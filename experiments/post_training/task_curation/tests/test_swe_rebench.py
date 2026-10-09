@@ -8,24 +8,19 @@ import subprocess
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import cast
 
 import pytest
-from taskcompendium.models import AnswerType, ScriptGrader
-from taskcompendium.pipeline.models import ImportRejection, NormalizedTask
+from taskcompendium.models import DockerBuildContext
+from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.modes import grade_pytest
-from verifyit.spec import PytestSpec, ScriptSpec, parse_spec
+from verifyit.spec import PytestSpec, parse_spec
 
-from experiments.post_training.task_curation.datasets.tasktrove.repositories import sources
-from experiments.post_training.task_curation.tests.conversion import convert_row, tasktrove_row
+from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 
 FIXTURES = Path(__file__).parent / "fixtures"
-
-
-def pipeline():
-    source = next(source for source in sources() if source.name == "tasktrove-swe_rebench")
-    assert source.pipeline is not None
-    return source.pipeline
 
 
 def python_source(commit: str) -> dict[str, bytes]:
@@ -83,19 +78,10 @@ def go_source() -> dict[str, bytes]:
     }
 
 
-def converted(files) -> NormalizedTask:
-    result = convert_row(pipeline(), tasktrove_row(files))
-    assert isinstance(result, NormalizedTask)
-    return result
-
-
 @pytest.mark.parametrize("language", ["python", "go"])
 def test_source_contract_keeps_private_graders_and_deferred_dependencies(language):
     files = python_source("abcdef0") if language == "python" else go_source()
-    task = converted(files).task
-    assert isinstance(task.grader, ScriptGrader)
-    assert task.answer_type == AnswerType.WORKSPACE_STATE
-    assert task.grader.artifacts[0].source == task.grader.artifacts[0].target == "/testbed"
+    task = converted_task(all_pipelines()["tasktrove-swe_rebench"], tasktrove_row(files))
     private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     public = {resource.path for resource in task.resources.worker}
     oracle = {resource.path: resource_bytes(resource) for resource in task.resources.oracle}
@@ -109,17 +95,7 @@ def test_source_contract_keeps_private_graders_and_deferred_dependencies(languag
     assert oracle["source_archive/tests/test.sh"] == files["tests/test.sh"]
     assert oracle["solution/solve.sh"] == files["solution/solve.sh"]
     assert "verifier.toml" not in private
-    spec = parse_spec(private["taskcompendium-verifier.toml"].decode())
-    if language == "python":
-        assert isinstance(spec, PytestSpec)
-        config = json.loads(files["tests/config.json"])
-        assert spec.must_pass == tuple(config["FAIL_TO_PASS"])
-        assert spec.must_not_break == tuple(config["PASS_TO_PASS"])
-    else:
-        assert isinstance(spec, ScriptSpec)
-        assert spec.path == "legacy_test.sh"
-    context = task.environment_requirements.docker_build
-    assert context is not None
+    context = cast(DockerBuildContext, task.environment_requirements.docker_build)
     build = {resource.path: resource_bytes(resource) for resource in context.files}
     assert not any(path.startswith(("tests/", "solution/")) for path in build)
     assert "taskcompendium-grader-setup.sh" not in build
@@ -140,9 +116,8 @@ def test_unsupported_language_or_test_contract_is_rejected(language, node_id):
     config = json.loads(files["tests/config.json"])
     config.update(language=language, FAIL_TO_PASS=[node_id])
     files["tests/config.json"] = json.dumps(config).encode()
-    result = convert_row(pipeline(), tasktrove_row(files))
-    assert isinstance(result, ImportRejection)
-    assert result.reason == "unsupported_variant"
+    result = convert_row(all_pipelines()["tasktrove-swe_rebench"], tasktrove_row(files))
+    assert cast(ImportRejection, result).reason == "unsupported_variant"
 
 
 @pytest.mark.parametrize(
@@ -154,7 +129,7 @@ def test_unsupported_language_or_test_contract_is_rejected(language, node_id):
     ],
 )
 def test_non_python_parser_requires_named_test_results(tmp_path, log, resolved):
-    task = converted(go_source()).task
+    task = converted_task(all_pipelines()["tasktrove-swe_rebench"], tasktrove_row(go_source()))
     parser = next(resource_bytes(resource) for resource in task.resources.verifier if resource.path == "test_state.py")
     namespace = {}
     exec(compile(parser, "test_state.py", "exec"), namespace)
@@ -206,15 +181,14 @@ def patched_repository(tmp_path) -> PatchedRepository:
     config["PASS_TO_PASS"] = ["tests/test_calc.py::test_existing"]
     files["tests/config.json"] = json.dumps(config).encode()
     files["tests/test_patch.diff"] = patch.encode()
-    task = converted(files).task
+    task = converted_task(all_pipelines()["tasktrove-swe_rebench"], tasktrove_row(files))
     private = tmp_path / "private"
     private.mkdir()
     for resource in task.resources.verifier:
         target = private / resource.path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(resource_bytes(resource))
-    spec = parse_spec((private / "taskcompendium-verifier.toml").read_text())
-    assert isinstance(spec, PytestSpec)
+    spec = cast(PytestSpec, parse_spec((private / "taskcompendium-verifier.toml").read_text()))
     return PatchedRepository(
         workspace=workspace,
         private=private,

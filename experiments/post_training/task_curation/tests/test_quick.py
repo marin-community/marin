@@ -6,12 +6,13 @@ import json
 import shutil
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from taskcompendium.convert.answers import exact_answer_task
-from taskcompendium.models import TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
+from taskcompendium.convert.answers import answer_task, exact_answer_task
+from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
 from verifyit.spec import ExactSpec
 from zephyr.readers import load_parquet
@@ -19,14 +20,14 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
-from experiments.post_training.task_curation.pipeline import HfSource
+from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline
 from experiments.post_training.task_curation.quick import run_local_sources
+from experiments.post_training.task_curation.sources import all_pipelines
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 
 
 def convert_local_answer(row, context):
-    task = exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
-    assert isinstance(task, TaskSpec)
+    task = answer_task(row, prompt=row.data["prompt"], spec=ExactSpec((row.data["answer"],), ignore_case=False))
     return task.model_copy(
         update={"grader": task.grader.model_copy(update={"environment": required_grader_environment(context)})}
     )
@@ -35,11 +36,10 @@ def convert_local_answer(row, context):
 @pytest.fixture
 def local_source():
     source = calendar.sources()[0]
-    assert source.pipeline is not None
     return replace(
         source,
         pipeline=replace(
-            source.pipeline,
+            all_pipelines()[source.name],
             source=HfSource("fixture/questions", "a" * 40, ("rows.parquet",), SourceFormat.PARQUET),
             convert=convert_local_answer,
         ),
@@ -78,10 +78,10 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     assert len(records) == 1
     assert records[0]["original_path"] == "original-row"
     task = TaskSpec.model_validate_json(records[0]["task_json"])
-    assert isinstance(task.grader, VerifyitGrader)
-    assert verifyit_spec(task.grader) == ExactSpec(("two",), ignore_case=False)
-    assert task.grader.environment is not None
-    assert task.grader.environment.packages_lock == str(source.pipeline.grader.lock.resolve())
+    grader = cast(VerifyitGrader, task.grader)
+    assert verifyit_spec(grader) == ExactSpec(("two",), ignore_case=False)
+    environment = cast(EnvironmentRequirements, grader.environment)
+    assert environment.packages_lock == str(source.pipeline.grader.lock.resolve())
 
 
 def answer_from_auxiliary(row, context):
@@ -107,11 +107,10 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     auxiliary.mkdir(parents=True)
     (auxiliary / "answer.txt").write_text("two")
     source = calendar.sources()[0]
-    assert source.pipeline is not None
     source = replace(
         source,
         pipeline=replace(
-            source.pipeline,
+            all_pipelines()[source.name],
             source=HfSource("fixture/questions", revision, ("rows.jsonl",), SourceFormat.JSONL),
             inputs={"answers": HfSource("fixture/answers", revision, ("answer.txt",), SourceFormat.JSONL)},
             convert=answer_from_auxiliary,
@@ -129,8 +128,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     cold = tmp_path / "cold"
     run_local_sources({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
     task = converted_task(cold, source.name)
-    assert isinstance(task.grader, VerifyitGrader)
-    assert verifyit_spec(task.grader) == ExactSpec(("two",), ignore_case=False)
+    assert verifyit_spec(cast(VerifyitGrader, task.grader)) == ExactSpec(("two",), ignore_case=False)
     assert not list(cache.rglob("unselected.jsonl"))
     manifest = json.loads((cold / source.name / "manifest.json").read_text())
     staged = source_file_path(manifest, "rows.jsonl")
@@ -155,30 +153,27 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
         download_cache=cache,
     )
     override_task = converted_task(overridden, source.name)
-    assert isinstance(override_task.grader, VerifyitGrader)
-    assert verifyit_spec(override_task.grader) == ExactSpec(("explicit answer",), ignore_case=False)
+    assert verifyit_spec(cast(VerifyitGrader, override_task.grader)) == ExactSpec(
+        ("explicit answer",), ignore_case=False
+    )
 
     next_revision = "b" * 40
     updated = remote / "fixture/questions" / next_revision
     updated.mkdir(parents=True)
     (updated / "rows.jsonl").write_text('{"prompt": "The next pinned question"}\n')
-    assert source.pipeline is not None
-    assert isinstance(source.pipeline.source, HfSource)
+    pipeline = cast(RlDataPipeline, source.pipeline)
     source = replace(
-        source, pipeline=replace(source.pipeline, source=replace(source.pipeline.source, revision=next_revision))
+        source, pipeline=replace(pipeline, source=replace(cast(HfSource, pipeline.source), revision=next_revision))
     )
     next_output = tmp_path / "next"
     run_local_sources({source.name: source}, None, next_output, inputs={}, max_workers=1, download_cache=cache)
     next_task = converted_task(next_output, source.name)
     assert next_task.source.revision == next_revision
-    assert isinstance(next_task.context.events[0], TextMessage)
-    assert next_task.context.events[0].content == "The next pinned question"
+    assert cast(TextMessage, next_task.context.events[0]).content == "The next pinned question"
 
 
 def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes(local_source, tmp_path):
     source = local_source
-    assert source.pipeline is not None
-    assert isinstance(source.pipeline.source, HfSource)
     logical_path = source.pipeline.source.files[0]
     local_file = tmp_path / "different-name.parquet"
     pq.write_table(

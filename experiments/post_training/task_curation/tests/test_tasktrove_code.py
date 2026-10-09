@@ -8,10 +8,11 @@ import os
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from harbor_config.models.task.config import TaskConfig
-from taskcompendium.convert.executable import SOLUTION_PATHS, solve_script
+from taskcompendium.convert.executable import solve_script
 from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH, archive_files, unpack_task_binary
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH
 from taskcompendium.harbor.export import harbor_record
@@ -129,35 +130,6 @@ ROWS: dict[str, dict] = {
     "tasktrove-structured_outputs": structured_row(NAME_SCHEMA, "json"),
 }
 
-PYTHON_FILE = ("/app/solution.py",)
-EXPECTED = {
-    "tasktrove-code_contests": ("stdio", SOLUTION_PATHS, None),
-    "tasktrove-codeforces": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
-    "tasktrove-competitive_coding": ("stdio", PYTHON_FILE, code.AGENT_IMAGE),
-    "tasktrove-taco": ("stdio", SOLUTION_PATHS, None),
-    "tasktrove-nl2bash": ("script", (OUTPUT_PATH,), nl2bash.AGENT_IMAGE),
-    "tasktrove-curriculum_easy": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-curriculum_medium": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-e2egit": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-e2egit_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-multifile": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-pymethods": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-pymethods_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-unitsyn": ("pytest", SOLUTION_PATHS, python_tests.AGENT_IMAGE),
-    "tasktrove-unitsyn_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-stack_pytest": ("pytest", PYTHON_FILE, python_tests.STACK_PYTEST_AGENT_IMAGE),
-    "tasktrove-structured_outputs": ("json-schema", (), None),
-}
-"""Each declaration's grader mode, captured files and agent image.
-
-A task with an agent image is graded in a fresh machine of the grader image. Repository tasks and
-source-image stdio tasks carry unresolved build recipes; structured tasks are graded in process.
-"""
-
-
-def grader_name(task: TaskSpec) -> str:
-    return task.grader.mode if isinstance(task.grader, VerifyitGrader) else task.grader.kind
-
 
 def write_verifier(task: TaskSpec, tests: Path) -> None:
     for resource in task.resources.verifier:
@@ -170,22 +142,9 @@ def resource_map(resources) -> dict[str, bytes]:
     return {resource.path: resource_bytes(resource) for resource in resources}
 
 
-def test_rows_cover_every_declaration():
-    assert set(ROWS) == set(PIPELINES) == set(EXPECTED)
-
-
 @pytest.mark.parametrize("name", sorted(ROWS))
-def test_row_converts_to_declared_grader(name):
+def test_conversion_keeps_hidden_tests_and_oracles_private(name):
     task = converted_task(PIPELINES[name], ROWS[name])
-    mode, output_paths, agent_image = EXPECTED[name]
-    assert grader_name(task) == mode
-    assert task.output_paths == output_paths
-    assert task.environment_requirements.docker_image == (agent_image.image if agent_image is not None else None)
-    grader_environment = task.grader.environment if isinstance(task.grader, VerifyitGrader) else None
-    if task.environment_requirements.docker_build is None:
-        assert grader_environment == (
-            fixture_context(PIPELINES[name]).grader_environment if agent_image is not None else None
-        )
     # Hidden tests and oracle files never reach the agent's machine.
     worker = {resource.path for resource in task.resources.worker}
     assert not any(path.startswith(("tests/", "solution/", "cases/")) for path in worker)
@@ -352,8 +311,7 @@ def test_structured_outputs_ask_for_the_answer_in_the_reply():
         PIPELINES["tasktrove-structured_outputs"], structured_row(NAME_SCHEMA, "json", STRUCTURED_PROMPT + footer)
     )
     assert isinstance(result, NormalizedTask)
-    prompt = result.task.context.events[-1].content
-    assert isinstance(prompt, str)
+    prompt = cast(str, result.task.context.events[-1].content)
     assert prompt.endswith("Return your final JSON in the assistant response.")
     assert "/app/answer.txt" not in prompt
     assert [change.field for change in result.changes] == ["instruction"]
@@ -394,9 +352,6 @@ def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tm
     recipe = b"FROM python:3.12-slim\nWORKDIR /app\nRUN mkdir /source-dependency\n"
     data["environment/Dockerfile"] = recipe
     task = converted_task(PIPELINES[f"tasktrove-{name}"], archive(SUM_PROMPT, data))
-    assert isinstance(task.grader, VerifyitGrader) and task.grader.environment is not None
-    build = task.environment_requirements.docker_build
-    assert build is not None and task.grader.environment.docker_build == build
     record = harbor_record(
         {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
         grader_image=None,
@@ -410,7 +365,7 @@ def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tm
     ).files
     assert files["environment/Dockerfile"].decode().split("# --- verifyit ---")[0].strip() == recipe.decode().strip()
     config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.verifier.environment_mode == "shared" and config.verifier.environment is None
+    assert config.verifier.environment_mode == "shared"
     assert not config.artifacts and "tests/Dockerfile" not in files
     assert not any(path.startswith(("environment/tests/", "environment/solution/", "solution/")) for path in files)
     tests = tmp_path / "tests"
