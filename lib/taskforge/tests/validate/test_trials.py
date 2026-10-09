@@ -10,32 +10,32 @@ from dataclasses import dataclass
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, ModelRequest, ModelTurn, RolloutContractError
 from shellbox.machine import Backend
-from taskcompendium.submission import JsonAnswer, JsonValueAnswer, PlainText, SubmissionConvention
+from taskcompendium.models import JsonAnswer, PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.llm.client import GlmRequestRejected
-from taskforge.sandbox.factories import SHELLSIM
+from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.validate.outcome import Cause, Graded, TrialKind, Ungraded
-from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
+from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials, task_digest
+from tests.sandbox.fixture_images import FixtureImageFactory
 
 DEADLINES = Deadlines(total_turn_timeout=30, attempt_timeout=60)
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
+DOCKER_BACKEND = Backend.DOCKER.value
 
 
-PLAIN = PlainText(id="plain")
-JSON_VALUE = JsonValueAnswer(id="json-value")
-
-
-def settings(factory, capabilities=None, conventions: tuple[SubmissionConvention, ...] = (PLAIN,)) -> EngineSettings:
+def settings(factory, capabilities=None) -> EngineSettings:
+    """Task machines from ``factory``; verifier machines from the fixture image factory."""
     return EngineSettings(
-        factories={SHELLSIM_BACKEND: factory},
-        capabilities={SHELLSIM_BACKEND: SHELLSIM} if capabilities is None else capabilities,
+        factories={SHELLSIM_BACKEND: factory, DOCKER_BACKEND: FixtureImageFactory()},
+        capabilities=(
+            {SHELLSIM_BACKEND: SHELLSIM, DOCKER_BACKEND: LOCAL_DOCKER} if capabilities is None else capabilities
+        ),
         max_turns=4,
         command_timeout=10,
         tool_turn_timeout=20,
         model_turn_timeout=30,
         cleanup_timeout=10,
-        conventions=conventions,
     )
 
 
@@ -194,25 +194,21 @@ async def test_the_ledger_input_hash_covers_the_deadlines(tmp_path, math_task, f
     assert first == again != other
 
 
-async def test_each_task_runs_under_the_first_convention_that_carries_its_answer(tmp_path, json_task, fakes):
+async def test_a_task_is_presented_in_its_own_answer_format(tmp_path, json_task, fakes):
     model = fakes.script_model([fakes.text('{"sum": 60}')])
-    conventions = (PLAIN, JSON_VALUE)
 
-    outcomes = await run_trials(
-        json_task,
-        plan(tmp_path, k=1),
-        settings(fakes.flaky_factory(0, RuntimeError), None, conventions),
-        model,
-    )
+    outcomes = await run_trials(json_task, plan(tmp_path, k=1), settings(fakes.flaky_factory(0, RuntimeError)), model)
 
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
     assert "one JSON value" in model.requests[0].messages[-1]["content"]
 
 
-async def test_a_task_no_convention_carries_is_not_started(tmp_path, json_task, fakes):
+async def test_a_task_whose_answer_format_cannot_carry_its_answer_is_not_started(tmp_path, json_task, fakes):
     model = fakes.script_model([fakes.text('{"sum": 60}')])
+    # assemble refuses this pairing; a task read from elsewhere can still carry it.
+    plain = json_task.model_copy(update={"task": json_task.task.model_copy(update={"answer_format": PlainText()})})
 
-    outcomes = await run_trials(json_task, plan(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)), model)
+    outcomes = await run_trials(plain, plan(tmp_path), settings(fakes.flaky_factory(0, RuntimeError)), model)
 
     assert all(
         isinstance(o, Ungraded) and (o.cause, o.retryable) == (Cause.SUBMISSION_UNSUPPORTED, False) for o in outcomes
@@ -222,24 +218,19 @@ async def test_a_task_no_convention_carries_is_not_started(tmp_path, json_task, 
     assert [e.cause for e in ledger(tmp_path)] == [Cause.SUBMISSION_UNSUPPORTED] * 3
 
 
-async def test_a_machine_state_task_runs_under_any_convention(tmp_path, file_task, fakes):
-    model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
-    factory = fakes.flaky_factory(0, RuntimeError)
-
-    outcomes = await run_trials(file_task, plan(tmp_path, k=1), settings(factory, None, (JSON_VALUE,)), model)
-
-    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
-
-
-async def test_the_ledger_input_hash_covers_the_convention(tmp_path, math_task, fakes):
+async def test_the_ledger_input_hash_is_the_digest_of_the_lowered_task_with_its_answer_format(
+    tmp_path, math_task, relower, fakes
+):
     model = fakes.script_model([fakes.text("395")])
     factory = fakes.flaky_factory(0, RuntimeError)
+    as_json = relower(math_task.task.model_copy(update={"answer_format": JsonAnswer()}))
 
-    for conventions in ((PLAIN,), (PLAIN,), (JsonAnswer(id="json"),)):
-        await run_trials(math_task, plan(tmp_path, k=1), settings(factory, None, conventions), model)
+    for task in (math_task, math_task, as_json):
+        await run_trials(task, plan(tmp_path, k=1), settings(factory), model)
 
     first, again, other = (entry.input_hash for entry in ledger(tmp_path))
     assert first == again != other
+    assert first == task_digest(settings(factory).apply(DEADLINES.apply(math_task)))
 
 
 DIVERGENCE = "Served prompt diverges from the replayed prefix at index 6689: sampled (701, 7), served (23482,)"

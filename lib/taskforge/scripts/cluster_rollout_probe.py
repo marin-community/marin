@@ -23,7 +23,7 @@ Phases, each ``k`` trials through ``taskforge.validate.trials.run_trials``:
 - ``math``: a null-environment numeric task (no machine).
 - ``docker``: a task on a digest-pinned public image on
   ``machine_factories(MachineHost.IRIS, controller_url, image_cache=None)`` as shipped, with the
-  task's ``IRIS_CONTROLLER_URL``. Its shell grader runs in a separate verifier machine started from
+  task's ``IRIS_CONTROLLER_URL``. Its script grader runs in a separate verifier machine started from
   the same image, which receives the agent's ``/workspace/sum.txt`` as an artifact.
 
 Then one machine lists the environment variable names a sandbox receives. The run exits non-zero
@@ -58,14 +58,15 @@ from rigging.timing import ExponentialBackoff
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.image import RegistryImage
 from shellbox.machine import Backend, Command, Machine, MachineFactory, MachineSpec, NetworkPolicy
-from taskcompendium.models import AnswerType, Source
-from taskcompendium.shell_verifier import (
+from taskcompendium.models import (
+    AnswerType,
     ArtifactKind,
     MissingArtifactPolicy,
+    PlainText,
+    Source,
     StdoutReward,
     VerifierArtifact,
 )
-from taskcompendium.submission import PlainText
 from verifyit.spec import NumericSpec
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
@@ -75,14 +76,15 @@ from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
 from taskforge.spec.draft import (
-    answer_verifier,
+    answer_grader,
     assemble,
     file,
+    grader_environment,
     lower,
     machine,
     requirements,
+    script_grader,
     session,
-    shell_verifier,
 )
 from taskforge.validate.evidence import Complete, Evidence
 from taskforge.validate.outcome import Graded, Outcome, TrialKind
@@ -180,7 +182,8 @@ def math_task(factories: dict[str, MachineFactory]) -> LoweredTaskSpec:
         "cluster-math",
         "What is 17 * 23 + 4? Reply with only the number, nothing else.",
         AnswerType.NUMBER,
-        answer_verifier(NumericSpec(expected=MATH_ANSWER, tolerance_abs=0, tolerance_rel=0)),
+        PlainText(),
+        answer_grader(NumericSpec(expected=MATH_ANSWER, tolerance_abs=0, tolerance_rel=0)),
         source("math"),
         environment=None,
     )
@@ -190,16 +193,19 @@ def math_task(factories: dict[str, MachineFactory]) -> LoweredTaskSpec:
 
 
 def docker_task(factories: dict[str, MachineFactory]) -> LoweredTaskSpec:
-    """A file task on ``IMAGE`` whose shell grader runs in a verifier machine from the same image."""
+    """A file task on ``IMAGE`` whose script grader runs in a verifier machine from the same image."""
     task = assemble(
         "cluster-docker-file",
         "The file /workspace/numbers.txt holds one integer per line. Use the shell tool to write their sum, "
         f"as a single integer, to {SUM_PATH}. Say when you are done.",
         AnswerType.FILE,
-        shell_verifier(
+        PlainText(),
+        script_grader(
             ("sh", "/tests/check.sh"),
             StdoutReward(),
-            image=IMAGE,
+            environment=grader_environment(IMAGE),
+            answer_path=None,
+            timeout=VERIFIER_TIMEOUT,
             files=(file("check.sh", CHECK_SCRIPT),),
             artifacts=(
                 VerifierArtifact(
@@ -310,7 +316,6 @@ async def run_phase(
         tool_turn_timeout=TOOL_TURN_TIMEOUT,
         model_turn_timeout=MODEL_TURN_TIMEOUT,
         cleanup_timeout=CLEANUP_TIMEOUT,
-        conventions=(PlainText(id="plain"),),
     )
     plan = TrialPlan(
         item_id=task.id,

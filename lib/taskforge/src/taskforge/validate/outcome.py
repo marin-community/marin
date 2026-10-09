@@ -37,7 +37,8 @@ class Cause(StrEnum):
     MACHINE_UNSUPPORTED = "machine_unsupported"
     """The factories cannot provide what the task asks for (``task_refusals`` or ``UnsupportedMachineSpec``)."""
     SUBMISSION_UNSUPPORTED = "submission_unsupported"
-    """No configured submission convention can carry the task's answer (``trials.task_convention``)."""
+    """The task's answer format cannot carry its answer for its grader (TaskCompendium
+    ``submission_compatibility``)."""
     TASK_SETUP = "task_setup"
     """The task's own setup failed: a setup command exited non-zero or timed out, or the environment
     lacks the capabilities the task requires. A task defect, not flakiness."""
@@ -72,6 +73,11 @@ class Cause(StrEnum):
     INVALID_TASK = "invalid_task"
     """The grader reported the task itself invalid (TaskCompendium ``Outcome.INVALID_TASK``)."""
     VERIFIER_SKIPPED = "verifier_skipped"
+    """The task has no runnable grader (TaskCompendium ``NoGrader``), so its grade is unavailable."""
+    CANDIDATE_CODE_ERROR = "candidate_code_error"
+    """A verifyit ``pytest`` grader scored 0 because the candidate's own code failed to import or be
+    collected. Not a wrong answer: the scaffold or the solver's environment may be at fault, so the
+    trial does not count toward the solve rate (``classify``)."""
     NO_GRADE = "no_grade"
     """The engine returned an unavailable grade for another reason."""
     UNCLASSIFIED = "unclassified"

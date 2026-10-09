@@ -4,41 +4,74 @@
 """Failures produced by a real ShellboxRolloutEngine run map to the right Cause."""
 
 
+import asyncio
+from dataclasses import dataclass
+
 import pytest
 from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, GenerationLimitReached, ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.machine import Backend, UnsupportedMachineSpec
-from taskcompendium.grading_result import Outcome
-from taskcompendium.models import VerifierSpec
-from taskcompendium.submission import PlainText
+from taskcompendium.grader import GraderPackage
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import NoGrader
+from verifyit.spec import ExactSpec, PytestSpec
 
 from taskforge.llm.client import GlmRequestRejected, GlmUnavailable
-from taskforge.validate.classify import trial_outcome
+from taskforge.spec.draft import answer_grader, grader_environment
+from taskforge.validate.classify import candidate_code_error, trial_outcome
 from taskforge.validate.outcome import Cause, Graded, Ungraded
+from tests.sandbox.fixture_images import FixtureImageFactory
 
-INVALID_REWARD_GRADER = """import json, os, pathlib
-verdict = {"status": "scored", "reward": "not-a-number", "detail": {}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
-"""
+INVALID_REWARD_GRADER = 'print("not-a-number")\n'
 FAILING_GRADER = "raise SystemExit(3)\n"
-HANGING_GRADER = "import time\ntime.sleep(60)\n"
+HANGING_GRADER = "# never finishes on HangingGraderFactory\n"
 
 
-def engine(model, factory=None) -> ShellboxRolloutEngine:
-    factories = {} if factory is None else {Backend.SHELLSIM.value: factory}
-    return ShellboxRolloutEngine(model, factories, convention=PlainText(id="plain"))
+@dataclass(frozen=True)
+class HangingGraderFactory:
+    """Fixture image machines on which the grader program never finishes."""
+
+    backend: Backend = Backend.DOCKER
+
+    async def create(self, spec):
+        machine = await FixtureImageFactory().create(spec)
+
+        class Hanging:
+            async def run(self, command):
+                if command.argv[:1] == ("python3",):
+                    await asyncio.Future()
+                return await machine.run(command)
+
+            async def upload(self, source, target):
+                await machine.upload(source, target)
+
+            async def download(self, source, target):
+                await machine.download(source, target)
+
+            async def close(self):
+                await machine.close()
+
+        return Hanging()
+
+
+def engine(model, factory=None, verifier_factory=None) -> ShellboxRolloutEngine:
+    """Task machines from ``factory``; verifier machines from ``verifier_factory`` or the fixture image factory."""
+    factories = {Backend.DOCKER.value: verifier_factory or FixtureImageFactory()}
+    if factory is not None:
+        factories[Backend.SHELLSIM.value] = factory
+    return ShellboxRolloutEngine(model, factories)
 
 
 def with_session(lowered, **limits):
     return lowered.model_copy(update={"session": lowered.session.model_copy(update=limits)})
 
 
-async def outcome_of(lowered, model, factory=None):
+async def outcome_of(lowered, model, factory=None, verifier_factory=None):
     try:
-        result = await engine(model, factory).run(lowered)
+        result = await engine(model, factory, verifier_factory).run(lowered)
     except Exception as error:
-        return trial_outcome(error)
-    return trial_outcome(result)
+        return trial_outcome(error, lowered.task)
+    return trial_outcome(result, lowered.task)
 
 
 @pytest.mark.parametrize(
@@ -151,40 +184,62 @@ async def test_a_machine_terminated_under_a_tool_turn_is_retryable(file_task, fa
 
 
 @pytest.mark.parametrize(
-    "script,detail",
+    "script,cause",
     [
-        (INVALID_REWARD_GRADER, "grader reward must be a finite number in [0, 1]"),
-        (FAILING_GRADER, "declared verdict producer did not complete successfully"),
+        (INVALID_REWARD_GRADER, Cause.GRADER_INVALID_REWARD),
+        (FAILING_GRADER, Cause.GRADER_EXECUTION),
     ],
 )
 async def test_script_grader_failures_are_infrastructure_grades_that_keep_the_rollout(
-    file_task_with, fakes, script, detail
+    file_task_with, fakes, script, cause
 ):
-    # A host-run script grader's failures carry no GradingFailure, so they share GRADER_INFRA.
     model = fakes.script_model([fakes.text("done")])
 
     outcome = await outcome_of(file_task_with(grader_script=script), model, fakes.flaky_factory(0, RuntimeError))
 
-    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.GRADER_INFRA, False)
-    assert outcome.detail == detail
+    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (cause, False)
     assert outcome.rollout is not None and outcome.rollout.grade.status == Outcome.INFRA_ERROR
 
 
 async def test_a_grader_past_the_verifier_deadline_is_a_retryable_grader_timeout(file_task_with, fakes):
-    # verifyit's own limit (1 s) outlasts the engine's verifier deadline (0.5 s), so the engine's expires first.
+    # The grader's own limit (1 s) outlasts the engine's verifier deadline (0.5 s), so the engine's expires first.
     task = with_session(file_task_with(grader_script=HANGING_GRADER, grader_timeout=1), verifier_timeout=0.5)
 
-    outcome = await outcome_of(task, fakes.script_model([fakes.text("done")]), fakes.flaky_factory(0, RuntimeError))
+    model = fakes.script_model([fakes.text("done")])
+
+    outcome = await outcome_of(task, model, fakes.flaky_factory(0, RuntimeError), HangingGraderFactory())
 
     assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.GRADER_TIMEOUT, True)
 
 
-async def test_skipped_verifier(math_task, relower, fakes):
-    skipped = VerifierSpec(kind="skipped", parameters_json='{"reason": "no reference answer"}')
-    task = relower(math_task.task.model_copy(update={"verifier": skipped}))
+async def test_a_task_without_a_grader_is_verifier_skipped(math_task, relower, fakes):
+    task = relower(math_task.task.model_copy(update={"grader": NoGrader(reason="no reference answer")}))
     outcome = await outcome_of(task, fakes.script_model([fakes.text("395")]))
 
-    assert isinstance(outcome, Ungraded) and outcome.cause is Cause.VERIFIER_SKIPPED
+    assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.VERIFIER_SKIPPED, False)
+    assert outcome.rollout is not None and outcome.rollout.grade.status == Outcome.UNAVAILABLE
+
+
+@pytest.mark.parametrize(
+    "grader,detail,unloaded",
+    [
+        ("pytest", {"reason": "collection_error", "category": "agent"}, True),
+        ("pytest", {"reason": "startup_error", "category": "agent"}, True),
+        ("pytest", {"reason": "tests", "passed": 0, "total": 3}, False),
+        ("exact", {"reason": "collection_error"}, False),
+    ],
+)
+def test_a_pytest_candidate_that_does_not_load_is_not_a_wrong_answer(math_task, grader, detail, unloaded):
+    package = (
+        answer_grader(PytestSpec(paths=("tests/test_x.py",)), environment=grader_environment(None))
+        if grader == "pytest"
+        else answer_grader(ExactSpec(expected=("395",)))
+    )
+    task = math_task.task.model_copy(update={"grader": GraderPackage(package.grader).grader})
+    grade = GradeResult(Outcome.GRADED, 0.0, detail=detail)
+
+    assert candidate_code_error(grade, task) is unloaded
+    assert not candidate_code_error(GradeResult(Outcome.GRADED, 1.0, detail=detail), task)
 
 
 @pytest.mark.parametrize("answer,status,reward", [("395", Outcome.GRADED, 1.0), ("", Outcome.SUBMISSION_FAILURE, 0.0)])

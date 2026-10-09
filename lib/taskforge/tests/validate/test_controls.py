@@ -9,16 +9,16 @@ import pytest
 from rigging.timing import ExponentialBackoff
 from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome
-from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
-from taskforge.sandbox.factories import SHELLSIM
+from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.spec.controls import ControlCategory, ControlKind, Expectation
 from taskforge.validate.controls import ControlPlan, ControlVerdict, ServerTokenizer, replay
 from taskforge.validate.outcome import Cause, Graded, Ungraded
 from taskforge.validate.trials import Deadlines, EngineSettings
+from tests.sandbox.fixture_images import FixtureImageFactory
 from tests.validate.conftest import TemplateTokenizer, render_ids
 
 
@@ -31,14 +31,13 @@ class ReorderingTokenizer(TemplateTokenizer):
 
 def settings(factory, max_turns: int = 6) -> EngineSettings:
     return EngineSettings(
-        factories={Backend.SHELLSIM.value: factory},
-        capabilities={Backend.SHELLSIM.value: SHELLSIM},
+        factories={Backend.SHELLSIM.value: factory, Backend.DOCKER.value: FixtureImageFactory()},
+        capabilities={Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: LOCAL_DOCKER},
         max_turns=max_turns,
         command_timeout=10,
         tool_turn_timeout=20,
         model_turn_timeout=30,
         cleanup_timeout=10,
-        conventions=(PlainText(id="plain"),),
     )
 
 

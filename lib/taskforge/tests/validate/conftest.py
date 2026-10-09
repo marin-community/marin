@@ -4,9 +4,11 @@
 """Small lowered tasks shared by the unit and live validate tests, with a control set for two of them.
 
 ``math_task`` is a null-environment numeric task graded in process by verifyit; ``json_task`` is a
-null-environment task with a JSON answer. ``file_task`` is a ShellSim task whose private ``script``
-grader runs on the host and checks the captured file the agent must create. Each is lowered for a
-laptop with the ShellSim factory (``lowered``); ``relower`` lowers a variant the same way.
+null-environment task with a JSON answer. ``file_task`` is a ShellSim task whose private Python
+grader runs in a verifier machine from the grader-base image and checks the captured file the agent
+must create. Each is lowered for a laptop (``lowered``) onto ``FACTORIES``: ShellSim, and for the
+verifier machine the ShellSim-backed ``FixtureImageFactory`` registered as Docker; ``relower`` lowers
+a variant the same way.
 
 ``TemplateTokenizer`` stands in for the server's chat template in control replay; the loop and queue
 tests import it.
@@ -25,11 +27,11 @@ from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, Machine, MachineSpec, MachineTerminated, Result
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, Source, TaskSpec
+from taskcompendium.models import AnswerType, JsonValueAnswer, PlainText, Source, TaskSpec
 from verifyit.spec import NumericSpec, StructuredExactSpec
 
 from taskforge.llm.client import GlmUnavailable
-from taskforge.sandbox.factories import MachineHost
+from taskforge.sandbox.factories import MachineHost, grading_environment
 from taskforge.spec.controls import (
     Control,
     ControlCategory,
@@ -43,20 +45,22 @@ from taskforge.spec.controls import (
 )
 from taskforge.spec.draft import (
     SHELL_CAPABILITY,
-    answer_verifier,
+    answer_grader,
     assemble,
     file,
+    grader_environment,
     lower,
     machine,
+    python_grader,
     requirements,
-    script_verifier,
     session,
 )
+from tests.sandbox.fixture_images import FixtureImageFactory
 
 MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
 NUMBERS_SUM = 60
-FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory()}
+FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: FixtureImageFactory()}
 SESSION = session(
     max_turns=4,
     model_turn_timeout=None,
@@ -68,13 +72,12 @@ SESSION = session(
     cleanup_timeout=10,
 )
 SHELLSIM = machine(startup_timeout=30)
-SUM_GRADER = """import json, os, pathlib
-workspace = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"])
-expected = json.loads(pathlib.Path(os.environ["VERIFYIT_TESTS_DIR"], "config.json").read_text())["expected"]
-answer = workspace / "captured/workspace/sum.txt"
+SUM_GRADER = """import json, pathlib
+expected = json.loads(pathlib.Path("/tests/config.json").read_text())["expected"]
+answer = pathlib.Path("/workspace/sum.txt")
 got = answer.read_text().strip() if answer.is_file() else None
-verdict = {"status": "scored", "reward": float(got == expected), "detail": {"got": got}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+print(f"got {got!r}")
+print(float(got == expected))
 """
 """Rewards 1 when the captured ``/workspace/sum.txt`` holds ``config["expected"]``."""
 
@@ -84,13 +87,13 @@ def source(row: str) -> Source:
 
 
 def lowered(task: TaskSpec) -> LoweredTaskSpec:
-    """``task`` lowered for a laptop: a ShellSim task machine when it has one, no verifier machine."""
+    """``task`` lowered for a laptop: a ShellSim task machine and a verifier machine when it has them."""
     has_machine = SHELL_CAPABILITY in task.environment_requirements.capabilities
     return lower(
         task,
         host=MachineHost.LAPTOP,
         task_machine=SHELLSIM if has_machine else None,
-        verifier_machine=None,
+        verifier_machine=None if grading_environment(task) is None else SHELLSIM,
         session=SESSION,
         factories=FACTORIES,
     )
@@ -107,7 +110,8 @@ def math_task() -> LoweredTaskSpec:
         "validate-math",
         "What is 17 * 23 + 4? Reply with only the number, nothing else.",
         AnswerType.NUMBER,
-        answer_verifier(NumericSpec(expected=MATH_ANSWER, tolerance_abs=0, tolerance_rel=0)),
+        PlainText(),
+        answer_grader(NumericSpec(expected=MATH_ANSWER, tolerance_abs=0, tolerance_rel=0)),
         source("math"),
         environment=None,
     )
@@ -120,7 +124,8 @@ def json_task() -> LoweredTaskSpec:
         "validate-json",
         "Report the sum of 12, 7, 30 and 11 as a JSON object whose only key is sum.",
         AnswerType.JSON,
-        answer_verifier(StructuredExactSpec(expected={"sum": NUMBERS_SUM})),
+        JsonValueAnswer(),
+        answer_grader(StructuredExactSpec(expected={"sum": NUMBERS_SUM})),
         source("json"),
         environment=None,
     )
@@ -133,7 +138,14 @@ def file_task_spec(grader_script: str = SUM_GRADER, setup: tuple[str, ...] = (),
         "The file /workspace/numbers.txt holds one integer per line. Use the shell tool to write their sum, "
         "as a single integer, to /workspace/sum.txt. Say when you are done.",
         AnswerType.FILE,
-        script_verifier(grader_script, {"expected": str(NUMBERS_SUM)}, timeout=grader_timeout),
+        PlainText(),
+        python_grader(
+            grader_script,
+            {"expected": str(NUMBERS_SUM)},
+            environment=grader_environment(None),
+            answer_path=None,
+            timeout=grader_timeout,
+        ),
         source("file"),
         environment=requirements(image=None, setup=setup),
         files=(file("workspace/numbers.txt", NUMBERS),),

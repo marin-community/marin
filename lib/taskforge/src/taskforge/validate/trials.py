@@ -31,10 +31,10 @@ The attempt file holds the whole ``RolloutData``, steps included: a validation r
 from its files alone, and the final reply, the tool calls and the per-turn usage are read from the
 steps.
 
-The submission convention is chosen per task (``task_convention``) from
-``EngineSettings.conventions``: it is presentation, not part of the task, and it changes the
-instruction the solver sees, so ``input_hash`` covers it too. A task no convention can carry is not
-started: each of its trials is one ``SUBMISSION_UNSUPPORTED`` attempt naming the reasons.
+The answer format is part of the task (``TaskSpec.answer_format``), so ``input_hash`` covers it
+with the rest of the lowered spec. A task whose format cannot carry its answer for its grader
+(TaskCompendium ``submission_compatibility``) is not started: each of its trials is one
+``SUBMISSION_UNSUPPORTED`` attempt naming the reasons.
 
 ``EngineSettings.factories`` and ``EngineSettings.capabilities`` come from
 ``taskforge.sandbox.factories.machine_factories`` and ``factory_capabilities`` for the same host. A
@@ -57,13 +57,12 @@ from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.machine import MachineFactory
-from taskcompendium.models import TaskSpec
-from taskcompendium.submission import SubmissionConvention, submission_compatibility
+from taskcompendium.models import CONVERSATION_ANSWERS, TaskSpec
+from taskcompendium.submission import submission_compatibility
 
 from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
 from taskforge.sandbox.factories import FactoryCapabilities, Refusal, task_refusals
-from taskforge.spec.draft import MACHINE_ANSWER_TYPES
 from taskforge.validate.classify import trial_outcome
 from taskforge.validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
 
@@ -75,16 +74,15 @@ CLEANUP_ERROR_COUNT = "cleanup_error_count"
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """The machine factories ``ShellboxRolloutEngine`` runs on, what they can run, the session limits
-    validation imposes on every trial, and the submission conventions tasks may be presented with.
+    """The machine factories ``ShellboxRolloutEngine`` runs on, what they can run, and the session
+    limits validation imposes on every trial.
 
     ``factories`` and ``capabilities`` are keyed by shellbox ``Backend`` value, as
     ``machine_factories`` and ``factory_capabilities`` return them. ``command_timeout`` bounds one
     shell command and ``tool_turn_timeout`` one tool turn, so the first must be shorter.
     ``model_turn_timeout`` bounds one model call. ``cleanup_timeout`` bounds each cleanup action
     (closing a session or machine); the engine records a cleanup that fails or overruns in
-    ``grade.diagnostics``. ``conventions`` is in preference order; each task runs under the first that
-    can carry its answer (``task_convention``).
+    ``grade.diagnostics``.
     """
 
     factories: Mapping[str, MachineFactory]
@@ -94,12 +92,8 @@ class EngineSettings:
     tool_turn_timeout: float
     model_turn_timeout: float
     cleanup_timeout: float
-    conventions: tuple[SubmissionConvention, ...]
 
     def __post_init__(self) -> None:
-        ids = [convention.id for convention in self.conventions]
-        if not ids or len(set(ids)) != len(ids):
-            raise ValueError(f"EngineSettings needs at least one convention and unique convention ids, got {ids}")
         if self.max_turns < 1:
             raise ValueError("EngineSettings needs max_turns >= 1")
         if not 0 < self.command_timeout < self.tool_turn_timeout:
@@ -120,32 +114,19 @@ class EngineSettings:
         )
         return lowered.model_copy(update={"session": session})
 
-    def engine(self, model: RolloutModel, convention: SubmissionConvention) -> ShellboxRolloutEngine:
-        return ShellboxRolloutEngine(model, self.factories, convention=convention)
+    def engine(self, model: RolloutModel) -> ShellboxRolloutEngine:
+        return ShellboxRolloutEngine(model, self.factories)
 
 
-class ConventionUnavailable(ValueError):
-    """No convention can carry a task's answer; the message gives each convention's reasons."""
+def submission_refusal(task: TaskSpec) -> str | None:
+    """Why the task's answer format cannot carry its answer, or ``None`` when it can.
 
-
-def task_convention(task: TaskSpec, conventions: Sequence[SubmissionConvention]) -> SubmissionConvention:
-    """The first of ``conventions`` that ``submission_compatibility`` accepts for ``task``.
-
-    A task whose answer is the machine state (``MACHINE_ANSWER_TYPES``) submits nothing through a
-    convention, so it takes the first.
-
-    Raises:
-        ConventionUnavailable: no convention is compatible with ``task``.
+    Only an answer read from the conversation has a format to check, as in RolloutEngine's session.
     """
-    if task.answer_type in MACHINE_ANSWER_TYPES:
-        return conventions[0]
-    reasons = []
-    for convention in conventions:
-        compatibility = submission_compatibility(task, convention)
-        if compatibility.compatible:
-            return convention
-        reasons.append(f"{convention.id}: {'; '.join(compatibility.reasons)}")
-    raise ConventionUnavailable("; ".join(reasons))
+    if task.answer_type not in CONVERSATION_ANSWERS:
+        return None
+    compatibility = submission_compatibility(task)
+    return None if compatibility.compatible else "; ".join(compatibility.reasons)
 
 
 @dataclass(frozen=True)
@@ -216,24 +197,22 @@ async def run_trials(
 async def run_trial(
     lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: RolloutModel, trial: str
 ) -> Outcome:
-    """Run one trial of ``lowered`` under ``plan.deadlines``, ``settings`` and its ``task_convention``,
-    attempting it again after a backoff while it fails for a retryable cause or, within
-    ``plan.token_contract_retries``, a broken token contract."""
+    """Run one trial of ``lowered`` under ``plan.deadlines`` and ``settings``, attempting it again
+    after a backoff while it fails for a retryable cause or, within ``plan.token_contract_retries``,
+    a broken token contract."""
     lowered = settings.apply(plan.deadlines.apply(lowered))
-    try:
-        convention = task_convention(lowered.task, settings.conventions)
-    except ConventionUnavailable as error:
-        return _refuse(lowered, None, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, str(error), None))
+    unsupported = submission_refusal(lowered.task)
+    if unsupported is not None:
+        return _refuse(lowered, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None))
     refusals = task_refusals(lowered, settings.capabilities)
     if refusals:
-        outcome = Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None)
-        return _refuse(lowered, convention, plan, trial, outcome)
-    engine = settings.engine(model, convention)
+        return _refuse(lowered, plan, trial, Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None))
+    engine = settings.engine(model)
     backoff = copy.copy(plan.retry_backoff)
     retries = contract_retries = 0
     attempt = plan.first_attempt
     while True:
-        outcome = await _attempt(engine, lowered, convention, plan, trial, attempt)
+        outcome = await _attempt(engine, lowered, plan, trial, attempt)
         if isinstance(outcome, Graded):
             return outcome
         if outcome.retryable and retries < plan.max_retries:
@@ -250,59 +229,41 @@ def refusal_detail(refusals: Sequence[Refusal]) -> str:
     return "; ".join(f"{refusal.where}: {refusal.reason}: {refusal.detail}" for refusal in refusals)
 
 
-def task_digest(lowered: LoweredTaskSpec, convention: SubmissionConvention | None) -> str:
-    """The sha256 of the lowered task as it runs (after ``Deadlines.apply`` and ``EngineSettings.apply``)
-    and the convention it is presented with (``None`` when no convention can carry it)."""
-    presented = "null" if convention is None else f"{type(convention).__name__} {convention.model_dump_json()}"
-    return sha256_hex(f"{lowered.model_dump_json()}\n{presented}".encode())
+def task_digest(lowered: LoweredTaskSpec) -> str:
+    """The sha256 of the lowered task as it runs (after ``Deadlines.apply`` and ``EngineSettings.apply``),
+    its answer format included."""
+    return sha256_hex(lowered.model_dump_json().encode())
 
 
-def _refuse(
-    lowered: LoweredTaskSpec,
-    convention: SubmissionConvention | None,
-    plan: TrialPlan,
-    trial: str,
-    outcome: Ungraded,
-) -> Ungraded:
+def _refuse(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, outcome: Ungraded) -> Ungraded:
     """Record ``outcome`` as the only attempt of a trial that is not started."""
-    with _attempt_span(lowered, convention, plan, trial, plan.first_attempt) as fields:
+    with _attempt_span(lowered, plan, trial, plan.first_attempt) as fields:
         _record(fields, outcome, plan, trial, plan.first_attempt)
     return outcome
 
 
 @contextmanager
-def _attempt_span(
-    lowered: LoweredTaskSpec,
-    convention: SubmissionConvention | None,
-    plan: TrialPlan,
-    trial: str,
-    attempt: int,
-) -> Iterator[SpanFields]:
+def _attempt_span(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, attempt: int) -> Iterator[SpanFields]:
     with span(
         plan.ledger,
         EntryKind.TRIAL,
         item_id=plan.item_id,
         round=plan.round,
         step=f"{plan.kind}/{trial}/{attempt}",
-        input_hash=task_digest(lowered, convention),
+        input_hash=task_digest(lowered),
     ) as fields:
         yield fields
 
 
 async def _attempt(
-    engine: ShellboxRolloutEngine,
-    lowered: LoweredTaskSpec,
-    convention: SubmissionConvention,
-    plan: TrialPlan,
-    trial: str,
-    attempt: int,
+    engine: ShellboxRolloutEngine, lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, attempt: int
 ) -> Outcome:
-    with _attempt_span(lowered, convention, plan, trial, attempt) as fields:
+    with _attempt_span(lowered, plan, trial, attempt) as fields:
         try:
             result: RolloutData | Exception = await engine.run(lowered)
         except Exception as error:
             result = error
-        outcome = trial_outcome(result)
+        outcome = trial_outcome(result, lowered.task)
         _record(fields, outcome, plan, trial, attempt)
     return outcome
 

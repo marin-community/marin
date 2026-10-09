@@ -21,7 +21,6 @@ from rigging.timing import ExponentialBackoff
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory, UnsupportedMachineSpec
-from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind
@@ -29,12 +28,13 @@ from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.sandbox.factories import SHELLSIM
+from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.spec.controls import Control
 from taskforge.validate.controls import ControlOutcome, ControlPlan, ControlVerdict, ServerTokenizer, replay
 from taskforge.validate.evidence import Complete, Evidence, Incomplete
 from taskforge.validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
+from tests.sandbox.fixture_images import FixtureImageFactory
 
 pytestmark = pytest.mark.live_glm
 
@@ -44,19 +44,20 @@ LIVE_TIMEOUT = 1800
 RETRY_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0)
 DEADLINES = Deadlines(total_turn_timeout=900, attempt_timeout=1200)
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
+DOCKER_BACKEND = Backend.DOCKER.value
 TOKEN_CONTRACT_RETRIES = 2
 
 
 def settings(factories: dict[str, MachineFactory]) -> EngineSettings:
+    """``factories`` for task machines; verifier machines on the ShellSim-backed fixture image factory."""
     return EngineSettings(
-        factories=factories,
-        capabilities={SHELLSIM_BACKEND: SHELLSIM},
+        factories={DOCKER_BACKEND: FixtureImageFactory(), **factories},
+        capabilities={SHELLSIM_BACKEND: SHELLSIM, DOCKER_BACKEND: LOCAL_DOCKER},
         max_turns=12,
         command_timeout=60,
         tool_turn_timeout=120,
         model_turn_timeout=600,
         cleanup_timeout=60,
-        conventions=(PlainText(id="plain"),),
     )
 
 
@@ -218,7 +219,8 @@ async def test_shellsim_file_task_trials(client, evidence_dir, file_task):
         evidence_dir,
         file_task,
         "b_shellsim_trials",
-        "ShellSim task, k=3: shell tool calls execute, a host-run script grader checks the captured /workspace/sum.txt",
+        "ShellSim task, k=3: shell tool calls execute, a Python grader in a verifier machine checks the "
+        "captured /workspace/sum.txt",
         {SHELLSIM_BACKEND: ShellSimMachineFactory()},
     )
     assert all(isinstance(o, Graded) for o in outcomes), directory
