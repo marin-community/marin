@@ -126,6 +126,7 @@ from experiments.grug.fast_track.optimizer import (
     magma_metrics,
     optimizer_diagnostics,
 )
+from experiments.grug.fast_track.router_calib import run as run_router_calib
 from experiments.grug.fast_track.snr_probe import SnrProbe
 from experiments.grug.fast_track.stiefel import _msign
 from experiments.grug.fast_track.trace_probe import trace_stats, trace_term_names
@@ -338,6 +339,8 @@ class GrugTrainerConfig:
     # ``trace_probe.trace_stats`` on held-out sequences to this npz.
     trace_probe_path: str | None = None
     trace_probe_sequences: int = 48
+    # ``router_calib.run`` (post-hoc routing-bias / expert-gain calibration, a diagnostic) to this JSON.
+    router_calib_path: str | None = None
     # After training, write the MLA layers' full softmax rows for queries at fixed in-document positions
     # (``ATTN_PROBE_DISTANCES``) of held-out sequences to this npz (``_attn_distance_dump``).
     attn_distance_path: str | None = None
@@ -2064,6 +2067,69 @@ def _logit_decomp_dump(config: "GrugRunConfig", params: Transformer, qb_betas: j
             )
 
 
+_ROUTER_CALIB_DATA_OFFSET = 40000
+_ROUTER_CALIB_FIT_BATCHES = 2
+_ROUTER_CALIB_VAL_SEQUENCES = 64
+
+
+def _router_calib_dump(
+    config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, train_loader
+) -> None:
+    """``router_calib.run`` on held-out training batches (fit) and validation sequences (score), dropless on an
+    expert-collapsed mesh like the final eval."""
+    mp = config.trainer.trainer.mp
+    probe_mesh = (
+        compact_grug_mesh(
+            expert_axis_size=1, replica_axis_size=mesh.shape["replica_dcn"], model_axis_size=mesh.shape["model"]
+        )
+        if mesh.shape["expert"] > 1
+        else mesh
+    )
+    implementation = (
+        dropless_moe_implementation(config.model)
+        if config.eval is None
+        else config.eval.dropless_eval_moe_implementation
+    )
+    stream = iter(train_loader.iter_from_step(config.trainer.trainer.num_train_steps + _ROUTER_CALIB_DATA_OFFSET))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _routing_dump_sequences,
+            config.data,
+            seq_len=config.model.max_seq_len,
+            num_sequences=_ROUTER_CALIB_VAL_SEQUENCES,
+        ).result()
+    valid = (segments >= 0) & (np.pad(segments[:, 1:], ((0, 0), (0, 1)), constant_values=-1) == segments)
+
+    def loss_fn(model: Transformer, betas: jax.Array, batch) -> jax.Array:
+        local = _to_dropless_local(_apply_qb_betas(model, betas), implementation=implementation)
+        compute = _cast_to_compute(mp, local)
+        return compute.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask)
+
+    with set_mesh(probe_mesh):
+        model = _reshard_tree_to_mesh(params, probe_mesh)
+        rows = NamedSharding(probe_mesh, P(_BATCH_AXES, None))
+
+        def put(batch):
+            return jax.tree.map(
+                lambda x: jax.device_put(np.asarray(x), rows) if hasattr(x, "shape") and x.ndim == 2 else x, batch
+            )
+
+        fit = [put(next(stream)) for _ in range(_ROUTER_CALIB_FIT_BATCHES)]
+        per_call = jax.device_count() * 4
+        val = []
+        for start in range(0, len(tokens), per_call):
+            seg = jax.device_put(segments[start : start + per_call], rows)
+            val.append(
+                GrugLmExample(
+                    tokens=jax.device_put(tokens[start : start + per_call], rows),
+                    loss_weight=jax.device_put(valid[start : start + per_call].astype(np.float32), rows),
+                    attn_mask=AttentionMask.causal().with_segment_ids(seg),
+                )
+            )
+        betas = jax.device_put(np.asarray(jax.device_get(qb_betas)), NamedSharding(probe_mesh, P(None, None)))
+        run_router_calib(model, betas, loss_fn, fit, val, (put(b) for b in stream), config.trainer.router_calib_path)
+
+
 def _trace_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
     """Write ``trace_probe.trace_stats`` for fixed held-out sequences to ``path`` (process 0): ``tokens`` /
     ``segments`` ``[N, S]``, each sequence's validation ``set_names``, the ``term_names`` and every trace array."""
@@ -3148,6 +3214,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if config.trainer.attn_distance_path is not None:
                 probed = state.ema_params if state.ema_params is not None else state.params
                 _attn_distance_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.attn_distance_path)
+            if config.trainer.router_calib_path is not None:
+                probed = state.ema_params if state.ema_params is not None else state.params
+                _router_calib_dump(config, probed, state.pending_qb_betas, mesh, train_loader)
             if config.trainer.trace_probe_path is not None:
                 probed = state.ema_params if state.ema_params is not None else state.params
                 _trace_probe_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.trace_probe_path)

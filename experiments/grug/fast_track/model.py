@@ -61,12 +61,11 @@ from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
-from experiments.grug.fast_track import attention_rows_probe, trace_capture
+from experiments.grug.fast_track import attention_rows_probe, router_soft_select, trace_capture
 from experiments.grug.fast_track.activations import polynorm, polynorm_over_input
 from experiments.grug.fast_track.expert_write_mask import expert_write_block_ids, expert_write_mask
 from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights, switchhead_weights
 from experiments.grug.fast_track.head_loss import prototype_target_logits, reduce_token_loss
-from experiments.grug.fast_track.kda_state_read import StateRead, repeat_heads, state_read_features, state_read_init
 from experiments.grug.fast_track.key_offset import (
     MatchAppend,
     append_shared_match,
@@ -1008,9 +1007,6 @@ class GrugModelConfig:
     mla_shared_kv_tied: bool = False
     mla_kv_direct: bool = False
     mla_prev_key_concat: bool = False
-    kda_state_reads: int = 0
-    kda_state_reads_tail: int = 0
-    kda_state_read_hidden: int = 512
     mla_far_key_half: str = ""
     mla_far_key_window: int = 128
     mla_value_norm: str = "none"
@@ -3510,7 +3506,6 @@ class KimiDeltaAttention(eqx.Module):
     """Per-bucket, per-channel log-decay logits of the push buckets (``kda_push_buckets``)."""
     w_push: Float[Array, "D NM"] | None
     """Writer's bucket weights, zero-init (uniform split)."""
-    state_read: StateRead | None  # kda_state_reads
     w_rot_down: Float[Array, "D R"] | None
     w_rot_up: Float[Array, "R NP"] | None
     rot_scale: Float[Array, "N P"] | None
@@ -3589,20 +3584,6 @@ class KimiDeltaAttention(eqx.Module):
             sconv_a=ShortConv.init(r, cfg.sconv_kernel, cfg.sconv_impl) if cfg.kda_decay_conv else None,
             vres_lambda=_vres_lambda_init(cfg),
             push_decay=_kda_push_decay_init(cfg, n, h) if cfg.kda_push_buckets else None,
-            state_read=(
-                state_read_init(
-                    random.fold_in(k_o, 3),
-                    n,
-                    cfg.kda_state_reads,
-                    h,
-                    h,
-                    cfg.kda_state_read_hidden,
-                    d,
-                    cfg.initializer_std,
-                )
-                if cfg.kda_state_reads
-                else None
-            ),
             w_push=(reshard(jnp.zeros((d, n * cfg.kda_push_buckets)), P(None, None)) if cfg.kda_push_buckets else None),
             w_rot_down=(
                 reshard(_init_weight(random.fold_in(k_ad, 1), (d, rot_rank), std), P(_FSDP_AXES, None))
@@ -3772,17 +3753,6 @@ class KimiDeltaAttention(eqx.Module):
         in_specs = (spec4,) * 4 + (spec3, extra_specs)
         # The Pallas custom VJPs are not vma-annotated, so skip the varying-axes check.
         kernel = jax.shard_map(run, mesh=get_abstract_mesh(), in_specs=in_specs, out_specs=spec4, check_vma=False)
-        read_delta = None
-        if self.state_read is not None:  # fixed-query reads of each head's state (kda_state_read.py)
-            m = cfg.kda_state_reads
-            a = self.state_read.queries.astype(q.dtype).reshape(-1, head_dim)
-            q_read = reshard(jnp.broadcast_to(a, (b, s, *a.shape)), spec4)
-            rep_ex = {
-                n_: v_ if n_ == "segment_ids" else repeat_heads(v_, m, axis=0 if n_.startswith("gate_") else 2)
-                for n_, v_ in extras.items()
-            }
-            reads = kernel(q_read, *(repeat_heads(t_, m, 2) for t_ in (k, v, g, beta)), rep_ex)
-            read_delta = state_read_features(self.state_read, reads)
         if self.push_decay is None or self.w_push is None:
             o = kernel(*args)
         else:
@@ -3810,8 +3780,6 @@ class KimiDeltaAttention(eqx.Module):
             gate = jnp.repeat(gate, head_dim, axis=-1, total_repeat_length=cfg.num_heads * head_dim)
         o = o * gate
         out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec())
-        if read_delta is not None:
-            out = out + reshard(read_delta.astype(out.dtype), _batch_spec())
         return out, stats
 
 
@@ -4654,6 +4622,9 @@ class MoEMLP(eqx.Module):
                 combine_weights_f = jax.nn.sigmoid(unbiased_topk)
             denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
             combine_weights_f = combine_weights_f * (renorm_sum / (denom + 1e-9))
+        if router_soft_select.SOFT_SELECT is not None:
+            biased_sel = jnp.take_along_axis(router_logits + self.router_bias, selected_experts, axis=-1)
+            combine_weights_f = router_soft_select.soft_combine(combine_weights_f, biased_sel)
         if self.expert_output_gain is not None:
             # Scaling expert e's output by g_e is scaling its combine weight in every (token, slot) that picked it.
             gain = shard_map(
@@ -9053,7 +9024,6 @@ def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
         mla_sparse_window=cfg.mla_sparse_window if cfg.mla_sparse_tail else 0,
         mla_sparse_topk=cfg.mla_sparse_topk if cfg.mla_sparse_tail else 0,
         mla_sparse_dsa_topk=cfg.mla_sparse_dsa_topk if cfg.mla_sparse_tail else 0,
-        kda_state_reads=cfg.kda_state_reads_tail,
         expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
         tail_expert_write_groups=0,
         expert_write_blocks=cfg.tail_expert_write_blocks or cfg.expert_write_blocks,

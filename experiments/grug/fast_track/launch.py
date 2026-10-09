@@ -416,6 +416,7 @@ def build_h100_ladder_run(
     head_probe: bool = False,
     logit_decomp: bool = False,
     trace_probe: bool = False,
+    router_calib: bool = False,
     attn_distance: bool = False,
     resume_from: str | None = None,
     xla_memory_report: bool = False,
@@ -678,6 +679,7 @@ def build_h100_ladder_run(
                 head_probe_path=prefix_join(ctx.output_path, "head_probe.npz") if head_probe else None,
                 logit_decomp_path=prefix_join(ctx.output_path, "logit_decomp.npz") if logit_decomp else None,
                 trace_probe_path=prefix_join(ctx.output_path, "trace_probe.npz") if trace_probe else None,
+                router_calib_path=prefix_join(ctx.output_path, "router_calib.json") if router_calib else None,
                 attn_distance_path=prefix_join(ctx.output_path, "attn_distance.npz") if attn_distance else None,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
                 final_param_dump_patterns=final_param_dump,
@@ -866,6 +868,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     is_flag=True,
     help="After training, write per-token stats splitting the logits into the stream head and the lm_head_extra_dim "
     "slice to <output>/logit_decomp.npz.",
+)
+@click.option(
+    "--router-calib",
+    is_flag=True,
+    help="After training, run the post-hoc router calibration diagnostic (router_calib.py) to "
+    "<output>/router_calib.json.",
 )
 @click.option(
     "--trace-probe",
@@ -1122,6 +1130,7 @@ def main(
     head_probe: bool,
     logit_decomp: bool,
     trace_probe: bool,
+    router_calib: bool,
     attn_distance: bool,
     resume_from: str | None,
     xla_memory_report: bool,
@@ -1190,6 +1199,7 @@ def main(
         head_probe=head_probe,
         logit_decomp=logit_decomp,
         trace_probe=trace_probe,
+        router_calib=router_calib,
         attn_distance=attn_distance,
         resume_from=resume_from,
         xla_memory_report=xla_memory_report,
