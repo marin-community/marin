@@ -13,7 +13,8 @@ import sqlalchemy
 
 from marina.journeys import free_port
 
-POSTGRES_IMAGE = "pgvector/pgvector:0.8.5-pg16-bookworm"
+# Avoid Docker Hub's unauthenticated pull limit on shared CI runners.
+POSTGRES_IMAGE = "mirror.gcr.io/pgvector/pgvector:0.8.5-pg16-bookworm"
 POSTGRES_PASSWORD = "marina"
 START_TIMEOUT = 60.0
 
