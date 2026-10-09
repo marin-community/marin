@@ -65,7 +65,8 @@ MCQA_FORMAT_PREFIX = (
 )
 MCQA_FORMAT_WRAPPERS = ("{}", "\\boxed{{{}}}")
 OPTION_LINE = re.compile(r"^[ \t]*([A-Z])[.):][ \t]", re.MULTILINE)
-LISTED_OPTIONS = re.compile(r"'Answer: (?:\\boxed\{)?([A-Z](?:/[A-Z])+)")
+LISTED_OPTIONS = re.compile(r"'Answer: (?:\\boxed\{)?([A-Z](?:/[A-Z])*)")
+ESCAPED_OPTION_NEWLINE = re.compile(r"\\n(?=[ \t]*[A-Z][.):][ \t])")
 MCQA_REGEX = r"Answer\s*:\s*(?!Answer)\s*([A-Za-z0-9])\s*"
 MCQA_BOXED_REGEX = r"\\boxed\{\s*([A-Za-z0-9])\s*\}"
 MCQA_EXTRACTIONS = frozenset(
@@ -138,33 +139,48 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
     return rewritten_task(task, original=instruction, reason=OPENQA_REWRITE_REASON)
 
 
-def mcqa_question(instruction: str, options: int) -> str:
-    """The question and its options without the file-delivery wrapper, asking for one option letter."""
+def mcqa_option_labels(problem: str) -> tuple[str, ...]:
+    """Choice labels beginning with A, excluding preceding Roman-numbered premises."""
+    matches = list(OPTION_LINE.finditer(problem))
+    start = next((index for index, match in enumerate(matches) if match.group(1) == "A"), len(matches))
+    return tuple(match.group(1) for match in matches[start:])
+
+
+def mcqa_question(instruction: str) -> tuple[str, int]:
+    """The question and option count, with source delivery wrappers removed."""
     _, separator, problem = instruction.partition(MCQA_SEPARATOR)
     if not separator:
         raise ValueError("Unrecognized MCQA delivery wrapper")
     if not problem.strip():
         raise ValueError("Missing MCQA question/options")
+    original_labels = tuple(match.group(1) for match in OPTION_LINE.finditer(problem))
+    # Some archives contain literal backslash-n separators. Decode only option boundaries,
+    # preserving mathematical escapes and any literal backslashes in the question.
+    problem = ESCAPED_OPTION_NEWLINE.sub("\n", problem)
+    labels = mcqa_option_labels(problem)
+    options = max((ord(label) - 64 for label in labels), default=0)
+    letters = tuple(chr(65 + index) for index in range(options))
+    if not labels or set(labels) != set(letters):
+        raise ValueError("Options must be a contiguous labeled sequence beginning at A")
     first, separator, rest = problem.partition("\n\n")
     if first.startswith(MCQA_FORMAT_PREFIX):
-        letters = tuple(chr(65 + index) for index in range(options))
         option_lists = {"/".join(letters)}
         listed = LISTED_OPTIONS.search(first)
-        # A generated wrapper can list the labels out of order or repeat one; accept any listing of exactly
-        # the actual labels.
-        if listed is not None and set(listed.group(1).split("/")) == set(letters):
+        # The source's generated wrapper also captures premise labels, and misses choices
+        # after escaped newlines. Recognize it while deriving choices from the question.
+        if listed is not None and set(listed.group(1).split("/")) in (set(letters), set(original_labels)):
             option_lists.add(listed.group(1))
         valid_formats = {
             f"{MCQA_FORMAT_PREFIX}'Answer: {wrapper.format(listed_options)}' "
             f"(e.g. 'Answer: {wrapper.format(example)}')."
             for wrapper in MCQA_FORMAT_WRAPPERS
             for listed_options in option_lists
-            for example in letters
+            for example in listed_options.split("/")
         }
         if first not in valid_formats or not separator or not rest.strip():
             raise ValueError("Unsupported MCQA format wrapper")
         problem = rest
-    return f"{problem.strip()}\n\nReturn one option letter from A through {chr(64 + options)}."
+    return f"{problem.strip()}\n\nReturn one option letter from A through {chr(64 + options)}.", options
 
 
 def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
@@ -173,12 +189,8 @@ def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec
         return source_defect("missing_input", "Instruction and verifier_data are required")
     if data.get("output_regex") not in MCQA_EXTRACTIONS:
         return unsupported("unsupported_answer_contract", "Unsupported source MCQA extraction regex")
-    letters = {match.group(1) for match in OPTION_LINE.finditer(instruction)}
-    options = max((ord(letter) - 64 for letter in letters), default=0)
-    if not letters or letters != {chr(65 + index) for index in range(options)}:
-        return unsupported("unsupported_answer_contract", "Options must be a contiguous labeled sequence beginning at A")
     try:
-        question = mcqa_question(instruction, options)
+        question, options = mcqa_question(instruction)
     except ValueError as error:
         return unsupported("unsupported_answer_contract", str(error))
     task = mcq_task(row, prompt=question, answer=data.get("expected_answer"), options=options)
@@ -274,7 +286,7 @@ def sources() -> list[RlDataSource]:
                 name="tasktrove-knowledge_mcqa",
                 source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
                 convert=convert_knowledge_mcqa,
-                version="1",
+                version="2",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=KNOWLEDGE_MCQA_RUBRIC,

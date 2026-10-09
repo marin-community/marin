@@ -168,13 +168,21 @@ def openqa_row(answers: list[str]) -> dict:
     )
 
 
-def mcqa_row(wrapper: str = "{}", output_regex: str = qa.MCQA_REGEX) -> dict:
+def mcqa_row(
+    wrapper: str = "{}",
+    output_regex: str = qa.MCQA_REGEX,
+    *,
+    question: str = MCQA_QUESTION,
+    listed_options: str = "A/B/C/D",
+    expected_answer: str = "B",
+) -> dict:
     instruction = (
         "You are answering a multiple-choice question. Write your final answer to `/app/answer.txt`.\n---\n\n"
-        f"{qa.MCQA_FORMAT_PREFIX}'Answer: {wrapper.format('A/B/C/D')}' (e.g. 'Answer: {wrapper.format('B')}').\n\n"
-        f"{MCQA_QUESTION}"
+        f"{qa.MCQA_FORMAT_PREFIX}'Answer: {wrapper.format(listed_options)}' "
+        f"(e.g. 'Answer: {wrapper.format(listed_options.split('/')[0])}').\n\n"
+        f"{question}"
     )
-    data = {"expected_answer": "B", "output_regex": output_regex}
+    data = {"expected_answer": expected_answer, "output_regex": output_regex}
     return tasktrove_row(
         {
             "instruction.md": instruction.encode(),
@@ -517,6 +525,54 @@ def test_mcqa_keeps_question_constraints_and_grades_the_option_letter(wrapper, o
 def test_mcqa_rejects_unknown_answer_extraction():
     rejection = rejection_of("tasktrove-knowledge_mcqa", mcqa_row(output_regex=r"\((\w)\)"))
     assert rejection.reason == "unsupported_answer_contract"
+
+
+@pytest.mark.parametrize("wrapper", ["{}", "\\boxed{{{}}}"])
+def test_mcqa_recovers_escaped_option_separators_without_decoding_question_escapes(wrapper):
+    # The source wrapper lists only A when B-D are separated by literal backslash-n.
+    question = "Which value equals \\frac{1}{2}?\nA: Zero\\n B: One half\\n C: One\\n D: Two"
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(wrapper, question=question, listed_options="A"))
+    assert "\\frac{1}{2}" in prompt_of(task)
+    assert "\n B: One half\n C: One\n D: Two" in prompt_of(task)
+    assert isinstance(task.grader, VerifyitGrader)
+    assert verifyit_spec(task.grader) == McqSpec("B", options=4)
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+    assert grade_reply(task, answer_reply(task, "A")) == 0.0
+
+
+@pytest.mark.parametrize("listed_options", ["A/B/C/D", "I/A/B/C/D"])
+def test_mcqa_preserves_roman_numbered_premises_without_counting_them_as_options(listed_options):
+    question = (
+        "Which statements hold?\nI. Two is even.\nII. Three is even.\nIV. Four is even.\n\n"
+        "A: I and II\nB: I and IV\nC: II only\nD: All of them"
+    )
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, listed_options=listed_options))
+    assert prompt_of(task) == f"{question}\n\nReturn one option letter from A through D."
+    assert isinstance(task.grader, VerifyitGrader)
+    assert verifyit_spec(task.grader) == McqSpec("B", options=4)
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+
+
+def test_mcqa_counts_choices_separately_from_named_equations_in_generated_wrapper():
+    question = (
+        "Mass balance constraints:\nB: v1 - v2 = 0\nE: v2 - v3 = 0\n\nWhich range?\nA: 0-5\nB: 0-6\nC: 0-7\nD: 0-8"
+    )
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, listed_options="B/E/A/B/C/D"))
+    assert prompt_of(task) == f"{question}\n\nReturn one option letter from A through D."
+    assert isinstance(task.grader, VerifyitGrader)
+    assert verifyit_spec(task.grader) == McqSpec("B", options=4)
+
+
+@pytest.mark.parametrize(
+    "question,answer,reason",
+    [
+        ("How many moles?\nA: 2 moles\nB: 3 moles\nC: 4 moles\nD: 6 moles", "2", "invalid_reference"),
+        ("Which statement holds?\nA: First\nB: Second\nB: Third\nD: Fourth", "B", "unsupported_answer_contract"),
+    ],
+)
+def test_mcqa_keeps_ambiguous_references_and_labels_rejected(question, answer, reason):
+    rejection = rejection_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, expected_answer=answer))
+    assert rejection.reason == reason
 
 
 def test_calendar_runs_the_source_verifier_with_its_timeout_and_witness_golden():
