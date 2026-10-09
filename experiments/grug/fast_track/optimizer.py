@@ -2136,9 +2136,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh_qk": muonh_transform_at(
                     learning_rate * self.muonh_qk_lr_mult, 4, momentum=self.muonh_qk_momentum
                 ),
-                "muonh_shared": muonh_transform_at(
-                    learning_rate * self.muonh_shared_lr_mult, 6, momentum=self.muonh_shared_momentum
-                ),
                 "muonh_routed": self._routed_transform(
                     muonh_transform_at(
                         learning_rate * self.muonh_routed_lr_mult,
@@ -2205,6 +2202,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "router": router_adam_at(adam_lr * self.router_lr_mult),
                 "muonh_router": muonh_transform_at(learning_rate * self.router_lr_mult, 5),
             }
+            if self.muonh_shared_lr_mult != 1.0 or self.muonh_shared_momentum is not None:
+                # Only when used: an unused group would still add optimizer state and break older checkpoints.
+                transforms["muonh_shared"] = muonh_transform_at(
+                    learning_rate * self.muonh_shared_lr_mult, 6, momentum=self.muonh_shared_momentum
+                )
             if slow_upper_qk:
                 # One LR per stacked slice: the upper softmax layers take the scheduled multiplier.
                 upper = jnp.asarray(self.upper_qk_slice_mask)
