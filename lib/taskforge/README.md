@@ -63,10 +63,11 @@ content-addressed cache and does not record to the ledger.
 ## Decisions
 
 Execution is RolloutEngine's. `ShellboxRolloutEngine.run` takes a `LoweredTaskSpec`: a
-TaskCompendium `TaskSpec` (schema 0.22) with the `TaskRuntimeSpec` and `TaskSessionSpec` that say how
-it runs. Each attempt creates a shellbox `Machine` from the caller's `MachineFactory` named by the
-task machine's `MachineRuntimeSpec.backend`, installs the task's resources, runs its setup commands,
-drives the shell tool, grades (on a separate verifier machine when one is lowered) and closes. It
+TaskCompendium `TaskSpec` (schema 0.25, which carries the task's grader and answer format) with the
+`TaskRuntimeSpec` and `TaskSessionSpec` that say how it runs. Each attempt creates a shellbox
+`Machine` from the caller's `MachineFactory` named by the task machine's `MachineRuntimeSpec.backend`,
+installs the task's resources, runs its setup commands, drives the shell tool, grades (in process for
+a verifyit grader without an environment, otherwise on the lowered verifier machine) and closes. It
 grades the state an agent left when the `total_turn_timeout` expires, and bounds every cleanup
 action by the lowered `cleanup_timeout`. Taskforge supplies the model callable
 (`llm.rollout_model.GlmRolloutModel`).

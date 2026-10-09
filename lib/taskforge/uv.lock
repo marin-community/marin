@@ -2434,6 +2434,7 @@ provides-extras = ["pipeline"]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "marin-shellbox", extras = ["shellsim"], editable = "../shellbox" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
