@@ -14,7 +14,6 @@ control replays.
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -32,32 +31,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-SKYRL_METADATA = DataSourceMetadata(
-    id="",
-    name="",
-    origin="MarinSkyRL",
-    revision="e44c4bfcb62c489286a1264094e6d9c883aaf0d2",
-    revised_at="2026-10-08T02:13:45Z",
-    type="RLVR",
-    turns="Single-turn",
-    family_basis="Upstream card/schema and selected SkyRL loader audited 2026-09-28",
-    classification_basis="Inferred from SkyRL environment contract; blended sources may contain multiple task types",
-    provenance_url=(
-        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c8"
-        "83aaf0d2/infra/rl_data/sources.py"
-    ),
-    snapshot_safe=True,
-    gym_url=(
-        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c883a"
-        "af0d2/skyrl-gym/skyrl_gym/envs/__init__.py"
-    ),
-    registry_revised_at="2026-10-01T14:18:17Z",
-    verifier_revised_at="2026-10-08T02:13:45Z",
-    revision_basis="Latest upstream dataset repository or MarinSkyRL verifier change",
-    recorded_at="2026-10-08",
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -313,40 +287,19 @@ CONTROLS = Controls(golden=reference_solution, memory_mb=CODE_GRADER_MEMORY_MB)
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=replace(
-                SKYRL_METADATA,
+            info=SourceInfo(
                 id="MarinSkyRL:apps",
-                name="apps",
-                display_name="codeparrot/apps",
-                url="https://huggingface.co/datasets/codeparrot/apps",
-                dataset_id="codeparrot/apps",
-                dataset_revision="21e74ddf8de1a21436da12e3e653065c5213e9d1",
-                verifier_revision="a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
+                title="codeparrot/apps",
+                origin="MarinSkyRL",
                 family="competitive-programming",
-                environment="lcb",
-                task_count=5000,
-                count_basis="Dataset card DatasetDict: train rows (not train + test)",
-                count_precision="reported",
-                count_url=(
-                    "https://huggingface.co/datasets/codeparrot/apps/blob/21e74ddf8de1a21436da12e3e6"
-                    "53065c5213e9d1/README.md"
-                ),
-                is_benchmark=True,
-                benchmark_basis="Upstream dataset card explicitly describes a benchmark",
-                family_url=(
-                    "https://huggingface.co/datasets/codeparrot/apps/blob/21e74ddf8de1a21436da12e3e6"
-                    "53065c5213e9d1/README.md"
-                ),
-                canonical_source="codeparrot/apps",
-                canonical_url="https://huggingface.co/datasets/codeparrot/apps",
-                license=("mit",),
-                verification="schema_only",
-                gym_alias="gym/lcb",
-                gym_entrypoint="skyrl_gym.envs.lcb.env:LCBEnv",
-                dataset_revised_at="2022-10-20T15:00:15.000Z",
-                verifier_url=(
-                    "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e"
-                    "6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
+                tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/lcb"),
+                verifier=SourceReference(
+                    "lcb",
+                    "a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
+                    (
+                        "https://github.com/marin-community/MarinSkyRL/tree/"
+                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
+                    ),
                 ),
             ),
             pipeline=RlDataPipeline(
@@ -365,41 +318,19 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
-            metadata=replace(
-                SKYRL_METADATA,
+            info=SourceInfo(
                 id="MarinSkyRL:eurus2_code",
-                name="eurus2_code",
-                display_name="PRIME-RL/Eurus-2-RL-Data · code",
-                url="https://huggingface.co/datasets/PRIME-RL/Eurus-2-RL-Data",
-                dataset_id="PRIME-RL/Eurus-2-RL-Data",
-                dataset_revision="9776b13264b5aaa0b16495fcf086a0a8d86fd655",
-                verifier_revision="a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
+                title="PRIME-RL/Eurus-2-RL-Data · code",
+                origin="MarinSkyRL",
                 family="competitive-programming",
-                environment="lcb",
-                task_count=25276,
-                count_basis="Dataset card: Coding/train only; SkyRL selects ability=code",
-                count_precision="reported",
-                count_url=(
-                    "https://huggingface.co/datasets/PRIME-RL/Eurus-2-RL-Data/blob/9776b13264b5aaa0b"
-                    "16495fcf086a0a8d86fd655/README.md"
-                ),
-                benchmark_basis=(
-                    "SkyRL test-only designation or HF benchmark:official tag; false means no " "designation found"
-                ),
-                family_url=(
-                    "https://huggingface.co/datasets/PRIME-RL/Eurus-2-RL-Data/blob/9776b13264b5aaa0b"
-                    "16495fcf086a0a8d86fd655/README.md"
-                ),
-                canonical_source="PRIME-RL/Eurus-2-RL-Data · code",
-                canonical_url="https://huggingface.co/datasets/PRIME-RL/Eurus-2-RL-Data",
-                license=("mit",),
-                verification="schema_only",
-                gym_alias="gym/lcb",
-                gym_entrypoint="skyrl_gym.envs.lcb.env:LCBEnv",
-                dataset_revised_at="2025-02-19T12:14:49.000Z",
-                verifier_url=(
-                    "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e"
-                    "6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
+                tags=("rlvr", "single-turn", "license:mit", "gym/lcb"),
+                verifier=SourceReference(
+                    "lcb",
+                    "a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
+                    (
+                        "https://github.com/marin-community/MarinSkyRL/tree/"
+                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
+                    ),
                 ),
             ),
             pipeline=RlDataPipeline(
@@ -422,40 +353,19 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
-            metadata=replace(
-                SKYRL_METADATA,
+            info=SourceInfo(
                 id="MarinSkyRL:verifiable_code",
-                name="verifiable_code",
-                display_name="open-r1/verifiable-coding-problems-python",
-                url="https://huggingface.co/datasets/open-r1/verifiable-coding-problems-python",
-                dataset_id="open-r1/verifiable-coding-problems-python",
-                dataset_revision="b761a24a95fa03289a231d2d31c183636ffb9833",
-                verifier_revision="a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
+                title="open-r1/verifiable-coding-problems-python",
+                origin="MarinSkyRL",
                 family="competitive-programming",
-                environment="lcb",
-                task_count=35735,
-                count_basis="HF card / viewer selected split rows, before filtering / deduplication",
-                count_precision="exact",
-                count_url=(
-                    "https://huggingface.co/datasets/open-r1/verifiable-coding-problems-python/blob/"
-                    "b761a24a95fa03289a231d2d31c183636ffb9833/README.md"
-                ),
-                benchmark_basis=(
-                    "SkyRL test-only designation or HF benchmark:official tag; false means no " "designation found"
-                ),
-                family_url=(
-                    "https://huggingface.co/datasets/open-r1/verifiable-coding-problems-python/blob/"
-                    "b761a24a95fa03289a231d2d31c183636ffb9833/README.md"
-                ),
-                canonical_source="open-r1/verifiable-coding-problems-python",
-                canonical_url="https://huggingface.co/datasets/open-r1/verifiable-coding-problems-python",
-                verification="schema_only",
-                gym_alias="gym/lcb",
-                gym_entrypoint="skyrl_gym.envs.lcb.env:LCBEnv",
-                dataset_revised_at="2025-03-03T12:49:47.000Z",
-                verifier_url=(
-                    "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e"
-                    "6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
+                tags=("rlvr", "single-turn", "gym/lcb"),
+                verifier=SourceReference(
+                    "lcb",
+                    "a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
+                    (
+                        "https://github.com/marin-community/MarinSkyRL/tree/"
+                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
+                    ),
                 ),
             ),
             pipeline=RlDataPipeline(
@@ -477,38 +387,19 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
-            metadata=replace(
-                SKYRL_METADATA,
+            info=SourceInfo(
                 id="MarinSkyRL:gretel_text_to_sql",
-                name="gretel_text_to_sql",
-                display_name="gretelai/synthetic_text_to_sql",
-                url="https://huggingface.co/datasets/gretelai/synthetic_text_to_sql",
-                dataset_id="gretelai/synthetic_text_to_sql",
-                dataset_revision="740ab236e64503fba51be1101df7a1be83bf455d",
-                verifier_revision="1d8cec1db5f4d68cb643344f8c777f73d197656040652ff2c7a588dd88ce7ed5",
+                title="gretelai/synthetic_text_to_sql",
+                origin="MarinSkyRL",
                 family="text-to-sql",
-                environment="text_to_sql",
-                task_count=100000,
-                count_basis="HF card / viewer selected split rows, before filtering / deduplication",
-                count_precision="exact",
-                count_url="https://datasets-server.huggingface.co/size?dataset=gretelai/synthetic_text_to_sql",
-                benchmark_basis=(
-                    "SkyRL test-only designation or HF benchmark:official tag; false means no " "designation found"
-                ),
-                family_url=(
-                    "https://huggingface.co/datasets/gretelai/synthetic_text_to_sql/blob/740ab236e64"
-                    "503fba51be1101df7a1be83bf455d/README.md"
-                ),
-                canonical_source="gretelai/synthetic_text_to_sql",
-                canonical_url="https://huggingface.co/datasets/gretelai/synthetic_text_to_sql",
-                license=("apache-2.0",),
-                verification="two_sided",
-                gym_alias="gym/text_to_sql",
-                gym_entrypoint="skyrl_gym.envs.text_to_sql.env:TextToSQLEnv",
-                dataset_revised_at="2025-12-16T19:17:20.000Z",
-                verifier_url=(
-                    "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e"
-                    "6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/text_to_sql"
+                tags=("rlvr", "single-turn", "license:apache-2.0", "gym/text_to_sql"),
+                verifier=SourceReference(
+                    "text_to_sql",
+                    "1d8cec1db5f4d68cb643344f8c777f73d197656040652ff2c7a588dd88ce7ed5",
+                    (
+                        "https://github.com/marin-community/MarinSkyRL/tree/"
+                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/text_to_sql"
+                    ),
                 ),
             ),
             pipeline=RlDataPipeline(

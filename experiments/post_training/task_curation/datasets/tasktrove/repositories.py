@@ -8,25 +8,15 @@ FAIL_TO_PASS and PASS_TO_PASS tests. No committed image covers those per-task re
 record the source grader's files and terms under a ``NoGrader`` and never reach the final export.
 """
 
-from dataclasses import replace
 
 from taskcompendium.convert.executable import swe_task
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-TASKTROVE_METADATA = replace(
-    TASKTROVE_RELEASE,
-    verifier_revision=None,
-    family="swe-repo",
-    snapshot_safe=True,
-    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 WORKSPACE = "/testbed"
 
@@ -57,9 +47,9 @@ def convert_repository_task(row: RawRow, _context: ConversionContext) -> TaskSpe
     return swe_task(row, workspace=WORKSPACE)
 
 
-def repository_source(name: str, config: str, rubric: str, metadata: DataSourceMetadata) -> RlDataSource:
+def repository_source(name: str, config: str, rubric: str, info: SourceInfo) -> RlDataSource:
     return RlDataSource(
-        metadata=metadata,
+        info=info,
         pipeline=RlDataPipeline(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
@@ -78,62 +68,50 @@ def sources() -> list[RlDataSource]:
             "swe_rebench",
             "DCAgent__swe_rebench_v2_patched_oracle-v2",
             SWE_REBENCH_RUBRIC,
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
-                name="DCAgent__swe_rebench_v2_patched_oracle-v2",
-                display_name="DCAgent/swe_rebench_v2_patched_oracle-v2",
-                dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-                task_count=13559,
+                title="DCAgent/swe_rebench_v2_patched_oracle-v2",
+                origin="Task Trove",
+                family="swe-repo",
+                tags=(
+                    "agentic",
+                    "multi-turn",
+                    "language:python",
+                    "language:go",
+                    "language:rust",
+                    "language:java",
+                    "language:julia",
+                    "language:kotlin",
+                    "language:swift",
+                    "language:dart",
+                    "language:c",
+                    "language:scala",
+                    "language:php",
+                    "language:csharp",
+                    "language:elixir",
+                    "language:lua",
+                    "language:cpp",
+                    "language:ocaml",
+                ),
+                count=18319,
                 notes=(
-                    "Real repos, hidden FAIL_TO_PASS, git gate, trusted-test restore. Bake the "
-                    "verify-time installs into the image."
+                    "Real repos, hidden FAIL_TO_PASS, git gate, trusted-test restore. Bake the verify-"
+                    "time installs into the image."
                 ),
-                canonical_source="DCAgent/swe_rebench_v2_patched_oracle-v2",
-                verification="script, pytest",
-                upstream_repository="DCAgent/swe_rebench_v2_patched_oracle-v2",
-                upstream_url="https://huggingface.co/datasets/DCAgent/swe_rebench_v2_patched_oracle-v2",
-                input_count=18319,
-                languages=(
-                    "python",
-                    "go",
-                    "rust",
-                    "java",
-                    "julia",
-                    "kotlin",
-                    "swift",
-                    "dart",
-                    "c",
-                    "scala",
-                    "php",
-                    "csharp",
-                    "elixir",
-                    "lua",
-                    "cpp",
-                    "ocaml",
-                ),
-                modes=("script", "pytest"),
             ),
         ),
         repository_source(
             "swesmith",
             "laion__swesmith-oracle-filtered-v2",
             SWESMITH_RUBRIC,
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:laion__swesmith-oracle-filtered-v2",
-                name="laion__swesmith-oracle-filtered-v2",
-                display_name="laion/swesmith-oracle-filtered-v2",
-                dataset_revision="eb0efd4c530101032b870f62aa5590b4888a8b01",
-                task_count=12720,
+                title="laion/swesmith-oracle-filtered-v2",
+                origin="Task Trove",
+                family="swe-repo",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=12927,
                 notes="Real repo tests. Strip the oracle patch from tests/config.json at conversion.",
-                canonical_source="laion/swesmith-oracle-filtered-v2",
-                verification="pytest",
-                upstream_repository="laion/swesmith-oracle-filtered-v2",
-                upstream_url="https://huggingface.co/datasets/laion/swesmith-oracle-filtered-v2",
-                input_count=12927,
-                languages=("python",),
-                modes=("pytest",),
             ),
         ),
     ]

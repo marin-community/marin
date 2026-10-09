@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source declarations combine conversion recipes with Atlas metadata."""
+"""Source identity and assessments, independent of the Atlas presentation."""
 
 from dataclasses import dataclass, field
 from typing import Literal
@@ -10,8 +10,41 @@ from experiments.post_training.task_curation.pipeline import RlDataPipeline
 
 
 @dataclass(frozen=True)
+class SourceReference:
+    """A dataset or verifier at the revision an assessment covers."""
+
+    name: str
+    revision: str | None
+    url: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class SourceInfo:
+    """Identity and discovery information for one source population.
+
+    ``count`` is the number of selected input rows at the dataset revision,
+    before conversion or curation. Leave it unknown unless the pinned payload
+    or a complete manifest establishes it. A sample size is not a source count.
+
+    Runnable sources take dataset identity from their pipeline. ``dataset``
+    identifies inventory entries without a pipeline. Tags describe task type,
+    interaction, benchmark status, and source-specific search terms.
+    """
+
+    id: str
+    title: str
+    origin: str
+    family: str = ""
+    tags: tuple[str, ...] = ()
+    count: int | None = None
+    notes: str = ""
+    dataset: SourceReference | None = None
+    verifier: SourceReference | None = None
+
+
+@dataclass(frozen=True)
 class DataSourceReview:
-    """An authored source assessment, with the evidence and revisions it covers.
+    """An authored assessment and the dataset/verifier revisions it covers.
 
     Executed reviews and difficulty measurements remain in the Atlas database.
     Declaring a conversion recipe does not imply a favorable quality review.
@@ -24,83 +57,22 @@ class DataSourceReview:
     verifier_revision: str | None = None
 
 
-@dataclass(frozen=True, kw_only=True)
-class DataSourceMetadata:
-    """Source inventory and provenance; counts describe the identified population."""
-
-    id: str
-    name: str
-    origin: str
-    display_name: str = ""
-    url: str = ""
-    dataset_id: str = ""
-    revision: str = ""
-    revised_at: str = ""
-    dataset_revision: str = ""
-    verifier_revision: str | None = None
-    family: str = ""
-    environment: str = ""
-    type: str = ""
-    turns: str = ""
-    task_count: int | None = None
-    count_basis: str = ""
-    count_precision: str = "unknown"
-    count_url: str = ""
-    recorded_at: str = ""
-    status: str = "Available"
-    kind: str = "Dataset"
-    notes: str = ""
-    split: str = "train"
-    is_benchmark: bool = False
-    benchmark_basis: str = ""
-    family_basis: str = ""
-    family_url: str = ""
-    classification_basis: str = ""
-    canonical_source: str = ""
-    canonical_url: str = ""
-    provenance_url: str = ""
-    license: tuple[str, ...] = ()
-    verification: str = ""
-    snapshot_safe: bool = False
-    snapshot_safety_basis: str = ""
-    upstream_repository: str = ""
-    upstream_configuration: str | None = None
-    upstream_url: str = ""
-    upstream_link_basis: str = ""
-    input_count: int | None = None
-    languages: tuple[str, ...] = ()
-    modes: tuple[str, ...] = ()
-    gym_alias: str = ""
-    gym_url: str = ""
-    gym_entrypoint: str = ""
-    canonical_id: str = ""
-    registry_name: str = ""
-    component_name: str = ""
-    component_selector: str = ""
-    component_file_sha256: str = ""
-    canonical_task_count: int | None = None
-    component_ratio: str = ""
-    dataset_revised_at: str = ""
-    registry_revised_at: str = ""
-    verifier_url: str = ""
-    verifier_revised_at: str = ""
-    revision_basis: str = ""
-    grading_revision: str = ""
-
-
 @dataclass(frozen=True)
 class RlDataSource:
-    """One source population and its optional TaskSpec conversion recipe.
+    """One source population, its assessment, and an optional conversion recipe.
 
-    A missing pipeline keeps excluded or unfinished sources visible in the
-    inventory without pretending they can run. The stable metadata ID preserves
-    existing Atlas review links across changes to conversion recipes.
+    Stable IDs preserve Atlas review history even when the recipe changes.
+    Sources without a pipeline remain discoverable in the inventory.
     """
 
-    metadata: DataSourceMetadata
+    info: SourceInfo
     pipeline: RlDataPipeline | None = None
     review: DataSourceReview = field(default_factory=DataSourceReview)
 
+    def __post_init__(self) -> None:
+        if self.pipeline is not None and self.info.dataset is not None:
+            raise ValueError("Runnable sources define their dataset only in pipeline.source")
+
     @property
     def name(self) -> str:
-        return self.pipeline.name if self.pipeline is not None else self.metadata.name
+        return self.pipeline.name if self.pipeline is not None else self.info.id.partition(":")[2]

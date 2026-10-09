@@ -107,26 +107,31 @@ def test_snapshot_replacement_retires_removed_rows_without_affecting_other_origi
 
 
 @pytest.mark.parametrize("changed_field", [None, "dataset_revision", "verifier_revision"])
-def test_changed_source_preserves_historical_review_but_invalidates_current_rating(changed_field) -> None:
+@pytest.mark.parametrize("review_origin", ["database", "source"])
+def test_changed_source_preserves_historical_review_but_invalidates_current_rating(changed_field, review_origin) -> None:
     payload = {"id": "MarinSkyRL:math", "dataset_revision": "data1", "verifier_revision": "code1"}
     if changed_field:
         payload[changed_field] = "new-revision"
-    row = source_with_review(
-        {
-            "payload": payload,
-            "quality": "good",
-            "difficulty": "32/32",
-            "traces": 3,
-            "review_id": "review1",
-            "review_date": "2026-09-28",
-            "review_source_revision": "data1",
-            "review_verifier_revision": "code1",
-            "verifier_issues": [],
-        }
-    )
-    assert row["review_id"] == "review1"
+    review = {
+        "quality": "good",
+        "difficulty": "32/32",
+        "traces": 3,
+        "review_id": "review1" if review_origin == "database" else None,
+        "review_date": "2026-09-28",
+        "review_source_revision": "data1",
+        "review_verifier_revision": "code1",
+    }
+    record = {"payload": payload, "verifier_issues": []}
+    if review_origin == "source":
+        payload.update(review)
+        record.update({key: None for key in review})
+    else:
+        record.update(review)
+    row = source_with_review(record)
+    assert row["review_id"] == review["review_id"]
     assert row["review_date"] == "2026-09-28"
     assert row["review_stale"] == bool(changed_field)
+    assert row["review_applicability"] == ("stale" if changed_field else "current")
     assert row["quality"] == (None if changed_field else "good")
     assert row["difficulty"] == (None if changed_field else "32/32")
 

@@ -263,7 +263,7 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> 
                     reason = row["normalization_reason"] if row["task_json"] is None else None
                     if row["task_json"] is not None:
                         try:
-                            record = harbor_record(row, grader_image=grader_image, family=source.metadata.family)
+                            record = harbor_record(row, grader_image=grader_image, family=source.info.family)
                         except UnsupportedHarborTask as error:
                             reason = str(error)
                         else:
@@ -281,7 +281,7 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> 
         "rejections": rejected,
         "grader_image": grader_image,
         "source": source.name,
-        "atlas_id": source.metadata.id,
+        "atlas_id": source.info.id,
         "harbor_config_validated": True,
         "runtime_verified": False,
         "limitation": "The supplied verifier image's dependency parity with the source package lock is unverified.",

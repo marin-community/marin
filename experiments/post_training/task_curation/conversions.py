@@ -27,7 +27,7 @@ def convert_source(
 ) -> ConversionResult | SourcePipelineResult:
     """Convert a declared source in quick, sample, or full mode using its bound recipe."""
     if source.pipeline is None:
-        raise ValueError(f"Source has no conversion pipeline: {source.metadata.id}")
+        raise ValueError(f"Source has no conversion pipeline: {source.info.id}")
     return convert_pipeline(
         source.pipeline,
         mode=mode,
