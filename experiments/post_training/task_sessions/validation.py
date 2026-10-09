@@ -47,6 +47,7 @@ from experiments.post_training.cat_count_canary.launcher import (
 )
 
 BATCH_SIZE = 8
+RUN_NAME = "checkpoints/task-session-validation"
 GROUP_SIZE = 4
 MICRO_BATCH_SIZE = 4
 VALIDATION_ROWS = BATCH_SIZE
@@ -156,7 +157,7 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     adopted_model = ArtifactStep.adopt(model.name, model.version, QWEN_SOURCE, kind=model.artifact_type)
     run = skyrl_step(
         SkyRLSpec(
-            name=user_owned_name(f"checkpoints/task-session-validation/{mode}"),
+            name=user_owned_name(f"{RUN_NAME}/{mode}"),
             version=version,
             config_yaml=yaml.safe_dump(config, sort_keys=False),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
@@ -203,9 +204,7 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
 @click.option("--steps", type=click.IntRange(min=1), default=10, show_default=True)
 @rl_build_options
 def main(mode: str, steps: int) -> ArtifactStep[SkyRLRun]:
-    return build_run(
-        mode=mode, version=resolve_version(f"checkpoints/task-session-validation/{mode}", None), steps=steps
-    )
+    return build_run(mode=mode, version=resolve_version(f"{RUN_NAME}/{mode}", None), steps=steps)
 
 
 if __name__ == "__main__":
