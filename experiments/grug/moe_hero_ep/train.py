@@ -1175,16 +1175,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     # the expert axis lands replicated, and the copy is much larger than the
                     # train-mesh params. The train step needs almost the whole device budget for
                     # its temporary buffer, thus this copy must die before the next step.
-                    with callbacks.progress_event_scope(
-                        step.emit_event,
-                        callbacks.ProgressEvent.EVALUATION_STARTED,
-                        callbacks.ProgressEvent.EVALUATION_FINISHED,
+                    with (
+                        callbacks.progress_event_scope(
+                            step.emit_event,
+                            callbacks.ProgressEvent.EVALUATION_STARTED,
+                            callbacks.ProgressEvent.EVALUATION_FINISHED,
+                        ),
+                        set_mesh(_mesh),
                     ):
-                        with set_mesh(_mesh):
-                            model = _reshard_tree_to_mesh(step.model, _mesh)
-                            with jax_config.enable_pgle(False):
-                                log_dict = eval_model(_ev, model, prefix=_prefix)
-                            levanter.tracker.log(log_dict, step=step_count)
+                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        with jax_config.enable_pgle(False):
+                            log_dict = eval_model(_ev, model, prefix=_prefix)
+                        levanter.tracker.log(log_dict, step=step_count)
                     last_dropless_eval_step = step_count
 
                 eval_hooks.append(dropless_eval_hook)
