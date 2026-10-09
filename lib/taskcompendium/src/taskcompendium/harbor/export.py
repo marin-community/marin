@@ -21,12 +21,18 @@ import tomlkit
 from finestore.schema import arrow_schema
 from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
 from rigging.filesystem.storage_path import StoragePath
+from verifyit.modes.extract import collapse_whitespace
 from verifyit.spec import (
     DEFAULT_WORKSPACE,
+    ExactSpec,
     GotestSpec,
+    JudgeSpec,
     JunitSpec,
+    MathSpec,
+    NumericSpec,
     PytestSpec,
     ScriptSpec,
+    Spec,
     mode_of,
     parse_spec,
     render_spec,
@@ -127,6 +133,8 @@ HARBOR_REWARD_PATH = "/logs/verifier/reward.txt"
 GRADER_STDOUT_PATH = "/logs/verifier/taskcompendium-stdout.txt"
 REPOSITORY_WORKSPACE = "/testbed"
 LEGACY_AGENT_TIMEOUT = 900.0
+MIN_GOLD_LEAK_CHARS = 12
+GOLD_LEAK_PREVIEW_CHARS = 60
 HARBOR_SCRIPT_ARGV = ("bash", f"/{TEST_SH}")
 
 
@@ -165,6 +173,7 @@ class _VerifierProgram:
     timeout: float
     env: dict[str, str]
     cwd: str
+    spec: Spec | None
 
 
 def _environment_mode(task: TaskSpec) -> VerifierEnvironmentMode:
@@ -246,6 +255,7 @@ def _verifier_program(
         # Separate Harbor verifiers own their tests; native execution skips uploading them.
         files["tests/Dockerfile"] = f"FROM {grader_image}\nCOPY . /tests\n".encode()
     answer_path = None
+    spec: Spec | None = None
     if isinstance(grader, VerifyitGrader):
         spec = verifyit_spec(grader)
         answer_path = verifyit_answer_file(spec) if task.answer_type == AnswerType.TEXT else None
@@ -317,6 +327,7 @@ def _verifier_program(
         timeout=timeout,
         env=grader_env,
         cwd=grader_cwd,
+        spec=spec,
     )
 
 
@@ -332,6 +343,24 @@ def _validate_tasktrove_dockerfile(files: dict[str, bytes]) -> None:
             source = line.split()[1]
             if source not in files and not any(path.startswith(source.rstrip("/") + "/") for path in files):
                 raise UnsupportedHarborTask(f"COPY of a file not in the task: {source}")
+
+
+def _reference_leak(instruction: str, spec: Spec | None) -> str | None:
+    """Retain the legacy exclusion for a long reference disclosed in the public prompt."""
+    if isinstance(spec, MathSpec | NumericSpec):
+        expected = (str(spec.expected),)
+    elif isinstance(spec, ExactSpec):
+        expected = spec.expected
+    elif isinstance(spec, JudgeSpec):
+        expected = spec.references
+    else:
+        return None
+    prompt = collapse_whitespace(instruction).lower()
+    for reference in expected:
+        needle = collapse_whitespace(reference).lower()
+        if len(needle) >= MIN_GOLD_LEAK_CHARS and needle in prompt:
+            return f"expected value appears in instruction: {needle[:GOLD_LEAK_PREVIEW_CHARS]!r}"
+    return None
 
 
 def harbor_payload(
@@ -358,6 +387,8 @@ def harbor_payload(
             f"\n\nWrite your final answer to `{answer_path}`. "
             "The contents of this file are graded as your final response."
         )
+    if leak := _reference_leak(prompt, verifier.spec):
+        raise UnsupportedHarborTask(f"gold_leak: {leak}")
     files["instruction.md"] = prompt.encode()
     public = () if environment_mode == VerifierEnvironmentMode.SHARED else (*task.resources.all, *task.resources.worker)
     if environment.docker_build is not None:

@@ -550,3 +550,21 @@ def test_harbor_repository_retains_old_environment_exclusions(repository_task, l
     }
     with pytest.raises(UnsupportedHarborTask):
         harbor_record(row, fallback_actor_image=BASE_IMAGE, grader_image=None, family="swe")
+
+
+def test_science_openqa_keeps_mechanical_conversion_but_filters_legacy_reference_leak():
+    # TaskTrove revision 02923004846e4e73862c20962f823a6d05100e7a, science raw row 22:
+    # the requested proof includes its reference formula.
+    source = next(source for source in qa.sources() if source.name == "science-openqa")
+    assert source.pipeline is not None
+    path = "science-1fafe0a7befe.tar.gz"
+    task = converted_task(
+        source.pipeline, {"path": path, "task_binary": (FIXTURES / "science_openqa_gold_leak.tar.gz").read_bytes()}
+    )
+    row = {
+        "task_json": task.model_dump_json(),
+        "source_row": "laion__nemotron-gym-science-so-openq-v3/tasks.parquet:22",
+        "original_path": path,
+    }
+    with pytest.raises(UnsupportedHarborTask, match="gold_leak: expected value appears in instruction"):
+        harbor_record(row, grader_image=GRADER_IMAGE, family=source.info.family, fallback_actor_image=BASE_IMAGE)

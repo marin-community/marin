@@ -270,7 +270,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from experiments.post_training.task_curation.pipeline import run_curation
 from experiments.post_training.task_curation.sources import all_sources
 
-source = all_sources()["tasktrove-calendar"]
+source = next(source for source in all_sources().values() if source.name == "tasktrove-calendar")
 assert source.pipeline is not None
 result = run_curation(
     source.pipeline,
@@ -344,6 +344,10 @@ This prints the graph without exporting, building images or launching training.
 For execution, the adopted input must be accessible to the coordinator. QUICK
 inputs retain their conversion-only status; exporting them adds no runtime
 verification. The smoke graph does not construct the legacy TaskTrove pipeline.
+Harbor lowering retains the legacy exclusion for reference answers of at least
+12 characters already present in the public instruction, after normalizing case and
+whitespace. It records these as `gold_leak` lowering rejections; QUICK retains
+the mechanically converted rows. This static check executes no grader.
 
 The source name in the QUICK manifest selects the registry declaration, which
 supplies the exported family and source ID. Reusable lowering and comparison live
