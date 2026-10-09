@@ -441,7 +441,8 @@ class ZephyrCoordinator:
         )
         self._coordinator_task_id = job_info.task_id.to_wire() if (job_info := get_job_info()) is not None else ""
 
-        self._web_application = create_dashboard_application(CoordinatorDashboard(self, WorkerState.ACTIVE))
+        self._dashboard = CoordinatorDashboard(self, WorkerState.ACTIVE)
+        self._web_application = create_dashboard_application(self._dashboard)
 
         logger.info("Coordinator initialized")
 
@@ -1394,6 +1395,7 @@ class ZephyrCoordinator:
                 return
             if not run.done:
                 raise RuntimeError(f"Execution {execution_id} is still active")
+            self._dashboard.archive_locked(execution_id)
             self._executions.pop(execution_id, None)
             for key in [key for key in self._worker_counters if key[1] == execution_id]:
                 self._worker_counters.pop(key)

@@ -66,6 +66,13 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 ULTRA_REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
 NAME_PREFIX = "nemotron_ultra_"
+ULTRA_VERIFIER_URL = (
+    "https://github.com/marin-community/MarinSkyRL/tree/"
+    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+)
+HARBOR_VERIFIER_URL = (
+    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598f3/src/harbor/verifier"
+)
 
 
 SWE_GYM = HfSource(
@@ -428,10 +435,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "4fa7989c106455b584397fb18b72ca84f44f10b3cf122c6d24c4d325a9c2f308",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "hs3_multi": SourceInfo(
@@ -444,10 +448,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "110a1af331809e56e1268bcdd9f524a11dd0f69b5a0e7adca218c422e23d7e2e",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "hs3_multiturn": SourceInfo(
@@ -460,10 +461,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0f8e77dcd20b0046901d41e55bb31278c7e50da693ec5a1a3c36e485da86b0d0",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "makeshn_ultra_v3_ipi_train": SourceInfo(
@@ -476,10 +474,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "3c22687383fb3360c57685b0f92a2123f94f4e1e",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "safety_en": SourceInfo(
@@ -492,10 +487,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "b2b02d239d99ad683992c24f962736ba8b85cc2a04084e3174657820d0751e13",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_GYM}": SourceInfo(
@@ -511,10 +503,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "3b04884dd2139714321f8e06416596dd5e60dd79d6cb4c3aab2a86b52e96bcdb",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
@@ -530,10 +519,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5f19be9f7240c4b6cc597922b4037fb08648738cd6593c4ff18a98ccc94e792b",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
@@ -546,10 +532,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "8d531a83a74e477b9adae6dd7cf2af3af1e17800a051ebdabe37f468acee61ac",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -562,10 +545,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "011ce022c8a4ec20f483945ae34e42169f0034da9d65e980e509392f6ad913c3",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
@@ -578,10 +558,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "e3e85a847527d0ace97e1a6459ce92b3ce54d5278ac6f5a4eae7e6da9a564623",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_calendar_v2": SourceInfo(
@@ -594,10 +571,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5c9656671baf79a9711cd5c7ecbacffc6d1a169129b81ab098c00a4be8838833",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_comp_coding": SourceInfo(
@@ -610,10 +584,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0878a10ef2dd4c89daf18e325b48720553c3f5f0ab60d99d233b4520db3e7684",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_instruction_following": SourceInfo(
@@ -626,10 +597,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "f0571dbf560eaceae2609645364cb6df639318e701a31e0cb55303adfa6539bc",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_jailbreak": SourceInfo(
@@ -642,10 +610,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "76b4bdebc9c8a2db5ee4b9b1bd6d1703b556e8ab00a9a8426aa942e3d2778022",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_lean": SourceInfo(
@@ -658,10 +623,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "44e963bdf18c6b3e95f85aee3ab59c03fc5c9e8fa1c598bc633ae117dd3d0315",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
@@ -674,10 +636,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "7fff13efc379f4bfd200ecd2d225dad60c79be801d09ddc27439f10b5fd87abb",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_math_tir": SourceInfo(
@@ -690,10 +649,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "2ab0dc76ee4bab074aec8879a6a6aa44405868d2ced449fbb2d64e3e9f9ab2d5",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
@@ -706,10 +662,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "abeefa8df27e3ab6decdfbfa33e7eca3abf6e7c7f37019d29419663ca7424b8e",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_nvarc_inductive": SourceInfo(
@@ -722,10 +675,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "7593b96ad47dc731d023f6d4e8d45df8d456b309fad6374698f815287470aa10",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_nvarc_transductive": SourceInfo(
@@ -738,10 +688,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "43c2d7cd6b0cb7365492cef009595a9687f2671ed545d7d209b354c358eda40f",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_rdkit": SourceInfo(
@@ -754,10 +701,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "cf4029df469964dabedfa347aa974e590744e9d4807d132042641e024d5d83f1",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
@@ -770,10 +714,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "9d4d3a356f99a79533ac7d25cf25481f6c975a75532c9e3ddbc0e9f4dbc4dea9",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_stem_mcqa": SourceInfo(
@@ -786,10 +727,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "4e21612c6acfff9c614d0c5e0e6868e0b137609aa2dca3c5f70aadf38dfa8aa0",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
@@ -802,10 +740,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "c745334d6e868cfa4388f84f39a11c4985fe3bc28996c306d3db9eb5a16800c5",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
@@ -818,10 +753,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "b84e98dd9bfc9daff96f66dc2f7fa9779d6dd31ed04e01b5a7a1b437a6b31ad8",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
@@ -834,10 +766,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "752d664be2f90fd7b5b87f042b5e710734a9c927cc44e2d77a5729261390c34f",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_v3_agentic_rl_step73_citation_format_v2": SourceInfo(
@@ -850,10 +779,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "bb2fa3ad44683ff0912d4d9b354ec259af50ffaf4d83d0d7e85c0ae4abf7460d",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_v3_agentic_rl_step73_freeform_text_v2": SourceInfo(
@@ -866,10 +792,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "31f2227faf10acc6c12d2072e0b9210cd965edf9e8afe31309f5de24af007741",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_v3_agentic_rl_step73_structured_outputs_v2": SourceInfo(
@@ -882,10 +805,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "a0bf6ec5d0ef1f5a2ed62b485210c371209c85a84c01e33e9e668e8356bfab57",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": SourceInfo(
@@ -898,10 +818,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "1b8b156a91f4647ed898c1fa0899447b2b08b2419acf292ca05110510fc2e028",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -916,10 +833,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "dd3310c994d63f365d41bba3ca91deda96c8c472e13a68b751f26610e99ca83d",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
     },
@@ -934,10 +848,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "b280136ced512ece80e95ba06ccd4a72b89dbd83009e91204dc537296e1ee379",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
@@ -950,10 +861,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "e3e85a847527d0ace97e1a6459ce92b3ce54d5278ac6f5a4eae7e6da9a564623",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_calendar_v2": SourceInfo(
@@ -966,10 +874,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5c9656671baf79a9711cd5c7ecbacffc6d1a169129b81ab098c00a4be8838833",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_comp_coding": SourceInfo(
@@ -982,10 +887,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0878a10ef2dd4c89daf18e325b48720553c3f5f0ab60d99d233b4520db3e7684",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_instruction_following": SourceInfo(
@@ -998,10 +900,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "f0571dbf560eaceae2609645364cb6df639318e701a31e0cb55303adfa6539bc",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_jailbreak": SourceInfo(
@@ -1014,10 +913,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "76b4bdebc9c8a2db5ee4b9b1bd6d1703b556e8ab00a9a8426aa942e3d2778022",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_lean": SourceInfo(
@@ -1030,10 +926,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "44e963bdf18c6b3e95f85aee3ab59c03fc5c9e8fa1c598bc633ae117dd3d0315",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
@@ -1046,10 +939,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "7fff13efc379f4bfd200ecd2d225dad60c79be801d09ddc27439f10b5fd87abb",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_math_tir": SourceInfo(
@@ -1062,10 +952,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "2ab0dc76ee4bab074aec8879a6a6aa44405868d2ced449fbb2d64e3e9f9ab2d5",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
@@ -1078,10 +965,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "abeefa8df27e3ab6decdfbfa33e7eca3abf6e7c7f37019d29419663ca7424b8e",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_nvarc_inductive": SourceInfo(
@@ -1094,10 +978,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "7593b96ad47dc731d023f6d4e8d45df8d456b309fad6374698f815287470aa10",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_nvarc_transductive": SourceInfo(
@@ -1110,10 +991,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "43c2d7cd6b0cb7365492cef009595a9687f2671ed545d7d209b354c358eda40f",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
@@ -1126,10 +1004,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "9d4d3a356f99a79533ac7d25cf25481f6c975a75532c9e3ddbc0e9f4dbc4dea9",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_stem_mcqa": SourceInfo(
@@ -1142,10 +1017,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "4e21612c6acfff9c614d0c5e0e6868e0b137609aa2dca3c5f70aadf38dfa8aa0",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
@@ -1158,10 +1030,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "c745334d6e868cfa4388f84f39a11c4985fe3bc28996c306d3db9eb5a16800c5",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
@@ -1174,10 +1043,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "b84e98dd9bfc9daff96f66dc2f7fa9779d6dd31ed04e01b5a7a1b437a6b31ad8",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
@@ -1190,10 +1056,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1206,10 +1069,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
@@ -1222,10 +1082,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "997b4d12a352345341d33861763b3680dee9d4039156cf9d0a21e7a18102620e",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
@@ -1238,10 +1095,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "752d664be2f90fd7b5b87f042b5e710734a9c927cc44e2d77a5729261390c34f",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
     },
@@ -1256,10 +1110,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "b280136ced512ece80e95ba06ccd4a72b89dbd83009e91204dc537296e1ee379",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
@@ -1272,10 +1123,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "e3e85a847527d0ace97e1a6459ce92b3ce54d5278ac6f5a4eae7e6da9a564623",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_calendar_v2": SourceInfo(
@@ -1288,10 +1136,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5c9656671baf79a9711cd5c7ecbacffc6d1a169129b81ab098c00a4be8838833",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_comp_coding": SourceInfo(
@@ -1304,10 +1149,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0878a10ef2dd4c89daf18e325b48720553c3f5f0ab60d99d233b4520db3e7684",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_instruction_following": SourceInfo(
@@ -1320,10 +1162,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "f0571dbf560eaceae2609645364cb6df639318e701a31e0cb55303adfa6539bc",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_jailbreak": SourceInfo(
@@ -1336,10 +1175,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "76b4bdebc9c8a2db5ee4b9b1bd6d1703b556e8ab00a9a8426aa942e3d2778022",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_lean": SourceInfo(
@@ -1352,10 +1188,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "44e963bdf18c6b3e95f85aee3ab59c03fc5c9e8fa1c598bc633ae117dd3d0315",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
@@ -1368,10 +1201,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "7fff13efc379f4bfd200ecd2d225dad60c79be801d09ddc27439f10b5fd87abb",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_math_tir": SourceInfo(
@@ -1384,10 +1214,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "2ab0dc76ee4bab074aec8879a6a6aa44405868d2ced449fbb2d64e3e9f9ab2d5",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
@@ -1400,10 +1227,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "abeefa8df27e3ab6decdfbfa33e7eca3abf6e7c7f37019d29419663ca7424b8e",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_nvarc_inductive": SourceInfo(
@@ -1416,10 +1240,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "7593b96ad47dc731d023f6d4e8d45df8d456b309fad6374698f815287470aa10",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_nvarc_transductive": SourceInfo(
@@ -1432,10 +1253,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "43c2d7cd6b0cb7365492cef009595a9687f2671ed545d7d209b354c358eda40f",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
@@ -1448,10 +1266,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "9d4d3a356f99a79533ac7d25cf25481f6c975a75532c9e3ddbc0e9f4dbc4dea9",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_stem_mcqa": SourceInfo(
@@ -1464,10 +1279,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "4e21612c6acfff9c614d0c5e0e6868e0b137609aa2dca3c5f70aadf38dfa8aa0",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
@@ -1480,10 +1292,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "c745334d6e868cfa4388f84f39a11c4985fe3bc28996c306d3db9eb5a16800c5",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
@@ -1496,10 +1305,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "b84e98dd9bfc9daff96f66dc2f7fa9779d6dd31ed04e01b5a7a1b437a6b31ad8",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
@@ -1512,10 +1318,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1528,10 +1331,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
@@ -1544,10 +1344,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "997b4d12a352345341d33861763b3680dee9d4039156cf9d0a21e7a18102620e",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
@@ -1560,10 +1357,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "752d664be2f90fd7b5b87f042b5e710734a9c927cc44e2d77a5729261390c34f",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_ds2_freeform": SourceInfo(
@@ -1576,10 +1370,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "78997a2391c51890ea9ef737c3c894a4307b90561bde4cfd3f730e283e9ad352",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_ds3_citation": SourceInfo(
@@ -1592,10 +1383,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "11de81bec2bbf26a6480ca9a43065fafe7638181cefd13926869f3a5d54ae6c0",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_rdkit": SourceInfo(
@@ -1608,10 +1396,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "cf4029df469964dabedfa347aa974e590744e9d4807d132042641e024d5d83f1",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_structured_outputs_v3": SourceInfo(
@@ -1624,10 +1409,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "1d36a9a2a0d93c9acb61bfb3eccc498d2c359e5ab2bfc76ccc28aadc9de224b1",
-                (
-                    "https://github.com/marin-community/MarinSkyRL/tree/"
-                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-                ),
+                ULTRA_VERIFIER_URL,
             ),
         ),
     },

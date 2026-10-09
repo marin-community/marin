@@ -10,29 +10,52 @@ artifact each declaration produces.
 
 ## Adding a dataset
 
-1. Copy the closest declaration. [skyrl/math.py](skyrl/math.py) is the smallest
-   complete example: a pinned `HfSource`, a converter built on
-   `math_answer_task`, `ShellSim()`, a rubric string and `MATH_CONTROLS`.
-2. Set the source pin and files, write the converter, and choose the
-   environment. Use a helper from `taskcompendium.convert` when one fits; keep
-   field mapping, prompt rewrites, rubrics and constants in the declaring module.
-3. If the grader needs a script, put it next to the module as `<name>_grade.py`;
-   vendor an upstream scorer under `<family>/scorers/` and list that directory
-   in the declaration's `ships`. Build the grader with `grade_script`,
-   `shipped_files` and `script_package` from
-   `taskcompendium.convert.script_grader`, which ship the script, the scorer
-   files and the row's `config.json` in the task's verifier resources. Set
-   `grader=GRADER_PACKAGES` from [environments.py](environments.py), the
-   packages every grade script in the catalog imports, and use
-   `required_grader_environment(context)` as its environment. A script that
-   needs more declares its own `Environment` (see
-   [environment.py](../environment.py)), such as `COMPILER_GRADER_PACKAGES`,
-   which adds a C++ toolchain. The packages live in [grader.in](grader.in) and
-   its compiled lock [grader.lock](grader.lock); regenerate the lock after
-   changing `grader.in` (see [images/](../images/README.md)).
-4. Add a representative raw row to the family test's `ROWS` and add the module's
-   `sources()` to [sources.py](../sources.py). Add family, tags and known input-row counts to `SourceInfo`. Count only
-   the pinned population selected by the recipe; leave unavailable counts unknown.
+1. Add an `RlDataSource` to the closest family module for runnable sources, or
+   [unconverted.py](unconverted.py) for inventory-only entries.
+   Set `SourceInfo`'s stable `id`, display `title`, `origin`, family and tags.
+   Leave `count=None` unless the pinned input population has been counted.
+   Keep an existing ID when updating a source so its Atlas reviews remain linked.
+2. For a runnable source, define its pinned files and converter in
+   `RlDataPipeline`; [skyrl/math.py](skyrl/math.py) is an example. Reuse
+   `taskcompendium.convert` helpers where they fit. Inventory-only sources use
+   `info.dataset=SourceReference(...)` and no pipeline. Use the `excluded` tag
+   when the entry should be hidden by default.
+3. If adding a module, import it and include its `sources()` results in
+   [all_sources()](../sources.py). Add a representative input to the family test's
+   `ROWS` and run that test and [test_catalog.py](../tests/test_catalog.py)
+   for a new converter.
+4. Regenerate the Atlas JSON from the repository root:
+
+   ```bash
+   uv run --with-editable './lib/taskcompendium[pipeline]' python \
+     -m experiments.post_training.task_curation.export_catalog \
+     --output infra/marina/applets/rl_data_catalog/dist/catalog.json
+   ```
+
+The export does not download data or run converters. Inspect the new row in the
+JSON; commit the Python declarations, not the generated file. The applet build
+regenerates this JSON automatically. To update the dashboard, follow
+[RL Data Atlas publishing](../../../../docs/references/rl-data-atlas.md).
+**Refresh sources** loads the published catalog; it does not rebuild it.
+See the [source API and count command](../README.md#declaring-a-dataset) for
+the compact declaration example and offline parquet counts.
+
+## Script graders
+
+If the grader needs a script, put it next to the module as `<name>_grade.py`;
+vendor an upstream scorer under `<family>/scorers/` and list that directory
+in the declaration's `ships`. Build the grader with `grade_script`,
+`shipped_files` and `script_package` from
+`taskcompendium.convert.script_grader`, which ship the script, the scorer
+files and the row's `config.json` in the task's verifier resources. Set
+`grader=GRADER_PACKAGES` from [environments.py](environments.py), the
+packages every grade script in the catalog imports, and use
+`required_grader_environment(context)` as its environment. A script that
+needs more declares its own `Environment` (see
+[environment.py](../environment.py)), such as `COMPILER_GRADER_PACKAGES`,
+which adds a C++ toolchain. The packages live in [grader.in](grader.in) and
+its compiled lock [grader.lock](grader.lock); regenerate the lock after
+changing `grader.in` (see [images/](../images/README.md)).
 
 A rubric and controls can come later: without a rubric rows are kept
 unreviewed, and without controls sandbox-graded rows other than judge-graded

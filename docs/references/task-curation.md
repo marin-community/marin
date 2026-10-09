@@ -211,12 +211,15 @@ unreviewed and unverified, with no admitted `final/` view.
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' \
   python -m experiments.post_training.task_curation.quick \
-  --source tasktrove-calendar --input-root /path/to/staged/tasktrove \
+  --source tasktrove-calendar \
   --output-root /tmp/task-curation-pass-1
 ```
 
-Use staged bytes from the declared revision and a fresh output root for each
-pass. The local command retains TaskSpecs and rejections under `normalize/`,
+The command downloads the declared pinned primary and auxiliary files into a
+reusable local cache (`--download-cache`, default `~/.cache/marin`). Override
+the primary download with `--input-root`, or an auxiliary input with
+`--input NAME PATH`, using bytes from the declared revision. Choose a fresh output
+root for each pass. The local command retains TaskSpecs and rejections under `normalize/`,
 counts and elapsed time in `manifest.json`, and source outcomes in
 `campaign.json`. Failed sources do not stop the remaining conversions. See the
 [local conversion loop](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#local-conversion-loop)
@@ -242,6 +245,13 @@ Sample and full modes run the reviewed procedure below.
    machine, rerun up to twice more after an infrastructure error, and the source
    passes at a 95% pass fraction. Judge-graded sources skip this step.
 7. Admit rows and write the outputs.
+
+Verification telemetry records `select`, `trials`, and `row_gate` executions.
+The gate writes the complete audit and accepted rows together and returns
+manifest counts, avoiding separate export and count executions. Control trials
+remain parallel on workers. Review-cache telemetry separates descriptor lookup
+from payload reads; descriptor shards are read with at most four threads per
+lookup, with whole-fragment prefetch disabled.
 
 The campaign runs source procedures in threads over one Zephyr context and
 worker pool. `--concurrent-sources` limits whole-source admission and

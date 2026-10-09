@@ -30,6 +30,15 @@ from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeva
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
+IFEVAL_VERIFIER = SourceReference(
+    "ifeval",
+    "c7600581c6ff27b8ebdc5a02954952c77e15b520f8d6da7edb69839dc9948158",
+    (
+        "https://github.com/marin-community/MarinSkyRL/tree/"
+        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/ifeval"
+    ),
+)
+
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
 IFEVAL_GRADE = grade_script(HERE / "ifeval_grade.py", *shipped_files(SCORERS, "ifeval_utils.py"))
@@ -185,14 +194,7 @@ def sources() -> list[RlDataSource]:
                 origin="MarinSkyRL",
                 family="instruction-following",
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/ifeval"),
-                verifier=SourceReference(
-                    "ifeval",
-                    "c7600581c6ff27b8ebdc5a02954952c77e15b520f8d6da7edb69839dc9948158",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/ifeval"
-                    ),
-                ),
+                verifier=IFEVAL_VERIFIER,
             ),
             pipeline=RlDataPipeline(
                 name="nemotron_if",
@@ -219,14 +221,7 @@ def sources() -> list[RlDataSource]:
                 origin="MarinSkyRL",
                 family="instruction-following",
                 tags=("rlvr", "single-turn", "license:odc-by", "gym/ifeval"),
-                verifier=SourceReference(
-                    "ifeval",
-                    "c7600581c6ff27b8ebdc5a02954952c77e15b520f8d6da7edb69839dc9948158",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/ifeval"
-                    ),
-                ),
+                verifier=IFEVAL_VERIFIER,
             ),
             pipeline=RlDataPipeline(
                 name="rlvr_ifeval",

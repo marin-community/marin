@@ -114,6 +114,7 @@ class PipelineStatus:
 class PipelineOverview:
     plan: PipelinePlan
     status: PipelineStatus
+    archived: bool = False
 
 
 @dataclass(frozen=True)
