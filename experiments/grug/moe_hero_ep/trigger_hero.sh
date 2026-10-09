@@ -11,14 +11,11 @@ fi
 mode=$1
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
-# The handoff is a checkpoint forced on hero-fa4sm100-nomask-step146k about 70 minutes before
-# cutover, with its metadata.json marked is_temporary=false so the hourly save does not prune it,
-# then copied out of the temporary tree to a durable prefix. Replace each placeholder with its
-# step N, the parent row recording global_step N-1, and the run ID hero-mfu30-step<N/1000>k in
-# current_run.py, in one commit.
+# Checkpoint 231464 was forced on hero-fa4sm100-nomask-step146k and copied out of the temporary tree to a
+# durable prefix; it resumes at global_step 231464. Parent W&B _step 231463 records global_step 231463.
 RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
-HANDOFF_CHECKPOINT=s3://hero-checkpoints/marin/grug/hero-fa4sm100-nomask-step146k/2026.08.19.2/checkpoints/step-REPLACE_BEFORE_DEPLOYMENT
-WANDB_FORK_FROM='hero-fa4sm100-nomask-step146k?_step=REPLACE_BEFORE_DEPLOYMENT'
+HANDOFF_CHECKPOINT=s3://hero-checkpoints/marin/grug/hero-fa4sm100-nomask-step146k/2026.08.19.2/checkpoints/step-231464
+WANDB_FORK_FROM='hero-fa4sm100-nomask-step146k?_step=231463'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
