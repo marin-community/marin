@@ -186,6 +186,14 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
             timeout=timeout,
         )
     )
+    if result.reason == ExitReason.TIMED_OUT:
+        raise _StepFailed(
+            _infra_error(
+                f"Cannot inspect grading artifact {artifact.source}: timed out",
+                GradingFailure.TIMEOUT,
+                _diagnostics(result),
+            )
+        )
     if result.exit_code == MISSING_CAPTURE_EXIT_CODE and artifact.missing == MissingArtifactPolicy.SKIP:
         return False
     if result.exit_code == MISSING_CAPTURE_EXIT_CODE:

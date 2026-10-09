@@ -148,6 +148,8 @@ def local_artifact_factory(tmp_path):
             return self.root / value.lstrip("/")
 
         async def run(self, command):
+            if self.archive_failure == "inspect_timeout" and command.argv[:2] == ("sh", "-c"):
+                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             if command.argv[0] == "tar" and self.archive_failure:
                 if self.archive_failure == "tar_timeout":
                     return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
@@ -251,6 +253,7 @@ def local_artifact_factory(tmp_path):
         "directory_file_conflict",
         "file_directory_conflict",
         "host_enospc",
+        "inspect_timeout",
         "tar_timeout",
         "tar_failed",
     ],
@@ -300,7 +303,7 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
     root = local_artifact_factory(
         prepare_artifacts,
         archive_members=archive_members,
-        archive_failure=artifact_case if artifact_case in {"tar_failed", "tar_timeout"} else None,
+        archive_failure=artifact_case if artifact_case in {"inspect_timeout", "tar_failed", "tar_timeout"} else None,
     )
     if artifact_case == "oversized_expanded":
         monkeypatch.setattr(grading, "MAX_ARTIFACT_EXPANDED_BYTES", 1)
@@ -346,11 +349,11 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
         result = await grade_in_sandbox(
             task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
         )
-        if artifact_case in {"tar_failed", "tar_timeout"}:
+        if artifact_case in {"inspect_timeout", "tar_failed", "tar_timeout"}:
             assert (result.status, result.reward, result.failure) == (
                 Outcome.INFRA_ERROR,
                 None,
-                GradingFailure.TIMEOUT if artifact_case == "tar_timeout" else GradingFailure.EXECUTION,
+                GradingFailure.EXECUTION if artifact_case == "tar_failed" else GradingFailure.TIMEOUT,
             )
         else:
             valid = artifact_case in {"directory", "file", "excluded_link"}
