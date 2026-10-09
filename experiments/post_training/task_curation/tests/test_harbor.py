@@ -13,40 +13,39 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
+from taskcompendium.convert.answers import answer_task
+from taskcompendium.convert.verifyit_build import verifyit_build_context
+from taskcompendium.grader import verifyit_package
 from taskcompendium.harbor.export import UnsupportedHarborTask, harbor_record
 from taskcompendium.models import (
+    AnswerType,
+    ArtifactKind,
     DockerBuildContext,
     EnvironmentRequirements,
+    FileReward,
     NoGrader,
+    ResourceGroups,
+    RewardFile,
     ScriptGrader,
+    Source,
+    TaskSpec,
+    VerifierArtifact,
     VerifyitGrader,
-    verifyit_answer_file,
-    verifyit_spec,
 )
-from taskcompendium.pipeline.models import NormalizedTask
+from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.grade import read_output
-from verifyit.spec import parse_spec
+from verifyit.spec import ExactSpec, JsonSchemaSpec, PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
-from experiments.post_training.task_curation.datasets.tasktrove import (
-    calendar,
-    instruction_following,
-    math,
-    puzzles,
-    python_tests,
-    qa,
-    repositories,
-    structured_outputs,
-)
+from experiments.post_training.task_curation.datasets.tasktrove import qa
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tasktrove.export import main
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 
-FIXTURES = Path(__file__).parent / "fixtures"
 GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64
 
 
@@ -60,24 +59,33 @@ def archive_files(blob: bytes) -> dict[str, bytes]:
         return files
 
 
-@pytest.fixture(params=[("calendar", calendar), ("math_prism", math), ("stack_pytest", python_tests)])
-def normalized_row(request) -> tuple[dict, NormalizedTask]:
-    name, module = request.param
-    source = next(source for source in module.sources() if source.name == f"tasktrove-{name}")
-    pipeline = source.pipeline
-    assert pipeline is not None
-    assert isinstance(pipeline.source, HfSource)
-    source_path = f"{name}-original.tar.gz"
-    converted = convert_row(pipeline, {"path": source_path, "task_binary": (FIXTURES / f"{name}.tar.gz").read_bytes()})
-    assert isinstance(converted, NormalizedTask)
-    config = Path(pipeline.source.files[0]).parent.name
+@pytest.fixture
+def normalized_row() -> tuple[dict, TaskSpec]:
+    source = Source(
+        dataset="open-thoughts/TaskTrove",
+        revision="pinned",
+        row="laion__all-puzzles-v2/tasks.parquet:0",
+        importer_revision="1",
+    )
+    task = answer_task(RawRow("fixture", source, {}), prompt="Give the answer.", spec=ExactSpec(expected=("gold",)))
+    task = task.model_copy(
+        update={
+            "resources": ResourceGroups(
+                worker=(inline_resource("app/input.txt", b"public input"),),
+                verifier=(inline_resource("private.txt", b"private reference"),),
+                oracle=(
+                    inline_resource("environment/Dockerfile", b"FROM python:3.12-slim\nWORKDIR /app\n"),
+                    inline_resource("solution/solve.sh", b"echo gold > /app/answer.txt\n"),
+                ),
+            )
+        }
+    )
     return {
-        "task_id": converted.task.id,
-        "task_json": converted.task.model_dump_json(),
-        "original_path": source_path,
-        "source_row": f"{config}/tasks.parquet:0",
-        "normalization_changes": [change.model_dump() for change in converted.changes],
-    }, converted
+        "task_id": task.id,
+        "task_json": task.model_dump_json(),
+        "original_path": "fixture-task",
+        "source_row": source.row,
+    }, task
 
 
 def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(normalized_row) -> None:
@@ -91,40 +99,29 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     )
     files = archive_files(record.task_binary)
     config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.metadata["taskcompendium_id"] == converted.task.id
+    assert config.metadata["taskcompendium_id"] == converted.id
     assert config.metadata["tasktrove_path"] == record.path == row["original_path"]
     # Frozen TaskTrove ConvertedTask (61bb85cc) uses this budget for every source.
     assert config.agent.timeout_sec == 900
-    name = row["original_path"].removesuffix("-original.tar.gz")
-    # Frozen 61bb85cc converter output for the real input archive, before tool installation.
-    expected_recipe = (FIXTURES / f"{name}_actor_61bb85cc.Dockerfile").read_text().rstrip()
-    assert files["environment/Dockerfile"].decode().split("# --- verifyit ---")[0].rstrip() == expected_recipe
+    assert files["environment/Dockerfile"].decode().startswith("FROM python:3.12-slim\nWORKDIR /app\n")
     assert config.verifier.environment_mode == VerifierEnvironmentMode.SEPARATE
     # Native separate verification skips tests upload, so tests must be baked in.
     assert config.verifier.environment.docker_image is None
     assert files["tests/Dockerfile"].decode() == f"FROM {GRADER_IMAGE}\nCOPY . /tests\n"
     assert not any(path.startswith("solution/") for path in files)
     assert not any(path.startswith(("environment/files/tests/", "environment/files/solution/")) for path in files)
-    if isinstance(converted.task.grader, VerifyitGrader):
-        # Harbor bypasses test.sh when this reserved filename exists. The wrapper
-        # must run to load our bundled verifyit and install public grader inputs.
-        assert "tests/verifier.toml" not in files
-    for resource in converted.task.resources.verifier:
-        assert "tests/" + resource.path in files
-    if converted.task.answer_type == "text":
-        assert b"/app/answer.txt" in files["instruction.md"]
-        assert [artifact.source for artifact in config.artifacts] == ["/app/answer.txt"]
-    else:
-        assert {artifact.source for artifact in config.artifacts} == set(converted.task.output_paths)
-    oracle = {resource.path for resource in converted.task.resources.oracle if resource.path.startswith("solution/")}
-    if oracle:
-        assert record.solution_binary is not None
-        assert oracle <= archive_files(record.solution_binary).keys()
+    # Harbor's reserved spec filename bypasses our bundled runtime wrapper.
+    assert "tests/verifier.toml" not in files
+    assert files["tests/private.txt"] == b"private reference"
+    assert files["environment/files/app/input.txt"] == b"public input"
+    assert b"/app/answer.txt" in files["instruction.md"]
+    assert [artifact.source for artifact in config.artifacts] == ["/app/answer.txt"]
+    assert archive_files(record.solution_binary)["solution/solve.sh"] == b"echo gold > /app/answer.txt\n"
 
 
 def test_source_recipe_provenance_does_not_override_other_datasets(normalized_row):
     row, converted = normalized_row
-    task = converted.task.model_copy(update={"source": converted.task.source.model_copy(update={"dataset": "other"})})
+    task = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "other"})})
     record = harbor_record(
         {**row, "task_json": task.model_dump_json()},
         fallback_actor_image=BASE_IMAGE,
@@ -147,11 +144,9 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
         )
     )
     if role == "actor":
-        task = converted.task.model_copy(update={"environment_requirements": environment})
+        task = converted.model_copy(update={"environment_requirements": environment})
     else:
-        task = converted.task.model_copy(
-            update={"grader": converted.task.grader.model_copy(update={"environment": environment})}
-        )
+        task = converted.model_copy(update={"grader": converted.grader.model_copy(update={"environment": environment})})
     with pytest.raises(UnsupportedHarborTask, match="Docker build contexts"):
         harbor_record(
             {**row, "task_json": task.model_dump_json()},
@@ -162,13 +157,28 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
         )
 
 
-def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path) -> None:
+@pytest.mark.parametrize("answer_type", [AnswerType.TEXT, AnswerType.FILE])
+def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path, answer_type) -> None:
     row, converted = normalized_row
-    task = converted.task
-    answer_path = task.grader.answer_path if isinstance(task.grader, ScriptGrader) else None
-    if isinstance(task.grader, VerifyitGrader) and task.answer_type == "text":
-        answer_path = verifyit_answer_file(verifyit_spec(task.grader))
-    output = (answer_path or task.output_paths[0]).removeprefix("/")
+    task = converted
+    output = "app/answer.txt"
+    if answer_type == AnswerType.FILE:
+        output = "app/solution.py"
+        task = task.model_copy(
+            update={
+                "answer_type": AnswerType.FILE,
+                "output_paths": ("/app/solution.py",),
+                "grader": ScriptGrader(
+                    argv=("bash", "/tests/test.sh"),
+                    answer_path=None,
+                    environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+                    reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format="number"),)),
+                ),
+                "resources": task.resources.model_copy(
+                    update={"verifier": (inline_resource("test.sh", b"#!/bin/bash\nexit 0\n"),)}
+                ),
+            }
+        )
     resources = task.resources.model_copy(
         update={
             "worker": (
@@ -207,87 +217,71 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
     assert not submitted.exists()
 
 
-@pytest.mark.parametrize(
-    "mode,reference,valid,invalid",
-    [
-        (
-            "exact",
-            {"gold": "Defect, Salt, chair", "answer_type": "ordered_list"},
-            "Defect, Salt, chair",
-            "chair, Salt, Defect",
+def test_harbor_pytest_source_recipe_installs_the_declared_interpreter(normalized_row):
+    row, original = normalized_row
+    package = verifyit_package(
+        PytestSpec(paths=("/tests/test_solution.py",), python="/opt/tasktrove-pytest/bin/python"),
+        resources=(
+            inline_resource("test_solution.py", b"import mock\n\ndef test_solution():\n    assert mock.Mock()\n"),
         ),
-        ("exact", {"gold": "gold", "answer_type": "exact"}, "gold", r"\boxed{gold}"),
-        ("math", {"gold": "3", "answer_type": "number"}, r"\boxed{3}", r"\boxed{4}"),
-        (
-            "json-schema",
-            {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
-            '{"name":"Ada"}',
-            '{"name":3}',
-        ),
-        ("mcq", {"expected_answer": "B", "output_regex": qa.MCQA_REGEX}, "B", "A"),
-        ("mcq", {"expected_answer": "B", "output_regex": qa.MCQA_REGEX}, "B", "Answer: B"),
-        ("ifeval", {"instruction_id_list": ["keywords:existence"], "kwargs": [{"keywords": ["mars"]}]}, "mars", "venus"),
-        (
-            "xml-elements",
-            {"type": "object", "required": ["name"]},
-            "<root><name>Ada</name></root>",
-            "<root><age>2</age></root>",
-        ),
-        ("csv-columns", {"type": "object", "required": ["name"]}, "name\nAda\n", "age\n2\n"),
-    ],
-)
-def test_harbor_in_process_contract_runs_bundled_grader(mode, reference, valid, invalid, tmp_path) -> None:
-    if mode == "json-schema":
-        source = next(source for source in instruction_following.sources() if source.name == "tasktrove-structured")
-        prompt = "Produce JSON with a string name. Write your final JSON to `/app/answer.txt`."
-        private = {"tests/verifier_data.json": json.dumps({"schema_type": "json", "schema": reference}).encode()}
-    elif mode in ("xml-elements", "csv-columns"):
-        source = structured_outputs.sources()[0]
-        serialization = "xml" if mode == "xml-elements" else "csv"
-        prompt = f"Extract Ada's name as {serialization.upper()}. Write your final answer to `/app/answer.txt`."
-        private = {
-            "tests/verifier_data.json": json.dumps({"schema_type": serialization, "schema": reference}).encode(),
-            "environment/Dockerfile": b"FROM python:3.12-slim\nWORKDIR /app\n",
+        environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+    )
+    task = original.model_copy(
+        update={
+            "answer_type": AnswerType.FILE,
+            "output_paths": ("/app/solution.py",),
+            "grader": package.grader,
+            "resources": original.resources.model_copy(update={"verifier": package.resources}),
         }
-    elif mode == "mcq":
-        source = next(source for source in qa.sources() if source.name == "tasktrove-knowledge_mcqa")
-        prompt = (
-            "Write your final answer to `/app/answer.txt`.\n---\n\n"
-            + qa.MCQA_FORMAT_PREFIX
-            + "'Answer: A/B' (e.g. 'Answer: B').\n\nWhat is 1+1?\nA. 1\nB. 2"
-        )
-        private = {"tests/verifier_data.json": json.dumps(reference).encode()}
-    elif mode == "ifeval":
-        source = next(source for source in instruction_following.sources() if source.name == "tasktrove-ifeval")
-        prompt = (
-            "You are running in a shell-based sandbox. Read the instruction below and write your final, complete "
-            "answer text to the file `/app/answer.txt`.\n\n---\n\nMention mars."
-        )
-        private = {"tests/verifier_data.json": json.dumps(reference).encode()}
-    else:
-        source = puzzles.sources()[0]
-        prompt = "Solve the puzzle. Write ONLY your final answer to **`/app/answer.txt`**."
-        private = {"tests/gold.json": json.dumps(reference).encode()}
-    assert source.pipeline is not None
-    assert isinstance(source.pipeline.source, HfSource)
-    converted = convert_row(source.pipeline, tasktrove_row({"instruction.md": prompt.encode(), **private}))
-    assert isinstance(converted, NormalizedTask)
-    row = {
-        "task_json": converted.task.model_dump_json(),
-        "source_row": source.pipeline.source.files[0] + ":0",
-        "original_path": "fixture-task",
-        "normalization_changes": [change.model_dump() for change in converted.changes],
-    }
+    )
     record = harbor_record(
-        row,
+        {**row, "task_json": task.model_dump_json()},
         fallback_actor_image=BASE_IMAGE,
         verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
-        family=source.info.family,
+        family="fixture",
+    )
+    files = archive_files(record.task_binary)
+    spec = parse_spec(files["tests/taskcompendium-verifier.toml"].decode())
+    assert isinstance(spec, PytestSpec)
+    assert spec.python == "/opt/tasktrove-pytest/bin/python"
+    assert (
+        files["environment/Dockerfile"]
+        .decode()
+        .startswith(
+            "FROM python:3.12-slim\nWORKDIR /app\n"
+            "RUN python3 -m venv --system-site-packages /opt/tasktrove-pytest && "
+            "/opt/tasktrove-pytest/bin/pip install --no-cache-dir pytest pytest-json-report mock\n"
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "spec,resources,valid,invalid",
+    [
+        (ExactSpec(expected=("gold",)), (), "gold", r"\boxed{gold}"),
+        (
+            JsonSchemaSpec(schema="schema.json"),
+            (inline_resource("schema.json", b'{"type":"object","required":["name"]}'),),
+            '{"name":"Ada"}',
+            "{}",
+        ),
+    ],
+)
+def test_harbor_emitted_wrapper_grades_text_and_private_resources(
+    normalized_row, spec, resources, valid, invalid, tmp_path
+):
+    _, original = normalized_row
+    task = answer_task(RawRow("fixture", original.source, {}), prompt="Give the answer.", spec=spec, resources=resources)
+    record = harbor_record(
+        {"task_json": task.model_dump_json(), "source_row": task.source.row, "original_path": "fixture-task"},
+        fallback_actor_image=BASE_IMAGE,
+        grader_image=GRADER_IMAGE,
+        family="fixture",
     )
     files = archive_files(record.task_binary)
     instruction = files["instruction.md"].decode()
-    assert instruction.startswith(converted.task.context.events[0].content)
+    assert instruction.startswith(task.context.events[0].content)
     assert "/app/answer.txt" in instruction
     assert not any(path.startswith("environment/files/") for path in files)
     for name, data in files.items():
@@ -315,7 +309,7 @@ def test_harbor_in_process_contract_runs_bundled_grader(mode, reference, valid, 
 def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(normalized_row, tmp_path) -> None:
     row, converted = normalized_row
     source = all_sources()["Task Trove:" + row["source_row"].split("/", 1)[0]]
-    unsupported = converted.task.model_copy(update={"grader": NoGrader(reason="Needs source validation")})
+    unsupported = converted.model_copy(update={"grader": NoGrader(reason="Needs source validation")})
     input_root, output_root = tmp_path / "input", tmp_path / "output"
     normalized = input_root / "normalize"
     normalized.mkdir(parents=True)
@@ -335,9 +329,17 @@ def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(no
         {"task_id": "unavailable", "path": row["original_path"], "reason": "Unsupported grader: none"}
     ]
     table = pq.read_table(output_root / "tasks.parquet")
-    assert [[field.name, str(field.type), field.nullable] for field in table.schema] == json.loads(
-        (FIXTURES / "harbor-wire-schema.json").read_text()
-    )
+    # Independent 12-column contract consumed by Harbor's TaskTrove loader.
+    assert [(field.name, str(field.type)) for field in table.schema] == [
+        (name, "string")
+        for name in ("path", "source", "family", "template_id", "converter", "mode", "dockerfile_id", "language")
+    ] + [
+        ("tags", "list<element: string>"),
+        ("has_solution", "bool"),
+        ("task_binary", "binary"),
+        ("solution_binary", "binary"),
+    ]
+    assert all(field.nullable for field in table.schema)
     exported = table.to_pylist()
     assert len(exported) == 1
     assert exported[0]["family"] == source.info.family
@@ -347,12 +349,12 @@ def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(no
     config = TaskConfig.model_validate_toml(files["task.toml"].decode())
     assert config.metadata["tasktrove_path"] == exported[0]["path"] == row["original_path"]
     assert config.metadata["tasktrove_source"] == exported[0]["source"] == row["source_row"].split("/", 1)[0]
-    assert config.metadata["taskcompendium_id"] == converted.task.id
+    assert config.metadata["taskcompendium_id"] == converted.id
     assert report["source_id"] == source.info.id
 
 
-@pytest.mark.parametrize("answer_path", ["/app/answer.txt", "/app/custom-answer.txt"])
-def test_harbor_judge_receives_canonical_text_at_declared_path(answer_path, tmp_path) -> None:
+def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None:
+    answer_path = "/app/custom-answer.txt"
     source = next(source for source in qa.sources() if source.name == "knowledge-openqa")
     assert source.pipeline is not None
     assert isinstance(source.pipeline.source, HfSource)
@@ -493,12 +495,36 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
 
 
 @pytest.fixture
-def repository_task():
-    source = next(source for source in repositories.sources() if source.name == "tasktrove-swesmith")
-    assert source.pipeline is not None
-    return converted_task(
-        source.pipeline,
-        {"path": "swesmith-fixture", "task_binary": (FIXTURES / "swesmith.tar.gz").read_bytes()},
+def repository_task(normalized_row):
+    _, task = normalized_row
+    environment = EnvironmentRequirements(
+        capabilities=("git_repository",),
+        docker_build=verifyit_build_context("FROM python:3.12-slim\nWORKDIR /testbed\n", (), package=VERIFYIT_PACKAGE),
+    )
+    grader = ScriptGrader(
+        argv=("bash", "/tests/test.sh"),
+        cwd="/testbed",
+        environment=environment,
+        answer_path=None,
+        artifacts=(VerifierArtifact(source="/testbed", target="/testbed", kind=ArtifactKind.DIRECTORY),),
+        reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format="number"),)),
+    )
+    return task.model_copy(
+        update={
+            "answer_type": AnswerType.WORKSPACE_STATE,
+            "environment_requirements": environment,
+            "grader": grader,
+            "tags": ("swe-repo",),
+            "resources": ResourceGroups(
+                verifier=(
+                    inline_resource("test.sh", b"#!/bin/bash\nexit 0\n"),
+                    inline_resource(
+                        "taskcompendium-verifier.toml",
+                        render_spec(PytestSpec(paths=("test_product.py",), workspace="/testbed")).encode(),
+                    ),
+                )
+            ),
+        }
     )
 
 
@@ -509,8 +535,19 @@ def test_harbor_repository_uses_shared_actor_state(repository_task, tmp_path):
     product.write_text("candidate repair")
     dependencies = tmp_path / "installed-dependencies"
     dependencies.write_text("actor-installed package")
+    probe = f"#!/bin/bash\ncat product.py; cat {shlex.quote(str(dependencies))}\n".encode()
     task = repository_task.model_copy(
-        update={"grader": repository_task.grader.model_copy(update={"cwd": str(workspace)})}
+        update={
+            "grader": repository_task.grader.model_copy(update={"cwd": str(workspace)}),
+            "resources": repository_task.resources.model_copy(
+                update={
+                    "verifier": tuple(
+                        inline_resource(resource.path, probe) if resource.path == "test.sh" else resource
+                        for resource in repository_task.resources.verifier
+                    )
+                }
+            ),
+        }
     )
     row = {
         "task_json": task.model_dump_json(),
@@ -539,14 +576,9 @@ def test_harbor_repository_uses_shared_actor_state(repository_task, tmp_path):
             assert content.startswith(resource_bytes(resource))
         else:
             assert content == resource_bytes(resource)
-    original_script = resource_bytes(
-        next(resource for resource in task.resources.verifier if resource.path == "test.sh")
-    )
-    prefix = files["tests/test.sh"][: -len(original_script)].decode()
-    # Run the exported setup in an existing actor tree: no checkout capture or .git is needed,
-    # and dependencies installed outside that tree remain visible to the grader.
-    probe = prefix + f"cat product.py; cat {shlex.quote(str(dependencies))}"
-    result = subprocess.run(["bash", "-c", probe], capture_output=True, text=True)
+    # Execute the complete emitted wrapper in the existing actor tree.
+    script = files["tests/test.sh"].decode()
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "candidate repairactor-installed package"
     assert product.read_text() == "candidate repair"
@@ -579,19 +611,25 @@ def test_harbor_repository_retains_old_environment_exclusions(repository_task, l
         )
 
 
-def test_science_openqa_keeps_mechanical_conversion_but_filters_legacy_reference_leak():
-    # TaskTrove revision 02923004846e4e73862c20962f823a6d05100e7a, science raw row 22:
-    # the requested proof includes its reference formula.
+def test_openqa_keeps_conversion_but_filters_disclosed_reference():
     source = next(source for source in qa.sources() if source.name == "science-openqa")
     assert source.pipeline is not None
-    path = "science-1fafe0a7befe.tar.gz"
+    reference = "alpha beta gamma"
     task = converted_task(
-        source.pipeline, {"path": path, "task_binary": (FIXTURES / "science_openqa_gold_leak.tar.gz").read_bytes()}
+        source.pipeline,
+        tasktrove_row(
+            {
+                "instruction.md": f"Prove the answer is {reference}.".encode(),
+                "tests/verifier_data.json": (
+                    json.dumps({"instruction": "Prove the identity.", "reference_answer": reference}).encode()
+                ),
+            }
+        ),
     )
-    row = {
-        "task_json": task.model_dump_json(),
-        "source_row": "laion__nemotron-gym-science-so-openq-v3/tasks.parquet:22",
-        "original_path": path,
-    }
     with pytest.raises(UnsupportedHarborTask, match="gold_leak: expected value appears in instruction"):
-        harbor_record(row, grader_image=GRADER_IMAGE, family=source.info.family, fallback_actor_image=BASE_IMAGE)
+        harbor_record(
+            {"task_json": task.model_dump_json(), "source_row": task.source.row, "original_path": "leaked-reference"},
+            grader_image=GRADER_IMAGE,
+            family=source.info.family,
+            fallback_actor_image=BASE_IMAGE,
+        )

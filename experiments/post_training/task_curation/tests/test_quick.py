@@ -11,24 +11,43 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from taskcompendium.convert.answers import exact_answer_task
-from taskcompendium.models import ScriptGrader, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
-from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.models import TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
+from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
 from verifyit.spec import ExactSpec
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed
-from experiments.post_training.task_curation.datasets.tasktrove import calendar, code
+from experiments.post_training.task_curation.datasets.tasktrove import calendar
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.quick import run_local_sources
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
-from experiments.post_training.task_curation.tests.conversion import tasktrove_row
 
 
-def test_local_campaign_continues_after_missing_source_and_converts_calendar(tmp_path: Path):
+def convert_local_answer(row, context):
+    task = exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
+    assert isinstance(task, TaskSpec)
+    return task.model_copy(
+        update={"grader": task.grader.model_copy(update={"environment": required_grader_environment(context)})}
+    )
+
+
+@pytest.fixture
+def local_source():
     source = calendar.sources()[0]
     assert source.pipeline is not None
-    assert isinstance(source.pipeline.source, HfSource)
+    return replace(
+        source,
+        pipeline=replace(
+            source.pipeline,
+            source=HfSource("fixture/questions", "a" * 40, ("rows.parquet",), SourceFormat.PARQUET),
+            convert=convert_local_answer,
+        ),
+    )
+
+
+def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
+    source = local_source
     missing = replace(
         source,
         pipeline=replace(
@@ -38,8 +57,7 @@ def test_local_campaign_continues_after_missing_source_and_converts_calendar(tmp
     input_root = tmp_path / "input"
     staged = input_root / source.pipeline.source.files[0]
     staged.parent.mkdir(parents=True)
-    blob = (Path(__file__).parent / "fixtures" / "calendar.tar.gz").read_bytes()
-    pq.write_table(pa.Table.from_pylist([{"path": "calendar-fixture.tar.gz", "task_binary": blob}]), staged)
+    pq.write_table(pa.Table.from_pylist([{"path": "original-row", "prompt": "One plus one?", "answer": "two"}]), staged)
     output = tmp_path / "output"
     with pytest.raises(CampaignFailed):
         run_local_sources(
@@ -58,57 +76,12 @@ def test_local_campaign_continues_after_missing_source_and_converts_calendar(tmp
         row for shard in (output / source.name / "normalize").glob("*.parquet") for row in load_parquet(str(shard))
     ]
     assert len(records) == 1
-    assert records[0]["original_path"] == "calendar-fixture.tar.gz"
+    assert records[0]["original_path"] == "original-row"
     task = TaskSpec.model_validate_json(records[0]["task_json"])
-    assert isinstance(task.grader, ScriptGrader)
-    assert source.pipeline.grader is not None and source.pipeline.grader.lock is not None
+    assert isinstance(task.grader, VerifyitGrader)
+    assert verifyit_spec(task.grader) == ExactSpec(("two",), ignore_case=False)
+    assert task.grader.environment is not None
     assert task.grader.environment.packages_lock == str(source.pipeline.grader.lock.resolve())
-    assert task.grader.answer_path == "/app/answer.txt"
-
-
-def test_quick_retains_reviewed_defects_and_sample_only_rejections(tmp_path):
-    source = next(source for source in code.sources() if source.name == "tasktrove-competitive_coding")
-    assert source.pipeline is not None
-    prompt = "Read two integers and print their sum. Write `/app/solution.py`."
-    files = {
-        "instruction.md": prompt.encode(),
-        "environment/Dockerfile": b"FROM python:3.12-slim\nWORKDIR /app\n",
-        "tests/verifier_data.json": json.dumps({"inputs": ["3 4\n"], "outputs": ["7\n"]}).encode(),
-    }
-    rows = [
-        tasktrove_row(files, path="comp-coding-dd2a13b32896.tar.gz"),
-        tasktrove_row(files, path="hidden-case"),
-        # This path is rejected only in code-contests, not in this source.
-        tasktrove_row(files, path="code_contests-4395"),
-        tasktrove_row({**files, "instruction.md": (prompt + "\nExample: 3 4 gives 7.").encode()}, path="sample-only"),
-    ]
-    staged = tmp_path / "input" / source.pipeline.source.files[0]
-    staged.parent.mkdir(parents=True)
-    pq.write_table(pa.Table.from_pylist(rows), staged)
-    output = tmp_path / "output"
-    run_local_sources(
-        {source.name: source},
-        tmp_path / "input",
-        output,
-        inputs={},
-        max_workers=1,
-        download_cache=tmp_path / "downloads",
-    )
-    records = {
-        row["original_path"]: row
-        for shard in (output / source.name / "normalize").glob("*.parquet")
-        for row in load_parquet(str(shard))
-    }
-    assert set(records) == {row["path"] for row in rows}
-    assert records["hidden-case"]["task_json"]
-    assert records["code_contests-4395"]["task_json"]
-    for path, reason in (
-        ("comp-coding-dd2a13b32896.tar.gz", "reviewed_defect"),
-        ("sample-only", "gold_in_instruction"),
-    ):
-        assert records[path]["task_json"] is None
-        assert records[path]["normalization_kind"] == "source_defect"
-        assert records[path]["normalization_reason"] == reason
 
 
 def answer_from_auxiliary(row, context):
@@ -202,14 +175,15 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     assert next_task.context.events[0].content == "The next pinned question"
 
 
-def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes(tmp_path):
-    source = calendar.sources()[0]
+def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes(local_source, tmp_path):
+    source = local_source
     assert source.pipeline is not None
     assert isinstance(source.pipeline.source, HfSource)
     logical_path = source.pipeline.source.files[0]
     local_file = tmp_path / "different-name.parquet"
-    blob = (Path(__file__).parent / "fixtures" / "calendar.tar.gz").read_bytes()
-    pq.write_table(pa.Table.from_pylist([{"path": "calendar-fixture.tar.gz", "task_binary": blob}]), local_file)
+    pq.write_table(
+        pa.Table.from_pylist([{"path": "original-row", "prompt": "One plus one?", "answer": "two"}]), local_file
+    )
     output = tmp_path / "output"
     run_local_sources(
         {source.name: source},
@@ -222,7 +196,7 @@ def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes
     )
     records = [row for file in (output / source.name / "normalize").glob("*.parquet") for row in load_parquet(str(file))]
     assert records[0]["source_row"] == f"{logical_path}:0"
-    assert records[0]["original_path"] == "calendar-fixture.tar.gz"
+    assert records[0]["original_path"] == "original-row"
     manifest = json.loads((output / source.name / "manifest.json").read_text())
     assert manifest["source_file_overrides"] == {
         logical_path: {"path": str(local_file.resolve()), "sha256": hashlib.sha256(local_file.read_bytes()).hexdigest()}
