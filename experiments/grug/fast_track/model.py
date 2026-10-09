@@ -89,10 +89,13 @@ from experiments.grug.fast_track.sparse_attention import (
     DcmhaPaper,
     Gauss,
     SparseIndex,
+    TapKind,
     attention_with_lse,
     gauss_attention_fast,
+    gauss_kernel,
     mla_sparse_attention,
     mla_sparse_params,
+    shift_mixture_attention,
 )
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
@@ -972,44 +975,32 @@ class GrugModelConfig:
     """M > 0: one shared match space per layer, ``m = kv_latent W_match``, used as ``mla_match_append`` says."""
     mla_match_append: MatchAppend = MatchAppend.OFF
     mla_value_lookahead: bool = False
-    """MLA values also read the next token (``key_offset.value_lookahead``); attention then skips the query itself."""
     mla_lookahead_self: bool = False
     """With ``mla_value_lookahead``: a learned per-channel weight ``v_self`` on ``v_t`` too (init 1)."""
     mla_future_heads: int = 0
-    """The last this many MLA heads remember each token's next ``mla_future_window`` tokens (``future_heads``)."""
     mla_future_window: int = 0
     mla_lag_groups: tuple[str, ...] = ()
     mla_sparse_window: int = 0
-    """> 0: MLA attention keeps only each query's last this many keys, its document start and the followers of its
-    ``mla_sparse_topk`` best index matches (``sparse_attention.py``; a slow dense emulation)."""
     mla_sparse_topk: int = 0
     mla_sparse_index_dim: int = 32
     mla_sparse_index: SparseIndex = SparseIndex.FOLLOW
     mla_sparse_index_heads: int = 4
     mla_sparse_kl_weight: float = 1.0
     mla_sparse_dsa_topk: int = 0
-    """With the follow index: also a lightning indexer's top this many keys."""
     mla_sparse_index_per_head: bool = False
     mla_sparse_select_match: bool = False
-    """Also attend to the matched tokens themselves, not only their followers."""
     mla_sparse_compress: bool = False
-    """Also attend to every visible block's mean key / value (NSA compression)."""
     mla_sparse_block: int = 32
     mla_sparse_taps: tuple[int, ...] = ()
-    """Value-tap offsets around each pick (identity-init at offset 0); empty: off."""
     mla_sparse_taps_per_channel: bool = False
     mla_sparse_untied: bool = False
     mla_sparse_anchor_match: bool = False
     mla_sparse_lookback: int = 0
     mla_sparse_score_only: bool = False
     mla_prev_gate: bool = False
-    """With ``mla_key_offset``: a per-head, per-token gate ``2 sigmoid(x . w)`` on the query's offset channels."""
     mla_logit_compose: bool = False
-    """MLA heads' scores composed before the softmax from every head's offset-channel and current-channel score
-    (``sparse_attention``, identity-pair init; needs ``mla_sparse_window``). Dynamic: also a rank-1 query-wise mix."""
     mla_logit_compose_dynamic: bool = False
     mla_dcmha: bool = False
-    """Full DCMHA (``sparse_attention.Dcmha``) on the MLA layers; needs ``mla_sparse_window`` (the emulation)."""
     mla_dcmha_rank: int = 2
     mla_dcmha_hidden: int = 64
     mla_dcmha_parts: tuple[str, ...] = ("pre", "post", "dynamic")
@@ -1017,13 +1008,11 @@ class GrugModelConfig:
     mla_shared_kv_tied: bool = False
     mla_kv_direct: bool = False
     mla_prev_key_concat: bool = False
-    """MLA keys are ``[k_j ; k_{j-1}]`` (each normed) against 2x-wide queries; the emulation only."""
     kda_state_reads: int = 0
     """Fixed-query reads per KDA state head into a small MLP (``kda_state_read.py``); 0: off."""
     kda_state_reads_tail: int = 0
     kda_state_read_hidden: int = 512
     mla_far_key_half: str = ""
-    """Emulation: keys ``mla_far_key_window``+ back score on one key half only (``cur`` / ``prev``)."""
     mla_far_key_window: int = 128
     mla_value_norm: str = "none"
     """Tied-value RMSNorm: ``none``, ``rms`` or ``learned``."""
@@ -1031,7 +1020,6 @@ class GrugModelConfig:
     """With ``mla_shared_kv``: the one cached vector is both key and value."""
     """MLA keys and values are one head each (MQA), broadcast to every query head."""
     mla_dcmha_paper: bool = False
-    """The released DCMHA network and init (``sparse_attention.DcmhaPaper``), not the tanh-bounded one."""
     mla_dcmha_static: str = "none"
     mla_gauss: bool = False
     """MLA values read through a learned per-head shifted Gaussian (``sparse_attention.Gauss``)."""
@@ -1042,13 +1030,14 @@ class GrugModelConfig:
     mla_gauss_components: int = 1
     mla_gauss_fast: bool = False
     """Run the Gaussian kernel via ``gauss_attention_fast``."""
+    mla_gauss_taps: TapKind = TapKind.NONE
+    """Free softmax kernel over offsets ``-reach..reach`` (per head or per channel), initialised as the Gaussian."""
+    mla_gauss_query_shifts: int = 0
+    """> 0: values read through a query-gated mixture of shifts ``0..n-1`` (``shift_mixture_attention``)."""
     mla_sparse_tail: bool = True
-    """False: the tail stack's MLA layer stays dense."""
     """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
     mla_lookahead_sink: bool = False
-    """With ``mla_value_lookahead``: each document's first (empty) slot gets a learned per-head key ``k_null``."""
     mla_tie_prev_qk: bool = False
-    """With ``mla_key_offset``: the query's shifted half is the token's own un-shifted key half (a symmetric match)."""
     final_num_experts: int = 0
     """> 0: the final layer's routed expert count (same top-k and width; it must be the only layer of the softmax tail
     stack). Per-expert router stats and the QB biases are padded to the widest layer (``stats_num_experts``)."""
@@ -3019,7 +3008,17 @@ class CausalSelfAttention(eqx.Module):
             qf = rearrange(jnp.einsum("bsd,dc->bsc", x, self.w_qf.astype(x.dtype)), "... (f c) -> ... f c", c=head_dim)
             window = self.cfg.mla_future_window
             k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
-        if self.gauss is not None and self.cfg.mla_gauss_fast:
+        if self.gauss is not None and self.gauss.shift_w is not None:
+            seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
+            pi_logits = jnp.einsum("bsd,dhn->bshn", x.astype(jnp.float32), self.gauss.shift_w) + self.gauss.shift_b
+            pi = reshard(
+                jax.nn.softmax(pi_logits, axis=-1), _partition_spec_of(q) or P(_BATCH_AXES, None, "model", None)
+            )
+            pi_mean = jax.lax.stop_gradient(jnp.mean(pi, axis=(0, 1)))
+            for (h, o), _ in np.ndenumerate(np.zeros(pi_mean.shape)):
+                stats[f"{_LAYER_KNOB_PREFIX}shift_pi_H{h}_O{o}"] = pi_mean[h, o]
+            attn_out = shift_mixture_attention(q, k, kernel_v, rel_bias, seg, pi, attention_with_lse)
+        elif self.gauss is not None and self.cfg.mla_gauss_fast:
             seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
             reach = self.cfg.mla_gauss_reach
             attn_out = gauss_attention_fast(q, k, kernel_v, rel_bias, seg, self.gauss, reach, attention_with_lse)
@@ -3181,6 +3180,11 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
     if gauss is not None:  # per-head shift and width of the value kernel
         sigma = jax.nn.softplus(gauss.rho.astype(jnp.float32)) + 0.05
         weight = jax.nn.softmax(gauss.mix.astype(jnp.float32), axis=-1)
+        if gauss.taps is not None:  # the free kernel's (channel-mean) weight per offset
+            reach = (gauss.taps.shape[-1] - 1) // 2
+            taps = jnp.mean(gauss_kernel(jax.lax.stop_gradient(gauss), reach), axis=1)
+            for (h, t), _ in np.ndenumerate(np.zeros(taps.shape)):
+                stats[f"attn_res_knob_gauss_tap_L{i}_H{h}_O{t - reach}"] = taps[h, t]
         for (h, c), _ in np.ndenumerate(np.zeros(gauss.mu.shape)):
             tag = f"L{i}_H{h}" + (f"_C{c}" if gauss.mu.shape[1] > 1 else "")
             stats[f"attn_res_knob_gauss_mu_{tag}"] = jax.lax.stop_gradient(gauss.mu[h, c]).astype(jnp.float32)

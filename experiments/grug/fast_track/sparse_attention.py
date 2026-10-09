@@ -68,15 +68,31 @@ class Compose(NamedTuple):
     offset_mask: jax.Array  # [H, D] channels whose key is the previous token's
 
 
+class TapKind(StrEnum):
+    """``mla_gauss_taps``: the value kernel as a free softmax over offsets instead of a Gaussian."""
+
+    NONE = "none"
+    HEAD = "head"
+    """One kernel per head."""
+    CHANNEL = "channel"
+    """One kernel per head and value channel."""
+
+
 class Gauss(eqx.Module):
     """Per-head value kernel, a mixture of ``C`` Gaussians: shifts ``mu`` ``[H, C]`` (tokens, positive = later),
     widths ``softplus(rho) + 0.05`` and weights ``softmax(mix)``; ``qscale``: the tied query's per-head scale
-    (``mla_gauss_tied``). Trained in the ``dcmha`` group (``.gauss.``)."""
+    (``mla_gauss_tied``). ``taps`` ``[H, 1 or E, 2K + 1]``: free kernel logits replacing the Gaussian
+    (``mla_gauss_taps``). ``shift_w`` ``[D, H, n]`` / ``shift_b`` ``[H, n]``: a query-token gate over the value
+    shifts ``0..n-1`` (``mla_gauss_query_shifts``, :func:`shift_mixture_attention`). Trained in the ``dcmha``
+    group (``.gauss.``)."""
 
     mu: jax.Array
     rho: jax.Array
     mix: jax.Array
     qscale: jax.Array | None
+    taps: jax.Array | None = None
+    shift_w: jax.Array | None = None
+    shift_b: jax.Array | None = None
 
 
 class GaussValues(NamedTuple):
@@ -90,6 +106,8 @@ class GaussValues(NamedTuple):
 
 def gauss_values(g: Gauss, v: jax.Array, segment_ids: jax.Array, reach: int) -> GaussValues:
     """Smooth each head's values along the sequence: ``smooth_j = sum_o G(o) v_{j+o}`` within the document."""
+    if g.taps is not None or g.shift_w is not None:
+        raise ValueError("mla_gauss_taps / mla_gauss_query_shifts need mla_gauss_fast")
     offsets = jnp.arange(-reach, reach + 1, dtype=jnp.float32)
     sigma = jax.nn.softplus(g.rho.astype(jnp.float32)) + 0.05  # [H, C]
     centred = offsets[None, None, :] - g.mu.astype(jnp.float32)[..., None]
@@ -655,7 +673,7 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
         ),
         logit_mix_u=jnp.zeros((d, n), jnp.float32) if cfg.mla_logit_compose_dynamic else None,
         logit_mix_w=matrix(4, 2 * n) if cfg.mla_logit_compose_dynamic else None,
-        gauss=_gauss_init(cfg, n) if cfg.mla_gauss else None,
+        gauss=_gauss_init(cfg, n, h, d) if cfg.mla_gauss else None,
         dcmha=(
             (
                 _dcmha_paper_init(
@@ -670,7 +688,11 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
     )
 
 
-def _gauss_init(cfg, heads: int) -> Gauss:
+QUERY_SHIFT_BIAS_INIT = (0.0, -2.0, -3.0, -3.0)
+"""``mla_gauss_query_shifts`` gate logits at init: mostly shift 0, with gradient reaching the later shifts."""
+
+
+def _gauss_init(cfg, heads: int, value_dim: int, d: int) -> Gauss:
     c = cfg.mla_gauss_components
     mu = jnp.asarray(cfg.mla_gauss_mu_init if cfg.mla_gauss_mu_init else (0.0,) * (heads * c), jnp.float32)
     if mu.shape != (heads * c,):
@@ -679,7 +701,29 @@ def _gauss_init(cfg, heads: int) -> Gauss:
         )
     rho = jnp.full((heads, c), math.log(math.expm1(cfg.mla_gauss_sigma_init - 0.05)), jnp.float32)
     qscale = jnp.full((heads,), cfg.qk_mult, jnp.float32) if cfg.mla_gauss_tied else None
-    return Gauss(mu=mu.reshape(heads, c), rho=rho, mix=jnp.zeros((heads, c), jnp.float32), qscale=qscale)
+    taps = None
+    if cfg.mla_gauss_taps != TapKind.NONE:
+        if c != 1:
+            raise ValueError("mla_gauss_taps replaces the Gaussian mixture: mla_gauss_components must be 1")
+        # Logits of the Gaussian init (centre mu_init, width sigma_init), so the taps start where the Gaussian does.
+        offsets = jnp.arange(-cfg.mla_gauss_reach, cfg.mla_gauss_reach + 1, dtype=jnp.float32)
+        logits = -jnp.square(offsets[None, :] - mu[:, None]) / (2 * cfg.mla_gauss_sigma_init**2)
+        width = value_dim if cfg.mla_gauss_taps == TapKind.CHANNEL else 1
+        taps = jnp.broadcast_to(logits[:, None, :], (heads, width, offsets.shape[0]))
+    shift_w = shift_b = None
+    if cfg.mla_gauss_query_shifts:
+        n = cfg.mla_gauss_query_shifts
+        shift_w = jnp.zeros((d, heads, n), jnp.float32)
+        shift_b = jnp.broadcast_to(jnp.asarray(QUERY_SHIFT_BIAS_INIT[:n], jnp.float32), (heads, n))
+    return Gauss(
+        mu=mu.reshape(heads, c),
+        rho=rho,
+        mix=jnp.zeros((heads, c), jnp.float32),
+        qscale=qscale,
+        taps=taps,
+        shift_w=shift_w,
+        shift_b=shift_b,
+    )
 
 
 def _dcmha_paper_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int, static: str) -> DcmhaPaper:
@@ -720,7 +764,13 @@ def _dcmha_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int) -> D
 
 
 def gauss_kernel(g: Gauss, reach: int) -> jax.Array:
-    """Each head's ``[H, 2K + 1]`` value kernel over offsets ``-K..K`` (see ``gauss_values``)."""
+    """The ``[H, 1 or E, 2K + 1]`` value kernel over offsets ``-K..K``: the taps, else the Gaussian mixture."""
+    if g.taps is not None:
+        return jax.nn.softmax(g.taps.astype(jnp.float32), axis=-1)
+    return _gaussian_kernel(g, reach)[:, None, :]
+
+
+def _gaussian_kernel(g: Gauss, reach: int) -> jax.Array:
     offsets = jnp.arange(-reach, reach + 1, dtype=jnp.float32)
     sigma = jax.nn.softplus(g.rho.astype(jnp.float32)) + 0.05
     centred = offsets[None, None, :] - g.mu.astype(jnp.float32)[..., None]
@@ -738,19 +788,19 @@ def gauss_attention_fast(q, k, v, rel_bias, segment_ids, g: Gauss, reach: int, a
 
     ``attend_with_lse(q, k, v, lower_bounds, valid, rel_bias) -> (out [B, S, H, E], lse [B, H, S])``."""
     seq = q.shape[1]
-    kernel = gauss_kernel(g, reach)  # [H, 2K + 1]
+    kernel = gauss_kernel(g, reach)  # [H, 1 or E, 2K + 1]
     starts = _document_starts(segment_ids)  # [B, S]
     pos = jnp.arange(seq)
     vf = v.astype(jnp.float32)
     # Far keys: their kernel is clipped only by the document (and sequence) ends.
-    ones = jnp.ones(v.shape[:3], jnp.float32)
+    ones = jnp.ones((*v.shape[:3], 1), jnp.float32)
     smooth = jnp.zeros_like(vf)
-    mass = jnp.zeros(v.shape[:3], jnp.float32)
+    mass = jnp.zeros((*v.shape[:3], kernel.shape[1]), jnp.float32)
     for t, o in enumerate(range(-reach, reach + 1)):
-        w = kernel[:, t]
-        smooth = smooth + w[None, None, :, None] * shift_tokens(vf, segment_ids, -o)
-        mass = mass + w[None, None, :] * shift_tokens(ones, segment_ids, -o)
-    smooth = (smooth / mass[..., None]).astype(v.dtype)
+        w = kernel[None, None, :, :, t]  # [1, 1, H, 1 or E]
+        smooth = smooth + w * shift_tokens(vf, segment_ids, -o)
+        mass = mass + w * shift_tokens(ones, segment_ids, -o)
+    smooth = (smooth / jnp.maximum(mass, 1e-9)).astype(v.dtype)  # a spike kernel leaves 0 mass at doc ends
     k_far = jnp.pad(k[:, : seq - reach], ((0, 0), (reach, 0), (0, 0), (0, 0)))
     v_far = jnp.pad(smooth[:, : seq - reach], ((0, 0), (reach, 0), (0, 0), (0, 0)))
     band = (
@@ -767,6 +817,34 @@ def gauss_attention_fast(q, k, v, rel_bias, segment_ids, g: Gauss, reach: int, a
     # pyrefly: ignore[bad-assignment]
     wrapped: Callable[..., jax.Array] = auto_axes(near, out_sharding=out_sharding)
     return wrapped(q, k, v, rel_bias, starts, kernel, far_ok, out_far, lse_far)
+
+
+def shift_mixture_attention(q, k, v, rel_bias, segment_ids, pi, attend_with_lse):
+    """``out_i = sum_o pi_io A_o(i)`` over value shifts ``o = 0..n-1``: ``A_o`` is causal attention where a query
+    matching key ``j`` reads value ``v_{j+o}`` (keys ``j <= i - o``, same document). Each ``A_o`` is one
+    FlashAttention call over keys moved ``o`` slots later against the raw values, so no value after the query is
+    read. ``pi`` ``[B, S, H, n]``: the query token's gate, renormalised over the shifts that have a key.
+
+    ``attend_with_lse(q, k, v, lower_bounds, valid, rel_bias) -> (out [B, S, H, E], lse [B, H, S])``."""
+    seq = q.shape[1]
+    starts = _document_starts(segment_ids)
+    pos = jnp.arange(seq)
+    outs, oks = [], []
+    for o in range(pi.shape[-1]):
+        k_o = jnp.pad(k[:, : seq - o], ((0, 0), (o, 0), (0, 0), (0, 0)))
+        band = (
+            None
+            if rel_bias is None or o == 0
+            else jnp.pad(rel_bias[..., : rel_bias.shape[-1] - o], ((0, 0),) * 3 + ((o, 0),))
+        )
+        ok = pos[None, :] >= starts + o  # [B, S]
+        out_o, _ = attend_with_lse(q, reshard_like(k_o, k), v, starts + o, ok, band)
+        outs.append(jnp.where(ok[:, :, None, None], out_o.astype(jnp.float32), 0.0))
+        oks.append(ok)
+    w = pi.astype(jnp.float32) * jnp.stack(oks, axis=-1)[:, :, None, :].astype(jnp.float32)
+    w = w / jnp.sum(w, axis=-1, keepdims=True)  # shift 0 always has a key
+    out = sum(w[..., o, None] * out_o for o, out_o in enumerate(outs))
+    return out.astype(v.dtype)
 
 
 def _gauss_near_merge(q, k, v, rel_bias, starts, kernel, far_ok, out_far, lse_far, *, reach: int):
@@ -792,15 +870,20 @@ def _gauss_near_merge(q, k, v, rel_bias, starts, kernel, far_ok, out_far, lse_fa
     tok_ok = tok[None] >= starts[:, :, None]  # [B, S, 2K] (always <= i)
     offset = m[:, None] - r[None, :]  # [K(m), 2K(r)]: offset from key i - m to token i - r
     in_kernel = (offset >= -reach) & (offset <= reach)
-    w_base = jnp.where(in_kernel[None], kernel[:, jnp.clip(offset + reach, 0, 2 * reach)], 0.0)  # [H, K, 2K]
-    w_mr = w_base[None, :, None] * tok_ok[:, None, :, None, :].astype(jnp.float32)  # [B, H, S, K, 2K]
-    near_mass = jnp.sum(w_mr, axis=-1)  # [B, H, S, K]
+    # [H, C, K, 2K] with C = 1 (per-head kernel) or E (per-channel)
+    w_base = jnp.where(in_kernel[None, None], kernel[:, :, jnp.clip(offset + reach, 0, 2 * reach)], 0.0)
+    tok_okf = tok_ok.astype(jnp.float32)
+    near_mass = jnp.einsum("hcmr,bsr->bhsmc", w_base, tok_okf)  # [B, H, S, K, C]
     top = jnp.maximum(lse_far, jnp.max(scores, axis=-1))  # [B, H, S]
     far_w = jnp.exp(lse_far - top)
     near_p = jnp.exp(scores - top[..., None])  # [B, H, S, K]
-    tok_w = jnp.einsum("bhsm,bhsmr->bhsr", near_p / jnp.maximum(near_mass, 1e-9), w_mr)  # weight on token i - r
+    coef = near_p[..., None] / jnp.maximum(near_mass, 1e-9)
+    tok_w = jnp.einsum("bhsmc,hcmr->bhsrc", coef, w_base) * tok_okf[:, None, :, :, None]  # weight on token i - r
     v_win = vf[:, jnp.clip(tok, 0, seq - 1)]  # [B, S, 2K, H, E]
-    near_num = jnp.einsum("bhsr,bsrhe->bshe", tok_w, v_win)
+    if kernel.shape[1] == 1:
+        near_num = jnp.einsum("bhsr,bsrhe->bshe", tok_w[..., 0], v_win)
+    else:
+        near_num = jnp.einsum("bhsre,bsrhe->bshe", tok_w, v_win)
     den = far_w + jnp.sum(near_p, axis=-1)  # [B, H, S]
     num = far_w.transpose(0, 2, 1)[..., None] * out_far.astype(jnp.float32) + near_num
     return (num / den.transpose(0, 2, 1)[..., None]).astype(v.dtype)
