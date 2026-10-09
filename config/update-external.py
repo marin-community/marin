@@ -615,6 +615,13 @@ def parse_args() -> argparse.Namespace:
         help="write a Markdown summary of the resolved versions and revisions",
     )
     parser.add_argument(
+        "--upgrade-package",
+        action="append",
+        default=[],
+        metavar="DISTRIBUTION",
+        help="also upgrade this distribution in each selected external lock (repeatable)",
+    )
+    parser.add_argument(
         "--promote-gpu-release",
         type=Path,
         metavar="MANIFEST",
@@ -623,8 +630,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     args = parser.parse_args()
-    if args.promote_gpu_release is not None and (args.check or args.projects or args.summary_file):
-        parser.error("--promote-gpu-release runs on its own; drop --check, PROJECT, and --summary-file")
+    if args.promote_gpu_release is not None and (
+        args.check or args.projects or args.summary_file or args.upgrade_package
+    ):
+        parser.error("--promote-gpu-release runs on its own; drop other arguments")
+    if args.check and args.upgrade_package:
+        parser.error("--upgrade-package cannot be used with --check")
+    if args.projects and not any(name != VLLM_CONFIG_NAME for name in args.projects) and args.upgrade_package:
+        parser.error("--upgrade-package requires a Git external project")
     return args
 
 
@@ -639,15 +652,18 @@ def main() -> None:
     previous_dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     if not args.check:
         for project in selected:
+            command = [
+                "uv",
+                "lock",
+                "--project",
+                str(project.directory),
+                "--upgrade-package",
+                project.distribution,
+            ]
+            for distribution in args.upgrade_package:
+                command.extend(("--upgrade-package", distribution))
             subprocess.run(
-                [
-                    "uv",
-                    "lock",
-                    "--project",
-                    str(project.directory),
-                    "--upgrade-package",
-                    project.distribution,
-                ],
+                command,
                 check=True,
             )
             if project.config_name == MARINSKYRL_CONFIG_NAME:

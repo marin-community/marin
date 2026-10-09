@@ -46,6 +46,7 @@ upload token that expires when the run ends.
 | Daily pure-library schedule (06:00 UTC) | Coupled pure-library development release, published. |
 | Push a package release tag | Stable release at the tag version, published. |
 | `workflow_dispatch` (manual mode) | Build-only smoke; nothing is published. |
+| `workflow_dispatch` (development mode on `main`) | Publish an on-demand development release of the selected family. |
 | Pull request touching package build inputs | Build the selected family; native wheels are installed and imported; nothing is published. |
 
 Stable tags are `marin-libs-v<X.Y.Z>`, `dupekit-v<X.Y.Z>`,
@@ -53,6 +54,31 @@ Stable tags are `marin-libs-v<X.Y.Z>`, `dupekit-v<X.Y.Z>`,
 
 The nine general libs always share one version per build, and each published
 wheel pins its sibling `marin-*` dependencies to that exact version.
+
+To publish the current `main` revision of the general libraries before the
+next daily run, dispatch the existing workflow and wait for its publish job:
+
+```bash
+gh workflow run marin-release-libs-wheels.yaml --repo marin-community/marin \
+  --ref main -f package=python-libs -f mode=development
+```
+
+The run chooses a new development version from the published family and its
+GitHub run ID. Once every wheel is published, refresh the isolated downstream
+locks from a Marin checkout:
+
+```bash
+uv run config/update-external.py \
+  --upgrade-package marin-rigging \
+  --upgrade-package marin-finestore \
+  --upgrade-package marin-iris
+```
+
+This advances the external Git heads and the named published libraries. The
+MarinSkyRL launcher lock is checked against installed package metadata before
+the generated pins are written. The separate MarinSkyRL trainer lock is owned
+by the MarinSkyRL repository and must be refreshed there when its runtime
+dependency set needs the new release.
 
 Native implementation pull requests compile their changed Rust sources in
 `unified-unit` and in the package release workflow. The follow-up dependency

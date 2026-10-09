@@ -2,15 +2,12 @@
 name = "marin-external-marinskyrl"
 version = "0"
 requires-python = "==3.12.*"
-dependencies = ["marinskyrl"]
+dependencies = ["marinskyrl @ git+https://github.com/marin-community/MarinSkyRL.git@main"]
 
 [tool.uv]
 package = false
 prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
-# Marin Git workspace rigging is 0.2.0; TaskCompendium needs a newer published release.
-override-dependencies = ["marin-rigging[secrets]>=0.2.139.dev37117265303"]
-
-[tool.uv.sources]
-# The isolated lock keeps the selected branch revision immutable.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }
+# Only the CPU launcher is installed here. Ignore transitive workspace source
+# mappings so the pinned Marin Git packages retain their published marin-* requirements.
+no-sources = true

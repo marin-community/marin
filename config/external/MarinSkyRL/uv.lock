@@ -15,9 +15,6 @@ required-markers = [
 [options]
 prerelease-mode = "allow"
 
-[manifest]
-overrides = [{ name = "marin-rigging", extras = ["secrets"], specifier = ">=0.2.139.dev37117265303" }]
-
 [[package]]
 name = "absl-py"
 version = "2.5.0"
@@ -828,6 +825,19 @@ wheels = [
 ]
 
 [[package]]
+name = "harbor-config"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "shortuuid" },
+    { name = "toml" },
+    { name = "typing-extensions" },
+    { name = "universal-pathlib" },
+]
+
+[[package]]
 name = "hf-transfer"
 version = "0.1.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1146,16 +1156,11 @@ wheels = [
 [[package]]
 name = "langdetect"
 version = "1.0.9"
-source = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/langdetect-1.0.9-py3-none-any.whl" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "six" },
 ]
-wheels = [
-    { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/langdetect-1.0.9-py3-none-any.whl", hash = "sha256:689ac91b643e003990a31fb6e06d3b388e155ed4c8d9f013b326194b5db3cd28" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "six" }]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", hash = "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0", size = 981474, upload-time = "2021-05-07T07:54:13.562Z" }
 
 [[package]]
 name = "latex2sympy2-extended"
@@ -1204,7 +1209,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?branch=main" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=main" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1216,7 +1221,7 @@ dependencies = [
     { name = "duckdb" },
     { name = "fsspec" },
     { name = "gcsfs" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging" },
     { name = "protobuf" },
     { name = "pyarrow" },
     { name = "pyyaml" },
@@ -1256,21 +1261,21 @@ wheels = [
 
 [[package]]
 name = "marin-finestore"
-version = "0.2.149.dev37775727576"
+version = "0.2.155.dev37928019690"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging" },
     { name = "pyarrow" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/e9/4c3ae36832170945c1fe7386b80ba4e4917b8d00ab6ce9528dda46d855fb/marin_finestore-0.2.149.dev37775727576.tar.gz", hash = "sha256:d2e005af38ddec400bd3e412b25e0393176dd02ee6690ea58209a4001d127a00", size = 60786, upload-time = "2026-10-08T12:18:36.005Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/5c/dadd6bb11192fc3c50999b787d35d36bfecd61b44b0e300a5157b4e20abe/marin_finestore-0.2.155.dev37928019690.tar.gz", hash = "sha256:6d6bb5b0344a6038dc10f6c7f4df993d6b7247f2ca5200f0df2c83f2f3341897", size = 61142, upload-time = "2026-10-09T12:09:49.399Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/f0/5c7bcf63f6346398879d5317095baec1297563304338228da0fdef14cf25/marin_finestore-0.2.149.dev37775727576-py3-none-any.whl", hash = "sha256:389a4a5ef4c6f234b1687ff74093710577b854c212afdc745a3cb68c6f93e37d", size = 47333, upload-time = "2026-10-08T12:18:20.079Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/27/87a6667bb9138cda82def38daade9fb00d477b78e83dbe04735bebb55a48/marin_finestore-0.2.155.dev37928019690-py3-none-any.whl", hash = "sha256:2e95c35234b0bb0d7994d2193c1aeeedb5ce0d0578bf6c396e49b15c640c3521", size = 47595, upload-time = "2026-10-09T12:09:33.435Z" },
 ]
 
 [[package]]
 name = "marin-iris"
-version = "0.2.149.dev37775727576"
+version = "0.2.155.dev37928019690"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -1288,7 +1293,7 @@ dependencies = [
     { name = "marin-finelog-server", version = "0.2.55.dev35451177481", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "marin-finestore" },
     { name = "marin-iris-native" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging" },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyqwest" },
@@ -1301,9 +1306,9 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/52/a4/97693b2dcba4460cc4ccdd618ac2510bda04c0f82406aab7bfbb9f415411/marin_iris-0.2.149.dev37775727576.tar.gz", hash = "sha256:d36cae72deb5d3fe3fce768d0b1cce20a50381e99463bd8889532e502fa6e3cc", size = 950526, upload-time = "2026-10-08T12:18:40.029Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/f5/4f72dd7f6c2959ca0287c3ed603548b49faa8c0ada6582348753804dcb2a/marin_iris-0.2.155.dev37928019690.tar.gz", hash = "sha256:22bae364c0036126f50bae361ba7a11909461d6526b3b9c0bd5387a034427796", size = 950597, upload-time = "2026-10-09T12:09:53.342Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/3e/34ad7f9044bc440d8257f4c0d26f9a541bd82f3440a6ff30d4cb17c7c6b1/marin_iris-0.2.149.dev37775727576-py3-none-any.whl", hash = "sha256:2d73e99cea4a89f8388f9f5a52bd8ee44913727c411b6a135fec85678b210cda", size = 1148093, upload-time = "2026-10-08T12:18:25.681Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/2b/bfad133c4e45c9817f473b93d65cbff8a4c60defa4f67322763a031f2cb6/marin_iris-0.2.155.dev37928019690-py3-none-any.whl", hash = "sha256:d45b71b3705847755d3d9f29073afb2cb8c0c7ce0d1dcdf98dd5ed3ce6c6ceb0", size = 1148094, upload-time = "2026-10-09T12:09:38.375Z" },
 ]
 
 [[package]]
@@ -1320,7 +1325,7 @@ wheels = [
 
 [[package]]
 name = "marin-rigging"
-version = "0.2.149.dev37775727576"
+version = "0.2.155.dev37928019690"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiobotocore" },
@@ -1341,9 +1346,9 @@ dependencies = [
     { name = "starlette" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/61/4b/c8917a74dc65f26f7218f233ec46b376a56c3fce22e547aa657ba7bc6561/marin_rigging-0.2.149.dev37775727576.tar.gz", hash = "sha256:790e5d2b01260a3b1384852041c67056d92648181b9c792873a7020c4da4b8af", size = 224417, upload-time = "2026-10-08T12:18:43.421Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/07/b9468ddab8daedd72ec47075b0e08c317bb55cadf98c36ff1c6b6e599e86/marin_rigging-0.2.155.dev37928019690.tar.gz", hash = "sha256:fdd0eab00cebc9cc035388b4b7023ffeecfe1af5f808dd327857621e5a6cb41d", size = 224344, upload-time = "2026-10-09T12:09:56.062Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/8e/2464e0a33fd06d0f121f1286bac1033fd0f28efe8351d86e5d8340bf414f/marin_rigging-0.2.149.dev37775727576-py3-none-any.whl", hash = "sha256:62b5c596465a7344de2cec478bdbba20e4ff3a034802d4ac9d116a5bff6777f6", size = 527709, upload-time = "2026-10-08T12:18:29.586Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/63/7306bfb94832bbb7b5011ddf467202b4dba52e7843b31bd957cc721d6b4a/marin_rigging-0.2.155.dev37928019690-py3-none-any.whl", hash = "sha256:0fdec2aa26c0caa47c2c2add076d67f1f5158e8c402f3254ad90542b8cbf7cb6", size = 527617, upload-time = "2026-10-09T12:09:42.861Z" },
 ]
 
 [package.optional-dependencies]
@@ -1352,9 +1357,28 @@ secrets = [
 ]
 
 [[package]]
+name = "marin-rolloutengine"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=232f192a56b013fdc3f6914eb158c7bc2d231f94#232f192a56b013fdc3f6914eb158c7bc2d231f94" }
+dependencies = [
+    { name = "harbor-config" },
+    { name = "marin-shellbox" },
+    { name = "pydantic" },
+    { name = "taskcompendium" },
+]
+
+[[package]]
+name = "marin-shellbox"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=232f192a56b013fdc3f6914eb158c7bc2d231f94#232f192a56b013fdc3f6914eb158c7bc2d231f94" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#b1264f778cc69fd0bfd6a0863d0775da7c0b7daa" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=main#33b47f2975b304bfc3417c0eb62abcdd3ce4264b" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -1378,6 +1402,8 @@ dependencies = [
     { name = "marin-iris" },
     { name = "marin-iris-native" },
     { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rolloutengine" },
+    { name = "marin-shellbox" },
     { name = "math-verify" },
     { name = "ninja" },
     { name = "nvidia-ml-py" },
@@ -1386,8 +1412,7 @@ dependencies = [
     { name = "pandas" },
     { name = "polars" },
     { name = "pyarrow" },
-    { name = "pycosat", version = "0.6.6", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
-    { name = "pycosat", version = "0.6.6", source = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pycosat" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "ray" },
@@ -1395,6 +1420,7 @@ dependencies = [
     { name = "requests" },
     { name = "s3fs" },
     { name = "smart-open" },
+    { name = "taskcompendium" },
     { name = "tensorboard" },
     { name = "tokenizers" },
     { name = "tqdm" },
@@ -1751,6 +1777,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pathlib-abc"
+version = "0.5.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/cb/448649d7f25d228bf0be3a04590ab7afa77f15e056f8fa976ed05ec9a78f/pathlib_abc-0.5.2.tar.gz", hash = "sha256:fcd56f147234645e2c59c7ae22808b34c364bb231f685ddd9f96885aed78a94c", size = 33342, upload-time = "2025-10-10T18:37:20.524Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/29/c028a0731e202035f0e2e0bfbf1a3e46ad6c628cbb17f6f1cc9eea5d9ff1/pathlib_abc-0.5.2-py3-none-any.whl", hash = "sha256:4c9d94cf1b23af417ce7c0417b43333b06a106c01000b286c99de230d95eefbb", size = 19070, upload-time = "2025-10-10T18:37:19.437Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "12.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1913,24 +1948,7 @@ wheels = [
 name = "pycosat"
 version = "0.6.6"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'win32'",
-    "sys_platform == 'emscripten'",
-    "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "platform_machine != 'x86_64' and sys_platform == 'linux'",
-]
 sdist = { url = "https://files.pythonhosted.org/packages/5b/81/cf8ebf77fc4f06f680ad3ee43d0d01826f6d6054828f1cf3b42d944b82a1/pycosat-0.6.6.tar.gz", hash = "sha256:a376cfae20b16fcfbef24bf3c047a8a294c35032bb051fa98842c12bbab6f0ff", size = 71623, upload-time = "2023-10-03T15:45:48.058Z" }
-
-[[package]]
-name = "pycosat"
-version = "0.6.6"
-source = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-wheels = [
-    { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl", hash = "sha256:744b881af42f32d467300e6932f6ec6bd9e55e253a6ad99067336492d617d1de" },
-]
 
 [[package]]
 name = "pycparser"
@@ -2151,8 +2169,7 @@ dependencies = [
     { name = "bfi" },
     { name = "cellpylib" },
     { name = "magiccube" },
-    { name = "pycosat", version = "0.6.6", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
-    { name = "pycosat", version = "0.6.6", source = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pycosat" },
     { name = "pyfiglet" },
     { name = "pytz" },
     { name = "pyyaml" },
@@ -2361,6 +2378,15 @@ wheels = [
 ]
 
 [[package]]
+name = "shortuuid"
+version = "1.0.13"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8c/e2/bcf761f3bff95856203f9559baf3741c416071dd200c0fc19fad7f078f86/shortuuid-1.0.13.tar.gz", hash = "sha256:3bb9cf07f606260584b1df46399c0b87dd84773e7b25912b7e391e30797c5e72", size = 9662, upload-time = "2024-03-11T20:11:06.879Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/44/21d6bf170bf40b41396480d8d49ad640bca3f2b02139cd52aa1e272830a5/shortuuid-1.0.13-py3-none-any.whl", hash = "sha256:a482a497300b49b4953e15108a7913244e1bb0d41f9d332f5e9925dba33a3c5a", size = 10529, upload-time = "2024-03-11T20:11:04.807Z" },
+]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2445,6 +2471,17 @@ wheels = [
 ]
 
 [[package]]
+name = "taskcompendium"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=232f192a56b013fdc3f6914eb158c7bc2d231f94#232f192a56b013fdc3f6914eb158c7bc2d231f94" }
+dependencies = [
+    { name = "marin-rigging" },
+    { name = "marin-shellbox" },
+    { name = "pydantic" },
+    { name = "verifyit", extra = ["answer", "judge", "reasoning-gym", "schema"] },
+]
+
+[[package]]
 name = "tensorboard"
 version = "2.21.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2499,6 +2536,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6a/dd/631b21433c771b1382535326f0eca80b9c9cee2e64961dd993bc9ac4669e/tokenizers-0.23.1-cp310-abi3-win32.whl", hash = "sha256:93120a930b919416da7cd10a2f606ac9919cc69cacae7980fa2140e277660948", size = 2536263, upload-time = "2026-04-27T14:43:29.888Z" },
     { url = "https://files.pythonhosted.org/packages/97/c9/2553f72aaf65a2797d4229e37fa7fbe38ffbf3e32912d31bdd78b3323e59/tokenizers-0.23.1-cp310-abi3-win_amd64.whl", hash = "sha256:e7bfaf995c1bdbbd21d13539decb6650967013759318627d85daeb7881af16b7", size = 2798223, upload-time = "2026-04-27T14:43:28.51Z" },
     { url = "https://files.pythonhosted.org/packages/cd/2b/2be299bab55fc595e3d38567edb1a87f86e594842968fa9515a07bdcf422/tokenizers-0.23.1-cp310-abi3-win_arm64.whl", hash = "sha256:a26197957d8e4425dfba746315f3c425ea00cfa8367c5fbc4ec73447893dcea9", size = 2664127, upload-time = "2026-04-27T14:43:26.949Z" },
+]
+
+[[package]]
+name = "toml"
+version = "0.10.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
 ]
 
 [[package]]
@@ -2597,6 +2643,19 @@ wheels = [
 ]
 
 [[package]]
+name = "universal-pathlib"
+version = "0.3.10"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "pathlib-abc" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/6e/d997a70ee8f4c61f9a7e2f4f8af721cf072a3326848fc881b05187e52558/universal_pathlib-0.3.10.tar.gz", hash = "sha256:4487cbc90730a48cfb64f811d99e14b6faed6d738420cd5f93f59f48e6930bfb", size = 261110, upload-time = "2026-02-22T14:40:58.87Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/1a/5d9a402b39ec892d856bbdd9db502ff73ce28cdf4aff72eb1ce1d6843506/universal_pathlib-0.3.10-py3-none-any.whl", hash = "sha256:dfaf2fb35683d2eb1287a3ed7b215e4d6016aa6eaf339c607023d22f90821c66", size = 83528, upload-time = "2026-02-22T14:40:57.316Z" },
+]
+
+[[package]]
 name = "urllib3"
 version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2656,8 +2715,9 @@ dependencies = [
 [[package]]
 name = "verifyit"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/verifyit?rev=a04f28fd8c00879f949031e58ce9fbe5f4d5da6e#a04f28fd8c00879f949031e58ce9fbe5f4d5da6e" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=232f192a56b013fdc3f6914eb158c7bc2d231f94#232f192a56b013fdc3f6914eb158c7bc2d231f94" }
 dependencies = [
+    { name = "harbor-config" },
     { name = "tomlkit" },
 ]
 

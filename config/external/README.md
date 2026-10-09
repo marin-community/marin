@@ -44,6 +44,21 @@ only the promoted vLLM release after editing `vllm/gpu.toml` with:
 uv run config/update-external.py vllm
 ```
 
+The updater normally advances only each external Git project. To pick up a
+newly published Marin library release in its isolated locks, name the
+distributions to upgrade:
+
+```bash
+uv run config/update-external.py \
+  --upgrade-package marin-rigging \
+  --upgrade-package marin-finestore \
+  --upgrade-package marin-iris
+```
+
+The full command checks the refreshed MarinSkyRL launcher environment and
+updates the generated pin table. Distributions absent from one external lock
+are ignored there. Review the lock changes before committing them.
+
 The generated module also carries the isolated TPU-vLLM requirements from
 `vllm/tpu.toml`; those forks are not part of the nightly upgrade set.
 Verify that all generated state is current without contacting the repositories:
@@ -79,12 +94,15 @@ The external configurations intentionally model only what Marin needs:
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
-  The lock overrides Rigging's source because a pinned Marin Git workspace
-  advertises its development version while the launcher needs published Marin
-  wheels. After each MarinSkyRL update, the updater installs the frozen base
-  lock in a temporary environment and runs `uv pip check`. This catches
-  requirements hidden by the override, including exact Rigging versions
-  required by published Iris and Finestore wheels.
+  The launcher project declares MarinSkyRL's Git branch directly and uses
+  `no-sources = true` so uv ignores workspace source mappings inside transitive
+  Git packages. Their version requirements still apply; Rigging, Iris, and
+  Finestore resolve from PyPI. Explicit Git requirements for RolloutEngine,
+  Shellbox, TaskCompendium, and Verifyit remain Git sources. The CPU launcher
+  also takes `langdetect` and `pycosat` from PyPI; the frozen trainer lock in
+  MarinSkyRL keeps its own wheel sources. After each update, the updater
+  installs the launcher lock in a temporary environment and runs `uv pip
+  check` against the installed packages' metadata.
 - `vllm` records the promoted GPU wheels (`gpu.toml`) and a main-line source
   paired with tpu-inference for TPU (`tpu.toml`). The GPU and TPU wheels have
   independent build and promotion paths. Neither is a workspace dependency.
