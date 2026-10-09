@@ -42,7 +42,9 @@ new run, retained checkpoint, and W&B fork boundary; its commands and recovery
 semantics are documented in the linked launcher procedure.
 
 Inventory downstream reports and trackers that pin the run ID or affected metric
-keys. Update their selection as part of accepting the child.
+keys. Update their selection as part of accepting the child. The public hero
+report starts each phase's curves at the run's `report_phase_start` config
+value; set it to `N` on the child.
 
 ## 3. Rehearse preflight and rollback
 
@@ -55,6 +57,11 @@ Verify:
   old run's recorded SHA. Preserve its original launch command.
 - Handoff `metadata.json` exists, records the expected step, and has the intended
   retention. Confirm layout and checkpoint lineage.
+- A one-rack run of the deploy SHA restores the handoff and trains through a few
+  steps, a dropless eval, and more steps after it
+  (`launch_diagnostics.py --restore-from <handoff> --eval-every <k>`). The
+  trial window usually ends before the child's first eval, and switching between
+  eval and train executables has failed before (#8861).
 - Child checkpoint trees are empty for initial cutover. During later recovery,
   preserve them and verify the newest complete child checkpoint instead.
 - No competing coordinator, gang, or hero pods exist apart from the old run.
