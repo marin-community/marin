@@ -75,7 +75,7 @@ An explicit `working_directory` overrides that selection.
 
 Machine setup commands run as trusted root before task operations.
 `MachineRuntimeSpec.user` supplies the default user for session commands.
-When its user is set, the task machine executes a startup command as that user after root setup and before model inference.
+When the execution user is set, the task machine runs an execution-user probe after root setup and before model inference.
 An explicit command user overrides that default.
 The verifier machine uses its own configured default user.
 

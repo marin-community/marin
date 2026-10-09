@@ -208,7 +208,7 @@ def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, inte
     class FailedStop(LocalProcess):
         async def exec(self, command, **kwargs):
             if "candidate-block" in command:
-                raise TimeoutError("Command deadline expired")
+                await asyncio.Future()
             if "stop-command" in command:
                 if interrupt_failure == "timeout":
                     raise TimeoutError("Provider interruption timed out")
@@ -222,7 +222,7 @@ def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, inte
             MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         with pytest.raises(RuntimeError) as failure:
-            await machine.run(Command(("candidate-block",), timeout=0.01))
+            await machine.run(Command(("candidate-block",), timeout=0.5))
         assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
         assert client.deleted and client.closed
         with pytest.raises(RuntimeError, match="closed"):
@@ -272,6 +272,87 @@ def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_p
                 assert not client.deleted
         finally:
             await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("command_timeout", [None, 30])
+def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, command_timeout):
+    provider_error = TimeoutError("Provider request timed out")
+
+    class FailedRequest(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if "candidate-request" in command:
+                raise provider_error
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = FailedRequest()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            with pytest.raises(TimeoutError) as caught:
+                await machine.run(Command(("candidate-request",), timeout=command_timeout))
+            assert caught.value is provider_error
+        finally:
+            await machine.close()
+        assert client.closed and client.deleted
+
+    asyncio.run(scenario())
+
+
+def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation():
+    entered = asyncio.Event()
+
+    class BlockedCleanup(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if "candidate-fail" in command:
+                raise OSError("Provider command failed")
+            if "rm -rf /tmp/.shellbox-" in command:
+                entered.set()
+                await asyncio.Future()
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = BlockedCleanup()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
+        )
+        pending = asyncio.create_task(machine.run(Command(("candidate-fail",))))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert client.closed and client.deleted
+
+    asyncio.run(scenario())
+
+
+def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
+    output_error = TimeoutError("Provider output request timed out")
+
+    class FailedOutputAndCleanup(LocalProcess):
+        async def exec(self, command, **kwargs):
+            if "wc -c" in command:
+                raise output_error
+            if "rm -rf /tmp/.shellbox-" in command:
+                raise OSError("Provider cleanup failed")
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = FailedOutputAndCleanup()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
+        )
+        with pytest.raises(RuntimeError) as caught:
+            await machine.run(Command(("printf", "ready")))
+        assert caught.value.__cause__ is output_error
+        assert len(caught.value.__notes__) == 1
+        assert client.closed and client.deleted
 
     asyncio.run(scenario())
 
@@ -328,7 +409,7 @@ def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_pat
                 await super().exec(command, **kwargs)
                 paths[1].unlink()
                 paths[0].write_text("99999999\n")
-                raise TimeoutError("Command completed after its deadline")
+                await asyncio.Future()
             if "stop-command" in command:
                 # Complete after the first marker check and before PID consumption.
                 interleave = f'read() {{ : > "{paths[1]}"; /bin/rm -f "{paths[0]}"; return 1; }}; '
@@ -377,7 +458,7 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
         )
-        error_type = OSError if primary_failure else TimeoutError if cleanup_failure == "timeout" else RuntimeError
+        error_type = OSError if primary_failure else RuntimeError
         with pytest.raises(error_type) as caught:
             await machine.run(Command(("printf", "candidate-fail")))
         if primary_failure:
@@ -450,7 +531,7 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
                     "sh",
                     "-c",
                     "victim=$(cat /tmp/victim.pid); "
-                    "for file in /tmp/.shellbox-command-* /tmp/.shellbox-*/pid; do "
+                    "for file in /tmp/.shellbox-*/pid; do "
                     f'[ ! -w "$file" ] || {mutation}; done; '
                     "sleep 3600 & echo $! > /tmp/candidate-child.pid; wait",
                 ),

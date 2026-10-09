@@ -1011,20 +1011,19 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     assert closed.is_set()
 
 
-@pytest.mark.parametrize("failure", ["exit", "timeout"])
-async def test_execution_user_preflight_fails_during_start_before_model_inference(failure):
+@pytest.mark.parametrize(
+    "result,cause_type",
+    [
+        (Result(126, b"", b"", False, False, ExitReason.EXITED), RuntimeError),
+        (Result(None, b"", b"", False, False, ExitReason.TIMED_OUT), TimeoutError),
+    ],
+)
+async def test_execution_user_preflight_fails_during_start_before_model_inference(result, cause_type):
     closed = asyncio.Event()
 
     class FailedProbeMachine:
         async def run(self, command):
-            return Result(
-                126 if failure == "exit" else None,
-                b"",
-                b"",
-                False,
-                False,
-                ExitReason.EXITED if failure == "exit" else ExitReason.TIMED_OUT,
-            )
+            return result
 
         async def close(self):
             closed.set()
@@ -1040,7 +1039,7 @@ async def test_execution_user_preflight_fails_during_start_before_model_inferenc
     with pytest.raises(RolloutInterrupted) as caught:
         await engine(model, {"local": Factory()}).run(lowered(task, machine=machine_runtime(user="learner")))
     assert caught.value.operation == RolloutOperation.START
-    assert isinstance(caught.value.__cause__, RuntimeError if failure == "exit" else TimeoutError)
+    assert isinstance(caught.value.__cause__, cause_type)
     assert model.requests == []
     assert closed.is_set()
 

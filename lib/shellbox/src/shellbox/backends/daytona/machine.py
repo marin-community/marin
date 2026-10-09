@@ -39,7 +39,7 @@ from shellbox.machine import Backend, Command, ExitReason, MachineSpec, NetworkP
 DEFAULT_SANDBOX_TTL_MINUTES = 360
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 RUN_COMMAND = (
-    'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; ' 'trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
+    'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
 )
 STOP_COMMAND = (
     "pidfile=$1; completed=$2; "
@@ -153,7 +153,7 @@ class DaytonaMachine:
         response = None
         environment = {**self.spec.env, **command.env}
         try:
-            async with asyncio.timeout(command.timeout):
+            async with asyncio.timeout(command.timeout) as deadline:
                 argv = (
                     "/bin/sh",
                     "-c",
@@ -216,8 +216,11 @@ class DaytonaMachine:
             )
         except TimeoutError as error:
             if response is not None:
+                primary_error = RuntimeError("Cannot collect Daytona command output")
+                raise primary_error from error
+            if not deadline.expired():
                 primary_error = error
-                raise RuntimeError("Cannot collect Daytona command output") from error
+                raise
             if not started:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             try:
@@ -246,10 +249,13 @@ class DaytonaMachine:
                         removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"))
                         if removed.exit_code:
                             raise RuntimeError("Cannot remove Daytona command files")
-                except BaseException as error:
+                except asyncio.CancelledError:
+                    await self.close()
+                    raise
+                except Exception as error:
                     await self.close()
                     if primary_error is None:
-                        raise
+                        raise RuntimeError("Cannot remove Daytona command files") from error
                     primary_error.add_note(f"Daytona command cleanup failed: {error}")
 
     async def upload(self, source: Path, target: str) -> None:
