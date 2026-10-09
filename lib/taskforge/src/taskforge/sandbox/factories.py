@@ -22,7 +22,6 @@ from pathlib import Path
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
-from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskResource, TaskSpec, VerifyitGrader
@@ -119,13 +118,16 @@ class LocalSandbox:
     Exactly one of ``factory`` and ``unavailable`` is set.
     """
 
-    factory: LocalMachineFactory | None
+    factory: MachineFactory | None
     unavailable: str | None
 
 
 @cache
 def local_sandbox() -> LocalSandbox:
     """Probe once whether bubblewrap can sandbox commands here (it needs root or user namespaces on Linux)."""
+    # The local backend needs bubblewrap_bin, which installs only on Linux.
+    from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable  # noqa: PLC0415
+
     try:
         return LocalSandbox(factory=LocalMachineFactory(), unavailable=None)
     except SandboxUnavailable as error:

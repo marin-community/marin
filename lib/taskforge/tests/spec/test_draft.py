@@ -571,12 +571,14 @@ def test_a_lock_only_grader_lowers_onto_the_local_backend():
     grader = python_grader(TEXT_GRADER, {}, environment=locked, answer_path=ANSWER_PATH, timeout=20)
 
     assert machine_backend(locked, MachineHost.IRIS) == Backend.LOCAL
-    with pytest.raises(ValueError, match="Lock-only graders require a LocalMachineFactory"):
-        lower(
-            answer_task(grader),
-            host=MachineHost.IRIS,
-            task_machine=None,
-            verifier_machine=VERIFIER,
-            session=SESSION,
-            factories={"local": RecordingFactory(Backend.LOCAL)},
-        )
+    # RolloutEngine accepts any factory whose backend is local, so a wrapped local factory serves the grader.
+    lowered = lower(
+        answer_task(grader),
+        host=MachineHost.IRIS,
+        task_machine=None,
+        verifier_machine=VERIFIER,
+        session=SESSION,
+        factories={"local": RecordingFactory(Backend.LOCAL)},
+    )
+
+    assert lowered.runtime.verifier_machine is not None and lowered.runtime.verifier_machine.backend == "local"
