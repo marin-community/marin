@@ -44,7 +44,7 @@ def converted(blob: bytes) -> NormalizedTask:
 
 
 def verifier_spec(task: TaskSpec) -> PytestSpec:
-    resource = next(resource for resource in task.resources.verifier if resource.path == "verifier.toml")
+    resource = next(resource for resource in task.resources.verifier if resource.path == "taskcompendium-verifier.toml")
     spec = parse_spec(resource_bytes(resource).decode())
     assert isinstance(spec, PytestSpec)
     return spec
@@ -73,6 +73,10 @@ def test_original_swesmith_keeps_build_and_private_roles():
     assert spec.must_not_break == tuple(original["PASS_TO_PASS"])
     assert spec.protected_paths_files == ("trusted_test_paths.txt",)
     assert task.environment_requirements.docker_image is None
+    assert "git_repository" in task.environment_requirements.capabilities
+    state = task.environment_requirements.tool_providers["shell"].initial_state
+    assert isinstance(state, dict)
+    assert state["workspace"] == "/testbed"
     assert task.environment_requirements.docker_build == task.grader.environment.docker_build
     context = task.environment_requirements.docker_build
     assert context is not None

@@ -8,23 +8,12 @@ retains its source contract until patched and non-Python grader migration is com
 """
 
 import json
-from functools import cache
 from pathlib import Path
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.executable import shell_environment, swe_task
-from taskcompendium.convert.tasktrove import TEST_SH_REWARD, archive_files
-from taskcompendium.models import (
-    AnswerType,
-    ArtifactKind,
-    DockerBuildContext,
-    EnvironmentRequirements,
-    ResourceGroups,
-    ScriptGrader,
-    TaskResource,
-    TaskSpec,
-    VerifierArtifact,
-)
+from taskcompendium.convert.executable import swe_task
+from taskcompendium.convert.tasktrove import archive_files
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     Converter,
@@ -34,11 +23,13 @@ from taskcompendium.pipeline.models import (
     NormalizedTask,
     RawRow,
 )
-from taskcompendium.runtime.local import context_paths
-from taskcompendium.runtime.resources import inline_resource
-from verifyit.spec import render_spec
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.repository_build import (
+    VERIFYIT_PACKAGE,
+    WORKSPACE,
+    repository_build_task,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import (
     TRUSTED_PATHS,
     repository_dockerfile,
@@ -47,9 +38,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
 )
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
-
-WORKSPACE = "/testbed"
-VERIFYIT_PACKAGE = Path(__file__).resolve().parents[5] / "lib/verifyit"
 
 REPOSITORY_CRITERIA = """
 The public repository and checkout identify necessary context; unavailable local checkout is a runtime
@@ -78,27 +66,6 @@ def convert_repository_task(row: RawRow, _context: ConversionContext) -> TaskSpe
     return swe_task(row, workspace=WORKSPACE)
 
 
-VERIFYIT_CONTEXT = "taskcompendium-verifyit"
-PUBLIC_SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
-REPOSITORY_SETUP = "taskcompendium-repository-setup.sh"
-VERIFYIT_INSTALL = f"""
-COPY {VERIFYIT_CONTEXT}/ /opt/taskcompendium-verifyit/
-RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --python 3.12 /opt/taskcompendium-verifyit
-"""
-VERIFYIT_SCRIPT = b"#!/bin/bash\nset -euo pipefail\nexec verifyit /tests/verifier.toml\n"
-
-
-@cache
-def verifyit_build_files() -> tuple[TaskResource, ...]:
-    """Bundle the checked-out verifier package so the recipe names the code used in conversion."""
-    package = VERIFYIT_PACKAGE
-    paths = [package / "pyproject.toml", package / "README.md", *context_paths(package / "src/verifyit")]
-    return tuple(
-        inline_resource(f"{VERIFYIT_CONTEXT}/{path.relative_to(package).as_posix()}", path.read_bytes())
-        for path in paths
-    )
-
-
 def convert_swesmith_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Recover SWE-smith's pytest grader while leaving its build recipe unresolved."""
     task = convert_repository_task(row, context)
@@ -110,86 +77,7 @@ def convert_swesmith_task(row: RawRow, context: ConversionContext) -> Normalized
     spec = trusted_pytest(files)
     if isinstance(spec, ImportRejection):
         return spec
-    instruction = files.text("instruction.md")
-    if not instruction.startswith(PUBLIC_SETUP_PREFIX):
-        return unsupported("unsupported_repository_setup", "Expected the source's explicit Environment Setup bash block")
-    setup, end, _ = instruction.removeprefix(PUBLIC_SETUP_PREFIX).partition("\n```")
-    if not end:
-        return unsupported("unsupported_repository_setup", "Environment Setup bash block is not closed")
-    original_dockerfile = files.text("environment/Dockerfile")
-    # Separate verification needs the packages installed by the public setup, not just its base image.
-    # Remove the build-time clone so the public clone instruction and later full artifact copy start empty.
-    dockerfile = repository_dockerfile(original_dockerfile, instruction) + VERIFYIT_INSTALL
-    if task.resources.worker:
-        dockerfile += "COPY taskcompendium-public/ /\n"
-    dockerfile += (
-        f"COPY {REPOSITORY_SETUP} /opt/{REPOSITORY_SETUP}\n"
-        f"RUN bash -e /opt/{REPOSITORY_SETUP} && rm -rf /testbed && mkdir -p /testbed\n"
-    )
-    # Original environment bytes stay with provenance; the edited recipe is an environment input.
-    context_files = tuple(
-        resource.model_copy(
-            update={
-                "path": resource.path.removeprefix("environment/"),
-                **(
-                    {"source": inline_resource("Dockerfile", dockerfile.encode()).source}
-                    if resource.path == "environment/Dockerfile"
-                    else {}
-                ),
-            }
-        )
-        for resource in task.resources.oracle
-        if resource.path.startswith("environment/")
-    )
-    if any(
-        resource.path.startswith((VERIFYIT_CONTEXT, "taskcompendium-public", REPOSITORY_SETUP))
-        for resource in context_files
-    ):
-        return unsupported("build_context_collision", "Source context occupies the bundled verifier path")
-    public_context = tuple(
-        resource.model_copy(update={"path": "taskcompendium-public/" + resource.path})
-        for resource in task.resources.worker
-    )
-    environment = EnvironmentRequirements(
-        docker_build=DockerBuildContext(
-            files=(
-                *context_files,
-                *verifyit_build_files(),
-                *public_context,
-                inline_resource(REPOSITORY_SETUP, setup.encode()),
-            )
-        )
-    )
-    verifier = (
-        *(
-            resource
-            for resource in task.resources.verifier
-            if resource.path in (TRUSTED_PATHS, "taskcompendium/archive-provenance.json")
-        ),
-        inline_resource("verifier.toml", render_spec(spec).encode()),
-        inline_resource("test.sh", VERIFYIT_SCRIPT).model_copy(update={"mode": "0755"}),
-    )
-    original_tests = tuple(
-        resource.model_copy(update={"path": "source_archive/tests/" + resource.path})
-        for resource in task.resources.verifier
-        if resource.path != "taskcompendium/archive-provenance.json"
-    )
-    grader = ScriptGrader(
-        argv=("bash", "/tests/test.sh"),
-        cwd="/",
-        environment=environment,
-        artifacts=(VerifierArtifact(source=WORKSPACE, target=WORKSPACE, kind=ArtifactKind.DIRECTORY),),
-        answer_path=None,
-        reward=TEST_SH_REWARD,
-    )
-    changes = [
-        NormalizationChange(
-            field="environment/Dockerfile",
-            reason="Carry repository test dependencies and the bundled verifier as an unresolved build recipe",
-            original=original_dockerfile,
-            replacement=dockerfile,
-        )
-    ]
+    changes = []
     pass_to_pass = repository_test_ids(json.loads(files.text("tests/config.json")).get("PASS_TO_PASS"))
     if pass_to_pass != spec.must_not_break:
         changes.append(
@@ -200,19 +88,18 @@ def convert_swesmith_task(row: RawRow, context: ConversionContext) -> Normalized
                 replacement=json.dumps(spec.must_not_break),
             )
         )
-    return NormalizedTask(
-        task.model_copy(
-            update={
-                "environment_requirements": shell_environment(environment),
-                "answer_type": AnswerType.WORKSPACE_STATE,
-                "grader": grader,
-                "resources": ResourceGroups(
-                    worker=task.resources.worker, verifier=verifier, oracle=(*task.resources.oracle, *original_tests)
-                ),
-                "tags": ("code", "swe", "swe-repo", "trusted-test-paths"),
-            }
+    return repository_build_task(
+        task,
+        files,
+        spec=spec,
+        dockerfile=repository_dockerfile(files.text("environment/Dockerfile"), files.text("instruction.md")),
+        verifier=tuple(
+            resource
+            for resource in task.resources.verifier
+            if resource.path in (TRUSTED_PATHS, "taskcompendium/archive-provenance.json")
         ),
-        tuple(changes),
+        tags=("code", "swe", "swe-repo", "trusted-test-paths"),
+        changes=tuple(changes),
     )
 
 
@@ -286,7 +173,7 @@ def sources() -> list[RlDataSource]:
             "laion__swesmith-oracle-filtered-v2",
             SWESMITH_RUBRIC,
             convert=convert_swesmith_task,
-            version="2",
+            version="3",
             ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:laion__swesmith-oracle-filtered-v2",
