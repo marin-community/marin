@@ -5,6 +5,8 @@
 
 import json
 import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from taskcompendium.convert.answers import unsupported
@@ -13,6 +15,10 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 from verifyit.spec import PytestSpec
 
 TRUSTED_PATHS = "trusted_test_paths.txt"
+PYTEST_REPORT_PLUGIN = "pytest-json-report"
+PYTEST_VERSION_CONSTRAINT = "pytest<9"
+PYTEST_CONSTRAINT_PATH = "/opt/verifyit-pytest-constraints.txt"
+# The source installer takes <repo> <trusted_commit> <manifest> [<patch>] [<fallback_commit>].
 TRUSTED_INVOCATION = re.compile(
     r"install_trusted_test_paths\.sh\s*\\?\s*\n?\s*"
     r"\S+\s+(?P<trusted>[0-9a-f]{7,40})\s+\S+"
@@ -114,6 +120,29 @@ def uncollectable(node_id: str) -> bool:
     return "." in name or (name == module and not name.startswith("test"))
 
 
+@dataclass(frozen=True)
+class PytestSelection:
+    must_pass: tuple[str, ...]
+    must_not_break: tuple[str, ...]
+    files: tuple[str, ...]
+
+
+def pytest_selection(
+    fail_to_pass: Sequence[str], pass_to_pass: Sequence[str], manifests: Iterable[str | None]
+) -> PytestSelection | ImportRejection:
+    """Select collectable tests only when trusted manifests cover every graded file."""
+    foreign = [node_id for node_id in fail_to_pass if uncollectable(node_id)]
+    if foreign:
+        return unsupported("unsupported_variant", f"FAIL_TO_PASS ids the pytest mode cannot collect: {foreign[:3]}")
+    retained = tuple(node_id for node_id in pass_to_pass if not uncollectable(node_id))
+    files = {node_id.split("::", 1)[0] for node_id in (*fail_to_pass, *retained)}
+    manifest = {line.strip() for text in manifests for line in (text or "").splitlines() if line.strip()}
+    uncovered = sorted(files - manifest)
+    if uncovered:
+        return unsupported("unsupported_variant", f"graded test files missing from trusted manifest: {uncovered[:5]}")
+    return PytestSelection(tuple(fail_to_pass), retained, tuple(sorted(files)))
+
+
 def trusted_pytest(task: TaskFiles) -> PytestSpec | ImportRejection:
     """Recover the legacy SWE-smith pytest contract, including trusted-test restoration."""
     config = json.loads(task.text("tests/config.json"))
@@ -128,19 +157,13 @@ def trusted_pytest(task: TaskFiles) -> PytestSpec | ImportRejection:
     match = TRUSTED_INVOCATION.search(task.text("tests/test.sh"))
     if match is None:
         return unsupported("unsupported_variant", "tests/test.sh does not call install_trusted_test_paths.sh")
-    foreign = [node_id for node_id in fail_to_pass if uncollectable(node_id)]
-    if foreign:
-        return unsupported("unsupported_variant", f"FAIL_TO_PASS ids the pytest mode cannot collect: {foreign[:3]}")
-    retained = tuple(node_id for node_id in pass_to_pass if not uncollectable(node_id))
-    files = {node_id.split("::", 1)[0] for node_id in (*fail_to_pass, *retained)}
-    manifest = {line.strip() for line in task.text(f"tests/{TRUSTED_PATHS}").splitlines() if line.strip()}
-    uncovered = sorted(files - manifest)
-    if uncovered:
-        return unsupported("unsupported_variant", f"graded test files missing from trusted manifest: {uncovered[:5]}")
+    selection = pytest_selection(fail_to_pass, pass_to_pass, (task.text(path) for path in (f"tests/{TRUSTED_PATHS}",)))
+    if isinstance(selection, ImportRejection):
+        return selection
     return PytestSpec(
-        paths=tuple(sorted(files)),
-        must_pass=fail_to_pass,
-        must_not_break=retained,
+        paths=selection.files,
+        must_pass=selection.must_pass,
+        must_not_break=selection.must_not_break,
         setup=RESTORE_TESTS.replace("TRUSTED_SHA", match["trusted"]).replace("FALLBACK_SHA", match["fallback"] or ""),
         protected_paths_files=(TRUSTED_PATHS,),
         workspace="/testbed",
@@ -149,20 +172,21 @@ def trusted_pytest(task: TaskFiles) -> PytestSpec | ImportRejection:
 
 def ensure_pytest_json_report(dockerfile: str, conda_lines: tuple[str, ...] = ()) -> str:
     """Install the report plugin in the repository's Python, including activated conda environments."""
-    if "pytest-json-report" in dockerfile:
+    if PYTEST_REPORT_PLUGIN in dockerfile:
         return dockerfile
     lines = dockerfile.splitlines()
     for index, line in enumerate(lines):
         tokens = line.split()
         if tokens[:1] == ["RUN"] and "pip" in tokens and "install" in tokens and "pytest" in tokens:
-            lines[index] = line + " pytest-json-report"
+            lines[index] = line + f" {PYTEST_REPORT_PLUGIN}"
             return "\n".join(lines) + "\n"
     if conda_lines:
         activate = " && ".join(conda_lines)
-        install = f'RUN bash -lc "{activate} && pip install --no-cache-dir pytest-json-report"\n'
+        install = f'RUN bash -lc "{activate} && pip install --no-cache-dir {PYTEST_REPORT_PLUGIN}"\n'
     else:
         install = (
-            "RUN (pip install --no-cache-dir pytest-json-report || pip3 install --no-cache-dir pytest-json-report)\n"
+            f"RUN (pip install --no-cache-dir {PYTEST_REPORT_PLUGIN}"
+            f" || pip3 install --no-cache-dir {PYTEST_REPORT_PLUGIN})\n"
         )
     return dockerfile.rstrip("\n") + "\n" + install
 
@@ -173,7 +197,7 @@ def repository_dockerfile(dockerfile: str, instruction: str) -> str:
     match = SWESMITH_REPOSITORY.search(instruction)
     if match is None:
         return dockerfile
-    packages = '"pytest<9"'
+    packages = f'"{PYTEST_VERSION_CONSTRAINT}"'
     additions = {
         "marshmallow-code__marshmallow.9716fc62": " simplejson",
         "conan-io__conan.86f29e13": " mock webtest PyJWT bottle parameterized",
@@ -182,7 +206,7 @@ def repository_dockerfile(dockerfile: str, instruction: str) -> str:
     packages += additions.get(match["repo"], "")
     return (
         dockerfile.rstrip("\n")
-        + "\nRUN printf 'pytest<9\\n' > /opt/verifyit-pytest-constraints.txt\n"
-        + "ENV PIP_CONSTRAINT=/opt/verifyit-pytest-constraints.txt\n"
+        + f"\nRUN printf '{PYTEST_VERSION_CONSTRAINT}\\n' > {PYTEST_CONSTRAINT_PATH}\n"
+        + f"ENV PIP_CONSTRAINT={PYTEST_CONSTRAINT_PATH}\n"
         + f"RUN python -m pip install --no-cache-dir {packages}\n"
     )

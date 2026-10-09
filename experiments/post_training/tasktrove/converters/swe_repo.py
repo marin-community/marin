@@ -4,13 +4,7 @@
 """Helpers shared by the SWE-bench-shaped converters (``swe_patched``, ``swe_trusted_paths``)."""
 
 import json
-from collections.abc import Iterable
-from dataclasses import dataclass
 from pathlib import PurePosixPath
-
-from taskcompendium.convert.tasktrove_converted_task import ConvertStatus, Rejected
-
-from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import uncollectable
 
 CONFIG_JSON = "tests/config.json"
 TRUSTED_TEST_PATHS = "tests/trusted_test_paths.txt"
@@ -45,13 +39,6 @@ APPLY_PATCH
 """
 
 
-@dataclass(frozen=True)
-class PytestSelection:
-    must_pass: tuple[str, ...]
-    must_not_break: tuple[str, ...]
-    files: tuple[str, ...]
-
-
 def restore_setup(trusted: str, manifests: tuple[str, ...], fallback: str = "", patch: str = "") -> str:
     manifest_commands = "\n".join(
         f'restore_manifest "$VERIFYIT_TESTS_DIR/{PurePosixPath(path).name}"' for path in manifests
@@ -67,34 +54,6 @@ def restore_setup(trusted: str, manifests: tuple[str, ...], fallback: str = "", 
         .replace("RESTORE_MANIFESTS", manifest_commands)
         .replace("APPLY_PATCH", patch_command)
     )
-
-
-def pytest_selection(
-    fail_to_pass: list[str], pass_to_pass: list[str], manifests: Iterable[str | None]
-) -> PytestSelection | Rejected:
-    foreign = [node_id for node_id in fail_to_pass if uncollectable(node_id)]
-    if foreign:
-        return Rejected(
-            ConvertStatus.UNSUPPORTED_VARIANT, f"FAIL_TO_PASS ids the pytest mode cannot collect: {foreign[:3]}"
-        )
-    retained_pass_to_pass = [node_id for node_id in pass_to_pass if not uncollectable(node_id)]
-    files = {test_file(node_id) for node_id in [*fail_to_pass, *retained_pass_to_pass]}
-    uncovered = uncovered_files(files, manifests)
-    if uncovered:
-        return Rejected(
-            ConvertStatus.UNSUPPORTED_VARIANT, f"graded test files missing from trusted manifest: {uncovered[:5]}"
-        )
-    return PytestSelection(tuple(fail_to_pass), tuple(retained_pass_to_pass), tuple(sorted(files)))
-
-
-def test_file(node_id: str) -> str:
-    return node_id.split("::", 1)[0]
-
-
-def uncovered_files(graded_files: set[str], manifests: Iterable[str | None]) -> list[str]:
-    """Graded test files that no trusted manifest restores, so an agent could rewrite them."""
-    manifest = {line.strip() for text in manifests for line in (text or "").splitlines() if line.strip()}
-    return sorted(graded_files - manifest)
 
 
 def test_ids(value: object) -> list[str]:

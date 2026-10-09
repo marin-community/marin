@@ -22,14 +22,17 @@ from taskcompendium.convert.tasktrove_converted_task import (
     ConvertStatus,
     Rejected,
 )
+from taskcompendium.pipeline.models import ImportRejection
 from verifyit.spec import PytestSpec, ScriptSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import ensure_pytest_json_report
+from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import (
+    ensure_pytest_json_report,
+    pytest_selection,
+)
 from experiments.post_training.tasktrove.converters.swe_repo import (
     CONFIG_JSON,
     TESTBED,
     TRUSTED_TEST_PATHS,
-    pytest_selection,
     restore_setup,
     test_ids,
 )
@@ -244,8 +247,8 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
         pass_to_pass,
         [task.get_text(TRUSTED_TEST_PATHS), task.get_text(TRUSTED_PATCH_PATHS)],
     )
-    if isinstance(selection, Rejected):
-        return selection
+    if isinstance(selection, ImportRejection):
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, selection.detail)
     node_ids = [*selection.must_pass, *selection.must_not_break]
     non_pytest = [node_id for node_id in node_ids if not _is_pytest_node_id(node_id)]
     if non_pytest:

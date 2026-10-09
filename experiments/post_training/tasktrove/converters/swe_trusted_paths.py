@@ -4,7 +4,6 @@
 """SWE repositories graded with trusted test paths."""
 
 import json
-import re
 
 from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
 from taskcompendium.convert.tasktrove_converted_task import (
@@ -14,27 +13,20 @@ from taskcompendium.convert.tasktrove_converted_task import (
     ConvertStatus,
     Rejected,
 )
+from taskcompendium.pipeline.models import ImportRejection
 from verifyit.spec import PytestSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import repository_dockerfile
+from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import (
+    TRUSTED_INVOCATION,
+    pytest_selection,
+    repository_dockerfile,
+)
 from experiments.post_training.tasktrove.converters.swe_repo import (
     CONFIG_JSON,
     TESTBED,
     TRUSTED_TEST_PATHS,
-    pytest_selection,
     restore_setup,
     test_ids,
-)
-
-# The old ``tests/test.sh`` invokes ``install_trusted_test_paths.sh <repo> <trusted_commit>
-# <manifest> [<patch_path>] [<fallback_commit>]``; the commits are the only per-task values we need
-# out of that call, and they only exist embedded in this shell text.
-_INVOCATION_RE = re.compile(
-    r"install_trusted_test_paths\.sh\s*\\?\s*\n?\s*"
-    r"\S+\s+(?P<trusted>[0-9a-f]{7,40})\s+\S+"
-    r"(?:\s+(?:\"\"|\S+))?"
-    r"(?:\s*\\?\s*\n?\s*(?P<fallback>[0-9a-f]{7,40}))?",
-    re.MULTILINE,
 )
 
 
@@ -61,14 +53,14 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
     if not fail_to_pass and not pass_to_pass:
         return Rejected(ConvertStatus.NULL_GRADER, "config.json has no FAIL_TO_PASS or PASS_TO_PASS tests")
 
-    match = _INVOCATION_RE.search(task.get_text(TEST_SH) or "")
+    match = TRUSTED_INVOCATION.search(task.get_text(TEST_SH) or "")
     if match is None:
         return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test.sh does not call install_trusted_test_paths.sh")
     trusted, fallback = match["trusted"], match["fallback"] or ""
 
     selection = pytest_selection(fail_to_pass, pass_to_pass, [task.get_text(TRUSTED_TEST_PATHS)])
-    if isinstance(selection, Rejected):
-        return selection
+    if isinstance(selection, ImportRejection):
+        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, selection.detail)
 
     spec = PytestSpec(
         paths=selection.files,
