@@ -20,16 +20,16 @@ from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
 
-from taskforge.builder.sdk import ModelEndpoint
 from taskforge.llm.policy import LLMPolicy
 from taskforge.loop.policy import LoopPolicy
 from taskforge.queue.config import EngineConfig, RunConfig
-from taskforge.queue.job import SUMMARY_FILE, RunInputs, RunModel, run_job
+from taskforge.queue.job import SUMMARY_FILE, RunInputs, run_job
 from taskforge.queue.run import FailedItems, RunSummary
 from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.sandbox.factories import MachineHost
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
+from taskforge.validate.solver import ModelFactory
 from taskforge.validate.trials import Deadlines, RetryBackoff
 
 from experiments.post_training.capability_driven_envs.catalog import (
@@ -46,13 +46,13 @@ BACKOFF = RetryBackoff(initial=1.0, maximum=10.0, factor=2.0, jitter=0.1)
 
 
 def capability_policy(k: int, proposals_per_idea: int) -> LoopPolicy:
-    """The capability run's policy: a task outside the band is not revised; a too-easy one is accepted and
-    labelled with its band, a too-hard one rejected."""
+    """The capability run's policy: a too-easy task is accepted and labelled with its band, a too-hard one
+    rejected; neither is revised, because this loop cannot repair a task."""
     return LoopPolicy(
         proposals_per_idea=proposals_per_idea,
         max_idea_reproposals=1,
         max_build_revisions=1,
-        max_repairs=1,
+        max_repairs=0,
         max_validation_retries=2,
         retry_backoff=BACKOFF,
         band_rules=BandRules(
@@ -98,20 +98,28 @@ def selected_ideas(catalog: Path, capabilities: Sequence[str]) -> dict[str, Capa
 
 
 def capability_inputs(
-    ideas: Mapping[str, CapabilityIdea], client: ModelEndpoint, root: Path
+    ideas: Mapping[str, CapabilityIdea], rollout_models: ModelFactory, root: Path
 ) -> RunInputs[CapabilityIdea]:
-    """A ``queue.job.InputsFactory`` once ``ideas`` is bound."""
-    return RunInputs(ideas=ideas, source=RecordSource(), describe_idea=capability_idea_record)
-
-
-def scripted_model() -> RunModel:
-    return RunModel(client=ScriptedBuilder(), rollout_models=scripted_solver)
+    """A ``queue.job.InputsFactory`` once ``ideas`` and the solver's ``rollout_models`` are bound; the
+    scripted builder builds every proposal."""
+    return RunInputs(
+        ideas=ideas,
+        source=RecordSource(),
+        describe_idea=capability_idea_record,
+        model=ScriptedBuilder(),
+        rollout_models=rollout_models,
+    )
 
 
 async def run(
-    root: Path, ideas: Mapping[str, CapabilityIdea], policy: LoopPolicy, model: RunModel, failed: FailedItems
+    root: Path,
+    ideas: Mapping[str, CapabilityIdea],
+    policy: LoopPolicy,
+    rollout_models: ModelFactory,
+    failed: FailedItems,
 ) -> RunSummary:
-    return await run_job(run_config(root, policy), partial(capability_inputs, ideas), failed, model)
+    inputs = partial(capability_inputs, ideas, rollout_models)
+    return await run_job(run_config(root, policy), inputs, failed)
 
 
 def main() -> None:
@@ -127,7 +135,7 @@ def main() -> None:
     failed = FailedItems.RETRY if args.retry_failed else FailedItems.SKIP
     policy = capability_policy(args.k, args.proposals)
     ideas = selected_ideas(args.catalog, args.capability)
-    asyncio.run(run(args.root.resolve(), ideas, policy, scripted_model(), failed))
+    asyncio.run(run(args.root.resolve(), ideas, policy, scripted_solver, failed))
     print(args.root.resolve() / SUMMARY_FILE)
 
 
