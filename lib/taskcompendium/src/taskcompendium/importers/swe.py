@@ -7,22 +7,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.models import (
     AnswerType,
+    ArtifactKind,
     ConversationInput,
     EnvironmentRequirements,
+    ExitCodeReward,
+    PlainText,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
-)
-from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.shell_verifier import (
-    ArtifactKind,
-    ExitCodeReward,
-    ShellVerifierSpec,
     VerifierArtifact,
     VerifierCommand,
 )
+from taskcompendium.runtime.resources import inline_resource
 
 PATCH_PATH = "/tmp/taskcompendium/model.patch"
 GRADER_PATH = "/tests/evaluate.sh"
@@ -30,7 +28,7 @@ BASE_REF = "refs/taskcompendium/base"
 
 
 class SWEInstance(BaseModel):
-    """Source fields that define the problem and private grader."""
+    """Source fields that define the problem and its evaluation script."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -40,7 +38,7 @@ class SWEInstance(BaseModel):
 
 
 def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentRequirements) -> TaskSpec:
-    """Keep evaluation private and grade the submitted Git patch in a fresh image."""
+    """Grade the submitted Git patch in a fresh machine from the same image."""
     if environment.docker_image is None or environment.tool_providers:
         raise ValueError("SWE tasks require a prebuilt, digest-pinned shell image")
     task_environment = environment.model_copy(
@@ -49,7 +47,7 @@ def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentR
             "setup_commands": (*environment.setup_commands, f"git update-ref {BASE_REF} HEAD"),
         }
     )
-    verifier = ShellVerifierSpec(
+    grader = ScriptGrader(
         collect=(
             VerifierCommand(
                 argv=(
@@ -63,6 +61,9 @@ def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentR
         ),
         artifacts=(VerifierArtifact(source=PATCH_PATH, target=PATCH_PATH, kind=ArtifactKind.FILE),),
         argv=("sh", "-c", 'git apply --binary "$1" && bash "$2"', "evaluate-patch", PATCH_PATH, GRADER_PATH),
+        cwd=environment.working_directory or "/",
+        environment=environment,
+        answer_path=None,
         reward=ExitCodeReward(),
     )
     return TaskSpec(
@@ -70,11 +71,8 @@ def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentR
         context=ConversationInput(events=(TextMessage(role="user", content=instance.problem_statement),)),
         environment_requirements=task_environment,
         answer_type=AnswerType.WORKSPACE_STATE,
-        verifier=VerifierSpec(
-            kind="shell",
-            parameters_json=verifier.model_dump_json(),
-            environment_requirements=environment,
-        ),
+        answer_format=PlainText(),
+        grader=grader,
         resources=ResourceGroups(verifier=(inline_resource("evaluate.sh", instance.eval_script.encode()),)),
         source=source,
     )

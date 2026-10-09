@@ -4,21 +4,24 @@
 """Single-stage Harbor import, private rewards, and unsupported task rejection."""
 
 import json
-from dataclasses import replace
 
 import pytest
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, ShellSimBuiltins
+from shellbox.machine import Command
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.harbor import harbor_task
-from taskcompendium.models import EnvironmentRequirements, Source, TaskSpec
+from taskcompendium.models import Source, TaskSpec
 
-from rolloutengine.lowering import lower_task
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 
-from .test_rollout import RecordingShellSimFactory, ReplayModel, engine, lowered, machine_runtime, shell_call
-
-FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
+from .test_rollout import (
+    FIXTURE_IMAGE,
+    RecordingShellSimFactory,
+    ReplayModel,
+    engine,
+    lowered,
+    machine_runtime,
+    shell_call,
+)
 
 
 @pytest.mark.parametrize("mode", [None, "shared"])
@@ -31,25 +34,6 @@ def test_shared_harbor_grading_is_rejected_during_import(tmp_path, mode, verifie
     exception = ValueError if verifier_environment and mode == "shared" else NotImplementedError
     with pytest.raises(exception):
         harbor_task(directory, source=Source(dataset="fixture", revision="1", row="task", importer_revision="1"))
-
-
-@pytest.mark.parametrize("session_name", ["shellbox", "custom"])
-async def test_shell_grading_without_an_image_is_rejected_before_execution(tmp_path, session_name):
-    directory = harbor_package(tmp_path, verifier_options='environment_mode = "separate"')
-    task = harbor_task(directory, source=Source(dataset="fixture", revision="1", row="task", importer_revision="1"))
-    task = task.model_copy(
-        update={"verifier": task.verifier.model_copy(update={"environment_requirements": EnvironmentRequirements()})}
-    )
-    record = lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime(), task_session=session_name)
-    factory = RecordingShellSimFactory()
-    model = ReplayModel([])
-    sessions = {"custom": lambda task, machine: None}
-    with pytest.raises(ValueError):
-        lower_task(task, record.runtime, record.session, factories={"local": factory}, sessions=sessions)
-    with pytest.raises(ValueError):
-        await engine(model, {"local": factory}, sessions=sessions).run(record)
-    assert factory.machines == []
-    assert model.requests == []
 
 
 def harbor_package(tmp_path, *, task_options="", environment_options="", verifier_options=""):
@@ -92,21 +76,14 @@ async def test_prebuilt_harbor_task_keeps_tests_private_and_grades_first_reward_
     (directory / "setup_files/input").write_text(answer)
     task = harbor_task(directory, source=Source(dataset="fixture", revision="1", row="task", importer_revision="1"))
     task = TaskSpec.model_validate_json(task.model_dump_json())
-    machines = []
-
-    class FixtureImageFactory:
-        async def create(self, spec):
-            machine = await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins()))
-            machines.append(machine)
-            return machine
-
+    factory = RecordingShellSimFactory()
     model = ReplayModel(
         [
             shell_call("test ! -f /tests/test.sh && cat /setup_files/input > /logs/artifacts/answer"),
             {"role": "assistant", "content": "Done."},
         ]
     )
-    record = await engine(model, {"local": FixtureImageFactory()}).run(
+    record = await engine(model, {"local": factory}).run(
         lowered(
             task,
             machine=machine_runtime(),
@@ -122,7 +99,8 @@ async def test_prebuilt_harbor_task_keeps_tests_private_and_grades_first_reward_
     assert record.grade.diagnostics["exit_code"] == 7
     assert record.loss_mask == (1, 0, 0, 1)
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
-    for machine in machines:
+    assert len(factory.machines) == 2
+    for machine in factory.machines:
         with pytest.raises(RuntimeError):
             await machine.run(Command(("true",)))
 

@@ -3,12 +3,12 @@
 `ShellboxRolloutEngine.run(lowered)` executes one single-stage task and returns `RolloutData`.
 The caller supplies the model callable, configured Shellbox factories, and optional task-session factories.
 The caller owns concurrency, retries, group grading, and training projections.
-TaskCompendium defines `TaskSpec` and grading outcomes. VerifyIT supplies verifier schemas and implementations.
+TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. VerifyIT supplies grading modes and their implementations.
 Shellbox supplies machine backends. RolloutEngine supplies the execution loop and session interface.
 
 ```mermaid
 flowchart TD
-    Source[Source row or task package] --> Task[TaskSpec: task definition and private verifier]
+    Source[Source row or task package] --> Task[TaskSpec: task definition, answer format, and grader]
     Task --> Lower[LoweredTaskSpec: preserved task, runtime, session limits]
     Config[Deployment configuration] --> Lower
     Lower --> Worker[Caller: task scheduler or rollout worker]
@@ -17,7 +17,7 @@ flowchart TD
     Model --> Engine
     Engine --> Session[TaskSession: task operations and grading]
     Session --> Machine[Shellbox task machine]
-    Session --> Grader[Private grader or verifier machine]
+    Session --> Grader[Grader: in process or in a verifier machine]
     Engine --> Record[RolloutData: conversation, tokens, masks, logprobs, grade]
     Record --> Worker
     Worker --> Train[Whole-rollout or step-wise training]
@@ -25,9 +25,9 @@ flowchart TD
 
 ## Task and runtime specs
 
-`TaskSpec` contains the task definition: public context, tools, output paths, answer type, private verifier, environment requirements, resources, source, and tags.
+`TaskSpec` contains the task definition: public context, tools, output paths, answer type, answer format, grader, environment requirements, resources, source, and tags.
 Its `environment_requirements` includes capabilities, an optional digest-pinned Docker image, workdir, setup commands, environment variables, and named tool-provider contracts.
-The verifier declares separate requirements in `verifier.environment_requirements`.
+A `ScriptGrader`, or a `VerifyitGrader` with an environment, declares separate requirements in `grader.environment`.
 
 Lowering preserves the task definition and adds these deployment settings:
 
@@ -51,16 +51,25 @@ The reserved session identifier `shellbox` selects the engine's shell-tool sessi
 Custom session factories receive `(lowered, machine)` and return a fresh session for each attempt.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
-`verifier_machine=None` selects host execution for supported answer graders.
-Shell grading requires a separate verifier machine.
-A verifier-machine selection creates a fresh private grader.
+A grader with an environment requires a `verifier_machine` selection. Every other grader requires `verifier_machine=None`.
+Each attempt creates a fresh verifier machine from that selection.
 
 The engine validates factory identifiers and supported requirements before machine acquisition.
 The selected factory applies network and hardware settings and rejects settings that it cannot enforce.
 The engine does not change those settings to match a backend.
 
 An environment with `docker_image` uses that prebuilt image. The reference must contain a SHA-256 digest.
-An environment without an image uses `ShellSimBuiltins` and requires a compatible factory.
+An environment with `packages_lock` and no image requires a `LocalMachineFactory`.
+TaskCompendium reads the lock's digest and data entries from the adjacent curation `.artifact.json` result,
+then builds a managed CPython environment with the locked packages, verifyit, and declared NLTK data.
+The factory mounts the built root read-only and puts its Python on `PATH`; attempts share the built runtime
+but each gets a fresh sandbox. The selected factory's mounts, executable paths, bubblewrap binary, and hash seed remain in use.
+Building the runtime is included in the startup deadline and, for graders, the verifier deadline.
+The host needs `uv`, download access for an uncached build, and a working bubblewrap setup.
+Grader staging runs as root, so local grading requires a host process running as root.
+Local machines reject CPU, memory, storage, and GPU allocations; leave those fields unset and `gpus=0`.
+
+An environment with neither an image nor a lock uses `ShellSimBuiltins` and requires a compatible factory.
 The default workdir is the image's workdir, or `/workspace` for the built-in filesystem.
 An explicit `working_directory` overrides that selection.
 
@@ -68,9 +77,9 @@ Machine setup commands run as trusted root before task operations.
 `MachineRuntimeSpec.user` supplies the default user for session commands.
 When its user is set, the task machine executes a startup command as that user after root setup and before model inference.
 An explicit command user overrides that default.
-The verifier uses its own machine user.
+The verifier machine uses its own configured default user.
 
-## Session lifecycle and private files
+## Session lifecycle and grader files
 
 The engine installs `resources.all` and `resources.worker` on the task machine before session preparation.
 It calls these session methods:
@@ -88,18 +97,16 @@ The default session exposes `shell(command: string)` when the task declares the 
 Each command starts a fresh shell. Files persist between commands.
 Native interaction tools and tool-provider contracts require a registered custom session.
 
-The model receives only public context, submission instructions, tool definitions, and task observations.
-The serialized task and lowered record contain private grading inputs. Do not send them to the model.
-The Shellbox session installs private verifier resources in `/tests` on the verifier machine after the turn loop.
-Oracle resources contain private control inputs for task-curation checks. They do not enter a rollout.
+The model receives only public context, answer-format instructions, tool definitions, and task observations.
+The serialized task and lowered record contain the grader and verifier resources. Do not send them to the model.
+Oracle resources contain control inputs for task-curation checks. They do not enter a rollout.
 
-A separate shell verifier receives `resources.all` and the declared artifacts from the task machine.
-Collect commands execute on the task machine before artifact transfer.
+When the grader has an environment, the Shellbox session stages grading inputs on the verifier machine after the turn loop.
+The verifier machine receives verifier resources under `/tests`, `resources.all`, `resources.worker`, captured `output_paths`, and the extracted answer.
+A `ScriptGrader`'s collect commands run as root on the task machine, then its artifacts are copied from the task machine.
+Collect commands and artifacts require a task machine.
 Artifacts specify a source, target, kind, exclusions, and missing-file policy.
 Directory exclusions use `tar --exclude` on the task machine.
-VerifyIT supplies shared verifier specifications and grading implementations.
-A separate VerifyIT grader receives captured `output_paths`, common resources, and private verifier resources.
-Worker-only resources do not enter a separate verifier.
 
 ## Deadlines and failures
 
@@ -144,17 +151,27 @@ Thread-backed sessions retain their pending operations until session cleanup can
 
 ## Grading
 
-The built-in session accepts shared VerifyIT verifier kinds, private shell graders, and explicit skipped grading.
-External verifiers require a custom session.
+The built-in Shellbox session grades by grader kind:
+
+| Grader | Grading |
+| --- | --- |
+| `VerifyitGrader` without an environment | `taskcompendium.grading.grade_answer` on the host, in a worker thread |
+| `VerifyitGrader` with an environment | `taskcompendium.runtime.grading.grade_in_sandbox` runs the verifyit command on the verifier machine |
+| `ScriptGrader` | `grade_in_sandbox` runs the grader command on the verifier machine |
+| `SessionGrader` | Rejected at lowering; a registered custom session grades the task |
+| `NoGrader` | `GradeResult(Outcome.UNAVAILABLE, None, reason)` |
+
 Group grading belongs to the caller.
 
-Text, JSON, and final-action submissions use typed grading contracts.
+The task's answer format extracts text, number, JSON, and final-action submissions from the final conversation.
 A malformed submission receives `Outcome.SUBMISSION_FAILURE` with reward 0.
 File submissions use captured workspace files.
-Action and structured-candidate graders do not support a separate verifier machine.
+The Shellbox session does not capture `state` answers and rejects them at lowering.
+A `VerifyitGrader` with an environment cannot grade a `native_action` answer.
 
-`ShellVerifierSpec` defines a grader command, collect commands, artifacts, and a reward source.
-The command receives the conversation as JSON on standard input.
+A `ScriptGrader` declares a command, collect commands, artifacts, an answer path, a conversation path, and a reward source.
+The verifier machine receives the extracted answer at `answer_path`.
+It receives the conversation as OpenAI-style chat-message JSON at `conversation_path`, by default `/tests/conversation.json`.
 The session's verifier deadline controls the full grading phase.
 
 | Reward source | Result | Origin / reason |
@@ -164,22 +181,23 @@ The session's verifier deadline controls the full grading phase.
 | `FileReward` | The first existing file supplies the scalar grade | Harbor compatibility: existing Harbor task graders |
 
 `FileReward` accepts a number or a JSON object with the configured numeric key.
-A malformed first file is a verifier failure. The engine does not try a lower-priority file.
+A JSON object's `detail` object becomes the grade detail.
+A malformed first file is a grading failure. Grading does not try a lower-priority file.
 The optional `pass_above` threshold supplies a separate pass/fail result.
-Harbor task packages contain instructions, environment configuration, and private test scripts.
+Harbor task packages contain instructions, environment configuration, and hidden test scripts.
 Their reward files use `reward.json` before `reward.txt` and treat a positive reward as a pass.
-The engine removes existing reward files before the private grader executes.
+Grading removes existing reward files before the grader command executes.
 A valid reward file can supply a grade after a nonzero exit code. A command timeout has no grade.
 
 `GradeResult.failure` identifies timeout, execution failure, missing reward, empty reward, or invalid reward.
-An incorrect answer receives a numeric grade. A verifier failure has no reward.
-Score bounds describe the verifier's native range.
+An incorrect answer receives a numeric grade. A grading failure has no reward.
+Score bounds describe the grader's native range.
 
-The Harbor importer reads the package environment and private verifier.
+The Harbor importer converts the package environment and tests into a `ScriptGrader`.
 The caller selects backend settings, users, and deadlines during lowering.
 The Harbor importer accepts only separate verifier environments.
 An unset verifier mode without a separate environment selects shared mode and causes rejection.
-Shell grading requires a prebuilt, digest-pinned verifier image and a separate machine.
+Script grading requires a separate machine: a sandbox of a prebuilt, digest-pinned grader image, or a local machine whose host builds the grader's packages lock.
 The Shellbox session's Harbor setup uses root-user overrides. The Iris backend rejects these overrides, so this Harbor path is unsupported on Iris.
 Other unsupported cases include multi-stage tasks, task-specific image builds, Harbor collect hooks, and healthchecks.
 Shellbox's generic image-builder API remains available outside this task path.
@@ -213,10 +231,10 @@ It does not add an oversized observation to retained response evidence.
 
 ## Use
 
-The submission convention controls final-answer extraction and model-visible submission instructions.
-The Shellbox session selects native-action or JSON extraction when the task's answer type requires it.
+The task's `answer_format` controls final-answer extraction and model-visible submission instructions.
+`rolloutengine.task_session.session_start(task)` adds the format's instruction and tools for text, number, JSON, and native-action answers.
 
-Construct the record with `lower_task(...)`. The [rollout tests](https://github.com/marin-community/marin/blob/d48cede857c532815086a08e7eba02593336ba1b/lib/rolloutengine/tests/test_rollout.py) contain executable examples.
+Construct the record with `lower_task(...)`. The [rollout tests](https://github.com/marin-community/marin/blob/main/lib/rolloutengine/tests/test_rollout.py) contain executable examples.
 This function accepts a fully lowered record and a model callable:
 
 ```python
@@ -227,7 +245,6 @@ from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.submission import PlainText
 
 
 async def run_task(
@@ -236,7 +253,6 @@ async def run_task(
     engine = ShellboxRolloutEngine(
         model,
         {"docker": DockerMachineFactory(), "shellsim": ShellSimMachineFactory()},
-        convention=PlainText(id="plain"),
     )
     return await engine.run(lowered)
 ```

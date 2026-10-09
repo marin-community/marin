@@ -4,22 +4,16 @@
 import sys
 
 import pytest
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TEST_SH, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.grade import Status, run
 from verifyit.spec import PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    INSTRUCTION,
-    TEST_SH,
-    TaskFiles,
-    read_task_binary,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 
 TOOL_REF = "0123abc"
 SOURCE = "DCAgent__exp_rpt_unitsyn-python-large-v2"
@@ -135,6 +129,7 @@ def test_pytest_mode_distinguishes_collection_failure_wrong_answer_and_oracle(tm
     solution.write_text("")
     missing_implementation = run(spec_path, workspace)
     assert (missing_implementation.status, missing_implementation.reward) == (Status.SCORED, 0.0)
+    assert missing_implementation.detail["reason"] == "collection_error"
 
     solution.write_text("def add(left, right):\n    return left - right - 1\n")
     wrong_answer = run(spec_path, workspace)

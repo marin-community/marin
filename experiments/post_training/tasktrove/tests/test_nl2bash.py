@@ -11,20 +11,16 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
+from taskcompendium.convert.tasktrove_nl2bash import CHECKER_NAME, DATA_NAME
 from verifyit.spec import ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.converters.nl2bash import CHECKER_NAME, DATA_NAME
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    TEST_SH,
-    read_task_binary,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import verify_task
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -168,8 +164,12 @@ def test_checker_rejects_conflicting_counts_without_rejecting_harmless_logs(tmp_
     assert reward["reward"] == score
 
 
-def test_missing_oracle_solution_is_rejected_as_null_grader():
+def test_missing_oracle_preserves_task_and_grader_without_inventing_solution():
     task = read_task_binary(_fixture())
     del task.files["solution/solve.sh"]
     record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
-    assert record.status == ConvertStatus.NULL_GRADER and record.task_binary is None
+    assert record.status == ConvertStatus.CONVERTED and record.task_binary is not None
+    assert record.solution_binary is None
+    converted = read_task_binary(record.task_binary)
+    assert verify_task(record.task_binary) is None
+    assert f"tests/{CHECKER_NAME}" in converted.files

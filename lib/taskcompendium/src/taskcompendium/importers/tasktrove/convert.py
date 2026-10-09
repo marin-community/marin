@@ -21,25 +21,14 @@ MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 1_024
 
 
-def read_archive(
-    data: bytes,
-    upstream_subset: str,
-    archive_path: str,
-    release_uri: str,
-    release_revision: str,
-) -> TaskArchive:
-    """Read an archive, checking its subset and path against its manifest.
-
-    The caller supplies release provenance; the archive cannot verify it.
-    """
-    if not all((upstream_subset, archive_path, release_uri, release_revision)) or len(data) > MAX_ARCHIVE_BYTES:
-        raise ValueError("Task archive has an invalid identity or exceeds the input limit")
+def archive_files(data: bytes) -> dict[str, bytes]:
+    """Read regular archive files within the TaskTrove size and path limits."""
+    if len(data) > MAX_ARCHIVE_BYTES:
+        raise ValueError("Task archive exceeds the input limit")
     files: dict[str, bytes] = {}
     size = 0
-    members = 0
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
-        for member in archive:
-            members += 1
+        for members, member in enumerate(archive, start=1):
             if members > MAX_ARCHIVE_MEMBERS:
                 raise ValueError("Task archive exceeds member limit")
             name = member.name.removeprefix("./")
@@ -53,6 +42,23 @@ def read_archive(
             stream = archive.extractfile(member)
             assert stream is not None
             files[name] = stream.read()
+    return files
+
+
+def read_archive(
+    data: bytes,
+    upstream_subset: str,
+    archive_path: str,
+    release_uri: str,
+    release_revision: str,
+) -> TaskArchive:
+    """Read an archive, checking its subset and path against its manifest.
+
+    The caller supplies release provenance; the archive cannot verify it.
+    """
+    if not all((upstream_subset, archive_path, release_uri, release_revision)) or len(data) > MAX_ARCHIVE_BYTES:
+        raise ValueError("Task archive has an invalid identity or exceeds the input limit")
+    files = archive_files(data)
     try:
         metadata = tomllib.loads(files[TASK_MANIFEST].decode())[METADATA_TABLE]
         if not isinstance(metadata, dict):

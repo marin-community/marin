@@ -20,15 +20,6 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 ## Machine API
 
-`download(source, target, max_bytes=limit)` accepts regular files only and uses bounded transfer buffers.
-It replaces the target after the transfer succeeds.
-An oversized file raises `DownloadLimitExceeded` without replacing the target.
-Provider errors and cancellation also preserve the target and remove partial files.
-Without a byte limit, `download` also accepts directories.
-
-Iris, QEMU, and ShellSim execute a guest command for each 64 KiB download chunk.
-Large transfers can exceed their caller's deadline. Exclude unnecessary files from grading artifacts.
-
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`, and `LocalMachineFactory` only `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. QEMU and ShellSim have Harbor environment adapters. Docker, gVisor, Daytona, Iris, and local expose the machine API without a Harbor adapter or persistent Bash support.
@@ -40,17 +31,7 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 | Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: no network. Neither reaches the cluster | Iris controller and workers with sandbox profile support; `ALLOW` needs a Kubernetes cluster |
 | Local | `HostImage()`: the host's own programs and files, in a bubblewrap sandbox | allow or deny | Trusted commands only; `bwrap` able to create namespaces (as root, `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, no AppArmor confinement); a root process to run commands as other users |
 
-The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker runtime on the host. The `daytona` extra pins the SDK used by the Harbor fork. Its OpenTelemetry dependencies include prereleases, so installing it needs `--prerelease allow`. The `iris` extra installs `marin-iris`; its current PyPI releases and related Marin dependencies also need `--prerelease allow`. A local checkout can supply Iris as a workspace dependency instead.
-
-Iris uses its `CONTAINER_PROFILE_SANDBOX` job profile, which runs the job under gVisor with no cluster environment, credentials, or workspace bundle, and the `ExecInContainer` RPC. It does not launch a nested `runsc` process or actor.
-
-`NetworkPolicy.ALLOW` submits the job with `EGRESS_POLICY_INTERNET`, which reaches public addresses but not private, carrier-grade NAT or link-local ones, so not the controller, other pods or the metadata server. On Docker worker clusters such as `marin` it needs the host egress filter that worker bootstrap installs. `NetworkPolicy.DENY` submits `EGRESS_POLICY_NONE`, which leaves only DNS on Kubernetes and no network on Docker workers.
-
-Iris file transfer requires the task image's `/bin/sh`, `base64`, `tar`, `dd`, `head`, `tail`, and `wc` utilities. Daytona uses the sandbox filesystem API for file transfer and requires `/bin/sh`, `tar`, `head`, and `wc` for commands and directory transfer.
-
-Daytona sandboxes and Iris jobs have a default six-hour lifetime to limit leaks when the harness exits without closing them. The Iris controller scans for expired jobs about once a minute, so an Iris sandbox can outlive `job_ttl` by a minute or more.
-
-A command or transfer on an Iris sandbox that was killed, expired, or preempted raises `MachineTerminated`. When the controller's exec pool is full it refuses an exec with `RESOURCE_EXHAUSTED` before running it; the machine retries that refusal with backoff for up to Iris's 30-minute RPC retry budget. Other exec RPC errors are not retried, because the command may already have run.
+The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker runtime on the host. The `daytona` extra pins the SDK used by the Harbor fork. Its OpenTelemetry dependencies include prereleases, so installing it needs `--prerelease allow`. The `iris` extra installs `marin-iris`; its current PyPI releases and related Marin dependencies also need `--prerelease allow`. A local checkout can supply Iris as a workspace dependency instead. Iris uses its `CONTAINER_PROFILE_SANDBOX` job profile, which runs the job under gVisor with no cluster environment, credentials, or workspace bundle, and the `ExecInContainer` RPC. It does not launch a nested `runsc` process or actor. `NetworkPolicy.ALLOW` submits the job with `EGRESS_POLICY_INTERNET`, which reaches public addresses but not private, carrier-grade NAT or link-local ones, so not the controller, other pods or the metadata server. On Docker worker clusters such as `marin` it needs the host egress filter that worker bootstrap installs. `NetworkPolicy.DENY` submits `EGRESS_POLICY_NONE`, which leaves only DNS on Kubernetes and no network on Docker workers. Iris file transfer requires the task image's `/bin/sh`, `base64`, `tar`, `head`, `tail`, and `wc` utilities. Daytona uses the sandbox filesystem API for file transfer and requires `/bin/sh`, `tar`, `head`, and `wc` for commands and directory transfer. Daytona sandboxes and Iris jobs have a default six-hour lifetime to limit leaks when the harness exits without closing them. The Iris controller scans for expired jobs about once a minute, so an Iris sandbox can outlive `job_ttl` by a minute or more. A command or transfer on an Iris sandbox that was killed, expired, or preempted raises `MachineTerminated`. When the controller's exec pool is full it refuses an exec with `RESOURCE_EXHAUSTED` before running it; the machine retries that refusal with backoff for up to Iris's 30-minute RPC retry budget. Other exec RPC errors are not retried, because the command may already have run.
 
 ```python
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
@@ -73,7 +54,7 @@ and injects them into the Iris job environment. Keep credentials out of
 secrets must never be used for actor jobs; ordinary factories inject none.
 
 Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
-A failed stop raises an infrastructure error and closes the machine.
+A failed stop without confirmed completion raises an infrastructure error and closes the machine.
 Docker also stops the process group on caller cancellation. Daytona closes the machine on caller cancellation.
 
 Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
@@ -201,6 +182,8 @@ try:
 finally:
     await machine.close()
 ```
+
+`HostImage(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))` can also supply these paths for one machine. The factory combines them with its own mounts and puts the image's `bin_dirs` first on `PATH`; this lets a factory wrapper pass the runtime through `MachineSpec`.
 
 - Each machine has a root directory of its own, which `create` makes empty under the host's temporary directory and `close` removes. Commands see it as `/`, with the host's `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`, `/sys` and `/run/systemd/resolve` mounted read-only over it, together with each directory in `read_only` at its own host path. Every other path, including `/app`, `/tests`, `/tmp` and `HOME`, is the machine's own, so paths that the host process uses, such as an Iris task's `/app`, are never touched. No other host file is visible.
 - Machines are independent, so a process may run any number of them at once.

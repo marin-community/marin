@@ -9,12 +9,10 @@ import re
 import shlex
 import tarfile
 import uuid
-from contextlib import aclosing
 from pathlib import Path, PurePosixPath
 
 import shellsim
 
-from shellbox.file_transfer import file_chunks, write_download
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     Backend,
@@ -33,6 +31,7 @@ DEFAULT_CPU_LIMIT = 10_000_000_000
 DEFAULT_DISK_LIMIT = 256 * 1024 * 1024
 DEFAULT_OUTPUT_LIMIT = 128 * 1024 * 1024
 DEFAULT_MEMORY_MB = 256
+SIMULATOR_PANIC_EXIT_CODE = 1
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
@@ -47,7 +46,16 @@ class ShellSimShellSession:
     async def execute(
         self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
     ) -> ShellUpdate:
-        result = await self.machine._run_source(command)
+        try:
+            result = await self.machine._run_source(command)
+        except shellsim.SimulationError as error:
+            output = str(error).encode()
+            return ShellUpdate(
+                output[:output_limit_bytes],
+                ShellStatus.COMPLETED,
+                SIMULATOR_PANIC_EXIT_CODE,
+                len(output) > output_limit_bytes,
+            )
         output = result.stdout + result.stderr
         return ShellUpdate(
             output[:output_limit_bytes],
@@ -125,6 +133,17 @@ class ShellSimMachine:
         except TimeoutError:
             self._closed = True
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        except shellsim.SimulationError as error:
+            stderr = str(error).encode()
+            limit = command.output_limit_bytes
+            return Result(
+                SIMULATOR_PANIC_EXIT_CODE,
+                b"",
+                stderr[:limit],
+                False,
+                len(stderr) > limit,
+                ExitReason.EXITED,
+            )
         limit = command.output_limit_bytes
         return Result(
             result.returncode,
@@ -145,13 +164,9 @@ class ShellSimMachine:
             self.simulation.mkdir(str(PurePosixPath(target).parent), parents=True)
             self.simulation.write_file(target, source.read_bytes(), mode=source.stat().st_mode & 0o7777)
 
-    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
+    async def download(self, source: str, target: Path) -> None:
         if self._closed:
             raise RuntimeError("Machine is closed")
-        if max_bytes is not None:
-            async with aclosing(file_chunks(self, source, max_bytes)) as chunks:
-                await write_download(chunks, target, max_bytes)
-            return
         async with self._lock:
             if target.exists() and target.is_dir():
                 archive = f"/__harbor_download_{uuid.uuid4().hex}.tar"

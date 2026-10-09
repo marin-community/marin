@@ -1,0 +1,63 @@
+# The packages task-curation grade scripts import (GRADER_PACKAGES in environments.py). Exact pins carry
+# the versions earlier grader images were validated with; regenerate grader.lock after any change (see
+# ../images/README.md).
+
+# Scientific stack shared by the vendored scorers (Nemotron Ultra, SkyRL code and SQL, ARC).
+numpy==2.3.5
+pandas==2.2.2
+scipy==1.17.0
+# TaskTrove math uses verifyit's symbolic comparator in the grader sandbox.
+math-verify==0.9.0
+sympy==1.13.3
+antlr4-python3-runtime==4.11.0
+rdkit==2025.9.3
+reasoning-gym==0.1.25
+
+# Structured-output, tool-call and instruction-following scorers.
+jsonschema==4.25.1
+pyyaml==6.0.3
+xmltodict==0.14.2
+openapi-schema-validator==0.6.3
+langdetect==1.0.9
+nltk==3.9.2
+absl-py==2.3.1
+immutabledict==4.3.0
+verifiable-instructions @ https://github.com/abukharin-nv/verifiable-instructions/archive/f46a5ac87b1400a4f8973039844b6be9b56e3faf.tar.gz
+
+# The vendored NVARC sandbox client (arc/scorers/.../sandbox.py) imports requests.
+requests==2.33.1
+
+# Python test graders, and verifyit's own dependencies (verifyit is copied into the image).
+pytest
+pytest-json-report
+hypothesis
+tomlkit
+harbor-config @ https://github.com/marin-community/harbor/archive/6b2e76e1dae5c084eed05edefefffcec8c0c1ad9.tar.gz#subdirectory=packages/harbor-config
+
+# The Stack Overflow Python-test tasks (tasktrove-stack_pytest): their hidden tests import mock, typer,
+# freezegun, fastapi, flask, scikit-learn and others. These are the packages, at the versions, of the agent
+# image those tasks are solved in, so a submission that runs there imports here too; flask keeps the pin
+# the grader image was validated with (the agent image has 3.1.3).
+aiohttp==3.14.4
+beautifulsoup4==4.15.0
+botocore==1.43.108
+cryptography==50.0.2
+dask==2026.8.0
+django==6.1.1
+faker==40.41.0
+fastapi==0.142.2
+flask==3.1.2
+freezegun==1.5.5
+importlib-metadata==9.0.1
+marshmallow==4.3.1
+mock==5.2.0
+networkx==3.7
+opencv-python-headless==5.0.0.93
+pathlib2==2.3.7.post1
+redis==8.1.0
+responses==0.26.3
+scikit-learn==1.9.1
+setuptools==84.0.0
+sqlalchemy==2.1.3
+typer==0.27.2
+xarray==2026.9.0

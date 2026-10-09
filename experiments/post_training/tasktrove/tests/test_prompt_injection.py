@@ -9,10 +9,10 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.spec import ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.prompt_injection import CHECKER_NAME, DATA_NAME, SOLVE_SH
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict

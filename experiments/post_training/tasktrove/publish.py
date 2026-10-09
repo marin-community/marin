@@ -35,6 +35,8 @@ import pyarrow.parquet as pq
 from huggingface_hub import HfApi
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.tasktrove import DOCKERFILE
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
@@ -45,7 +47,6 @@ from experiments.post_training.tasktrove.apply_mcqa_routing import (
     ROUTING_COLUMNS,
 )
 from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dataset import (
     APPROX_SHARD_BYTES,
     TASKTROVE_HF_ID,
@@ -54,7 +55,7 @@ from experiments.post_training.tasktrove.dataset import (
     load_source_verdicts,
 )
 from experiments.post_training.tasktrove.mcqa_routing import Route
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
+from experiments.post_training.tasktrove.taskbinary import read_task_binary
 from experiments.post_training.tasktrove.verify import VERIFIED_STATUS
 
 logger = logging.getLogger(__name__)

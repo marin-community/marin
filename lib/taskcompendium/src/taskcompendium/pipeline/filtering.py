@@ -4,8 +4,8 @@
 """Apply a policy to retained curation evidence without new model calls."""
 
 from taskcompendium.pipeline.models import (
+    REJECTING_CHECK_STATUSES,
     CheckResult,
-    CheckStatus,
     Confidence,
     Decision,
     Disposition,
@@ -20,12 +20,12 @@ CONFIDENCE_RANK = {Confidence.LOW: 0, Confidence.MEDIUM: 1, Confidence.HIGH: 2}
 
 
 def task_decision(task_id: str, checks: list[CheckResult], review: ReviewRecord, policy: FilterPolicy) -> Decision:
-    """Decide keep/reject from static quality, retaining grader gaps separately."""
-    failed = [f"check:{check.check}" for check in checks if check.status == CheckStatus.FAIL]
+    """Separate quality decisions from incomplete review evidence."""
+    failed = [f"check:{check.check}" for check in checks if check.status in REJECTING_CHECK_STATUSES]
     if failed:
         return Decision(task_id=task_id, disposition=Disposition.REJECT, reasons=failed)
     if review.status != ReviewStatus.REVIEWED or review.verdict is None:
-        return Decision(task_id=task_id, disposition=Disposition.REJECT, reasons=[f"review:{review.status}"])
+        return Decision(task_id=task_id, disposition=Disposition.DEFER, reasons=[f"review:{review.status}"])
     verdict = review.verdict
     if verdict.quality == Quality.BAD or verdict.reference_status == ReferenceStatus.CONFLICT or verdict.defects:
         reasons = [f"defect:{defect}" for defect in verdict.defects] or ["review:bad_or_conflicting_reference"]
