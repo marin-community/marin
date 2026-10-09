@@ -226,3 +226,54 @@ Compare row counts by source and retain the rejection categories. Quick counts
 can exceed the published TaskTrove release because that release also removes
 duplicates, applies reviewed defects and routes some MCQA rows away from RL.
 `original_path` preserves TaskTrove's archive key for later comparisons.
+
+### Harbor compatibility view
+
+Lower QUICK output to Task Trove's 12-column parquet format:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.harbor \
+  --input-root /tmp/curation-quick/tasktrove-calendar \
+  --output-root /tmp/curation-harbor/calendar \
+  --family scheduling \
+  --grader-image '<registry/image>@sha256:<digest>'
+```
+
+The verifier image is an explicit runtime input. It must contain the dependencies
+required by the task's grader package lock. Export does not build or run images;
+its manifest records that dependency parity and runtime behavior remain
+unverified. Current verifyit code is bundled under the hidden `tests/` directory.
+The exporter supports plain-text answers with recorded original file-delivery
+instructions, and file submissions graded by verifyit or an archived Harbor
+`test.sh` emitting `reward.txt`. Other contracts produce explicit rejection
+records. Rejections from normalization remain in the export manifest.
+
+Each task keeps its source, original archive path, and TaskSpec ID. The agent image
+contains only public resources; the verifier runs separately and receives the
+declared output files. Oracle files are stored in `solution_binary`. Generated
+`task.toml` files are parsed with Harbor's native configuration model.
+
+Compare the output with a downloaded, pinned release manifest:
+
+Download `manifest.json` from
+`https://huggingface.co/datasets/open-athena/task-trove/resolve/<release-commit>/manifest.json`
+and pass that same commit to `--golden-revision`.
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.compare_harbor \
+  --tasks /tmp/curation-harbor/calendar/tasks.parquet \
+  --source laion__nemotron-gym-agent-calendar-v2 \
+  --golden-manifest /path/to/tasktrove-manifest.json \
+  --golden-revision '<release-commit>' \
+  --output /tmp/curation-harbor/calendar/comparison.json
+```
+
+Repeat `--source` for every expected source, including sources with no generated
+rows. The comparison records the golden manifest's hash and supplied release
+revision. It checks every generated archive, source identity, schema, and source
+count. Count differences remain visible: QUICK skips release deduplication and
+verification, so its output may include rows absent from the released dataset.
+The comparison does not establish grader equivalence or compare golden task
+binaries.
