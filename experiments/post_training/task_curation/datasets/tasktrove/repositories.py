@@ -13,7 +13,6 @@ from pathlib import Path
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.executable import swe_task
 from taskcompendium.convert.tasktrove import archive_files
-from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     Converter,
@@ -63,13 +62,9 @@ Compare the stated repository bug and behavioral requirements with FAIL_TO_PASS 
 {REPOSITORY_CRITERIA}"""
 
 
-def convert_repository_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
-    return swe_task(row, workspace=WORKSPACE)
-
-
-def convert_swesmith_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+def convert_swesmith_task(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
     """Recover SWE-smith's pytest grader while leaving its build recipe unresolved."""
-    task = convert_repository_task(row, context)
+    task = swe_task(row, workspace=WORKSPACE)
     if isinstance(task, ImportRejection):
         return task
     if row.data.get("archive_links"):
