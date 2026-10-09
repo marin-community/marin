@@ -16,6 +16,7 @@ from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import HostImage, NetworkPolicy
 from taskcompendium.convert.environment import grading_environment
+from taskcompendium.runtime.local import LocalRuntime, local_runtime
 
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import (
@@ -25,7 +26,6 @@ from experiments.post_training.task_curation.driver import (
     main,
 )
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.environment_runtime import LocalRuntime, local_runtime
 from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.post_training.task_curation.pipeline import environment_requirements
 from experiments.post_training.task_curation.tests.image_builds import (

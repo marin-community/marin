@@ -54,6 +54,7 @@ from taskcompendium.pipeline.source_processing import (
 from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION
 from taskcompendium.pipeline.sources import source_files_identity
+from taskcompendium.runtime.local import context_paths
 from zephyr.dataset import Dataset
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime
@@ -61,7 +62,6 @@ from experiments.post_training.task_curation.environment import Environment, Pla
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
     built_environment,
-    context_paths,
     environment_artifact,
 )
 

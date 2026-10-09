@@ -12,9 +12,21 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from harbor_config.env import resolve_env_vars
+from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result, ShellSimBuiltins
+from shellbox.machine import (
+    Backend,
+    Command,
+    ExitReason,
+    HostImage,
+    Machine,
+    MachineFactory,
+    MachineSpec,
+    Result,
+    ShellSimBuiltins,
+)
 from taskcompendium.models import EnvironmentRequirements, TaskResource
+from taskcompendium.runtime.local import local_factory, local_runtime
 from taskcompendium.runtime.resources import resource_bytes
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
@@ -51,8 +63,14 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
 
 
 def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
+    if requirements.docker_image is not None:
+        source = RegistryImage(requirements.docker_image)
+    elif requirements.packages_lock is not None:
+        source = HostImage()
+    else:
+        source = ShellSimBuiltins()
     return MachineSpec(
-        source=RegistryImage(requirements.docker_image) if requirements.docker_image else ShellSimBuiltins(),
+        source=source,
         workdir=(
             requirements.working_directory
             if requirements.working_directory is not None
@@ -79,12 +97,20 @@ async def _acquire_machine(
     factories: Mapping[str, MachineFactory],
     cleanup: _Cleanup,
     owned: AsyncExitStack,
+    requirements: EnvironmentRequirements,
 ) -> Machine:
     """Create a machine closed by ``owned``, retaining ownership if creation outlives cancellation."""
     machine_cleanup = cleanup
     if runtime.cleanup_timeout is not None:
         machine_cleanup = _Cleanup(runtime.cleanup_timeout, cleanup.errors)
-    creation = asyncio.create_task(factories[runtime.backend].create(spec))
+    factory = factories[runtime.backend]
+    if requirements.packages_lock is not None and requirements.docker_image is None:
+        assert isinstance(factory, LocalMachineFactory)
+        environment = await asyncio.to_thread(local_runtime, requirements.packages_lock)
+        await asyncio.to_thread(environment.ensure_built)
+        factory = await asyncio.to_thread(local_factory, environment, factory)
+        spec = replace(spec, env={**environment.variables, **spec.env})
+    creation = asyncio.create_task(factory.create(spec))
     try:
         machine = await asyncio.shield(creation)
     except asyncio.CancelledError:
@@ -106,7 +132,9 @@ async def _prepare_machine(
     if runtime is None:
         return None
     async with asyncio.timeout(runtime.startup_timeout):
-        machine = await _acquire_machine(runtime, _machine_spec(requirements, runtime), factories, cleanup, owned)
+        machine = await _acquire_machine(
+            runtime, _machine_spec(requirements, runtime), factories, cleanup, owned, requirements
+        )
         await _install_resources(machine, resources)
         for command in requirements.setup_commands:
             result = await machine.run(Command(("sh", "-c", command), timeout=runtime.startup_timeout, user="0"))
@@ -144,6 +172,7 @@ class _AttemptMachineFactory:
     factories: Mapping[str, MachineFactory]
     cleanup: _Cleanup
     owned: AsyncExitStack
+    environment: EnvironmentRequirements
 
     @property
     def backend(self) -> Backend:
@@ -151,5 +180,7 @@ class _AttemptMachineFactory:
 
     async def create(self, spec: MachineSpec) -> Machine:
         async with asyncio.timeout(self.runtime.startup_timeout):
-            machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
+            machine = await _acquire_machine(
+                self.runtime, spec, self.factories, self.cleanup, self.owned, self.environment
+            )
         return _OwnedMachine(machine)

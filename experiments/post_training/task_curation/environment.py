@@ -94,8 +94,3 @@ def placement(environment: Environment) -> Placement:
     if set(environment.apt) - WORKER_IMAGE_APT:
         return Placement.BUILT_IMAGE
     return Placement.WORKER
-
-
-def nltk_packages(data: tuple[str, ...]) -> tuple[str, ...]:
-    """The NLTK data packages that an environment's ``data`` entries download."""
-    return tuple(entry.removeprefix("nltk:") for entry in data)

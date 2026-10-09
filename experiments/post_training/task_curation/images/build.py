@@ -16,7 +16,6 @@ import hashlib
 import json
 import os
 import shutil
-import stat
 import subprocess
 from dataclasses import dataclass
 from functools import partial
@@ -27,15 +26,19 @@ from typing import Any
 from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
-from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.runtime.local import (
+    EXECUTABLE_MODE,
+    IDENTITY_CHARS,
+    LOCK_FILE,
+    RUNTIME_PACKAGES,
+    RUNTIME_PTH,
+    context_files,
+    nltk_packages,
+    runtime_files,
+)
 
-from experiments.post_training.task_curation.environment import Environment, Placement, nltk_packages, placement
-
-HERE = Path(__file__).resolve().parent
-REPO_ROOT = HERE.parents[3]
-RUNTIME_PACKAGES = (REPO_ROOT / "lib" / "verifyit" / "src" / "verifyit",)
-"""Package directories every built environment puts on the import path; verifyit graders import them."""
+from experiments.post_training.task_curation.environment import Environment, Placement, placement
 
 # New GHCR packages are created org-internal and the Iris workers pull anonymously, so built
 # images are tagged into the public iris-task package until a public task-curation package exists.
@@ -46,27 +49,11 @@ PLATFORM = "linux/amd64"
 PYTHON_VERSION = "3.12"
 PYTHON_PLATFORM = "x86_64-unknown-linux-gnu"
 ENVIRONMENT_ARTIFACT_VERSION = "2026.10.08"
-IDENTITY_CHARS = 16
-LOCK_FILE = "requirements.lock"
-RUNTIME_PTH = "task-curation-runtime.pth"
-"""The ``.pth`` file that puts the runtime packages' directory on ``sys.path``."""
-REGULAR_MODE = "100644"
-EXECUTABLE_MODE = "100755"
 BUILD_COMMAND = "uv run python -m experiments.post_training.task_curation.images --identity {identity}"
 
 
 class MissingEnvironmentArtifact(RuntimeError):
     """A declaration names an environment whose current identity has no built artifact."""
-
-
-class ContextFile(BaseModel):
-    """A file in a package directory, by path relative to the directory, git-style mode and content digest."""
-
-    model_config = ConfigDict(frozen=True)
-
-    path: str
-    mode: str
-    sha256: str
 
 
 class EnvironmentArtifact(Artifact):
@@ -91,32 +78,6 @@ class EnvironmentBuild:
     identity: str
     repository: str
     output_path: str
-
-
-def context_paths(root: Path) -> list[Path]:
-    """Every file below ``root`` in path order, skipping bytecode caches."""
-    return sorted(path for path in root.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
-
-
-def _file_mode(path: Path) -> str:
-    # Iris workspace bundles drop exec bits, so a consumer sees only these two modes.
-    return EXECUTABLE_MODE if path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) else REGULAR_MODE
-
-
-def context_files(root: Path) -> list[ContextFile]:
-    return [
-        ContextFile(
-            path=path.relative_to(root).as_posix(),
-            mode=_file_mode(path),
-            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-        )
-        for path in context_paths(root)
-    ]
-
-
-def runtime_files() -> dict[str, list[dict[str, str]]]:
-    """The files of every runtime package, by package name."""
-    return {package.name: [file.model_dump() for file in context_files(package)] for package in RUNTIME_PACKAGES}
 
 
 def environment_identity(environment: Environment) -> dict[str, Any]:
