@@ -9,7 +9,7 @@ The [public campaign archive](https://huggingface.co/datasets/open-athena/Snowba
 Download each parent checkpoint at the revision recorded in the recipe, preserving its sharded safetensors index. Replace the archived object-storage paths with your local paths and choose an empty output directory. `revision` records provenance; the reader does not resolve or verify a remote revision. Verify the downloaded revision before starting.
 
 ```sh
-uv run python -m experiments.weight_merging.merge \
+uv run --package marin-core --extra cpu python -m experiments.weight_merging.merge \
   --recipe /path/to/recipe.json --threads 16 --code-revision YOUR_GIT_SHA
 ```
 
@@ -30,5 +30,5 @@ The archived campaign optimized NUPA200 and BFCL-Parity and did not demonstrate 
 Run the CPU behavior tests with:
 
 ```sh
-uv run pytest tests/test_weight_merging.py experiments/weight_merging/test_select_experts.py
+uv run --package marin-core --extra cpu --group test pytest tests/test_weight_merging.py experiments/weight_merging/test_select_experts.py
 ```

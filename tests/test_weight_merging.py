@@ -294,3 +294,28 @@ def test_calibrated_checkpoint_round_trip_matches_materialized_updates(tmp_path,
     manifest = json.loads((output / "merge-manifest.json").read_text())
     for entry in manifest["objects"]:
         assert hashlib.sha256((output / entry["name"]).read_bytes()).hexdigest() == entry["sha256"]
+
+
+@pytest.mark.parametrize("shape,row", [((2,), -1), ((2,), 2), ((), 0)])
+def test_invalid_protected_rows_leave_no_partial_checkpoint(tmp_path, shape, row):
+    anchor = tmp_path / "anchor"
+    anchor.mkdir()
+    weights = {"a": torch.ones(2), "z": torch.ones(shape)}
+    safetensors.torch.save_file(weights, anchor / "all.safetensors")
+    (anchor / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {name: "all.safetensors" for name in weights}})
+    )
+    output = tmp_path / "output"
+    source = CheckpointSource(str(anchor), "revision")
+    with pytest.raises(ValueError):
+        merge_checkpoint(
+            source,
+            [source],
+            str(output),
+            MergeParameters(MergeMethod.AVERAGE, (0.5,), 1, 1, 0),
+            code_revision="code-revision",
+            preserve_rows={"z": (row,)},
+            tensor_coefficients={},
+            row_overrides={},
+        )
+    assert not output.exists()

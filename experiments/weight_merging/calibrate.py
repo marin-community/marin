@@ -19,7 +19,7 @@ import torch
 import torch.nn.functional as F
 from marin.merging.checkpoint import INDEX_NAME, METADATA_NAMES, CheckpointSource
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer
 
 from experiments.weight_merging.calibration_model import FrozenGrugBank, coefficient_group
@@ -303,7 +303,9 @@ def main() -> None:
     output_fs.makedirs(output_path, exist_ok=True)
 
     def write(name: str, payload: bytes) -> None:
-        output_fs.pipe_file(prefix_join(output_path, name), payload)
+        destination = prefix_join(output_path, name)
+        output_fs.makedirs(str(StoragePath.parse(destination).parent), exist_ok=True)
+        output_fs.pipe_file(destination, payload)
 
     write(
         "recipe.json",

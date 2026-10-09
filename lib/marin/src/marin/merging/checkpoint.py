@@ -112,6 +112,12 @@ def merge_checkpoint(
         raise ValueError("Checkpoint tensor keys differ")
     if not set(preserve_rows) <= names:
         raise ValueError("Preserved rows refer to missing tensors")
+    for name, rows in preserve_rows.items():
+        if not rows:
+            continue
+        tensor = readers[0].tensor(name)
+        if tensor.ndim == 0 or any(row < 0 or row >= tensor.shape[0] for row in rows):
+            raise ValueError(f"Preserved rows are outside the first-axis bounds: {name}")
     if len(donors) != len(parameters.coefficients):
         raise ValueError("Each donor needs one coefficient")
     if not set(tensor_coefficients) <= names:
