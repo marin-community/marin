@@ -77,10 +77,23 @@ type InputsFactory[IdeaT] = Callable[[Path], RunInputs[IdeaT]]
 
 
 def prepare_root(config: RunConfig) -> Path:
-    """Place the run root on this host and copy the policy in."""
+    """Place the run root on this host and copy the policy in, or check it against the policy already there.
+
+    Raises:
+        ValueError: the root's ``policy.json`` has another digest (``LoopPolicy.digest``) than ``config.policy``.
+    """
     root = run_root(config)
     root.mkdir(parents=True, exist_ok=True)
-    write_atomic(root / POLICY_FILE, POLICY.dump_json(config.policy, indent=2))
+    policy_file = root / POLICY_FILE
+    if not policy_file.exists():
+        write_atomic(policy_file, POLICY.dump_json(config.policy, indent=2))
+        return root
+    stored = POLICY.validate_json(policy_file.read_bytes()).digest
+    if stored != config.policy.digest:
+        raise ValueError(
+            f"{root} was started under policy {stored}, not the requested {config.policy.digest}; relaunch with "
+            "the policy this root started with, or use a new run root"
+        )
     return root
 
 

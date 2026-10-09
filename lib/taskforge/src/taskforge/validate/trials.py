@@ -60,6 +60,7 @@ from shellbox.machine import MachineFactory
 from taskcompendium.models import CONVERSATION_ANSWERS, TaskSpec
 from taskcompendium.submission import submission_compatibility
 
+from taskforge.atomic_file import write_atomic
 from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
 from taskforge.sandbox.factories import FactoryCapabilities, Refusal, task_refusals
@@ -342,4 +343,4 @@ def outcome_json(outcome: Outcome) -> bytes:
 
 def write_evidence(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(payload)
+    write_atomic(path, payload)

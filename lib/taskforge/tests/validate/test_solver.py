@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
+import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 
@@ -13,7 +16,7 @@ from taskforge.validate.calibration import CalibrationBand, FindingKind, load_su
 from taskforge.validate.outcome import Graded
 from taskforge.validate.run import ValidationPolicy, load_validation
 from taskforge.validate.solver import ValidationSite, run_solver
-from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
+from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, write_evidence
 
 SETTINGS = EngineSettings(
     factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
@@ -64,3 +67,16 @@ async def test_settled_trials_load_from_disk_and_a_solved_round_is_decided_by_th
     assert decide(draft, summary, history, rules(BandChoice.ACCEPT)) == Accept(summary, BandOutcome.TOO_EASY)
     rejected = decide(draft, summary, history, rules(BandChoice.REJECT))
     assert isinstance(rejected, Reject) and rejected.kind is RejectKind.TASK
+
+
+def test_an_attempt_file_appears_only_once_its_whole_payload_is_written(tmp_path, monkeypatch):
+    path = tmp_path / "solver" / "0" / "attempt-0.json"
+
+    def interrupted(self, target):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Path, "replace", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        write_evidence(path, b'{"outcome": "graded"}')
+
+    assert list(path.parent.iterdir()) == []

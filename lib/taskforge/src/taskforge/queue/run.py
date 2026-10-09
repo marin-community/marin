@@ -3,8 +3,9 @@
 
 """One unattended run in one asyncio process: every idea and every item concurrently, resumed from the logs.
 
-``run_queue`` starts every idea as a task; as each idea's batch parses it starts every item that is not
-finished as a task. Concurrency is bounded by ``LoopServices.slots`` (the run's width), which
+``run_queue`` starts every idea as a task; once every idea's batch has parsed and no two proposals share
+an item id (``check_item_ids``), it starts every item that is not finished as a task. Concurrency is
+bounded by ``LoopServices.slots`` (the run's width), which
 ``loop.program.run_item`` acquires around each model- or sandbox-bound phase, so an item sleeping on a
 retry backoff holds no slot. There is no request limiter: a phase fans out further (solver trials,
 adversary roles, controls), and ``GlmClient`` already pools connections and holds on router drain. The
@@ -285,14 +286,28 @@ async def _item(
 
 
 async def _idea[IdeaT](
-    idea_id: str, idea: IdeaT, policy: LoopPolicy, services: LoopServices[IdeaT], failed: FailedItems, tally: _Tally
-) -> None:
+    idea_id: str, idea: IdeaT, policy: LoopPolicy, services: LoopServices[IdeaT], tally: _Tally
+) -> tuple[TaskProposal, ...]:
     try:
-        proposals = await run_idea(idea_id, idea, policy, services)
+        return await run_idea(idea_id, idea, policy, services)
     except Exception as error:
         tally.failure(idea_item_id(idea_id), error)
-        return
-    await _gather([_item(proposal, policy, services, failed, tally) for proposal in proposals])
+        return ()
+
+
+def check_item_ids(batches: Mapping[str, Sequence[TaskProposal]]) -> None:
+    """Raise ``ValueError`` when proposals of the batches, keyed by idea id, share an item id (``item_id_for``).
+
+    The message lists each shared item id with the ideas whose proposals it came from.
+    """
+    sources: dict[str, list[str]] = {}
+    for idea_id, proposals in batches.items():
+        for proposal in proposals:
+            sources.setdefault(item_id_for(proposal), []).append(idea_id)
+    duplicates = {item_id: ideas for item_id, ideas in sorted(sources.items()) if len(ideas) > 1}
+    if duplicates:
+        listed = "; ".join(f"{item_id} from ideas {ideas}" for item_id, ideas in duplicates.items())
+        raise ValueError(f"proposals share item ids: {listed}")
 
 
 async def run_queue[IdeaT](
@@ -302,9 +317,14 @@ async def run_queue[IdeaT](
 
     An idea's or item's exception is recorded in ``RunSummary.failed`` and never cancels its siblings;
     cancelling the run cancels every item, and the next launch resumes them from their logs.
+
+    Raises:
+        ValueError: two proposals share an item id (``check_item_ids``); no item starts.
     """
     tally = _Tally()
-    await _gather([_idea(idea_id, idea, policy, services, failed, tally) for idea_id, idea in ideas.items()])
+    batches = await asyncio.gather(*(_idea(idea_id, idea, policy, services, tally) for idea_id, idea in ideas.items()))
+    check_item_ids(dict(zip(ideas, batches, strict=True)))
+    await _gather([_item(proposal, policy, services, failed, tally) for batch in batches for proposal in batch])
     return RunSummary(
         items=tally.items,
         failed=tally.failed,

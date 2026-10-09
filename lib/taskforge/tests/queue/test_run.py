@@ -86,3 +86,36 @@ async def test_a_too_easy_task_is_rejected_under_the_reject_choice_and_not_expor
 
     assert summary.items == {"IDEA--0": Terminal.REJECTED}
     assert summary.accepted == {}
+
+
+async def test_a_relaunch_under_another_policy_is_refused_and_keeps_the_stored_policy(
+    tmp_path, template_client, proposal_source, solver_models
+):
+    inputs = inputs_for(template_client, proposal_source, solver_models)
+    first = run_config(config(tmp_path, "accept"))
+    await run_job(first, inputs, FailedItems.SKIP)
+    stored = (first.root / "policy.json").read_bytes()
+    changed = config(tmp_path, "accept")
+    changed["policy"]["validation"]["k"] = 3
+    second = run_config(changed)
+
+    with pytest.raises(ValueError, match="use a new run root") as refusal:
+        await run_job(second, inputs, FailedItems.SKIP)
+
+    assert first.policy.digest in str(refusal.value) and second.policy.digest in str(refusal.value)
+    assert (first.root / "policy.json").read_bytes() == stored
+
+
+async def test_proposals_of_two_ideas_that_share_an_item_id_fail_the_run_before_any_item_starts(
+    tmp_path, template_client, proposal_source, solver_models
+):
+    run = run_config(config(tmp_path, "accept"))
+
+    def inputs(root):
+        shared = inputs_for(template_client, proposal_source, solver_models)(root)
+        return RunInputs(**{**vars(shared), "ideas": {"A": "a", "B": "b"}})
+
+    with pytest.raises(ValueError, match=r"IDEA--0 from ideas \['A', 'B'\]"):
+        await run_job(run, inputs, FailedItems.SKIP)
+
+    assert not (run.root / "ledger" / "IDEA--0.jsonl").exists()
