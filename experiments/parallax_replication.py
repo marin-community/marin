@@ -9,7 +9,8 @@ lr 5e-3 (wd 0.1, momentum 0.95, 5 quintic Newton-Schulz steps) with the non-matr
 0.95, eps 1e-7) at 0.3x (embeddings) and 0.015x (norms) of the Muon lr; global grad clip 1.0; WSD with no warmup
 and a linear decay to 0 over the last 20%; 960 x 4096-token batches (3.93M tokens). The paper trains 20k steps
 (78.6B tokens); ``--steps`` sets the budget. Differences: our tokenizer (hero-bpe-v16384) and data, and bf16
-linears instead of fp8.
+linears instead of fp8. The downstream evals (LAMBADA and the 0-shot suite) run on the final checkpoint after
+training; WikiText perplexity comes from the Paloma wikitext_103 validation loss logged during training.
 
 Plan: ``.agents/projects/parallax-replication.md``. Launch (from the repo root, ``WANDB_API_KEY`` set):
 
@@ -26,25 +27,17 @@ import jmp
 from fray.cluster import ResourceConfig
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.muon import MuonConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.experiment.namespacing import user_namespaced_name
-from marin.experiment.train import MARIN_PRECISION, _marin_mesh
-from marin.training.training import (
-    LevanterCheckpoint,
-    TrainLmOnPodConfig,
-    resolve_training_env,
-    run_levanter_train_lm,
-)
+from marin.experiment.train import MARIN_PRECISION, _marin_mesh, _train_job
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
 
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -61,24 +54,6 @@ BATCH_SIZE = 960  # 3.93M tokens
 PER_DEVICE_BATCH = 8  # gradient-accumulation microbatch per H100
 ARMS = ("transformer", "parallax")
 WANDB_PROJECT = "marin_moe"
-# Levanter's in-training harness needs its pinned lm-eval fork (levanter's ``lm_eval`` extra), which the default
-# GPU training environment does not install.
-LM_EVAL_PACKAGE = (
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab"
-)
-
-# The paper's evals (all 0-shot, lm-eval-harness). WikiText perplexity comes from Paloma's wikitext_103 set.
-EVAL_TASKS = (
-    EvalTaskConfig("lambada_openai", 0, task_alias="lambada_openai_0shot"),
-    EvalTaskConfig("boolq", 0, task_alias="boolq_0shot"),
-    EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),
-    EvalTaskConfig("piqa", 0, task_alias="piqa_0shot"),
-    EvalTaskConfig("arc_easy", 0, task_alias="arc_easy_0shot"),
-    EvalTaskConfig("arc_challenge", 0, task_alias="arc_challenge_0shot"),
-    EvalTaskConfig("winogrande", 0, task_alias="winogrande_0shot"),
-    EvalTaskConfig("openbookqa", 0, task_alias="openbookqa_0shot"),
-    EvalTaskConfig("sciq", 0, task_alias="sciq_0shot"),
-)
 
 
 def qwen3_0p6b(parallax: bool) -> Qwen3Config:
@@ -120,14 +95,6 @@ def paper_muon() -> MuonConfig:
     )
 
 
-def _train_job(pod_config: TrainLmOnPodConfig) -> None:
-    """``marin.experiment.train._train_job`` for GPU, plus the lm-eval package the harness imports."""
-    env_vars = resolve_training_env(pod_config.env_vars, pod_config.resources)
-    remote(run_levanter_train_lm, resources=pod_config.resources, env_vars=env_vars, pip_packages=[LM_EVAL_PACKAGE])(
-        pod_config
-    )
-
-
 def build(arm: str, steps: int) -> ArtifactStep[LevanterCheckpoint]:
     run_id = f"plx-{arm}-{steps}"
     validation = [
@@ -163,8 +130,6 @@ def build(arm: str, steps: int) -> ArtifactStep[LevanterCheckpoint]:
             optimizer=paper_muon(),
             z_loss_weight=None,  # the paper trains without a z-loss
             train_seq_len=SEQ_LEN,
-            eval_harness=LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(list(EVAL_TASKS))),
-            eval_harness_steps=steps,
             adapter=NoAdaptorConfig(),
         )
         return TrainLmOnPodConfig(
