@@ -13,7 +13,7 @@ def test_rolloutengine_imports_without_linux_local_backend():
 import sys
 
 class WithoutBubblewrap:
-    def find_spec(self, fullname, path=None, target=None):
+    def find_spec(self, fullname, _path=None, _target=None):
         if fullname == "bubblewrap_bin":
             raise ModuleNotFoundError("No module named 'bubblewrap_bin'")
 

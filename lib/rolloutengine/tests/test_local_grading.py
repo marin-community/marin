@@ -49,7 +49,7 @@ class DelegatingLocalFactory:
 class UnavailableLocalFactory:
     backend: Backend = Backend.LOCAL
 
-    async def create(self, spec: MachineSpec) -> Machine:
+    async def create(self, _spec: MachineSpec) -> Machine:
         raise AssertionError("Lowering must not create a machine")
 
 
