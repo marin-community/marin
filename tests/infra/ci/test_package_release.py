@@ -421,6 +421,26 @@ source = { registry = "https://pypi.org/simple" }
         validate_targeted_lock_change(before, unrelated, "marin-iris-native", "0.1.4.dev30194118926")
 
 
+def test_validate_targeted_lock_change_accepts_newer_uv_lock_revision() -> None:
+    before = """\
+version = 1
+revision = 3
+
+[[package]]
+name = "marin-iris-native"
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
+"""
+    targeted = before.replace('version = "0.1.3"', 'version = "0.1.4.dev30194118926"')
+    newer_uv = targeted.replace("revision = 3", "revision = 5")
+
+    validate_targeted_lock_change(before, newer_uv, "marin-iris-native", "0.1.4.dev30194118926")
+    with pytest.raises(ValueError, match="lockfile metadata"):
+        validate_targeted_lock_change(
+            before, newer_uv.replace("version = 1", "version = 2"), "marin-iris-native", "0.1.4.dev30194118926"
+        )
+
+
 def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     workflow = _workflow(RELEASE_WORKFLOW)
     triggers = _triggers(workflow)

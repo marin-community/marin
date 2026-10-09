@@ -552,7 +552,8 @@ def published_artifacts(distribution: str, version: str) -> list[PublishedArtifa
 
 def _canonical_package_entries(lock_text: str) -> tuple[dict, dict[str, list[str]]]:
     lock = tomllib.loads(lock_text)
-    metadata = {key: value for key, value in lock.items() if key != "package"}
+    # uv writes its own lockfile format revision, so a newer uv changes it on each re-lock.
+    metadata = {key: value for key, value in lock.items() if key not in ("package", "revision")}
     packages: dict[str, list[str]] = {}
     for package in lock.get("package", []):
         packages.setdefault(package["name"], []).append(json.dumps(package, sort_keys=True))
