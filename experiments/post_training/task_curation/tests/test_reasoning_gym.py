@@ -375,7 +375,21 @@ def test_tasktrove_reasoning_gym_exports_its_source_environment():
 
 
 @pytest.mark.parametrize("dataset", ["arc_agi", "rearc"])
-def test_tasktrove_reasoning_gym_rejects_unscorable_grid_entries(dataset):
-    entry = {**TASKTROVE_ENTRY, "metadata": {"source_dataset": dataset}}
-    result = convert_row(PIPELINES["tasktrove-reasoning-gym"], tasktrove_archive(entry=entry))
-    assert (result.kind, result.reason) == (ImportFailureKind.UNSUPPORTED, "unsupported_variant")
+def test_tasktrove_reasoning_gym_grades_json_grid_entries(dataset, tmp_path):
+    entry = {
+        "question": "Fill the grid.",
+        "answer": "1 2\n3 4",
+        "metadata": {"source_dataset": dataset, "output": [[1, 2], [3, 4]]},
+    }
+    task = converted_task(PIPELINES["tasktrove-reasoning-gym"], tasktrove_archive(entry=entry))
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    for resource in task.resources.verifier:
+        (tests / resource.path).write_bytes(resource_bytes(resource))
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+
+    for candidate, expected in [(entry["answer"], 1.0), ("1 2\n3 5", 0.05), ("not a grid", 0.0)]:
+        (workspace / "answer.txt").write_text(candidate)
+        verdict = grade(verifyit_spec(task.grader), tests, workspace)
+        assert (verdict.status, verdict.reward) == (Status.SCORED, expected)

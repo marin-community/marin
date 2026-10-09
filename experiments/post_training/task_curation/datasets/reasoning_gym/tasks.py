@@ -91,8 +91,6 @@ GENERATOR_PARTS = 32
 GENERATED_GRADE = grade_script(HERE / "reasoning_gym_grade.py", *shipped_files(HERE, GENERATE.name))
 
 TASKTROVE_CONFIG = "laion__nemotron-gym-reasoning-gym-v2"
-# JSON transport changes output grids to lists; these scorers reject even their gold answers.
-UNSCORABLE_TASKTROVE_DATASETS = frozenset({"arc_agi", "rearc"})
 SCORER_TIMEOUT = 60.0
 ANSWER_FILE_NOTE = f"\nThe runtime writes your final assistant response to {ANSWER_PATH}."
 REWRITE_REASON = f"The grader reads the reply, which the runtime writes to {ANSWER_PATH}"
@@ -318,11 +316,6 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
         return unsupported("missing_scorer", "metadata.source_dataset is required")
     if not isinstance(data.get("answer"), str) or not data["answer"].strip():
         return source_defect("invalid_entry", "Entry answer must be a string")
-    if dataset in UNSCORABLE_TASKTROVE_DATASETS:
-        return unsupported(
-            "unsupported_variant",
-            f"reasoning-gym dataset {dataset!r} cannot score even its own gold answer (library bug)",
-        )
     package = verifyit_package(
         ReasoningGymSpec(dataset=dataset),
         (inline_resource("entry.json", json.dumps(data).encode()),),
@@ -401,7 +394,7 @@ def sources() -> list[RlDataSource]:
                 name="tasktrove-reasoning-gym",
                 source=tasktrove_source(TASKTROVE_CONFIG),
                 convert=TaskTroveConverter(TASKTROVE_CONFIG, convert_tasktrove),
-                version="2",
+                version="3",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_RUBRIC,
