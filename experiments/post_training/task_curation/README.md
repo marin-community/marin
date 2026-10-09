@@ -20,8 +20,12 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.po
   --output infra/marina/applets/rl_data_catalog/dist/catalog.json
 ```
 
-The applet build runs this command and bundles the resulting JSON. Its digest
-covers the complete inventory. The Atlas does not scrape upstream catalogs on refresh.
+The output is `infra/marina/applets/rl_data_catalog/dist/catalog.json`, ignored
+by Git. Edit the Python declarations, not this generated file. The applet build
+runs the command automatically and bundles the JSON. **Refresh sources** reads
+that packaged catalog; publishing a rebuilt applet makes source edits visible.
+See [Adding a dataset](datasets/README.md#adding-a-dataset) for the edit-to-export
+checklist and [RL Data Atlas](../../../docs/references/rl-data-atlas.md) for publishing.
 
 ## Declaring a dataset
 
