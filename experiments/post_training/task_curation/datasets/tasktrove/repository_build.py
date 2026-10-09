@@ -7,7 +7,7 @@ from functools import cache
 from pathlib import Path
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.tasktrove import TEST_SH_REWARD, TaskFiles
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH_REWARD, TaskFiles
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -67,7 +67,7 @@ def repository_build_task(
     setup, end, _ = instruction.removeprefix(PUBLIC_SETUP_PREFIX).partition("\n```")
     if not end:
         return unsupported("unsupported_repository_setup", "Environment Setup bash block is not closed")
-    original_dockerfile = files.text("environment/Dockerfile")
+    original_dockerfile = files.text(DOCKERFILE)
     dockerfile += VERIFYIT_INSTALL
     if task.resources.worker:
         dockerfile += "COPY taskcompendium-public/ /\n"
@@ -84,7 +84,7 @@ def repository_build_task(
                 "path": resource.path.removeprefix("environment/"),
                 **(
                     {"source": inline_resource("Dockerfile", dockerfile.encode()).source}
-                    if resource.path == "environment/Dockerfile"
+                    if resource.path == DOCKERFILE
                     else {}
                 ),
             }

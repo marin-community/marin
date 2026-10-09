@@ -14,6 +14,8 @@ from taskcompendium.convert.tasktrove import TaskFiles
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 from verifyit.spec import PytestSpec
 
+from experiments.post_training.task_curation.datasets.tasktrove.repository_build import WORKSPACE
+
 TRUSTED_PATHS = "trusted_test_paths.txt"
 PYTEST_REPORT_PLUGIN = "pytest-json-report"
 PYTEST_VERSION_CONSTRAINT = "pytest<9"
@@ -166,7 +168,7 @@ def trusted_pytest(task: TaskFiles) -> PytestSpec | ImportRejection:
         must_not_break=selection.must_not_break,
         setup=RESTORE_TESTS.replace("TRUSTED_SHA", match["trusted"]).replace("FALLBACK_SHA", match["fallback"] or ""),
         protected_paths_files=(TRUSTED_PATHS,),
-        workspace="/testbed",
+        workspace=WORKSPACE,
     )
 
 
