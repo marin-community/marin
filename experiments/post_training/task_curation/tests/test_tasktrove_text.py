@@ -352,7 +352,9 @@ def test_math_uses_verifyit_in_the_sandbox_and_keeps_source_evidence_and_oracle(
     assert verifier["source/test.sh"] == files["tests/test.sh"]
     assert verifier["verifier_data.json"] == files["tests/verifier_data.json"]
     oracle = {resource.path: resource_bytes(resource) for resource in task.resources.oracle}
-    assert oracle == {path: content for path, content in files.items() if path.startswith("solution/")}
+    assert oracle == {
+        path: content for path, content in files.items() if not path.startswith(("tests/", "setup_files/"))
+    }
     # Oracle commands upload the oracle files, which therefore cannot carry archive timestamps.
     assert all(resource.mtime_ns is None for resource in task.resources.oracle)
     control = math_sources.math_golden(task)
@@ -525,6 +527,23 @@ def test_mcqa_keeps_question_constraints_and_grades_the_option_letter(wrapper, o
 def test_mcqa_rejects_unknown_answer_extraction():
     rejection = rejection_of("tasktrove-knowledge_mcqa", mcqa_row(output_regex=r"\((\w)\)"))
     assert rejection.reason == "unsupported_answer_contract"
+
+
+def test_tasktrove_retains_source_recipe_and_oracle_without_changing_text_execution():
+    row = mcqa_row()
+    with tarfile.open(fileobj=io.BytesIO(row["task_binary"])) as archive:
+        files = archive_members(archive)
+    recipe = b"FROM python:3.11-slim-bookworm\nWORKDIR /app\n"
+    solution = b"#!/bin/bash\nprintf 'Answer: B' > /app/answer.txt\n"
+    files.update({"environment/Dockerfile": recipe, "solution/solve.sh": solution})
+    task = task_of("tasktrove-knowledge_mcqa", tasktrove_row(files))
+    oracle = {resource.path: resource_bytes(resource) for resource in task.resources.oracle}
+    assert oracle["environment/Dockerfile"] == recipe
+    assert oracle["solution/solve.sh"] == solution
+    assert task.resources.all == task.resources.worker == ()
+    assert task.environment_requirements.docker_build is None
+    assert task.environment_requirements.docker_image is None
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
 
 
 def test_mcqa_accepts_gaps_in_choice_labels_without_accepting_absent_references():

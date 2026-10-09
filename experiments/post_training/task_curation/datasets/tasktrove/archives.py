@@ -3,9 +3,9 @@
 
 """TaskTrove sources: archived Harbor tasks from the original ``open-thoughts/TaskTrove`` release."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from taskcompendium.convert.tasktrove import TASKS_FILE, unpack_task_binary
+from taskcompendium.convert.tasktrove import TASKS_FILE, archive_resources, unpack_task_binary
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
@@ -34,7 +34,19 @@ class TaskTroveConverter:
         reason = SOURCE_DEFECTS.get((self.config, row.data["path"]))
         if reason is not None:
             return ImportRejection(kind=ImportFailureKind.SOURCE_DEFECT, reason="reviewed_defect", detail=reason)
-        return self.convert(row, context)
+        converted = self.convert(row, context)
+        if isinstance(converted, ImportRejection):
+            return converted
+        task = converted.task if isinstance(converted, NormalizedTask) else converted
+        existing = {resource.path for resource in (*task.resources.all, *task.resources.oracle)}
+        # Oracle controls may upload these files through runtimes without timestamp support.
+        oracle = task.resources.oracle + tuple(
+            resource.model_copy(update={"mtime_ns": None})
+            for resource in archive_resources(row.data).oracle
+            if resource.path not in existing
+        )
+        task = task.model_copy(update={"resources": task.resources.model_copy(update={"oracle": oracle})})
+        return replace(converted, task=task) if isinstance(converted, NormalizedTask) else task
 
 
 def tasktrove_source(config: str) -> HfSource:
