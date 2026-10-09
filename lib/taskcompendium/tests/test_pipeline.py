@@ -164,6 +164,13 @@ def response(task_id, confidence="high", quality="good"):
     }
 
 
+@pytest.fixture(autouse=True)
+def local_pipeline_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prefix = str(tmp_path / "marin")
+    monkeypatch.setenv("MARIN_PREFIX", prefix)
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", prefix)
+
+
 @pytest.fixture
 def svamp_recipe():
     return fixture_recipe(convert_svamp, source=replace(SOURCE_FILES, patterns=("*.jsonl",)))
