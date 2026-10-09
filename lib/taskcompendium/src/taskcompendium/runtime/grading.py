@@ -11,6 +11,7 @@ state, the conversation, and copied artifacts. The agent's own machine never gra
 import io
 import json
 import math
+import os
 import tarfile
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -486,7 +487,11 @@ async def _grade_staged(
             await _run_checked(
                 task_machine,
                 Command(
-                    command.argv, cwd=command.cwd, env=resolve_env_vars(command.env), timeout=grading.limit, user=ROOT
+                    command.argv,
+                    cwd=command.cwd,
+                    env=resolve_env_vars(command.env, os.environ),
+                    timeout=grading.limit,
+                    user=ROOT,
                 ),
                 "Cannot collect grading inputs",
             )
@@ -504,7 +509,7 @@ async def _grade_staged(
                 replace(
                     machine_spec,
                     workdir=grading.workspace,
-                    env={**machine_spec.env, **resolve_env_vars(grading.environment.environment_variables)},
+                    env={**machine_spec.env, **resolve_env_vars(grading.environment.environment_variables, os.environ)},
                 )
             )
             try:

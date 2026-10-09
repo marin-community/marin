@@ -76,7 +76,7 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
             if requirements.working_directory is not None
             else "" if requirements.docker_image else "/workspace"
         ),
-        env=resolve_env_vars(requirements.environment_variables),
+        env=resolve_env_vars(requirements.environment_variables, os.environ),
         network=runtime.network,
         memory_mb=runtime.memory_mb,
         cpus=runtime.cpus,

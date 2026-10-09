@@ -316,7 +316,7 @@ def lock_consumer(project_dir: Path) -> None:
 
     uv lock preserves existing resolutions when constraints are already
     satisfied, so a plain `uv lock` after vendoring keeps the old version.
-    --upgrade-package for each marin-* package forces re-resolution against
+    --upgrade-package for each bundled package forces re-resolution against
     the new wheels in the vendor find-links directory.
     """
     upgrade_flags: list[str] = []

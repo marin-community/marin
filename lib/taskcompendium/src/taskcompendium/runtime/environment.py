@@ -3,14 +3,13 @@
 
 """Resolve task environment templates at the machine boundary."""
 
-import os
 import re
 from collections.abc import Mapping
 
 _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
 
 
-def resolve_env_vars(environment: Mapping[str, str]) -> dict[str, str]:
+def resolve_env_vars(environment: Mapping[str, str], host_environment: Mapping[str, str]) -> dict[str, str]:
     """Resolve ``${NAME}`` and ``${NAME:-default}`` in environment values."""
     resolved = {}
     for key, value in environment.items():
@@ -19,8 +18,8 @@ def resolve_env_vars(environment: Mapping[str, str]) -> dict[str, str]:
             resolved[key] = value
             continue
         name, default = match.groups()
-        if name in os.environ:
-            resolved[key] = os.environ[name]
+        if name in host_environment:
+            resolved[key] = host_environment[name]
         elif default is not None:
             resolved[key] = default
         else:
