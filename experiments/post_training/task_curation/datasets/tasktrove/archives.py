@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass, replace
 
-from taskcompendium.convert.tasktrove import TASKS_FILE, archive_resources, unpack_task_binary
+from taskcompendium.convert.tasktrove import TASKS_FILE, TASKTROVE_REPO, archive_resource, unpack_task_binary
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
@@ -13,7 +13,6 @@ from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportR
 from experiments.post_training.task_curation.datasets.tasktrove.source_defects import SOURCE_DEFECTS
 from experiments.post_training.task_curation.pipeline import HfSource
 
-TASKTROVE_REPO = "open-thoughts/TaskTrove"
 TASKTROVE_REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 ANSWER_FILE_DELIVERY = (
     ("write your final answer to `/app/answer.txt`", "return your final answer in the assistant response"),
@@ -41,9 +40,9 @@ class TaskTroveConverter:
         existing = {resource.path for resource in (*task.resources.all, *task.resources.oracle)}
         # Oracle controls may upload these files through runtimes without timestamp support.
         oracle = task.resources.oracle + tuple(
-            resource.model_copy(update={"mtime_ns": None})
-            for resource in archive_resources(row.data).oracle
-            if resource.path not in existing
+            archive_resource(row.data, path).model_copy(update={"mtime_ns": None})
+            for path in row.data["files"]
+            if path not in existing and not path.startswith(("tests/", "setup_files/"))
         )
         task = task.model_copy(update={"resources": task.resources.model_copy(update={"oracle": oracle})})
         return replace(converted, task=task) if isinstance(converted, NormalizedTask) else task

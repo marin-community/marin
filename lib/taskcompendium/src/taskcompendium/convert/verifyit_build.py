@@ -4,6 +4,7 @@
 """Source image recipes with the checked-out Verifyit package."""
 
 import re
+import shlex
 from functools import cache
 from pathlib import Path
 
@@ -19,26 +20,30 @@ VERIFYIT_INSTALL = (
     " && rm -rf /var/lib/apt/lists/*)\n"
     f"COPY --from={UV_IMAGE} /uv /usr/local/bin/uv\n"
     f"COPY {VERIFYIT_CONTEXT}/ /opt/taskcompendium-verifyit/\n"
-    'RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --python ">=3.11" /opt/taskcompendium-verifyit\n'
+    'RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --python ">=3.11" {package}\n'
 )
+
+
+def verifyit_source_paths(package: Path) -> tuple[Path, ...]:
+    return (package / "pyproject.toml", package / "README.md", *context_paths(package / "src/verifyit"))
 
 
 @cache
 def verifyit_build_files(package: Path) -> tuple[TaskResource, ...]:
     """Bundle the checked-out package used by the source recipe."""
-    paths = [package / "pyproject.toml", package / "README.md", *context_paths(package / "src/verifyit")]
     return tuple(
         inline_resource(f"{VERIFYIT_CONTEXT}/{path.relative_to(package).as_posix()}", path.read_bytes())
-        for path in paths
+        for path in verifyit_source_paths(package)
     )
 
 
 def verifyit_build_context(
-    dockerfile: str, archive_resources: tuple[TaskResource, ...], *, package: Path
+    dockerfile: str, archive_resources: tuple[TaskResource, ...], *, package: Path, extras: tuple[str, ...] = ()
 ) -> DockerBuildContext:
     """Retain source environment files and append the bundled verifier installation."""
     body = re.sub(r"\n{3,}", "\n\n", "\n".join(line.rstrip() for line in dockerfile.splitlines())).strip("\n")
-    dockerfile = body + "\n\n" + VERIFYIT_INSTALL
+    target = "/opt/taskcompendium-verifyit" + (f"[{','.join(extras)}]" if extras else "")
+    dockerfile = body + "\n\n" + VERIFYIT_INSTALL.format(package=shlex.quote(target))
     recipe = inline_resource("Dockerfile", dockerfile.encode())
     original = next((resource for resource in archive_resources if resource.path == DOCKERFILE), None)
     if original is not None:

@@ -34,6 +34,7 @@ from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import inline_resource
 
 TASKS_FILE = "tasks.parquet"
+TASKTROVE_REPO = "open-thoughts/TaskTrove"
 
 INSTRUCTION = "instruction.md"
 TASK_TOML = "task.toml"
@@ -119,21 +120,20 @@ def archive_file(data: Mapping[str, Any], path: str) -> bytes | None:
     return base64.b64decode(value, validate=True) if isinstance(value, str) else None
 
 
+def archive_resource(data: Mapping[str, Any], path: str) -> TaskResource:
+    """Materialize one archived file while preserving its declared permissions."""
+    original = data["file_metadata"][path]
+    return TaskResource(
+        path=path.removeprefix("tests/") if path.startswith("tests/") else path,
+        source=inline_resource(path, base64.b64decode(data["files"][path], validate=True)).source,
+        mode=original["mode"],
+        mtime_ns=original["mtime_ns"],
+    )
+
+
 def archive_resources(data: Mapping[str, Any]) -> ResourceGroups:
     """Keep setup files with the worker, tests with the grader and everything else with the oracle."""
-    files = data["files"]
-    metadata = data["file_metadata"]
-
-    def resource(path: str, encoded: str) -> TaskResource:
-        original = metadata[path]
-        return TaskResource(
-            path=path.removeprefix("tests/") if path.startswith("tests/") else path,
-            source=inline_resource(path, base64.b64decode(encoded, validate=True)).source,
-            mode=original["mode"],
-            mtime_ns=original["mtime_ns"],
-        )
-
-    resources = {path: resource(path, encoded) for path, encoded in files.items()}
+    resources = {path: archive_resource(data, path) for path in data["files"]}
     provenance = inline_resource(
         "taskcompendium/archive-provenance.json",
         json.dumps({"archive_sha256": data["archive_sha256"], "source_path": data["path"]}).encode(),

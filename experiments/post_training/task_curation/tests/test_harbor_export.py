@@ -14,11 +14,13 @@ from click.testing import CliRunner
 from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext, run
+from taskcompendium.convert import tasktrove_python_unit_tests
 from taskcompendium.harbor import export as harbor
 from taskcompendium.harbor.export import VerifierPayloadIdentity
 from taskcompendium.models import NoGrader
 from upath import UPath
 
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
 from experiments.post_training.task_curation.export_tasktrove import harbor_export_step
 from experiments.post_training.task_curation.rl_smoke import main, smoke_step
@@ -133,6 +135,33 @@ def test_candidate_grader_edit_invalidates_export_fingerprint_pin(tmp_path, monk
     with pytest.raises(FingerprintMismatchError):
         replace(after, expected_fingerprint=before.fingerprint()).lower()
     assert not (tmp_path / "not-materialized").exists()
+
+
+@pytest.mark.parametrize(
+    "changed_file",
+    [
+        Path(harbor.__file__).with_name("tasktrove.py"),
+        Path(tasktrove_python_unit_tests.__file__),
+        VERIFYIT_PACKAGE / "pyproject.toml",
+        VERIFYIT_PACKAGE / "README.md",
+    ],
+)
+def test_actor_recipe_inputs_invalidate_export_fingerprint(changed_file, tmp_path, monkeypatch):
+    normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(tmp_path / "not-materialized"))
+    before = harbor_export_step(
+        normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
+    )
+    original_read = Path.read_bytes
+
+    def edited_read(path):
+        content = original_read(path)
+        return content + b"\n# changed build input\n" if path == changed_file else content
+
+    monkeypatch.setattr(Path, "read_bytes", edited_read)
+    after = harbor_export_step(
+        normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
+    )
+    assert after.fingerprint() != before.fingerprint()
 
 
 @pytest.mark.parametrize("field", ["id", "family"])

@@ -13,6 +13,7 @@ import tarfile
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from functools import cache
+from pathlib import Path
 from typing import Any, cast
 
 import pyarrow as pa
@@ -40,6 +41,7 @@ from verifyit.spec import (
 
 from taskcompendium.convert.script_grader import GRADE_ARGV
 from taskcompendium.convert.tasktrove import TEST_SH
+from taskcompendium.harbor.tasktrove import source_actor_build
 from taskcompendium.models import (
     DOCKER_IMAGE_PATTERN,
     AnswerType,
@@ -364,7 +366,12 @@ def _reference_leak(instruction: str, spec: Spec | None) -> str | None:
 
 
 def harbor_payload(
-    row: dict[str, Any], *, grader_image: str | None, family: str, fallback_actor_image: str
+    row: dict[str, Any],
+    *,
+    grader_image: str | None,
+    family: str,
+    fallback_actor_image: str,
+    verifyit_package_root: Path | None = None,
 ) -> HarborPayload:
     """Assemble file graders separately and legacy repository graders in the actor environment."""
     if grader_image is not None and re.fullmatch(DOCKER_IMAGE_PATTERN, grader_image) is None:
@@ -391,8 +398,13 @@ def harbor_payload(
         raise UnsupportedHarborTask(f"gold_leak: {leak}")
     files["instruction.md"] = prompt.encode()
     public = () if environment_mode == VerifierEnvironmentMode.SHARED else (*task.resources.all, *task.resources.worker)
-    if environment.docker_build is not None:
-        for resource in environment.docker_build.files:
+    actor_build = environment.docker_build
+    if actor_build is None:
+        actor_build = source_actor_build(
+            task, source=row["source_row"].split("/", 1)[0], mode=verifier.mode, package=verifyit_package_root
+        )
+    if actor_build is not None:
+        for resource in actor_build.files:
             if (
                 environment_mode == VerifierEnvironmentMode.SHARED
                 and resource.path != "Dockerfile"
@@ -448,7 +460,7 @@ def harbor_payload(
         # Shared Harbor execution retains the actor's installed dependencies and workspace.
         # This is the legacy TaskTrove execution policy, not ScriptGrader's fresh-machine policy.
         files[TEST_SH] = f"#!/bin/bash\nset -euo pipefail\ncd {shlex.quote(verifier.cwd)}\n".encode() + files[TEST_SH]
-    if environment_mode == VerifierEnvironmentMode.SHARED:
+    if actor_build is not None:
         _validate_tasktrove_dockerfile(files)
     outputs = list(task.output_paths)
     if answer_path:
@@ -527,10 +539,21 @@ def harbor_payload(
 
 
 def harbor_record(
-    row: dict[str, Any], *, grader_image: str | None, family: str, fallback_actor_image: str
+    row: dict[str, Any],
+    *,
+    grader_image: str | None,
+    family: str,
+    fallback_actor_image: str,
+    verifyit_package_root: Path | None = None,
 ) -> HarborRecord:
     """Package the shared file assembly into the TaskTrove parquet record."""
-    payload = harbor_payload(row, grader_image=grader_image, family=family, fallback_actor_image=fallback_actor_image)
+    payload = harbor_payload(
+        row,
+        grader_image=grader_image,
+        family=family,
+        fallback_actor_image=fallback_actor_image,
+        verifyit_package_root=verifyit_package_root,
+    )
     return HarborRecord(
         **asdict(payload.metadata),
         task_binary=archive_bytes(payload.files, payload.modes),
@@ -545,6 +568,7 @@ def export_harbor(
     grader_image: str | None,
     source: HarborSourceMetadata,
     fallback_actor_image: str,
+    verifyit_package_root: Path,
 ) -> dict[str, Any]:
     """Write the legacy parquet view and account for normalization and lowering failures."""
     manifest = json.loads((input_root / MANIFEST_FILENAME).read_text())
@@ -578,6 +602,7 @@ def export_harbor(
                                     grader_image=grader_image,
                                     family=source.family,
                                     fallback_actor_image=fallback_actor_image,
+                                    verifyit_package_root=verifyit_package_root,
                                 )
                             except UnsupportedHarborTask as error:
                                 reason = str(error)
@@ -596,6 +621,7 @@ def export_harbor(
         "by_source": dict(counts),
         "rejections": rejected,
         "grader_base_image": grader_image,
+        "verifyit_package_root": str(verifyit_package_root),
         "verify_tool_ref": verifier_identity.ref,
         "environment_build_required": True,
         "source": source.name,

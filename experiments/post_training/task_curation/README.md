@@ -374,9 +374,20 @@ They can omit `--grader-image`; no repository copy enters a
 second verifier image. Other directory or artifact-transfer contracts remain
 explicit export rejections.
 
-Non-repository sources currently use curation actor images and a separate
-verifier image. Their TaskSpec export does not establish environment, grader,
-or filtering parity with the legacy TaskTrove conversion.
+Conversion retains original environment recipes and available oracle files as private
+provenance. Harbor export prefers an explicitly corrected build context, then
+the retained TaskTrove recipe, then the canonical actor image. Its TaskTrove
+recipe adapter removes legacy rewardkit/litellm installs and replaces old puzzle
+and reasoning-gym grader installs with Verifyit, while preserving Python test
+setup. It bundles the current Verifyit source package, supplied explicitly by
+the experiment binding; the CLI accepts `--verifyit-package-root` to select it.
+Build identity includes the adapter and package metadata as well as runtime code.
+
+These actor recipes do not establish full execution parity. Most non-repository
+sources use a separate verifier image, so actor-installed dependencies
+and changes outside declared submission files do not transfer to that grader.
+Code Contests and TACO use their declared shared build, as do the repository
+sources. No container builds or grading runs are implied by a successful export.
 
 In-process exact, math, JSON-schema, MCQ, IFEval, XML-element, and CSV-column
 graders also run in the supplied verifier image after export. The complete

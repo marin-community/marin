@@ -24,6 +24,7 @@ from taskcompendium.harbor.records import NormalizedIndex
 from taskcompendium.harbor.snapshots import TaskSnapshot, file_map_snapshot, snapshot_from_dict, task_snapshot
 from taskcompendium.models import AnswerType, TaskSpec
 
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import HfSource
@@ -97,6 +98,7 @@ def candidate_snapshot(
             family=source.info.family,
             grader_image=None if task.answer_type == AnswerType.WORKSPACE_STATE else grader_image,
             fallback_actor_image=BASE_IMAGE,
+            verifyit_package_root=VERIFYIT_PACKAGE,
         )
     except UnsupportedHarborTask as error:
         return task_snapshot(config, row["original_path"], "lowering_rejection", detail=str(error))

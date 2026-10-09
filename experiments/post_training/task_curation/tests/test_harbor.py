@@ -31,6 +31,7 @@ from verifyit.grade import read_output
 from verifyit.spec import parse_spec
 
 from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import (
     calendar,
     instruction_following,
@@ -83,13 +84,23 @@ def normalized_row(request) -> tuple[dict, NormalizedTask]:
 
 def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(normalized_row) -> None:
     row, converted = normalized_row
-    record = harbor_record(row, fallback_actor_image=BASE_IMAGE, grader_image=GRADER_IMAGE, family="fixture")
+    record = harbor_record(
+        row,
+        fallback_actor_image=BASE_IMAGE,
+        verifyit_package_root=VERIFYIT_PACKAGE,
+        grader_image=GRADER_IMAGE,
+        family="fixture",
+    )
     files = archive_files(record.task_binary)
     config = TaskConfig.model_validate_toml(files["task.toml"].decode())
     assert config.metadata["taskcompendium_id"] == converted.task.id
     assert config.metadata["tasktrove_path"] == record.path == row["original_path"]
     # Frozen TaskTrove ConvertedTask (61bb85cc) uses this budget for every source.
     assert config.agent.timeout_sec == 900
+    name = row["original_path"].removesuffix("-original.tar.gz")
+    # Frozen 61bb85cc converter output for the real input archive, before tool installation.
+    expected_recipe = (FIXTURES / f"{name}_actor_61bb85cc.Dockerfile").read_text().rstrip()
+    assert files["environment/Dockerfile"].decode().split("# --- verifyit ---")[0].rstrip() == expected_recipe
     assert config.verifier.environment_mode == VerifierEnvironmentMode.SEPARATE
     # Native separate verification skips tests upload, so tests must be baked in.
     assert config.verifier.environment.docker_image is None
@@ -113,6 +124,19 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
         assert oracle <= archive_files(record.solution_binary).keys()
 
 
+def test_source_recipe_provenance_does_not_override_other_datasets(normalized_row):
+    row, converted = normalized_row
+    task = converted.task.model_copy(update={"source": converted.task.source.model_copy(update={"dataset": "other"})})
+    record = harbor_record(
+        {**row, "task_json": task.model_dump_json()},
+        fallback_actor_image=BASE_IMAGE,
+        grader_image=GRADER_IMAGE,
+        family="fixture",
+    )
+    expected_image = task.environment_requirements.docker_image or BASE_IMAGE
+    assert archive_files(record.task_binary)["environment/Dockerfile"].decode().startswith(f"FROM {expected_image}\n")
+
+
 @pytest.mark.parametrize("role", ["actor", "grader"])
 def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(normalized_row, role):
     row, converted = normalized_row
@@ -134,6 +158,7 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
         harbor_record(
             {**row, "task_json": task.model_dump_json()},
             fallback_actor_image=BASE_IMAGE,
+            verifyit_package_root=VERIFYIT_PACKAGE,
             grader_image=GRADER_IMAGE,
             family="fixture",
         )
@@ -143,7 +168,13 @@ def test_harbor_comparison_reports_population_difference_without_claiming_runtim
     normalized_row, tmp_path
 ) -> None:
     row, _ = normalized_row
-    record = harbor_record(row, fallback_actor_image=BASE_IMAGE, grader_image=GRADER_IMAGE, family="fixture")
+    record = harbor_record(
+        row,
+        fallback_actor_image=BASE_IMAGE,
+        verifyit_package_root=VERIFYIT_PACKAGE,
+        grader_image=GRADER_IMAGE,
+        family="fixture",
+    )
     output = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([asdict(record)], schema=TASKS_SCHEMA), output)
     schema = pq.ParquetFile(output).schema_arrow
@@ -185,6 +216,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
     record = harbor_record(
         {**row, "task_json": edited.model_dump_json()},
         fallback_actor_image=BASE_IMAGE,
+        verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
         family="fixture",
     )
@@ -280,7 +312,13 @@ def test_harbor_in_process_contract_runs_bundled_grader(mode, reference, valid, 
         "original_path": "fixture-task",
         "normalization_changes": [change.model_dump() for change in converted.changes],
     }
-    record = harbor_record(row, fallback_actor_image=BASE_IMAGE, grader_image=GRADER_IMAGE, family=source.info.family)
+    record = harbor_record(
+        row,
+        fallback_actor_image=BASE_IMAGE,
+        verifyit_package_root=VERIFYIT_PACKAGE,
+        grader_image=GRADER_IMAGE,
+        family=source.info.family,
+    )
     files = archive_files(record.task_binary)
     instruction = files["instruction.md"].decode()
     assert instruction.startswith(converted.task.context.events[0].content)
@@ -364,7 +402,13 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(answer_path, tmp_
         "original_path": "judge-fixture.tar.gz",
         "source_row": source.pipeline.source.files[0] + ":0",
     }
-    record = harbor_record(row, fallback_actor_image=BASE_IMAGE, grader_image=GRADER_IMAGE, family=source.info.family)
+    record = harbor_record(
+        row,
+        fallback_actor_image=BASE_IMAGE,
+        verifyit_package_root=VERIFYIT_PACKAGE,
+        grader_image=GRADER_IMAGE,
+        family=source.info.family,
+    )
     files = archive_files(record.task_binary)
     config = TaskConfig.model_validate_toml(files["task.toml"].decode())
     instruction = files["instruction.md"].decode()
@@ -399,6 +443,7 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
     record = harbor_record(
         {"task_json": task.model_dump_json(), "original_path": "arc.tar.gz", "source_row": "arc/tasks.parquet:0"},
         fallback_actor_image=BASE_IMAGE,
+        verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
         family=source.info.family,
     )
@@ -450,6 +495,7 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
         harbor_record(
             {"task_json": task.model_dump_json(), "original_path": "arc.tar.gz", "source_row": "arc/tasks.parquet:0"},
             fallback_actor_image=BASE_IMAGE,
+            verifyit_package_root=VERIFYIT_PACKAGE,
             grader_image=GRADER_IMAGE,
             family=source.info.family,
         ).task_binary
@@ -495,7 +541,9 @@ def test_harbor_repository_uses_shared_actor_state(repository_task, tmp_path):
         "source_row": "swesmith/tasks.parquet:0",
     }
     files = archive_files(
-        harbor_record(row, fallback_actor_image=BASE_IMAGE, grader_image=None, family="swe").task_binary
+        harbor_record(
+            row, fallback_actor_image=BASE_IMAGE, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe"
+        ).task_binary
     )
     config = TaskConfig.model_validate_toml(files["task.toml"].decode())
     assert config.verifier.environment_mode == "shared"
@@ -549,7 +597,9 @@ def test_harbor_repository_retains_old_environment_exclusions(repository_task, l
         "source_row": "swesmith/tasks.parquet:0",
     }
     with pytest.raises(UnsupportedHarborTask):
-        harbor_record(row, fallback_actor_image=BASE_IMAGE, grader_image=None, family="swe")
+        harbor_record(
+            row, fallback_actor_image=BASE_IMAGE, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe"
+        )
 
 
 def test_science_openqa_keeps_mechanical_conversion_but_filters_legacy_reference_leak():
