@@ -1,0 +1,258 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The configuration of one unattended run, read from a JSON file in which every field is required.
+
+The GLM endpoint is a typed choice: ``LaptopGlm`` (a base URL and a token file, for a port-forward)
+or ``RelayGlm`` (an Iris relay job and the name of the environment variable that holds the token).
+The builders' Parallel key is a file or an environment variable name in the same way. No config
+object holds a secret, so a config file can be committed and shown; ``queue.job`` reads secrets at
+the boundary. The GLM pool is always named, because the token binds which router pool serves a
+request. Local paths (a laptop root, the image cache, a token or key file) are absolute: the reader
+does not expand ``~`` or resolve against the working directory, so a config means the same thing
+wherever it is launched from.
+
+A config file looks like ``docs/policy.example.json``::
+
+    {"run_id": ..., "root": ..., "host": "laptop" | "iris", "image_cache": "<laptop directory>" | null,
+     "glm": {"kind": "laptop", "base_url": ..., "token_file": ..., "pool": "high" | "bulk"}
+          | {"kind": "relay", "relay_job": ..., "token_env": ..., "pool": "high" | "bulk"},
+     "web": null | {"kind": "key_file", "path": ...} | {"kind": "key_env", "env": ...},
+     "policy": <loop.policy.POLICY>,
+     "engine": {"max_turns": ..., "command_timeout": ..., "tool_turn_timeout": ...,
+                "model_turn_timeout": ..., "cleanup_timeout": ...},
+     "width": ..., "restore_from": null | "<archived run root>"}
+"""
+
+import json
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+from shellbox.machine import MachineFactory
+
+from taskforge.llm.client import Pool
+from taskforge.loop.policy import POLICY, LoopPolicy
+from taskforge.sandbox.factories import FactoryCapabilities, MachineHost
+from taskforge.validate.trials import EngineSettings
+
+ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+RUN_FIELDS = frozenset(
+    {"run_id", "root", "host", "image_cache", "glm", "web", "policy", "engine", "width", "restore_from"}
+)
+
+
+def _require_absolute(path: Path, name: str) -> None:
+    if not path.is_absolute():
+        raise ValueError(f"{name} is an absolute path (no ~, no working-directory-relative path), got {path}")
+
+
+class GlmKind(StrEnum):
+    """The ``kind`` tag of a config's ``glm`` object."""
+
+    LAPTOP = "laptop"
+    RELAY = "relay"
+
+
+@dataclass(frozen=True)
+class LaptopGlm:
+    """GLM through a reachable base URL (a port-forward); the token is on a ``GLM_API_TOKEN=`` line of a file."""
+
+    base_url: str
+    token_file: Path
+    pool: Pool
+
+    def __post_init__(self) -> None:
+        _require_absolute(self.token_file, "LaptopGlm.token_file")
+
+
+@dataclass(frozen=True)
+class RelayGlm:
+    """GLM through an Iris relay job, resolved inside the task; the token is in environment variable ``token_env``.
+
+    ``relay_job`` is explicit per cluster; nothing falls back to a default relay.
+    """
+
+    relay_job: str
+    token_env: str
+    pool: Pool
+
+    def __post_init__(self) -> None:
+        if not ENV_NAME.fullmatch(self.token_env):
+            raise ValueError("RelayGlm.token_env names an environment variable, for example GLM_API_TOKEN")
+
+
+type GlmConfig = LaptopGlm | RelayGlm
+
+
+class WebKind(StrEnum):
+    """The ``kind`` tag of a config's ``web`` object."""
+
+    KEY_FILE = "key_file"
+    KEY_ENV = "key_env"
+
+
+@dataclass(frozen=True)
+class ParallelKeyFile:
+    """The Parallel API key for the builders' web tools, on a ``PARALLEL_KEY=`` line of ``path``."""
+
+    path: Path
+
+    def __post_init__(self) -> None:
+        _require_absolute(self.path, "ParallelKeyFile.path")
+
+
+@dataclass(frozen=True)
+class ParallelKeyEnv:
+    """The Parallel API key for the builders' web tools, in environment variable ``env``."""
+
+    env: str
+
+    def __post_init__(self) -> None:
+        if not ENV_NAME.fullmatch(self.env):
+            raise ValueError("ParallelKeyEnv.env names an environment variable, for example PARALLEL_KEY")
+
+
+type WebConfig = ParallelKeyFile | ParallelKeyEnv
+
+
+@dataclass(frozen=True)
+class EngineConfig:
+    """The run-wide RolloutEngine session limits (``validate.trials.EngineSettings``); the factories
+    come from the host at run time. Each task carries its own answer format.
+    """
+
+    max_turns: int
+    command_timeout: float
+    tool_turn_timeout: float
+    model_turn_timeout: float
+    cleanup_timeout: float
+
+    def settings(
+        self, factories: Mapping[str, MachineFactory], capabilities: Mapping[str, FactoryCapabilities]
+    ) -> EngineSettings:
+        """These limits over ``factories`` and ``capabilities``, both keyed by shellbox ``Backend`` value."""
+        return EngineSettings(
+            factories=factories,
+            capabilities=capabilities,
+            max_turns=self.max_turns,
+            command_timeout=self.command_timeout,
+            tool_turn_timeout=self.tool_turn_timeout,
+            model_turn_timeout=self.model_turn_timeout,
+            cleanup_timeout=self.cleanup_timeout,
+        )
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    """One unattended run.
+
+    Attributes:
+        run_id: Names the run in the Finelog ledger mirror and in ``summary.json``.
+        root: The run root (``items/``, ``cache/``, ``ledger/``, ``policy.json``, ``summary.json``).
+            Absolute on a laptop; on Iris it is relative and placed under ``$IRIS_OUTPUT_DIR``, which
+            Iris archives per attempt.
+        host: Where machine factories come from.
+        image_cache: Where the laptop Docker factory keeps the images it prepares; an absolute
+            directory on a laptop, None on Iris (``sandbox.factories.machine_factories``).
+        glm: The GLM endpoint, resolved once by ``queue.job``.
+        web: Where the builders' Parallel key comes from, or None for builders without web tools.
+        policy: Every bound of the run.
+        engine: The run-wide RolloutEngine settings.
+        width: Concurrent phases across items (``LoopServices.slots``); not a request limit.
+        restore_from: A previous attempt's archived run root, copied in before resuming.
+    """
+
+    run_id: str
+    root: Path
+    host: MachineHost
+    image_cache: Path | None
+    glm: GlmConfig
+    web: WebConfig | None
+    policy: LoopPolicy
+    engine: EngineConfig
+    width: int
+    restore_from: str | None
+
+    def __post_init__(self) -> None:
+        if self.width < 1:
+            raise ValueError(f"width must be at least 1, got {self.width}")
+        if (self.host is MachineHost.LAPTOP) != (self.image_cache is not None):
+            raise ValueError(
+                f"image_cache is a directory on a laptop and null on Iris; this {self.host} run has {self.image_cache}"
+            )
+        if self.host is MachineHost.IRIS and self.root.is_absolute():
+            raise ValueError(f"an Iris run root is relative to $IRIS_OUTPUT_DIR, got {self.root}")
+        if self.host is MachineHost.LAPTOP:
+            _require_absolute(self.root, "a laptop run root")
+            assert self.image_cache is not None
+            _require_absolute(self.image_cache, "image_cache")
+
+
+def _fields(obj: Mapping[str, Any], names: frozenset[str], where: str) -> None:
+    if set(obj) != names:
+        missing, unknown = sorted(names - set(obj)), sorted(set(obj) - names)
+        raise ValueError(f"{where}: missing {missing}, unknown {unknown}")
+
+
+def _kind(obj: Mapping[str, Any], where: str) -> str:
+    if "kind" not in obj:
+        raise ValueError(f"{where}: missing ['kind']")
+    return obj["kind"]
+
+
+def glm_config(obj: Mapping[str, Any]) -> GlmConfig:
+    if GlmKind(_kind(obj, "glm")) is GlmKind.LAPTOP:
+        _fields(obj, frozenset({"kind", "base_url", "token_file", "pool"}), "glm")
+        return LaptopGlm(obj["base_url"], Path(obj["token_file"]), Pool(obj["pool"]))
+    _fields(obj, frozenset({"kind", "relay_job", "token_env", "pool"}), "glm")
+    return RelayGlm(obj["relay_job"], obj["token_env"], Pool(obj["pool"]))
+
+
+def web_config(obj: Mapping[str, Any] | None) -> WebConfig | None:
+    if obj is None:
+        return None
+    if WebKind(_kind(obj, "web")) is WebKind.KEY_FILE:
+        _fields(obj, frozenset({"kind", "path"}), "web")
+        return ParallelKeyFile(Path(obj["path"]))
+    _fields(obj, frozenset({"kind", "env"}), "web")
+    return ParallelKeyEnv(obj["env"])
+
+
+def engine_config(obj: Mapping[str, Any]) -> EngineConfig:
+    _fields(
+        obj,
+        frozenset({"max_turns", "command_timeout", "tool_turn_timeout", "model_turn_timeout", "cleanup_timeout"}),
+        "engine",
+    )
+    return EngineConfig(
+        max_turns=obj["max_turns"],
+        command_timeout=obj["command_timeout"],
+        tool_turn_timeout=obj["tool_turn_timeout"],
+        model_turn_timeout=obj["model_turn_timeout"],
+        cleanup_timeout=obj["cleanup_timeout"],
+    )
+
+
+def run_config(obj: Mapping[str, Any]) -> RunConfig:
+    """A ``RunConfig`` from its JSON object; a missing or unknown field raises ``ValueError``."""
+    _fields(obj, RUN_FIELDS, "run config")
+    return RunConfig(
+        run_id=obj["run_id"],
+        root=Path(obj["root"]),
+        host=MachineHost(obj["host"]),
+        image_cache=None if obj["image_cache"] is None else Path(obj["image_cache"]),
+        glm=glm_config(obj["glm"]),
+        web=web_config(obj["web"]),
+        policy=POLICY.validate_python(obj["policy"]),
+        engine=engine_config(obj["engine"]),
+        width=obj["width"],
+        restore_from=obj["restore_from"],
+    )
+
+
+def load_run_config(path: Path) -> RunConfig:
+    return run_config(json.loads(path.read_text()))

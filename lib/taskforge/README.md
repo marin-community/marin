@@ -25,6 +25,7 @@ src/taskforge/
               adversary trials, calibration, attempt files as resumable evidence
   review/     the Decision contract and the rules that derive it from validation evidence
   loop/       the per-item program, its policy, and the event log that item status is derived from
+  queue/      the unattended run: GLM endpoint configuration, hundreds-wide scheduling, the Iris job
 scripts/      Iris image builder, cluster probes, ledger summary
 docker/       grader-base image build context
 ```
@@ -33,7 +34,7 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate -> review -> loop
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate -> review -> loop -> queue
 ```
 
 The foundation packages (`content_hash`, `atomic_file`, `ledger`, `sandbox`, `spec`, `llm`) import
@@ -214,6 +215,33 @@ or on a package the order does not name.
   `items/idea--<id>/batches/<reproposal>/`: `plan/{request,completions}.json` and
   `slots/<slot>/{request,completions}.json` with `repair_error.txt` or `failure.txt`, completions in
   the shape of the author's `completions.json`. Both resume from the run root's event logs.
+- `queue.run.run_queue(ideas, policy, services, failed) -> RunSummary`: runs every idea and every
+  unfinished item of the run rooted at `services.root` in one asyncio process. `services.slots` (the
+  run's width) bounds concurrent phases, not requests. An item whose log ends `ACCEPTED` or
+  `REJECTED` is skipped, `FAILED` is skipped unless `failed` is `FailedItems.RETRY`, and `ABANDONED`
+  re-enters. One item's exception is recorded in `RunSummary.failed` and never cancels a sibling.
+  `RunSummary` also counts ungraded trial attempts by cause, `GlmUnavailable` outside trials, and
+  build host failures by `InfrastructureCause` over its items' `BUILD_INFRASTRUCTURE` events
+  (`build_infrastructure`). `RunSummary` is the run's export of accepted tasks, written as
+  `summary.json`: `accepted` maps every `ACCEPTED` item to an `AcceptedTask` (its round, task digest
+  and draft directory, the synthesis pass rate of the calibration summary it was accepted on:
+  `solved`, `k`, `solve_rate`, and the `review.decision.BandOutcome` of the `Accept` decision), and
+  `noted` maps every item whose final decision carries a calibration summary to its `NOTED`-tier
+  adversary passes (role, trial, rule, reason).
+  Both are read from the item directories, so a relaunch exports items an earlier launch finished.
+- `queue.job.run_job(config, inputs, failed)`: the laptop and Iris boundary. `queue.config.RunConfig`
+  (`load_run_config`; every field required) names the host and its `image_cache` (a directory on a
+  laptop, `null` on Iris), the GLM endpoint as `LaptopGlm` or
+  `RelayGlm` with an explicit `Pool`, the builders' Parallel key source, the `LoopPolicy`, the
+  `EngineConfig` (the turn, command, tool-turn, model-turn and cleanup limits of `EngineSettings`;
+  each task carries its own answer format), the width and `restore_from`. The run's builders get the host's factories
+  and no `ImageBuilder`, so a build that publishes a task image is abandoned with
+  `no_image_builder`. Local paths (a laptop root, `image_cache`, a token
+  or key file) are absolute; the config reader expands no `~` and resolves nothing against the
+  working directory. `inputs` is an `InputsFactory`: a function of the
+  run's `GlmClient` and run root that returns `RunInputs(ideas, source, describe_idea,
+  adversary_context, checks, rubric, check_context)`; `adversary_context` is the consumer's section of
+  each item's adversary brief (`""` for none). `scripts/run_queue.py` runs it from a config file.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -413,6 +441,32 @@ the loop records where an accepted task fell (`DECIDED.band`, the pass rate, and
 reason), so a log tells a calibrated acceptance from a consumer's acceptance outside the band
 without opening `decision.json`.
 
+An unattended run is one asyncio process. Models and sandboxes are remote, so one process reaches
+hundreds-wide without a coordination store. The width semaphore is acquired around phases, so an item
+waiting out a retry backoff holds no slot, and there is no request limiter: `GlmClient` pools 512
+connections and holds while the router drains. A throttle is added only after `RunSummary` shows a
+failure that needs it. Item status is the item's event log, so a relaunch on the same run root, or on
+an Iris attempt restored from the previous attempt's archive (`restore_from`), resumes every item.
+
+`summary.json` is the one place a run lists its accepted tasks for consumers; there is no separate
+export file. Each accepted record carries the synthesis pass rate (solved of `k` and the solve rate)
+from the calibration summary it was accepted on, so a consumer need not open the round's `calibration.json`,
+and the band outcome. The band on an accepted record is the decision's: `in_band`,
+or `too_easy` / `too_hard` when the policy's `BandRules` chose to accept a task still outside the band
+after its revisions. A consumer reads the band rather than treat acceptance as calibration.
+
+The GLM pool is always named. Validation we drive ourselves (live tests, probes, laptop runs) uses
+the interactive `high` pool; the committed unattended configuration (`docs/policy.example.json`)
+names `bulk`, with a `<relay-job>` placeholder the launcher sets per cluster. A config holds no
+secret: `LaptopGlm` names a token file and `RelayGlm` the environment variable that holds the token,
+and the Parallel key is a file or a variable name in the same way. Under Iris,
+`queue.job.host_secrets` removes those variables and the submitter keys Iris forwards from the
+process environment and from `IRIS_JOB_ENV` before any sandbox exists, because Iris copies
+`IRIS_JOB_ENV` into every child job. First-run policy values (`k=8`, band `[0.125, 0.875]`,
+`adversary_k=2`, `adversary_submissions=10`, `adversary_repair_submissions=3`, `band_rules` accept for
+too-easy and reject for too-hard, `max_build_retries=2`, width 256) live in the policy example, not in
+code.
+
 ## Testing
 
 Run every command from `lib/taskforge`. Do not pass a partial marker expression such as
@@ -458,6 +512,10 @@ The cluster scripts run on Iris and document their submit commands in their docs
 `scripts/build_image_job.py` builds a `DockerBuild` context and pushes it to a registry digest
 through `scripts/push_image_task.py`, `scripts/iris_machine_probe.py` probes the shellbox Iris
 backend, and `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task.
+`scripts/run_queue.py` runs a queue from a run config on a laptop or in an Iris task, and
+`scripts/cluster_queue_probe.py` is the fail-fast preflight for an unattended run: GLM health for
+both pools, machine creation without leaked credentials, a width of concurrent validation rounds,
+the Finelog mirror, resume from the event logs, and a registry image pull.
 
 ## Evidence
 
