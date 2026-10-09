@@ -89,13 +89,16 @@ and admits one larger file.
 
 Blob descriptor shards use at most 1024 rows per row group; ordinary tables retain
 their 16,384-row limit. Named-object lookups scan descriptors in 64-row batches
-with one batch and one fragment of readahead, without threaded decoding or Parquet pre-buffering. This
-bounds decoding of unrequested inline values after compaction. Descriptor and part
+with one batch and one fragment of readahead per shard, single-threaded decoding,
+and no Parquet pre-buffering. This bounds decoding of unrequested inline values after compaction. Descriptor and part
 files also disable fsspec read-ahead so a small column read does not fetch adjacent
 blob payloads. Ordinary table reads keep their filesystem caching behavior. Returned values
 still occupy memory, and dispersed keys can require reading most row groups;
 bounded decoding does not remove row-group read amplification. `read_blobs` reads
 all requested descriptors together and gathers chunked parts in one parts scan.
+Descriptor shards are read with at most four threads per lookup; version resolution
+uses the whole committed snapshot. Blob reads keep their bounded decoding and
+disable whole-fragment prefetch.
 
 `ReadView.read_diagnostics()` returns a snapshot of cumulative `read_blobs`
 work, including single-value `read_blob` calls. It reports requested and found

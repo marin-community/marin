@@ -427,11 +427,14 @@ def test_blob_inline_boundary_and_batch_parts_survive_rewrites(tmp_path, monkeyp
         store.flush()
         store.write_object("first", b"d" * (INLINE_BLOB_BYTES + 3))
         store.flush()
+        for index in range(6):
+            store.write_object("inline", f"replacement-{index}".encode())
+            store.flush()
 
     view = ReadView(root)
     assert view.read_blobs(["missing", "first", "inline", "second", "first"]) == {
         "first": b"d" * (INLINE_BLOB_BYTES + 3),
-        "inline": inline,
+        "inline": b"replacement-5",
         "second": second,
     }
     descriptors = view.scan(BlobTables.DESCRIPTORS, columns=[BlobColumns.NAME, BlobColumns.PART_COUNT])

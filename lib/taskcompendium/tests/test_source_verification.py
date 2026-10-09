@@ -10,6 +10,7 @@ from functools import partial
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import SchemaFormat
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -46,6 +47,7 @@ from taskcompendium.pipeline.source_verification import (
     verification_identity,
     verify_source,
 )
+from taskcompendium.pipeline.stages import manifest_counts
 from taskcompendium.pipeline.verification import DIAGNOSTIC_TAIL_CHARS, control_result
 
 from .pipeline_stages import FixtureGradingMachines
@@ -489,3 +491,70 @@ def test_inconclusive_source_defers_eligible_rows_but_preserves_failed_controls(
     rejected = gate_source_row(row, status=SourceVerificationStatus.INCONCLUSIVE, results={"one": checks})
     assert rejected["filter_status"] == "reject"
     assert rejected["filter_reasons"] == ["check:golden"]
+
+
+def fixture_control_outcome(task: TaskSpec) -> VerificationReport:
+    return VerificationReport(
+        [
+            CheckResult(
+                check="empty",
+                status=CheckStatus.DEFECT if task.id == "defect" else CheckStatus.PASS,
+                detail="fixture control",
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_verification_writes_complete_audit_accepted_rows_and_matching_counts(tmp_path, empty):
+    rows = []
+    if not empty:
+        for task_id, disposition in [
+            ("kept-a", "keep"),
+            ("rejected", "reject"),
+            ("defect", "keep"),
+            ("kept-b", "keep"),
+            ("deferred", "defer"),
+        ]:
+            task = schema_task(task_id, OBJECT_SCHEMA)
+            rows.append(
+                {
+                    "task_id": task_id,
+                    "task_json": task.model_dump_json(),
+                    "filter_status": disposition,
+                    "filter_reasons": [],
+                    "review_status": "unreviewed",
+                }
+            )
+    source = tmp_path / "source"
+    (source / "audit").mkdir(parents=True)
+    (source / "manifest.json").write_text(json.dumps({"input_rows": len(rows)}))
+    for index, shard in enumerate([rows[:2], rows[2:]]):
+        pq.write_table(pa.Table.from_pylist(shard, schema=TASK_SCHEMA), source / f"audit/part-{index:05d}.parquet")
+    output = tmp_path / "verified"
+    telemetry = PhaseTelemetry("verification")
+    suite = replace(control_suite(SCHEMA_CONTROLS, None), run=fixture_control_outcome)
+    with ZephyrContext(max_workers=2, name="verification-outputs") as context:
+        manifest = verify_source(
+            str(source),
+            str(output),
+            SourceVerificationPolicy(3, 0, 1, 1.0),
+            suite,
+            2,
+            context=context,
+            telemetry=telemetry,
+        )
+        scanned = manifest_counts(StoragePath(str(output)), context)
+    assert {name: manifest[name] for name in scanned} == scanned
+    assert manifest["input_rows"] == len(rows)
+    audit = pq.read_table(output / "audit").to_pylist()
+    accepted = pq.read_table(output / "accepted").to_pylist()
+    assert {row["task_id"] for row in audit} == {row["task_id"] for row in rows}
+    assert {row["task_id"] for row in accepted} == (set() if empty else {"kept-a", "kept-b"})
+    assert [item.operation for item in telemetry.executions] == (
+        ["select", "row_gate"] if empty else ["select", "trials", "row_gate"]
+    )
+    if not empty:
+        assert manifest["dispositions"] == {"keep": 2, "reject": 2, "defer": 1}
+        assert next(row for row in audit if row["task_id"] == "defect")["filter_reasons"] == ["check:empty"]
+        assert manifest["verification"]["counts"]["defective"] == 1
