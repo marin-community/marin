@@ -41,11 +41,13 @@ import sys
 import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 
 from scripts.ci.package_release import PACKAGES as RELEASE_PACKAGES
 from scripts.ci.package_release import PYTHON_LIBS_FAMILY
@@ -87,7 +89,7 @@ def _python_libraries() -> dict[str, PythonLibrary]:
     return libraries
 
 
-PACKAGES = _python_libraries()
+PACKAGES: Mapping[str, PythonLibrary] = MappingProxyType(_python_libraries())
 
 
 # ---------- helpers ----------------------------------------------------------
@@ -134,21 +136,24 @@ def _set_version(text: str, kind: VersionFileKind, new_version: str) -> str:
     return new_text
 
 
-# Match dependency list items: lines that are indented and start with a quoted
-# sibling name. Anchored on `^\s+"` so we never touch metadata lines like
-# `name = "marin-core"` (no leading whitespace) or single-line extras.
-_SIBLING_ALT = "|".join(re.escape(s) for s in sorted(PACKAGES, key=len, reverse=True))
-_SIBLING_ITEM_RE = re.compile(
-    rf'^(?P<indent>\s+)"(?P<name>{_SIBLING_ALT})(?![-\w])(?P<extras>\[[^\]]*\])?[^"]*"(?P<tail>.*)$',
-    re.MULTILINE,
-)
+_SIBLING_REQUIREMENT_RE = re.compile(r"^(?P<name>marin-[\w.-]+)(?P<extras>\[[^]]+\])?(?:\s*[<>=!~].*)?$")
 
 
 def _rewrite_sibling_pins(text: str, version: str) -> str:
-    return _SIBLING_ITEM_RE.sub(
-        lambda m: f'{m.group("indent")}"{m.group("name")}{m.group("extras") or ""}=={version}"{m.group("tail")}',
-        text,
-    )
+    project = tomllib.loads(text)["project"]
+    requirements = list(project.get("dependencies", ()))
+    for extra in project.get("optional-dependencies", {}).values():
+        requirements.extend(extra)
+    for requirement in requirements:
+        package, separator, marker = requirement.partition(";")
+        match = _SIBLING_REQUIREMENT_RE.fullmatch(package.strip())
+        if match is None or match.group("name") not in PACKAGES:
+            continue
+        pinned = f'{match.group("name")}{match.group("extras") or ""}=={version}'
+        if separator:
+            pinned += f";{marker}"
+        text = text.replace(f'"{requirement}"', f'"{pinned}"')
+    return text
 
 
 # Match dependency list items that use PEP 440 direct URL form
@@ -309,12 +314,7 @@ def build_wheels(version: str) -> None:
 
 
 def vendor_copy(target: Path) -> None:
-    """Drop freshly-built wheels into target/, replacing prior bundle wheels.
-
-    Files for unrelated distributions in the target directory are left alone.
-    Used by --mode vendor to feed local wheels into a downstream experiment's
-    find-links.
-    """
+    """Replace this bundle's wheels in target, leaving unrelated files alone."""
     target.mkdir(parents=True, exist_ok=True)
     stale = sorted(wheel for package in PACKAGES for wheel in target.glob(f"{package.replace('-', '_')}-*.whl"))
     for s in stale:
@@ -329,13 +329,7 @@ def vendor_copy(target: Path) -> None:
 
 
 def lock_consumer(project_dir: Path) -> None:
-    """Re-lock the consumer project so it picks up the freshly-vendored wheels.
-
-    uv lock preserves existing resolutions when constraints are already
-    satisfied, so a plain `uv lock` after vendoring keeps the old version.
-    --upgrade-package for each bundled package forces re-resolution against
-    the new wheels in the vendor find-links directory.
-    """
+    """Select the vendored bundle's wheel versions in a consumer lock."""
     upgrade_flags: list[str] = []
     for pkg in PACKAGES:
         upgrade_flags += ["--upgrade-package", pkg]

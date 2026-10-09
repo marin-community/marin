@@ -280,6 +280,7 @@ def test_shellbox_iris_extra_pins_to_bundle_release() -> None:
     released = tomllib.loads(_rewrite_sibling_pins(pyproject, "0.3.0.dev30194118926"))
 
     assert released["project"]["optional-dependencies"]["iris"] == ["marin-iris==0.3.0.dev30194118926"]
+    assert "marin-rigging==0.3.0.dev30194118926" in released["project"]["optional-dependencies"]["daytona"]
 
 
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
