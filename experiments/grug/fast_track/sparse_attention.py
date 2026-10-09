@@ -680,7 +680,7 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
         gauss=_gauss_init(cfg, n, h, d) if cfg.mla_gauss else None,
         copy_gate_lse=jnp.zeros((n,), jnp.float32) if _copy_gate_parts(cfg)[0] else None,
         parallax_w=matrix(7, n * h) if cfg.mla_parallax else None,
-        parallax_gain=jnp.zeros((n,), jnp.float32) if cfg.mla_parallax else None,
+        parallax_gain=jnp.zeros((n,), jnp.float32) if cfg.mla_parallax and cfg.mla_parallax_form == "scaled" else None,
         copy_gate_out=jnp.zeros((n, h), jnp.float32) if _copy_gate_parts(cfg)[1] else None,
         dcmha=(
             (

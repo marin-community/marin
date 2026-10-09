@@ -1024,6 +1024,8 @@ class GrugModelConfig:
     mla_gauss_fast: bool = False
     mla_gauss_taps: TapKind = TapKind.NONE
     mla_parallax: bool = False
+    mla_parallax_form: str = "scaled"
+    """``scaled``: s = gain * rms(r).k / head_dim, gain zero-init; ``paper``: the raw s = (W_R x).k."""
     """MLA layers use Parallax (``sparse_attention.parallax_attention``, dense emulation)."""
     mla_copy_gate: str = "none"
     """MLA output gate also reads the head's match strength (lse), its output, or both."""
@@ -3010,13 +3012,14 @@ class CausalSelfAttention(eqx.Module):
             qf = rearrange(jnp.einsum("bsd,dc->bsc", x, self.w_qf.astype(x.dtype)), "... (f c) -> ... f c", c=head_dim)
             window = self.cfg.mla_future_window
             k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
-        if self.parallax_w is not None and self.parallax_gain is not None:
+        if self.parallax_w is not None:
             seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
             r = rearrange(
                 jnp.einsum("bsd,dc->bsc", x, self.parallax_w.astype(x.dtype)), "... (n d) -> ... n d", d=head_dim
             )
-            # Divided by the head dim: q and k are normed (|r.k| up to ~head_dim), so s = gain * mean_c r_c k_c.
-            r = rms_norm(r.astype(jnp.float32)) * self.parallax_gain.astype(jnp.float32)[:, None] / head_dim
+            if self.parallax_gain is not None:
+                # Divided by the head dim: q and k are normed (|r.k| up to ~head_dim), so s = gain * mean_c r_c k_c.
+                r = rms_norm(r.astype(jnp.float32)) * self.parallax_gain.astype(jnp.float32)[:, None] / head_dim
             attn_out = parallax_attention(q, k, kernel_v, r, rel_bias, seg)
         elif self.gauss is not None and self.cfg.mla_gauss_fast:
             seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
