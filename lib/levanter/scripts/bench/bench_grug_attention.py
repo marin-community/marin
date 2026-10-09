@@ -138,12 +138,12 @@ def sweep(args) -> None:
     elif args.sweep_part == "dq":
         grid = [
             dict(block_q_dq=bq, block_k_dq=bk, num_warps_dq=w, num_stages_dq=s)
-            for bq, bk, w, s in itertools.product([64, 128, 256], [32, 64], [4, 8], [1])
+            for bq, bk, w, s in itertools.product([64, 128, 256], [32, 64, 128], [4, 8], [1, 2])
         ]
     else:
         grid = [
             dict(block_q_dkv=bq, block_k_dkv=bk, num_warps_dkv=w, num_stages_dkv=s)
-            for bq, bk, w, s in itertools.product([128, 256], [32, 64], [4, 8], [1])
+            for bq, bk, w, s in itertools.product([32, 64, 128], [32, 64, 128], [4, 8], [1, 2])
         ]
     for mask_name in args.masks:
         window = args.window if mask_name == "window" else None
