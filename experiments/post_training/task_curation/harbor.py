@@ -67,6 +67,7 @@ class HarborRecord:
 TASKS_SCHEMA = arrow_schema(HarborRecord)
 IN_PROCESS_FILE_MODES = frozenset({"exact", "math", "json-schema", "mcq", "ifeval", "xml-elements", "csv-columns"})
 VERIFIER_SPEC_PATH = "tests/taskcompendium-verifier.toml"
+HARBOR_REWARD_PATH = "/logs/verifier/reward.txt"
 
 
 def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
@@ -118,7 +119,9 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         raise UnsupportedHarborTask("Agent setup commands and package locks require an environment build")
     if set(environment.tool_providers) - {"shell"}:
         raise UnsupportedHarborTask("Only shell tool providers have Harbor lowering")
-    files, modes = {}, {}
+    # Separate Harbor verifiers own their tests; native execution skips uploading them.
+    files = {"tests/Dockerfile": f"FROM {grader_image}\nCOPY . /tests\n".encode()}
+    modes = {}
     answer_path = None
     if isinstance(grader, VerifyitGrader):
         spec = verifyit_spec(grader)
@@ -144,7 +147,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
             files.update(verifier_runtime())
             files["tests/test.sh"] = (
                 "#!/bin/bash\nset -euo pipefail\n"
-                "mkdir -p /logs/verifier\nrm -f /logs/verifier/reward.txt\n"
+                f"mkdir -p /logs/verifier\nrm -f {HARBOR_REWARD_PATH}\n"
                 f"{shlex.join(grader.argv)} > /logs/verifier/taskcompendium-stdout.txt\n"
                 "export PYTHONPATH=/tests/runtime\npython3 - <<'PY'\n"
                 "from pathlib import Path\n"
@@ -153,13 +156,13 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
                 "with Path('/logs/verifier/taskcompendium-stdout.txt').open('rb') as stdout:\n"
                 f"    output = stdout.read({DIAGNOSTIC_OUTPUT_BYTES}).decode(errors='replace')\n"
                 "reward = parse_reward_number(last_line(output))\n"
-                "Path('/logs/verifier/reward.txt').write_text(str(reward))\nPY\n"
+                f"Path({HARBOR_REWARD_PATH!r}).write_text(str(reward))\nPY\n"
             ).encode()
         elif grader.argv == ("bash", "/tests/test.sh") and isinstance(grader.reward, FileReward):
             if len(grader.reward.files) != 1:
                 raise UnsupportedHarborTask("Script graders must emit one Harbor reward file")
             reward = grader.reward.files[0]
-            if reward.path != "/logs/verifier/reward.txt" or reward.format != "number":
+            if reward.path != HARBOR_REWARD_PATH or reward.format != "number":
                 raise UnsupportedHarborTask("Script graders must emit Harbor's numeric reward.txt")
         else:
             raise UnsupportedHarborTask("Unsupported script command or reward contract")
@@ -245,7 +248,6 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
             "timeout_sec": timeout,
             "env": grader_env,
             "environment": {
-                "docker_image": grader_image,
                 "workdir": grader_cwd,
                 "env": grader.environment.environment_variables if grader.environment is not None else {},
             },
@@ -317,12 +319,15 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> 
         "rejected_rows": len(rejected),
         "by_source": dict(counts),
         "rejections": rejected,
-        "grader_image": grader_image,
+        "grader_base_image": grader_image,
+        "verifier_build_required": True,
         "source": source.name,
         "atlas_id": source.info.id,
         "harbor_config_validated": True,
         "runtime_verified": False,
-        "limitation": "The supplied verifier image's dependency parity with the source package lock is unverified.",
+        "limitation": (
+            "Verifier builds and execution have not run; the supplied base image's dependency parity is unverified."
+        ),
     }
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
@@ -331,7 +336,11 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> 
 @click.command(help=__doc__)
 @click.option("--input-root", type=click.Path(exists=True, file_okay=False, path_type=Path), required=True)
 @click.option("--output-root", type=click.Path(file_okay=False, path_type=Path), required=True)
-@click.option("--grader-image", required=True, help="Explicit digest-pinned verifier image; image builds are separate.")
+@click.option(
+    "--grader-image",
+    required=True,
+    help="Explicit digest-pinned verifier base image; Harbor builds each task's private tests on top.",
+)
 def main(input_root: Path, output_root: Path, grader_image: str) -> None:
     result = export_harbor(input_root, output_root, grader_image=grader_image)
     click.echo(json.dumps({key: value for key, value in result.items() if key != "rejections"}))

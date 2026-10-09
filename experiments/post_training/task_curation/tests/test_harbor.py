@@ -87,7 +87,9 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     assert config.metadata["taskcompendium_id"] == converted.task.id
     assert config.metadata["tasktrove_path"] == record.path == row["original_path"]
     assert config.verifier.environment_mode == VerifierEnvironmentMode.SEPARATE
-    assert config.verifier.environment.docker_image == GRADER_IMAGE
+    # Native separate verification skips tests upload, so tests must be baked in.
+    assert config.verifier.environment.docker_image is None
+    assert files["tests/Dockerfile"].decode() == f"FROM {GRADER_IMAGE}\nCOPY . /tests\n"
     assert not any(path.startswith("solution/") for path in files)
     assert not any(path.startswith(("environment/files/tests/", "environment/files/solution/")) for path in files)
     if isinstance(converted.task.grader, VerifyitGrader):
