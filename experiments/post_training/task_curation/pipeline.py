@@ -310,16 +310,8 @@ def _run_standard_curation(
 ) -> ConversionResult | SourcePipelineResult:
     """Run a declared source against staged inputs in quick, sample, or full mode.
 
-<<<<<<< HEAD
-    Quick conversion records the declared grader lock without building or running it.
-    Sample and full runs require the campaign's review configuration and resolved grader.
-||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
-    QUICK records the declared grader lock without building or running it.
-    SAMPLE and FULL require a matching config and the campaign's resolved grader.
-=======
     QUICK records the declared grader lock without building or running it.
     SAMPLE and FULL use the invocation mode and the campaign's resolved settings.
->>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
     """
     missing = pipeline.inputs.keys() - inputs.keys()
     if missing:

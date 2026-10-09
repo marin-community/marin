@@ -34,8 +34,8 @@ reviewer.
 `PipelineResult` contains the existing `SourceStatus`, named output and evidence
 paths, and the names of the stages it ran. Outputs need no `final` or admitted
 view. Exceptions enter the campaign's existing failure report while peer results
-remain available. The campaign report retains the result envelope for completed
-invocations.
+remain available. The campaign report retains the envelope when a callable
+returns a `PipelineResult`.
 
 The existing `RlDataPipeline` is the standard implementation. Its artifact
 binding retains pinned downloads, grader dependencies, policies and cache
@@ -45,8 +45,9 @@ and resolved grader environment.
 Catalog fields are available on `RlDataSource` without executing its callable.
 Standard declarations derive `name`, `version`, `dataset` and `files` once at
 construction from their immutable recipe. Custom declarations use the suffix of
-`SourceInfo.id` as their invocation name and supply `SourceInfo.dataset`,
-`version` and optional `files`. Atlas reads these fields directly.
+`SourceInfo.id` after its first colon as their invocation name. They supply
+`SourceInfo.dataset`, `RlDataSource.version` and optional `RlDataSource.files`.
+Atlas reads these fields directly.
 
 ## Package organization
 

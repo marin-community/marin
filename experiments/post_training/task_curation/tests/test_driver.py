@@ -57,19 +57,13 @@ def math500():
 @pytest.fixture
 def catalog(monkeypatch):
     pipelines = {name: replace(math500(), name=name) for name in ("first", "second", "third")}
-<<<<<<< HEAD
-    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_pipelines", lambda: pipelines)
-||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
-    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_pipelines", lambda: pipelines)
-=======
     monkeypatch.setattr(
-        "experiments.post_training.task_curation.sources.runnable_sources",
+        "experiments.post_training.task_curation.driver.runnable_sources",
         lambda: {
             name: RlDataSource(info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), pipeline=pipeline)
             for name, pipeline in pipelines.items()
         },
     )
->>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
     return pipelines
 
 
@@ -241,9 +235,7 @@ def test_custom_cli_runs_own_ingestion_without_review_controller_or_build_settin
     input_file = tmp_path / "numbers.txt"
     input_file.write_text("1\n2\n3\n")
     source = number_source(input_file)
-    monkeypatch.setattr(
-        "experiments.post_training.task_curation.sources.runnable_sources", lambda: {source.name: source}
-    )
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     options = ["--mode", mode, "--source", source.name, "--max-workers", "1"]
     if mode == "quick":
         output_root = tmp_path / "output"

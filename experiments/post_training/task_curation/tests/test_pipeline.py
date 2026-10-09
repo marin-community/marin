@@ -32,16 +32,9 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
-from experiments.post_training.task_curation.invocation import PipelineRun
 from experiments.post_training.task_curation.pipeline import (
     DownloadRequest,
-<<<<<<< HEAD
-||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
-    HfSource,
-=======
-    HfSource,
     RlDataPipeline,
->>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
     UrlSource,
     download_source,
     download_step,
@@ -266,84 +259,6 @@ def test_declarations_with_the_same_pinned_files_share_one_download():
     assert download_step(selected, CampaignRuntime()).name == download_step(pipeline.source, CampaignRuntime()).name
 
 
-<<<<<<< HEAD
-||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
-@pytest.mark.parametrize("mode, expected_rows", [(SourceProcessingMode.SAMPLE, 2), (SourceProcessingMode.FULL, 5)])
-def test_reviewed_invocation_uses_selected_mode_for_panel_or_full_conversion(
-    tmp_path, fixture_converter, config, mode, expected_rows
-):
-    _, convert = fixture_converter
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "rows.jsonl").write_text(
-        "".join(json.dumps({"prompt": f"Question {index}?", "answer": str(index)}) + "\n" for index in range(5))
-    )
-    pipeline = replace(
-        math500(),
-        source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
-        convert=convert,
-        rubric=None,
-        controls=None,
-        grader=None,
-    )
-    config = replace(config, mode=mode, quality_policy=SourceQualityPolicy(sample_size=2))
-    client = LocalClient()
-    with (
-        set_current_client(client),
-        ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
-    ):
-        result = run_curation(
-            pipeline,
-            mode=mode,
-            context=context,
-            source_input=str(source),
-            output_path=str(tmp_path / "output"),
-            inputs={},
-            config=config,
-        )
-    rows = [row for shard in (tmp_path / "output/normalize").glob("*.parquet") for row in load_parquet(str(shard))]
-    assert len(rows) == expected_rows
-    assert {row["source_row"] for row in rows} <= {f"rows.jsonl:{index}" for index in range(5)}
-    manifest = json.loads(StoragePath(result.manifest_path).read_text())
-    assert manifest["mode"] == mode
-
-
-=======
-@pytest.mark.parametrize("mode, expected_rows", [(SourceProcessingMode.SAMPLE, 2), (SourceProcessingMode.FULL, 5)])
-def test_reviewed_invocation_uses_invocation_mode_for_panel_or_full_conversion(
-    tmp_path, fixture_converter, config, mode, expected_rows
-):
-    _, convert = fixture_converter
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "rows.jsonl").write_text(
-        "".join(json.dumps({"prompt": f"Question {index}?", "answer": str(index)}) + "\n" for index in range(5))
-    )
-    pipeline = replace(
-        math500(),
-        source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
-        convert=convert,
-        rubric=None,
-        controls=None,
-        grader=None,
-    )
-    config = replace(config, mode=mode, quality_policy=SourceQualityPolicy(sample_size=2))
-    client = LocalClient()
-    with (
-        set_current_client(client),
-        ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
-    ):
-        result = replace(pipeline, config=config)(
-            pipeline, PipelineRun(mode, context, str(tmp_path / "output"), source_input=str(source))
-        )
-    rows = [row for shard in (tmp_path / "output/normalize").glob("*.parquet") for row in load_parquet(str(shard))]
-    assert len(rows) == expected_rows
-    assert {row["source_row"] for row in rows} <= {f"rows.jsonl:{index}" for index in range(5)}
-    manifest = json.loads(StoragePath(result.evidence["manifest"]).read_text())
-    assert manifest["mode"] == mode
-
-
->>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
 @pytest.fixture
 def served(tmp_path):
     root = tmp_path / "served"

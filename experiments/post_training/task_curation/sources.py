@@ -64,30 +64,7 @@ def runnable_sources() -> dict[str, RlDataSource]:
     names = [source.name for source in sources]
     if len(set(names)) != len(names):
         raise ValueError("Duplicate RL pipeline names")
-<<<<<<< HEAD
-    return {pipeline.name: pipeline for pipeline in pipelines}
-||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
-    return {pipeline.name: pipeline for pipeline in pipelines}
-
-
-def selected_pipelines(names: Sequence[str]) -> dict[str, RlDataPipeline]:
-    """Select runnable declarations in catalog order; an empty selection includes all."""
-    catalog = all_pipelines()
-    unknown = set(names) - catalog.keys()
-    if unknown:
-        raise ValueError(f"Unknown source: {', '.join(sorted(unknown))}")
-    return {name: pipeline for name, pipeline in catalog.items() if not names or name in names}
-=======
     return {source.name: source for source in sources}
-
-
-def selected_sources(names: Sequence[str]) -> dict[str, RlDataSource]:
-    """Select runnable declarations in catalog order; an empty selection includes all."""
-    catalog = runnable_sources()
-    unknown = set(names) - catalog.keys()
-    if unknown:
-        raise ValueError(f"Unknown source: {', '.join(sorted(unknown))}")
-    return {name: pipeline for name, pipeline in catalog.items() if not names or name in names}
 
 
 def standard_pipelines() -> dict[str, RlDataPipeline]:
@@ -97,4 +74,3 @@ def standard_pipelines() -> dict[str, RlDataPipeline]:
         for source in runnable_sources().values()
         if isinstance(source.pipeline, RlDataPipeline)
     }
->>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)

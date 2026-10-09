@@ -109,33 +109,18 @@ def run_local_sources(
                     source_input = str(input_root)
                 else:
                     source_input = None
-<<<<<<< HEAD
-                primary, auxiliary = source_downloads(pipeline, campaign)
-                if source_input is None:
-                    source_input = stage_local_download(primary, download_cache)
-                staged_inputs = dict(inputs)
-                for input_name, download in auxiliary.items():
-                    if input_name not in staged_inputs:
-                        staged_inputs[input_name] = stage_local_download(download, download_cache)
-                logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
-                shards = conversion_shards(source_input, source_files(pipeline.source), overrides=source_overrides)
-||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
-                source_input, staged_inputs = stage_local_inputs(
-                    pipeline, download_cache, campaign, source_input=source_input, inputs=inputs
-                )
-                logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
-                shards = conversion_shards(source_input, source_files(pipeline.source), overrides=source_overrides)
-=======
                 pipeline = source.pipeline
                 if pipeline is None:
                     raise ValueError(f"Source has no pipeline: {source.name}")
                 staged_inputs = dict(inputs)
->>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
                 conversion_context = context
                 if isinstance(pipeline, RlDataPipeline):
-                    source_input, staged_inputs = stage_local_inputs(
-                        pipeline, download_cache, campaign, source_input=source_input, inputs=inputs
-                    )
+                    primary, auxiliary = source_downloads(pipeline, campaign)
+                    if source_input is None:
+                        source_input = stage_local_download(primary, download_cache)
+                    for input_name, download in auxiliary.items():
+                        if input_name not in staged_inputs:
+                            staged_inputs[input_name] = stage_local_download(download, download_cache)
                     logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
                     shards = conversion_shards(source_input, source_files(pipeline.source), overrides=source_overrides)
                     conversion_context = context

@@ -34,17 +34,9 @@ from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_
 from experiments.post_training.task_curation.binding import pipeline_step
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
 from experiments.post_training.task_curation.local import run_local_sources
-<<<<<<< HEAD
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, download_identity, source_step
-from experiments.post_training.task_curation.sources import all_pipelines
-||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
-from experiments.post_training.task_curation.pipeline import download_identity, source_step
-from experiments.post_training.task_curation.sources import selected_pipelines
-=======
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, download_identity
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.sources import selected_sources
->>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
+from experiments.post_training.task_curation.sources import runnable_sources
 
 REVIEW_REQUEST_TIMEOUT = 60
 IRIS_SCHEDULING_TIMEOUT = 600
@@ -158,9 +150,9 @@ def _controller_url(backend: VerificationBackend, controller_url: str | None) ->
     return job_url
 
 
-def _selected_pipelines(sources: tuple[str, ...]) -> dict[str, RlDataPipeline]:
+def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
     """The named catalog sources in catalog order, or the whole catalog when none is named."""
-    catalog = all_pipelines()
+    catalog = runnable_sources()
     unknown = set(sources) - catalog.keys()
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
@@ -233,11 +225,11 @@ def local_source_plan(source: RlDataSource) -> dict[str, Any]:
 
 @click.command(help=__doc__)
 @click.option("--model", default=GLM_MODEL, show_default=True)
-@click.option("--model-revision", help="Required for SAMPLE/FULL.")
+@click.option("--model-revision", help="Required for standard SAMPLE/FULL.")
 @click.option("--base-url", help="OpenAI-compatible review endpoint; defaults to the relay job's endpoint.")
 @click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB, show_default=True, help="Iris GLM relay job to resolve.")
-@click.option("--review-cache", help="Required for SAMPLE/FULL.")
-@click.option("--review-mode", type=click.Choice(["batch", "chat"]), help="Required for SAMPLE/FULL.")
+@click.option("--review-cache", help="Required for standard SAMPLE/FULL.")
+@click.option("--review-mode", type=click.Choice(["batch", "chat"]), help="Required for standard SAMPLE/FULL.")
 @click.option(
     "--review-concurrency",
     type=click.IntRange(min=1, max=MAX_DIRECT_CONCURRENT_REQUESTS),
@@ -247,7 +239,7 @@ def local_source_plan(source: RlDataSource) -> dict[str, Any]:
 @click.option("--mode", type=click.Choice([mode.value for mode in SourceProcessingMode]), required=True)
 @click.option("--max-workers", type=click.IntRange(min=1), help="Required for SAMPLE/FULL; defaults to 4 for QUICK.")
 @click.option("--coordinator-memory", help="Required for SAMPLE/FULL: RAM for the shared coordinator, e.g. 16g.")
-@click.option("--normalized-shards", type=click.IntRange(min=1), help="Required for SAMPLE/FULL.")
+@click.option("--normalized-shards", type=click.IntRange(min=1), help="Required for standard SAMPLE/FULL.")
 @click.option("--concurrent-sources", type=click.IntRange(min=10), default=10, show_default=True)
 @click.option("--worker-image", help="Required for SAMPLE/FULL: Zephyr worker image carrying the grading code.")
 @click.option(
@@ -324,19 +316,7 @@ def main(
     download_cache: Path | None,
     do_run: bool,
 ) -> None:
-<<<<<<< HEAD
-    pipelines = _selected_pipelines(sources)
-||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
-    try:
-        pipelines = selected_pipelines(sources)
-    except ValueError as error:
-        raise click.UsageError(str(error)) from error
-=======
-    try:
-        selected = selected_sources(sources)
-    except ValueError as error:
-        raise click.UsageError(str(error)) from error
->>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
+    selected = _selected_sources(sources)
     processing_mode = SourceProcessingMode(mode)
     if processing_mode == SourceProcessingMode.QUICK:
         if not sources:
@@ -352,15 +332,7 @@ def main(
         if not do_run:
             plan = {
                 "mode": processing_mode,
-                "sources": [
-                    {
-<<<<<<< HEAD
-                        "name": pipeline.name,
-                        "source": download_identity(pipeline.source),
-                        "inputs": {name: download_identity(source) for name, source in pipeline.inputs.items()},
-                    }
-                    for pipeline in pipelines.values()
-                ],
+                "sources": [local_source_plan(source) for source in selected.values()],
                 "input_root": str(input_root) if input_root is not None else None,
                 "input_files": {name: str(path) for name, path in local_files},
                 "inputs": inputs,
@@ -369,40 +341,6 @@ def main(
                 "max_workers": max_workers,
             }
             click.echo(json.dumps(plan, indent=2))
-||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
-                        "mode": processing_mode,
-                        "sources": [
-                            {
-                                "name": pipeline.name,
-                                "source": download_identity(pipeline.source),
-                                "inputs": {name: download_identity(source) for name, source in pipeline.inputs.items()},
-                            }
-                            for pipeline in pipelines.values()
-                        ],
-                        "input_root": str(input_root) if input_root is not None else None,
-                        "input_files": {name: str(path) for name, path in local_files},
-                        "inputs": inputs,
-                        "output_root": str(output_root),
-                        "download_cache": str(download_cache),
-                        "max_workers": max_workers,
-                    },
-                    indent=2,
-                )
-            )
-=======
-                        "mode": processing_mode,
-                        "sources": [local_source_plan(source) for source in selected.values()],
-                        "input_root": str(input_root) if input_root is not None else None,
-                        "input_files": {name: str(path) for name, path in local_files},
-                        "inputs": inputs,
-                        "output_root": str(output_root),
-                        "download_cache": str(download_cache),
-                        "max_workers": max_workers,
-                    },
-                    indent=2,
-                )
-            )
->>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
             return
         run_local_sources(
             selected,
