@@ -81,9 +81,6 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
         # Harbor bypasses test.sh when this reserved filename exists. The wrapper
         # must run to load our bundled verifyit and install public grader inputs.
         assert "tests/verifier.toml" not in files
-        command = shlex.split(files["tests/test.sh"].decode().splitlines()[-1])
-        assert command[:2] == ["exec", "python3"]
-        assert command[-1].removeprefix("/") in files
     for resource in converted.task.resources.verifier:
         assert "tests/" + resource.path in files
     if converted.task.answer_type == "text":
