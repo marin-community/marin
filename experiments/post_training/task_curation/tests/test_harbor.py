@@ -294,6 +294,8 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(answer_path, tmp_
         tasktrove_row(
             {
                 "instruction.md": original.encode(),
+                "tests/test.sh": b"#!/bin/bash\nexit 99\n",
+                "tests/sitecustomize.py": b"raise RuntimeError('archived runtime')\n",
                 "tests/verifier_data.json": json.dumps({"instruction": question, "expected_answers": ["Mars"]}).encode(),
             }
         ),
@@ -315,6 +317,8 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(answer_path, tmp_
     assert instruction.startswith(task.context.events[0].content)
     assert "/app/response.txt" not in instruction
     assert config.metadata["tasktrove_path"] == row["original_path"]
+    assert files["tests/source/test.sh"] == b"#!/bin/bash\nexit 99\n"
+    assert "tests/sitecustomize.py" not in files
     assert not any(name.startswith("environment/files/tests/") for name in files)
     workspace = tmp_path / "app"
     workspace.mkdir()
