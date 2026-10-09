@@ -9,18 +9,18 @@ file, map its fields onto one spec, pass the instruction and Dockerfile through,
 
 import re
 
-from verifyit.spec import MathSpec, MathType, McqSpec
-
-from experiments.post_training.tasktrove.converters.answer_solution import answer_solution
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TaskFiles
+from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
+from verifyit.spec import MathSpec, MathType, McqSpec
+
+from experiments.post_training.tasktrove.converters.answer_solution import answer_solution
 
 _OPTION_LINE = re.compile(r"^\s*\(?([A-Z])[\.\):]\s", re.MULTILINE)
 _MAX_OPTIONS = 10

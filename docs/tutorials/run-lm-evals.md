@@ -187,9 +187,9 @@ persistence use the selected GCS or S3 records store after
 ### Object-store model loading
 
 CUDA vLLM serves `s3://` checkpoints with RunAI model streamer 0.16.1. The launcher gives the
-streamer's low-speed check 10 seconds and sends its warning and error logs to the Iris job log. The
-Grug H100x8 entry also enables distributed loading: each data-parallel rank reads its assigned
-weights and broadcasts them locally instead of all eight ranks reading the full 124.9 GiB export.
+streamer's low-speed check 10 seconds and sends its warning and error logs to the Iris job log.
+GPU object-store loads default to distributed RunAI reads: ranks divide the reads and share the
+data. Explicit `--load-format` or `--model-loader-extra-config` arguments override this default.
 
 The following variables may prefix an evaluation command and are forwarded to the remote inference
 child:

@@ -6,7 +6,6 @@
 import asyncio
 import os
 import stat
-import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -19,16 +18,11 @@ pytest.importorskip("daytona")
 from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
-from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import Command, DownloadLimitExceeded, MachineSpec, UnsupportedMachineSpec
+from shellbox.machine import Command, MachineSpec, UnsupportedMachineSpec
 
 
 class LocalFiles:
-    def __init__(self):
-        self.downloaded_bytes = 0
-        self.download_closed = False
-
     async def upload_file_stream(self, data: bytes, target: str) -> None:
         path = Path(target)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,18 +30,6 @@ class LocalFiles:
 
     async def download_file(self, source: str) -> bytes:
         return Path(source).read_bytes()
-
-    async def download_file_stream(self, source: str):
-        async def chunks():
-            try:
-                with Path(source).open("rb") as file:
-                    while data := file.read(DOWNLOAD_CHUNK_BYTES):
-                        self.downloaded_bytes += len(data)
-                        yield data
-            finally:
-                self.download_closed = True
-
-        return chunks()
 
 
 class LocalProcess:
@@ -157,56 +139,6 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
             await machine.close()
         assert client.deleted
         assert client.closed
-
-    asyncio.run(scenario())
-
-
-def test_daytona_download_caps_a_file_that_grows_after_the_regular_file_probe(tmp_path):
-    source, target = tmp_path / "archive.tar", tmp_path / "download"
-    source.write_bytes(b"archive")
-    target.write_bytes(b"existing")
-    limit = 1024**2
-
-    class GrowingFiles(LocalFiles):
-        def grow(self, remote):
-            if Path(remote) != source:
-                return
-            with Path(remote).open("ab") as file:
-                for _ in range(512):
-                    file.write(b"x" * DOWNLOAD_CHUNK_BYTES)
-
-        async def download_file(self, remote):
-            self.grow(remote)
-            return await super().download_file(remote)
-
-        async def download_file_stream(self, remote):
-            self.grow(remote)
-            return await super().download_file_stream(remote)
-
-    async def scenario():
-        client = LocalDaytona()
-        client.sandbox.fs = GrowingFiles()
-        machine = await DaytonaMachineFactory(lambda: client).create(
-            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
-        )
-        try:
-            tracemalloc.start()
-            try:
-                with pytest.raises(DownloadLimitExceeded):
-                    await machine.download(str(source), target, max_bytes=limit)
-                _, peak = tracemalloc.get_traced_memory()
-            finally:
-                tracemalloc.stop()
-            assert source.stat().st_size > 32 * 1024**2
-            assert target.read_bytes() == b"existing"
-            assert client.sandbox.fs.downloaded_bytes <= limit + DOWNLOAD_CHUNK_BYTES
-            assert client.sandbox.fs.download_closed
-            assert peak < 8 * 1024**2
-            assert not list(tmp_path.glob(".shellbox-download-*"))
-            following = await machine.run(Command(("printf", "still-ready")))
-            assert (following.exit_code, following.stdout) == (0, b"still-ready")
-        finally:
-            await machine.close()
 
     asyncio.run(scenario())
 

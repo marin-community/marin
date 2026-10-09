@@ -5,8 +5,10 @@
 
 from unittest.mock import MagicMock
 
+import pytest
 from starlette.testclient import TestClient
 from zephyr.dashboard.app import PlanNodeState
+from zephyr.dashboard.coordinator import MAX_FINISHED_PIPELINES
 from zephyr.dataset import Dataset
 from zephyr.plan import compute_plan, plan_nodes
 from zephyr.shuffle import ListShard
@@ -41,7 +43,7 @@ def test_overview_reports_current_shard_heatmap_for_multiple_pipelines(coordinat
     response = client.get("/api/overview")
 
     assert response.status_code == 200
-    second, first = response.json()["pipelines"]
+    first, second = response.json()["pipelines"]
     assert second["status"]["execution_id"] == "second"
     assert first["plan"]["pipeline_name"] == "pipeline with a long name"
     node = next(item for item in first["status"]["node_statuses"] if item["node_id"] == active_node.node_id)
@@ -64,3 +66,50 @@ def test_overview_reports_current_shard_heatmap_for_multiple_pipelines(coordinat
     run.terminal_error = RuntimeError("failed stage")
     failed = client.get("/api/shards", params={"execution_id": "first", "offset": 19, "limit": 2}).json()
     assert [shard["state"] for shard in failed["shards"]] == ["stopped", "running"]
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_released_pipeline_retains_terminal_summary_without_payloads(coordinator, tmp_path, failed):
+    execution_id = "finished"
+    run = start_test_stage(coordinator, [], execution_id=execution_id)
+    run.plan = compute_plan(Dataset.from_list(["private-source-value"]).map(str.upper))
+    run.started_at_ms = 10
+    if failed:
+        run.terminal_error = RuntimeError("grader failed")
+    run.finish(storage_cleanup_safe=True)
+    path = tmp_path / "chunks" / execution_id
+    path.mkdir(parents=True)
+    (path / "shared.pkl").write_text("private-source-value")
+    start_test_stage(coordinator, [], execution_id="active").started_at_ms = 20
+    client = TestClient(coordinator.web_application)
+    before = client.get("/api/overview").json()["pipelines"]
+
+    coordinator.release_execution(execution_id)
+
+    response = client.get("/api/overview")
+    finished, active = response.json()["pipelines"]
+    assert finished["status"] == before[0]["status"]
+    assert finished["plan"] == before[0]["plan"]
+    assert finished["archived"]
+    assert finished["status"]["phase"] == ("failed" if failed else "succeeded")
+    assert active["status"]["execution_id"] == "active"
+    assert not active["archived"]
+    assert "private-source-value" not in response.text
+    assert not path.exists()
+    assert client.get("/api/counters", params={"execution_id": execution_id}).json()["counters"] == []
+
+
+def test_finished_history_is_bounded_and_keeps_active_pipelines(coordinator):
+    start_test_stage(coordinator, [], execution_id="active").started_at_ms = 1
+    for index in range(MAX_FINISHED_PIPELINES + 2):
+        execution_id = f"finished-{index}"
+        run = start_test_stage(coordinator, [], execution_id=execution_id)
+        run.started_at_ms = index + 2
+        run.finish(storage_cleanup_safe=False)
+        coordinator.release_execution(execution_id)
+
+    pipelines = TestClient(coordinator.web_application).get("/api/overview").json()["pipelines"]
+    assert [item["status"]["execution_id"] for item in pipelines] == [
+        "active",
+        *(f"finished-{index}" for index in range(2, MAX_FINISHED_PIPELINES + 2)),
+    ]

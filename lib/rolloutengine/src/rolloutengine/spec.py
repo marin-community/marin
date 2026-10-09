@@ -25,7 +25,7 @@ class MachineRuntimeSpec(BaseModel):
 
 
 class TaskRuntimeSpec(BaseModel):
-    """Machine selections for task execution and private verification."""
+    """Machine selections for task execution and for grading."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

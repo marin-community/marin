@@ -19,7 +19,7 @@ class OpenAIChatClient:
     priority: str = "bulk"
 
     def complete(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        """Send exactly one request; its caller owns durable reservation and retry policy."""
+        """Send exactly one request; its caller owns retry policy."""
         request = urllib.request.Request(
             self.base_url.rstrip("/") + "/chat/completions",
             data=json.dumps(body, ensure_ascii=False).encode(),

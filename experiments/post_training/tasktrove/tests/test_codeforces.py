@@ -5,22 +5,19 @@
 
 from pathlib import Path
 
+import pytest
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH
+from taskcompendium.convert.tasktrove_codeforces import _BUILD, _COMMAND, _JUDGE_PY, CHECKER_PATH
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.grade import Status
 from verifyit.modes import grade_stdio
 from verifyit.spec import Compare, StdioSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.codeforces import (
-    _BUILD,
-    _COMMAND,
-    _JUDGE_PY,
-    CHECKER_PATH,
-)
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, TEST_SH, read_task_binary, write_task_binary
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import verify_task
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -214,10 +211,32 @@ def test_judge_py_rejects_via_a_positional_checker(tmp_path):
     assert reward.reward == 0.0
 
 
-def test_judge_py_falls_back_to_normalized_match_for_an_argv_style_checker(tmp_path):
-    """About half of the shipped checkers define ``main()`` with no parameters; calling them
-    positionally raises, and the launcher falls back to the normalized match, same as upstream."""
-    tests_dir, workspace = _judge_task(tmp_path, "def main():\n    pass\n")
+def test_argv_checker_accepts_a_valid_alternative_to_the_reference(tmp_path):
+    tests_dir, workspace = _judge_task(
+        tmp_path,
+        "import sys\nfrom pathlib import Path\n"
+        "def main():\n"
+        "    input_path, expected_path, got_path = map(Path, sys.argv[1:])\n"
+        "    assert input_path.read_text() == 'x\\n'\n"
+        "    print(int(sorted(expected_path.read_text().split()) == sorted(got_path.read_text().split())))\n",
+    )
+    (tests_dir / "cases" / "output_0.txt").write_text("2 1\n")
+    (workspace / "solution.py").write_text("print('1 2')\n")
+    reward = grade_stdio.grade(_spec(special_judge="judge.py"), tests_dir, workspace)
+    assert (reward.reward, reward.status) == (1.0, Status.SCORED)
+
+
+@pytest.mark.parametrize(
+    "checker_source",
+    [
+        "def main(*paths):\n    raise TypeError('broken checker')\n",
+        "def main():\n    raise ValueError('broken checker')\n",
+        "def main():\n    print('invalid verdict')\n",
+        "def main():\n    pass\n",
+    ],
+)
+def test_broken_checker_does_not_award_credit_for_matching_reference(tmp_path, checker_source):
+    tests_dir, workspace = _judge_task(tmp_path, checker_source)
     (tests_dir / "cases" / "output_0.txt").write_text("anything\n")
     reward = grade_stdio.grade(_spec(special_judge="judge.py"), tests_dir, workspace)
-    assert reward.reward == 1.0  # "anything" normalized-matches the solution's stdout
+    assert (reward.reward, reward.status) == (0.0, Status.SCORED)

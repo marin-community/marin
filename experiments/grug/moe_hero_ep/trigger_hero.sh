@@ -11,11 +11,11 @@ fi
 mode=$1
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
-# Checkpoint 146139 was forced on hero-main-step121638 and copied out of the temporary tree to a
-# durable prefix; it resumes at global_step 146139. Parent W&B _step 146138 records global_step 146138.
+# Checkpoint 231464 was forced on hero-fa4sm100-nomask-step146k and copied out of the temporary tree to a
+# durable prefix; it resumes at global_step 231464. Parent W&B _step 231463 records global_step 231463.
 RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
-HANDOFF_CHECKPOINT=s3://hero-checkpoints/marin/grug/hero-main-step121638/2026.08.19.2/checkpoints/step-146139
-WANDB_FORK_FROM='hero-main-step121638?_step=146138'
+HANDOFF_CHECKPOINT=s3://hero-checkpoints/marin/grug/hero-fa4sm100-nomask-step146k/2026.08.19.2/checkpoints/step-231464
+WANDB_FORK_FROM='hero-fa4sm100-nomask-step146k?_step=231463'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
@@ -150,8 +150,6 @@ IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-e
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32614 \
-  -e XLA_PYTHON_CLIENT_MEM_FRACTION 0.75 \
-  -e XLA_FLAGS "--xla_gpu_memory_limit_slop_factor=85" \
   -- python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
     --run-id "$RUN_ID" \
     --initialize-from-checkpoint "$HANDOFF_CHECKPOINT" \

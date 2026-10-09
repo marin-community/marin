@@ -92,7 +92,10 @@ class ShellSimBuiltins:
 
 @dataclass(frozen=True)
 class HostImage:
-    """The host's own programs and filesystem, used by the local backend instead of an image."""
+    """The host's programs, with optional per-machine read-only mounts and program paths."""
+
+    read_only: tuple[Path, ...] = ()
+    bin_dirs: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -149,10 +152,6 @@ class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
 
 
-class DownloadLimitExceeded(ValueError):
-    """A candidate file exceeds the requested download limit."""
-
-
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 
@@ -160,15 +159,7 @@ class Machine(Protocol):
 
     async def upload(self, source: Path, target: str) -> None: ...
 
-    async def download(self, source: str, target: Path, *, max_bytes: int | None = None) -> None:
-        """Download a file or directory.
-
-        A byte limit applies only to files. Exceeding it raises
-        DownloadLimitExceeded without replacing the target. Transfer buffers
-        stay bounded independently of the limit. Bounded directory downloads
-        raise UnsupportedMachineSpec.
-        """
-        ...
+    async def download(self, source: str, target: Path) -> None: ...
 
     async def close(self) -> None: ...
 

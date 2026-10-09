@@ -1,17 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-stage execution, private grading, deadlines, and exact token evidence."""
+"""Single-stage execution, grading, deadlines, and exact token evidence."""
 
 import asyncio
-import errno
 import json
-import os
-import re
-import shutil
 import tarfile
-import tracemalloc
-from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -19,46 +13,36 @@ from tempfile import TemporaryDirectory
 import pytest
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.file_transfer import DOWNLOAD_CHUNK_BYTES, write_download
-from shellbox.machine import (
-    Command,
-    DockerImage,
-    DownloadLimitExceeded,
-    ExitReason,
-    Machine,
-    NetworkPolicy,
-    Result,
-    ShellSimBuiltins,
-    UnsupportedMachineSpec,
-)
-from taskcompendium.grader import grader_package
+from shellbox.machine import Backend, Command, DockerImage, ExitReason, Machine, NetworkPolicy, Result, ShellSimBuiltins
+from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
+    AnswerCall,
     AnswerType,
+    ArtifactKind,
     ConversationInput,
     EnvironmentRequirements,
+    ExitCodeReward,
+    FileReward,
+    FinalAction,
     FunctionDefinition,
+    JsonValueAnswer,
+    NoGrader,
+    PlainText,
     ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
+    SessionGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
-)
-from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.shell_verifier import (
-    ArtifactKind,
-    ExitCodeReward,
-    FileReward,
-    RewardFile,
-    RewardFileFormat,
-    ShellVerifierSpec,
     VerifierArtifact,
 )
-from taskcompendium.submission import AnswerCall, FinalAction, PlainText
+from taskcompendium.runtime.resources import inline_resource
 from verifyit.grade import grade as verifyit_grade
-from verifyit.spec import NumericSpec, StdioSpec, StructuredExactSpec, parse_spec
+from verifyit.spec import FunctionCall, NumericSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
 
-import rolloutengine.grading as grading
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     GenerationLimitReached,
@@ -76,282 +60,8 @@ from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeS
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
-
-
-async def local_file_chunks(path):
-    with path.open("rb") as file:
-        while chunk := file.read(DOWNLOAD_CHUNK_BYTES):
-            yield chunk
-
-
-@pytest.fixture
-def local_artifact_factory(tmp_path):
-    class Machine:
-        def __init__(self, root, spec, archive_growth, archive_members, archive_failure):
-            self.root = root
-            self.spec = spec
-            self.archive_growth = archive_growth
-            self.archive_members = archive_members
-            self.archive_failure = archive_failure
-            self.closed = False
-            (root / "workspace").mkdir(parents=True)
-            (root / "tmp").mkdir()
-
-        def path(self, value):
-            assert value == "/" or value.split("/")[1] in {"workspace", "tests", "logs", "tmp"}
-            return self.root / value.lstrip("/")
-
-        async def run(self, command):
-            if command.argv[0] == "tar" and self.archive_failure:
-                if self.archive_failure == "tar_timeout":
-                    return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-                return Result(
-                    2,
-                    b"",
-                    b"Archive failed",
-                    False,
-                    False,
-                    ExitReason.EXITED,
-                )
-
-            def rewrite(value):
-                for path in re.findall(r"(?<![\w/%*])/[^\s'\";)}]*", value):
-                    self.path(path)
-                return re.sub(r"/(workspace|tests|logs|tmp)(?=/|$)", lambda match: str(self.path(match[0])), value)
-
-            process = await asyncio.create_subprocess_exec(
-                *(rewrite(value) for value in command.argv),
-                cwd=self.path(command.cwd or "/workspace"),
-                env={**os.environ, **self.spec.env, **command.env},
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(command.stdin), timeout=command.timeout)
-            finally:
-                if process.returncode is None:
-                    process.kill()
-                    await process.wait()
-            limit = command.output_limit_bytes
-            return Result(
-                process.returncode,
-                stdout[:limit],
-                stderr[:limit],
-                len(stdout) > limit,
-                len(stderr) > limit,
-                ExitReason.EXITED,
-            )
-
-        async def upload(self, source, target):
-            destination = self.path(target)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_dir():
-                shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
-            else:
-                shutil.copy2(source, destination, follow_symlinks=False)
-
-        async def download(self, source, target, *, max_bytes=None):
-            origin = self.path(source)
-            if source.startswith("/tmp/taskcompendium-artifact-"):
-                if self.archive_members:
-                    with tarfile.open(origin, "w") as archive:
-                        for member in self.archive_members:
-                            archive.addfile(member)
-                if self.archive_growth:
-                    with origin.open("ab") as archive:
-                        for _ in range(self.archive_growth // DOWNLOAD_CHUNK_BYTES):
-                            archive.write(b"x" * DOWNLOAD_CHUNK_BYTES)
-            if max_bytes is not None:
-                if origin.is_dir():
-                    raise UnsupportedMachineSpec("A download byte limit requires a regular file")
-                async with aclosing(local_file_chunks(origin)) as chunks:
-                    await write_download(chunks, target, max_bytes)
-                return
-            if origin.is_dir():
-                shutil.copytree(origin, target, symlinks=True, dirs_exist_ok=True)
-            else:
-                shutil.copy2(origin, target, follow_symlinks=False)
-
-        async def close(self):
-            self.closed = True
-
-    class Factory:
-        def __init__(self, prepare_artifacts, *, archive_growth=0, archive_members=(), archive_failure=None):
-            self.machines = []
-            self.prepare_artifacts = prepare_artifacts
-            self.archive_growth = archive_growth
-            self.archive_members = archive_members
-            self.archive_failure = archive_failure
-
-        async def create(self, spec):
-            machine = Machine(
-                tmp_path / str(len(self.machines)), spec, self.archive_growth, self.archive_members, self.archive_failure
-            )
-            self.machines.append(machine)
-            if spec.env.get("ARTIFACT_TASK_MACHINE") == "1":
-                self.prepare_artifacts(machine)
-            return machine
-
-    return Factory
-
-
-@pytest.mark.parametrize(
-    "artifact_case",
-    [
-        "directory",
-        "file",
-        "relative_private",
-        "absolute_private",
-        "in_tree",
-        "hardlink",
-        "directory_root",
-        "file_root",
-        "parent_link",
-        "missing",
-        "kind_mismatch",
-        "excluded_link",
-        "oversized_archive",
-        "oversized_expanded",
-        "grown_archive",
-        "too_many_members",
-        "long_member",
-        "conflicting_member",
-        "directory_file_conflict",
-        "file_directory_conflict",
-        "host_enospc",
-        "host_edquot",
-        "host_eio",
-        "host_emfile",
-        "tar_timeout",
-        "tar_failed",
-    ],
-)
-async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissions(
-    local_artifact_factory, artifact_case, monkeypatch
-):
-    def prepare_artifacts(machine):
-        if artifact_case == "missing":
-            return
-        artifacts = machine.path("/logs/artifacts")
-        artifacts.mkdir(parents=True)
-        answer = artifacts / "answer"
-        if artifact_case in {"directory_root", "parent_link"}:
-            artifacts.rename(artifacts.with_name("real"))
-            artifacts.symlink_to("real", target_is_directory=True)
-        if artifact_case in {"relative_private", "absolute_private"}:
-            answer.symlink_to("../../tests/expected" if artifact_case == "relative_private" else "/tests/expected")
-        elif artifact_case in {"in_tree", "hardlink", "file_root"}:
-            submitted = artifacts / "submitted"
-            submitted.write_bytes(b"secret")
-            if artifact_case == "hardlink":
-                os.link(submitted, answer)
-            else:
-                answer.symlink_to("submitted")
-        else:
-            answer.write_bytes(b"secret")
-        if artifact_case == "excluded_link":
-            (artifacts / "cache").mkdir()
-            (artifacts / "cache/private").symlink_to("../../../tests/expected")
-        if artifact_case == "too_many_members":
-            for index in range(5):
-                (artifacts / str(index)).touch()
-
-    archive_members = []
-    if artifact_case in {"conflicting_member", "file_directory_conflict", "directory_file_conflict"}:
-        first = tarfile.TarInfo("file")
-        if artifact_case == "directory_file_conflict":
-            first.type = tarfile.DIRTYPE
-        archive_members.append(first)
-        second = tarfile.TarInfo("file/child" if artifact_case == "conflicting_member" else "file")
-        if artifact_case == "file_directory_conflict":
-            second.type = tarfile.DIRTYPE
-        archive_members.append(second)
-    elif artifact_case == "long_member":
-        archive_members.append(tarfile.TarInfo("x" * 256))
-    root = local_artifact_factory(
-        prepare_artifacts,
-        archive_growth=32 * 1024**2 if artifact_case == "grown_archive" else 0,
-        archive_members=archive_members,
-        archive_failure=artifact_case if artifact_case in {"tar_failed", "tar_timeout"} else None,
-    )
-    if artifact_case == "oversized_archive":
-        monkeypatch.setattr(grading, "MAX_ARTIFACT_ARCHIVE_BYTES", 1024)
-    if artifact_case == "oversized_expanded":
-        monkeypatch.setattr(grading, "MAX_ARTIFACT_EXPANDED_BYTES", 1)
-    if artifact_case == "grown_archive":
-        monkeypatch.setattr(grading, "MAX_ARTIFACT_ARCHIVE_BYTES", 1024**2)
-    if artifact_case == "too_many_members":
-        monkeypatch.setattr(grading, "MAX_ARTIFACT_MEMBERS", 3)
-    is_file = artifact_case in {"file", "file_root", "parent_link"}
-    source = "/logs/artifacts/answer" if is_file else "/logs/artifacts"
-    artifact = VerifierArtifact(
-        source=source,
-        target=source,
-        kind=ArtifactKind.FILE if is_file or artifact_case == "kind_mismatch" else ArtifactKind.DIRECTORY,
-        exclude=("cache",) if artifact_case == "excluded_link" else (),
-    )
-    verifier = ShellVerifierSpec(
-        argv=("sh", "-c", "cmp /logs/artifacts/answer /tests/expected"), reward=ExitCodeReward(), artifacts=(artifact,)
-    )
-    task = file_task().model_copy(
-        update={
-            "environment_requirements": EnvironmentRequirements(
-                capabilities=("shell", "filesystem"), environment_variables={"ARTIFACT_TASK_MACHINE": "1"}
-            ),
-            "verifier": VerifierSpec(
-                kind="shell",
-                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
-                parameters_json=verifier.model_dump_json(),
-            ),
-            "resources": ResourceGroups(verifier=(inline_resource("expected", b"secret"),)),
-        }
-    )
-    model = ReplayModel([{"role": "assistant", "content": "Done."}])
-    host_errors = {
-        "host_enospc": errno.ENOSPC,
-        "host_edquot": errno.EDQUOT,
-        "host_eio": errno.EIO,
-        "host_emfile": errno.EMFILE,
-    }
-    if artifact_case in host_errors:
-
-        def failed_extract(*args, **kwargs):
-            raise OSError(host_errors[artifact_case], "Host artifact extraction failed")
-
-        monkeypatch.setattr(tarfile.TarFile, "extract", failed_extract)
-    if artifact_case in host_errors or artifact_case in {"tar_failed", "tar_timeout"}:
-        with pytest.raises(RolloutInterrupted) as caught:
-            await engine(model, {"local": root}).run(
-                lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
-            )
-        assert caught.value.operation is RolloutOperation.GRADE
-        assert caught.value.rollout.grade.reward is None
-        if artifact_case in host_errors:
-            assert isinstance(caught.value.__cause__, OSError)
-            assert caught.value.__cause__.errno == host_errors[artifact_case]
-        else:
-            assert isinstance(caught.value.__cause__, TimeoutError if artifact_case == "tar_timeout" else RuntimeError)
-        assert all(machine.closed for machine in root.machines)
-        return
-    if artifact_case == "grown_archive":
-        tracemalloc.start()
-    try:
-        record = await engine(model, {"local": root}).run(
-            lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
-        )
-        if artifact_case == "grown_archive":
-            _, peak = tracemalloc.get_traced_memory()
-    finally:
-        if artifact_case == "grown_archive":
-            tracemalloc.stop()
-    valid = artifact_case in {"directory", "file", "excluded_link"}
-    assert (record.grade.status, record.grade.reward) == (
-        (Outcome.GRADED, 1.0) if valid else (Outcome.SUBMISSION_FAILURE, 0.0)
-    )
-    assert all(machine.closed for machine in root.machines)
-    if artifact_case == "grown_archive":
-        assert peak < 8 * 1024**2
+GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=FIXTURE_IMAGE)
+TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
 
 
 @pytest.mark.docker
@@ -388,13 +98,15 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         async def upload(self, source, target):
             await self.machine.upload(source, target)
 
-        async def download(self, source, target, *, max_bytes=None):
-            await self.machine.download(source, target, max_bytes=max_bytes)
+        async def download(self, source, target):
+            await self.machine.download(source, target)
 
         async def close(self):
             await self.machine.close()
 
     class Factory:
+        backend = Backend.DOCKER
+
         async def create(self, spec):
             machine = await DockerMachineFactory().create(replace(spec, source=DockerImage("busybox:1.36")))
             machines.append(machine)
@@ -420,27 +132,22 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
             assert written.exit_code == 0
             return CandidateMachine(machine)
 
-    verifier = ShellVerifierSpec(
-        argv=("sh", "-c", "cmp /workspace/artifacts/answer /tests/expected"),
-        reward=ExitCodeReward(),
-        artifacts=(
-            VerifierArtifact(source="/workspace/artifacts", target="/workspace/artifacts", kind=ArtifactKind.DIRECTORY),
+    task = file_task(
+        environment_requirements=EnvironmentRequirements(
+            docker_image=FIXTURE_IMAGE,
+            working_directory="/workspace",
+            environment_variables={"ARTIFACT_TASK_MACHINE": "1"},
         ),
-    )
-    task = file_task().model_copy(
-        update={
-            "environment_requirements": EnvironmentRequirements(
-                docker_image=FIXTURE_IMAGE,
-                working_directory="/workspace",
-                environment_variables={"ARTIFACT_TASK_MACHINE": "1"},
+        grader=workspace_grader(
+            argv=("sh", "-c", "cmp /workspace/artifacts/answer /tests/expected"),
+            reward=ExitCodeReward(),
+            artifacts=(
+                VerifierArtifact(
+                    source="/workspace/artifacts", target="/workspace/artifacts", kind=ArtifactKind.DIRECTORY
+                ),
             ),
-            "verifier": VerifierSpec(
-                kind="shell",
-                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
-                parameters_json=verifier.model_dump_json(),
-            ),
-            "resources": ResourceGroups(verifier=(inline_resource("expected", b"public"),)),
-        }
+        ),
+        resources=ResourceGroups(verifier=(inline_resource("expected", b"public"),)),
     )
     runtime = lowered(task, machine=machine_runtime(user="nobody"), verifier_machine=machine_runtime())
     rollout_engine = engine(ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()})
@@ -487,33 +194,43 @@ class RecordingShellSimFactory:
         return machine
 
 
-def arithmetic_task() -> TaskSpec:
-    return TaskSpec(
-        id="arithmetic",
-        context=ConversationInput(events=(TextMessage(role="user", content="What is six plus six?"),)),
-        environment_requirements=EnvironmentRequirements(),
-        answer_type=AnswerType.NUMBER,
-        verifier=grader_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0)).verifier,
-        source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+def arithmetic_task(**update) -> TaskSpec:
+    return TaskSpec.model_validate(
+        {
+            "id": "arithmetic",
+            "context": ConversationInput(events=(TextMessage(role="user", content="What is six plus six?"),)),
+            "environment_requirements": EnvironmentRequirements(),
+            "answer_type": AnswerType.NUMBER,
+            "answer_format": PlainText(),
+            "grader": verifyit_package(TWELVE).grader,
+            "source": Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            **update,
+        }
     )
 
 
-def file_task(script: bytes = b'if [ "$(cat /workspace/answer)" = 12 ]; then echo 1; else echo 0; fi') -> TaskSpec:
-    return arithmetic_task().model_copy(
-        update={
+def workspace_grader(**fields) -> ScriptGrader:
+    """A script grader that reads the agent's workspace files rather than an extracted answer."""
+    return ScriptGrader.model_validate(
+        {"cwd": "/workspace", "environment": GRADER_ENVIRONMENT, "answer_path": None, **fields}
+    )
+
+
+def file_task(
+    script: bytes = b'if [ "$(cat /workspace/answer)" = 12 ]; then echo 1; else echo 0; fi', **update
+) -> TaskSpec:
+    return arithmetic_task(
+        **{
             "answer_type": AnswerType.FILE,
             "environment_requirements": EnvironmentRequirements(capabilities=("shell", "filesystem")),
-            "verifier": VerifierSpec(
-                kind="shell",
-                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
-                parameters_json=ShellVerifierSpec(
-                    argv=("sh", "/tests/grade.sh"),
-                    artifacts=(
-                        VerifierArtifact(source="/workspace/answer", target="/workspace/answer", kind=ArtifactKind.FILE),
-                    ),
-                ).model_dump_json(),
+            "grader": workspace_grader(
+                argv=("sh", "/tests/grade.sh"),
+                artifacts=(
+                    VerifierArtifact(source="/workspace/answer", target="/workspace/answer", kind=ArtifactKind.FILE),
+                ),
             ),
             "resources": ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
+            **update,
         }
     )
 
@@ -572,13 +289,8 @@ def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) ->
     )
 
 
-def engine(model, factories=None, *, sessions=None, convention=None) -> ShellboxRolloutEngine:
-    return ShellboxRolloutEngine(
-        model.complete,
-        {} if factories is None else factories,
-        convention=convention or PlainText(id="plain"),
-        sessions=sessions,
-    )
+def engine(model, factories=None, *, sessions=None) -> ShellboxRolloutEngine:
+    return ShellboxRolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
@@ -611,11 +323,10 @@ async def test_lowering_preserves_task_and_produces_private_grade_with_training_
     ],
 )
 async def test_json_answer_grades_typed_evidence_and_rejects_duplicate_keys(answer, status, reward):
-    task = arithmetic_task().model_copy(
-        update={
-            "answer_type": AnswerType.JSON,
-            "verifier": grader_package(StructuredExactSpec(expected={"value": 12})).verifier,
-        }
+    task = arithmetic_task(
+        answer_type=AnswerType.JSON,
+        answer_format=JsonValueAnswer(),
+        grader=verifyit_package(StructuredExactSpec(expected={"value": 12})).grader,
     )
     model = ReplayModel([{"role": "assistant", "content": answer}])
     record = await engine(model).run(lowered(task))
@@ -713,8 +424,8 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
         async def upload(self, source, target):
             await self.machine.upload(source, target)
 
-        async def download(self, source, target, *, max_bytes=None):
-            await self.machine.download(source, target, max_bytes=max_bytes)
+        async def download(self, source, target):
+            await self.machine.download(source, target)
 
         async def close(self):
             await self.machine.close()
@@ -769,27 +480,9 @@ async def test_tool_turn_cannot_preempt_command_timeout_feedback(tool_turn_timeo
     assert model.requests == []
 
 
-@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
-async def test_candidate_verifier_grades_captured_file_without_text_submission(answer, reward):
-    task = arithmetic_task().model_copy(
-        update={
-            "answer_type": AnswerType.FILE,
-            "environment_requirements": EnvironmentRequirements(capabilities=("shell", "filesystem")),
-            "output_paths": ("/app/answer.txt",),
-        }
-    )
-    model = ReplayModel(
-        [shell_call(f"mkdir -p /app && echo {answer} > /app/answer.txt"), {"role": "assistant", "content": "Done."}]
-    )
-    record = await engine(model, {"local": FixtureImageFactory()}).run(lowered(task, machine=machine_runtime()))
-    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
-    assert record.loss_mask == (1, 0, 0, 1)
-    assert "12" not in json.dumps(model.requests[0].messages)
-
-
 async def test_answer_call_retains_submission_tool_and_finishes():
-    task = arithmetic_task().model_copy(
-        update={"environment_requirements": EnvironmentRequirements(capabilities=("shell",))}
+    task = arithmetic_task(
+        environment_requirements=EnvironmentRequirements(capabilities=("shell",)), answer_format=AnswerCall()
     )
     message = {
         "role": "assistant",
@@ -802,11 +495,7 @@ async def test_answer_call_retains_submission_tool_and_finishes():
         ],
     }
     model = ReplayModel([message])
-    result = await engine(
-        model,
-        {"local": FixtureImageFactory()},
-        convention=AnswerCall(id="answer"),
-    ).run(lowered(task, machine=machine_runtime()))
+    result = await engine(model, {"local": FixtureImageFactory()}).run(lowered(task, machine=machine_runtime()))
     assert result.grade.reward == 1.0
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["submit_answer", "shell"]
 
@@ -816,19 +505,11 @@ async def test_answer_call_retains_submission_tool_and_finishes():
     [(["finish"], Outcome.GRADED), (["finish", "finish"], Outcome.SUBMISSION_FAILURE), ([], Outcome.SUBMISSION_FAILURE)],
 )
 async def test_native_action_preserves_configured_call_limits(calls, expected):
-    task = arithmetic_task().model_copy(
-        update={
-            "answer_type": AnswerType.NATIVE_ACTION,
-            "final_tools": (FunctionDefinition(name="finish", parameters={"type": "object"}),),
-            "verifier": VerifierSpec(
-                kind="predicted_action",
-                parameters_json=json.dumps(
-                    {
-                        "expected_calls": [{"name": "finish", "arguments": {}}],
-                    }
-                ),
-            ),
-        }
+    task = arithmetic_task(
+        answer_type=AnswerType.NATIVE_ACTION,
+        answer_format=FinalAction(require_call=True, max_calls=1),
+        final_tools=(FunctionDefinition(name="finish", parameters={"type": "object"}),),
+        grader=verifyit_package(PredictedActionSpec(expected_calls=(FunctionCall("finish", {}),))).grader,
     )
     message = {"role": "assistant", "content": "Done."}
     if calls:
@@ -837,16 +518,16 @@ async def test_native_action_preserves_configured_call_limits(calls, expected):
             for index, call in enumerate(calls)
         ]
     model = ReplayModel([message])
-    record = await engine(model, convention=FinalAction(id="limited", require_call=True, max_calls=1)).run(lowered(task))
+    record = await engine(model).run(lowered(task))
     assert record.grade.status == expected
     assert model.requests[0].options["tool_choice"] == "required"
     assert model.requests[0].options["parallel_tool_calls"] is False
 
 
 async def test_workspace_state_receives_shell_presentation_without_answer_tools():
-    task = file_task().model_copy(update={"answer_type": AnswerType.WORKSPACE_STATE})
+    task = file_task(answer_type=AnswerType.WORKSPACE_STATE, answer_format=AnswerCall())
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": FixtureImageFactory()}, convention=AnswerCall(id="answer-call")).run(
+    record = await engine(model, {"local": FixtureImageFactory()}).run(
         lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert record.grade.reward == 1.0
@@ -855,31 +536,75 @@ async def test_workspace_state_receives_shell_presentation_without_answer_tools(
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
 
 
-async def test_shared_shell_grading_is_rejected_before_task_startup():
+@pytest.mark.parametrize(
+    "grader,verifier_machine",
+    [
+        (verifyit_package(TWELVE, environment=GRADER_ENVIRONMENT).grader, None),
+        (ScriptGrader(argv=("true",), environment=GRADER_ENVIRONMENT), None),
+        (verifyit_package(TWELVE).grader, machine_runtime()),
+        (NoGrader(reason="No evaluator"), machine_runtime()),
+        (SessionGrader(), None),
+    ],
+    ids=["verifyit_environment", "script", "in_process", "none", "session"],
+)
+async def test_grader_without_matching_runtime_is_rejected_before_task_startup(grader, verifier_machine):
     factory = RecordingShellSimFactory()
     model = ReplayModel([])
     with pytest.raises(ValueError):
-        await engine(model, {"local": factory}).run(lowered(file_task(), machine=machine_runtime()))
+        await engine(model, {"local": factory}).run(
+            lowered(arithmetic_task(grader=grader), machine=machine_runtime(), verifier_machine=verifier_machine)
+        )
     assert factory.machines == []
     assert model.requests == []
 
 
-async def test_private_shell_verifier_can_run_without_a_task_machine():
-    task = arithmetic_task().model_copy(
-        update={
-            "verifier": VerifierSpec(
-                kind="shell",
-                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
-                parameters_json=ShellVerifierSpec(argv=("cat", "/tests/reward")).model_dump_json(),
-            ),
-            "resources": ResourceGroups(verifier=(inline_resource("reward", b"0.75"),)),
-        }
+async def test_state_answer_is_rejected_because_the_shellbox_session_cannot_capture_state():
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([])
+    with pytest.raises(NotImplementedError):
+        await engine(model, {"local": factory}).run(
+            lowered(
+                file_task(answer_type=AnswerType.STATE), machine=machine_runtime(), verifier_machine=machine_runtime()
+            )
+        )
+    assert factory.machines == []
+    assert model.requests == []
+
+
+async def test_ungraded_task_reports_reason_without_a_verifier_machine():
+    reason = "The source evaluator is unavailable"
+    task = arithmetic_task(
+        environment_requirements=EnvironmentRequirements(capabilities=("shell", "filesystem")),
+        grader=NoGrader(reason=reason),
     )
     factory = RecordingShellSimFactory()
-    record = await engine(ReplayModel([{"role": "assistant", "content": "12"}]), {"local": factory}).run(
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "12"}])
+    record = await engine(model, {"local": factory}).run(lowered(task, machine=machine_runtime()))
+    assert (record.grade.status, record.grade.reward, record.grade.error) == (Outcome.UNAVAILABLE, None, reason)
+    assert record.loss_mask == (1, 0, 0, 1)
+    assert len(factory.machines) == 1
+    with pytest.raises(RuntimeError):
+        await factory.machines[0].run(Command(("true",)))
+
+
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_script_grader_reads_answer_and_conversation_files_without_a_task_machine(answer, reward):
+    script = (
+        b"import json\n"
+        b"messages = json.load(open('/tests/conversation.json'))\n"
+        b"answer = open('/app/answer.txt').read()\n"
+        b"question = messages[0]['content'] == 'What is six plus six?'\n"
+        b"print(float(question and messages[-1]['content'] == answer == '12'))\n"
+    )
+    task = arithmetic_task(
+        grader=ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADER_ENVIRONMENT),
+        resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+    )
+    factory = RecordingShellSimFactory()
+    record = await engine(ReplayModel([{"role": "assistant", "content": answer}]), {"local": factory}).run(
         lowered(task, verifier_machine=machine_runtime())
     )
-    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 0.75)
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
     assert len(factory.machines) == 1
     with pytest.raises(RuntimeError):
         await factory.machines[0].run(Command(("true",)))
@@ -887,33 +612,27 @@ async def test_private_shell_verifier_can_run_without_a_task_machine():
 
 @pytest.mark.parametrize("answer,reward", [(b"\x00\xff\r\n", 1.0), (b"incorrect", 0.0)])
 async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(answer, reward):
-    verifier = ShellVerifierSpec(
-        argv=("sh", "/tests/grade.sh"),
-        reward=ExitCodeReward(),
-        artifacts=(
-            VerifierArtifact(source="/workspace/answer", target="/workspace/submission", kind=ArtifactKind.FILE),
+    task = file_task(
+        grader=workspace_grader(
+            argv=("sh", "/tests/grade.sh"),
+            environment=EnvironmentRequirements(
+                docker_image=FIXTURE_IMAGE, setup_commands=("echo clean > /workspace/baseline",)
+            ),
+            reward=ExitCodeReward(),
+            artifacts=(
+                VerifierArtifact(source="/workspace/answer", target="/workspace/submission", kind=ArtifactKind.FILE),
+            ),
         ),
-    )
-    task = file_task().model_copy(
-        update={
-            "verifier": VerifierSpec(
-                kind="shell",
-                parameters_json=verifier.model_dump_json(),
-                environment_requirements=EnvironmentRequirements(
-                    docker_image=FIXTURE_IMAGE, setup_commands=("echo clean > /workspace/baseline",)
+        resources=ResourceGroups(
+            worker=(inline_resource("workspace/input", answer),),
+            verifier=(
+                inline_resource("expected", b"\x00\xff\r\n"),
+                inline_resource(
+                    "grade.sh",
+                    b'test "$(cat /workspace/baseline)" = clean && cmp /tests/expected /workspace/submission',
                 ),
             ),
-            "resources": ResourceGroups(
-                worker=(inline_resource("workspace/input", answer),),
-                verifier=(
-                    inline_resource("expected", b"\x00\xff\r\n"),
-                    inline_resource(
-                        "grade.sh",
-                        b'test "$(cat /workspace/baseline)" = clean && cmp /tests/expected /workspace/submission',
-                    ),
-                ),
-            ),
-        }
+        ),
     )
     factory = RecordingShellSimFactory()
     model = ReplayModel(
@@ -965,11 +684,7 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
             "stop",
         )
 
-    runner = ShellboxRolloutEngine(
-        complete,
-        {"local": FixtureImageFactory()},
-        convention=PlainText(id="plain"),
-    )
+    runner = ShellboxRolloutEngine(complete, {"local": FixtureImageFactory()})
     with pytest.raises(RolloutContractError):
         await runner.run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
 
@@ -986,6 +701,12 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
         ),
         ("true", Outcome.INFRA_ERROR, None, GradingFailure.MISSING_REWARD),
         (
+            "echo > /logs/verifier/reward.json; echo 1 > /logs/verifier/reward.txt",
+            Outcome.INFRA_ERROR,
+            None,
+            GradingFailure.EMPTY_REWARD,
+        ),
+        (
             "echo broken > /logs/verifier/reward.json; echo 1 > /logs/verifier/reward.txt",
             Outcome.INFRA_ERROR,
             None,
@@ -994,28 +715,22 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
     ],
 )
 async def test_reward_file_priority_rejects_fallback_and_agent_scores(script, status, reward, failure):
-    verifier = ShellVerifierSpec(
-        argv=("sh", "/tests/grade.sh"),
-        reward=FileReward(
-            files=(
-                RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),
-                RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),
+    task = file_task(
+        grader=workspace_grader(
+            argv=("sh", "/tests/grade.sh"),
+            reward=FileReward(
+                files=(
+                    RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),
+                    RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),
+                ),
+                pass_above=0,
             ),
-            pass_above=0,
         ),
-    )
-    task = file_task().model_copy(
-        update={
-            "verifier": VerifierSpec(
-                kind="shell",
-                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
-                parameters_json=verifier.model_dump_json(),
-            ),
-            "resources": ResourceGroups(
-                worker=(inline_resource("logs/verifier/reward.txt", b"1"),),
-                verifier=(inline_resource("grade.sh", script.encode()),),
-            ),
-        }
+        # The grading machine also receives worker resources, so this planted score reaches it.
+        resources=ResourceGroups(
+            worker=(inline_resource("logs/verifier/reward.txt", b"1"),),
+            verifier=(inline_resource("grade.sh", script.encode()),),
+        ),
     )
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": FixtureImageFactory()}
@@ -1390,13 +1105,10 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     assert closed.is_set()
 
 
-@pytest.mark.parametrize("download_failed", [False, True])
-async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(tmp_path, download_failed):
+@pytest.mark.parametrize("failure", [None, "download", "remove"])
+async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_path, failure):
     answer = tmp_path / "answer"
     answer.write_bytes(b"12\n")
-    archive_path = tmp_path / "artifact.tar"
-    with tarfile.open(archive_path, "w") as archive:
-        archive.add(answer, arcname="answer")
     factory = RecordingShellSimFactory()
 
     class Machine:
@@ -1405,17 +1117,23 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
 
         async def run(self, command):
             if command.argv[:2] == ("tar", "-cf"):
-                await self.machine.upload(archive_path, command.argv[2])
                 return Result(0, b"", b"", False, False, ExitReason.EXITED)
-            if command.argv[:2] == ("rm", "-rf") and command.argv[2].startswith("/tmp/taskcompendium-artifact-"):
-                raise OSError("Cannot remove artifact archive")
+            if (
+                failure == "remove"
+                and command.argv[:2] == ("rm", "-rf")
+                and command.argv[2].startswith("/tmp/taskcompendium-artifact-")
+            ):
+                return Result(1, b"", b"Cannot remove artifact archive", False, False, ExitReason.EXITED)
             return await self.machine.run(command)
 
-        async def download(self, source, target, *, max_bytes=None):
+        async def download(self, source, target):
             if source.startswith("/tmp/taskcompendium-artifact-"):
-                if download_failed:
+                if failure == "download":
                     raise ConnectionError("Artifact download failed")
-            await self.machine.download(source, target, max_bytes=max_bytes)
+                with tarfile.open(target, "w") as archive:
+                    archive.add(answer, arcname="answer")
+                return
+            await self.machine.download(source, target)
 
         async def upload(self, source, target):
             await self.machine.upload(source, target)
@@ -1430,40 +1148,43 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
             await machine.upload(answer, "/workspace/project/answer")
             return Machine(machine)
 
-    verifier = ShellVerifierSpec(
-        argv=("sh", "-c", 'test "$(cat /workspace/project/answer)" = 12'),
-        reward=ExitCodeReward(),
-        artifacts=(
-            VerifierArtifact(
-                source="/workspace/project", target="/workspace/project", kind=ArtifactKind.DIRECTORY, exclude=("cache",)
+    task = file_task(
+        grader=workspace_grader(
+            argv=("sh", "-c", 'test "$(cat /workspace/project/answer)" = 12'),
+            reward=ExitCodeReward(),
+            artifacts=(
+                VerifierArtifact(
+                    source="/workspace/project",
+                    target="/workspace/project",
+                    kind=ArtifactKind.DIRECTORY,
+                    exclude=("cache",),
+                ),
             ),
-        ),
-    )
-    task = file_task().model_copy(
-        update={
-            "verifier": VerifierSpec(
-                kind="shell",
-                environment_requirements=EnvironmentRequirements(docker_image=FIXTURE_IMAGE),
-                parameters_json=verifier.model_dump_json(),
-            )
-        }
+        )
     )
     runner = engine(ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()})
     spec = lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
-    if download_failed:
+    if failure == "download":
         with pytest.raises(RolloutInterrupted) as caught:
             await runner.run(spec)
         assert caught.value.operation == RolloutOperation.GRADE
         assert isinstance(caught.value.__cause__, ConnectionError)
         record = caught.value.rollout
         assert (record.grade.status, record.grade.reward) == (Outcome.UNAVAILABLE, None)
+    elif failure == "remove":
+        record = await runner.run(spec)
+        assert (record.grade.status, record.grade.reward, record.grade.failure) == (
+            Outcome.INFRA_ERROR,
+            None,
+            GradingFailure.EXECUTION,
+        )
+        # The archive stays on the task machine, so the grader never starts.
+        assert len(factory.machines) == 1
     else:
         record = await runner.run(spec)
         assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.response_token_ids == (20,)
-    assert record.grade.diagnostics["cleanup_errors"] == [
-        {"operation": "artifact_archive_remove", "exception_type": "OSError"}
-    ]
+    assert "cleanup_errors" not in record.grade.diagnostics
     for machine in factory.machines:
         with pytest.raises(RuntimeError):
             await machine.run(Command(("true",)))
@@ -1483,7 +1204,7 @@ async def test_artifact_archive_cleanup_failure_retains_grade_or_primary_error(t
         (AnswerType.NUMBER, " ", "scored", Outcome.SUBMISSION_FAILURE, 0.0),
     ],
 )
-async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_files(
+async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resources(
     answer_type, answer, status, expected_status, expected_reward
 ):
     factory = RecordingShellSimFactory()
@@ -1501,7 +1222,7 @@ async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_fi
                     (
                         "sh",
                         "-c",
-                        "test -f /workspace/common && test ! -f /workspace/worker && test -f /workspace/verifier-only",
+                        "test -f /workspace/common && test -f /workspace/worker && test -f /workspace/verifier-only",
                     )
                 )
             )
@@ -1518,14 +1239,11 @@ async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_fi
         async def upload(self, source, target):
             await self.machine.upload(source, target)
 
-        async def download(self, source, target, *, max_bytes=None):
+        async def download(self, source, target):
             if source == "/logs/verifier/verdict.json":
-                data = json.dumps(self.verdict).encode()
-                if max_bytes is not None and len(data) > max_bytes:
-                    raise DownloadLimitExceeded("Candidate file exceeds the download limit")
-                target.write_bytes(data)
+                target.write_text(json.dumps(self.verdict))
             else:
-                await self.machine.download(source, target, max_bytes=max_bytes)
+                await self.machine.download(source, target)
 
         async def close(self):
             await self.machine.close()
@@ -1535,25 +1253,20 @@ async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_fi
             machine = await factory.create(spec)
             return VerifierMachine(machine) if len(factory.machines) == 2 else machine
 
-    task = arithmetic_task().model_copy(
-        update={
-            "answer_type": answer_type,
-            "verifier": (
-                arithmetic_task().verifier.model_copy(
-                    update={
-                        "environment_requirements": EnvironmentRequirements(
-                            setup_commands=("echo private > /workspace/verifier-only",)
-                        )
-                    }
-                )
+    task = arithmetic_task(
+        answer_type=answer_type,
+        grader=verifyit_package(
+            TWELVE,
+            environment=EnvironmentRequirements(
+                docker_image=FIXTURE_IMAGE, setup_commands=("echo private > /workspace/verifier-only",)
             ),
-            "environment_requirements": EnvironmentRequirements(capabilities=("shell", "filesystem")),
-            "output_paths": ("/app/answer.txt",) if answer_type == AnswerType.FILE else (),
-            "resources": ResourceGroups(
-                all=(inline_resource("workspace/common", b"public"),),
-                worker=(inline_resource("workspace/worker", b"task-only"),),
-            ),
-        }
+        ).grader,
+        environment_requirements=EnvironmentRequirements(capabilities=("shell", "filesystem")),
+        output_paths=("/app/answer.txt",) if answer_type == AnswerType.FILE else (),
+        resources=ResourceGroups(
+            all=(inline_resource("workspace/common", b"public"),),
+            worker=(inline_resource("workspace/worker", b"task-only"),),
+        ),
     )
     model = ReplayModel(
         [
@@ -1586,21 +1299,3 @@ async def test_separate_verifyit_grader_uses_typed_submissions_without_worker_fi
     for machine in factory.machines:
         with pytest.raises(RuntimeError):
             await machine.run(Command(("true",)))
-
-
-@pytest.mark.parametrize("invalid", ["text_executable", "private_output"])
-async def test_invalid_private_grading_inputs_fail_before_machine_acquisition(invalid):
-    task = arithmetic_task().model_copy(
-        update={
-            "verifier": (
-                grader_package(StdioSpec(command="python answer.py")).verifier
-                if invalid == "text_executable"
-                else arithmetic_task().verifier
-            ),
-            "output_paths": ("/tests/verifier.toml",) if invalid == "private_output" else (),
-        }
-    )
-    factory = RecordingShellSimFactory()
-    with pytest.raises(ValueError):
-        await engine(ReplayModel([]), {"local": factory}).run(lowered(task, verifier_machine=machine_runtime()))
-    assert factory.machines == []

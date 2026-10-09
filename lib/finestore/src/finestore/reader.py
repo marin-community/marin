@@ -12,6 +12,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
 from typing import BinaryIO, ClassVar, Protocol
@@ -39,6 +40,7 @@ from finestore.layout import (
 )
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
+MAX_DESCRIPTOR_READS = 4
 
 
 @dataclass
@@ -436,6 +438,14 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
     return combined
 
 
+def _blob_shard_descriptors(
+    filesystem: PyFileSystem, primary_key: tuple[str, ...], names: Sequence[str], shard: _ReadableShard
+) -> pa.Table:
+    plan = _read_plan(filesystem, (shard,), primary_key, None, [(BlobColumns.NAME, "in", list(names))])
+    assert plan is not None
+    return _scan_plan(plan, None, scan_profile=_BLOB_DESCRIPTOR_SCAN_PROFILE)
+
+
 class _ReadOperations:
     """Read operations shared by manifest and legacy listing snapshots."""
 
@@ -613,12 +623,21 @@ class _ReadOperations:
         if diagnostics is not None:
             diagnostics.descriptor_lookups += 1
         try:
-            plan = self._read_plan(BlobTables.DESCRIPTORS, None, [(BlobColumns.NAME, "in", list(names))])
-            if plan is None:
+            shards = tuple(self.list_shards(BlobTables.DESCRIPTORS))
+            if not shards:
                 return None
             if diagnostics is not None:
-                diagnostics.selected_shards += len(plan.shards)
-            return _scan_plan(plan, None, scan_profile=_BLOB_DESCRIPTOR_SCAN_PROFILE)
+                diagnostics.selected_shards += len(shards)
+            fs, _ = factory.url_to_fs(self.root)
+            filesystem = PyFileSystem(_BlobReadHandler(fs))
+            primary_key = self.primary_key(BlobTables.DESCRIPTORS)
+            # Read footers and matching rows together, with bounded concurrent decoding.
+            # Version resolution still spans every shard in the committed snapshot.
+            with ThreadPoolExecutor(max_workers=min(MAX_DESCRIPTOR_READS, len(shards))) as executor:
+                parts = list(
+                    executor.map(lambda shard: _blob_shard_descriptors(filesystem, primary_key, names, shard), shards)
+                )
+            return _deduplicate(pa.concat_tables(parts, promote_options="permissive"), primary_key)
         finally:
             if diagnostics is not None:
                 diagnostics.descriptor_seconds += time.monotonic() - started
