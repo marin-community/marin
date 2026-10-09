@@ -92,6 +92,7 @@ EXPANDED_QUALITY = frozenset({SourceQualityStatus.UNREVIEWED, SourceQualityStatu
 
 
 class SourceProcessingMode(StrEnum):
+    QUICK = "quick"
     SAMPLE = "sample"
     FULL = "full"
 
@@ -916,6 +917,8 @@ def run_source_pipeline(
     canonical_source: str,
 ) -> SourcePipelineResult:
     """Run one source and persist final execution counters and partial phase evidence."""
+    if config.mode == SourceProcessingMode.QUICK:
+        raise ValueError("QUICK uses run_conversion without a review or verification configuration")
     telemetry = SourceTelemetry(canonical_source, output_path)
     run = _SourceRun(recipe, context, source_input, StoragePath(output_path), config, telemetry)
     with telemetry.record():

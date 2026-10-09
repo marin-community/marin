@@ -416,7 +416,7 @@ class AlternatingParts:
                 yield index, row
 
 
-@pytest.mark.parametrize("mode", list(SourceProcessingMode))
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path, mode):
     source, produced = tmp_path / "source", tmp_path / "produced"
     produced.mkdir()

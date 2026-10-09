@@ -35,6 +35,7 @@ from shellbox.machine import Backend
 from taskcompendium.convert.environment import IMAGE_BACKENDS
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.pipeline.controls import controls_identity
+from taskcompendium.pipeline.conversion import ConversionResult, run_conversion
 from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
 from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
@@ -49,12 +50,15 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.source_processing import (
     SOURCE_PIPELINE_REVISION,
     SourcePipelineConfig,
+    SourcePipelineResult,
+    SourceProcessingMode,
     run_source_pipeline,
 )
 from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION
 from taskcompendium.pipeline.sources import source_files_identity
 from taskcompendium.runtime.local import context_paths
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime
@@ -248,6 +252,53 @@ def source_recipe(
     )
 
 
+def convert_source(
+    pipeline: RlDataPipeline,
+    *,
+    mode: SourceProcessingMode,
+    context: ZephyrContext,
+    source_input: str,
+    output_path: str,
+    inputs: Mapping[str, str],
+    config: SourcePipelineConfig | None = None,
+    grader_environment: EnvironmentRequirements | None = None,
+) -> ConversionResult | SourcePipelineResult:
+    """Run a declared source against staged inputs in quick, sample, or full mode.
+
+    Quick conversion records the declared grader lock without building or running it.
+    Sample and full runs require the campaign's review configuration and resolved grader.
+    """
+    missing = pipeline.inputs.keys() - inputs.keys()
+    if missing:
+        raise ValueError(f"Missing staged auxiliary inputs for {pipeline.name}: {sorted(missing)}")
+    if mode == SourceProcessingMode.QUICK:
+        if config is not None:
+            raise ValueError("QUICK conversion does not take review or verification settings")
+        if grader_environment is None and pipeline.grader is not None:
+            environment = pipeline.grader
+            if environment.image is not None:
+                grader_environment = environment_requirements(environment)
+            elif environment.lock is not None:
+                grader_environment = EnvironmentRequirements(
+                    compatible_backends=(Backend.LOCAL,), packages_lock=str(environment.lock.resolve())
+                )
+            else:
+                raise ValueError(
+                    f"Quick conversion of {pipeline.name} needs a declared grader lock or resolved environment"
+                )
+        return run_conversion(source_recipe(pipeline, inputs, grader_environment), context, source_input, output_path)
+    if config is None or config.mode != mode:
+        raise ValueError("Sample and full conversion require a configuration with the requested mode")
+    return run_source_pipeline(
+        source_recipe(pipeline, inputs, grader_environment),
+        context,
+        source_input,
+        output_path,
+        config,
+        canonical_source=pipeline.name,
+    )
+
+
 def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -407,14 +458,17 @@ def _run_source(
     if pipeline.grader is not None:
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
-    result = run_source_pipeline(
-        source_recipe(pipeline, run.inputs, grader_environment),
-        campaign.context,
-        run.source_input,
-        run.output_path,
-        config,
-        canonical_source=pipeline.name,
+    result = convert_source(
+        pipeline,
+        mode=config.mode,
+        context=campaign.context,
+        source_input=run.source_input,
+        output_path=run.output_path,
+        inputs=run.inputs,
+        config=config,
+        grader_environment=grader_environment,
     )
+    assert isinstance(result, SourcePipelineResult)
     if result.status == SourceStatus.INCOMPLETE:
         raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
     return RlDataArtifact(path=run.output_path, status=result.status, manifest=asdict(result))
@@ -428,6 +482,8 @@ def source_step(
     A ``grader`` without a declared image requires its environment's artifact to be built already; see
     ``images.build``.
     """
+    if config.mode == SourceProcessingMode.QUICK:
+        raise ValueError("QUICK conversion uses convert_source with staged inputs; it does not build reviewed artifacts")
     downloaded = download_step(pipeline.source, campaign)
     inputs = {name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())}
     grader_step = None

@@ -187,3 +187,42 @@ rejects the source. Repeat `--source NAME` to run a subset.
 Keep `--review-cache` stable across campaigns: reviews are cached by the
 complete request and the declared model revision, so a changed artifact can be
 rebuilt without repeating identical inference.
+
+## Local conversion loop
+
+Quick mode converts every selected row from staged files into TaskSpec parquet.
+It skips model review, grader controls, mechanical checks and deduplication.
+Converter rejections and resource limits still apply. The output includes every
+input row in `normalize/`, with either `task_json` or a typed rejection, and
+counts and elapsed time in `manifest.json`. It has no admitted `final/` view.
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' \
+  python -m experiments.post_training.task_curation.quick \
+  --source tasktrove-calendar \
+  --source tasktrove-math_prism \
+  --input-root /path/to/staged/tasktrove \
+  --output-root /tmp/task-curation-pass-1
+```
+
+The staged root contains the source's declared relative paths, for example
+`laion__nemotron-gym-agent-calendar-v2/tasks.parquet`. Use bytes from the
+source's pinned revision. The command runs a local Zephyr pool and keeps its
+scratch files under the output root. Repeat `--source` to reuse the pool across
+sources. Supply auxiliary inputs with `--input NAME /path/to/staged/input`.
+Choose a fresh output root for each pass; existing source outputs are refused.
+Failures are recorded in `campaign.json` while the remaining sources continue;
+the command exits unsuccessfully if any source failed.
+
+`pipeline.convert_source(source, mode=SourceProcessingMode.QUICK, ...)` is the
+shared entry point for staged data. `SAMPLE` and `FULL` use the same function
+with a matching `SourcePipelineConfig` and the resolved grader environment;
+reviewed campaign artifacts call it too. Quick mode needs no review config or
+credentials. It records a declared grader image or local dependency lock
+without building or executing the environment. Sources that declare only PyPI
+pins need an explicit resolved grader environment before quick conversion.
+
+Compare row counts by source and retain the rejection categories. Quick counts
+can exceed the published TaskTrove release because that release also removes
+duplicates, applies reviewed defects and routes some MCQA rows away from RL.
+`original_path` preserves TaskTrove's archive key for later comparisons.
