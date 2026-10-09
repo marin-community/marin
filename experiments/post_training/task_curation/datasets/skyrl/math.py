@@ -24,6 +24,7 @@ from verifyit.modes.extract import extract_boxed
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, UrlSource
 from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
 
+AIME_VERIFIER_REVISION = "88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4"
 SKYRL_METADATA = DataSourceMetadata(
     id="",
     name="",
@@ -328,7 +329,7 @@ SOURCES = (
             dataset_id="HuggingFaceH4/aime_2024",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="2fe88a2f1091d5048c0f36abc874fb997b3dd99a",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=30,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -376,7 +377,7 @@ SOURCES = (
             dataset_id="di-zhang-fdu/AIME_1983_2024",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="3e2cc86390666c5c756622afc0eeb9e6194496bc",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=933,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -423,7 +424,7 @@ SOURCES = (
             dataset_id="chaochun/nlu-asdiv-dataset",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="883f90a9a65bf00304ba8f37423910fe743abc47",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=2305,
             count_basis="Original GitHub README: complete ASDiv problem collection",
@@ -470,7 +471,7 @@ SOURCES = (
             dataset_id="BytedTsinghua-SIA/DAPO-Math-17k",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="65877096c24ffa7abc4e4fa5edb95cf3413a5674",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=1791700,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -515,7 +516,7 @@ SOURCES = (
             dataset_id="agentica-org/DeepScaleR-Preview-Dataset",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="b6ae8c60f5c1f2b594e2140b91c49c9ad0949e29",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=40315,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -606,7 +607,7 @@ SOURCES = (
             dataset_id="pafitis/HARDMath_processed_training",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="937e9f10356e31e854f6efb9a2507f1e200c8b25",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=702,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -653,7 +654,7 @@ SOURCES = (
             dataset_id="EleutherAI/hendrycks_math",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="21a5633873b6a120296cce3e2df9d5550074f4a3",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=7500,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -698,7 +699,7 @@ SOURCES = (
             dataset_id="HuggingFaceH4/MATH-500",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=500,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -744,7 +745,7 @@ SOURCES = (
             dataset_id="AI-MO/NuminaMath-CoT",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="9d8d210c9f6a36c8f3cd84045668c9b7800ef517",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=859494,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -792,7 +793,7 @@ SOURCES = (
             dataset_id="allenai/RLVR-MATH",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="bd2a93551b503a395fadd1a740d957559cfe6f3c",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=7500,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -836,7 +837,7 @@ SOURCES = (
             dataset_id="ChilleD/SVAMP",
             revised_at="2026-10-08T05:59:25Z",
             dataset_revision="5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef",
-            verifier_revision="88660ec860e483213c2a1c5e03d7f1c483e93ab25860648ae40a656fcb876db4",
+            verifier_revision=AIME_VERIFIER_REVISION,
             environment="aime",
             task_count=700,
             count_basis="HF card / viewer selected split rows, before filtering / deduplication",
@@ -867,7 +868,7 @@ SOURCES = (
 )
 
 
-def math_pipeline(source: MathSource) -> RlDataSource:
+def math_source(source: MathSource) -> RlDataSource:
     return RlDataSource(
         metadata=source.metadata,
         pipeline=RlDataPipeline(
@@ -884,4 +885,4 @@ def math_pipeline(source: MathSource) -> RlDataSource:
 
 
 def sources() -> list[RlDataSource]:
-    return [math_pipeline(source) for source in SOURCES]
+    return [math_source(source) for source in SOURCES]

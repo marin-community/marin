@@ -5,46 +5,15 @@
 
 from dataclasses import replace
 
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-TASKTROVE_METADATA = DataSourceMetadata(
-    id="",
-    name="",
-    origin="Task Trove",
-    url="https://huggingface.co/datasets/open-athena/task-trove",
-    dataset_id="open-athena/task-trove",
-    revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
-    revised_at="2026-10-08T09:34:47.000Z",
-    environment="Harbor",
-    type="Agentic",
-    turns="Multi-turn",
-    count_basis="Released Harbor tasks: manifest by_source.converted",
-    count_precision="exact",
-    count_url=(
-        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
-        "e826563f5718dbf/manifest.json"
-    ),
-    benchmark_basis="Release manifest does not designate benchmarks",
-    family_basis="Task Trove release manifest source_verdicts.family",
-    family_url=(
-        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
-        "e826563f5718dbf/manifest.json"
-    ),
-    classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
-    canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
-    provenance_url=(
-        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb8"
-        "03e826563f5718dbf/manifest.json"
-    ),
-    recorded_at="2026-10-08",
-)
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE
+from experiments.post_training.task_curation.source import RlDataSource
 
 
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:AweAI-Team__CalibForge",
                 name="AweAI-Team__CalibForge",
                 display_name="AweAI-Team/CalibForge",
@@ -73,7 +42,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:DCAgent__exp_rle_adversarial-v6",
                 name="DCAgent__exp_rle_adversarial-v6",
                 display_name="DCAgent/exp_rle_adversarial-v6",
@@ -98,7 +67,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:DCAgent__exp_rpt_nemotron-cpp",
                 name="DCAgent__exp_rpt_nemotron-cpp",
                 display_name="DCAgent/exp_rpt_nemotron-cpp",
@@ -123,7 +92,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:DCAgent__inferredbugs-sandboxes-verifier",
                 name="DCAgent__inferredbugs-sandboxes-verifier",
                 display_name="DCAgent/inferredbugs-sandboxes-verifier",
@@ -147,7 +116,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:DCAgent__mix_h4_binary_easy",
                 name="DCAgent__mix_h4_binary_easy",
                 display_name="DCAgent/mix_h4_binary_easy",
@@ -171,7 +140,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
                 name="DCAgent__selfinstruct-naive-sandboxes-2-verified-v3",
                 display_name="DCAgent/selfinstruct-naive-sandboxes-2-verified-v3",
@@ -195,7 +164,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:GAIR__OpenSWE__openswe_oss",
                 name="GAIR__OpenSWE__openswe_oss",
                 display_name="GAIR/OpenSWE__openswe_oss",
@@ -234,7 +203,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:GAIR__OpenSWE__openswe_other",
                 name="GAIR__OpenSWE__openswe_other",
                 display_name="GAIR/OpenSWE__openswe_other",
@@ -272,7 +241,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__codeelo-v2",
                 name="laion__codeelo-v2",
                 display_name="laion/codeelo-v2",
@@ -293,7 +262,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_bugsinpy-v4",
                 name="laion__exp_rpt_bugsinpy-v4",
                 display_name="laion/exp_rpt_bugsinpy-v4",
@@ -317,7 +286,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_codenet-python-v4",
                 name="laion__exp_rpt_codenet-python-v4",
                 display_name="laion/exp_rpt_codenet-python-v4",
@@ -341,7 +310,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_crosscodeeval-csharp-v4",
                 name="laion__exp_rpt_crosscodeeval-csharp-v4",
                 display_name="laion/exp_rpt_crosscodeeval-csharp-v4",
@@ -362,7 +331,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_crosscodeeval-java-v3",
                 name="laion__exp_rpt_crosscodeeval-java-v3",
                 display_name="laion/exp_rpt_crosscodeeval-java-v3",
@@ -383,7 +352,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_crosscodeeval-python-v2",
                 name="laion__exp_rpt_crosscodeeval-python-v2",
                 display_name="laion/exp_rpt_crosscodeeval-python-v2",
@@ -404,7 +373,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_crosscodeeval-typescript-v2",
                 name="laion__exp_rpt_crosscodeeval-typescript-v2",
                 display_name="laion/exp_rpt_crosscodeeval-typescript-v2",
@@ -425,7 +394,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_ghactions-v3",
                 name="laion__exp_rpt_ghactions-v3",
                 display_name="laion/exp_rpt_ghactions-v3",
@@ -446,7 +415,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_methods2test-large-v4",
                 name="laion__exp_rpt_methods2test-large-v4",
                 display_name="laion/exp_rpt_methods2test-large-v4",
@@ -471,7 +440,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_nemotron-junit-v6",
                 name="laion__exp_rpt_nemotron-junit-v6",
                 display_name="laion/exp_rpt_nemotron-junit-v6",
@@ -492,7 +461,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_scaffold-v3",
                 name="laion__exp_rpt_scaffold-v3",
                 display_name="laion/exp_rpt_scaffold-v3",
@@ -513,7 +482,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_stack-cpp-v4",
                 name="laion__exp_rpt_stack-cpp-v4",
                 display_name="laion/exp_rpt_stack-cpp-v4",
@@ -538,7 +507,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
                 name="laion__exp_rpt_stack-dockerfile-gpt5mini-v7",
                 display_name="laion/exp_rpt_stack-dockerfile-gpt5mini-v7",
@@ -562,7 +531,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_stack-go-v5",
                 name="laion__exp_rpt_stack-go-v5",
                 display_name="laion/exp_rpt_stack-go-v5",
@@ -587,7 +556,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_stack-jest-v5",
                 name="laion__exp_rpt_stack-jest-v5",
                 display_name="laion/exp_rpt_stack-jest-v5",
@@ -608,7 +577,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_stack-junit-v6",
                 name="laion__exp_rpt_stack-junit-v6",
                 display_name="laion/exp_rpt_stack-junit-v6",
@@ -632,7 +601,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_stack-php-large-v9",
                 name="laion__exp_rpt_stack-php-large-v9",
                 display_name="laion/exp_rpt_stack-php-large-v9",
@@ -653,7 +622,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_stack-pytest-large-v3",
                 name="laion__exp_rpt_stack-pytest-large-v3",
                 display_name="laion/exp_rpt_stack-pytest-large-v3",
@@ -678,7 +647,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__exp_rpt_stack-rspec-v4",
                 name="laion__exp_rpt_stack-rspec-v4",
                 display_name="laion/exp_rpt_stack-rspec-v4",
@@ -702,7 +671,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__magicoder-v4",
                 name="laion__magicoder-v4",
                 display_name="laion/magicoder-v4",
@@ -727,7 +696,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__mix_h10_reward_proportional-v2",
                 name="laion__mix_h10_reward_proportional-v2",
                 display_name="laion/mix_h10_reward_proportional-v2",
@@ -751,7 +720,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__mix_h11_single_skill_only-v2",
                 name="laion__mix_h11_single_skill_only-v2",
                 display_name="laion/mix_h11_single_skill_only-v2",
@@ -776,7 +745,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__mix_h8_original_tests-v2",
                 name="laion__mix_h8_original_tests-v2",
                 display_name="laion/mix_h8_original_tests-v2",
@@ -800,7 +769,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-agentic-function-calling-pivot-v3",
                 name="laion__nemotron-gym-agentic-function-calling-pivot-v3",
                 display_name="laion/nemotron-gym-agentic-function-calling-pivot-v3",
@@ -825,7 +794,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
                 name="laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
                 display_name="laion/nemotron-gym-agentic-indirect-prompt-injection-v3",
@@ -850,7 +819,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-agentic-swe-pivot-v4",
                 name="laion__nemotron-gym-agentic-swe-pivot-v4",
                 display_name="laion/nemotron-gym-agentic-swe-pivot-v4",
@@ -871,7 +840,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-cfbench-v4",
                 name="laion__nemotron-gym-cfbench-v4",
                 display_name="laion/nemotron-gym-cfbench-v4",
@@ -896,7 +865,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-identity-following-v4",
                 name="laion__nemotron-gym-identity-following-v4",
                 display_name="laion/nemotron-gym-identity-following-v4",
@@ -920,7 +889,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-instruction-following-adversarial-v5",
                 name="laion__nemotron-gym-instruction-following-adversarial-v5",
                 display_name="laion/nemotron-gym-instruction-following-adversarial-v5",
@@ -941,7 +910,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-instruction-following-citation-v2",
                 name="laion__nemotron-gym-instruction-following-citation-v2",
                 display_name="laion/nemotron-gym-instruction-following-citation-v2",
@@ -962,7 +931,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-instruction-following-freeform-v2",
                 name="laion__nemotron-gym-instruction-following-freeform-v2",
                 display_name="laion/nemotron-gym-instruction-following-freeform-v2",
@@ -983,7 +952,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-instruction-following-multiturnchat-v4",
                 name="laion__nemotron-gym-instruction-following-multiturnchat-v4",
                 display_name="laion/nemotron-gym-instruction-following-multiturnchat-v4",
@@ -1004,7 +973,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-inverse-ifeval-v4",
                 name="laion__nemotron-gym-inverse-ifeval-v4",
                 display_name="laion/nemotron-gym-inverse-ifeval-v4",
@@ -1025,7 +994,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-knowledge-web-search-mcqa-v2",
                 name="laion__nemotron-gym-knowledge-web-search-mcqa-v2",
                 display_name="laion/nemotron-gym-knowledge-web-search-mcqa-v2",
@@ -1049,7 +1018,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-litmus-bench-v2",
                 name="laion__nemotron-gym-litmus-bench-v2",
                 display_name="laion/nemotron-gym-litmus-bench-v2",
@@ -1073,7 +1042,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-math-advanced-calculations-v4",
                 name="laion__nemotron-gym-math-advanced-calculations-v4",
                 display_name="laion/nemotron-gym-math-advanced-calculations-v4",
@@ -1098,7 +1067,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-multichallenge-vanilla-v3",
                 name="laion__nemotron-gym-multichallenge-vanilla-v3",
                 display_name="laion/nemotron-gym-multichallenge-vanilla-v3",
@@ -1119,7 +1088,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-qa-abstention-v4",
                 name="laion__nemotron-gym-qa-abstention-v4",
                 display_name="laion/nemotron-gym-qa-abstention-v4",
@@ -1143,7 +1112,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-sysbench-v4",
                 name="laion__nemotron-gym-sysbench-v4",
                 display_name="laion/nemotron-gym-sysbench-v4",
@@ -1168,7 +1137,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__openswe-tasks-patched-v7-oracle-success",
                 name="laion__openswe-tasks-patched-v7-oracle-success",
                 display_name="laion/openswe-tasks-patched-v7-oracle-success",
@@ -1193,7 +1162,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__r2egym-patched-full-oracle-v3",
                 name="laion__r2egym-patched-full-oracle-v3",
                 display_name="laion/r2egym-patched-full-oracle-v3",
@@ -1217,7 +1186,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__swegym-tasks-patched-validated-v5",
                 name="laion__swegym-tasks-patched-validated-v5",
                 display_name="laion/swegym-tasks-patched-validated-v5",
@@ -1242,7 +1211,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__toolscale-v4",
                 name="laion__toolscale-v4",
                 display_name="laion/toolscale-v4",
@@ -1267,7 +1236,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__tulu3-sft-personas-math-sandboxes-verified-v3",
                 name="laion__tulu3-sft-personas-math-sandboxes-verified-v3",
                 display_name="laion/tulu3-sft-personas-math-sandboxes-verified-v3",
@@ -1288,7 +1257,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:R2E-Gym__R2E-Gym-V1",
                 name="R2E-Gym__R2E-Gym-V1",
                 display_name="R2E-Gym/R2E-Gym-V1",
@@ -1319,7 +1288,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:SankalpKJ__nemotron-code-oracle-filtered",
                 name="SankalpKJ__nemotron-code-oracle-filtered",
                 display_name="SankalpKJ/nemotron-code-oracle-filtered",
@@ -1343,7 +1312,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:SWE-Gym__SWE-Gym",
                 name="SWE-Gym__SWE-Gym",
                 display_name="SWE-Gym/SWE-Gym",
@@ -1370,7 +1339,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__code",
                 name="XiaomiMiMo__MiMo-V2.6-RL-oss__code",
                 display_name="XiaomiMiMo/MiMo-V2.6-RL-oss__code",
@@ -1403,7 +1372,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__cyber",
                 name="XiaomiMiMo__MiMo-V2.6-RL-oss__cyber",
                 display_name="XiaomiMiMo/MiMo-V2.6-RL-oss__cyber",
@@ -1439,7 +1408,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
                 name="XiaomiMiMo__MiMo-V2.6-RL-oss__general",
                 display_name="XiaomiMiMo/MiMo-V2.6-RL-oss__general",
@@ -1478,7 +1447,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
                 name="XiaomiMiMo__MiMo-V2.6-RL-oss__music",
                 display_name="XiaomiMiMo/MiMo-V2.6-RL-oss__music",
@@ -1502,7 +1471,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:XiaomiMiMo__MiMo-V2.6-RL-oss__webdev",
                 name="XiaomiMiMo__MiMo-V2.6-RL-oss__webdev",
                 display_name="XiaomiMiMo/MiMo-V2.6-RL-oss__webdev",

@@ -26,12 +26,10 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-TASKTROVE_METADATA = DataSourceMetadata(id="", name="", origin="Task Trove", recorded_at="2026-10-08")
+from experiments.post_training.task_curation.source import RlDataSource
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
 CONTEXT_FILE = "conversation.txt"
@@ -91,44 +89,19 @@ def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
                 name="laion__nemotron-gym-multichallenge-advanced-v4",
                 display_name="laion/nemotron-gym-multichallenge-advanced-v4",
-                url="https://huggingface.co/datasets/open-athena/task-trove",
-                dataset_id="open-athena/task-trove",
-                revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
-                revised_at="2026-10-08T09:34:47.000Z",
                 dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
                 verifier_revision=None,
                 family="llm-judge-freeform",
-                environment="Harbor",
-                type="Agentic",
-                turns="Multi-turn",
                 task_count=1052,
-                count_basis="Released Harbor tasks: manifest by_source.converted",
-                count_precision="exact",
-                count_url=(
-                    "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bb"
-                    "ccb803e826563f5718dbf/manifest.json"
-                ),
                 notes=(
                     "Multi-turn with four factual or formatting criteria per task. The converter "
                     "preserves the source's explicit positive or negated pass condition."
                 ),
-                benchmark_basis="Release manifest does not designate benchmarks",
-                family_basis="Task Trove release manifest source_verdicts.family",
-                family_url=(
-                    "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bb"
-                    "ccb803e826563f5718dbf/manifest.json"
-                ),
-                classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
                 canonical_source="laion/nemotron-gym-multichallenge-advanced-v4",
-                canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
-                provenance_url=(
-                    "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5"
-                    "bbccb803e826563f5718dbf/manifest.json"
-                ),
                 verification="judge",
                 snapshot_safe=True,
                 snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",

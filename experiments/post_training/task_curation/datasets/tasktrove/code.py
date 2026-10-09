@@ -29,48 +29,20 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from verifyit.spec import Compare, StdioSpec
 
 from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
 from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
 
-TASKTROVE_METADATA = DataSourceMetadata(
-    id="",
-    name="",
-    origin="Task Trove",
-    url="https://huggingface.co/datasets/open-athena/task-trove",
-    dataset_id="open-athena/task-trove",
-    revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
-    revised_at="2026-10-08T09:34:47.000Z",
+TASKTROVE_METADATA = replace(
+    TASKTROVE_RELEASE,
     verifier_revision=None,
-    environment="Harbor",
-    type="Agentic",
-    turns="Multi-turn",
-    count_basis="Released Harbor tasks: manifest by_source.converted",
-    count_precision="exact",
-    count_url=(
-        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
-        "e826563f5718dbf/manifest.json"
-    ),
-    benchmark_basis="Release manifest does not designate benchmarks",
-    family_basis="Task Trove release manifest source_verdicts.family",
-    family_url=(
-        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
-        "e826563f5718dbf/manifest.json"
-    ),
-    classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
-    canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
-    provenance_url=(
-        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb8"
-        "03e826563f5718dbf/manifest.json"
-    ),
     verification="stdio",
     snapshot_safe=True,
     snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
     upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
     languages=("python",),
     modes=("stdio",),
-    recorded_at="2026-10-08",
 )
 
 AGENT_IMAGE = Environment(
@@ -184,9 +156,7 @@ def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> 
     )
 
 
-def stdio_pipeline(
-    name: str, config: str, convert: Converter, rubric: str, metadata: DataSourceMetadata
-) -> RlDataSource:
+def stdio_source(name: str, config: str, convert: Converter, rubric: str, metadata: DataSourceMetadata) -> RlDataSource:
     return RlDataSource(
         metadata=metadata,
         pipeline=RlDataPipeline(
@@ -205,7 +175,7 @@ def stdio_pipeline(
 
 def sources() -> list[RlDataSource]:
     return [
-        stdio_pipeline(
+        stdio_source(
             "code_contests",
             "DCAgent__code-contests-noblock",
             convert_code_contests_task,
@@ -225,7 +195,7 @@ def sources() -> list[RlDataSource]:
                 input_count=8728,
             ),
         ),
-        stdio_pipeline(
+        stdio_source(
             "codeforces",
             "laion__codeforces-v3",
             convert_codeforces_task,
@@ -248,7 +218,7 @@ def sources() -> list[RlDataSource]:
                 input_count=10000,
             ),
         ),
-        stdio_pipeline(
+        stdio_source(
             "competitive_coding",
             "laion__nemotron-gym-competitive-coding-v2",
             convert_competitive_coding_task,
@@ -268,7 +238,7 @@ def sources() -> list[RlDataSource]:
                 input_count=15713,
             ),
         ),
-        stdio_pipeline(
+        stdio_source(
             "taco",
             "laion__exp_rpt_taco-v2",
             convert_taco_task,

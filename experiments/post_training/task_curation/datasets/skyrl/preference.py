@@ -254,7 +254,7 @@ HH_SUBSETS = (
                 "a7ec602a1fa/harmless-base"
             ),
             dataset_id="Anthropic/hh-rlhf",
-            dataset_revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+            dataset_revision=HH_REVISION,
             turns="Multi-turn",
             task_count=42537,
             count_basis="Named HH collection train rows, corroborated by tasksource mirror metadata",
@@ -291,7 +291,7 @@ HH_SUBSETS = (
                 "a7ec602a1fa/helpful-base"
             ),
             dataset_id="Anthropic/hh-rlhf",
-            dataset_revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+            dataset_revision=HH_REVISION,
             turns="Multi-turn",
             task_count=43835,
             count_basis="Named HH collection train rows, corroborated by tasksource mirror metadata",
@@ -328,7 +328,7 @@ HH_SUBSETS = (
                 "a7ec602a1fa/helpful-online"
             ),
             dataset_id="Anthropic/hh-rlhf",
-            dataset_revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+            dataset_revision=HH_REVISION,
             turns="Multi-turn",
             task_count=22007,
             count_basis="Named HH collection train rows, corroborated by tasksource mirror metadata",
@@ -365,7 +365,7 @@ HH_SUBSETS = (
                 "a7ec602a1fa/helpful-rejection-sampled"
             ),
             dataset_id="Anthropic/hh-rlhf",
-            dataset_revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+            dataset_revision=HH_REVISION,
             turns="Multi-turn",
             task_count=52421,
             count_basis="Named HH collection train rows, corroborated by tasksource mirror metadata",

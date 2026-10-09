@@ -15,45 +15,17 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
 
-TASKTROVE_METADATA = DataSourceMetadata(
-    id="",
-    name="",
-    origin="Task Trove",
-    url="https://huggingface.co/datasets/open-athena/task-trove",
-    dataset_id="open-athena/task-trove",
-    revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
-    revised_at="2026-10-08T09:34:47.000Z",
+TASKTROVE_METADATA = replace(
+    TASKTROVE_RELEASE,
     verifier_revision=None,
     family="swe-repo",
-    environment="Harbor",
-    type="Agentic",
-    turns="Multi-turn",
-    count_basis="Released Harbor tasks: manifest by_source.converted",
-    count_precision="exact",
-    count_url=(
-        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
-        "e826563f5718dbf/manifest.json"
-    ),
-    benchmark_basis="Release manifest does not designate benchmarks",
-    family_basis="Task Trove release manifest source_verdicts.family",
-    family_url=(
-        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb803"
-        "e826563f5718dbf/manifest.json"
-    ),
-    classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
-    canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
-    provenance_url=(
-        "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bbccb8"
-        "03e826563f5718dbf/manifest.json"
-    ),
     snapshot_safe=True,
     snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
     upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-    recorded_at="2026-10-08",
 )
 
 WORKSPACE = "/testbed"
@@ -85,7 +57,7 @@ def convert_repository_task(row: RawRow, _context: ConversionContext) -> TaskSpe
     return swe_task(row, workspace=WORKSPACE)
 
 
-def repository_pipeline(name: str, config: str, rubric: str, metadata: DataSourceMetadata) -> RlDataSource:
+def repository_source(name: str, config: str, rubric: str, metadata: DataSourceMetadata) -> RlDataSource:
     return RlDataSource(
         metadata=metadata,
         pipeline=RlDataPipeline(
@@ -102,7 +74,7 @@ def repository_pipeline(name: str, config: str, rubric: str, metadata: DataSourc
 
 def sources() -> list[RlDataSource]:
     return [
-        repository_pipeline(
+        repository_source(
             "swe_rebench",
             "DCAgent__swe_rebench_v2_patched_oracle-v2",
             SWE_REBENCH_RUBRIC,
@@ -143,7 +115,7 @@ def sources() -> list[RlDataSource]:
                 modes=("script", "pytest"),
             ),
         ),
-        repository_pipeline(
+        repository_source(
             "swesmith",
             "laion__swesmith-oracle-filtered-v2",
             SWESMITH_RUBRIC,

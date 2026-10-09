@@ -38,11 +38,9 @@ from taskcompendium.pipeline.models import (
 )
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, Spec, XmlElementsSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-TASKTROVE_METADATA = DataSourceMetadata(id="", name="", origin="Task Trove", recorded_at="2026-10-08")
+from experiments.post_training.task_curation.source import RlDataSource
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (
@@ -173,44 +171,19 @@ def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
             metadata=replace(
-                TASKTROVE_METADATA,
+                TASKTROVE_RELEASE,
                 id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
                 name="laion__nemotron-gym-structured-outputs-v4",
                 display_name="laion/nemotron-gym-structured-outputs-v4",
-                url="https://huggingface.co/datasets/open-athena/task-trove",
-                dataset_id="open-athena/task-trove",
-                revision="ec049a4fb541ffbe5bbccb803e826563f5718dbf",
-                revised_at="2026-10-08T09:34:47.000Z",
                 dataset_revision="4b0dbad71fce1c2a286e2348b3fe5df588b3c1e8",
                 verifier_revision=None,
                 family="instruction-following",
-                environment="Harbor",
-                type="Agentic",
-                turns="Multi-turn",
                 task_count=50446,
-                count_basis="Released Harbor tasks: manifest by_source.converted",
-                count_precision="exact",
-                count_url=(
-                    "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bb"
-                    "ccb803e826563f5718dbf/manifest.json"
-                ),
                 notes=(
                     "Keep JSON/YAML/TOML rows (full jsonschema validation); drop XML and CSV rows, "
                     "which only check key presence."
                 ),
-                benchmark_basis="Release manifest does not designate benchmarks",
-                family_basis="Task Trove release manifest source_verdicts.family",
-                family_url=(
-                    "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5bb"
-                    "ccb803e826563f5718dbf/manifest.json"
-                ),
-                classification_basis="Task Trove tasks run as Agentic interactions in Harbor",
                 canonical_source="laion/nemotron-gym-structured-outputs-v4",
-                canonical_url="https://huggingface.co/datasets/open-athena/task-trove",
-                provenance_url=(
-                    "https://huggingface.co/datasets/open-athena/task-trove/blob/ec049a4fb541ffbe5"
-                    "bbccb803e826563f5718dbf/manifest.json"
-                ),
                 verification="script",
                 snapshot_safe=True,
                 snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
