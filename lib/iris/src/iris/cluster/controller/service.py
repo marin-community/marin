@@ -170,6 +170,13 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.KickTasksResponse:
         return tasks.kick_tasks(self._tasks, request, ctx)
 
+    def renew_worker_token(
+        self,
+        request: controller_pb2.Controller.RenewWorkerTokenRequest,
+        ctx: RequestContext,
+    ) -> controller_pb2.Controller.RenewWorkerTokenResponse:
+        return workers.renew_worker_token(self._workers, request, ctx)
+
     def register(
         self,
         request: controller_pb2.Controller.RegisterRequest,

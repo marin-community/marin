@@ -431,6 +431,11 @@ message Controller {
     EndpointAccess access = 8;       // Proxy access mode.
   }
 
+  message RenewWorkerTokenRequest {}
+  message RenewWorkerTokenResponse {
+    string token = 1;
+  }
+
   // Mint a scoped bearer token authorizing only this endpoint's /proxy path.
   // Signed by the controller's JWT key with a deadline; carries no RPC authority
   // (see rpc/auth.py::authorize_method). Only the endpoint's owning user or an
@@ -876,6 +881,8 @@ service ControllerService {
 
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
+  // Renew a worker credential while it is still valid (worker/admin only).
+  rpc RenewWorkerToken(Controller.RenewWorkerTokenRequest) returns (Controller.RenewWorkerTokenResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
   // Mint a scoped bearer token for one endpoint's /proxy path (owner/admin only).
   rpc MintEndpointToken(Controller.MintEndpointTokenRequest) returns (Controller.MintEndpointTokenResponse);

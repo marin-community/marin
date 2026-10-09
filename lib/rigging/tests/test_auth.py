@@ -2,14 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import google.auth.exceptions
 import google.auth.identity_pool
 import google.auth.impersonated_credentials
+import jwt
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from rigging.auth import (
     BearerTokenInjector,
     GcpAccessTokenProvider,
@@ -17,6 +22,7 @@ from rigging.auth import (
     IapLoginRequired,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
+    RefreshingTokenProvider,
     read_desktop_client,
 )
 
@@ -322,3 +328,88 @@ def test_read_desktop_client_rejects_web_client_secret(tmp_path):
 
     with pytest.raises(ValueError, match="desktop"):
         read_desktop_client(str(secret_file))
+
+
+@pytest.fixture
+def renewal_tokens():
+    def mint(expiry):
+        return jwt.encode(
+            {"iss": "test", "sub": "worker", "aud": "iris", "exp": expiry},
+            "test-signing-key-for-auth-renewal",
+            algorithm="HS256",
+        )
+
+    return mint
+
+
+def test_refreshing_token_survives_bootstrap_expiry_and_restart(tmp_path, renewal_tokens):
+    now = [1000.0]
+    bootstrap = renewal_tokens(2000)
+    renewed = renewal_tokens(4000)
+    cache = tmp_path / "credentials" / "worker.jwt"
+    provider = RefreshingTokenProvider(bootstrap, lambda token: renewed, cache_path=cache, now=lambda: now[0])
+    assert provider.get_token() == bootstrap
+    now[0] = 1750
+    assert provider.get_token() == renewed
+    assert cache.stat().st_mode & 0o777 == 0o600
+    now[0] = 2500
+    restarted = RefreshingTokenProvider(
+        bootstrap, lambda token: renewal_tokens(6000), cache_path=cache, now=lambda: now[0]
+    )
+    assert restarted.get_token() == renewed
+    now[0] = 3750
+    assert restarted.get_token() == renewal_tokens(6000)
+
+
+def test_refreshing_token_serializes_concurrent_renewals(renewal_tokens):
+    initial = renewal_tokens(1200)
+    renewed = renewal_tokens(4000)
+    supplied = []
+
+    def exchange(token):
+        supplied.append(token)
+        return renewed
+
+    provider = RefreshingTokenProvider(initial, exchange, now=lambda: 1000)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        tokens = list(executor.map(lambda _: provider.get_token(), range(16)))
+    assert tokens == [renewed] * 16
+    assert supplied == [initial]
+
+
+def test_refreshing_token_retries_transient_failure_without_sending_expired_token(renewal_tokens):
+    now = [1000.0]
+    initial = renewal_tokens(1200)
+
+    def unavailable(token):
+        raise ConnectError(Code.UNAVAILABLE, "issuer offline")
+
+    provider = RefreshingTokenProvider(initial, unavailable, now=lambda: now[0])
+    assert provider.get_token() == initial
+    now[0] = 1201
+    with pytest.raises(ConnectError) as error:
+        provider.get_token()
+    assert error.value.code == Code.UNAVAILABLE
+
+
+def test_refreshing_token_does_not_hide_auth_rejection(renewal_tokens):
+    def rejected(token):
+        raise ConnectError(Code.UNAUTHENTICATED, "invalid credential")
+
+    provider = RefreshingTokenProvider(renewal_tokens(1200), rejected, now=lambda: 1000)
+    with pytest.raises(ConnectError) as error:
+        provider.get_token()
+    assert error.value.code == Code.UNAUTHENTICATED
+
+
+def test_refreshing_token_renews_without_application_requests(renewal_tokens):
+    stop = threading.Event()
+    renewed = renewal_tokens(4000)
+
+    def exchange(token):
+        stop.set()
+        return renewed
+
+    provider = RefreshingTokenProvider(renewal_tokens(1200), exchange, now=lambda: 1000)
+    provider.run(stop)
+    assert provider.get_token() == renewed

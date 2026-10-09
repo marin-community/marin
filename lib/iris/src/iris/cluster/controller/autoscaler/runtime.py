@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from finelog.client.log_client import Table
+from rigging.auth import TokenProvider
 from rigging.timing import Duration, Timestamp, TokenBucket
 
 from iris.cluster.config import AutoscalerConfig, WorkerConfig
@@ -179,6 +180,7 @@ class Autoscaler:
         evaluation_interval: Duration,
         platform: WorkerInfraProvider,
         base_worker_config: WorkerConfig | None = None,
+        worker_token_provider: TokenProvider | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
         create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
         make_draining_group: Callable[[str], ScalingGroup] | None = None,
@@ -192,6 +194,7 @@ class Autoscaler:
             platform: WorkerInfraProvider instance for shutdown lifecycle
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
+            worker_token_provider: Supplies current credentials when provisioning workers.
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
             create_rate_limit: Project-wide ceiling on slice-creation requests per minute,
                 shared across all scale groups. See ``DEFAULT_CREATE_RATE_LIMIT``.
@@ -206,6 +209,7 @@ class Autoscaler:
         self._platform = platform
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
+        self._worker_token_provider = worker_token_provider
         self._unresolvable_timeout = unresolvable_timeout
 
         # Project-wide slice-creation throttle, shared across all groups. Deferred
@@ -239,6 +243,7 @@ class Autoscaler:
         config: AutoscalerConfig,
         platform: WorkerInfraProvider,
         base_worker_config: WorkerConfig | None = None,
+        worker_token_provider: TokenProvider | None = None,
         make_draining_group: Callable[[str], ScalingGroup] | None = None,
         provisioning_table: Table | None = None,
     ) -> "Autoscaler":
@@ -249,6 +254,7 @@ class Autoscaler:
             config: Autoscaler configuration (with defaults already applied)
             platform: WorkerInfraProvider instance for shutdown lifecycle
             base_worker_config: Base worker config merged with per-group overrides
+            worker_token_provider: Supplies current credentials when provisioning workers.
             make_draining_group: Builds a scale-to-zero group for a retired-but-live scale group
                 (see ``Autoscaler.__init__`` / ``restore_autoscaler_state``).
             provisioning_table: finelog ``iris.provisioning`` table for slice-provisioning outcomes.
@@ -261,6 +267,7 @@ class Autoscaler:
             evaluation_interval=config.evaluation_interval,
             platform=platform,
             base_worker_config=base_worker_config,
+            worker_token_provider=worker_token_provider,
             make_draining_group=make_draining_group,
             provisioning_table=provisioning_table,
         )
@@ -583,7 +590,10 @@ class Autoscaler:
 
     def _per_group_worker_config(self, group: ScalingGroup) -> WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
-        return build_worker_config_for_group(self._base_worker_config, group.config)
+        config = build_worker_config_for_group(self._base_worker_config, group.config)
+        if config is not None and self._worker_token_provider is not None:
+            config.auth_token = self._worker_token_provider.get_token() or ""
+        return config
 
     def _register_slice_workers(
         self,

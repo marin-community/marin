@@ -12,7 +12,7 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler, Table
-from rigging.auth import BearerTokenInjector, StaticTokenProvider
+from rigging.auth import BearerTokenInjector, RefreshingTokenProvider
 from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
@@ -41,6 +41,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
+from iris.cluster.worker.auth import worker_token_provider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
@@ -208,6 +209,7 @@ class Worker:
         # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
         # case where the controller assigns the id is handled by re-attaching
         # post-register.
+        self._token_provider: RefreshingTokenProvider | None = None
         self._log_client: LogClient | None = log_client
         self._log_handler: RemoteLogHandler | None = None
         # Stats tables are registered as soon as a LogClient is available.
@@ -260,7 +262,12 @@ class Worker:
         #      worker. Lifecycle thread is spawned last for that reason.
         interceptors: tuple[BearerTokenInjector, ...] = ()
         if self._config.controller_address and self._config.auth_token:
-            interceptors = (BearerTokenInjector(StaticTokenProvider(self._config.auth_token), "authorization"),)
+            self._token_provider = worker_token_provider(
+                self._config.controller_address,
+                self._config.auth_token,
+                self._cache_dir / "credentials" / "worker.jwt",
+            )
+            interceptors = (BearerTokenInjector(self._token_provider, "authorization"),)
 
         if self._config.controller_address:
             if self._log_client is None:
@@ -314,6 +321,9 @@ class Worker:
             lambda: self._server.started,
             timeout=Duration.from_seconds(5.0),
         )
+
+        if self._token_provider is not None:
+            self._threads.spawn(target=self._token_provider.run, name="credential-renewal")
 
         # Start lifecycle thread: register + serve + reset loop
         if self._config.controller_address:
