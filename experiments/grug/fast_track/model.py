@@ -3015,7 +3015,8 @@ class CausalSelfAttention(eqx.Module):
             r = rearrange(
                 jnp.einsum("bsd,dc->bsc", x, self.parallax_w.astype(x.dtype)), "... (n d) -> ... n d", d=head_dim
             )
-            r = rms_norm(r.astype(jnp.float32)) * self.parallax_gain.astype(jnp.float32)[:, None]
+            # Divided by the head dim: q and k are normed (|r.k| up to ~head_dim), so s = gain * mean_c r_c k_c.
+            r = rms_norm(r.astype(jnp.float32)) * self.parallax_gain.astype(jnp.float32)[:, None] / head_dim
             attn_out = parallax_attention(q, k, kernel_v, r, rel_bias, seg)
         elif self.gauss is not None and self.cfg.mla_gauss_fast:
             seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
