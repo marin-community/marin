@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.0",
     "marin-verifyit[judge,math,reasoning-gym,schema]",
     "marin-shellbox",
+    "tomlkit>=0.13",
 ]
 
 [project.optional-dependencies]

@@ -26,8 +26,8 @@ is the environment every grade script in the catalog imports:
 - every package in [`../datasets/grader.lock`](../datasets/grader.lock), with
   hashes required: the math, chemistry, schema, instruction-following and
   Reasoning Gym scorer dependencies, `pytest` with `pytest-json-report` and
-  `hypothesis`, the packages the Stack Overflow Python-test tasks import,
-  `harbor-config`, and `verifiable-instructions` at a pinned commit;
+  `hypothesis`, packages used by Stack Overflow Python-test tasks, and
+  `verifiable-instructions` at a pinned commit;
 - the NLTK `punkt_tab` and `wordnet` data.
 
 `COMPILER_GRADER_PACKAGES` adds `build-essential` for the TaskTrove

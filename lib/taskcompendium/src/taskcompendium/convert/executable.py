@@ -64,6 +64,7 @@ def shell_environment(image: EnvironmentRequirements) -> EnvironmentRequirements
     """The agent's shell in ``image``, on the backends that can run it."""
     return EnvironmentRequirements(
         docker_image=image.docker_image,
+        docker_build=image.docker_build,
         compatible_backends=image.compatible_backends,
         capabilities=SHELL_CAPABILITIES,
         tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
@@ -133,6 +134,7 @@ def converted_workspace_task(
         else:
             worker.append(inline_resource(path, data))
     oracle.extend(inline_resource(path, data) for path, data in converted.solution_files.items())
+    tags = (*converted.tags, f"language:{converted.language}") if converted.language else converted.tags
     return workspace_task(
         row,
         instruction=instruction,
@@ -143,7 +145,7 @@ def converted_workspace_task(
         verifier=tuple(verifier),
         worker=tuple(worker),
         oracle=tuple(oracle),
-        tags=converted.tags,
+        tags=tags,
     )
 
 

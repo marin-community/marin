@@ -312,11 +312,11 @@ class ArtifactDataSource:
 
 @dataclass(frozen=True)
 class TaskTroveDataSource:
-    """A metadata-selected cohort from the compatibility RL view of a TaskTrove release."""
+    """A metadata-selected cohort from an explicitly named packed Harbor file."""
 
     step: ArtifactStep[Artifact]
     selection: TaskTroveSelection
-    relative_path: str = "tasks/part-00000.parquet"
+    relative_path: str
     manifest_path: str = "manifest.json"
 
     def __post_init__(self) -> None:

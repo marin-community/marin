@@ -70,6 +70,9 @@ ULTRA_VERIFIER_URL = (
     "https://github.com/marin-community/MarinSkyRL/tree/"
     "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
 )
+HARBOR_VERIFIER_URL = (
+    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598f3/src/harbor/verifier"
+)
 
 
 SWE_GYM = HfSource(
@@ -500,10 +503,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "3b04884dd2139714321f8e06416596dd5e60dd79d6cb4c3aab2a86b52e96bcdb",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
@@ -519,10 +519,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5f19be9f7240c4b6cc597922b4037fb08648738cd6593c4ff18a98ccc94e792b",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
@@ -535,10 +532,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "8d531a83a74e477b9adae6dd7cf2af3af1e17800a051ebdabe37f468acee61ac",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -551,10 +545,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "011ce022c8a4ec20f483945ae34e42169f0034da9d65e980e509392f6ad913c3",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
@@ -827,10 +818,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "1b8b156a91f4647ed898c1fa0899447b2b08b2419acf292ca05110510fc2e028",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -845,10 +833,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "dd3310c994d63f365d41bba3ca91deda96c8c472e13a68b751f26610e99ca83d",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
     },
@@ -1071,10 +1056,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1087,10 +1069,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
@@ -1339,10 +1318,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1355,10 +1331,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(

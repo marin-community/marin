@@ -1,2 +1,3 @@
 six==1.17.0
 tomlkit==0.14.0
+tomli-w>=1.2

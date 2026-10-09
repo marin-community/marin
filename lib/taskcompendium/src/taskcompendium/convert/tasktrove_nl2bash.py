@@ -24,8 +24,6 @@ from verifyit.spec import ScriptSpec
 from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
 from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
-    Converter,
-    ConverterKey,
     ConvertStatus,
     Rejected,
 )
@@ -168,10 +166,3 @@ def convert_nl2bash(task: TaskFiles) -> ConvertedTask | Rejected:
         data_files=data_files,
         solution_files={SOLVE_SH: solve.replace(_BROKEN_SEED_CALL, _FIXED_SEED_CALL).encode()} if solve else {},
     )
-
-
-CONVERTER = Converter(
-    name="nl2bash",
-    keys=(ConverterKey("shell-cmd", frozenset({"tests/test.sh", "tests/verifier.py"})),),
-    convert=convert_nl2bash,
-)

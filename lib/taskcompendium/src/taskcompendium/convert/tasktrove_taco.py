@@ -24,8 +24,6 @@ from verifyit.spec import Compare, StdioSpec
 from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
 from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
-    Converter,
-    ConverterKey,
     ConvertStatus,
     Rejected,
 )
@@ -88,10 +86,3 @@ def convert_taco(task: TaskFiles) -> ConvertedTask | Rejected:
         data_files=cases,
         solution_files=_oracle_solution_files(solution),
     )
-
-
-CONVERTER = Converter(
-    name="taco",
-    keys=(ConverterKey("stdin-stdout", frozenset({"tests/test.sh"})),),
-    convert=convert_taco,
-)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""What a converter takes and returns, how converters are keyed, and how their results become rows."""
+"""Archive conversion results and their translation into TaskSpec resources."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -32,7 +32,7 @@ class ConvertedTask:
     instruction: str
     spec: Spec
     dockerfile: str
-    """The task's own Dockerfile after the converter's edits; the pipeline appends the tool install."""
+    """The source Dockerfile after conversion, before runtime environment assembly."""
     tags: tuple[str, ...]
     language: str = ""
     data_files: dict[str, bytes] = field(default_factory=dict)
@@ -40,7 +40,7 @@ class ConvertedTask:
     solution_files: dict[str, bytes] = field(default_factory=dict)
     """Oracle solution; stored beside the task, never inside the binary the agent sees."""
     metadata: dict = field(default_factory=dict)
-    """Converter-specific ``task.toml`` metadata; the template's own ``metadata.json`` is merged by ``convert_one``."""
+    """Source-specific metadata retained in the converted task."""
     agent_timeout: float = 900.0
     verifier_timeout: float = 600.0
     verifier_extras: tuple[str, ...] = ()
@@ -53,22 +53,7 @@ class Rejected:
     detail: str
 
 
-@dataclass(frozen=True)
-class ConverterKey:
-    """What selects a converter: the source family from the verdicts and the template's code files."""
-
-    family: str
-    code_files: frozenset[str]
-
-
 ConvertFn = Callable[[TaskFiles], ConvertedTask | Rejected]
-
-
-@dataclass(frozen=True)
-class Converter:
-    name: str
-    keys: tuple[ConverterKey, ...]
-    convert: ConvertFn
 
 
 REJECTION_KINDS = {

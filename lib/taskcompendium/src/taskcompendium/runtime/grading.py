@@ -459,9 +459,9 @@ def _sandbox_grading(
         raise TypeError(
             f"Sandbox grading requires a verifyit grader with an environment or a script grader, not {grader.kind}"
         )
+    require_environment_source(machine_spec, grading.environment)
     if (grading.collect or grading.artifacts) and task_machine is None:
         raise ValueError("Collecting grader inputs requires the task machine")
-    require_environment_source(machine_spec, grading.environment)
     validate_output_directories(task.output_directories, grading.workspace)
     return grading
 

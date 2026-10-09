@@ -123,10 +123,10 @@ TEST_DIRS: dict[str, tuple[str, ...]] = {
     "marin": ("tests", "experiments"),
 }
 
-# Levanter's suite is the only unit leg that runs long enough to be worth spreading over
-# extra runners; every other scope finishes well under the workflow's per-leg budget. A
-# sharded scope splits its selected files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4}
+# The Levanter and Marin suites run long enough to be worth spreading over extra runners;
+# every other scope finishes in a few minutes on one. A sharded scope splits its selected
+# files across this many parallel matrix legs.
+SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 3}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.

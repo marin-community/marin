@@ -9,7 +9,7 @@ description = "One grader for TaskTrove Clean tasks: reads tests/verifier.toml, 
 readme = "README.md"
 requires-python = ">=3.11"
 # Grading dependencies remain optional.
-dependencies = ["tomlkit>=0.13"]
+dependencies = ["tomli-w>=1.2"]
 
 [project.scripts]
 verifyit = "verifyit.grade:main"

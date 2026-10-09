@@ -26,14 +26,28 @@ from zephyr.writers import write_parquet_file
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
-from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
+from taskcompendium.pipeline.audit_schema import (
+    IDENTITY_FIELDS,
+    NORMALIZED_COLUMNS,
+    NORMALIZED_SCHEMA,
+    RAW_SCHEMA,
+    TASK_SCHEMA,
+)
 from taskcompendium.pipeline.controls import GradingMachines, control_suite
+from taskcompendium.pipeline.conversion import (
+    ConvertedRow,
+    convert_source_row,
+    converted_columns,
+    row_source,
+    row_task_id,
+)
 from taskcompendium.pipeline.execution_telemetry import (
     TELEMETRY_FILENAME,
     PhaseTelemetry,
     SourceTelemetry,
     execute_phase,
 )
+from taskcompendium.pipeline.inputs import SourceFileOverride
 from taskcompendium.pipeline.models import Admission, Disposition, FilterPolicy, SourceRecipe, SourceStatus
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
@@ -52,9 +66,10 @@ from taskcompendium.pipeline.source_verification import (
     verify_source,
 )
 from taskcompendium.pipeline.sources import (
+    PARQUET_SHARD_BYTES,
     SourceShard,
     conversion_context,
-    decode_staged_row,
+    conversion_shards,
     row_locator,
     source_files_identity,
     source_shards,
@@ -64,6 +79,7 @@ from taskcompendium.pipeline.sources import (
 from taskcompendium.pipeline.stages import (
     AUDIT_INPUT_PATTERN,
     AuditExecution,
+    CheckedRow,
     ReviewConfig,
     _read_json,
     _write_json,
@@ -75,9 +91,9 @@ from taskcompendium.pipeline.stages import (
     prepare_source,
     skip_source_review,
 )
-from taskcompendium.pipeline.transforms import normalize_row, row_source, row_task_id
+from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "9"
+SOURCE_PIPELINE_REVISION = "10"
 PANEL_ROWS_PER_SHARD = 16
 OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
 SIDECAR_SHARD = "part-{shard:05d}.parquet"
@@ -92,6 +108,7 @@ EXPANDED_QUALITY = frozenset({SourceQualityStatus.UNREVIEWED, SourceQualityStatu
 
 
 class SourceProcessingMode(StrEnum):
+    QUICK = "quick"
     SAMPLE = "sample"
     FULL = "full"
 
@@ -111,6 +128,16 @@ class SourcePipelineConfig:
     filter_policy: FilterPolicy
     normalized_shards: int
     machines: GradingMachines | None
+
+
+@dataclass(frozen=True)
+class ConversionResult:
+    normalized_path: str
+    manifest_path: str
+    input_rows: int
+    converted_rows: int
+    rejections: dict[str, int]
+    elapsed_seconds: float
 
 
 @dataclass(frozen=True)
@@ -150,10 +177,21 @@ def merge_raw_samples(samples: Iterator[RawSample], *, size: int, seed: int) -> 
     return RawSample(count, rows)
 
 
-def _raw_dataset(source_input: str, recipe: SourceRecipe) -> Dataset:
-    return Dataset.from_list(list(source_shards(source_input, recipe.source))).flat_map(
+def _raw_dataset(
+    source_input: str,
+    recipe: SourceRecipe,
+    overrides: Mapping[str, SourceFileOverride] | None,
+    *,
+    parquet_shard_bytes: int = PARQUET_SHARD_BYTES,
+    ledger: StoragePath | None = None,
+) -> Dataset:
+    shards = conversion_shards(source_input, recipe.source, overrides=overrides, parquet_shard_bytes=parquet_shard_bytes)
+    rows = (
         partial(staged_raw_file_rows, source_input, spec=recipe.source, context=conversion_context(recipe))
+        if ledger is None
+        else partial(_staged_rows_with_ledger, source_input=source_input, recipe=recipe, output=ledger)
     )
+    return Dataset.from_list(list(shards)).flat_map(rows)
 
 
 def _binary_hash_identity(value: Any) -> dict[str, Any]:
@@ -169,31 +207,27 @@ def _raw_input_sha256(data: dict[str, Any]) -> str:
     return hashlib.sha256(document.encode()).hexdigest()
 
 
-def _decode_and_normalize(row: dict[str, Any], *, recipe: SourceRecipe) -> dict[str, Any]:
-    metrics = counters.current_stage()
-    raw_input_sha256 = _raw_input_sha256(row["data"])
-    started = time.monotonic()
-    try:
-        decoded = decode_staged_row(row, recipe.source, conversion_context(recipe))
-    finally:
-        metrics.update_counter("source/decode/seconds", time.monotonic() - started)
-        metrics.update_counter("source/decode/attempts", 1)
-    metrics.update_counter("source/decode/completed_rows", 1)
-    started = time.monotonic()
-    try:
-        result = normalize_row(decoded, recipe)
-    finally:
-        metrics.update_counter("source/normalize/seconds", time.monotonic() - started)
-        metrics.update_counter("source/normalize/attempts", 1)
-    result["audit"]["raw"]["raw_input_sha256"] = raw_input_sha256
-    result["audit"]["raw"]["source_locator"] = row["locator"]
-    audit = result["audit"]
-    metrics.update_counter("source/normalize/completed_rows", 1)
-    metrics.update_counter("source/normalize/task_rows", int(audit["normalized"] is not None))
-    rejection = audit["normalization_rejection"]
-    if rejection is not None:
-        metrics.update_counter(f"source/normalize/{rejection['kind']}", 1)
+def _admit_conversion(converted: ConvertedRow, *, recipe: SourceRecipe) -> dict[str, Any]:
+    result = admit_converted_row(converted, recipe)
+    result["audit"]["raw"]["raw_input_sha256"] = _raw_input_sha256(converted.original_data)
+    result["audit"]["raw"]["source_locator"] = converted.raw.source.row
     return result
+
+
+def _convert_selected(row: dict[str, Any], *, recipe: SourceRecipe, cached: Mapping[str, ConvertedRow]) -> ConvertedRow:
+    previous = cached.get(row["locator"])
+    return previous if previous is not None else convert_source_row(row, recipe)
+
+
+def conversion_stage(
+    rows: Dataset, recipe: SourceRecipe, *, cached: Mapping[str, ConvertedRow] | None = None
+) -> Dataset[ConvertedRow]:
+    """Convert selected raw rows once, reusing a reviewed panel during full expansion."""
+    return rows.map(partial(_convert_selected, recipe=recipe, cached=cached or {}))
+
+
+def _checked_conversion(converted: ConvertedRow, *, recipe: SourceRecipe) -> tuple[ConvertedRow, CheckedRow]:
+    return converted, checked_row(_admit_conversion(converted, recipe=recipe))
 
 
 def _locator_identity(locator: str, raw_input_sha256: str | None, recipe: SourceRecipe) -> dict[str, Any]:
@@ -244,29 +278,6 @@ def _staged_rows_with_ledger(
         metrics.update_counter("source/raw/read_seconds", time.monotonic() - started)
 
 
-def _reuse_normalized(row: dict[str, Any], *, recipe: SourceRecipe, cached: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    previous = cached.get(row["locator"])
-    return previous if previous is not None else _decode_and_normalize(row, recipe=recipe)
-
-
-IDENTITY_FIELDS = [
-    ("task_id", pa.string()),
-    ("source_locator", pa.string()),
-    ("raw_input_sha256", pa.string()),
-    ("raw_sha256", pa.string()),
-]
-RAW_SCHEMA = pa.schema(IDENTITY_FIELDS)
-NORMALIZED_COLUMNS = (
-    "task_id",
-    "source_dataset",
-    "source_revision",
-    "source_row",
-    "task_json",
-    "normalization_kind",
-    "normalization_reason",
-    "normalization_detail",
-    "normalization_changes",
-)
 REVIEW_COLUMNS = tuple(
     field.name for field in TASK_SCHEMA if field.name not in {"task_json", "raw_json", "checks", "admission"}
 )
@@ -392,6 +403,8 @@ class _SourceRun:
     output: StoragePath
     config: SourcePipelineConfig
     telemetry: SourceTelemetry
+    source_overrides: Mapping[str, SourceFileOverride] | None
+    parquet_shard_bytes: int
 
     def scratch(self, phase: str) -> StoragePath:
         """The working directory of one of ``SCRATCH_PHASES``."""
@@ -404,6 +417,7 @@ class _Panel:
 
     sample: RawSample
     normalized: list[dict[str, Any]]
+    converted: list[ConvertedRow]
     coverage: QualitySampleCoverage
 
     @property
@@ -422,8 +436,15 @@ def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample
     assert spec.parts is not None
     context = conversion_context(recipe)
     sizes = {
-        file: spec.parts.size(StoragePath(run.source_input) / file, context)
-        for file in staged_files(run.source_input, spec)
+        file: spec.parts.size(
+            (
+                StoragePath(run.source_overrides[file].path)
+                if run.source_overrides
+                else StoragePath(run.source_input) / file
+            ),
+            context,
+        )
+        for file in staged_files(run.source_input, spec, run.source_overrides)
     }
     population_count, chosen = seeded_sample(
         ((file, index) for file, size in sizes.items() for index in range(size)),
@@ -433,7 +454,7 @@ def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample
     indices = {file: frozenset(index for chosen_file, index in chosen if chosen_file == file) for file in sizes}
     shards = [
         replace(shard, indices=indices[shard.file])
-        for shard in source_shards(run.source_input, spec)
+        for shard in source_shards(run.source_input, spec, run.source_overrides)
         if indices[shard.file]
     ]
     rows = execute_phase(
@@ -469,13 +490,13 @@ def _sample_panel(run: _SourceRun) -> _Panel:
         else:
             sample = execute_phase(
                 run.context,
-                Dataset.from_list(list(source_shards(run.source_input, run.recipe.source)))
-                .flat_map(
-                    partial(
-                        _staged_rows_with_ledger, source_input=run.source_input, recipe=run.recipe, output=run.output
-                    )
-                )
-                .reduce(
+                _raw_dataset(
+                    run.source_input,
+                    run.recipe,
+                    run.source_overrides,
+                    parquet_shard_bytes=run.parquet_shard_bytes,
+                    ledger=run.output,
+                ).reduce(
                     partial(sample_raw_rows, size=policy.sample_size, seed=policy.seed),
                     partial(merge_raw_samples, size=policy.sample_size, seed=policy.seed),
                 ),
@@ -484,14 +505,14 @@ def _sample_panel(run: _SourceRun) -> _Panel:
     if not sample.rows:
         raise ValueError("No selected source rows are available for the quality panel")
     with run.telemetry.phase("panel_normalize") as phase:
-        checked = execute_phase(
+        converted_and_checked = execute_phase(
             run.context,
-            Dataset.from_list(list(batched(sample.rows, PANEL_ROWS_PER_SHARD)))
-            .flat_map(iter)
-            .map(partial(_decode_and_normalize, recipe=run.recipe))
-            .map(checked_row),
+            conversion_stage(
+                Dataset.from_list(list(batched(sample.rows, PANEL_ROWS_PER_SHARD))).flat_map(iter), run.recipe
+            ).map(partial(_checked_conversion, recipe=run.recipe)),
             telemetry=phase,
         ).results
+    checked = [checked for _, checked in converted_and_checked]
     # The panel is a few dozen rows: deduplicating it on the driver costs less than an execution.
     with run.telemetry.phase("sample_prepare"):
         prepare_panel(checked, str(run.scratch("sample")), run.recipe, run.config.execution)
@@ -499,6 +520,7 @@ def _sample_panel(run: _SourceRun) -> _Panel:
     return _Panel(
         sample,
         [row.normalized for row in checked],
+        [converted for converted, _ in converted_and_checked],
         QualitySampleCoverage.CENSUS if census else QualitySampleCoverage.RAW_SAMPLE,
     )
 
@@ -529,7 +551,7 @@ def _gate_quality(run: _SourceRun, panel: _Panel, review: ReviewConfig | None) -
 
 def _expand_full(run: _SourceRun, panel: _Panel) -> StoragePath:
     """Prepare every raw row, reusing the panel's normalized rows, and point the quality manifest at them."""
-    cached = {result["locator"]: result for result in panel.normalized}
+    cached = {row.raw.source.row: row for row in panel.converted}
     prepared, quality = run.scratch("full"), run.scratch("quality")
     with run.telemetry.phase("full_prepare") as phase:
         prepare_source(
@@ -539,9 +561,13 @@ def _expand_full(run: _SourceRun, panel: _Panel) -> StoragePath:
             None,
             run.config.execution,
             context=run.context,
-            normalized_rows=_raw_dataset(run.source_input, run.recipe).map(
-                partial(_reuse_normalized, recipe=run.recipe, cached=cached)
-            ),
+            normalized_rows=conversion_stage(
+                _raw_dataset(
+                    run.source_input, run.recipe, run.source_overrides, parquet_shard_bytes=run.parquet_shard_bytes
+                ),
+                run.recipe,
+                cached=cached,
+            ).map(partial(_admit_conversion, recipe=run.recipe)),
             telemetry=phase,
         )
     manifest = _read_json(quality / "manifest.json")
@@ -616,20 +642,21 @@ def _verify(run: _SourceRun, panel: _Panel) -> tuple[dict[str, Any], StoragePath
 
 def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
     recipe, source_input, output = run.recipe, run.source_input, run.output
-    source_files = source_files_identity(recipe.source)
+    inputs = {
+        "source_input": source_input,
+        "inputs": dict(recipe.inputs),
+        "files": source_files_identity(recipe.source),
+        "source_file_overrides": {name: asdict(file) for name, file in (run.source_overrides or {}).items()},
+    }
     _write_json(
         output / "download/manifest.json",
         {
-            "source_input": source_input,
-            "inputs": dict(recipe.inputs),
-            "files": source_files,
-            "staged_files": staged_files(source_input, recipe.source),
-            "input_identity_sha256": canonical_sha256(
-                {"source_input": source_input, "inputs": dict(recipe.inputs), "files": source_files}
-            ),
+            **inputs,
+            "staged_files": staged_files(source_input, recipe.source, run.source_overrides),
+            "input_identity_sha256": canonical_sha256(inputs),
             "population_count": population_count,
             "locator_sidecars": str(output / "download/locators/*.parquet"),
-            "raw_payloads": "Retained at the immutable source input",
+            "raw_payloads": "Retained at source_input or the recorded per-file override paths",
             "raw_input_sha256": (
                 "Canonical source JSON with binary values represented by their SHA256 and byte size; "
                 "absent for rows of a parted source that a sample did not read"
@@ -790,6 +817,8 @@ def _write_manifest(
         "quality_revision": SOURCE_QUALITY_REVISION,
         "verification_revision": SOURCE_VERIFICATION_REVISION,
         "normalized_shards": config.normalized_shards,
+        "source_input": run.source_input,
+        "source_file_overrides": {name: asdict(file) for name, file in (run.source_overrides or {}).items()},
         "datasets": {name: str(output / name) for name in OUTPUT_VIEWS},
         "source_dataset": recipe.source.dataset,
         "source_revision": recipe.source.revision,
@@ -911,12 +940,108 @@ def run_source_pipeline(
     context: ZephyrContext,
     source_input: str,
     output_path: str,
-    config: SourcePipelineConfig,
+    config: SourcePipelineConfig | None = None,
     *,
+    mode: SourceProcessingMode,
     canonical_source: str,
-) -> SourcePipelineResult:
+    parquet_shard_bytes: int = PARQUET_SHARD_BYTES,
+    source_overrides: Mapping[str, SourceFileOverride] | None = None,
+) -> ConversionResult | SourcePipelineResult:
     """Run one source and persist final execution counters and partial phase evidence."""
+    if mode == SourceProcessingMode.QUICK:
+        if config is not None:
+            raise ValueError("QUICK takes no review or verification configuration")
+        return _run_quick(
+            recipe,
+            context,
+            source_input,
+            output_path,
+            parquet_shard_bytes=parquet_shard_bytes,
+            source_overrides=source_overrides,
+        )
+    if config is None or config.mode != mode:
+        raise ValueError("Reviewed modes require a matching source pipeline configuration")
     telemetry = SourceTelemetry(canonical_source, output_path)
-    run = _SourceRun(recipe, context, source_input, StoragePath(output_path), config, telemetry)
+    run = _SourceRun(
+        recipe, context, source_input, StoragePath(output_path), config, telemetry, source_overrides, parquet_shard_bytes
+    )
     with telemetry.record():
         return _run_source_pipeline(run)
+
+
+def _write_conversion(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, output_path: str) -> Iterator[Counter[str]]:
+    counts: Counter[str] = Counter()
+
+    def counted() -> Iterator[dict[str, Any]]:
+        for row in rows:
+            counts["input_rows"] += 1
+            if row["task_json"] is not None:
+                counts["converted_rows"] += 1
+            else:
+                counts[f"rejection:{row['normalization_kind']}:{row['normalization_reason']}"] += 1
+            yield row
+
+    path = format_shard_path(
+        str(StoragePath(output_path) / "part-{shard:05d}.parquet"), shard.shard_idx, shard.total_shards
+    )
+    write_parquet_file(counted(), path, schema=NORMALIZED_SCHEMA)
+    yield counts
+
+
+def _run_quick(
+    recipe: SourceRecipe,
+    context: ZephyrContext,
+    source_input: str,
+    output_path: str,
+    *,
+    parquet_shard_bytes: int = PARQUET_SHARD_BYTES,
+    source_overrides: Mapping[str, SourceFileOverride] | None = None,
+) -> ConversionResult:
+    """Convert every selected staged row, retaining tasks and typed conversion rejections.
+
+    Model review, resource budgets, deduplication, mechanical checks and grader controls do not run.
+    The output is unreviewed and has no production admission or ``final/`` view.
+    Existing outputs are rejected so a failed rerun cannot mix old and new shards.
+    """
+    output = StoragePath(output_path)
+    if output.exists():
+        raise FileExistsError(f"Conversion output already exists: {output_path}")
+    started = time.monotonic()
+    dataset = (
+        conversion_stage(
+            _raw_dataset(source_input, recipe, source_overrides, parquet_shard_bytes=parquet_shard_bytes), recipe
+        )
+        .map(converted_columns)
+        .map_shard(partial(_write_conversion, output_path=str(output / "normalize")))
+    )
+    counts: Counter[str] = Counter()
+    for shard_counts in context.execute(dataset).results:
+        counts.update(shard_counts)
+    result = ConversionResult(
+        normalized_path=str(output / "normalize"),
+        manifest_path=str(output / "manifest.json"),
+        input_rows=counts["input_rows"],
+        converted_rows=counts["converted_rows"],
+        rejections={
+            key.removeprefix("rejection:"): count for key, count in counts.items() if key.startswith("rejection:")
+        },
+        elapsed_seconds=time.monotonic() - started,
+    )
+    (output / "manifest.json").write_text(
+        json.dumps(
+            {
+                **asdict(result),
+                "mode": "quick",
+                "source": recipe.name,
+                "source_dataset": recipe.source.dataset,
+                "source_revision": recipe.source.revision,
+                "recipe_revision": recipe.version,
+                "source_input": source_input,
+                "source_file_overrides": {name: asdict(file) for name, file in (source_overrides or {}).items()},
+                "reviewed": False,
+                "verified": False,
+            },
+            indent=2,
+        )
+    )
+    return result

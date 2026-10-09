@@ -13,7 +13,17 @@ from tempfile import TemporaryDirectory
 import pytest
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, Command, DockerImage, ExitReason, Machine, NetworkPolicy, Result, ShellSimBuiltins
+from shellbox.machine import (
+    Backend,
+    Command,
+    DockerImage,
+    ExitReason,
+    Machine,
+    NetworkPolicy,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -21,6 +31,7 @@ from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
     ConversationInput,
+    DockerBuildContext,
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
@@ -315,6 +326,35 @@ async def test_lowering_preserves_task_and_produces_private_grade_with_training_
     assert result.loss_mask == (1,)
     assert result.logprobs == (-0.5,)
     assert "12" not in json.dumps(model.requests[0].messages)
+
+
+@pytest.mark.parametrize("unresolved_role", ["actor", "grader"])
+@pytest.mark.parametrize("entrypoint", ["lower", "run"])
+async def test_unresolved_recipe_rejected_before_fallback_machine_or_model_start(unresolved_role, entrypoint):
+    environment = EnvironmentRequirements(
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"),))
+    )
+    task = file_task()
+    if unresolved_role == "actor":
+        task = task.model_copy(update={"environment_requirements": environment})
+    else:
+        task = task.model_copy(
+            update={"grader": workspace_grader(argv=("sh", "/tests/grade.sh"), environment=environment)}
+        )
+    spec = lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    reloaded = LoweredTaskSpec.model_validate_json(spec.model_dump_json())
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([{"role": "assistant", "content": "Done."}])
+    runner = engine(model, {"local": factory})
+    with pytest.raises(UnsupportedMachineSpec):
+        if entrypoint == "lower":
+            lower_task(
+                reloaded.task, reloaded.runtime, reloaded.session, factories=runner.factories, sessions=runner.sessions
+            )
+        else:
+            await runner.run(reloaded)
+    assert factory.machines == []
+    assert model.requests == []
 
 
 @pytest.mark.parametrize(

@@ -14,6 +14,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
     ToolResult,
+    require_resolved_environment,
 )
 from taskcompendium.runtime.models import (
     Actor,
@@ -54,6 +55,7 @@ async def run_episode(
     """Run a fresh episode; a final message completes it, while exhaustion truncates it."""
     if max_steps <= 0:
         raise ValueError("A positive turn budget is required")
+    require_resolved_environment(task.environment_requirements)
     events = list(task.context.events)
     environment: Environment | None = None
     termination = Termination.STEP_LIMIT

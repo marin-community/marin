@@ -1,43 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskTrove Nemotron structured-outputs tasks, graded in process on the assistant's reply.
+"""TaskTrove structured extraction, graded for format and grounding in its source document."""
 
-JSON, YAML and TOML answers are validated against the source schema after the converter's repairs.
-XML and CSV answers are checked for the schema's top-level field names. The archived instruction asks a
-terminal agent to write ``/app/answer.txt``; the task asks for the answer in the reply instead.
-"""
-
-import csv
-import io
 import json
 
-from taskcompendium.convert.answers import answer_task, json_schema_task, source_defect
+from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
-from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
-from taskcompendium.convert.tasktrove_converted_task import ConvertedTask, ConvertStatus, Rejected, archive_conversion
-from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
+from taskcompendium.convert.tasktrove_converted_task import archive_conversion
 from taskcompendium.convert.tasktrove_nemotron_structured_outputs import (
     MISSING_INSTRUCTION,
-    SchemaType,
-    graded_by,
+    convert_nemotron_structured_outputs,
 )
-from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
-from taskcompendium.pipeline.controls import answer_reply
-from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import (
-    Controls,
-    ImportFailureKind,
-    ImportRejection,
-    IntendedUse,
-    NormalizedTask,
-    RawRow,
-    Reply,
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    PlainText,
+    ResourceGroups,
+    TaskSpec,
+    TextMessage,
 )
-from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, Spec, XmlElementsSpec
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
+from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizedTask, RawRow
+from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -69,7 +60,7 @@ Compare the requested serialization format and complete public schema against th
 
 Check schema satisfiability, required fields, bounds, types, enums, and additionalProperties constraints.
 
-The checker enforces schema structure; identify unsupported semantic or factual requirements in the request.
+The checker enforces format first, then a judge checks grounded values and the missing-data convention.
 
 Converter repairs are review evidence: reject a repair that changes the public contract rather than its syntax.
 
@@ -88,82 +79,34 @@ def reply_instruction(instruction: str) -> str:
     return instruction
 
 
-def invalid_contract(detail: str) -> ImportRejection:
-    return ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_structured_contract", detail=detail)
-
-
-def _format_conversion(task: TaskFiles) -> ConvertedTask | Rejected:
-    """The format contract of a structured-output task, graded in process.
-
-    The TaskTrove release wraps this contract in a script that also asks a judge whether the values
-    are grounded in the document; the curation pipeline has no judge control path yet, so it grades
-    the format alone. TODO(rl-data): grounded-value judge once a judge control exists.
-    """
-    data = verifier_data(task)
-    raw_type = data.get("schema_type")
-    try:
-        schema_type = SchemaType(raw_type)
-    except ValueError:
-        return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, f"unknown schema_type {raw_type!r}")
-    graded = graded_by(schema_type, data.get("schema"))
-    if isinstance(graded, Rejected):
-        return graded
-    spec, data_files = graded
-    return ConvertedTask(
-        instruction=task.text(INSTRUCTION) + MISSING_INSTRUCTION,
-        spec=spec,
-        dockerfile=task.text(DOCKERFILE),
-        tags=("structured-outputs", "nemotron", schema_type.value),
-        data_files=data_files,
-    )
-
-
-def convert_structured_outputs(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
-    converted = archive_conversion(row.data, _format_conversion)
+def convert_structured_outputs(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
+    converted = archive_conversion(row.data, convert_nemotron_structured_outputs)
     if isinstance(converted, ImportRejection):
         return converted
-    original = converted.instruction
-    instruction = reply_instruction(original)
-    spec = converted.spec
-    if isinstance(spec, JsonSchemaSpec):
-        schema = converted.data_files[f"tests/{spec.schema}"].decode()
+    schema = converted.data_files.get("tests/format/schema.json")
+    if schema is not None:
         conflicts = required_object_conflicts(json.loads(schema))
         if conflicts:
             return source_defect("unsatisfiable_schema", "; ".join(conflicts))
-        task = json_schema_task(row, prompt=instruction, schema=schema, schema_format=spec.format)
-        if isinstance(task, ImportRejection):
-            return task
-    else:
-        assert isinstance(spec, XmlElementsSpec | CsvColumnsSpec)
-        if any(not name for name in (*spec.required, *spec.any_of)):
-            return invalid_contract("Required and alternative names must be nonempty strings")
-        task = answer_task(row, prompt=instruction, spec=spec)
+    original = converted.instruction
+    instruction = reply_instruction(original.removesuffix(MISSING_INSTRUCTION)) + MISSING_INSTRUCTION
+    package = verifyit_package(
+        converted.spec,
+        tuple(inline_resource(path.removeprefix("tests/"), data) for path, data in converted.data_files.items()),
+        environment=required_grader_environment(context),
+    )
+    task = TaskSpec(
+        id=row.id,
+        source=row.source,
+        context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=package.grader,
+        resources=ResourceGroups(verifier=package.resources),
+        tags=converted.tags,
+    )
     return rewritten_task(task, original=original, reason=REWRITE_REASON)
-
-
-def _names(spec: XmlElementsSpec | CsvColumnsSpec) -> tuple[str, ...]:
-    return (*spec.required, *spec.any_of[:1])
-
-
-def _csv(rows: list[tuple[str, ...]]) -> str:
-    document = io.StringIO()
-    csv.writer(document).writerows(rows)
-    return document.getvalue()
-
-
-def _grader_spec(task: TaskSpec) -> Spec:
-    assert isinstance(task.grader, VerifyitGrader)
-    return verifyit_spec(task.grader)
-
-
-def structured_witness(task: TaskSpec) -> Reply | None:
-    """An XML element or CSV table naming every required field; JSON schemas supply no instance."""
-    spec = _grader_spec(task)
-    if isinstance(spec, XmlElementsSpec):
-        return answer_reply(task, "<control>" + "".join(f"<{name}/>" for name in _names(spec)) + "</control>")
-    if isinstance(spec, CsvColumnsSpec):
-        return answer_reply(task, _csv([_names(spec), tuple("control" for _ in _names(spec))]))
-    return None
 
 
 def sources() -> list[RlDataSource]:
@@ -176,20 +119,17 @@ def sources() -> list[RlDataSource]:
                 family="instruction-following",
                 tags=("agentic", "multi-turn"),
                 count=53870,
-                notes=(
-                    "Keep JSON/YAML/TOML rows (full jsonschema validation); drop XML and CSV rows, which "
-                    "only check key presence."
-                ),
+                notes="All formats require both a format check and a source-grounding judge.",
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-structured_outputs",
                 source=tasktrove_source(CONFIG),
-                convert=convert_structured_outputs,
+                convert=TaskTroveConverter(CONFIG, convert_structured_outputs),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=STRUCTURED_OUTPUTS_RUBRIC,
-                controls=Controls(golden=structured_witness),
+                grader=GRADER_PACKAGES,
             ),
         )
     ]
