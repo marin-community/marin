@@ -10,7 +10,7 @@ configuration, rubric and, for the Stack Overflow tasks, the agent image carryin
 the grader packages include the same ones, so a submission that imports one there grades here.
 """
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from taskcompendium.convert.executable import (
     SOLUTION_PATHS,
@@ -23,20 +23,11 @@ from taskcompendium.pipeline.inputs import ConversionContext, required_grader_en
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-TASKTROVE_METADATA = replace(
-    TASKTROVE_RELEASE,
-    verifier_revision=None,
-    family="unit-test-gen",
-    snapshot_safe=True,
-    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:d15747080ff81dbbec4a1dcbc7cd651d3b935054d4b67e4b55dc517e1b2cfc56"
@@ -216,7 +207,7 @@ class PythonTestsSource:
     convert: Converter
     image: Environment
     rubric: str
-    metadata: DataSourceMetadata = field(kw_only=True)
+    info: SourceInfo = field(kw_only=True)
 
 
 SOURCES = {
@@ -225,24 +216,17 @@ SOURCES = {
         convert_python_tests,
         AGENT_IMAGE,
         CURRICULUM_EASY_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_curriculum-easy",
-            name="DCAgent__exp_rpt_curriculum-easy",
-            display_name="DCAgent/exp_rpt_curriculum-easy",
-            dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-            task_count=505,
+            title="DCAgent/exp_rpt_curriculum-easy",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python"),
+            count=509,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
-            canonical_source="DCAgent/exp_rpt_curriculum-easy",
-            verification="pytest",
-            upstream_repository="DCAgent/exp_rpt_curriculum-easy",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_curriculum-easy",
-            input_count=509,
-            languages=("python",),
-            modes=("pytest",),
         ),
     ),
     "curriculum_medium": PythonTestsSource(
@@ -250,24 +234,17 @@ SOURCES = {
         convert_python_tests,
         AGENT_IMAGE,
         CURRICULUM_MEDIUM_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_curriculum-medium-v2",
-            name="DCAgent__exp_rpt_curriculum-medium-v2",
-            display_name="DCAgent/exp_rpt_curriculum-medium-v2",
-            dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-            task_count=489,
+            title="DCAgent/exp_rpt_curriculum-medium-v2",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python"),
+            count=492,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
-            canonical_source="DCAgent/exp_rpt_curriculum-medium-v2",
-            verification="pytest",
-            upstream_repository="DCAgent/exp_rpt_curriculum-medium-v2",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_curriculum-medium-v2",
-            input_count=492,
-            languages=("python",),
-            modes=("pytest",),
         ),
     ),
     "e2egit": PythonTestsSource(
@@ -275,24 +252,17 @@ SOURCES = {
         convert_python_tests,
         AGENT_IMAGE,
         E2EGIT_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_e2egit-v2",
-            name="DCAgent__exp_rpt_e2egit-v2",
-            display_name="DCAgent/exp_rpt_e2egit-v2",
-            dataset_revision="4c17fe785b141148bd4f01afb739884a02e8836e",
-            task_count=487,
+            title="DCAgent/exp_rpt_e2egit-v2",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python", "language:javascript"),
+            count=487,
             notes=(
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles overlap with the large cut."
             ),
-            canonical_source="DCAgent/exp_rpt_e2egit-v2",
-            verification="pytest, junit",
-            upstream_repository="DCAgent/exp_rpt_e2egit-v2",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_e2egit-v2",
-            input_count=487,
-            languages=("python", "javascript"),
-            modes=("pytest", "junit"),
         ),
     ),
     "e2egit_large": PythonTestsSource(
@@ -300,24 +270,17 @@ SOURCES = {
         convert_python_tests,
         AGENT_IMAGE,
         E2EGIT_LARGE_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_e2egit-large",
-            name="DCAgent__exp_rpt_e2egit-large",
-            display_name="DCAgent/exp_rpt_e2egit-large",
-            dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-            task_count=4993,
+            title="DCAgent/exp_rpt_e2egit-large",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python"),
+            count=4998,
             notes=(
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles repeated katas."
             ),
-            canonical_source="DCAgent/exp_rpt_e2egit-large",
-            verification="pytest",
-            upstream_repository="DCAgent/exp_rpt_e2egit-large",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_e2egit-large",
-            input_count=4998,
-            languages=("python",),
-            modes=("pytest",),
         ),
     ),
     "multifile": PythonTestsSource(
@@ -325,24 +288,17 @@ SOURCES = {
         convert_python_tests,
         AGENT_IMAGE,
         MULTIFILE_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_multifile-v3",
-            name="DCAgent__exp_rpt_multifile-v3",
-            display_name="DCAgent/exp_rpt_multifile-v3",
-            dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-            task_count=4842,
+            title="DCAgent/exp_rpt_multifile-v3",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python"),
+            count=4843,
             notes=(
                 "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
                 "submissions failed every task. Kept with the kata tag."
             ),
-            canonical_source="DCAgent/exp_rpt_multifile-v3",
-            verification="pytest",
-            upstream_repository="DCAgent/exp_rpt_multifile-v3",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_multifile-v3",
-            input_count=4843,
-            languages=("python",),
-            modes=("pytest",),
         ),
     ),
     "pymethods": PythonTestsSource(
@@ -350,24 +306,17 @@ SOURCES = {
         convert_python_tests,
         AGENT_IMAGE,
         PYMETHODS_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_pymethods2test-v3",
-            name="DCAgent__exp_rpt_pymethods2test-v3",
-            display_name="DCAgent/exp_rpt_pymethods2test-v3",
-            dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-            task_count=500,
+            title="DCAgent/exp_rpt_pymethods2test-v3",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python"),
+            count=500,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
-            canonical_source="DCAgent/exp_rpt_pymethods2test-v3",
-            verification="pytest",
-            upstream_repository="DCAgent/exp_rpt_pymethods2test-v3",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_pymethods2test-v3",
-            input_count=500,
-            languages=("python",),
-            modes=("pytest",),
         ),
     ),
     "pymethods_large": PythonTestsSource(
@@ -375,24 +324,17 @@ SOURCES = {
         convert_python_tests,
         AGENT_IMAGE,
         PYMETHODS_LARGE_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_pymethods2test-large-v2",
-            name="DCAgent__exp_rpt_pymethods2test-large-v2",
-            display_name="DCAgent/exp_rpt_pymethods2test-large-v2",
-            dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-            task_count=4990,
+            title="DCAgent/exp_rpt_pymethods2test-large-v2",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python"),
+            count=4991,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
-            canonical_source="DCAgent/exp_rpt_pymethods2test-large-v2",
-            verification="pytest",
-            upstream_repository="DCAgent/exp_rpt_pymethods2test-large-v2",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_pymethods2test-large-v2",
-            input_count=4991,
-            languages=("python",),
-            modes=("pytest",),
         ),
     ),
     "unitsyn": PythonTestsSource(
@@ -400,24 +342,17 @@ SOURCES = {
         convert_unitsyn,
         AGENT_IMAGE,
         UNITSYN_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_unitsyn-python-v4",
-            name="DCAgent__exp_rpt_unitsyn-python-v4",
-            display_name="DCAgent/exp_rpt_unitsyn-python-v4",
-            dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-            task_count=491,
+            title="DCAgent/exp_rpt_unitsyn-python-v4",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python"),
+            count=491,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. The standardized mode "
                 "passed all 10 sampled oracles and rejected all 10 empty submissions."
             ),
-            canonical_source="DCAgent/exp_rpt_unitsyn-python-v4",
-            verification="pytest",
-            upstream_repository="DCAgent/exp_rpt_unitsyn-python-v4",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_unitsyn-python-v4",
-            input_count=491,
-            languages=("python",),
-            modes=("pytest",),
         ),
     ),
     "unitsyn_large": PythonTestsSource(
@@ -425,24 +360,17 @@ SOURCES = {
         convert_python_tests,
         AGENT_IMAGE,
         UNITSYN_LARGE_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_unitsyn-python-large-v2",
-            name="DCAgent__exp_rpt_unitsyn-python-large-v2",
-            display_name="DCAgent/exp_rpt_unitsyn-python-large-v2",
-            dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-            task_count=4991,
+            title="DCAgent/exp_rpt_unitsyn-python-large-v2",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python"),
+            count=4991,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
-            canonical_source="DCAgent/exp_rpt_unitsyn-python-large-v2",
-            verification="pytest",
-            upstream_repository="DCAgent/exp_rpt_unitsyn-python-large-v2",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_unitsyn-python-large-v2",
-            input_count=4991,
-            languages=("python",),
-            modes=("pytest",),
         ),
     ),
     "stack_pytest": PythonTestsSource(
@@ -450,24 +378,17 @@ SOURCES = {
         convert_stack_pytest,
         STACK_PYTEST_AGENT_IMAGE,
         STACK_PYTEST_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_stack-pytest-v2",
-            name="DCAgent__exp_rpt_stack-pytest-v2",
-            display_name="DCAgent/exp_rpt_stack-pytest-v2",
-            dataset_revision="4c17fe785b141148bd4f01afb739884a02e8836e",
-            task_count=495,
+            title="DCAgent/exp_rpt_stack-pytest-v2",
+            origin="Task Trove",
+            family="unit-test-gen",
+            tags=("agentic", "multi-turn", "language:python"),
+            count=500,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
-            canonical_source="DCAgent/exp_rpt_stack-pytest-v2",
-            verification="pytest",
-            upstream_repository="DCAgent/exp_rpt_stack-pytest-v2",
-            upstream_url="https://huggingface.co/datasets/DCAgent/exp_rpt_stack-pytest-v2",
-            input_count=500,
-            languages=("python",),
-            modes=("pytest",),
         ),
     ),
 }
@@ -476,7 +397,7 @@ SOURCES = {
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=source.metadata,
+            info=source.info,
             pipeline=RlDataPipeline(
                 name=f"tasktrove-{name}",
                 source=tasktrove_source(source.config),

@@ -11,7 +11,6 @@ NVARC rows ask for a reply.
 """
 
 from collections.abc import Mapping
-from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -45,20 +44,9 @@ from taskcompendium.pipeline.models import (
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import SCORERS as ULTRA_SCORERS
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource
-
-TASKTROVE_METADATA = replace(
-    TASKTROVE_RELEASE,
-    dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-    verifier_revision=None,
-    family="arc-agi",
-    snapshot_safe=True,
-    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-    input_count=10000,
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
 TRANSDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-transductive-v3"
@@ -247,19 +235,14 @@ ULTRA_ARC_CONTROLS = Controls(golden=ultra_arc_golden, memory_mb=GRADER_MEMORY_M
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2",
-                name="laion__nemotron-gym-arc-agi-python-inductive-v2",
-                display_name="laion/nemotron-gym-arc-agi-python-inductive-v2",
-                task_count=10000,
+                title="laion/nemotron-gym-arc-agi-python-inductive-v2",
+                origin="Task Trove",
+                family="arc-agi",
+                tags=("agentic", "multi-turn", "language:python"),
+                count=10000,
                 notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
-                canonical_source="laion/nemotron-gym-arc-agi-python-inductive-v2",
-                verification="script",
-                upstream_repository="laion/nemotron-gym-arc-agi-python-inductive-v2",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-arc-agi-python-inductive-v2",
-                languages=("python",),
-                modes=("script",),
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-arc_inductive",
@@ -275,18 +258,14 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-arc-agi-transductive-v3",
-                name="laion__nemotron-gym-arc-agi-transductive-v3",
-                display_name="laion/nemotron-gym-arc-agi-transductive-v3",
-                task_count=9994,
+                title="laion/nemotron-gym-arc-agi-transductive-v3",
+                origin="Task Trove",
+                family="arc-agi",
+                tags=("agentic", "multi-turn"),
+                count=10000,
                 notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
-                canonical_source="laion/nemotron-gym-arc-agi-transductive-v3",
-                verification="exact",
-                upstream_repository="laion/nemotron-gym-arc-agi-transductive-v3",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-arc-agi-transductive-v3",
-                modes=("exact",),
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-arc_transductive",

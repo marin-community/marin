@@ -15,7 +15,7 @@ import json
 import re
 import sqlite3
 from collections.abc import Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -28,46 +28,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-SKYRL_METADATA = DataSourceMetadata(
-    id="",
-    name="",
-    origin="MarinSkyRL",
-    revision="e44c4bfcb62c489286a1264094e6d9c883aaf0d2",
-    revised_at="2026-09-30T09:02:36Z",
-    verifier_revision="91c7a60e85e31b6933ab0ee732125b3338e82b89",
-    family="preference",
-    environment="preference",
-    type="Alignment",
-    count_precision="exact",
-    notes=(
-        "Interaction describes supported conversation structure. Conversational collections can "
-        "include one-turn examples."
-    ),
-    benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
-    family_basis="Upstream card/schema and selected SkyRL loader audited 2026-09-28",
-    classification_basis="HH/Capybara collections support Multi-turn; Orca/UltraFeedback use Single-turn prompts",
-    provenance_url=(
-        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c8"
-        "83aaf0d2/infra/rl_data/sources.py"
-    ),
-    snapshot_safe=True,
-    gym_alias="gym/preference",
-    gym_url=(
-        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c883a"
-        "af0d2/skyrl-gym/skyrl_gym/envs/__init__.py"
-    ),
-    gym_entrypoint="skyrl_gym.envs.preference.env:PreferenceEnv",
-    registry_revised_at="2026-10-01T14:18:17Z",
-    verifier_url=(
-        "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d9c88"
-        "3aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
-    ),
-    verifier_revised_at="2026-09-30T09:02:36Z",
-    revision_basis="Latest upstream dataset repository or MarinSkyRL verifier change",
-    recorded_at="2026-10-08",
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 HH_REPO = "Anthropic/hh-rlhf"
 HH_REVISION = "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
@@ -83,101 +44,68 @@ TRAIN_FILE = "data/train-00000-of-00001.parquet"
 KTO_COMPONENTS = {
     "kto_component_capybara": (
         "argilla/distilabel-capybara-dpo-7k-binarized",
-        replace(
-            SKYRL_METADATA,
+        SourceInfo(
             id="MarinSkyRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
-            name="kto_mix/argilla/distilabel-capybara-dpo-7k-binarized",
-            display_name="argilla/distilabel-capybara-dpo-7k-binarized · KTO",
-            url="https://huggingface.co/datasets/argilla/distilabel-capybara-dpo-7k-binarized",
-            dataset_id="trl-lib/kto-mix-14k",
-            dataset_revision="4470f033f33364e7d064c9f920c3df54d0cce767",
-            turns="Multi-turn",
-            task_count=4502,
-            count_basis=(
-                "Argilla DPO mix train source frequencies x 2: one positive and one negative KTO " "record per pair"
+            title="argilla/distilabel-capybara-dpo-7k-binarized · KTO",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
             ),
-            count_url=(
-                "https://datasets-server.huggingface.co/statistics?dataset=argilla/dpo-mix-7k&conf"
-                "ig=default&split=train"
+            verifier=SourceReference(
+                "preference",
+                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
+                ),
             ),
-            family_url=(
-                "https://huggingface.co/datasets/trl-lib/kto-mix-14k/blob/4470f033f33364e7d064c9f9"
-                "20c3df54d0cce767/README.md"
-            ),
-            canonical_source="trl-lib/kto-mix-14k",
-            canonical_url="https://huggingface.co/datasets/trl-lib/kto-mix-14k",
-            verification="schema_only",
-            canonical_id="MarinSkyRL:kto_mix",
-            registry_name="kto_mix",
-            component_name="argilla/distilabel-capybara-dpo-7k-binarized",
-            canonical_task_count=13500,
-            dataset_revised_at="2024-03-25T14:53:24.000Z",
         ),
     ),
     "kto_component_intel_orca": (
         "argilla/distilabel-intel-orca-dpo-pairs",
-        replace(
-            SKYRL_METADATA,
+        SourceInfo(
             id="MarinSkyRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
-            name="kto_mix/argilla/distilabel-intel-orca-dpo-pairs",
-            display_name="argilla/distilabel-intel-orca-dpo-pairs · KTO",
-            url="https://huggingface.co/datasets/argilla/distilabel-intel-orca-dpo-pairs",
-            dataset_id="trl-lib/kto-mix-14k",
-            dataset_revision="4470f033f33364e7d064c9f920c3df54d0cce767",
-            turns="Single-turn",
-            task_count=4544,
-            count_basis=(
-                "Argilla DPO mix train source frequencies x 2: one positive and one negative KTO " "record per pair"
+            title="argilla/distilabel-intel-orca-dpo-pairs · KTO",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "single-turn", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
             ),
-            count_url=(
-                "https://datasets-server.huggingface.co/statistics?dataset=argilla/dpo-mix-7k&conf"
-                "ig=default&split=train"
+            verifier=SourceReference(
+                "preference",
+                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
+                ),
             ),
-            family_url=(
-                "https://huggingface.co/datasets/trl-lib/kto-mix-14k/blob/4470f033f33364e7d064c9f9"
-                "20c3df54d0cce767/README.md"
-            ),
-            canonical_source="trl-lib/kto-mix-14k",
-            canonical_url="https://huggingface.co/datasets/trl-lib/kto-mix-14k",
-            verification="schema_only",
-            canonical_id="MarinSkyRL:kto_mix",
-            registry_name="kto_mix",
-            component_name="argilla/distilabel-intel-orca-dpo-pairs",
-            canonical_task_count=13500,
-            dataset_revised_at="2024-03-25T14:53:24.000Z",
         ),
     ),
     "kto_component_ultrafeedback": (
         "argilla/ultrafeedback-binarized-preferences-cleaned",
-        replace(
-            SKYRL_METADATA,
+        SourceInfo(
             id="MarinSkyRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
-            name="kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned",
-            display_name="argilla/ultrafeedback-binarized-preferences-cleaned · KTO",
-            url="https://huggingface.co/datasets/argilla/ultrafeedback-binarized-preferences-cleaned",
-            dataset_id="trl-lib/kto-mix-14k",
-            dataset_revision="4470f033f33364e7d064c9f920c3df54d0cce767",
-            turns="Single-turn",
-            task_count=4454,
-            count_basis=(
-                "Argilla DPO mix train source frequencies x 2: one positive and one negative KTO " "record per pair"
+            title="argilla/ultrafeedback-binarized-preferences-cleaned · KTO",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "single-turn", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
             ),
-            count_url=(
-                "https://datasets-server.huggingface.co/statistics?dataset=argilla/dpo-mix-7k&conf"
-                "ig=default&split=train"
+            verifier=SourceReference(
+                "preference",
+                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
+                ),
             ),
-            family_url=(
-                "https://huggingface.co/datasets/trl-lib/kto-mix-14k/blob/4470f033f33364e7d064c9f9"
-                "20c3df54d0cce767/README.md"
-            ),
-            canonical_source="trl-lib/kto-mix-14k",
-            canonical_url="https://huggingface.co/datasets/trl-lib/kto-mix-14k",
-            verification="schema_only",
-            canonical_id="MarinSkyRL:kto_mix",
-            registry_name="kto_mix",
-            component_name="argilla/ultrafeedback-binarized-preferences-cleaned",
-            canonical_task_count=13500,
-            dataset_revised_at="2024-03-25T14:53:24.000Z",
         ),
     ),
 }
@@ -236,7 +164,7 @@ class HhSubset:
     name: str
     config: str
     rubric: str
-    metadata: DataSourceMetadata = field(kw_only=True)
+    info: SourceInfo = field(kw_only=True)
 
 
 HH_SUBSETS = (
@@ -244,148 +172,96 @@ HH_SUBSETS = (
         "hh_harmless_base",
         "harmless-base",
         HH_HARMLESS_BASE_RUBRIC,
-        metadata=replace(
-            SKYRL_METADATA,
+        info=SourceInfo(
             id="MarinSkyRL:hh_rlhf/harmless-base",
-            name="hh_rlhf/harmless-base",
-            display_name="Anthropic/hh-rlhf · harmless-base",
-            url=(
-                "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6a"
-                "a7ec602a1fa/harmless-base"
+            title="Anthropic/hh-rlhf · harmless-base",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
             ),
-            dataset_id="Anthropic/hh-rlhf",
-            dataset_revision=HH_REVISION,
-            turns="Multi-turn",
-            task_count=42537,
-            count_basis="Named HH collection train rows, corroborated by tasksource mirror metadata",
-            count_url=(
-                "https://huggingface.co/datasets/tasksource/hh-rlhf/blob/cf7f694217d04b7a31912644f"
-                "504a8b59525439b/README.md"
+            verifier=SourceReference(
+                "preference",
+                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
+                ),
             ),
-            family_url=(
-                "https://huggingface.co/datasets/Anthropic/hh-rlhf/blob/09be8c5bbc57cb3887f3a9732a"
-                "d6aa7ec602a1fa/README.md"
-            ),
-            canonical_source="Anthropic/hh-rlhf",
-            canonical_url="https://huggingface.co/datasets/Anthropic/hh-rlhf",
-            license=("mit",),
-            verification="two_sided",
-            canonical_id="MarinSkyRL:hh_rlhf",
-            registry_name="hh_rlhf",
-            component_name="harmless-base",
-            canonical_task_count=160800,
-            dataset_revised_at="2023-05-26T18:47:34.000Z",
         ),
     ),
     HhSubset(
         "hh_helpful_base",
         "helpful-base",
         HH_HELPFUL_BASE_RUBRIC,
-        metadata=replace(
-            SKYRL_METADATA,
+        info=SourceInfo(
             id="MarinSkyRL:hh_rlhf/helpful-base",
-            name="hh_rlhf/helpful-base",
-            display_name="Anthropic/hh-rlhf · helpful-base",
-            url=(
-                "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6a"
-                "a7ec602a1fa/helpful-base"
+            title="Anthropic/hh-rlhf · helpful-base",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
             ),
-            dataset_id="Anthropic/hh-rlhf",
-            dataset_revision=HH_REVISION,
-            turns="Multi-turn",
-            task_count=43835,
-            count_basis="Named HH collection train rows, corroborated by tasksource mirror metadata",
-            count_url=(
-                "https://huggingface.co/datasets/tasksource/hh-rlhf/blob/cf7f694217d04b7a31912644f"
-                "504a8b59525439b/README.md"
+            verifier=SourceReference(
+                "preference",
+                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
+                ),
             ),
-            family_url=(
-                "https://huggingface.co/datasets/Anthropic/hh-rlhf/blob/09be8c5bbc57cb3887f3a9732a"
-                "d6aa7ec602a1fa/README.md"
-            ),
-            canonical_source="Anthropic/hh-rlhf",
-            canonical_url="https://huggingface.co/datasets/Anthropic/hh-rlhf",
-            license=("mit",),
-            verification="two_sided",
-            canonical_id="MarinSkyRL:hh_rlhf",
-            registry_name="hh_rlhf",
-            component_name="helpful-base",
-            canonical_task_count=160800,
-            dataset_revised_at="2023-05-26T18:47:34.000Z",
         ),
     ),
     HhSubset(
         "hh_helpful_online",
         "helpful-online",
         HH_HELPFUL_ONLINE_RUBRIC,
-        metadata=replace(
-            SKYRL_METADATA,
+        info=SourceInfo(
             id="MarinSkyRL:hh_rlhf/helpful-online",
-            name="hh_rlhf/helpful-online",
-            display_name="Anthropic/hh-rlhf · helpful-online",
-            url=(
-                "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6a"
-                "a7ec602a1fa/helpful-online"
+            title="Anthropic/hh-rlhf · helpful-online",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
             ),
-            dataset_id="Anthropic/hh-rlhf",
-            dataset_revision=HH_REVISION,
-            turns="Multi-turn",
-            task_count=22007,
-            count_basis="Named HH collection train rows, corroborated by tasksource mirror metadata",
-            count_url=(
-                "https://huggingface.co/datasets/tasksource/hh-rlhf/blob/cf7f694217d04b7a31912644f"
-                "504a8b59525439b/README.md"
+            verifier=SourceReference(
+                "preference",
+                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
+                ),
             ),
-            family_url=(
-                "https://huggingface.co/datasets/Anthropic/hh-rlhf/blob/09be8c5bbc57cb3887f3a9732a"
-                "d6aa7ec602a1fa/README.md"
-            ),
-            canonical_source="Anthropic/hh-rlhf",
-            canonical_url="https://huggingface.co/datasets/Anthropic/hh-rlhf",
-            license=("mit",),
-            verification="two_sided",
-            canonical_id="MarinSkyRL:hh_rlhf",
-            registry_name="hh_rlhf",
-            component_name="helpful-online",
-            canonical_task_count=160800,
-            dataset_revised_at="2023-05-26T18:47:34.000Z",
         ),
     ),
     HhSubset(
         "hh_helpful_rejection_sampled",
         "helpful-rejection-sampled",
         HH_HELPFUL_REJECTION_SAMPLED_RUBRIC,
-        metadata=replace(
-            SKYRL_METADATA,
+        info=SourceInfo(
             id="MarinSkyRL:hh_rlhf/helpful-rejection-sampled",
-            name="hh_rlhf/helpful-rejection-sampled",
-            display_name="Anthropic/hh-rlhf · helpful-rejection-sampled",
-            url=(
-                "https://huggingface.co/datasets/Anthropic/hh-rlhf/tree/09be8c5bbc57cb3887f3a9732ad6a"
-                "a7ec602a1fa/helpful-rejection-sampled"
+            title="Anthropic/hh-rlhf · helpful-rejection-sampled",
+            origin="MarinSkyRL",
+            family="preference",
+            tags=("alignment", "multi-turn", "license:mit", "gym/preference"),
+            notes=(
+                "Interaction describes supported conversation structure. Conversational collections "
+                "can include one-turn examples."
             ),
-            dataset_id="Anthropic/hh-rlhf",
-            dataset_revision=HH_REVISION,
-            turns="Multi-turn",
-            task_count=52421,
-            count_basis="Named HH collection train rows, corroborated by tasksource mirror metadata",
-            count_url=(
-                "https://huggingface.co/datasets/tasksource/hh-rlhf/blob/cf7f694217d04b7a31912644f"
-                "504a8b59525439b/README.md"
+            verifier=SourceReference(
+                "preference",
+                "91c7a60e85e31b6933ab0ee732125b3338e82b89",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/preference"
+                ),
             ),
-            family_url=(
-                "https://huggingface.co/datasets/Anthropic/hh-rlhf/blob/09be8c5bbc57cb3887f3a9732a"
-                "d6aa7ec602a1fa/README.md"
-            ),
-            canonical_source="Anthropic/hh-rlhf",
-            canonical_url="https://huggingface.co/datasets/Anthropic/hh-rlhf",
-            license=("mit",),
-            verification="two_sided",
-            canonical_id="MarinSkyRL:hh_rlhf",
-            registry_name="hh_rlhf",
-            component_name="helpful-rejection-sampled",
-            canonical_task_count=160800,
-            dataset_revised_at="2023-05-26T18:47:34.000Z",
         ),
     ),
 )
@@ -547,7 +423,7 @@ def convert_kto_component(row: RawRow, _context: ConversionContext) -> TaskSpec 
 def sources() -> list[RlDataSource]:
     hh = [
         RlDataSource(
-            metadata=subset.metadata,
+            info=subset.info,
             pipeline=RlDataPipeline(
                 name=subset.name,
                 source=HfSource(HH_REPO, HH_REVISION, (f"{subset.config}/train.jsonl.gz",), SourceFormat.JSONL),
@@ -562,7 +438,7 @@ def sources() -> list[RlDataSource]:
     ]
     kto = [
         RlDataSource(
-            metadata=metadata,
+            info=info,
             pipeline=RlDataPipeline(
                 name=name,
                 source=HfSource(
@@ -581,6 +457,6 @@ def sources() -> list[RlDataSource]:
                 inputs={PARENT_INPUT: HfSource(PARENT_REPO, PARENT_REVISION, (TRAIN_FILE,), SourceFormat.PARQUET)},
             ),
         )
-        for name, (component, metadata) in KTO_COMPONENTS.items()
+        for name, (component, info) in KTO_COMPONENTS.items()
     ]
     return [*hh, *kto]

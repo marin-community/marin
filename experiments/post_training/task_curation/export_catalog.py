@@ -7,43 +7,73 @@ import argparse
 import hashlib
 import json
 from collections.abc import Iterable
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from experiments.post_training.task_curation.pipeline import HfSource
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source import RlDataSource, SourceReference
 from experiments.post_training.task_curation.sources import all_sources
 
 
 def source_row(source: RlDataSource) -> dict[str, Any]:
     """Project a declaration into the Atlas wire format without executing it."""
-    row = asdict(source.metadata)
-    pipeline = source.pipeline
+    info, pipeline = source.info, source.pipeline
+    dataset = info.dataset
+    invocation = None
     if pipeline is not None:
         upstream = pipeline.source
         if isinstance(upstream, HfSource):
-            input_source, input_revision = upstream.repo, upstream.revision
-            row["dataset_id"] = row["dataset_id"] or upstream.repo
-            row["dataset_revision"] = row["dataset_revision"] or upstream.revision
-            if not row["url"]:
-                row["url"] = f"https://huggingface.co/datasets/{upstream.repo}"
+            dataset = SourceReference(
+                upstream.repo,
+                upstream.revision,
+                f"https://huggingface.co/datasets/{upstream.repo}/tree/{upstream.revision}",
+            )
+            files = upstream.files
         else:
-            input_source, input_revision = upstream.url, upstream.sha256
-            row["dataset_revision"] = row["dataset_revision"] or upstream.sha256
-            if not row["url"]:
-                row["url"] = upstream.url
-        row["pipeline"] = {
+            dataset = SourceReference(upstream.filename, upstream.sha256, upstream.url)
+            files = (upstream.filename,)
+        invocation = {
             "name": pipeline.name,
             "version": pipeline.version,
-            "source": input_source,
-            "revision": input_revision,
+            "source": dataset.name,
+            "revision": dataset.revision,
+            "files": files,
         }
-    else:
-        row["pipeline"] = None
-    row["display_name"] = row["display_name"] or row["dataset_id"] or source.name
-    row["canonical_source"] = row["canonical_source"] or row["display_name"]
-    row["canonical_url"] = row["canonical_url"] or row["url"]
+    verifier = info.verifier
+    tags = info.tags
+    row: dict[str, Any] = {
+        "id": info.id,
+        "name": source.name,
+        "display_name": info.title,
+        "origin": info.origin,
+        "family": info.family,
+        "tags": tags,
+        "task_count": info.count,
+        "notes": info.notes,
+        "dataset_id": dataset.name if dataset else None,
+        "dataset_revision": dataset.revision if dataset else None,
+        "url": dataset.url if dataset else None,
+        "canonical_source": dataset.name if dataset else None,
+        "canonical_url": dataset.url if dataset else None,
+        "verifier_revision": verifier.revision if verifier else None,
+        "verifier_url": verifier.url if verifier else None,
+        "verifier_name": verifier.name if verifier else None,
+        "type": next(
+            (
+                label
+                for tag, label in (("rlvr", "RLVR"), ("agentic", "Agentic"), ("alignment", "Alignment"))
+                if tag in tags
+            ),
+            "",
+        ),
+        "turns": next(
+            (label for tag, label in (("single-turn", "Single-turn"), ("multi-turn", "Multi-turn")) if tag in tags), ""
+        ),
+        "is_benchmark": "benchmark" in tags,
+        "kind": "Generator" if "generator" in tags else "Dataset",
+        "status": "Excluded" if "excluded" in tags else "Available",
+        "pipeline": invocation,
+    }
     review = source.review
     row.update(
         quality=review.grade,

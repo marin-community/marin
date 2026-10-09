@@ -10,7 +10,6 @@ reject tasks that no answer can satisfy, which the in-process graders cannot det
 
 import json
 import re
-from dataclasses import replace
 
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
@@ -24,19 +23,9 @@ from verifyit.grade import InvalidTask
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, SchemaFormat
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource
-
-TASKTROVE_METADATA = replace(
-    TASKTROVE_RELEASE,
-    dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-    verifier_revision=None,
-    family="instruction-following",
-    snapshot_safe=True,
-    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 SHELL_PREAMBLE = "You are running in a shell-based sandbox."
 PREAMBLE_SEPARATOR = "\n---\n"
@@ -217,22 +206,17 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-instruction-following-v3",
-                name="laion__nemotron-gym-instruction-following-v3",
-                display_name="laion/nemotron-gym-instruction-following-v3",
-                task_count=46391,
+                title="laion/nemotron-gym-instruction-following-v3",
+                origin="Task Trove",
+                family="instruction-following",
+                tags=("agentic", "multi-turn"),
+                count=46391,
                 notes=(
                     "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
                     "(vacuous pass) at conversion."
                 ),
-                canonical_source="laion/nemotron-gym-instruction-following-v3",
-                verification="ifeval",
-                upstream_repository="laion/nemotron-gym-instruction-following-v3",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-instruction-following-v3",
-                input_count=46391,
-                modes=("ifeval",),
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-ifeval",
@@ -245,19 +229,14 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-instruction-following-structured-v3",
-                name="laion__nemotron-gym-instruction-following-structured-v3",
-                display_name="laion/nemotron-gym-instruction-following-structured-v3",
-                task_count=9167,
+                title="laion/nemotron-gym-instruction-following-structured-v3",
+                origin="Task Trove",
+                family="instruction-following",
+                tags=("agentic", "multi-turn"),
+                count=9437,
                 notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
-                canonical_source="laion/nemotron-gym-instruction-following-structured-v3",
-                verification="json-schema",
-                upstream_repository="laion/nemotron-gym-instruction-following-structured-v3",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-instruction-following-structured-v3",
-                input_count=9437,
-                modes=("json-schema",),
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-structured",

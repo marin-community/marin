@@ -2,7 +2,7 @@
 
 Every RL dataset is one `RlDataSource` declared here, and every declaring module
 exports `sources()`, which [sources.py](../sources.py) collects into the catalog.
-Each source combines Atlas metadata and an optional `RlDataPipeline` recipe.
+Each source combines source information and an optional `RlDataPipeline` recipe.
 A declaration names the pinned source, the converter that builds each task with
 its grader, the agent environment, and an optional review rubric and grader
 controls. See the [experiment overview](../README.md) for the fields and the
@@ -31,8 +31,8 @@ artifact each declaration produces.
    its compiled lock [grader.lock](grader.lock); regenerate the lock after
    changing `grader.in` (see [images/](../images/README.md)).
 4. Add a representative raw row to the family test's `ROWS` and add the module's
-   `sources()` to [sources.py](../sources.py). Add counts, classification and
-   evidence to the same source declaration; reuse the family's metadata template.
+   `sources()` to [sources.py](../sources.py). Add family, tags and known input-row counts to `SourceInfo`. Count only
+   the pinned population selected by the recipe; leave unavailable counts unknown.
 
 A rubric and controls can come later: without a rubric rows are kept
 unreviewed, and without controls sandbox-graded rows other than judge-graded
@@ -74,4 +74,4 @@ it receives the endpoint and credentials is follow-up work.
 [unconverted.py](unconverted.py) retains excluded sources and available releases
 whose TaskSpec conversions are unfinished. These entries remain visible in the
 Atlas and are omitted from campaign execution. Add a recipe when a source's
-conversion is implemented, retaining its stable metadata ID.
+conversion is implemented, retaining its stable source ID.

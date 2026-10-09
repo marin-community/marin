@@ -21,6 +21,7 @@ from taskcompendium.runtime.resources import inline_resource
 from experiments.post_training.task_curation.compare_harbor import compare_harbor
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, math, python_tests
 from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, harbor_record, main
+from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tests.conversion import convert_row
 from experiments.post_training.tasktrove.publish import TASKS_SCHEMA as RELEASE_SCHEMA
@@ -45,10 +46,11 @@ def normalized_row(request) -> tuple[dict, NormalizedTask]:
     source = next(source for source in module.sources() if source.name == f"tasktrove-{name}")
     pipeline = source.pipeline
     assert pipeline is not None
+    assert isinstance(pipeline.source, HfSource)
     source_path = f"{name}-original.tar.gz"
     converted = convert_row(pipeline, {"path": source_path, "task_binary": (FIXTURES / f"{name}.tar.gz").read_bytes()})
     assert isinstance(converted, NormalizedTask)
-    config = source.metadata.name
+    config = Path(pipeline.source.files[0]).parent.name
     return {
         "task_id": converted.task.id,
         "task_json": converted.task.model_dump_json(),
@@ -175,5 +177,5 @@ def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(no
     ]
     exported = pq.read_table(output_root / "tasks.parquet").to_pylist()
     assert len(exported) == 1
-    assert exported[0]["family"] == source.metadata.family
-    assert report["atlas_id"] == source.metadata.id
+    assert exported[0]["family"] == source.info.family
+    assert report["atlas_id"] == source.info.id

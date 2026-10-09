@@ -366,7 +366,7 @@ def staged(tmp_path_factory) -> dict[str, StoragePath]:
 
 
 def component_path(name: str) -> str:
-    return next(source.metadata.id for source in sources() if source.name == name).split("/", 1)[1]
+    return next(source.info.id for source in sources() if source.name == name).split("/", 1)[1]
 
 
 @pytest.mark.parametrize("name", sorted(ROWS))

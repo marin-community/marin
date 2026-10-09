@@ -10,7 +10,6 @@ multiple-choice source grades the option letter in process.
 """
 
 import re
-from dataclasses import replace
 
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.convert.conversation import conversation_task
@@ -25,18 +24,9 @@ from verifyit.modes.grade_judge import normalize as normalize_reference
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource
-
-TASKTROVE_METADATA = replace(
-    TASKTROVE_RELEASE,
-    dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-    verifier_revision=None,
-    snapshot_safe=True,
-    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 OPENQA_REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 MCQA_REWRITE_REASON = "Replace the source's answer-file wrapper with a request for one option letter"
@@ -192,52 +182,40 @@ def sources() -> list[RlDataSource]:
         (
             "knowledge-openqa",
             "laion__nemotron-gym-knowledge-openqa-v4",
-            replace(
-                TASKTROVE_METADATA,
+            SourceInfo(
                 id="Task Trove:laion__nemotron-gym-knowledge-openqa-v4",
-                name="laion__nemotron-gym-knowledge-openqa-v4",
-                display_name="laion/nemotron-gym-knowledge-openqa-v4",
+                title="laion/nemotron-gym-knowledge-openqa-v4",
+                origin="Task Trove",
                 family="qa-short-answer",
-                task_count=121961,
+                tags=("agentic", "multi-turn"),
+                count=122357,
                 notes=(
-                    "Exact gate then reference-based judge. Reference answers are real; needs the "
-                    "judge in the new grader."
+                    "Exact gate then reference-based judge. Reference answers are real; needs the judge "
+                    "in the new grader."
                 ),
-                canonical_source="laion/nemotron-gym-knowledge-openqa-v4",
-                verification="judge",
-                upstream_repository="laion/nemotron-gym-knowledge-openqa-v4",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-knowledge-openqa-v4",
-                input_count=122357,
-                modes=("judge",),
             ),
         ),
         (
             "science-openqa",
             "laion__nemotron-gym-science-so-openq-v3",
-            replace(
-                TASKTROVE_METADATA,
+            SourceInfo(
                 id="Task Trove:laion__nemotron-gym-science-so-openq-v3",
-                name="laion__nemotron-gym-science-so-openq-v3",
-                display_name="laion/nemotron-gym-science-so-openq-v3",
+                title="laion/nemotron-gym-science-so-openq-v3",
+                origin="Task Trove",
                 family="llm-judge-freeform",
-                task_count=150468,
+                tags=("agentic", "multi-turn"),
+                count=150644,
                 notes=(
                     "Reference answer plus judge. Move the reference out of the criterion text into a "
                     "data field at conversion."
                 ),
-                canonical_source="laion/nemotron-gym-science-so-openq-v3",
-                verification="judge",
-                upstream_repository="laion/nemotron-gym-science-so-openq-v3",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-science-so-openq-v3",
-                input_count=150644,
-                modes=("judge",),
             ),
         ),
     )
     return [
         *(
             RlDataSource(
-                metadata=metadata,
+                info=info,
                 pipeline=RlDataPipeline(
                     name=name,
                     source=tasktrove_source(config),
@@ -249,26 +227,20 @@ def sources() -> list[RlDataSource]:
                     grader=GRADER_PACKAGES,
                 ),
             )
-            for name, config, metadata in openqa
+            for name, config, info in openqa
         ),
         RlDataSource(
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-knowledge-mcqa-v2",
-                name="laion__nemotron-gym-knowledge-mcqa-v2",
-                display_name="laion/nemotron-gym-knowledge-mcqa-v2",
+                title="laion/nemotron-gym-knowledge-mcqa-v2",
+                origin="Task Trove",
                 family="qa-short-answer",
-                task_count=23860,
+                tags=("agentic", "multi-turn"),
+                count=616888,
                 notes=(
-                    "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at "
-                    "conversion and subsample hard: 617k rows is a third of the corpus."
+                    "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
+                    "and subsample hard: 617k rows is a third of the corpus."
                 ),
-                canonical_source="laion/nemotron-gym-knowledge-mcqa-v2",
-                verification="mcq",
-                upstream_repository="laion/nemotron-gym-knowledge-mcqa-v2",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-knowledge-mcqa-v2",
-                input_count=616888,
-                modes=("mcq",),
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-knowledge_mcqa",
