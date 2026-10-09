@@ -12,7 +12,7 @@ import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import fixtures, ingest, results_db
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalRunRecord, list_records, write_record
+from marin.evaluation.records import EvalRunRecord, RunStatus, list_records, write_record
 from sqlalchemy.pool import StaticPool
 
 
@@ -103,7 +103,8 @@ def test_reconciler_discovers_new_paths_and_only_rereads_known_paths_when_due(tm
     results_db.migrate_schema(engine)
     clock = Clock()
     prefix = tmp_path / "records"
-    record = _record(tmp_path)
+    source_record = _record(tmp_path)
+    record = source_record.model_copy(update={"status": RunStatus.INFRA_FAILED, "error": "transient failure"})
     write_record(record, str(prefix))
     store = _store(engine)
     ingestor = evaldash_app.PostgresIngestor(engine, (str(prefix),), 600, 86400, now=clock)
@@ -118,9 +119,9 @@ def test_reconciler_discovers_new_paths_and_only_rereads_known_paths_when_due(tm
     asyncio.run(ingestor.run_once())
     assert store.store_info().catalog_generation == generation
 
-    changed = record.model_copy(update={"description": "rewritten"})
+    changed = source_record.model_copy(update={"description": "recovered"})
     write_record(changed, str(prefix))
-    added = record.model_copy(update={"run_id": f"{record.run_id}-new", "description": "new"})
+    added = source_record.model_copy(update={"run_id": f"{record.run_id}-new", "description": "new"})
     write_record(added, str(prefix))
     clock.now = state.next_verify_at.replace(tzinfo=UTC) - timedelta(seconds=1)
     asyncio.run(ingestor.run_once())
@@ -130,7 +131,7 @@ def test_reconciler_discovers_new_paths_and_only_rereads_known_paths_when_due(tm
 
     clock.now += timedelta(seconds=2)
     asyncio.run(ingestor.run_once())
-    assert _stored(store, record.run_id)["description"] == "rewritten"
+    assert _stored(store, record.run_id)["description"] == "recovered"
 
 
 def test_reconciler_promotes_duplicate_only_after_two_successful_absences(tmp_path):
