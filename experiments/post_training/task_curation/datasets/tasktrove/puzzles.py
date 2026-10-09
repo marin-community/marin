@@ -26,6 +26,8 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+PUZZLES_CONFIG = "laion__all-puzzles-v2"
+
 ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list", "number", "coords"})
 MATH_ANSWER_TYPES = frozenset({"number", "coords"})
 REWRITE_REASON = "Adapt the puzzle's answer-file delivery to the assistant response"
@@ -74,7 +76,7 @@ def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="Task Trove:laion__all-puzzles-v2",
+                id=f"Task Trove:{PUZZLES_CONFIG}",
                 title="laion/all-puzzles-v2",
                 origin="Task Trove",
                 family="math-answer",
@@ -87,8 +89,8 @@ def sources() -> list[RlDataSource]:
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-puzzles",
-                source=tasktrove_source("laion__all-puzzles-v2"),
-                convert=TaskTroveConverter("laion__all-puzzles-v2", convert_puzzle),
+                source=tasktrove_source(PUZZLES_CONFIG),
+                convert=TaskTroveConverter(PUZZLES_CONFIG, convert_puzzle),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

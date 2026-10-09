@@ -14,12 +14,13 @@ from taskcompendium.runtime.local import context_paths
 from taskcompendium.runtime.resources import inline_resource
 
 VERIFYIT_CONTEXT = "taskcompendium-verifyit"
+VERIFYIT_INSTALL_DIRECTORY = "/opt/taskcompendium-verifyit"
 VERIFYIT_INSTALL = (
     "# --- verifyit ---\n"
     "RUN command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git"
     " && rm -rf /var/lib/apt/lists/*)\n"
     f"COPY --from={UV_IMAGE} /uv /usr/local/bin/uv\n"
-    f"COPY {VERIFYIT_CONTEXT}/ /opt/taskcompendium-verifyit/\n"
+    f"COPY {VERIFYIT_CONTEXT}/ {VERIFYIT_INSTALL_DIRECTORY}/\n"
     'RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --python ">=3.11" {package}\n'
 )
 
@@ -42,7 +43,7 @@ def verifyit_build_context(
 ) -> DockerBuildContext:
     """Retain source environment files and append the bundled verifier installation."""
     body = re.sub(r"\n{3,}", "\n\n", "\n".join(line.rstrip() for line in dockerfile.splitlines())).strip("\n")
-    target = "/opt/taskcompendium-verifyit" + (f"[{','.join(extras)}]" if extras else "")
+    target = VERIFYIT_INSTALL_DIRECTORY + (f"[{','.join(extras)}]" if extras else "")
     dockerfile = body + "\n\n" + VERIFYIT_INSTALL.format(package=shlex.quote(target))
     recipe = inline_resource("Dockerfile", dockerfile.encode())
     original = next((resource for resource in archive_resources if resource.path == DOCKERFILE), None)

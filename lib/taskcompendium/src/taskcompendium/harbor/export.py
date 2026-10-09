@@ -373,7 +373,7 @@ def harbor_payload(
     fallback_actor_image: str,
     verifyit_package_root: Path | None = None,
 ) -> HarborPayload:
-    """Assemble file graders separately and legacy repository graders in the actor environment."""
+    """Assemble shared repository/stdio graders and separate graders for other tasks."""
     if grader_image is not None and re.fullmatch(DOCKER_IMAGE_PATTERN, grader_image) is None:
         raise ValueError("The verifier image must be explicitly pinned by digest")
     task = TaskSpec.model_validate_json(row["task_json"])

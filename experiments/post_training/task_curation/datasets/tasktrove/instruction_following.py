@@ -27,6 +27,9 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
+STRUCTURED_CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"
+
 SHELL_PREAMBLE = "You are running in a shell-based sandbox."
 PREAMBLE_SEPARATOR = "\n---\n"
 IFEVAL_REWRITE_REASON = "Remove the source's shell answer-file preamble"
@@ -207,7 +210,7 @@ def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-instruction-following-v3",
+                id=f"Task Trove:{IFEVAL_CONFIG}",
                 title="laion/nemotron-gym-instruction-following-v3",
                 origin="Task Trove",
                 family="instruction-following",
@@ -220,8 +223,8 @@ def sources() -> list[RlDataSource]:
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-ifeval",
-                source=tasktrove_source("laion__nemotron-gym-instruction-following-v3"),
-                convert=TaskTroveConverter("laion__nemotron-gym-instruction-following-v3", convert_ifeval),
+                source=tasktrove_source(IFEVAL_CONFIG),
+                convert=TaskTroveConverter(IFEVAL_CONFIG, convert_ifeval),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
@@ -230,7 +233,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-instruction-following-structured-v3",
+                id=f"Task Trove:{STRUCTURED_CONFIG}",
                 title="laion/nemotron-gym-instruction-following-structured-v3",
                 origin="Task Trove",
                 family="instruction-following",
@@ -240,10 +243,8 @@ def sources() -> list[RlDataSource]:
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-structured",
-                source=tasktrove_source("laion__nemotron-gym-instruction-following-structured-v3"),
-                convert=TaskTroveConverter(
-                    "laion__nemotron-gym-instruction-following-structured-v3", convert_structured
-                ),
+                source=tasktrove_source(STRUCTURED_CONFIG),
+                convert=TaskTroveConverter(STRUCTURED_CONFIG, convert_structured),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

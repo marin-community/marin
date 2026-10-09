@@ -133,7 +133,7 @@ def source_stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | Impor
     return NormalizedTask(task, ())
 
 
-def convert_code_contests_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+def convert_code_contests_task(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
     return source_stdio_task(row, convert_code_contests)
 
 
@@ -141,7 +141,7 @@ def convert_codeforces_task(row: RawRow, context: ConversionContext) -> Normaliz
     return stdio_task(row, context, convert_codeforces)
 
 
-def convert_taco_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
+def convert_taco_task(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
     return source_stdio_task(row, convert_taco)
 
 

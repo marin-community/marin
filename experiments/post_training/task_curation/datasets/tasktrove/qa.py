@@ -28,6 +28,8 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+MCQA_CONFIG = "laion__nemotron-gym-knowledge-mcqa-v2"
+
 OPENQA_REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 MCQA_REWRITE_REASON = "Replace the source's answer-file wrapper with a request for one option letter"
 OPENQA_DELIVERY = (
@@ -254,7 +256,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-knowledge-mcqa-v2",
+                id=f"Task Trove:{MCQA_CONFIG}",
                 title="laion/nemotron-gym-knowledge-mcqa-v2",
                 origin="Task Trove",
                 family="qa-short-answer",
@@ -267,8 +269,8 @@ def sources() -> list[RlDataSource]:
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-knowledge_mcqa",
-                source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
-                convert=TaskTroveConverter("laion__nemotron-gym-knowledge-mcqa-v2", convert_knowledge_mcqa),
+                source=tasktrove_source(MCQA_CONFIG),
+                convert=TaskTroveConverter(MCQA_CONFIG, convert_knowledge_mcqa),
                 version="4",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
