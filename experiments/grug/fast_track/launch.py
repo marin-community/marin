@@ -10,14 +10,13 @@ data-matches or compute-matches it (``--match``, default data), or sets ``--batc
 """
 
 import dataclasses
-import json
 import math
 import os
 import shlex
 import sys
 import types
 import typing
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from datetime import timedelta
 from enum import StrEnum
 from typing import Any
@@ -47,8 +46,6 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
-from experiments.grug.fast_track.analyze_routing import token_strings_from_tokenizer
-from experiments.grug.fast_track.flip_detector import DEFAULT_FLIP_PATTERNS
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import (
     AttnResLayerBackward,
@@ -140,70 +137,6 @@ V16384_VOCAB = 16384
 PALOMA_DETOK_VERSION = "2026.09.17"
 # In-process read cache for the tensorstore data loader. 1 GB is ample for the flat cache.
 TENSORSTORE_CACHE_BYTES = 1_000_000_000
-
-
-class RouterTieClass(StrEnum):
-    """Named token classes ``--router-tie-class`` expands to a ``router_embed_tie`` centroid."""
-
-    LATEX = "latex"
-    DIGITS = "digits"
-    NEWLINE = "newline"
-
-
-# Common LaTeX command names that also appear as tokens without their backslash (after a separate backslash token).
-LATEX_COMMAND_NAMES = frozenset(
-    "mathbf mathrm mathcal mathbb mathsf mathit boldsymbol frac dfrac tfrac sqrt ldots cdots cdot "
-    "alpha beta gamma delta epsilon varepsilon zeta theta vartheta kappa lambda sigma varphi omega Omega "
-    "Delta Gamma Lambda Sigma infty partial nabla leq geq neq approx equiv subseteq otimes oplus "
-    "rightarrow Rightarrow leftarrow mapsto forall quad qquad operatorname displaystyle textbf textit "
-    "emph overline underline hspace vspace".split()
-)
-
-
-_ROUTER_TIE_CLASS_MEMBER: dict[RouterTieClass, Callable[[str], bool]] = {
-    RouterTieClass.LATEX: lambda t: "\\" in t or t.strip() in LATEX_COMMAND_NAMES,
-    RouterTieClass.DIGITS: lambda t: t.strip().isdigit(),
-    RouterTieClass.NEWLINE: lambda t: "\n" in t,
-}
-
-
-def router_tie_class_ids(token_class: RouterTieClass, token_strings: list[str]) -> tuple[int, ...]:
-    """The non-special token ids of ``token_class`` (``token_strings`` from ``token_strings_from_tokenizer``):
-    ``latex`` has a backslash or is a ``LATEX_COMMAND_NAMES`` name, ``digits`` is all digits once stripped,
-    ``newline`` has a newline."""
-    member = _ROUTER_TIE_CLASS_MEMBER[token_class]
-    return tuple(idx for idx, text in enumerate(token_strings) if not text.startswith("<special ") and member(text))
-
-
-def router_tie_class_specs(items: tuple[str, ...], tokenizer: str, vocab_size: int) -> tuple[str, ...]:
-    """``router_embed_tie`` centroid specs for ``--router-tie-class L:E:CLASS`` items."""
-    if not items:
-        return ()
-    token_strings = token_strings_from_tokenizer(tokenizer, vocab_size)
-    specs = []
-    for item in items:
-        layer, sep, rest = item.partition(":")
-        expert, sep2, name = rest.partition(":")
-        if not (sep and sep2):
-            raise click.BadParameter(f"--router-tie-class expects 'L:E:CLASS', got {item!r}")
-        ids = router_tie_class_ids(RouterTieClass(name), token_strings)
-        click.echo(f"router tie class {name!r} at {layer}:{expert}: {len(ids)} tokens", err=True)
-        specs.append(f"{layer}:{expert}:" + "|".join(str(v) for v in ids))
-    return tuple(specs)
-
-
-def router_tie_cluster_specs(item: str | None) -> tuple[str, ...]:
-    """``router_embed_tie`` centroid specs for ``--router-tie-clusters L:PATH``: expert ``e`` of layer ``L`` (``*``:
-    every layer) ties to the centroid of ``json.load(PATH)[e]``, a list of token ids."""
-    if not item:
-        return ()
-    layer, sep, path = item.partition(":")
-    if not sep:
-        raise click.BadParameter(f"--router-tie-clusters expects 'L:PATH', got {item!r}")
-    with open(path) as f:
-        clusters = json.load(f)
-    click.echo(f"router tie clusters at layer {layer}: sizes {[len(c) for c in clusters]}", err=True)
-    return tuple(f"{layer}:{expert}:" + "|".join(str(int(v)) for v in ids) for expert, ids in enumerate(clusters))
 
 
 # Model geometry shared across rungs.
@@ -412,12 +345,6 @@ def build_h100_ladder_run(
     seed: int = 0,
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
-    final_param_dump: tuple[str, ...] = (),
-    head_probe: bool = False,
-    logit_decomp: bool = False,
-    trace_probe: bool = False,
-    router_calib: bool = False,
-    attn_distance: bool = False,
     resume_from: str | None = None,
     xla_memory_report: bool = False,
     pgle_runs: int = 0,
@@ -425,10 +352,6 @@ def build_h100_ladder_run(
     loader_buffer_batches: int = TRAIN_LOADER_BUFFER_SIZE,
     ema_beta: float | None = None,
     ema_last_steps: int | None = None,
-    ema_blend_sweep: tuple[float, ...] = (),
-    ema_group_sweep: bool = False,
-    head_replay: tuple[int, int, float] = (0, 100, 0.1),
-    ngram_stat_prefill_batches: int = 0,
     max_retries_failure: int = MAX_RETRIES_FAILURE,
     model_settings: Mapping[str, str] | None = None,
     embed2_rows_frac: float | None = None,
@@ -437,25 +360,9 @@ def build_h100_ladder_run(
     ragged_transport: RaggedTransport = RaggedTransport.DEVICE,
     collective_overlap_limit: int | None = None,
     single_process: bool = False,
-    routing_dump_steps: tuple[int, ...] = (),
-    routing_dump_batches: int = 8,
-    router_tie_specs: tuple[str, ...] = (),
-    grad_capture_starts: tuple[int, ...] = (),
-    grad_capture_len: int = 48,
     grad_accum_microbatches: int = 1,
-    muon_probe_steps: tuple[int, ...] = (),
-    snr_probe_steps: tuple[int, ...] = (),
-    noise_scale_steps: tuple[int, ...] = (),
     checkpoint_keep: tuple[tuple[int, int | None], ...] = (),
     stop_after_steps: int | None = None,
-    train_batch_dump_steps: tuple[int, ...] = (),
-    train_text_count_patterns: tuple[str, ...] = (),
-    fact_probe_input: str | None = None,
-    weight_attribution_window: tuple[int, ...] = (),
-    flip_detector_patterns: tuple[str, ...] = (),
-    weight_diagnostics_every: int = 0,
-    fact_probe_every: int = 1,
-    fact_probe_ema_every: int = 50,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -469,10 +376,6 @@ def build_h100_ladder_run(
     ``collective_overlap_limit`` overrides XLA's concurrent-collective limit (None: the mode default).
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
-    ``routing_dump_steps`` writes expert-routing count dumps to ``<output>/routing/`` (see
-    ``GrugTrainerConfig.routing_dump_steps``). ``router_tie_specs`` are appended to the model's
-    ``router_embed_tie`` after ``model_settings``. ``grad_capture_starts`` writes optimizer-diagnostic captures
-    (``grad_capture.py``) for ``grad_capture_len`` steps from each start to ``<output>/grad_capture/``.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -487,9 +390,6 @@ def build_h100_ladder_run(
         if not model.attn_res:
             raise ValueError("attn_res_remat_attention requires the kma recipe")
         model = dataclasses.replace(model, attn_res_remat_attention=True)
-    if router_tie_specs:
-        # Before the settings, so a --model-set router_embed_tie_release_step validates against the ties.
-        model = dataclasses.replace(model, router_embed_tie=model.router_embed_tie + router_tie_specs)
     model = _apply_settings(model, model_settings or {})
     if embed2_rows_frac is not None:
         model = dataclasses.replace(model, embed2_rows=_embed2_rows_for_fraction(model, embed2_rows_frac))
@@ -569,28 +469,7 @@ def build_h100_ladder_run(
         replica_axis_size=replica_axis_size,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
-        ema_blend_sweep=ema_blend_sweep,
-        ema_group_sweep=ema_group_sweep,
-        head_replay_slots=head_replay[0],
-        head_replay_period=head_replay[1],
-        head_replay_scale=head_replay[2],
-        ngram_stat_prefill_batches=ngram_stat_prefill_batches,
-        routing_dump_steps=routing_dump_steps,
-        routing_dump_batches=routing_dump_batches,
-        grad_capture_starts=grad_capture_starts,
-        grad_capture_len=grad_capture_len,
         grad_accum_microbatches=grad_accum_microbatches,
-        muon_probe_steps=muon_probe_steps,
-        snr_probe_steps=snr_probe_steps,
-        noise_scale_steps=noise_scale_steps,
-        train_batch_dump_steps=train_batch_dump_steps,
-        train_text_count_patterns=train_text_count_patterns,
-        fact_probe_input=fact_probe_input,
-        weight_attribution_window=weight_attribution_window,
-        flip_detector_patterns=flip_detector_patterns,
-        weight_diagnostics_every=weight_diagnostics_every,
-        fact_probe_every=fact_probe_every,
-        fact_probe_ema_every=fact_probe_ema_every,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -675,31 +554,10 @@ def build_h100_ladder_run(
                 grug_trainer,
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
-                final_param_dump_path=prefix_join(ctx.output_path, "final_params.npz") if final_param_dump else None,
-                head_probe_path=prefix_join(ctx.output_path, "head_probe.npz") if head_probe else None,
-                logit_decomp_path=prefix_join(ctx.output_path, "logit_decomp.npz") if logit_decomp else None,
-                trace_probe_path=prefix_join(ctx.output_path, "trace_probe.npz") if trace_probe else None,
-                router_calib_path=prefix_join(ctx.output_path, "router_calib.json") if router_calib else None,
-                attn_distance_path=prefix_join(ctx.output_path, "attn_distance.npz") if attn_distance else None,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
-                final_param_dump_patterns=final_param_dump,
                 pipeline_depth=pipeline_depth,
                 loader_buffer_batches=loader_buffer_batches,
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
-                routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
-                flip_detector_dir=prefix_join(ctx.output_path, "flip_detector") if flip_detector_patterns else None,
-                weight_diagnostics_every=weight_diagnostics_every,
-                fact_probe_dir=(
-                    prefix_join(ctx.output_path, "fact_probe")
-                    if train_batch_dump_steps or train_text_count_patterns or fact_probe_input
-                    else None
-                ),
-                grad_capture_path=prefix_join(ctx.output_path, "grad_capture") if grad_capture_starts else None,
-                muon_probe_path=(
-                    prefix_join(ctx.output_path, "muon_probe")
-                    if muon_probe_steps or snr_probe_steps or noise_scale_steps
-                    else None
-                ),
             ),
             eval=(
                 None
@@ -847,45 +705,9 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 )
 @click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
 @click.option(
-    "--final-param-dump",
-    multiple=True,
-    help="Regex (repeatable) of param paths to write to <output>/final_params.npz after training.",
-)
-@click.option(
     "--resume-from",
     default=None,
-    help="Load this checkpoint directory (another run's <output>/checkpoints) first, e.g. to run end-of-run probes "
-    "on a finished run without retraining.",
-)
-@click.option(
-    "--attn-distance",
-    is_flag=True,
-    help="After training, write the MLA layers' softmax rows for queries at fixed in-document positions to "
-    "<output>/attn_distance.npz.",
-)
-@click.option(
-    "--logit-decomp",
-    is_flag=True,
-    help="After training, write per-token stats splitting the logits into the stream head and the lm_head_extra_dim "
-    "slice to <output>/logit_decomp.npz.",
-)
-@click.option(
-    "--router-calib",
-    is_flag=True,
-    help="After training, run the post-hoc router calibration diagnostic (router_calib.py) to "
-    "<output>/router_calib.json.",
-)
-@click.option(
-    "--trace-probe",
-    is_flag=True,
-    help="After training, write the per-token operation-by-operation trace (trace_probe.py) of held-out sequences "
-    "to <output>/trace_probe.npz.",
-)
-@click.option(
-    "--head-probe",
-    is_flag=True,
-    help="After training, write per-token query-head attention stats and head ablations to <output>/head_probe.npz "
-    "(baseline recipe, dense or MoE).",
+    help="Load this checkpoint directory (another run's <output>/checkpoints) first.",
 )
 @click.option(
     "--xla-memory-report",
@@ -914,28 +736,6 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 )
 @click.option("--ema-beta", type=float, default=None, help="Weight-EMA decay; evals after the EMA start score the EMA.")
 @click.option("--ema-last-steps", type=int, default=None, help="Run the weight EMA over only the last N steps.")
-@click.option(
-    "--ema-blend",
-    type=float,
-    multiple=True,
-    help="After training, also evaluate a*EMA + (1-a)*final weights for each given a (repeatable).",
-)
-@click.option("--ema-group-sweep", is_flag=True, help="After training, probe each parameter group's EMA blend.")
-@click.option(
-    "--head-replay",
-    type=(int, int, float),
-    default=(0, 100, 0.1),
-    show_default=True,
-    help="lm_head replay of stored final hidden states: SLOTS PERIOD SCALE (0 slots: off).",
-)
-@click.option(
-    "--ngram-stat-prefill-batches",
-    type=click.IntRange(min=0),
-    default=0,
-    show_default=True,
-    help="Untimed: fill the n-gram statistic table (--model-set ngram_stat_rows=N) from this many batches the "
-    "run never trains on (the stream after its last step) before step 0.",
-)
 @click.option(
     "--max-retries",
     type=click.IntRange(min=0),
@@ -969,65 +769,6 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Run one JAX process owning every GPU (default: one process per GPU), so XLA can write peer buffers.",
 )
 @click.option(
-    "--routing-dump-steps",
-    default="",
-    help="Comma-separated completed-step counts at which to dump per-layer (token, expert) routing counts over "
-    "fixed held-out batches to <output>/routing/routing_step<N>.npz (0: at init; past the end: the final step).",
-)
-@click.option(
-    "--grad-capture-starts",
-    default="",
-    help="Comma-separated steps starting optimizer-diagnostic capture windows (gradients and applied updates of "
-    "selected matrices, see grad_capture.py) written to <output>/grad_capture/.",
-)
-@click.option("--grad-capture-len", default=48, show_default=True, help="Steps per --grad-capture-starts window.")
-@click.option(
-    "--muon-probe-steps",
-    default="",
-    help="Comma-separated steps at which to run the Muon probe (muon_probe.py); results go to <output>/muon_probe/.",
-)
-@click.option(
-    "--dump-train-batches",
-    default="",
-    help="Comma-separated steps whose train batches go to <output>/fact_probe/; the run then stops before training.",
-)
-@click.option(
-    "--count-train-text",
-    multiple=True,
-    help="Repeatable regex counted in every decoded train batch up to --num-steps (<output>/fact_probe/); then stops.",
-)
-@click.option(
-    "--fact-probe-input",
-    default=None,
-    help="npz of probe rows and fact spans (fact_probe.write_fact_probe_input) to score through training.",
-)
-@click.option(
-    "--weight-attribution",
-    default="",
-    help="START,END step counts: attribute each step's change in log p at the --fact-probe-input spot to the "
-    "parameter updates (weight_attribution.py); results in <output>/fact_probe/.",
-)
-@click.option(
-    "--flip-detector",
-    is_flag=True,
-    help="Log the step-to-step reversing update directions of the MLA attention matrices (flip_detector.py).",
-)
-@click.option(
-    "--weight-diagnostics",
-    "weight_diagnostics_every",
-    default=0,
-    show_default=True,
-    help="Every N steps log each projection matrix's stable rank and output-channel norm ratio and each RMSNorm "
-    "gain's distance from 1 (weight_diagnostics.py). 0 disables.",
-)
-@click.option("--fact-probe-every", default=1, show_default=True, help="Score the fact probe every N steps.")
-@click.option("--fact-probe-ema-every", default=50, show_default=True, help="Score the live EMA weights every N steps.")
-@click.option(
-    "--snr-probe-steps",
-    default="",
-    help="Comma-separated steps at which to run the SNR probe (snr_probe.py); results go to <output>/muon_probe/.",
-)
-@click.option(
     "--checkpoint-keep",
     default="",
     help="Comma-separated EVERY[:UNTIL] permanent-checkpoint policies (levanter keep), e.g. 350:350,1400 saves at "
@@ -1040,36 +781,11 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Stop at this step without changing the schedule's length (e.g. a probe-only job resumed at that step).",
 )
 @click.option(
-    "--noise-scale-steps",
-    default="",
-    help="Comma-separated steps at which to measure the per-component gradient noise scale (noise_scale.py); "
-    "results go to <output>/muon_probe/.",
-)
-@click.option(
     "--grad-accum",
     "grad_accum_microbatches",
     default=1,
     show_default=True,
     help="Microbatches per train batch (gradient accumulation): the same update with less activation memory.",
-)
-@click.option(
-    "--routing-dump-batches",
-    type=click.IntRange(min=1),
-    default=8,
-    show_default=True,
-    help="Train-size batches of held-out sequences per routing dump.",
-)
-@click.option(
-    "--router-tie-clusters",
-    default=None,
-    help="'L:PATH': tie layer L's (or '*': every layer's) router column e to the embedding centroid of the e-th "
-    "token list in the JSON file PATH (a list of token-id lists, e.g. vocab k-means clusters).",
-)
-@click.option(
-    "--router-tie-class",
-    multiple=True,
-    help="Tie layer L's (or '*': every layer's) router column E to the embedding centroid of a token class, "
-    f"'L:E:CLASS' with CLASS one of {[c.value for c in RouterTieClass]} (repeatable; see router_tie_class_ids).",
 )
 @click.option(
     "--model-set",
@@ -1126,12 +842,6 @@ def main(
     seed: int,
     profile_start_step: int | None,
     dump_hlo: bool,
-    final_param_dump: tuple[str, ...],
-    head_probe: bool,
-    logit_decomp: bool,
-    trace_probe: bool,
-    router_calib: bool,
-    attn_distance: bool,
     resume_from: str | None,
     xla_memory_report: bool,
     pgle_runs: int,
@@ -1139,35 +849,14 @@ def main(
     loader_buffer_batches: int,
     ema_beta: float | None,
     ema_last_steps: int | None,
-    ema_blend: tuple[float, ...],
-    ema_group_sweep: bool,
-    head_replay: tuple[int, int, float],
-    ngram_stat_prefill_batches: int,
     max_retries: int,
     z_loss_weight: float,
     ragged_transport: str,
     collective_overlap_limit: int | None,
     single_process: bool,
-    routing_dump_steps: str,
-    routing_dump_batches: int,
-    grad_capture_starts: str,
-    grad_capture_len: int,
     grad_accum_microbatches: int,
-    muon_probe_steps: str,
-    snr_probe_steps: str,
-    noise_scale_steps: str,
     checkpoint_keep: str,
     stop_after_steps: int | None,
-    dump_train_batches: str,
-    count_train_text: tuple[str, ...],
-    fact_probe_input: str | None,
-    weight_attribution: str,
-    flip_detector: bool,
-    weight_diagnostics_every: int,
-    fact_probe_every: int,
-    fact_probe_ema_every: int,
-    router_tie_class: tuple[str, ...],
-    router_tie_clusters: str | None,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -1178,9 +867,6 @@ def main(
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
         _submit_to_cluster(run_id, target_cluster, priority, job_env)  # re-execs iris; never returns
-    # In the job: the tokenizer is staged from the cluster's mirror; the class sizes print in the job log.
-    router_tie_specs = router_tie_class_specs(router_tie_class, V16384_TOKENIZER, V16384_VOCAB)
-    router_tie_specs += router_tie_cluster_specs(router_tie_clusters)
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
@@ -1195,12 +881,6 @@ def main(
         seed=seed,
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
-        final_param_dump=tuple(final_param_dump),
-        head_probe=head_probe,
-        logit_decomp=logit_decomp,
-        trace_probe=trace_probe,
-        router_calib=router_calib,
-        attn_distance=attn_distance,
         resume_from=resume_from,
         xla_memory_report=xla_memory_report,
         pgle_runs=pgle_runs,
@@ -1208,10 +888,6 @@ def main(
         loader_buffer_batches=loader_buffer_batches,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
-        ema_blend_sweep=tuple(ema_blend),
-        ema_group_sweep=ema_group_sweep,
-        head_replay=head_replay,
-        ngram_stat_prefill_batches=ngram_stat_prefill_batches,
         max_retries_failure=max_retries,
         model_settings=_parse_settings(model_set),
         embed2_rows_frac=embed2_rows_frac,
@@ -1220,25 +896,9 @@ def main(
         ragged_transport=RaggedTransport(ragged_transport),
         collective_overlap_limit=collective_overlap_limit,
         single_process=single_process,
-        routing_dump_steps=tuple(int(step) for step in routing_dump_steps.split(",") if step),
-        routing_dump_batches=routing_dump_batches,
-        grad_capture_starts=tuple(int(step) for step in grad_capture_starts.split(",") if step),
-        grad_capture_len=grad_capture_len,
         grad_accum_microbatches=grad_accum_microbatches,
-        muon_probe_steps=tuple(int(step) for step in muon_probe_steps.split(",") if step),
-        snr_probe_steps=tuple(int(step) for step in snr_probe_steps.split(",") if step),
-        noise_scale_steps=tuple(int(step) for step in noise_scale_steps.split(",") if step),
         checkpoint_keep=tuple(_keep_policy(entry) for entry in checkpoint_keep.split(",") if entry),
         stop_after_steps=stop_after_steps,
-        train_batch_dump_steps=tuple(int(step) for step in dump_train_batches.split(",") if step),
-        train_text_count_patterns=tuple(count_train_text),
-        fact_probe_input=fact_probe_input,
-        weight_attribution_window=tuple(int(step) for step in weight_attribution.split(",") if step),
-        flip_detector_patterns=DEFAULT_FLIP_PATTERNS if flip_detector else (),
-        weight_diagnostics_every=weight_diagnostics_every,
-        fact_probe_every=fact_probe_every,
-        fact_probe_ema_every=fact_probe_ema_every,
-        router_tie_specs=router_tie_specs,
     )
 
 

@@ -1,18 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import concurrent.futures
 import dataclasses
 import faulthandler
 import functools
 import gc
 import glob
-import io
 import json
 import logging
 import math
 import os
-import re
 import subprocess
 import sys
 import time
@@ -33,8 +30,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
-from jax.experimental import multihost_utils
-from jax.sharding import Mesh, NamedSharding, reshard
+from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
@@ -47,7 +43,6 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_NCCL_SEND_RECV_XLA_FLAGS, RAGGED_REQUIRED_XLA_FLAGS
-from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
@@ -58,80 +53,35 @@ from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.trainer import TrainerConfig
 from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
-from levanter.utils.jax_utils import leaf_key_paths, parameter_count
+from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.fast_track.attention_rows_probe import ROW_FIELDS, attention_rows_probe
 from experiments.grug.fast_track.byte_targets import token_byte_table
-from experiments.grug.fast_track.fact_probe import (
-    EMA,
-    RAW,
-    TOP_K,
-    TRAIN_BATCH_DUMP_FILE,
-    TRAIN_TEXT_COUNTS_FILE,
-    FactProbeInput,
-    FactProbeWriter,
-    count_text_patterns,
-    row_mean_loss,
-    summarize_recorded_attention,
-    write_text_counts,
-    write_train_batch,
-)
-from experiments.grug.fast_track.flip_detector import (
-    FLIP_DETECTOR_FILE,
-    flagged_cosines,
-    flip_directions,
-    side_stats,
-    subspace_overlap,
-)
-from experiments.grug.fast_track.grad_capture import CaptureWriter, add_to_captured, capture_matrices, capture_steps
 from experiments.grug.fast_track.host_stall import HostStallSampler
-from experiments.grug.fast_track.logit_decomp import LOGIT_DECOMP_FIELDS, logit_decomp_stats
 from experiments.grug.fast_track.model import (
-    ATTN_PROBE_KEYS,
-    ATTN_PROBE_STAT,
-    ATTN_ROWS_STAT,
     FINAL_HIDDEN_KEY,
-    HEAD_PROBE_FIELDS,
-    HEAD_PROBE_STAT,
-    HEAD_QCOS_STAT,
     NEWTON_GRAM_KEY,
-    RELPOS_ROWS_STAT,
     DenseMLP,
-    ForwardProbe,
     FutureAux,
     GrugModelConfig,
     HeadReplay,
     MtpMode,
-    RMSNorm,
     Transformer,
-    ZeroCenteredRMSNorm,
-    _long_layer_schedule,
-    forward_probe,
-    head_probe,
     ngram_stat_table_add,
     refresh_attn_prev,
     tie_routers,
     write_ngram_stats,
 )
-from experiments.grug.fast_track.muon_probe import MuonProbe
-from experiments.grug.fast_track.noise_scale import NoiseScaleProbe
 from experiments.grug.fast_track.optimizer import (
     expert_consistency_metrics,
     hyperball_metrics,
     magma_metrics,
     optimizer_diagnostics,
 )
-from experiments.grug.fast_track.router_calib import run as run_router_calib
-from experiments.grug.fast_track.snr_probe import SnrProbe
-from experiments.grug.fast_track.stiefel import _msign
-from experiments.grug.fast_track.trace_probe import trace_stats, trace_term_names
-from experiments.grug.fast_track.weight_attribution import AttributionWriter, leaf_name, per_layer_sum, rails_by_name
-from experiments.grug.fast_track.weight_diagnostics import gain_stats, matrix_stats
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -297,106 +247,13 @@ class GrugTrainerConfig:
     # EMA start on score the EMA. None: no EMA.
     ema_beta: float | None = None
     ema_last_steps: int | None = None
-    # After training, also evaluate ``a * ema + (1 - a) * params`` for each ``a`` here (logged under
-    # ``eval_blend<a>/``), to sweep how much of the EMA to keep.
-    ema_blend_sweep: tuple[float, ...] = ()
-    # Per-group blend probe: with every group at ``ema_group_base_blend``, also evaluate each group of
-    # ``EMA_BLEND_GROUPS`` at 0 (raw final weights) and at 1 (pure EMA), logged as ``eval_blend_<group><a>/``.
-    # Head replay: every ``head_replay_period`` steps, store the batch's final hidden states and labels in one
-    # of ``head_replay_slots`` slots; each step also trains the lm_head on the oldest slot at
-    # ``head_replay_scale`` x its CE (exact head gradient at the current weights; the stored hidden is a
-    # stale view of that data). 0 slots: off.
-    head_replay_slots: int = 0
-    head_replay_period: int = 100
-    head_replay_scale: float = 0.1
-    ema_group_sweep: bool = False
-    ema_group_base_blend: float = 0.5
-    # Before step 0, fill the model's n-gram statistic table (``ngram_stat_rows``) from this many batches of the
-    # training stream taken *after* the run's last step, i.e. tokens the run never trains on. Untimed: it runs
-    # before the loop. 0: the table starts empty and fills online from the batches the run trains on.
-    ngram_stat_prefill_batches: int = 0
-    # With ``lm_head_unigram_bias``: before step 0, set the lm_head bias to the log unigram frequencies of the
-    # first this many training batches (untimed, before the loop).
-    lm_head_unigram_batches: int = 64
-    # Expert-specialization dump: once this many steps have completed (0: before the first step; a step past
-    # the end: after the last one), route ``routing_dump_batches`` train-size batches of fixed held-out
-    # sequences (the validation sets round-robin, see ``_routing_dump_sequences``) and write per-layer
-    # (token, expert) assignment counts to ``<routing_dump_path>/routing_step<N>.npz`` (``_routing_dumper``).
-    routing_dump_steps: tuple[int, ...] = ()
-    routing_dump_batches: int = 8
-    routing_dump_path: str | None = None
-    # After training, write the params whose dotted path matches any of ``final_param_dump_patterns`` (``re.search``)
-    # to ``final_param_dump_path`` as one npz (process 0), for offline analysis of small learned tables.
-    final_param_dump_path: str | None = None
-    # After training, write per-token, per-query-head attention statistics of the final (EMA) weights on fixed
-    # held-out sequences, plus each head's per-token ablation loss change, to this npz (``_head_probe_dump``).
-    head_probe_path: str | None = None
-    head_probe_sequences: int = 32
-    # After training, write per-token statistics splitting the final (EMA) logits into the residual-stream head and
-    # the ``lm_head_extra_dim`` slice (``model.logit_decomp_stats``) on held-out sequences to this npz.
-    logit_decomp_path: str | None = None
-    logit_decomp_sequences: int = 64
-    # ``trace_probe.trace_stats`` on held-out sequences to this npz.
-    trace_probe_path: str | None = None
-    trace_probe_sequences: int = 48
-    # ``router_calib.run`` (post-hoc routing-bias / expert-gain calibration, a diagnostic) to this JSON.
-    router_calib_path: str | None = None
-    # After training, write the MLA layers' full softmax rows for queries at fixed in-document positions
-    # (``ATTN_PROBE_DISTANCES``) of held-out sequences to this npz (``_attn_distance_dump``).
-    attn_distance_path: str | None = None
-    attn_distance_sequences: int = 256
     # Written by process 0 once the final eval has run; a restarted job that finds it exits instead of retraining
     # (a preemption during the post-training blend evals otherwise reran the whole run).
     completion_marker_path: str | None = None
-    final_param_dump_patterns: tuple[str, ...] = ()
-    # Optimizer diagnostics (``grad_capture.py``): for ``grad_capture_len`` steps from each start, write the raw
-    # gradient and applied update of the captured matrices to ``<grad_capture_path>/grad_capture_step<N>.npz``.
-    grad_capture_starts: tuple[int, ...] = ()
-    grad_capture_len: int = 48
-    grad_capture_path: str | None = None
     # Split each train batch into this many equal microbatches, run forward and backward on one at a time and
     # average their gradients: the same update with 1/k of the activation memory, at some speed cost. MoE
     # capacity and routing statistics then apply per microbatch. 1: off.
     grad_accum_microbatches: int = 1
-    # Muon probe (``muon_probe.py``): at each of these steps, measure how reliable each captured matrix's
-    # singular directions are on held-out data and along the next steps; writes
-    # ``<muon_probe_path>/muon_probe_step<N>.npz``.
-    muon_probe_steps: tuple[int, ...] = ()
-    muon_probe_path: str | None = None
-    # SNR probe (``snr_probe.py``): at each of these steps, compare Muon's update with SNR-weighted ones on held-out
-    # payoff and loss; writes ``<muon_probe_path>/snr_probe_step<N>.npz``.
-    snr_probe_steps: tuple[int, ...] = ()
-    # Gradient noise scale probe (``noise_scale.py``): at each of these steps, the agreement of independent gradients
-    # at several batch sizes per model component; writes ``<muon_probe_path>/noise_scale_step<N>.npz``.
-    noise_scale_steps: tuple[int, ...] = ()
-    # Fact probe (``fact_probe.py``). ``train_batch_dump_steps``: write those steps' train batches to
-    # ``<fact_probe_dir>/train_batch_step<N>.npz`` and stop before training. ``fact_probe_input``: score its rows
-    # every ``fact_probe_every`` steps (the EMA weights every ``fact_probe_ema_every``) into ``fact_probe_dir``.
-    train_batch_dump_steps: tuple[int, ...] = ()
-    # Decode every train batch up to ``num_train_steps``, count each regex per step into
-    # ``<fact_probe_dir>/train_text_counts.npz`` and stop before training.
-    train_text_count_patterns: tuple[str, ...] = ()
-    fact_probe_input: str | None = None
-    # Weight attribution (``weight_attribution.py``): for step counts in ``weight_attribution_window`` (start, end),
-    # attribute each step's change in log p at ``fact_probe_input``'s spot to the parameter updates, per tensor and
-    # layer, with the Bi-Maxwell rails, into ``fact_probe_dir``. Tensors matching ``weight_attribution_exclude`` are
-    # skipped (the probe keeps previous-step copies of the rest).
-    weight_attribution_window: tuple[int, ...] = ()
-    # Flip detector (``flip_detector.py``, diagnostic only): for parameters matching ``flip_detector_patterns``,
-    # find the update directions that reverse step to step; every ``flip_detector_every`` steps log their
-    # correlations and write ``<flip_detector_dir>/flip_detector_<i>.npz``.
-    flip_detector_patterns: tuple[str, ...] = ()
-    flip_detector_every: int = 10
-    flip_detector_k: int = 4
-    flip_detector_beta: float = 0.98
-    # Weight diagnostics (``weight_diagnostics.py``): every this many steps, log each projection matrix's stable rank
-    # and output-channel norm ratio and each RMSNorm gain's distance from 1 under ``weights/``. 0 disables.
-    weight_diagnostics_every: int = 0
-    flip_detector_dir: str | None = None
-    weight_attribution_exclude: str = r"token_embed2"
-    fact_probe_every: int = 1
-    fact_probe_ema_every: int = 50
-    fact_probe_dir: str | None = None
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -1124,465 +981,6 @@ def _compute_diagnostic_watch_stats(
     )
 
 
-def _make_grad_capture_step(mp: jmp.Policy, *, z_loss_weight: float):
-    """``capture(params, batch, pending_qb_betas, step, ...)`` recomputes the train step's gradient on the same batch
-    and returns the captured matrices' gradients and current values (see ``grad_capture.py``)."""
-    z_loss = z_loss_weight if z_loss_weight > 0 else None
-
-    @functools.partial(jax.jit, static_argnames=("loop_active", "router_tie_active"))
-    def capture(params: Transformer, batch, pending_qb_betas, step, loop_active, router_tie_active):
-        params = _apply_qb_betas(params, pending_qb_betas)
-        (_, _), grads = _loss_and_grads(
-            params, batch, mp, z_loss, step, loop_active, router_tie_active=router_tie_active
-        )
-        return capture_matrices(grads), capture_matrices(params)
-
-    return capture
-
-
-def _make_noise_scale_gradients(mp: jmp.Policy, *, z_loss_weight: float):
-    """``gradients(params, batch, row_weight, pending_qb_betas, step, ...)``: the full training gradient of ``batch``
-    with each sequence's loss weight scaled by ``row_weight`` ``[B]`` (``noise_scale.py``)."""
-    z_loss = z_loss_weight if z_loss_weight > 0 else None
-
-    @functools.partial(jax.jit, static_argnames=("loop_active", "router_tie_active"))
-    def gradients(params: Transformer, batch, row_weight, pending_qb_betas, step, loop_active, router_tie_active):
-        params = _apply_qb_betas(params, pending_qb_betas)
-        weight = reshard(row_weight.astype(batch.loss_weight.dtype), P(_BATCH_AXES))[:, None]
-        batch = replace(batch, loss_weight=batch.loss_weight * weight)
-        (_, _), grads = _loss_and_grads(
-            params, batch, mp, z_loss, step, loop_active, router_tie_active=router_tie_active
-        )
-        return grads
-
-    return gradients
-
-
-def _make_probe_loss(mp: jmp.Policy):
-    """``loss(params, batch, pending_qb_betas, deltas)``: the plain next-token loss on ``batch`` after adding
-    ``deltas`` to the captured matrices (``grad_capture.add_to_captured``)."""
-
-    @jax.jit
-    def loss(params: Transformer, batch, pending_qb_betas, deltas):
-        params = add_to_captured(_apply_qb_betas(params, pending_qb_betas), deltas)
-        compute_params = _cast_to_compute(mp, params)
-        return compute_params.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask)
-
-    return loss
-
-
-_captured_params = jax.jit(capture_matrices)
-
-
-# The probe program issues ~200 small cross-process collectives (one-hot row selections). With sharded autotuning (XLA's
-# default for multi-process GPU jobs) all 8 processes of lc1-fact20g deadlocked in its first compile, each waiting in
-# ConfigAssigner::AssignConfigs for autotune results the others never published. Autotuning per process instead
-# (lc1-fact20h-ue) hung every process in the program's collectives: the latency-hiding scheduler orders async
-# collectives by per-process cost estimates, so the processes can issue them in different orders. Program order
-# is identical everywhere.
-_FACT_PROBE_COMPILER_OPTIONS = {"xla_gpu_shard_autotuning": False, "xla_gpu_enable_latency_hiding_scheduler": False}
-
-
-def _make_fact_probe_scores(
-    mp: jmp.Policy, model_transform: Callable[[Transformer], Transformer], positions: np.ndarray
-):
-    """``scores(params, batch)``: per-token loss [B, S] and, at ``positions`` ([T, 2] host array, baked into the
-    program as a constant so no process-equality check runs on it), the next-token loss and top-k."""
-
-    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
-    def scores(params: Transformer, batch):
-        compute_params = _cast_to_compute(mp, model_transform(params))
-        loss = compute_params.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask, reduction="none")
-        predictions = compute_params.position_predictions(
-            batch.tokens, jnp.asarray(positions, jnp.int32), mask=batch.attn_mask, k=TOP_K
-        )
-        return loss, predictions
-
-    return scores
-
-
-def _fact_probe_hook(
-    config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy, ema_start_step: int, last_step: int
-) -> Callable[..., None]:
-    """The ``fact_probe_input`` hook: every ``fact_probe_every`` steps score the probe rows with the raw weights, and
-    every ``fact_probe_ema_every`` with the live EMA weights. EP runs score dropless on an expert-collapsed mesh, as
-    the final eval does."""
-    trainer_cfg = config.trainer
-    if trainer_cfg.fact_probe_dir is None or trainer_cfg.fact_probe_input is None:
-        raise ValueError("fact_probe_input needs fact_probe_dir")
-    probe = FactProbeInput.load(trainer_cfg.fact_probe_input)
-    host_example = probe.example(config.data.the_tokenizer.eos_token_id)
-    weights = np.asarray(host_example.loss_weight)
-    recording = ForwardProbe(
-        attn_queries=tuple((int(row), int(position)) for row, position in probe.attn_queries),
-        spot=(int(probe.spot[0]), int(probe.spot[1])) if len(probe.spot) else None,
-        spot_token_ids=tuple(int(token) for token in probe.spot_token_ids),
-    )
-    writer = FactProbeWriter(trainer_cfg.fact_probe_dir, chunk_size=100)
-    if mesh.shape["expert"] > 1:
-        probe_mesh = compact_grug_mesh(
-            expert_axis_size=1, replica_axis_size=mesh.shape["replica_dcn"], model_axis_size=mesh.shape["model"]
-        )
-        implementation = (
-            dropless_moe_implementation(config.model)
-            if config.eval is None
-            else config.eval.dropless_eval_moe_implementation
-        )
-        transform = functools.partial(_to_dropless_local, implementation=implementation)
-    else:
-        probe_mesh, transform = mesh, lambda model: model
-    with set_mesh(probe_mesh):
-        rows = NamedSharding(probe_mesh, P(_BATCH_AXES))
-        batch = jax.tree.map(
-            lambda leaf: jax.device_put(leaf, rows) if isinstance(leaf, np.ndarray) else leaf, host_example
-        )
-        scores = _make_fact_probe_scores(mp, transform, probe.positions())
-
-    def score(kind: str, params: Transformer, count: int) -> None:
-        # A local: the expert-collapsed copy is larger than the train-mesh params and must die before the next step.
-        model = _reshard_tree_to_mesh(_router_tie_view(params, count), probe_mesh)
-        # Inside ``forward_probe`` so the first trace (the only one) records ``recording``.
-        with _pgle_disabled(), forward_probe(recording):
-            outputs = scores(model, batch)
-        # One process per GPU: gather the global values instead of fetching non-addressable shards.
-        loss, (span_loss, top_ids, top_probs, attention) = multihost_utils.process_allgather(outputs, tiled=True)
-        if jax.process_index() == 0:
-            attention = {name: np.asarray(value) for name, value in attention.items()}
-            attention = summarize_recorded_attention(attention, probe, ATTN_PROBE_STAT, ATTN_PROBE_KEYS)
-            writer.add(kind, count, span_loss, top_ids, top_probs, row_mean_loss(np.asarray(loss), weights), attention)
-
-    scored: set[int] = set()
-
-    def hook(info, force: bool = False) -> None:
-        count = info.next_step
-        # The forced end-of-run callback pass revisits the last step; score each step once.
-        due = count % trainer_cfg.fact_probe_every == 0 or count == last_step
-        if info.model is None or count in scored or not due:
-            return
-        scored.add(count)
-        with set_mesh(probe_mesh):
-            score(RAW, info.model, count)
-            if count > ema_start_step and trainer_cfg.ema_beta is not None:
-                if count % trainer_cfg.fact_probe_ema_every == 0 or count == last_step:
-                    score(EMA, info.eval_model, count)
-        if count == last_step and jax.process_index() == 0:
-            writer.flush_all()
-
-    return hook
-
-
-def _count_train_text(config: GrugRunConfig, train_loader: DataLoader, num_steps: int) -> None:
-    """The ``train_text_count_patterns`` scan: decode each step's train batch and count every pattern (process 0
-    writes, every 200 steps and at the end)."""
-    patterns = config.trainer.train_text_count_patterns
-    tokenizer = config.data.the_tokenizer
-    assert config.trainer.fact_probe_dir is not None
-    path = f"{config.trainer.fact_probe_dir.rstrip('/')}/{TRAIN_TEXT_COUNTS_FILE}"
-    steps: list[int] = []
-    counts: list[np.ndarray] = []
-    for step, batch in enumerate(train_loader.iter_from_step(0)):
-        if step >= num_steps:
-            break
-        tokens, _ = _host_batch(batch)
-        if jax.process_index() != 0:
-            continue
-        steps.append(step)
-        counts.append(count_text_patterns(tokens, tokenizer.decode, patterns))
-        if (step + 1) % 200 == 0 or step + 1 == num_steps:
-            write_text_counts(path, patterns, steps, counts)
-            logger.info(
-                "text counts through step %d: %s",
-                step,
-                dict(zip(patterns, np.sum(counts, axis=0).tolist(), strict=True)),
-            )
-
-
-def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) -> Callable[..., None]:
-    """The ``weight_attribution_window`` hook (see ``weight_attribution.py``). Runs on the train mesh, so log p
-    uses the training MoE path; ``logp`` is recorded so the first-order sums can be checked against it."""
-    trainer_cfg = config.trainer
-    start, end = trainer_cfg.weight_attribution_window
-    if trainer_cfg.fact_probe_input is None or trainer_cfg.fact_probe_dir is None:
-        raise ValueError("weight_attribution_window needs fact_probe_input (with a spot) and fact_probe_dir")
-    probe = FactProbeInput.load(trainer_cfg.fact_probe_input)
-    if not len(probe.spot):
-        raise ValueError("weight_attribution_window needs a spot in fact_probe_input")
-    row, position = int(probe.spot[0]), int(probe.spot[1])
-    host_example = probe.example(config.data.the_tokenizer.eos_token_id)
-    with set_mesh(mesh):
-        rows = NamedSharding(mesh, P(_BATCH_AXES))
-        batch = jax.tree.map(
-            lambda leaf: jax.device_put(leaf, rows) if isinstance(leaf, np.ndarray) else leaf, host_example
-        )
-    exclude = re.compile(trainer_cfg.weight_attribution_exclude)
-    writer = AttributionWriter(trainer_cfg.fact_probe_dir)
-
-    def selected(tree) -> dict[str, jax.Array]:
-        return {
-            leaf_name(path): leaf
-            for path, leaf in jax.tree_util.tree_leaves_with_path(tree)
-            if isinstance(leaf, jax.Array)
-            and jnp.issubdtype(leaf.dtype, jnp.floating)
-            and not exclude.search(leaf_name(path))
-        }
-
-    @functools.partial(jax.jit, static_argnames=("set_refs",), compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
-    def attribute(params, mem, fast, slow, batch, set_refs: bool):
-        """``mem``: previous parameters, the last two updates, the previous fast rail, and the fixed reference
-        directions ``v`` (an update's second difference) and ``gref`` (G), both frozen at the ``set_refs`` call."""
-
-        def logp(p):
-            compute_params = _cast_to_compute(mp, p)
-            loss, _, _, _ = compute_params.position_predictions(
-                batch.tokens, jnp.asarray([[row, position]], jnp.int32), mask=batch.attn_mask, k=1
-            )
-            return -loss[0]
-
-        value, grads = jax.value_and_grad(logp)(params)
-        g_all, p_all = selected(grads), selected(params)
-        dots = {}
-        new = {key: {} for key in mem}
-        for name, theta in p_all.items():
-            g = g_all[name].astype(jnp.float32)
-            theta = theta.astype(jnp.float32)
-            d = theta - mem["prev"][name]
-            dprev, dprev2 = mem["dprev"][name], mem["dprev2"][name]
-            v = d - dprev if set_refs else mem["v"][name]
-            gref = g if set_refs else mem["gref"][name]
-            rec = {
-                "Gd": per_layer_sum(name, g * d),
-                "Gdp": per_layer_sum(name, g * dprev),
-                "ddp": per_layer_sum(name, d * dprev),
-                "ddpp": per_layer_sum(name, d * dprev2),
-                "dd": per_layer_sum(name, d * d),
-                "GG": per_layer_sum(name, g * g),
-                "vd": per_layer_sum(name, v * d),
-                "vt": per_layer_sum(name, v * theta),
-                "gt": per_layer_sum(name, gref * theta),
-            }
-            zero = jnp.zeros_like(rec["Gd"])
-            if name in fast:
-                rec["Gf"] = per_layer_sum(name, g * fast[name].astype(jnp.float32))
-                rec["Gfp"] = per_layer_sum(name, g * mem["fast_prev"][name])
-                rec["Gs"] = per_layer_sum(name, g * slow[name].astype(jnp.float32)) if name in slow else zero
-                new["fast_prev"][name] = fast[name].astype(jnp.float32) + 0.0
-            else:
-                rec["Gf"] = rec["Gfp"] = rec["Gs"] = zero
-            dots[name] = rec
-            new["prev"][name] = theta + 0.0
-            new["dprev"][name] = d
-            new["dprev2"][name] = dprev + 0.0
-            new["v"][name] = v + 0.0
-            new["gref"][name] = gref + 0.0
-        return value, dots, new
-
-    @jax.jit
-    def initial(params, fast):
-        prev = {n: x.astype(jnp.float32) + 0.0 for n, x in selected(params).items()}
-        zeros = {n: jnp.zeros_like(x) for n, x in prev.items()}
-        return {
-            "prev": prev,
-            "dprev": zeros,
-            "dprev2": {n: jnp.zeros_like(x) for n, x in prev.items()},
-            "v": {n: jnp.zeros_like(x) for n, x in prev.items()},
-            "gref": {n: jnp.zeros_like(x) for n, x in prev.items()},
-            "fast_prev": {n: x.astype(jnp.float32) + 0.0 for n, x in fast.items()},
-        }
-
-    carry: dict = {"seen": set(), "calls": 0}
-
-    def hook(info, force: bool = False) -> None:
-        count = info.next_step
-        if info.model is None or not start <= count <= end or count in carry["seen"]:
-            return
-        carry["seen"].add(count)
-        fast, slow = rails_by_name(info.opt_state)
-        fast = {n: x for n, x in fast.items() if not exclude.search(n)}
-        slow = {n: x for n, x in slow.items() if not exclude.search(n)}
-        with set_mesh(mesh), _pgle_disabled():
-            if "mem" not in carry:
-                carry["mem"] = initial(info.model, fast)
-                return
-            carry["calls"] += 1
-            # The second update is the first with a real previous update, so its second difference is the reference.
-            value, dots, carry["mem"] = attribute(info.model, carry["mem"], fast, slow, batch, carry["calls"] == 2)
-        host = multihost_utils.process_allgather({"value": value, "dots": dots}, tiled=True)
-        if jax.process_index() == 0:
-            writer.add(
-                count,
-                float(host["value"]),
-                {n: {k: np.asarray(v) for k, v in r.items()} for n, r in host["dots"].items()},
-            )
-            if count == end:
-                writer.flush()
-
-    return hook
-
-
-# Matrix leaves that are lookup tables, not projections (rows are read, never multiplied through).
-_NOT_PROJECTION = re.compile(r"embed|ngram_stat_table|router_bias|expert_visit_bias|null_const|attn_prev")
-
-
-def _expert_axis_only(leaf: jax.Array) -> P:
-    """``leaf``'s partition spec with every mesh axis but ``expert`` dropped."""
-    spec = tuple(leaf.sharding.spec) + (None,) * (leaf.ndim - len(leaf.sharding.spec))
-    keep = lambda ax: "expert" if ax == "expert" or (isinstance(ax, tuple) and "expert" in ax) else None  # noqa: E731
-    return P(*(keep(ax) for ax in spec))
-
-
-def _weight_diagnostics_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[..., None]:
-    """The ``weight_diagnostics_every`` hook (see ``weight_diagnostics.py``)."""
-    every = config.trainer.weight_diagnostics_every
-    is_norm = lambda x: isinstance(x, (RMSNorm, ZeroCenteredRMSNorm))  # noqa: E731
-
-    def collect(model) -> tuple[dict[str, jax.Array], dict[str, jax.Array]]:
-        matrices = {}
-        for path, leaf in jax.tree_util.tree_leaves_with_path(eqx.filter(model, eqx.is_inexact_array)):
-            name = leaf_name(path)
-            if not isinstance(leaf, jax.Array) or leaf.ndim < 2 or _NOT_PROJECTION.search(name):
-                continue
-            # Expert banks keep only their expert-axis sharding (a batch axis here); the rest are small enough to
-            # replicate. Either way every contracted axis is unsharded.
-            matrices[name] = reshard(leaf, _expert_axis_only(leaf) if "expert_mlp" in name else P(*(None,) * leaf.ndim))
-        gains = {}
-        for path, norm in jax.tree_util.tree_leaves_with_path(model, is_leaf=is_norm):
-            if isinstance(norm, RMSNorm):
-                gains[leaf_name(path)] = reshard(norm.gain(), P(*(None,) * norm.weight.ndim))
-            elif isinstance(norm, ZeroCenteredRMSNorm):
-                gains[leaf_name(path)] = 1.0 + reshard(norm.gamma, P(*(None,) * norm.gamma.ndim))
-        return matrices, gains
-
-    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
-    def compute(matrices, gains):
-        out = {f"weights/{name}/{k}": v for name, w in matrices.items() for k, v in matrix_stats(w).items()}
-        out.update({f"weights/{name}/{k}": v for name, g in gains.items() for k, v in gain_stats(g).items()})
-        return out
-
-    def hook(info, force: bool = False) -> None:
-        if info.model is None or info.step % every:
-            return
-        with set_mesh(mesh), _pgle_disabled():
-            stats = compute(*collect(info.model))
-        host = jax.tree.map(np.asarray, multihost_utils.process_allgather(stats, tiled=True))
-        if jax.process_index() == 0:
-            levanter.tracker.log({k: float(v) for k, v in host.items()}, step=info.step)
-
-    return hook
-
-
-def _flip_detector_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[..., None]:
-    """The ``flip_detector_patterns`` hook (see ``flip_detector.py``)."""
-    cfg = config.trainer
-    if cfg.flip_detector_dir is None:
-        raise ValueError("flip_detector_patterns needs flip_detector_dir")
-    patterns = [re.compile(p) for p in cfg.flip_detector_patterns]
-    beta, k, every = cfg.flip_detector_beta, cfg.flip_detector_k, cfg.flip_detector_every
-    sides = ("in", "out")
-
-    def selected(tree) -> dict[str, jax.Array]:
-        out = {}
-        for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
-            name = leaf_name(path)
-            if isinstance(leaf, jax.Array) and leaf.ndim in (2, 3) and any(p.search(name) for p in patterns):
-                x = leaf.astype(jnp.float32) if leaf.ndim == 3 else leaf.astype(jnp.float32)[None]
-                # Replicated: the matrices are small, and contracting a sharded axis needs an explicit out sharding.
-                out[name] = reshard(x, P(None, None, None))
-        return out
-
-    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
-    def step(params, prev, dprev, stats, bases):
-        cur = selected(params)
-        new_stats, cosines = {}, {}
-        for name, theta in cur.items():
-            d = theta - prev[name]
-            for side in sides:
-                cross, energy = side_stats(d, dprev[name], side)
-                key = f"{name}|{side}"
-                c0, e0 = stats[key]
-                new_stats[key] = (beta * c0 + (1 - beta) * cross, beta * e0 + (1 - beta) * energy)
-                cosines[key] = flagged_cosines(d, dprev[name], bases[key], side)
-        return new_stats, cosines, {n: x + 0.0 for n, x in cur.items()}, {n: cur[n] - prev[n] for n in cur}
-
-    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
-    def solve(stats, old_bases):
-        out = {}
-        for key, (cross, energy) in stats.items():
-            rho, basis = flip_directions(cross, energy, k)
-            out[key] = (rho, basis, subspace_overlap(old_bases[key], basis))
-        return out
-
-    carry: dict = {"seen": set(), "block": [], "index": 0, "solved": 0}
-
-    def hook(info, force: bool = False) -> None:
-        count = info.next_step
-        if info.model is None or count in carry["seen"]:
-            return
-        carry["seen"].add(count)
-        with set_mesh(mesh), _pgle_disabled():
-            if "prev" not in carry:
-                cur = selected(info.model)
-                carry["prev"] = {n: x + 0.0 for n, x in cur.items()}
-                carry["dprev"] = {n: jnp.zeros_like(x) for n, x in cur.items()}
-                shapes = {
-                    f"{n}|{s}": (x.shape[0], x.shape[1] if s == "in" else x.shape[2])
-                    for n, x in cur.items()
-                    for s in sides
-                }
-                carry["stats"] = {key: (jnp.zeros((l, m, m)), jnp.zeros((l, m, m))) for key, (l, m) in shapes.items()}
-                carry["bases"] = {key: jnp.zeros((l, m, k)) for key, (l, m) in shapes.items()}
-                return
-            carry["stats"], cosines, carry["prev"], carry["dprev"] = step(
-                info.model, carry["prev"], carry["dprev"], carry["stats"], carry["bases"]
-            )
-        carry["block"].append(jax.tree.map(np.asarray, multihost_utils.process_allgather(cosines, tiled=True)))
-        if count % every:
-            return
-        with set_mesh(mesh), _pgle_disabled():
-            solved = solve(carry["stats"], carry["bases"])
-        carry["bases"] = {key: basis for key, (_, basis, _) in solved.items()}
-        host = multihost_utils.process_allgather({key: (rho, ov) for key, (rho, _, ov) in solved.items()}, tiled=True)
-        record, logs = {}, {}
-        for key, (rho, overlap) in host.items():
-            rho, overlap = np.asarray(rho), np.asarray(overlap)
-            block = np.asarray([b[key] for b in carry["block"]])  # [steps, 3, layers]
-            for layer in range(rho.shape[0]):
-                tag = f"flip/{key.replace('|', '/')}/L{layer}"
-                logs[f"{tag}/rho_min"] = float(rho[layer, 0])
-                logs[f"{tag}/rho_max"] = float(rho[layer, -1])
-                if carry["solved"] and len(block):
-                    logs[f"{tag}/flagged_cos"] = float(np.mean(block[:, 0, layer]))
-                    logs[f"{tag}/rest_cos"] = float(np.mean(block[:, 1, layer]))
-                    logs[f"{tag}/flagged_share"] = float(np.mean(block[:, 2, layer]))
-                    logs[f"{tag}/overlap"] = float(overlap[layer])
-            record[f"rho/{key}"] = rho
-            record[f"cos/{key}"] = block
-        carry["solved"] += 1
-        carry["block"] = []
-        if jax.process_index() == 0:
-            levanter.tracker.log(logs, step=info.step)
-            path = f"{cfg.flip_detector_dir.rstrip('/')}/{FLIP_DETECTOR_FILE.format(index=carry['index'])}"
-            with fsspec.open(path, "wb") as f:
-                np.savez(f, step=count, **record)
-        carry["index"] += 1
-
-    return hook
-
-
-def _host_batch(batch) -> tuple[np.ndarray, np.ndarray]:
-    gather = functools.partial(multihost_utils.process_allgather, tiled=True)
-    return np.asarray(gather(batch.tokens)), np.asarray(gather(batch.loss_weight))
-
-
-# Probe batches start this many steps past the run's last step (disjoint from the training data).
-_MUON_PROBE_DATA_OFFSET = 1000
-# Past the Muon/SNR probes' batches, so the probes never share data.
-_NOISE_PROBE_DATA_OFFSET = 20000
-
-
-def _leaf_names(tree) -> list[str]:
-    return [str(p) for p in jax.tree.leaves(leaf_key_paths(tree))]
-
-
 def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
     watch_targets = (
         tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -1904,9 +1302,6 @@ def _init_unigram_bias(state: GrugTrainState, train_loader, *, num_batches: int)
     return dataclasses.replace(state, params=params, ema_params=ema_params)
 
 
-ROUTING_DUMP_FILE = "routing_step{step}.npz"
-
-
 _PY_SPY_TIMEOUT = 60
 
 
@@ -1926,628 +1321,6 @@ def _stall_diagnostic(timeout) -> None:
         logger.critical("py-spy dump unavailable: %s", e)
         return
     logger.critical("py-spy native dump (exit %d):\n%s%s", dump.returncode, dump.stdout, dump.stderr)
-
-
-def _dump_final_params(params, patterns: tuple[str, ...], path: str) -> None:
-    """Gather the params matching ``patterns`` from every process and write them to ``path`` (process 0)."""
-    selected = {}
-    for key_path, leaf in jax.tree_util.tree_leaves_with_path(params):
-        name = jax.tree_util.keystr(key_path, simple=True, separator=".")
-        if isinstance(leaf, jax.Array) and any(re.search(pattern, name) for pattern in patterns):
-            selected[name] = leaf
-    if not selected:
-        raise ValueError(f"no params match final_param_dump_patterns {patterns}")
-    host = {name: np.asarray(multihost_utils.process_allgather(leaf, tiled=True)) for name, leaf in selected.items()}
-    if jax.process_index() == 0:
-        with fsspec.open(path, "wb") as f:
-            np.savez(f, **host)
-        logger.info("wrote %d final params to %s", len(host), path)
-
-
-# In-document query positions probed by ``_attn_distance_dump``, and the most queries kept per position.
-ATTN_PROBE_DISTANCES = (20, 40, 100, 200, 400, 1000, 2000, 4000)
-_ATTN_PROBE_PER_DISTANCE = 64
-_ATTN_PROBE_QUERIES_PER_BATCH = 32
-
-
-def _attn_distance_dump(
-    config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str
-) -> None:
-    """Write every MLA layer's softmax rows ``[Q, L, H, S]`` (float16) for queries at in-document positions
-    ``ATTN_PROBE_DISTANCES`` of fixed held-out sequences to ``path`` (process 0), with ``tokens`` / ``segments``,
-    each query's ``query_seq`` / ``query_pos`` / ``query_doc_pos`` and the probed ``layers``."""
-    params = _apply_qb_betas(params, qb_betas)
-    mp = config.trainer.trainer.mp
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        tokens, segments = pool.submit(
-            _routing_dump_sequences,
-            config.data,
-            seq_len=config.model.max_seq_len,
-            num_sequences=config.trainer.attn_distance_sequences,
-        ).result()
-    seq = tokens.shape[1]
-    starts = np.zeros_like(segments)
-    for r in range(len(segments)):
-        change = np.flatnonzero(np.diff(segments[r]) != 0) + 1
-        bounds = np.concatenate([[0], change])
-        starts[r] = np.repeat(bounds, np.diff(np.concatenate([bounds, [seq]])))
-    doc_pos = np.arange(seq)[None, :] - starts
-    batch = jax.device_count()
-    picks: list[tuple[int, int, int]] = []
-    for distance in ATTN_PROBE_DISTANCES:
-        rows, cols = np.nonzero((doc_pos == distance) & (segments >= 0))
-        picks += [(int(r), int(c), distance) for r, c in list(zip(rows, cols, strict=True))[:_ATTN_PROBE_PER_DISTANCE]]
-    by_batch: dict[int, list[tuple[int, int, int]]] = {}
-    for r, c, distance in picks:
-        by_batch.setdefault(r // batch, []).append((r, c, distance))
-    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-
-    def global_batch(host: np.ndarray) -> jax.Array:
-        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
-
-    @jax.jit
-    def probe(params, ids, segs, rows, positions):
-        model = _cast_to_compute(mp, params)
-        with attention_rows_probe(rows, positions):
-            _, metrics = model(ids, mask=AttentionMask.causal().with_segment_ids(segs))
-        return {k: v for k, v in metrics.items() if k.startswith((ATTN_ROWS_STAT, RELPOS_ROWS_STAT))}
-
-    rows_out, relpos, meta = [], [], []
-    with set_mesh(mesh):
-        for b, queries in sorted(by_batch.items()):
-            ids = global_batch(tokens[b * batch : (b + 1) * batch])
-            segs = global_batch(segments[b * batch : (b + 1) * batch])
-            for start in range(0, len(queries), _ATTN_PROBE_QUERIES_PER_BATCH):
-                chunk = queries[start : start + _ATTN_PROBE_QUERIES_PER_BATCH]
-                padded = chunk + [chunk[0]] * (_ATTN_PROBE_QUERIES_PER_BATCH - len(chunk))
-                rows = jnp.asarray([r - b * batch for r, _, _ in padded], jnp.int32)
-                positions = jnp.asarray([c for _, c, _ in padded], jnp.int32)
-                out = probe(params, ids, segs, rows, positions)
-                names = sorted((k for k in out if k.startswith(ATTN_ROWS_STAT)), key=lambda k: int(k.rsplit("_L", 1)[1]))
-                stacked = np.stack([np.asarray(out[k]) for k in names], axis=1)[: len(chunk)]  # [Q, L, H, F, S]
-                rows_out.append(stacked.astype(np.float16))
-                rel_names = [k.replace(ATTN_ROWS_STAT, RELPOS_ROWS_STAT) for k in names]
-                if all(k in out for k in rel_names):
-                    relpos.append(np.stack([np.asarray(out[k]) for k in rel_names], axis=1)[: len(chunk)])
-                meta += chunk
-    if jax.process_index() == 0:
-        rows_all = np.concatenate(rows_out, axis=0)
-        with fsspec.open(path, "wb") as f:
-            np.savez(
-                f,
-                # [Q, L, H, S] each: ``attention_rows_probe.ROW_FIELDS``.
-                **{name: rows_all[:, :, :, i] for i, name in enumerate(ROW_FIELDS)},
-                tokens=tokens,
-                segments=segments,
-                query_seq=np.asarray([r for r, _, _ in meta]),
-                query_pos=np.asarray([c for _, c, _ in meta]),
-                query_doc_pos=np.asarray([d for _, _, d in meta]),
-                layers=np.asarray([int(k.rsplit("_L", 1)[1]) for k in names]),
-                # [Q, L, H, rel_extent]: each query's Inkling bias at distance 0 .. rel_extent - 1 back.
-                relpos=np.concatenate(relpos, axis=0) if relpos else np.zeros((0,)),
-            )
-
-
-def _logit_decomp_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
-    """Write ``model.logit_decomp_stats`` for fixed held-out sequences to ``path`` (process 0): ``tokens`` /
-    ``segments`` ``[N, S]``, ``stats`` ``[N, S, F]`` (``LOGIT_DECOMP_FIELDS``) and the probe tokens' ``unigram``
-    log-frequencies used for the frequency alignment."""
-    params = _apply_qb_betas(params, qb_betas)
-    mp = config.trainer.trainer.mp
-    vocab = config.model.vocab_size
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        tokens, segments = pool.submit(
-            _routing_dump_sequences,
-            config.data,
-            seq_len=config.model.max_seq_len,
-            num_sequences=config.trainer.logit_decomp_sequences,
-        ).result()
-    counts = np.bincount(tokens[segments >= 0].reshape(-1), minlength=vocab).astype(np.float64) + 1.0
-    unigram = np.log(counts / counts.sum()).astype(np.float32)
-    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-    batch = jax.device_count()
-
-    def global_batch(host: np.ndarray) -> jax.Array:
-        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
-
-    @jax.jit
-    def decomp(params, ids, segs, unigram):
-        return logit_decomp_stats(_cast_to_compute(mp, params), ids, segs, unigram)
-
-    stats = []
-    with set_mesh(mesh):
-        uni = jnp.asarray(unigram)
-        for start in range(0, len(tokens), batch):
-            ids, segs = global_batch(tokens[start : start + batch]), global_batch(segments[start : start + batch])
-            stats.append(np.asarray(multihost_utils.process_allgather(decomp(params, ids, segs, uni), tiled=True)))
-    if jax.process_index() == 0:
-        with fsspec.open(path, "wb") as f:
-            np.savez(
-                f,
-                tokens=tokens,
-                segments=segments,
-                stats=np.concatenate(stats, axis=0).astype(np.float32),
-                fields=np.asarray(LOGIT_DECOMP_FIELDS),
-                unigram=unigram,
-            )
-
-
-_ROUTER_CALIB_DATA_OFFSET = 40000
-_ROUTER_CALIB_FIT_BATCHES = 2
-_ROUTER_CALIB_VAL_SEQUENCES = 64
-
-
-def _router_calib_dump(
-    config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, train_loader
-) -> None:
-    """``router_calib.run`` on held-out training batches (fit) and validation sequences (score), dropless on an
-    expert-collapsed mesh like the final eval."""
-    mp = config.trainer.trainer.mp
-    probe_mesh = (
-        compact_grug_mesh(
-            expert_axis_size=1, replica_axis_size=mesh.shape["replica_dcn"], model_axis_size=mesh.shape["model"]
-        )
-        if mesh.shape["expert"] > 1
-        else mesh
-    )
-    implementation = (
-        dropless_moe_implementation(config.model)
-        if config.eval is None
-        else config.eval.dropless_eval_moe_implementation
-    )
-    stream = iter(train_loader.iter_from_step(config.trainer.trainer.num_train_steps + _ROUTER_CALIB_DATA_OFFSET))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        tokens, segments = pool.submit(
-            _routing_dump_sequences,
-            config.data,
-            seq_len=config.model.max_seq_len,
-            num_sequences=_ROUTER_CALIB_VAL_SEQUENCES,
-        ).result()
-    valid = (segments >= 0) & (np.pad(segments[:, 1:], ((0, 0), (0, 1)), constant_values=-1) == segments)
-
-    def loss_fn(model: Transformer, betas: jax.Array, batch) -> jax.Array:
-        local = _to_dropless_local(_apply_qb_betas(model, betas), implementation=implementation)
-        compute = _cast_to_compute(mp, local)
-        return compute.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask)
-
-    with set_mesh(probe_mesh):
-        model = _reshard_tree_to_mesh(params, probe_mesh)
-        rows = NamedSharding(probe_mesh, P(_BATCH_AXES, None))
-
-        def put(batch):
-            return jax.tree.map(
-                lambda x: jax.device_put(np.asarray(x), rows) if hasattr(x, "shape") and x.ndim == 2 else x, batch
-            )
-
-        fit = [put(next(stream)) for _ in range(_ROUTER_CALIB_FIT_BATCHES)]
-        per_call = jax.device_count() * 4
-        val = []
-        for start in range(0, len(tokens), per_call):
-            seg = jax.device_put(segments[start : start + per_call], rows)
-            val.append(
-                GrugLmExample(
-                    tokens=jax.device_put(tokens[start : start + per_call], rows),
-                    loss_weight=jax.device_put(valid[start : start + per_call].astype(np.float32), rows),
-                    attn_mask=AttentionMask.causal().with_segment_ids(seg),
-                )
-            )
-        betas = jax.device_put(np.asarray(jax.device_get(qb_betas)), NamedSharding(probe_mesh, P(None, None)))
-        run_router_calib(model, betas, loss_fn, fit, val, (put(b) for b in stream), config.trainer.router_calib_path)
-
-
-def _trace_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
-    """Write ``trace_probe.trace_stats`` for fixed held-out sequences to ``path`` (process 0): ``tokens`` /
-    ``segments`` ``[N, S]``, each sequence's validation ``set_names``, the ``term_names`` and every trace array."""
-    params = _apply_qb_betas(params, qb_betas)
-    mp = config.trainer.trainer.mp
-    count = config.trainer.trace_probe_sequences
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        tokens, segments = pool.submit(
-            _routing_dump_sequences, config.data, seq_len=config.model.max_seq_len, num_sequences=count
-        ).result()
-    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-    batch = jax.device_count()
-
-    def global_batch(host: np.ndarray) -> jax.Array:
-        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
-
-    @jax.jit
-    def trace(params, ids, segs):
-        return trace_stats(_cast_to_compute(mp, params), ids, segs)
-
-    parts: list[dict[str, np.ndarray]] = []
-    with set_mesh(mesh):
-        for start in range(0, len(tokens), batch):
-            ids, segs = global_batch(tokens[start : start + batch]), global_batch(segments[start : start + batch])
-            out = trace(params, ids, segs)
-            parts.append({k: np.asarray(multihost_utils.process_allgather(v, tiled=True)) for k, v in out.items()})
-    if jax.process_index() != 0:
-        return
-    merged: dict[str, np.ndarray] = {}
-    for key in parts[0]:
-        if key.startswith("check_"):
-            merged[key] = np.max(np.stack([p[key] for p in parts]))
-            logger.info("trace_probe %s = %.3g", key, float(merged[key]))
-            continue
-        # Routing arrays are [L, T, K] with T = batch * seq; the rest lead with the batch.
-        axis = 1 if key.startswith("routing_") else 0
-        value = np.concatenate([p[key] for p in parts], axis=axis)
-        merged[key] = value.astype(np.float16) if value.dtype == np.float32 else value
-    sets = config.data.validation_sets(Axis("position", config.model.max_seq_len))
-    names = sorted(sets)
-    lengths = {name: len(sets[name].as_sync_dataset()) for name in names}
-    picks = [name for index in range(max(lengths.values())) for name in names if index < lengths[name]][:count]
-    num_extra = merged["dla_target"].shape[-1] - 2 * config.model.num_layers - 2
-    with fsspec.open(path, "wb") as f:
-        np.savez(
-            f,
-            tokens=tokens,
-            segments=segments,
-            set_names=np.asarray(picks),
-            term_names=np.asarray(trace_term_names(params, num_extra)),
-            **merged,
-        )
-
-
-def _head_probe_dump(config: "GrugRunConfig", params: Transformer, qb_betas: jax.Array, mesh: Mesh, path: str) -> None:
-    """Probe every softmax-attention query head of a non-AttnRes model (dense or MoE, with its QB routing biases
-    ``qb_betas``) on fixed held-out sequences and write
-    ``path`` (process 0): ``tokens`` / ``segments`` ``[N, S]``, ``stats`` ``[L, N, S, H, F]`` (``HEAD_PROBE_FIELDS``),
-    the per-token next-token ``loss`` ``[N, S]``, and ``ablation_dloss`` ``[L, H, N, S]``: each token's loss with
-    that head's output projection rows zeroed, minus the full model's."""
-    cfg = config.model
-    if cfg.attn_res or params.stacked_blocks_tail is not None or params.kda_blocks is not None:
-        raise ValueError("head_probe supports the baseline recipe (one scanned softmax-attention stack)")
-    params = _apply_qb_betas(params, qb_betas)
-    mp = config.trainer.trainer.mp
-    heads, head_dim = cfg.num_heads, cfg.inferred_head_dim
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        tokens, segments = pool.submit(
-            _routing_dump_sequences,
-            config.data,
-            seq_len=cfg.max_seq_len,
-            num_sequences=config.trainer.head_probe_sequences,
-        ).result()
-    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-    batch = jax.device_count()
-
-    def global_batch(host: np.ndarray) -> jax.Array:
-        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
-
-    def per_token_loss(model, ids, segs):
-        mask = AttentionMask.causal().with_segment_ids(segs)
-        weight = (segs >= 0).astype(jnp.float32)
-        return model.next_token_loss(ids, weight, mask=mask, reduction="none")
-
-    @jax.jit
-    def probe(params, ids, segs):
-        model = _cast_to_compute(mp, params)
-        with head_probe():
-            _, metrics = model(ids, mask=AttentionMask.causal().with_segment_ids(segs))
-        return metrics[HEAD_PROBE_STAT], metrics[HEAD_QCOS_STAT], per_token_loss(model, ids, segs)
-
-    @jax.jit
-    def ablated(params, ids, segs, layer, head):
-        w_o = params.stacked_blocks.stacked.attn.w_o  # [L, H * D, E]
-        rows = (jnp.arange(w_o.shape[1]) // head_dim) == head
-        zero = (jnp.arange(w_o.shape[0]) == layer)[:, None, None] & rows[None, :, None]
-        model = eqx.tree_at(lambda m: m.stacked_blocks.stacked.attn.w_o, params, jnp.where(zero, 0.0, w_o))
-        return per_token_loss(_cast_to_compute(mp, model), ids, segs)
-
-    def gather(x) -> np.ndarray:
-        return np.asarray(multihost_utils.process_allgather(x, tiled=True))
-
-    stats, qcos, loss, dloss = [], [], [], []
-    with set_mesh(mesh):
-        for start in range(0, len(tokens), batch):
-            ids, segs = global_batch(tokens[start : start + batch]), global_batch(segments[start : start + batch])
-            batch_stats, batch_qcos, batch_loss = probe(params, ids, segs)
-            stats.append(gather(batch_stats).astype(np.float16))
-            qcos.append(np.asarray(batch_qcos))
-            base = gather(batch_loss)
-            loss.append(base)
-            per_head = [
-                [gather(ablated(params, ids, segs, layer, head)) - base for head in range(heads)]
-                for layer in range(cfg.num_layers)
-            ]
-            dloss.append(np.asarray(per_head, np.float32))
-    if jax.process_index() == 0:
-        with fsspec.open(path, "wb") as f:
-            np.savez(
-                f,
-                tokens=tokens,
-                segments=segments,
-                stats=np.concatenate(stats, axis=1),
-                fields=np.asarray(HEAD_PROBE_FIELDS),
-                loss=np.concatenate(loss, axis=0),
-                ablation_dloss=np.concatenate(dloss, axis=2),
-                # [L, 2, H, H]: token-mean query-head cosine and absolute cosine (mean over equal-size batches).
-                query_cos=np.mean(qcos, axis=0),
-                layer_is_long=np.asarray(_long_layer_schedule(cfg.num_layers, cfg.global_every, cfg.global_layers)),
-            )
-        logger.info("wrote head probe of %d sequences to %s", len(tokens), path)
-
-
-def _routing_dump_sequences(
-    data_config: LmDataConfig, *, seq_len: int, num_sequences: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """``num_sequences`` fixed held-out sequences and their segment ids (``-1`` marks padding): every
-    validation set from its start, round-robin over the sets in name order, so each dump sees the same
-    tokens. Raises when the validation sets hold fewer sequences."""
-    sets = data_config.validation_sets(Axis("position", seq_len))
-    if not sets:
-        raise ValueError("routing_dump_steps needs validation sets")
-    names = sorted(sets)
-    datasets = {name: sets[name].as_sync_dataset() for name in names}
-    lengths = {name: len(datasets[name]) for name in names}
-    picks: list[tuple[str, int]] = []
-    for index in range(max(lengths.values())):
-        picks += [(name, index) for name in names if index < lengths[name]]
-    if len(picks) < num_sequences:
-        raise ValueError(f"routing dump needs {num_sequences} sequences, the validation sets hold {len(picks)}")
-    picks = picks[:num_sequences]
-    fetched = {}
-    for name in names:
-        indices = [index for n, index in picks if n == name]
-        if indices:
-            examples = [grug_lm_example_from_named(ex) for ex in datasets[name].get_batch(indices)]
-            fetched.update({(name, index): ex for index, ex in zip(indices, examples, strict=True)})
-    tokens, segments = [], []
-    for pick in picks:
-        example = fetched[pick]
-        tokens.append(np.asarray(example.tokens, np.int32))
-        seg = example.attn_mask.segment_ids
-        segments.append(np.zeros(seq_len, np.int32) if seg is None else np.asarray(seg[0], np.int32))
-    return np.stack(tokens), np.stack(segments)
-
-
-def _routing_counts_step(mp: jmp.Policy):
-    """Jitted ``(params, qb_betas, tokens, segment_ids, counts) -> counts``: adds one batch's routed
-    assignments (every top-K slot, weight 1, and a combine-weight-weighted copy) to the ``[L, V, E]``
-    counts by current token and by previous token (same document only)."""
-
-    @jax.jit
-    def add(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array, counts):
-        model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
-        selected, weights = model.routing_assignments(tokens, AttentionMask.causal().with_segment_ids(segment_ids))
-        k = selected.shape[-1]
-        valid = segment_ids >= 0
-        prev_tokens = jnp.pad(tokens[:, :-1], ((0, 0), (1, 0)))
-        prev_valid = valid & (jnp.pad(segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=-1) == segment_ids)
-        out_spec = P(None, None, None)
-
-        def slots(x):
-            return jnp.broadcast_to(x[..., None], (*x.shape, k))
-
-        cur, prev, cur_ok, prev_ok = slots(tokens), slots(prev_tokens), slots(valid), slots(prev_valid)
-        current, previous, weighted = counts
-        for layer in range(selected.shape[0]):
-            sel = selected[layer]
-            current = current.at[layer, cur, sel].add(cur_ok.astype(jnp.int32), out_sharding=out_spec)
-            previous = previous.at[layer, prev, sel].add(prev_ok.astype(jnp.int32), out_sharding=out_spec)
-            w = jnp.where(cur_ok, weights[layer].astype(jnp.float32), 0.0)
-            weighted = weighted.at[layer, cur, sel].add(w, out_sharding=out_spec)
-        return current, previous, weighted
-
-    return add
-
-
-NEURON_DUMP_FILE = "neurons_step{step}.npz"
-
-
-def _neuron_counts_layer(
-    w_up: jax.Array, routed_input: jax.Array, selected: jax.Array, shared_pre: jax.Array, valid: jax.Array
-) -> dict[str, jax.Array]:
-    """One layer's ReLU² neuron activity: per routed expert and hidden unit, how many of the tokens routed to it
-    have a positive pre-activation (and the summed ReLU² output); per shared hidden unit the same over every token;
-    and histograms of how many units each token (routed: each token-expert assignment) switches on."""
-    num_experts, _, width = w_up.shape
-    replicated = P(*(None,) * w_up.ndim)
-    w_up = reshard(w_up.astype(routed_input.dtype), replicated)
-    hist_spec = P(None)
-
-    def expert(_, e):
-        pre = jnp.einsum("ti,ij->tj", routed_input, w_up[e], out_sharding=P(_BATCH_AXES, None)).astype(jnp.float32)
-        routed = jnp.any(selected == e, axis=-1) & valid
-        on = (pre > 0) & routed[:, None]
-        units_on = jnp.sum(pre > 0, axis=-1)
-        hist = jnp.zeros((width + 1,), jnp.int32).at[units_on].add(routed.astype(jnp.int32), out_sharding=hist_spec)
-        return None, (
-            jnp.sum(on, axis=0, dtype=jnp.int32),
-            jnp.sum(routed, dtype=jnp.int32),
-            jnp.sum(jnp.where(on, jnp.square(pre), 0.0), axis=0),
-            hist,
-        )
-
-    _, (active, tokens, sq, hist) = jax.lax.scan(expert, None, jnp.arange(num_experts))
-    shared = shared_pre.astype(jnp.float32)
-    shared_on = (shared > 0) & valid[:, None]
-    shared_width = shared.shape[-1]
-    shared_hist = (
-        jnp.zeros((shared_width + 1,), jnp.int32)
-        .at[jnp.sum(shared > 0, axis=-1)]
-        .add(valid.astype(jnp.int32), out_sharding=hist_spec)
-    )
-    return {
-        "routed_active": active,
-        "routed_tokens": tokens,
-        "routed_sq": sq,
-        "routed_hist": jnp.sum(hist, axis=0),
-        "shared_active": jnp.sum(shared_on, axis=0, dtype=jnp.int32),
-        "shared_sq": jnp.sum(jnp.where(shared_on, jnp.square(shared), 0.0), axis=0),
-        "shared_hist": shared_hist,
-        "shared_tokens": jnp.sum(valid, dtype=jnp.int32),
-    }
-
-
-def _neuron_counts_step(mp: jmp.Policy):
-    """Jitted ``(params, qb_betas, tokens, segment_ids) -> {name: [L, ...]}``: one batch's neuron activity per layer
-    (``_neuron_counts_layer``), for the neuron-health dump."""
-
-    @jax.jit
-    def counts(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
-        model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
-        selected, routed_input, shared_pre = model.neuron_inputs(
-            tokens, AttentionMask.causal().with_segment_ids(segment_ids)
-        )
-        valid = reshard((segment_ids >= 0).reshape(-1), P(_BATCH_AXES))
-        per_layer = [
-            _neuron_counts_layer(layer.mlp.expert_mlp.w_up, routed_input[i], selected[i], shared_pre[i], valid)
-            for i, layer in enumerate(model.layers())
-        ]
-        return jax.tree.map(lambda *xs: jnp.stack(xs), *per_layer)
-
-    return counts
-
-
-def _expert_grad_step(mp: jmp.Policy, z_loss: float | None):
-    """Jitted ``(params, qb_betas, tokens, segment_ids) -> [per layer (routed w_up, routed w_down, shared w_up, shared
-    w_down) gradients]`` of the plain loss on one batch, for the neuron-health dump's per-unit gradient statistics."""
-
-    @jax.jit
-    def grads(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
-        batch = GrugLmExample(
-            tokens=tokens,
-            loss_weight=(segment_ids >= 0).astype(jnp.float32),
-            attn_mask=AttentionMask.causal().with_segment_ids(segment_ids),
-        )
-        (_, _), g = _loss_and_grads(_apply_qb_betas(params, qb_betas), batch, mp, z_loss)
-        return [
-            (layer.mlp.expert_mlp.w_up, layer.mlp.expert_mlp.w_down, layer.shared[0].w_up, layer.shared[0].w_down)
-            for layer in g.layers()
-        ]
-
-    return grads
-
-
-def _unit_norms(x: jax.Array, axis: int) -> jax.Array:
-    return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axis))
-
-
-@jax.jit
-def _unit_grad_stats(params: Transformer, layer_grads) -> dict[str, jax.Array]:
-    """Per hidden unit of every layer's routed experts (``[L, E, I]``) and shared expert (``[L, I]``): the gradient
-    norm of its ``w_up`` column and ``w_down`` row, the norm of the same slice of Muon's update direction
-    (Newton-Schulz of each expert's gradient: the share of the step that reaches the unit), and the weight norm."""
-    out: dict[str, list[jax.Array]] = {}
-
-    def add(name: str, value: jax.Array) -> None:
-        out.setdefault(name, []).append(value)
-
-    for layer, (g_up, g_down, gs_up, gs_down) in zip(params.layers(), layer_grads, strict=True):
-        em, sh = layer.mlp.expert_mlp, layer.shared[0]
-        g_up, g_down = (reshard(x.astype(jnp.float32), P(*(None,) * x.ndim)) for x in (g_up, g_down))
-        add("routed_grad_up", _unit_norms(g_up, -2))
-        add("routed_grad_down", _unit_norms(g_down, -1))
-        add("routed_ns_up", _unit_norms(_msign(g_up), -2))
-        add("routed_ns_down", _unit_norms(_msign(g_down), -1))
-        add("routed_weight_up", _unit_norms(reshard(em.w_up, P(*(None,) * em.w_up.ndim)), -2))
-        add("routed_weight_down", _unit_norms(reshard(em.w_down, P(*(None,) * em.w_down.ndim)), -1))
-        gs_up, gs_down = (reshard(x.astype(jnp.float32), P(None, None)) for x in (gs_up, gs_down))
-        add("shared_grad_up", _unit_norms(gs_up, -2))
-        add("shared_grad_down", _unit_norms(gs_down, -1))
-        add("shared_ns_up", _unit_norms(_msign(gs_up), -2))
-        add("shared_ns_down", _unit_norms(_msign(gs_down), -1))
-        add("shared_weight_up", _unit_norms(reshard(sh.w_up, P(None, None)), -2))
-        add("shared_weight_down", _unit_norms(reshard(sh.w_down, P(None, None)), -1))
-    return {name: jnp.stack(values) for name, values in out.items()}
-
-
-def write_routing_dump(
-    path: str,
-    counts: tuple[np.ndarray, np.ndarray, np.ndarray],
-    cfg: GrugModelConfig,
-    layer_kinds: np.ndarray,
-    step: int,
-    num_tokens: int,
-) -> None:
-    """Write one routing dump (``analyze_routing.py`` reads it) to an fsspec ``path``."""
-    current, previous, weighted = counts
-    with fsspec.open(path, "wb") as f:
-        np.savez_compressed(
-            f,
-            counts=current,
-            counts_prev=previous,
-            counts_weighted=weighted,
-            num_experts=cfg.num_experts,
-            num_null_experts=cfg.num_null_experts,
-            top_k=cfg.num_experts_per_token,
-            layer_kinds=layer_kinds,
-            step=step,
-            num_tokens=num_tokens,
-        )
-
-
-def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch_size: int) -> Callable[..., None]:
-    """Build the ``routing_dump_steps`` dump: ``dump(state)`` routes the fixed held-out batches and writes
-    ``routing_step<N>.npz`` (``counts``, ``counts_prev``, ``counts_weighted`` as ``[L, V, E]``, plus the
-    routing metadata) under ``routing_dump_path``, once per step; process 0 writes."""
-    trainer_cfg = config.trainer
-    if trainer_cfg.routing_dump_path is None:
-        raise ValueError("routing_dump_steps needs routing_dump_path")
-    cfg = config.model
-    num_sequences = trainer_cfg.routing_dump_batches * batch_size
-    # The dataset's per-example jit pins its output to a CPU device, which conflicts with the train loop's GPU
-    # context mesh; JAX's mesh context is thread-local, so fetch on a worker thread (as the data loader does).
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        tokens, segments = pool.submit(
-            _routing_dump_sequences, config.data, seq_len=cfg.max_seq_len, num_sequences=num_sequences
-        ).result()
-    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-    add = _routing_counts_step(trainer_cfg.trainer.mp)
-    neuron_counts = _neuron_counts_step(trainer_cfg.trainer.mp)
-    expert_grads = _expert_grad_step(
-        trainer_cfg.trainer.mp, trainer_cfg.z_loss_weight if trainer_cfg.z_loss_weight > 0 else None
-    )
-    shape = (cfg.num_layers, cfg.vocab_size, cfg.num_experts + cfg.num_null_experts)
-    replicated = NamedSharding(mesh, P(None, None, None))
-    layer_kinds = np.asarray(model.layer_kinds())
-
-    def global_batch(host: np.ndarray) -> jax.Array:
-        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
-
-    dumped: set[int] = set()
-
-    def dump(state: GrugTrainState) -> None:
-        step = int(state.step)
-        if step in dumped:
-            return
-        dumped.add(step)
-        started = time.time()
-        counts = (
-            jax.device_put(np.zeros(shape, np.int32), replicated),
-            jax.device_put(np.zeros(shape, np.int32), replicated),
-            jax.device_put(np.zeros(shape, np.float32), replicated),
-        )
-        params = _router_tie_view(state.params, step)
-        neurons, grad_sum = None, None
-        for start in range(0, num_sequences, batch_size):
-            batch = slice(start, start + batch_size)
-            batch_tokens, batch_segments = global_batch(tokens[batch]), global_batch(segments[batch])
-            counts = add(params, state.pending_qb_betas, batch_tokens, batch_segments, counts)
-            # Neuron activity (ReLU² experts): summed over the same held-out batches, written beside the routing dump.
-            batch_neurons = neuron_counts(params, state.pending_qb_betas, batch_tokens, batch_segments)
-            neurons = batch_neurons if neurons is None else jax.tree.map(jnp.add, neurons, batch_neurons)
-            batch_grads = expert_grads(params, state.pending_qb_betas, batch_tokens, batch_segments)
-            grad_sum = batch_grads if grad_sum is None else jax.tree.map(jnp.add, grad_sum, batch_grads)
-        current, previous, weighted = (np.asarray(c) for c in jax.block_until_ready(counts))
-        path = f"{trainer_cfg.routing_dump_path.rstrip('/')}/{ROUTING_DUMP_FILE.format(step=step)}"
-        num_batches = -(-num_sequences // batch_size)
-        mean_grads = jax.tree.map(lambda g: g / num_batches, grad_sum)
-        neurons = {**neurons, **_unit_grad_stats(params, mean_grads)}
-        neuron_arrays = {name: np.asarray(v) for name, v in jax.device_get(neurons).items()}
-        if jax.process_index() == 0:
-            write_routing_dump(path, (current, previous, weighted), cfg, layer_kinds, step, int(np.sum(segments >= 0)))
-            buffer = io.BytesIO()
-            np.savez(buffer, step=np.asarray(step), layer_kinds=layer_kinds, **neuron_arrays)
-            neuron_path = f"{trainer_cfg.routing_dump_path.rstrip('/')}/{NEURON_DUMP_FILE.format(step=step)}"
-            with fsspec.open(neuron_path, "wb") as f:
-                f.write(buffer.getvalue())
-        logger.info(
-            "routing dump at step %d: %d sequences in %.1fs -> %s", step, num_sequences, time.time() - started, path
-        )
-
-    return dump
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -2679,22 +1452,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             max_buffered_batches=config.trainer.loader_buffer_batches,
         )
 
-        if config.trainer.train_batch_dump_steps:
-            if config.trainer.fact_probe_dir is None:
-                raise ValueError("train_batch_dump_steps needs fact_probe_dir")
-            for dump_step in config.trainer.train_batch_dump_steps:
-                tokens, weights = _host_batch(next(iter(train_loader.iter_from_step(dump_step))))
-                if jax.process_index() == 0:
-                    path = f"{config.trainer.fact_probe_dir.rstrip('/')}/{TRAIN_BATCH_DUMP_FILE.format(step=dump_step)}"
-                    write_train_batch(path, dump_step, tokens, weights)
-            logger.info("train batches dumped; stopping before training")
-            return
-        if config.trainer.train_text_count_patterns:
-            if config.trainer.fact_probe_dir is None:
-                raise ValueError("train_text_count_patterns needs fact_probe_dir")
-            _count_train_text(config, train_loader, trainer.num_train_steps)
-            return
-
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
 
@@ -2762,78 +1519,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             )
         if state.params.lm_head_bias is not None and int(state.step) == 0:
             state = _init_unigram_bias(state, train_loader, num_batches=config.trainer.lm_head_unigram_batches)
-        dump_routing = None
-        pending_dumps = set(config.trainer.routing_dump_steps)
-        if pending_dumps:
-            dump_routing = _routing_dumper(config, state.params, mesh, batch_schedule.batch_size_at_step(0))
-            if 0 in pending_dumps and int(state.step) == 0:
-                dump_routing(state)
-            # A resumed run skips the dumps it already passed.
-            pending_dumps = {step for step in pending_dumps if step > int(state.step)}
-        grad_capture_due = capture_steps(config.trainer.grad_capture_starts, config.trainer.grad_capture_len)
-        grad_capture_step = capture_writer = None
-        if grad_capture_due:
-            if config.trainer.grad_capture_path is None:
-                raise ValueError("grad_capture_starts needs grad_capture_path")
-            grad_capture_step = _make_grad_capture_step(trainer.mp, z_loss_weight=config.trainer.z_loss_weight)
-            capture_writer = CaptureWriter(config.trainer.grad_capture_path)
-        muon_probes: list[MuonProbe] = []
-        snr_probes: list[SnrProbe] = []
-        noise_probes: list[NoiseScaleProbe] = []
-        if config.trainer.noise_scale_steps:
-            if config.trainer.muon_probe_path is None:
-                raise ValueError("noise_scale_steps needs muon_probe_path")
-            noise_gradients = _make_noise_scale_gradients(trainer.mp, z_loss_weight=config.trainer.z_loss_weight)
-            noise_batches = iter(train_loader.iter_from_step(trainer.num_train_steps + _NOISE_PROBE_DATA_OFFSET))
-            mask = config.optimizer.create_mask(state.params)
-            labels = dict(zip(_leaf_names(state.params), jax.tree.leaves(mask), strict=True))
-            noise_probes = [
-                NoiseScaleProbe(
-                    step,
-                    config.trainer.muon_probe_path,
-                    noise_batches,
-                    labels,
-                    ns_steps=config.optimizer.backend_steps,
-                )
-                for step in config.trainer.noise_scale_steps
-            ]
-        if config.trainer.muon_probe_steps or config.trainer.snr_probe_steps:
-            if config.trainer.muon_probe_path is None:
-                raise ValueError("muon_probe_steps and snr_probe_steps need muon_probe_path")
-            probe_gradients = _make_grad_capture_step(trainer.mp, z_loss_weight=config.trainer.z_loss_weight)
-            # Probe batches come from past the run's end, so the run's own data order is untouched.
-            probe_batches = iter(train_loader.iter_from_step(trainer.num_train_steps + _MUON_PROBE_DATA_OFFSET))
-            muon_probes = [
-                MuonProbe(
-                    step,
-                    config.trainer.muon_probe_path,
-                    _captured_params,
-                    probe_batches,
-                    ns_steps=config.optimizer.backend_steps,
-                )
-                for step in config.trainer.muon_probe_steps
-            ]
-            probe_loss = _make_probe_loss(trainer.mp)
-            snr_probes = [
-                SnrProbe(
-                    step,
-                    config.trainer.muon_probe_path,
-                    _captured_params,
-                    probe_batches,
-                    ns_steps=config.optimizer.backend_steps,
-                )
-                for step in config.trainer.snr_probe_steps
-            ]
-        for noise_probe in noise_probes:
-            # A probe-only job resumed at the probe step (``stop_after_steps``) runs it before any training step.
-            if noise_probe.step == int(state.step):
-                noise_probe.run(
-                    state.params,
-                    state.step,
-                    lambda p, b, w, st, betas=state.pending_qb_betas, rt=_router_ties_active(
-                        config.model, int(state.step)
-                    ): (noise_gradients(p, b, w, betas, st, loop_active=None, router_tie_active=rt)),
-                )
         batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
 
@@ -2872,16 +1557,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
-        if config.trainer.flip_detector_patterns:
-            state_callbacks.add_hook(_flip_detector_hook(config, mesh), every=1)
-        if config.trainer.weight_diagnostics_every:
-            state_callbacks.add_hook(_weight_diagnostics_hook(config, mesh), every=1)
-        if config.trainer.weight_attribution_window:
-            state_callbacks.add_hook(_weight_attribution_hook(config, mesh, trainer.mp), every=1)
-        if config.trainer.fact_probe_input is not None and not config.trainer.weight_attribution_window:
-            state_callbacks.add_hook(
-                _fact_probe_hook(config, mesh, trainer.mp, ema_start_step, trainer.num_train_steps), every=1
-            )
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_hooks: list[Callable[..., None]] = []
@@ -2980,17 +1655,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
             if not math.isfinite(loss):
                 raise RuntimeError(f"Non-finite loss ({loss}) at step {step + 1}.")
-            if rec.captured_before is not None:
-                assert step_state is not None
-                captured_grads, params_before = rec.captured_before
-                params_after = jax.device_get(_captured_params(step_state.params))
-                if jax.process_index() == 0:
-                    capture_writer.submit(
-                        step,
-                        captured_grads,
-                        {name: params_after[name] - params_before[name] for name in params_before},
-                        params_before if step - 1 not in grad_capture_due else None,
-                    )
             if step_state is not None and step + 1 == config.model.router_embed_tie_release_step:
                 # Before the callbacks, so the checkpoint and evals at this step already see the release.
                 step_state = _release_router_ties(step_state)
@@ -3046,9 +1710,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if rec.watch_stats is not None:
                     levanter.tracker.log(jax.device_get(rec.watch_stats), step=step)
             if step_state is not None:
-                if dump_routing is not None and step + 1 in pending_dumps:
-                    dump_routing(step_state)
-                    pending_dumps.discard(step + 1)
                 if checkpointer is not None:
                     with callbacks.progress_event_scope(
                         state_callbacks.emit_event,
@@ -3074,8 +1735,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             with HostStallSampler(HOST_STALL_SAMPLE_THRESHOLD) as stall_sampler:
                 # Pipelined loop: step n+1 is dispatched before step n's loss is waited on, so the host's dispatch
                 # and logging overlap the devices' work. A step whose follow-up needs its state (an eval, a
-                # checkpoint poll, a routing dump, the router-tie release, the HLO dump, gradient capture, the last
-                # step) is finished before the next dispatch, since that dispatch donates the state.
+                # checkpoint poll, the router-tie release, the HLO dump, the last step) is finished before the
+                # next dispatch, since that dispatch donates the state.
                 host_step = int(state.step)
                 pending: _PendingStep | None = None
                 if config.trainer.pipeline_depth not in (0, 1):
@@ -3117,50 +1778,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     loop_active = None if grow_step is None else current_step >= grow_step
                     # The router tie release likewise switches programs once (plus a host-side param rewrite below).
                     router_tie_active = _router_ties_active(config.model, current_step)
-                    for muon_probe in muon_probes:
-                        pending_betas = state.pending_qb_betas
-                        muon_probe.before_step(
-                            current_step,
-                            state.params,
-                            state.step,
-                            lambda p, b, st, betas=pending_betas, la=loop_active, rt=router_tie_active: probe_gradients(
-                                p, b, betas, st, loop_active=la, router_tie_active=rt
-                            ),
-                        )
-                    for noise_probe in noise_probes:
-                        if current_step == noise_probe.step:
-                            pending_betas = state.pending_qb_betas
-                            noise_probe.run(
-                                state.params,
-                                state.step,
-                                lambda p, b, w, st, betas=pending_betas, la=loop_active, rt=router_tie_active: (
-                                    noise_gradients(p, b, w, betas, st, loop_active=la, router_tie_active=rt)
-                                ),
-                            )
-                    for snr_probe in snr_probes:
-                        pending_betas = state.pending_qb_betas
-                        snr_probe.before_step(
-                            current_step,
-                            state.params,
-                            state.step,
-                            lambda p, b, st, betas=pending_betas, la=loop_active, rt=router_tie_active: probe_gradients(
-                                p, b, betas, st, loop_active=la, router_tie_active=rt
-                            ),
-                            lambda p, b, d, betas=pending_betas: probe_loss(p, b, betas, d),
-                        )
-                    captured_before = None
-                    if grad_capture_step is not None and current_step in grad_capture_due:
-                        # Before the step: the train step donates the state.
-                        captured_before = jax.device_get(
-                            grad_capture_step(
-                                state.params,
-                                batch,
-                                state.pending_qb_betas,
-                                state.step,
-                                loop_active=loop_active,
-                                router_tie_active=router_tie_active,
-                            )
-                        )
                     dispatch_start = time.perf_counter()
                     state_leaves, metrics, inline_watch_stats = train_step(
                         state_leaves, batch, loop_active=loop_active, router_tie_active=router_tie_active
@@ -3181,16 +1798,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         loop_active=loop_active,
                         router_tie_active=router_tie_active,
                         watch_stats=watch_stats,
-                        captured_before=captured_before,
                         dispatch_time=dispatch_time,
                         step_start=step_start,
                         needs_state=(
                             host_step >= stop_step
                             or config.trainer.pipeline_depth == 0
-                            or captured_before is not None
                             or (eval_interval is not None and host_step % eval_interval == 0)
                             or host_step % CHECKPOINT_POLL_STEPS == 0
-                            or (dump_routing is not None and host_step in pending_dumps)
                             or host_step == config.model.router_embed_tie_release_step
                             or (config.trainer.hlo_dump_path is not None and not hlo_written)
                         ),
@@ -3210,59 +1824,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if marker is not None and jax.process_index() == 0:
                 with fsspec.open(marker, "w") as f:
                     json.dump({"step": int(state.step), "final_loss": float(last_loss)}, f)
-            if dump_routing is not None and pending_dumps:
-                # Steps past the end of the run dump the final weights.
-                dump_routing(state)
-            if config.trainer.head_probe_path is not None:
-                probed = state.ema_params if state.ema_params is not None else state.params
-                _head_probe_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.head_probe_path)
-            if config.trainer.attn_distance_path is not None:
-                probed = state.ema_params if state.ema_params is not None else state.params
-                _attn_distance_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.attn_distance_path)
-            if config.trainer.router_calib_path is not None:
-                probed = state.ema_params if state.ema_params is not None else state.params
-                _router_calib_dump(config, probed, state.pending_qb_betas, mesh, train_loader)
-            if config.trainer.trace_probe_path is not None:
-                probed = state.ema_params if state.ema_params is not None else state.params
-                _trace_probe_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.trace_probe_path)
-            if config.trainer.logit_decomp_path is not None:
-                probed = state.ema_params if state.ema_params is not None else state.params
-                _logit_decomp_dump(config, probed, state.pending_qb_betas, mesh, config.trainer.logit_decomp_path)
-            if config.trainer.final_param_dump_path is not None:
-                _dump_final_params(
-                    state.params, config.trainer.final_param_dump_patterns, config.trainer.final_param_dump_path
-                )
-            if capture_writer is not None:
-                capture_writer.close()
-            blends: list[tuple[str, Callable[[str], float]]] = [
-                (f"eval_blend{a:g}", lambda _path, a=a: a) for a in config.trainer.ema_blend_sweep
-            ]
-            if config.trainer.ema_group_sweep:
-                base = config.trainer.ema_group_base_blend
-                for group in (*EMA_BLEND_GROUPS, "other"):
-                    for a in (0.0, 1.0):
-                        blends.append(
-                            (
-                                f"eval_blend_{group}{a:g}",
-                                lambda path, a=a, group=group: a if _ema_blend_group(path) == group else base,
-                            )
-                        )
-            if blends:
-                if state.ema_params is None or dropless_evaluator is None or dropless_eval_mesh is None:
-                    raise ValueError("EMA blend evals need ema_beta and the dropless evaluator")
-                for prefix, alpha_for in blends:
-                    blended = jax.tree_util.tree_map_with_path(
-                        lambda path, e, p, alpha_for=alpha_for: (a := alpha_for(jax.tree_util.keystr(path))) * e
-                        + (1.0 - a) * p,
-                        state.ema_params,
-                        state.params,
-                    )
-                    with set_mesh(dropless_eval_mesh):
-                        blended = _reshard_tree_to_mesh(blended, dropless_eval_mesh)
-                        with _pgle_disabled():
-                            blend_log = eval_model(dropless_evaluator, blended, prefix=prefix)
-                    levanter.tracker.log(blend_log, step=int(state.step))
-                    del blended
             if checkpointer is not None:
                 with callbacks.progress_event_scope(
                     state_callbacks.emit_event,
@@ -3282,18 +1843,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 HOST_GAP_WARN = 0.1
 # Post-step host work above this is logged with the Python stacks that ran during it (see `host_stall`).
 HOST_STALL_SAMPLE_THRESHOLD = 0.3
-# Parameter groups of the per-group EMA blend probe (regex over the pytree key path); "other" is the rest.
-EMA_BLEND_GROUPS: dict[str, str] = {
-    "lmhead": r"output_proj",
-    "embed": r"token_embed",
-    "attn": r"\.attn\b|\.attn\.",
-    "moe": r"\.mlp\b|\.shared\b",
-}
-
-
-def _ema_blend_group(path: str) -> str:
-    """The ``EMA_BLEND_GROUPS`` group of a key path, or ``other``."""
-    return next((group for group, pattern in EMA_BLEND_GROUPS.items() if re.search(pattern, path)), "other")
 
 
 # Seed of the training-only router noise (``moe_gumbel_tau``); folded with the step.
@@ -3324,7 +1873,6 @@ class _PendingStep:
     loop_active: bool | None
     router_tie_active: bool | None
     watch_stats: object
-    captured_before: object
     dispatch_time: float
     step_start: float
     needs_state: bool

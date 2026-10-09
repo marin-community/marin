@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import experiments.grug.fast_track.test_ngram_stat as t
+import experiments.grug.fast_track.test_kda_local as t
 
 
 def test_mla_layers_get_their_own_head_count_and_train():

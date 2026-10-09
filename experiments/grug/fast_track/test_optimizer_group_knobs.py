@@ -15,7 +15,7 @@ import pytest
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
-import experiments.grug.fast_track.test_ngram_stat as t
+import experiments.grug.fast_track.test_kda_local as t
 from experiments.grug.fast_track.optimizer import (
     BiMaxwellRails,
     GrugMoeMuonHConfig,
