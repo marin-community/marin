@@ -31,25 +31,12 @@ from taskcompendium.submission import (
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
 from rolloutengine.grading import _grade_rollout
+from rolloutengine.shell_tool import SHELL_TOOL_NAME, shell_observation, shell_tool_definition
 from rolloutengine.spec import LoweredTaskSpec
 
-SHELL_TOOL_NAME = "shell"
 WORKSPACE_INSTRUCTION = (
     "Use the shell tool to inspect and change the workspace. Send a final response when the task is completed."
 )
-SHELL_TOOL = {
-    "type": "function",
-    "function": {
-        "name": SHELL_TOOL_NAME,
-        "description": "Run a shell command in the task workspace. Files persist between commands.",
-        "parameters": {
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-            "additionalProperties": False,
-        },
-    },
-}
 
 
 def session_start(task: TaskSpec) -> SessionStart:
@@ -78,7 +65,7 @@ def session_start(task: TaskSpec) -> SessionStart:
     if "shell" in task.environment_requirements.capabilities:
         if any(function.name == SHELL_TOOL_NAME for function in (*task.final_tools, *task.interaction_tools)):
             raise ValueError("The shell tool name is reserved for the Shellbox session")
-        tools.append(SHELL_TOOL)
+        tools.append(shell_tool_definition())
         if task.answer_type == AnswerType.WORKSPACE_STATE:
             messages.append({"role": "user", "content": WORKSPACE_INSTRUCTION})
     if tools:
@@ -148,15 +135,7 @@ class _ShellboxTaskSession:
                 {
                     "role": "tool",
                     "tool_call_id": call.call_id,
-                    "content": json.dumps(
-                        {
-                            "stdout": result.stdout.decode(errors="replace"),
-                            "stderr": result.stderr.decode(errors="replace"),
-                            "exit_code": result.exit_code,
-                            "reason": result.reason.value,
-                            "truncated": result.stdout_truncated or result.stderr_truncated,
-                        }
-                    ),
+                    "content": shell_observation(result),
                 }
             )
         return Transition(done=False, observations=tuple(observations))
