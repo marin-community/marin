@@ -119,9 +119,13 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
         return source_defect("invalid_references", "At least one reference is required")
     if any(not normalize_reference(reference) for reference in references):
         return source_defect("invalid_references", "A reference becomes empty under normalization")
+    # JudgeSpec carries the grading inputs; archived scripts remain private provenance only.
     package = verifyit_package(
         JudgeSpec(references=references, question=question),
-        archive_resources(row.data).verifier,
+        tuple(
+            resource.model_copy(update={"path": "source/" + resource.path})
+            for resource in archive_resources(row.data).verifier
+        ),
         environment=required_grader_environment(context),
     )
     prompt = TextMessage(role="user", content=replace_phrases(instruction, OPENQA_DELIVERY))
@@ -232,7 +236,7 @@ def sources() -> list[RlDataSource]:
                     name=name,
                     source=tasktrove_source(config),
                     convert=convert_openqa,
-                    version="1",
+                    version="2",
                     environment=ShellSim(),
                     intended_use=IntendedUse.TRAIN,
                     rubric=OPENQA_RUBRIC,

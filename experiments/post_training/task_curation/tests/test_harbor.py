@@ -17,6 +17,8 @@ from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
 from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader, verifyit_answer_file, verifyit_spec
 from taskcompendium.pipeline.models import NormalizedTask
 from taskcompendium.runtime.resources import inline_resource
+from verifyit.grade import read_output
+from verifyit.spec import parse_spec
 
 from experiments.post_training.task_curation.compare_harbor import compare_harbor
 from experiments.post_training.task_curation.datasets.tasktrove import (
@@ -278,3 +280,51 @@ def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(no
     assert len(exported) == 1
     assert exported[0]["family"] == source.info.family
     assert report["atlas_id"] == source.info.id
+
+
+@pytest.mark.parametrize("answer_path", ["/app/answer.txt", "/app/custom-answer.txt"])
+def test_harbor_judge_receives_canonical_text_at_declared_path(answer_path, tmp_path) -> None:
+    source = next(source for source in qa.sources() if source.name == "knowledge-openqa")
+    assert source.pipeline is not None
+    assert isinstance(source.pipeline.source, HfSource)
+    question = "Which planet is known as the red planet?"
+    original = f"Write your concise final answer to `/app/response.txt`.\n\n{question}"
+    converted = convert_row(
+        source.pipeline,
+        tasktrove_row(
+            {
+                "instruction.md": original.encode(),
+                "tests/test.sh": b"#!/bin/bash\nexit 99\n",
+                "tests/sitecustomize.py": b"raise RuntimeError('archived runtime')\n",
+                "tests/verifier_data.json": json.dumps({"instruction": question, "expected_answers": ["Mars"]}).encode(),
+            }
+        ),
+    )
+    assert isinstance(converted, NormalizedTask)
+    task = converted.task
+    assert isinstance(task.grader, VerifyitGrader)
+    grader = task.grader.model_copy(update={"parameters": {**task.grader.parameters, "output": answer_path}})
+    task = task.model_copy(update={"grader": grader})
+    row = {
+        "task_json": task.model_dump_json(),
+        "original_path": "judge-fixture.tar.gz",
+        "source_row": source.pipeline.source.files[0] + ":0",
+    }
+    record = harbor_record(row, grader_image=GRADER_IMAGE, family=source.info.family)
+    files = archive_files(record.task_binary)
+    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    instruction = files["instruction.md"].decode()
+    assert instruction.startswith(task.context.events[0].content)
+    assert "/app/response.txt" not in instruction
+    assert config.metadata["tasktrove_path"] == row["original_path"]
+    assert files["tests/source/test.sh"] == b"#!/bin/bash\nexit 99\n"
+    assert "tests/sitecustomize.py" not in files
+    assert not any(name.startswith("environment/files/tests/") for name in files)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    candidate = "Mars, with a complete explanation.\n"
+    transferred = workspace / Path(config.artifacts[0].source).relative_to("/app")
+    transferred.write_text(candidate)
+    # Exercise the judge's file-read boundary without calling any judge model.
+    spec = parse_spec(files["tests/taskcompendium-verifier.toml"].decode())
+    assert read_output(spec, workspace) == candidate

@@ -283,14 +283,14 @@ package lock. Export does not build or run images;
 its manifest records that dependency parity and runtime behavior remain
 unverified. Current verifyit code is bundled under the hidden `tests/` directory.
 The exporter supports file submissions graded by verifyit or an archived Harbor
-`test.sh` emitting `reward.txt`. Text tasks whose grader declares an environment
-require recorded original file-delivery instructions.
+`test.sh` emitting `reward.txt`. Text tasks retain their canonical TaskSpec
+prompt and gain a file-delivery instruction using the grader's declared answer
+path. Export does not need the archived instruction or its delivery filename.
 
 In-process exact, math, JSON-schema, MCQ, IFEval, XML-element, and CSV-column
-graders also run in the supplied verifier image after export. Their canonical
-TaskSpec prompt gains an explicit answer-file instruction, and the complete
-file is passed to the same candidate grader used in process. An MCQ answer file
-contains the bare option letter requested by the TaskSpec. Reference answers
+graders also run in the supplied verifier image after export. The complete
+answer file is passed to the same candidate grader used in process. An MCQ
+answer file contains the bare option letter requested by the TaskSpec. Reference answers
 and schema files remain private verifier resources. Other contracts produce
 explicit rejection records. Rejections from normalization remain in the export
 manifest.
