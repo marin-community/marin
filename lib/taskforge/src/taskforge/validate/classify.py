@@ -68,12 +68,13 @@ def classify(failure: BaseException | RolloutData, task: TaskSpec) -> Cause:
 def candidate_code_error(grade: GradeResult, task: TaskSpec) -> bool:
     """Whether a verifyit pytest grader gave reward 0 because the candidate's own code did not load.
 
-    verifyit scores a candidate's startup or collection error as a failed attempt with reward 0. The attribution arguably belongs upstream in verifyit: it should surface it as a
-    documented field of ``GradeResult.detail`` (today it is an undocumented ``reason`` key, with
-    ``category`` "agent", that TaskCompendium copies through), so that every consumer can tell a
-    candidate that did not load from a wrong one. Taskforge reads the key locally for now because a
-    curation run must not count a broken scaffold or a solver's missing dependency as a wrong answer,
-    while RL training upstream wants exactly the reward 0 it gets.
+    verifyit scores a candidate's startup or collection error as a failed attempt with reward 0.
+    The attribution arguably belongs upstream in verifyit: it should surface it as a documented
+    field of ``GradeResult.detail`` (today it is an undocumented ``reason`` key, with ``category``
+    "agent", that TaskCompendium copies through), so that every consumer can tell a candidate that
+    did not load from a wrong one. Taskforge reads the key locally for now because a curation run
+    must not count a broken scaffold or a solver's missing dependency as a wrong answer, while RL
+    training upstream wants exactly the reward 0 it gets.
     """
     grader = task.grader
     return (
