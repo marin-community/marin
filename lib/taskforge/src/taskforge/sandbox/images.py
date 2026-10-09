@@ -22,6 +22,16 @@ from typing import Protocol
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, TaskResource
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
+# The verifier machine of a script grader on a task without its own image: docker/grader-base built for
+# linux/amd64 and pinned by manifest digest. Publish it with
+#   uv run scripts/build_image_job.py --context docker/grader-base --repository capability-infra/taskforge-grader-base
+# and put the printed reference here.
+# TODO(user): this digest is a local build that has not been pushed to the task registry yet; pushing it
+# (or publishing a new build and replacing the reference) needs the capability-registry-publisher credential.
+GRADER_BASE_IMAGE = (
+    "envreg.208261-marin-gpu.coreweave.app/capability-infra/taskforge-grader-base"
+    "@sha256:ac2dd82a3da61c50470e042942174f1327b00deed12a9047435aef90befbed1f"
+)
 MANIFEST_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 # Repository path components per the OCI distribution spec.
 REPOSITORY = re.compile(r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*")

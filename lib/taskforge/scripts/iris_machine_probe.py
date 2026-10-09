@@ -26,6 +26,8 @@ evidence. Every sandbox comes from ``IrisMachineFactory.create`` as shipped. Che
 - ``ttl``: a sandbox created with a short ``job_ttl``, used every 30 s until a command fails;
   ``terminated`` says whether the failure was shellbox's typed ``MachineTerminated``.
 - ``private_image``: a sandbox from an image in the authenticated task registry.
+- ``grader_base``: with ``--grader-image`` (``taskforge.sandbox.images.GRADER_BASE_IMAGE``), a sandbox from the
+  script-grader base image: its user, and whether ``python3``, ``setsid`` and ``tar`` are on ``PATH``.
 """
 
 import argparse
@@ -47,6 +49,8 @@ PRIVATE_IMAGE = (
     "@sha256:3ae832dec16b02ff2f6bf0656cfca1449d42a5bce9de955d48e03efea2f903bc"
 )
 CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
+GRADER_BASE_SCRIPT = 'echo "uid=$(id -u) pwd=$(pwd)"; for tool in python3 setsid tar; do command -v "$tool"; done'
+
 NETWORK_SCRIPT = r"""
 getent hosts registry-1.docker.io > /dev/null; echo "dns=$?"
 timeout 5 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' 2> /dev/null; echo "tcp_ip=$?"
@@ -175,6 +179,15 @@ async def check_private_image(factory: IrisMachineFactory) -> None:
     await machine.close()
 
 
+async def check_grader_base(factory: IrisMachineFactory, image: str) -> None:
+    spec = MachineSpec(source=RegistryImage(image), workdir="/app", network=NetworkPolicy.DENY)
+    start = time.monotonic()
+    machine = await factory.create(spec)
+    result = await machine.run(Command(("sh", "-c", GRADER_BASE_SCRIPT)))
+    emit("grader_base", seconds=round(time.monotonic() - start, 2), stdout=result.stdout.decode())
+    await machine.close()
+
+
 async def guarded(name: str, coro) -> None:
     """Report a failed check and continue: this script's output is the evidence."""
     try:
@@ -200,6 +213,8 @@ async def main(args: argparse.Namespace) -> None:
     for attempt in range(2):
         await guarded(f"machine_attempt_{attempt}", check_machine(factory, spec, args.tmp))
     await guarded("private_image", check_private_image(factory))
+    if args.grader_image:
+        await guarded("grader_base", check_grader_base(factory, args.grader_image))
     await guarded("ttl", check_ttl(factory, spec, args.ttl))
     emit("done")
 
@@ -209,4 +224,5 @@ if __name__ == "__main__":
     parser.add_argument("--ttl", type=int, default=90)
     parser.add_argument("--tmp", default="/tmp")
     parser.add_argument("--chunk-bytes", type=int, default=None, help="override shellbox TRANSFER_CHUNK_BYTES")
+    parser.add_argument("--grader-image", default=None, help="GRADER_BASE_IMAGE, to check it on gVisor")
     asyncio.run(main(parser.parse_args()))

@@ -22,9 +22,10 @@ from pathlib import Path
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
+from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy
-from taskcompendium.models import EnvironmentRequirements, TaskResource
+from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskResource, TaskSpec, VerifyitGrader
 
 DOCKER_PROBE_TIMEOUT = 20
 
@@ -111,6 +112,26 @@ def local_docker() -> LocalDocker:
     return LocalDocker(skopeo=Path(skopeo), unavailable=None)
 
 
+@dataclass(frozen=True)
+class LocalSandbox:
+    """The Iris task's bubblewrap probe: a local factory for lock-only graders, or why there is none.
+
+    Exactly one of ``factory`` and ``unavailable`` is set.
+    """
+
+    factory: LocalMachineFactory | None
+    unavailable: str | None
+
+
+@cache
+def local_sandbox() -> LocalSandbox:
+    """Probe once whether bubblewrap can sandbox commands here (it needs root or user namespaces on Linux)."""
+    try:
+        return LocalSandbox(factory=LocalMachineFactory(), unavailable=None)
+    except SandboxUnavailable as error:
+        return LocalSandbox(factory=None, unavailable=str(error))
+
+
 ROOT_USERS = frozenset({"0", "root"})
 # ShellSim runs builtins only, has no guest network, and refuses users other than root
 # (shellbox.backends.shellsim.machine.ShellSimMachine.run). RolloutEngine refuses explicit resource
@@ -144,6 +165,29 @@ IRIS_GVISOR = FactoryCapabilities(
     gpus=False,
     file_timestamps=False,
 )
+# The local backend runs lock-only graders in bubblewrap sandboxes on the host that runs Taskforge, with
+# packages RolloutEngine builds from the lock; it allocates no CPU, memory, storage or GPUs, and RolloutEngine
+# refuses explicit resource timestamps on any machine without an image.
+LOCAL_SANDBOX = FactoryCapabilities(
+    image=False,
+    network=frozenset({NetworkPolicy.DENY, NetworkPolicy.ALLOW}),
+    execution_users=ROOT_USERS,
+    cpu_and_storage_limits=False,
+    gpus=False,
+    file_timestamps=False,
+)
+
+
+def _unavailable(reason: str) -> FactoryCapabilities:
+    return FactoryCapabilities(
+        image=True,
+        network=frozenset(),
+        execution_users=frozenset(),
+        cpu_and_storage_limits=False,
+        gpus=False,
+        file_timestamps=False,
+        unavailable=reason,
+    )
 
 
 def container_backend(where: MachineHost) -> Backend:
@@ -156,20 +200,12 @@ def container_backend(where: MachineHost) -> Backend:
 def factory_capabilities(where: MachineHost) -> Mapping[str, FactoryCapabilities]:
     """What the factories ``machine_factories(where, ...)`` returns can run, keyed the same way."""
     if where is MachineHost.IRIS:
-        return {Backend.SHELLSIM.value: SHELLSIM, Backend.GVISOR.value: IRIS_GVISOR}
+        sandbox = local_sandbox()
+        local = LOCAL_SANDBOX if sandbox.unavailable is None else _unavailable(sandbox.unavailable)
+        return {Backend.SHELLSIM.value: SHELLSIM, Backend.GVISOR.value: IRIS_GVISOR, Backend.LOCAL.value: local}
     docker = local_docker()
-    if docker.unavailable is not None:
-        unavailable = FactoryCapabilities(
-            image=True,
-            network=frozenset(),
-            execution_users=frozenset(),
-            cpu_and_storage_limits=False,
-            gpus=False,
-            file_timestamps=False,
-            unavailable=docker.unavailable,
-        )
-        return {Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: unavailable}
-    return {Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: LOCAL_DOCKER}
+    docker_row = LOCAL_DOCKER if docker.unavailable is None else _unavailable(docker.unavailable)
+    return {Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: docker_row}
 
 
 def machine_factories(
@@ -178,9 +214,11 @@ def machine_factories(
     """The factories ``ShellboxRolloutEngine`` takes, keyed by ``factory.backend.value``.
 
     On Iris the gVisor factory submits sandboxes to ``controller_url``, the controller of the task
-    Taskforge runs in, and ``image_cache`` must be ``None``. On a laptop ``controller_url`` must be
-    ``None`` and ``image_cache`` is the directory where the Docker factory keeps the registry images it
-    pulls with Skopeo; the Docker factory is absent when the laptop has no Docker or Skopeo.
+    Taskforge runs in, and ``image_cache`` must be ``None``; the local factory, which grades lock-only
+    environments, is present when bubblewrap can sandbox commands in the Iris task. On a laptop
+    ``controller_url`` must be ``None`` and ``image_cache`` is the directory where the Docker factory
+    keeps the registry images it pulls with Skopeo; the Docker factory is absent when the laptop has
+    no Docker or Skopeo.
     """
     if (where is MachineHost.IRIS) != (controller_url is not None):
         raise ValueError(f"{where} factories take a controller URL only on Iris, got {controller_url!r}")
@@ -189,6 +227,8 @@ def machine_factories(
     factories: list[MachineFactory] = [ShellSimMachineFactory()]
     if controller_url is not None:
         factories.append(IrisMachineFactory(controller_url=controller_url))
+        if (local := local_sandbox().factory) is not None:
+            factories.append(local)
     elif (skopeo := local_docker().skopeo) is not None:
         factories.append(DockerMachineFactory(skopeo=skopeo, image_cache=image_cache))
     return {factory.backend.value: factory for factory in factories}
@@ -242,13 +282,21 @@ def task_refusals(lowered: LoweredTaskSpec, capabilities: Mapping[str, FactoryCa
         (
             MachineRole.VERIFIER,
             lowered.runtime.verifier_machine,
-            task.verifier.environment_requirements,
-            task.resources.all + task.resources.verifier,
+            grading_environment(task),
+            task.resources.all + task.resources.worker + task.resources.verifier,
         ),
     )
     return [
         refusal
         for role, selection, requirements, resources in selections
-        if selection is not None
+        if selection is not None and requirements is not None
         for refusal in _machine_refusals(role, selection, requirements, resources, capabilities)
     ]
+
+
+def grading_environment(task: TaskSpec) -> EnvironmentRequirements | None:
+    """The environment of the task's verifier machine, or ``None`` when its grader takes none."""
+    grader = task.grader
+    if isinstance(grader, ScriptGrader | VerifyitGrader):
+        return grader.environment
+    return None

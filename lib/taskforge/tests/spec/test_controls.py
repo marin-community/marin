@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import AnswerType, AssistantToolCalls, Source, TaskSpec
+from taskcompendium.models import AnswerCall, AnswerFormat, AnswerType, AssistantToolCalls, PlainText, Source, TaskSpec
 from verifyit.spec import ExactSpec
 
 from taskforge.spec.controls import (
@@ -22,16 +22,14 @@ from taskforge.spec.controls import (
     shell_turn,
     validate_controls,
 )
-from taskforge.spec.draft import answer_verifier, assemble, file, requirements, script_verifier
+from taskforge.spec.draft import answer_grader, assemble, file, grader_environment, python_grader, requirements
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
 GRADED_ONE = Expectation(Outcome.GRADED, reward_min=1.0)
 GRADED_ZERO = Expectation(Outcome.GRADED, reward_max=0.0)
-GRADER = """import json, os, pathlib
-answer = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "captured/workspace/answer")
-reward = float(answer.is_file() and answer.read_text().strip() == "12")
-verdict = {"status": "scored", "reward": reward, "detail": {}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+GRADER = """import pathlib
+answer = pathlib.Path("/workspace/answer")
+print(float(answer.is_file() and answer.read_text().strip() == "12"))
 """
 
 
@@ -40,19 +38,21 @@ def file_task() -> TaskSpec:
         "file",
         "Write 12 to /workspace/answer.",
         AnswerType.FILE,
-        script_verifier(GRADER, {}, timeout=20),
+        PlainText(),
+        python_grader(GRADER, {}, environment=grader_environment(None), answer_path=None, timeout=20),
         SOURCE,
         environment=requirements(image=None),
         output_paths=("/workspace/answer",),
     )
 
 
-def answer_task() -> TaskSpec:
+def answer_task(answer_format: AnswerFormat = PlainText()) -> TaskSpec:
     return assemble(
         "answer",
         "What is six plus six?",
         AnswerType.TEXT,
-        answer_verifier(ExactSpec(expected=("12",))),
+        answer_format,
+        answer_grader(ExactSpec(expected=("12",))),
         SOURCE,
         environment=None,
     )
@@ -334,7 +334,7 @@ def test_replay_mismatches_with_the_task_are_rejected():
         ({"call_id": "c", "name": "shell", "arguments": {"command": 1}}, "one string command"),
         ({"call_id": "c", "name": "shell", "arguments": {"command": "ls", "timeout": 1}}, "one string command"),
         ({"call_id": "c", "name": "browse", "arguments": {}}, "does not offer"),
-        ({"call_id": "c", "name": "submit_answer", "arguments": {"answer": "12"}}, "submits before its final turn"),
+        ({"call_id": "c", "name": "submit_answer", "arguments": {"answer": "12"}}, "does not offer"),
     ],
 )
 def test_transcript_calls_are_checked_against_the_tasks_tools(call, message):
@@ -342,6 +342,18 @@ def test_transcript_calls_are_checked_against_the_tasks_tools(call, message):
     payload = Transcript((AssistantToolCalls.model_validate({"calls": [call]}), reply("12")))
     with pytest.raises(ValueError, match=message):
         validate_controls(file_task(), [replace(gold, payload=payload), *rest])
+
+
+def test_an_answer_call_task_offers_submit_answer_only_as_the_final_turn():
+    submit = AssistantToolCalls.model_validate(
+        {"calls": [{"call_id": "c", "name": "submit_answer", "arguments": {"answer": "12"}}]}
+    )
+    gold, *rest = answer_controls()
+    task = answer_task(AnswerCall())
+
+    validate_controls(task, [replace(gold, payload=Transcript((submit,))), *rest])
+    with pytest.raises(ValueError, match="submits before its final turn"):
+        validate_controls(task, [replace(gold, payload=Transcript((submit, reply("12")))), *rest])
 
 
 @pytest.mark.parametrize(

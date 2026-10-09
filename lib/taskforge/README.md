@@ -19,6 +19,7 @@ src/taskforge/
   spec/       TaskSpec assembly and fixed controls
   sandbox/    MachineFactory selection per host, up-front task refusals, image builds
 scripts/      Iris image builder, shellbox Iris probe, ledger summary
+docker/       grader-base image build context
 ```
 
 Packages are totally ordered. A package imports only from packages to its left and from external
@@ -41,18 +42,23 @@ content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm
   `prefix` as the start of the assistant turn and returns a `Completion` whose `content` starts
   with it. Use it to force an output format such as proposal front matter.
   `llm.client.prefill_request_fields(policy, request_fields)` returns the request fields it sends.
-- `spec.draft.assemble(task_id, instruction, answer_type, grader, source, *, environment, files,
-  output_paths, system, final_tools, tags) -> TaskSpec`: the semantic task. `environment` is
-  `requirements(image=, setup=, workdir=, env=)` or `None` for a task without a machine; `files`
-  are agent-visible `file("workspace/x", ...)` resources relative to the machine root; `grader`
-  is a `GraderPackage` from `answer_verifier(spec)` (verifyit candidate modes), `script_verifier(script,
-  config, timeout=)` (a verifyit `script` grader run on the host) or `shell_verifier(argv, reward,
-  image=, ...)` (a grader command in a separate verifier machine, image-backed tasks only).
+- `spec.draft.assemble(task_id, instruction, answer_type, answer_format, grader, source, *,
+  environment, files, output_paths, system, final_tools, tags) -> TaskSpec`: the semantic task.
+  `answer_format` (a TaskCompendium `AnswerFormat` such as `PlainText()` or `AnswerCall()`) says how
+  the final answer is requested and read. `environment` is `requirements(image=, setup=, workdir=,
+  env=)` or `None` for a task without a machine; `files` are agent-visible `file("workspace/x", ...)`
+  resources relative to the machine root; `grader` is a `GraderPackage` from `answer_grader(spec)`
+  (a verifyit mode graded in process, or in a verifier machine given `environment=`),
+  `python_grader(script, config, environment=, answer_path=, timeout=)` (`python3 /tests/grade.py`
+  in a verifier machine) or `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`.
+  `grader_environment(task_image)` is the verifier machine's environment: the task image, or
+  `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
 - `spec.draft.lower(task, *, host, task_machine, verifier_machine, session, factories) ->
   LoweredTaskSpec`: the only place Taskforge builds a lowered spec. `machine(...)` gives each
   machine's settings and `session(...)` the turn budget and deadlines; `lower` picks ShellSim for a
-  machine without an image and the host's container backend otherwise, so a lowered spec is bound
-  to its host.
+  machine without an image or packages lock, the local backend for a lock alone, and the host's
+  container backend for an image, so a lowered spec is bound to its host. A grader with an
+  environment takes a verifier machine; no other grader does.
 - `spec.controls.Control`: one labeled candidate submission (`kind`, `category`, `concern`,
   `author`, a `Transcript` or `Workspace` payload, an `Expectation`). `concern` is a required
   `ControlConcern`: `reference`, `acceptance`, `extraction` or `shortcut`. A `Workspace` holds
@@ -60,7 +66,8 @@ content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm
   checks a set against its task; `controls_json` and `parse_controls` round-trip it.
 - `sandbox.factories.machine_factories(where, controller_url, image_cache)`: the factories for
   `ShellboxRolloutEngine`, keyed by shellbox `Backend` value as `MachineRuntimeSpec.backend` names
-  them: ShellSim plus Docker on a laptop, ShellSim plus gVisor on Iris (`container_backend(where)`).
+  them: ShellSim plus Docker on a laptop, ShellSim plus gVisor on Iris (`container_backend(where)`),
+  plus the local backend for lock-only graders when bubblewrap works in the Iris task.
   On Iris it takes the controller URL and no image cache; on a laptop it takes the directory where
   the Docker factory keeps Skopeo-prepared images and no controller URL. The caller names that
   directory. `task_refusals(lowered, factory_capabilities(where))` lists every typed reason a
@@ -91,13 +98,14 @@ content-addressed cache and does not record to the ledger.
 Task specs are upstream's. A built task is a TaskCompendium `TaskSpec` and the `LoweredTaskSpec`
 that says how it runs. `spec.draft.assemble` builds the semantic task and `spec.draft.lower` alone
 builds the lowered record, so a move of either is a single-site change.
-Task-specific grading is the task's own code, private in `resources.verifier`. A task without a
-container image is graded by a verifyit `script` grader that RolloutEngine runs on the host after
-the attempt, reading the captured `output_paths` or the text answer; an image-backed task may
-instead run a `ShellVerifierSpec` command in a separate verifier machine started from its image.
-Generic verifier types (exact, numeric, mcq, structured answers, predicted actions) belong to
-`lib/verifyit`, which `TaskSpec` reaches through its verifier registry. A gap in either is fixed
-upstream.
+Task-specific grading is the task's own code, private in `resources.verifier`, run by a
+`ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
+the task's image, or for a ShellSim task or a task without a machine from Taskforge's grader base
+(`docker/grader-base`: CPython 3.12, `sh`, `setsid`, root), and receives the captured
+`output_paths` at their own paths and the extracted answer at `/app/answer.txt`. Generic grader
+modes (exact, numeric, mcq, math, ifeval, JSON schema, structured answers, predicted actions and
+the rest of verifyit's in-process modes) grade in process without a machine and are preferred
+whenever a task fits one; they belong to `lib/verifyit`. A gap in either is fixed upstream.
 
 Every control names the part of the grader it exercises. Answer extraction is expected to move to
 a cheap model, so controls that only pin today's parser carry `concern = extraction` and can be

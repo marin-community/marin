@@ -3,8 +3,8 @@
 
 """Assemble a TaskCompendium ``TaskSpec`` from builder outputs and lower it for RolloutEngine.
 
-These helpers own the serialized details a builder should not repeat: verifier
-``parameters_json``, resource groups, and the capability requirements of a task
+These helpers own the serialized details a builder should not repeat: the
+grader model, resource groups, and the capability requirements of a task
 machine. ``assemble`` adds the checks TaskSpec itself does not make and returns
 a spec that survives a JSON round trip.
 
@@ -13,9 +13,9 @@ limits, user, deadlines) is the ``LoweredTaskSpec`` RolloutEngine executes, and
 ``lower`` alone builds one, choosing each machine's backend for the host. A
 lowered spec is therefore bound to the host whose factories it names.
 
-Only ``_presentation`` builds the presented context and concrete tools, and
-only ``lower`` builds a ``LoweredTaskSpec``, so moving either is a single-site
-change.
+Only ``_presentation`` builds the presented context, concrete tools and answer
+format, and only ``lower`` builds a ``LoweredTaskSpec``, so moving either is a
+single-site change.
 """
 
 import json
@@ -27,58 +27,47 @@ from pydantic import JsonValue
 from rolloutengine.lowering import SHELLBOX_SESSION, lower_task
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy
-from taskcompendium.grader import GraderPackage, script_package
-from taskcompendium.grading import validate_verifier, verifier_descriptor
-from taskcompendium.grading_contract import supports_candidate_mode
+from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.models import (
+    CONVERSATION_ANSWERS,
+    AnswerFormat,
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ExitCodeReward,
+    FileReward,
     FunctionDefinition,
     ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
     Source,
+    StdoutReward,
     TaskResource,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
-)
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
-from taskcompendium.shell_verifier import (
-    ExitCodeReward,
-    FileReward,
-    RewardFile,
-    RewardFileFormat,
-    ShellVerifierSpec,
-    StdoutReward,
     VerifierArtifact,
     VerifierCommand,
 )
-from verifyit.spec import Mode, Spec, mode_of
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.submission import require_submission_compatibility
+from verifyit.candidate import IN_PROCESS_MODES
+from verifyit.spec import Spec, mode_of
 
-from taskforge.sandbox.factories import MachineHost, container_backend
+from taskforge.sandbox.factories import MachineHost, container_backend, grading_environment
+from taskforge.sandbox.images import GRADER_BASE_IMAGE
 
 SHELL_CAPABILITY = "shell"
 FILESYSTEM_CAPABILITY = "filesystem"
 
 type Reward = StdoutReward | ExitCodeReward | FileReward
 
-TEXT_ANSWER_TYPES = frozenset({AnswerType.TEXT, AnswerType.NUMBER})
-ANSWER_TYPES_BY_KIND: dict[str, frozenset[AnswerType]] = {
-    Mode.EXACT: TEXT_ANSWER_TYPES | {AnswerType.JSON},
-    Mode.NUMERIC: TEXT_ANSWER_TYPES,
-    Mode.MCQ: TEXT_ANSWER_TYPES,
-    Mode.STRUCTURED_EXACT: frozenset({AnswerType.JSON}),
-    Mode.PREDICTED_ACTION: frozenset({AnswerType.NATIVE_ACTION}),
-}
-"""The answer types each candidate-mode answer grader can grade (TaskCompendium's submission envelopes)."""
-MACHINE_ANSWER_TYPES = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
-SCRIPT_ANSWER_TYPES = TEXT_ANSWER_TYPES | {AnswerType.FILE, AnswerType.WORKSPACE_STATE}
-"""The answer types a host-run script grader reads: the extracted text answer or captured output files."""
-SCRIPT_KIND = Mode.SCRIPT.value
-SHELL_KIND = "shell"
-SKIPPED_KIND = "skipped"
-PRIVATE_ROOTS = (PurePosixPath("/tests"), PurePosixPath("/logs/verifier"))
-"""Where RolloutEngine installs private grader files and writes grader logs; no submission may land there."""
+ANSWER_PATH = "/app/answer.txt"
+"""Where a script grader finds the extracted answer of a text, number, JSON or native-action task."""
+PYTHON_GRADER_ARGV = ("python3", "/tests/grade.py")
+PYTHON_GRADER_FILES = frozenset({"grade.py", "config.json"})
+MACHINE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.WORKSPACE_STATE})
+"""Answers the grader reads from the task machine's files rather than from the conversation."""
 
 
 @dataclass(frozen=True)
@@ -108,6 +97,7 @@ class _Presentation:
 
     context: ConversationInput
     final_tools: tuple[FunctionDefinition, ...]
+    answer_format: AnswerFormat
 
 
 def file(path: str, content: str, mode: int = 0o644) -> TaskResource:
@@ -193,74 +183,120 @@ def reward_file(
     return FileReward(files=(RewardFile(path=path, format=file_format, key=key),), pass_above=pass_above)
 
 
-def shell_verifier(
+def grader_environment(task_image: str | None, *, env: Mapping[str, str] | None = None) -> EnvironmentRequirements:
+    """The verifier machine of a script grader: the task image, or Taskforge's grader base without one.
+
+    A Docker task grades in a fresh machine from its own image, so the grader sees the task's tools. A
+    ShellSim task, or a task without a machine, grades in ``GRADER_BASE_IMAGE`` (CPython 3.12 with
+    the standard library, ``sh``, ``setsid`` and ``tar``, as root in ``/app``).
+    """
+    return EnvironmentRequirements(
+        docker_image=GRADER_BASE_IMAGE if task_image is None else task_image, environment_variables=dict(env or {})
+    )
+
+
+def script_grader(
     argv: Sequence[str],
     reward: Reward,
     *,
-    image: str,
+    environment: EnvironmentRequirements,
+    answer_path: str | None,
+    timeout: float,
     files: Sequence[TaskResource] = (),
+    cwd: str = "/app",
+    env: Mapping[str, str] | None = None,
     collect: Sequence[VerifierCommand] = (),
     artifacts: Sequence[VerifierArtifact] = (),
-    env: Mapping[str, str] | None = None,
 ) -> GraderPackage:
-    """A grader command run in a separate verifier machine started from ``image``.
+    """A grader command run in a separate verifier machine built from ``environment``.
 
-    For a Docker task ``image`` is the task image. ``files`` are private and
-    installed under ``/tests`` after the final model response. ``collect``
-    commands run in the task machine and ``artifacts`` are copied from it into
-    the verifier machine; an artifact a control may delete needs an explicit
-    kind, not ``AUTO``. The deadline is the session's ``verifier_timeout`` and
-    the user is the verifier machine's.
+    ``environment`` names a digest-pinned image (``grader_environment``) or, on Iris, a packages
+    lock that RolloutEngine builds on its local backend. The verifier machine receives ``files``
+    under ``/tests``, the task's agent-visible files at ``/``, the captured ``output_paths`` at
+    their own absolute paths, the conversation as JSON chat messages at
+    ``/tests/conversation.json``, and the extracted answer at ``answer_path``, which is ``None``
+    for a file or workspace-state answer. ``collect`` commands run as root in the task machine and
+    ``artifacts`` are copied from it first; an artifact a control may delete needs an explicit
+    kind, not ``AUTO``. ``argv`` runs in ``cwd`` as the verifier machine's user and must finish
+    within ``timeout`` and the session's ``verifier_timeout``.
     """
-    parameters = ShellVerifierSpec(argv=tuple(argv), reward=reward, collect=tuple(collect), artifacts=tuple(artifacts))
-    verifier = VerifierSpec(
-        kind=SHELL_KIND,
-        parameters_json=parameters.model_dump_json(),
-        environment_requirements=EnvironmentRequirements(docker_image=image, environment_variables=dict(env or {})),
+    grader = ScriptGrader(
+        argv=tuple(argv),
+        cwd=cwd,
+        env=dict(env or {}),
+        environment=environment,
+        collect=tuple(collect),
+        artifacts=tuple(artifacts),
+        answer_path=answer_path,
+        reward=reward,
+        timeout=timeout,
     )
-    return GraderPackage(verifier, tuple(files))
+    return GraderPackage(grader, tuple(files))
 
 
-def script_verifier(
-    script: str, config: Mapping[str, JsonValue], *, timeout: float, files: Sequence[TaskResource] = ()
+def python_grader(
+    script: str,
+    config: Mapping[str, JsonValue],
+    *,
+    environment: EnvironmentRequirements,
+    answer_path: str | None,
+    timeout: float,
+    files: Sequence[TaskResource] = (),
 ) -> GraderPackage:
-    """A Python grader that verifyit's ``script`` mode runs on the host after the attempt.
+    """A Python program graded as ``python3 /tests/grade.py`` in a verifier machine.
 
-    ``script`` is ``grader.py`` and ``config`` its private ``config.json``; ``files``
-    are further private inputs, paths relative to the tests directory. The grader
-    reads captured output under ``$VERIFYIT_WORKSPACE`` (the text answer at
-    ``answer.txt``, output paths under ``captured/``), its inputs under
-    ``$VERIFYIT_TESTS_DIR``, writes ``$VERIFYIT_LOGS_DIR/verdict.json`` and exits 0.
-    It runs under the host's ``python3`` with the standard library only.
-
-    Raises:
-        ValueError: a file is named ``grader.py`` or ``config.json``, or two files share a path.
-    """
-    package = script_package(script.encode(), dict(config), timeout=timeout)
-    resources = package.resources + tuple(files)
-    paths = [resource.path for resource in resources]
-    if len(set(paths)) != len(paths):
-        raise ValueError(f"Script grader files repeat a path: {sorted(paths)}")
-    return GraderPackage(package.verifier, resources)
-
-
-def answer_verifier(spec: Spec) -> GraderPackage:
-    """A verifyit candidate-mode grader of the final answer, graded in process.
+    ``script`` is ``/tests/grade.py`` and ``config`` its private ``/tests/config.json``; ``files``
+    are further private inputs, paths relative to ``/tests``. The program reads the extracted
+    answer at ``answer_path`` (``ANSWER_PATH`` for a text answer, ``None`` for a file answer) and
+    captured output files at their absolute paths, never stdin, and prints the reward as its last
+    stdout line.
 
     Raises:
-        ValueError: ``spec``'s mode is not a candidate mode (exact, numeric, mcq,
-            predicted_action, structured_exact).
+        ValueError: a file is named ``grade.py`` or ``config.json``, or two files share a path.
     """
-    mode = mode_of(spec).value
-    if not supports_candidate_mode(mode):
-        raise ValueError(f"{mode!r} is not a candidate-mode answer grader")
-    return GraderPackage(verifier_descriptor(spec))
+    paths = [resource.path for resource in files]
+    if len(set(paths)) != len(paths) or PYTHON_GRADER_FILES & set(paths):
+        raise ValueError(f"Python grader files repeat a path or shadow grade.py or config.json: {sorted(paths)}")
+    resources = (
+        inline_resource("grade.py", script.encode()),
+        inline_resource("config.json", json.dumps(dict(config), sort_keys=True).encode()),
+        *files,
+    )
+    return script_grader(
+        PYTHON_GRADER_ARGV,
+        StdoutReward(),
+        environment=environment,
+        answer_path=answer_path,
+        timeout=timeout,
+        files=resources,
+    )
+
+
+def answer_grader(spec: Spec, *, environment: EnvironmentRequirements | None = None) -> GraderPackage:
+    """A verifyit grader of the final answer.
+
+    Without ``environment`` the mode must be one verifyit grades in process (exact, numeric, mcq,
+    math, ifeval, json_schema, xml_elements, csv_columns, structured_exact, predicted_action). Any
+    other mode runs the verifyit command in a verifier machine built from ``environment``, whose
+    image must contain verifyit.
+
+    Raises:
+        ValueError: the mode does not grade in process and no environment was given.
+    """
+    mode = mode_of(spec)
+    if environment is None and mode not in IN_PROCESS_MODES:
+        raise ValueError(
+            f"verifyit mode {mode.value!r} does not grade in process; give it a grading environment with "
+            "verifyit installed, or use script_grader"
+        )
+    return verifyit_package(spec, environment=environment)
 
 
 def assemble(
     task_id: str,
     instruction: str,
     answer_type: AnswerType,
+    answer_format: AnswerFormat,
     grader: GraderPackage,
     source: Source,
     *,
@@ -273,21 +309,25 @@ def assemble(
 ) -> TaskSpec:
     """Build a TaskSpec and reject one that RolloutEngine could not grade as intended.
 
-    ``environment`` is the task machine (``requirements(...)``) or ``None`` for a
-    task without one. ``files`` are the agent-visible files installed relative to
-    the machine root; the grader's files stay private.
+    ``answer_format`` says how the model is asked for its final answer and how the answer is read
+    from its conversation; a file or workspace-state task carries one too, which grading never
+    reads. ``environment`` is the task machine (``requirements(...)``) or ``None`` for a task
+    without one. ``files`` are the agent-visible files installed relative to the machine root; the
+    grader's files stay private.
 
     Raises:
-        ValueError: TaskSpec validation failed, files or output paths were given
-            without a task machine, the grader is invalid or does not fit the
-            answer type or task machine, an output path lies in a private
-            grading root, or private grader content is agent-visible.
+        ValueError: TaskSpec validation failed, files or output paths were given without a task
+            machine, the answer format cannot carry the answer for this grader, a file or
+            workspace-state answer has no output path or artifact to reach the grader, an output
+            path is not normalized, or private grader content is agent-visible.
     """
     if environment is None and (files or output_paths):
         raise ValueError("Files and output paths require a task machine")
     if environment is not None and SHELL_CAPABILITY not in environment.capabilities:
         raise ValueError(f"A task machine needs the {SHELL_CAPABILITY!r} capability")
-    presentation = _presentation(instruction, system, final_tools)
+    if answer_type in MACHINE_ANSWERS and not output_paths and not _reads_task_machine(grader):
+        raise ValueError(f"A {answer_type.value!r} answer needs output paths or grader artifacts to reach the grader")
+    presentation = _presentation(instruction, system, final_tools, answer_format)
     spec = TaskSpec(
         id=task_id,
         context=presentation.context,
@@ -295,19 +335,19 @@ def assemble(
         final_tools=presentation.final_tools,
         output_paths=tuple(output_paths),
         answer_type=answer_type,
-        verifier=grader.verifier,
+        answer_format=presentation.answer_format,
+        grader=grader.grader,
         source=source,
         resources=ResourceGroups(worker=tuple(files), verifier=grader.resources),
         tags=tuple(tags),
     )
-    _validate_grader(spec.verifier)
-    _check_grader(spec)
+    if spec.answer_type in CONVERSATION_ANSWERS:
+        # As the Shellbox session does at start: only an answer read from the conversation has a format to check.
+        require_submission_compatibility(spec)
     for path in spec.output_paths:
         candidate = PurePosixPath(path)
         if not candidate.is_absolute() or ".." in candidate.parts:
             raise ValueError(f"Output path {path!r} must be absolute and normalized")
-        if any(candidate.is_relative_to(root) for root in PRIVATE_ROOTS):
-            raise ValueError(f"Output path {path!r} overlaps private grading files")
     visible = {resource_bytes(item) for item in spec.resources.all + spec.resources.worker}
     leaked = sorted(item.path for item in spec.resources.verifier if resource_bytes(item) in visible)
     if leaked:
@@ -329,28 +369,27 @@ def lower(
 ) -> LoweredTaskSpec:
     """The ``LoweredTaskSpec`` that runs ``task`` on ``host``'s ``factories``.
 
-    Every Taskforge ``LoweredTaskSpec`` is built here. Each machine's backend is
-    ShellSim when its requirements name no image, else the host's container
-    backend. Script and answer graders run in process, so only a shell grader
-    takes a verifier machine.
+    Every Taskforge ``LoweredTaskSpec`` is built here. Each machine's backend is ShellSim when its
+    requirements name neither an image nor a packages lock, the local backend for a lock alone, and
+    the host's container backend for an image. A grader with an environment (a script grader, or a
+    verifyit grader that does not grade in process) takes a verifier machine; no other grader does.
 
     Raises:
-        ValueError: A machine is given where the task has none or missing where it
-            has one, or RolloutEngine rejects the lowered spec.
+        ValueError: A machine is given where the task has none or missing where it has one, or
+            RolloutEngine rejects the lowered spec.
         NotImplementedError: RolloutEngine cannot run the lowered spec.
     """
     if (task_machine is None) != (SHELL_CAPABILITY not in task.environment_requirements.capabilities):
         raise ValueError("A task machine is given exactly when the task has the shell capability")
-    if (verifier_machine is None) != (task.verifier.kind != SHELL_KIND):
-        raise ValueError("A verifier machine is given exactly when the task has a shell grader")
+    grading = grading_environment(task)
+    if (verifier_machine is None) != (grading is None):
+        raise ValueError("A verifier machine is given exactly when the task's grader has an environment")
     runtime = TaskRuntimeSpec(
         task_machine=(
             None if task_machine is None else machine_runtime(task_machine, task.environment_requirements, host)
         ),
         verifier_machine=(
-            None
-            if verifier_machine is None
-            else machine_runtime(verifier_machine, task.verifier.environment_requirements, host)
+            None if verifier_machine is None or grading is None else machine_runtime(verifier_machine, grading, host)
         ),
     )
     return lower_task(task, runtime, session, factories=factories, sessions={})
@@ -364,9 +403,8 @@ def machine_runtime(
     ``lower`` builds every task and verifier machine with it; a builder prototyping a machine
     outside a lowered task uses it too, so the backend choice stays in one place.
     """
-    backend = Backend.SHELLSIM if requirements.docker_image is None else container_backend(host)
     return MachineRuntimeSpec(
-        backend=backend.value,
+        backend=machine_backend(requirements, host).value,
         network=settings.network,
         cpus=settings.resources.cpus,
         memory_mb=settings.resources.memory_mb,
@@ -378,46 +416,27 @@ def machine_runtime(
     )
 
 
-def _presentation(instruction: str, system: str | None, final_tools: Sequence[FunctionDefinition]) -> _Presentation:
-    return _Presentation(context=_conversation(instruction, system), final_tools=tuple(final_tools))
+def machine_backend(requirements: EnvironmentRequirements, host: MachineHost) -> Backend:
+    """ShellSim without an image or lock, the local backend for a lock alone, else the host's container backend."""
+    if requirements.docker_image is not None:
+        return container_backend(host)
+    if requirements.packages_lock is not None:
+        return Backend.LOCAL
+    return Backend.SHELLSIM
+
+
+def _reads_task_machine(grader: GraderPackage) -> bool:
+    return isinstance(grader.grader, ScriptGrader) and bool(grader.grader.artifacts or grader.grader.collect)
+
+
+def _presentation(
+    instruction: str, system: str | None, final_tools: Sequence[FunctionDefinition], answer_format: AnswerFormat
+) -> _Presentation:
+    return _Presentation(
+        context=_conversation(instruction, system), final_tools=tuple(final_tools), answer_format=answer_format
+    )
 
 
 def _conversation(instruction: str, system: str | None = None) -> ConversationInput:
     system_events = () if system is None else (TextMessage(role="system", content=system),)
     return ConversationInput(events=(*system_events, TextMessage(role="user", content=instruction)))
-
-
-def _validate_grader(verifier: VerifierSpec) -> None:
-    if verifier.kind == SHELL_KIND:
-        ShellVerifierSpec.model_validate_json(verifier.parameters_json)
-        return
-    if verifier.kind == SKIPPED_KIND:
-        if not isinstance(json.loads(verifier.parameters_json).get("reason"), str):
-            raise ValueError("A skipped grader needs a reason")
-        return
-    validate_verifier(verifier)
-
-
-def _check_grader(spec: TaskSpec) -> None:
-    kind = spec.verifier.kind
-    answer_type = spec.answer_type
-    if kind == SKIPPED_KIND:
-        return
-    if kind == SHELL_KIND:
-        if spec.environment_requirements.docker_image is None:
-            raise ValueError("A shell verifier requires an image-backed task machine")
-        return
-    if kind == SCRIPT_KIND:
-        if answer_type not in SCRIPT_ANSWER_TYPES:
-            raise ValueError(f"A script verifier cannot grade a {answer_type.value!r} answer")
-        if answer_type in MACHINE_ANSWER_TYPES and not spec.output_paths:
-            raise ValueError(f"A script verifier grading a {answer_type.value!r} answer needs output paths")
-        return
-    if answer_type in MACHINE_ANSWER_TYPES:
-        raise ValueError(f"A {answer_type.value!r} answer requires a script or shell verifier, not {kind!r}")
-    allowed = ANSWER_TYPES_BY_KIND.get(kind)
-    if allowed is None:
-        raise ValueError(f"Taskforge does not grade {kind!r} verifiers")
-    if answer_type not in allowed:
-        names = " or ".join(sorted(item.value for item in allowed))
-        raise ValueError(f"A {kind!r} verifier requires a {names} answer, not {answer_type.value!r}")

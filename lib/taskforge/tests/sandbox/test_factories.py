@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -11,27 +12,31 @@ from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Backend, Command, MachineSpec, NetworkPolicy, ShellSimBuiltins, UnsupportedMachineSpec
-from taskcompendium.grading import numeric_answer
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    Grader,
+    PlainText,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskResource,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.shell_verifier import ShellVerifierSpec
+from verifyit.spec import NumericSpec
 
 from taskforge.sandbox import factories
 from taskforge.sandbox.factories import (
     IRIS_GVISOR,
     LOCAL_DOCKER,
+    LOCAL_SANDBOX,
     SHELLSIM,
     LocalDocker,
+    LocalSandbox,
     MachineHost,
     MachineRole,
     RefusalReason,
@@ -43,7 +48,7 @@ from taskforge.sandbox.factories import (
 
 IMAGE = "registry.example/task@sha256:" + "0" * 64
 SHELL = ("shell", "filesystem")
-IRIS = {Backend.SHELLSIM.value: SHELLSIM, Backend.GVISOR.value: IRIS_GVISOR}
+IRIS = {Backend.SHELLSIM.value: SHELLSIM, Backend.GVISOR.value: IRIS_GVISOR, Backend.LOCAL.value: LOCAL_SANDBOX}
 LAPTOP = {Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: LOCAL_DOCKER}
 SESSION = TaskSessionSpec(
     task_session=SHELLBOX_SESSION,
@@ -74,19 +79,26 @@ def selection(backend: Backend, **update) -> MachineRuntimeSpec:
     return MachineRuntimeSpec(**(fields | update))
 
 
-def shell_grader(image: str = IMAGE) -> VerifierSpec:
-    return VerifierSpec(
-        kind="shell",
-        parameters_json=ShellVerifierSpec(argv=("sh", "/tests/grade.sh")).model_dump_json(),
-        environment_requirements=EnvironmentRequirements(docker_image=image),
-    )
+LOCKED = EnvironmentRequirements(compatible_backends=(Backend.LOCAL,), packages_lock="gs://bucket/env/uv.lock")
+
+
+@dataclass(frozen=True)
+class FakeFactory:
+    backend: Backend
+
+    async def create(self, spec: MachineSpec):
+        raise AssertionError(f"Unexpected machine for {spec}")
+
+
+def script_grader(environment: EnvironmentRequirements = EnvironmentRequirements(docker_image=IMAGE)) -> ScriptGrader:
+    return ScriptGrader(argv=("sh", "/tests/grade.sh"), environment=environment)
 
 
 def lowered(
     task_machine: MachineRuntimeSpec | None,
     *,
     image: str | None = None,
-    verifier: VerifierSpec | None = None,
+    grader: Grader | None = None,
     verifier_machine: MachineRuntimeSpec | None = None,
     worker: tuple[TaskResource, ...] = (),
     verifier_files: tuple[TaskResource, ...] = (),
@@ -101,7 +113,8 @@ def lowered(
         context=ConversationInput(events=(TextMessage(role="user", content="hi"),)),
         environment_requirements=environment,
         answer_type=AnswerType.NUMBER,
-        verifier=verifier or numeric_answer("1", tolerance_abs=0, tolerance_rel=0),
+        answer_format=PlainText(),
+        grader=grader or verifyit_package(NumericSpec("1", tolerance_abs=0, tolerance_rel=0)).grader,
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
         resources=ResourceGroups(worker=worker, verifier=verifier_files),
     )
@@ -159,7 +172,7 @@ def test_verifier_machine_is_checked_against_its_own_backend():
     spec = lowered(
         selection(Backend.GVISOR),
         image=IMAGE,
-        verifier=shell_grader(),
+        grader=script_grader(),
         verifier_machine=selection(Backend.GVISOR, user="grader", gpus=1),
     )
     assert reasons(spec, IRIS) == {
@@ -175,7 +188,7 @@ def test_explicit_file_timestamps_are_refused_where_they_are_not_kept():
     # Verifier files go only to the verifier machine.
     graded = lowered(
         selection(Backend.SHELLSIM),
-        verifier=shell_grader(),
+        grader=script_grader(),
         verifier_machine=selection(container_backend(MachineHost.IRIS)),
         verifier_files=(STAMPED,),
     )
@@ -204,17 +217,34 @@ def test_laptop_without_docker_names_the_missing_factory_and_omits_it(monkeypatc
     assert set(built) == {Backend.SHELLSIM.value}
 
 
+def test_a_lock_only_grader_needs_the_local_factory_of_an_iris_task(monkeypatch):
+    graded = lowered(None, grader=script_grader(LOCKED), verifier_machine=selection(Backend.LOCAL))
+
+    assert reasons(graded, IRIS) == set()
+    assert reasons(graded, LAPTOP) == {(RefusalReason.NO_FACTORY, MachineRole.VERIFIER)}
+    monkeypatch.setattr(factories, "local_sandbox", lambda: LocalSandbox(factory=None, unavailable="no bwrap here"))
+    [refusal] = task_refusals(graded, factory_capabilities(MachineHost.IRIS))
+    assert (refusal.reason, refusal.where, refusal.detail) == (
+        RefusalReason.NO_FACTORY,
+        MachineRole.VERIFIER,
+        "local: no bwrap here",
+    )
+
+
 @pytest.mark.parametrize("host", list(MachineHost))
 def test_factories_and_capabilities_cover_the_hosts_backends(monkeypatch, tmp_path, host):
     skopeo = Path("/opt/bin/skopeo")
+    local = FakeFactory(Backend.LOCAL)
     monkeypatch.setattr(factories, "local_docker", lambda: LocalDocker(skopeo=skopeo, unavailable=None))
+    monkeypatch.setattr(factories, "local_sandbox", lambda: LocalSandbox(factory=local, unavailable=None))
     is_iris = host is MachineHost.IRIS
     built = machine_factories(
         host,
         controller_url="http://controller.example:10000" if is_iris else None,
         image_cache=None if is_iris else tmp_path / "images",
     )
-    assert set(built) == set(factory_capabilities(host)) == {Backend.SHELLSIM.value, container_backend(host).value}
+    expected = {Backend.SHELLSIM.value, container_backend(host).value} | ({Backend.LOCAL.value} if is_iris else set())
+    assert set(built) == set(factory_capabilities(host)) == expected
     assert all(factory.backend.value == key for key, factory in built.items())
     container = built[container_backend(host).value]
     if is_iris:

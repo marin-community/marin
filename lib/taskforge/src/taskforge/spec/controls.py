@@ -20,8 +20,15 @@ from enum import StrEnum
 from pydantic import TypeAdapter
 from rolloutengine.shell_tool import SHELL_TOOL_NAME
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskResource, TaskSpec, TextMessage
-from taskcompendium.submission import ANSWER_CALL_NAME
+from taskcompendium.models import (
+    ANSWER_CALL_NAME,
+    AnswerCall,
+    AssistantToolCalls,
+    ConversationToolCall,
+    TaskResource,
+    TaskSpec,
+    TextMessage,
+)
 
 from taskforge.spec.draft import SHELL_CAPABILITY
 
@@ -267,7 +274,9 @@ def _check_payload(task: TaskSpec, control: Control) -> None:
         if not has_machine:
             raise ValueError(f"Workspace control {control.id} requires a task machine")
         return
-    final_names = {function.name for function in task.final_tools} | {ANSWER_CALL_NAME}
+    final_names = {function.name for function in task.final_tools}
+    if isinstance(task.answer_format, AnswerCall):
+        final_names.add(ANSWER_CALL_NAME)
     *steps, final = control.payload.turns
     if any(call.name in final_names for turn in steps if isinstance(turn, AssistantToolCalls) for call in turn.calls):
         raise ValueError(f"Control {control.id} submits before its final turn")

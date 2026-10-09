@@ -22,8 +22,7 @@ from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, Source, TaskSpec
-from taskcompendium.submission import PlainText
+from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
 
 from taskforge.ledger.records import EntryKind, LedgerEntry
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
@@ -31,18 +30,27 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel, served_tokens
 from taskforge.sandbox.factories import MachineHost
-from taskforge.spec.draft import assemble, file, lower, machine, requirements, script_verifier, session
+from taskforge.spec.draft import (
+    assemble,
+    file,
+    grader_environment,
+    lower,
+    machine,
+    python_grader,
+    requirements,
+    session,
+)
+from tests.sandbox.fixture_images import FixtureImageFactory
 
 POLICY = LLMPolicy(max_continuations=0)
-FACTORIES = {"shellsim": ShellSimMachineFactory()}
+# Grading runs on the grader-base verifier machine, here served by ShellSim through the fixture factory.
+FACTORIES = {"shellsim": ShellSimMachineFactory(), "docker": FixtureImageFactory()}
 CONTEXT_ERROR = "This model's maximum context length is 262144 tokens. However, you requested 300000 tokens."
-OUTPUT_CHECK = """import json, os, pathlib
-config = json.loads(pathlib.Path(os.environ["VERIFYIT_TESTS_DIR"], "config.json").read_text())
-output = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "captured", config["path"])
+OUTPUT_CHECK = """import json, pathlib
+config = json.loads(pathlib.Path("/tests/config.json").read_text())
+output = pathlib.Path("/", config["path"])
 words = config["words"]
-reward = float(output.is_file() and (words is None or output.read_text().split() == words))
-verdict = {"status": "scored", "reward": reward, "detail": {}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+print(float(output.is_file() and (words is None or output.read_text().split() == words)))
 """
 """Rewards 1 when the captured output file exists and, unless ``words`` is null, holds exactly those words."""
 PUZZLE_1 = "List, ascending and one per line, every prime p below 1000 such that p + 2 and p + 6 are both prime.\n"
@@ -119,6 +127,7 @@ def shell_task():
         "rollout-model-shell",
         "Create /workspace/done.txt.",
         AnswerType.FILE,
+        PlainText(),
         output_check("workspace/done.txt", None),
         Source(dataset="taskforge-tests", revision="1", row="0", importer_revision="1"),
         environment=requirements(image=None),
@@ -127,7 +136,13 @@ def shell_task():
 
 
 def output_check(path: str, words: list[str] | None):
-    return script_verifier(OUTPUT_CHECK, {"path": path, "words": words}, timeout=30)
+    return python_grader(
+        OUTPUT_CHECK,
+        {"path": path, "words": words},
+        environment=grader_environment(None),
+        answer_path=None,
+        timeout=30,
+    )
 
 
 def shellsim(task: TaskSpec, max_turns: int = 6) -> LoweredTaskSpec:
@@ -145,14 +160,14 @@ def shellsim(task: TaskSpec, max_turns: int = 6) -> LoweredTaskSpec:
         task,
         host=MachineHost.LAPTOP,
         task_machine=machine(startup_timeout=30),
-        verifier_machine=None,
+        verifier_machine=machine(startup_timeout=30),
         session=limits,
         factories=FACTORIES,
     )
 
 
 def rollout_engine(model: GlmRolloutModel) -> ShellboxRolloutEngine:
-    return ShellboxRolloutEngine(model, FACTORIES, convention=PlainText(id="plain"))
+    return ShellboxRolloutEngine(model, FACTORIES)
 
 
 @pytest.fixture
@@ -283,6 +298,7 @@ def live_task():
         "Then, in a separate call, write the number of lines of that file to /workspace/count.txt. "
         "Then show both files with cat, and say when you are done.",
         AnswerType.FILE,
+        PlainText(),
         output_check("workspace/count.txt", ["15"]),
         Source(dataset="taskforge-tests", revision="1", row="live", importer_revision="1"),
         environment=requirements(image=None),
@@ -379,6 +395,7 @@ def reasoning_task():
         "files prefixed by the file name. Then run it with sh.\n"
         "Say when you are done.",
         AnswerType.FILE,
+        PlainText(),
         output_check("workspace/answer1.txt", PUZZLE_1_ANSWER),
         Source(dataset="taskforge-tests", revision="1", row="reasoning", importer_revision="1"),
         environment=requirements(image=None),
