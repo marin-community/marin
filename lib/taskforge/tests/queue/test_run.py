@@ -1,13 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
+from taskforge.ledger.jsonl import read_entries
 from taskforge.loop.events import Terminal
+from taskforge.proposal.model import TaskProposal
+from taskforge.proposal.source import ProposalBatch, SlotProposal
 from taskforge.queue.config import load_run_config, run_config
 from taskforge.queue.job import SUMMARY_FILE, RunInputs, run_job
 from taskforge.queue.run import FailedItems
@@ -106,7 +112,7 @@ async def test_a_relaunch_under_another_policy_is_refused_and_keeps_the_stored_p
     assert (first.root / "policy.json").read_bytes() == stored
 
 
-async def test_proposals_of_two_ideas_that_share_an_item_id_fail_the_run_before_any_item_starts(
+async def test_proposals_of_two_ideas_that_share_an_item_id_fail_the_run(
     tmp_path, template_client, proposal_source, solver_models
 ):
     run = run_config(config(tmp_path, "accept"))
@@ -115,7 +121,57 @@ async def test_proposals_of_two_ideas_that_share_an_item_id_fail_the_run_before_
         shared = inputs_for(template_client, proposal_source, solver_models)(root)
         return RunInputs(**{**vars(shared), "ideas": {"A": "a", "B": "b"}})
 
-    with pytest.raises(ValueError, match=r"IDEA--0 from ideas \['A', 'B'\]"):
+    with pytest.raises(ValueError, match=r"IDEA--0 from ideas (A and B|B and A)"):
         await run_job(run, inputs, FailedItems.SKIP)
 
-    assert not (run.root / "ledger" / "IDEA--0.jsonl").exists()
+
+@dataclass
+class HeldClient:
+    """Answers like ``client`` but holds every build on its first call, after setting ``building``."""
+
+    client: Any
+    building: asyncio.Event
+
+    @property
+    def endpoint(self) -> Any:
+        return self.client.endpoint
+
+    async def structured(self, messages, output_type, name):
+        self.building.set()
+        await asyncio.Event().wait()
+
+
+@dataclass
+class GatedSource:
+    """Proposes ``proposal`` for every idea; idea ``"b"`` proposes only once ``building`` is set."""
+
+    proposal: TaskProposal
+    building: asyncio.Event
+
+    async def propose(self, idea: str, n: int) -> ProposalBatch:
+        if idea == "b":
+            await self.building.wait()
+        return ProposalBatch(planning_request=(), planning=(), slots=(SlotProposal(0, self.proposal, (), (), None),))
+
+
+async def test_a_later_idea_that_reuses_a_running_item_id_fails_the_run_and_cancels_the_item(
+    tmp_path, template_client, proposal, solver_models
+):
+    run = run_config(config(tmp_path, "accept"))
+    building = asyncio.Event()
+
+    def inputs(root):
+        return RunInputs(
+            ideas={"A": "a", "B": "b"},
+            source=GatedSource(proposal, building),
+            describe_idea=lambda idea: {"idea": idea},
+            model=HeldClient(template_client, building),
+            rollout_models=solver_models,
+        )
+
+    with pytest.raises(ValueError, match=r"IDEA--0 from ideas A and B"):
+        await run_job(run, inputs, FailedItems.SKIP)
+
+    steps = [entry.step for entry in read_entries(run.root / "ledger" / "IDEA--0.jsonl")]
+    assert "opened" in steps and "terminal" not in steps
+    assert asyncio.all_tasks() == {asyncio.current_task()}
