@@ -22,6 +22,7 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from rigging.filesystem.atomic import unique_temp_path
 from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import prefix_join
 
 from zephyr.plan import ParquetOutput, PhysicalOp, Scatter
 from zephyr.readers import load_parquet_batch
@@ -270,7 +271,7 @@ def _write_stage_output(
         return TaskResult(shard=shard)
 
     if parquet_output is not None:
-        path = unique_temp_path(f"{stage_dir}/shard-{shard_idx:04d}/fragment.parquet")
+        path = unique_temp_path(prefix_join(stage_dir, f"shard-{shard_idx:04d}/fragment.parquet"))
         write_parquet_file(stage_gen, path, schema=parquet_output.schema)
         return TaskResult(shard=ListShard(refs=[ParquetDiskChunk(path, parquet_output.schema)]))
 

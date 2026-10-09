@@ -18,6 +18,7 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any
 
+from pyarrow import Schema
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
@@ -145,7 +146,7 @@ class Concat:
 class ParquetOutput:
     """Materialize map fragments as Arrow batches for a following Parquet writer."""
 
-    schema: Any
+    schema: Schema
 
 
 @dataclass
@@ -258,7 +259,7 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     return pipeline
 
 
-def _writer_for(writer_type: str, schema: Any) -> Callable[[Iterable, str], object]:
+def _writer_for(writer_type: str, schema: Schema | None) -> Callable[[Iterable, str], object]:
     """Bind a logical writer type (and optional schema) to its writer callable.
 
     Resolved once at plan time so ``run_stage`` neither dispatches on a string
