@@ -38,11 +38,6 @@ from verifyit.spec import ExactSpec, ReasoningGymSpec, ScriptSpec
 
 from experiments.post_training.tasktrove.task_format import drop_dockerfile_lines
 
-# reasoning-gym's own scorer for these two datasets compares a JSON-deserialized ``list`` (the
-# entry's ``metadata["output"]``) against ``parse_board()``'s ``tuple``-of-``tuple``s return; the
-# comparison is never equal regardless of the candidate, so even the gold answer scores 0.05.
-_UNSCORABLE_REASONING_GYM_DATASETS = frozenset({"arc_agi", "rearc"})
-
 _OLD_REASONING_GYM_PIP_INSTALL = re.compile(r"^RUN pip install --no-cache-dir reasoning-gym")
 """The old grader imported ``reasoning_gym`` directly in the task's system Python; the new grader
 installs its own copy through ``verifyit[reasoning-gym]``, so this line is dead weight."""
@@ -68,11 +63,6 @@ def _convert_reasoning_gym(task: TaskFiles, data: dict) -> ConvertedTask | Rejec
     source_dataset = entry_metadata.get("source_dataset") if isinstance(entry_metadata, dict) else None
     if not isinstance(source_dataset, str) or not source_dataset:
         return Rejected(ConvertStatus.NULL_GRADER, "verifier_data.metadata.source_dataset missing")
-    if source_dataset in _UNSCORABLE_REASONING_GYM_DATASETS:
-        return Rejected(
-            ConvertStatus.UNSUPPORTED_VARIANT,
-            f"reasoning-gym dataset {source_dataset!r} cannot score even its own gold answer (library bug)",
-        )
     answer = data.get("answer")
     if not isinstance(answer, str) or not answer.strip():
         return Rejected(ConvertStatus.NULL_GRADER, "verifier_data.answer is empty")

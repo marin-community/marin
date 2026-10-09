@@ -13,6 +13,7 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
 from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH
 from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.grade import grade
@@ -82,12 +83,27 @@ def test_reasoning_gym_exemplar_passes_verification():
     assert verify_task(record.task_binary) is None
 
 
-def test_unscorable_reasoning_gym_dataset_is_rejected_as_unsupported_variant():
-    """``arc_agi`` and ``rearc`` can't score even their own gold answer; see the converter comment."""
-    data = {"answer": "5 5\n5 5", "metadata": {"source_dataset": "arc_agi"}, "question": "q"}
+@pytest.mark.parametrize("dataset", ["arc_agi", "rearc"])
+def test_arc_reasoning_gym_dataset_converts_and_scores_gold(dataset):
+    data = {
+        "answer": "5 5\n5 5",
+        "metadata": {"source_dataset": dataset, "output": [[5, 5], [5, 5]]},
+        "question": "q",
+    }
     record = convert_one(_info(), "t.tar.gz", _with_verifier_data(data), converter_index(), TOOL_REF)
-    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
-    assert "arc_agi" in record.error
+    assert record.status == ConvertStatus.CONVERTED
+    assert verify_task(record.task_binary) is None
+    task = read_task_binary(record.task_binary)
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        task.write_to(root)
+        tests_dir = root / "tests"
+        workspace = root / "app"
+        workspace.mkdir()
+        spec = parse_spec(task.text(VERIFIER_TOML))
+        for candidate, expected in [(data["answer"], 1.0), ("5 5\n5 4", 0.05)]:
+            (workspace / "answer.txt").write_text(candidate)
+            assert grade(spec, tests_dir, workspace).reward == expected
 
 
 def test_missing_source_dataset_is_rejected_as_null_grader():
