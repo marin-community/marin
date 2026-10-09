@@ -9,7 +9,8 @@ Rules, in order; the first that fires decides:
    defect) give a ``Repair``, even when the evidence is incomplete: retrying cannot improve them. An item
    with no repairs left gets ``Reject(BUDGET)`` instead.
 2. Incomplete evidence with ``MACHINE_UNSUPPORTED`` or ``SUBMISSION_UNSUPPORTED`` gives ``Reject(HOST)``:
-   this host's factories or conventions cannot run the task, and no rebuild here changes that.
+   this host's factories cannot run the task, or its answer format cannot carry its answer, and no rebuild
+   here changes that.
 3. Other incomplete evidence gives ``Retry`` for its most frequent cause. The loop bounds retries and
    ends an item that exhausts them as abandoned, never rejected.
 4. A band finding (``TOO_HARD``, ``TOO_EASY``) is decided by the consumer's ``BandRule`` for its kind:

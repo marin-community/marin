@@ -164,7 +164,7 @@ async def test_repair_brief_revises_the_program_so_its_grader_rejects_the_shortc
     assert SHORTCUT in repaired.controls
 
     turns = control_turns(SHORTCUT)
-    engine = ShellboxRolloutEngine(scripted_model(turns), factories, convention=repaired.convention)
+    engine = ShellboxRolloutEngine(scripted_model(turns), factories)
     session = repaired.lowered.session.model_copy(update={"max_turns": len(turns), "command_timeout": 60})
     rollout = await engine.run(repaired.lowered.model_copy(update={"session": session}))
     assert SHORTCUT.expect.met_by(rollout.grade), rollout.grade

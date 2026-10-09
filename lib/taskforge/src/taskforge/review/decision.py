@@ -37,7 +37,7 @@ class RejectKind(StrEnum):
     BUDGET = "budget"
     """Repairs or build revisions are exhausted while findings remain."""
     HOST = "host"
-    """This host's factories or conventions cannot run the task; another host may."""
+    """This host's factories cannot run the task, or its answer format cannot carry its answer."""
 
 
 class BandOutcome(StrEnum):

@@ -9,15 +9,14 @@ from collections.abc import Callable
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
-from taskcompendium.models import AnswerType, Source
-from taskcompendium.submission import PlainText
+from taskcompendium.models import AnswerType, PlainText, Source
 from verifyit.spec import NumericSpec
 
 from taskforge.builder.run import Provenance, TaskDraft
 from taskforge.builder.step import Blob, CacheStatus, StepRecord, StepRole
 from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.sandbox.factories import MachineHost
-from taskforge.spec.draft import answer_verifier, assemble, lower, session
+from taskforge.spec.draft import answer_grader, assemble, lower, session
 from taskforge.validate.adversary import AdversaryRole, ClaimKind
 from taskforge.validate.calibration import CalibrationBand, CalibrationSummary, DefectTier, Finding, RoleStats
 from taskforge.validate.evidence import Complete, Incomplete, RewardStats
@@ -71,7 +70,8 @@ def draft() -> TaskDraft:
         "review-math",
         "What is 17 * 23 + 4? Reply with only the number.",
         AnswerType.NUMBER,
-        answer_verifier(NumericSpec(expected="395", tolerance_abs=0, tolerance_rel=0)),
+        PlainText(),
+        answer_grader(NumericSpec(expected="395", tolerance_abs=0, tolerance_rel=0)),
         SOURCE,
         environment=None,
     )
@@ -83,7 +83,7 @@ def draft() -> TaskDraft:
         session=SESSION,
         factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
     )
-    return TaskDraft(task, lowered, PlainText(id="plain_text"), (), provenance())
+    return TaskDraft(task, lowered, (), provenance())
 
 
 def role_stats(passes: int) -> RoleStats:
