@@ -56,6 +56,8 @@ SEQ_LEN = 4096
 BATCH_SIZE = 960  # 3.93M tokens
 GRAD_ACCUM_MICROBATCHES = 15  # 8 sequences per H100 per microbatch
 PAPER_LR = 5e-3
+PROFILE_START = 20
+PROFILE_STEPS = 5
 WANDB_PROJECT = "marin_moe"
 MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 TRAIN_RESOURCES = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="600g", disk="900g", replicas=1)
@@ -112,6 +114,7 @@ class ParallaxLaunchConfig:
     steps: int
     batch_size: int
     grad_accum_microbatches: int
+    profile: bool = False  # capture an xprof trace of steps PROFILE_START..+PROFILE_STEPS
 
 
 def run_grug_config(launch: ParallaxLaunchConfig) -> GrugRunConfig:
@@ -120,7 +123,7 @@ def run_grug_config(launch: ParallaxLaunchConfig) -> GrugRunConfig:
         seed=0,
         train_batch_size=launch.batch_size,
         num_train_steps=launch.steps,
-        profiler=ProfilerConfig(enabled=False),
+        profiler=ProfilerConfig(enabled=launch.profile, start_step=PROFILE_START, num_steps=PROFILE_STEPS),
         mp=jmp.get_policy(MP_POLICY),
         tracker=WandbConfig(
             project=WANDB_PROJECT,
@@ -169,8 +172,9 @@ def build(
     batch_size: int = BATCH_SIZE,
     learning_rate: float = PAPER_LR,
     microbatches: int = GRAD_ACCUM_MICROBATCHES,
+    profile: bool = False,
 ) -> ArtifactStep[LevanterCheckpoint]:
-    run_id = run_name(arm, steps, batch_size, learning_rate, microbatches)
+    run_id = run_name(arm, steps, batch_size, learning_rate, microbatches) + ("-prof" if profile else "")
     validation = [
         *uncheatable_datasets(tokenizer=V16384_TOKENIZER, tag=V16384_TOKENIZER).values(),
         *paloma_datasets(
@@ -191,6 +195,7 @@ def build(
             steps=steps,
             batch_size=batch_size,
             grad_accum_microbatches=microbatches,
+            profile=profile,
         )
 
     return ArtifactStep(
@@ -213,6 +218,7 @@ def build(
 @click.option("--batch-size", type=int, default=BATCH_SIZE, show_default=True, help="Sequences per step.")
 @click.option("--lr", "learning_rate", type=float, default=PAPER_LR, show_default=True, help="Peak Muon lr.")
 @click.option("--microbatches", type=int, default=GRAD_ACCUM_MICROBATCHES, show_default=True)
+@click.option("--profile", is_flag=True, help="Capture an xprof trace (run id gets a -prof suffix).")
 def main(
     arm: str,
     steps: int,
@@ -222,20 +228,31 @@ def main(
     batch_size: int,
     learning_rate: float,
     microbatches: int,
+    profile: bool,
 ) -> None:
     if not submit:
         StepRunner().run(
-            [build(arm, steps, batch_size=batch_size, learning_rate=learning_rate, microbatches=microbatches).lower()]
+            [
+                build(
+                    arm,
+                    steps,
+                    batch_size=batch_size,
+                    learning_rate=learning_rate,
+                    microbatches=microbatches,
+                    profile=profile,
+                ).lower()
+            ]
         )
         return
     wandb_key = os.environ.get("WANDB_API_KEY")
     if not wandb_key:
         raise click.ClickException("WANDB_API_KEY must be set to submit")
     args = [a for a in sys.argv[1:] if a != "--submit"]
+    job_run_id = run_name(arm, steps, batch_size, learning_rate, microbatches) + ("-prof" if profile else "")
     cmd = [
         "uv", "run", "iris", "--cluster", "marin", "job", "run", "--no-wait", "--enable-extra-resources",
         "--target-cluster", target_cluster, "--priority", priority,
-        "--job-name", f"{run_name(arm, steps, batch_size, learning_rate, microbatches)}-coord",
+        "--job-name", f"{job_run_id}-coord",
         "-e", "WANDB_API_KEY", wandb_key, "-e", "WANDB_PROJECT", WANDB_PROJECT,
         "--", "python", "-m", "experiments.grug.parallax.launch", *args,
     ]  # fmt: skip
