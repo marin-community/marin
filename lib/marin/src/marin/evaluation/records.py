@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
@@ -42,6 +43,7 @@ DEFAULT_SCAN_PREFIXES = (
 )
 RECORD_FILE = "record.json"
 _MAX_RECORD_READERS = 16
+_MAX_RECORD_WRITE_ATTEMPTS = 16
 EVALCHEMY_INFRASTRUCTURE_ERROR = "EVALCHEMY_INFRASTRUCTURE_ERROR"
 
 
@@ -513,11 +515,22 @@ def record_path(prefix: str, run_id: str) -> str:
 
 
 def write_record(record: EvalRunRecord, prefix: str) -> str:
-    """Write ``record.json`` under ``{prefix}/{run_id}/`` and return its full path."""
+    """Publish a record, preserving the first successful result for a run ID."""
     path = record_path(prefix, record.run_id)
-    with open_url(path, "w") as handle:
-        handle.write(record.model_dump_json(indent=2, by_alias=True))
-    return path
+    target = conditional_object(path)
+    payload = record.model_dump_json(indent=2, by_alias=True).encode()
+    for _ in range(_MAX_RECORD_WRITE_ATTEMPTS):
+        current = target.read()
+        if current is not None:
+            prior = EvalRunRecord.model_validate_json(current.data)
+            if prior.status is RunStatus.SUCCEEDED:
+                return path
+        try:
+            target.write(payload, expected_version=None if current is None else current.version)
+            return path
+        except ConditionalWriteError:
+            continue
+    raise ConditionalWriteError(f"record changed repeatedly while publishing {path}")
 
 
 def read_record(path: str) -> EvalRunRecord:

@@ -366,6 +366,28 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     assert record.judge.hardware.accelerator == "H100x1"
 
 
+def test_run_evaluation_batch_retry_skips_completed_result_before_serving(tmp_path, monkeypatch):
+    started = []
+
+    def remote(_config):
+        started.append(True)
+        return nullcontext(_remote_session())
+
+    _patch_inference_runtime(monkeypatch, remote)
+    batch = replace(
+        _hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "one", _successful_evaluation),)),
+        judge=None,
+    )
+
+    paths = run_evaluation_batch(batch)
+    first = Path(paths[0]).read_bytes()
+    assert len(started) == 1
+
+    assert run_evaluation_batch(batch) == paths
+    assert len(started) == 1
+    assert Path(paths[0]).read_bytes() == first
+
+
 def test_run_evaluation_batch_refreshes_direct_endpoint_between_evaluations(tmp_path, monkeypatch):
     observed_urls: list[str] = []
     addresses = iter(("http://10.0.0.1:8000", "http://10.0.0.2:8000"))

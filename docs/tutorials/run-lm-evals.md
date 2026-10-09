@@ -296,7 +296,10 @@ evaluator-neutral `rollouts_v1` conversation per `(task, doc_id, trial_id)` atte
 deduplicated across extraction filters. Harbor preserves its job metadata, trial results, and
 trajectories while writing normalized agentic samples and steps; Marin derives its `rollouts_v1` rows
 from `steps`. The evaluator's raw artifacts remain in FineStore. Harbor's job tree remains the
-checkpoint used for resume and inspection. Evalchemy records include the
+checkpoint used for resume and inspection. Evalchemy commits completed request payloads to FineStore
+and restores them after an Iris retry. A committed task completion marker skips an already scored task;
+a completed `record.json` skips the batch before model serving starts. The first successful record for
+a run ID stays canonical even if a later attempt fails. Evalchemy records include the
 normalized launch configuration; Harbor records include the dataset, agent, environment, task limit,
 and source-policy digest. A Harbor infrastructure exception remains ungraded and counts against the
 completion gate after its artifacts are saved; a verifier-scored zero remains a completed evaluation

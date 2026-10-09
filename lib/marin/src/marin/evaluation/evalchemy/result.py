@@ -18,7 +18,6 @@ from pathlib import PurePosixPath
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.evalchemy.client import EVALCHEMY_RESULTS_PREFIX, EVALCHEMY_RESULTS_SUFFIX
 from marin.evaluation.lm_eval_samples import (
     is_scratch_artifact,
     read_native_evalchemy_artifacts,
@@ -28,6 +27,8 @@ from marin.execution.artifact import Artifact, result_type_name
 logger = logging.getLogger(__name__)
 
 _REPORT_FILE = "report.json"
+EVALCHEMY_RESULTS_PREFIX = "results_"
+EVALCHEMY_RESULTS_SUFFIX = ".json"
 
 
 def _numeric(values: dict) -> dict[str, float]:

@@ -571,6 +571,21 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
     configure_coreweave_s3()
     if not batch.evaluations:
         raise ValueError("an evaluation batch requires at least one evaluation")
+    original_evaluations = batch.evaluations
+    pending = []
+    for evaluation in batch.evaluations:
+        path = record_path(batch.records_prefix, evaluation.identity.run_id)
+        try:
+            record = read_record(path)
+        except FileNotFoundError:
+            pending.append(evaluation)
+            continue
+        if record.status is not RunStatus.SUCCEEDED:
+            pending.append(evaluation)
+    if not pending:
+        return [record_path(batch.records_prefix, item.identity.run_id) for item in original_evaluations]
+    if len(pending) != len(batch.evaluations):
+        batch = replace(batch, evaluations=tuple(pending))
     orchestrator_job_id = str(iris_ctx().job_id)
     runtime_env = env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS)
     evaluation_env = {
@@ -587,13 +602,14 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
     )
     try:
         with remote_inference(inference) as session:
-            return _evaluate_with_hosted_judge(
+            _evaluate_with_hosted_judge(
                 batch,
                 session,
                 orchestrator_job_id,
                 runtime_env,
                 evaluation_env,
             )
+            return [record_path(batch.records_prefix, item.identity.run_id) for item in original_evaluations]
     except RemoteInferenceStartupError as exc:
         _record_startup_failure(batch, orchestrator_job_id, exc, _INFERENCE_ROLE)
         raise RuntimeError(f"evaluation batch inference failed: {exc}") from exc

@@ -11,7 +11,9 @@ These tests pin that shape independently of the pydantic model that produces it.
 
 import dataclasses
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
@@ -111,6 +113,45 @@ def test_write_read_record_round_trip(tmp_path):
     reread = read_record(path)
 
     assert reread == _RECORD
+
+
+def test_success_record_survives_later_failed_retry(tmp_path):
+    failed = _RECORD.model_copy(update={"status": RunStatus.INFRA_FAILED, "metrics": {}})
+    path = write_record(_RECORD, str(tmp_path))
+    original = Path(path).read_bytes()
+
+    write_record(failed, str(tmp_path))
+
+    assert Path(path).read_bytes() == original
+    assert read_record(path) == _RECORD
+
+
+def test_failure_record_is_replaced_by_success(tmp_path):
+    failed = _RECORD.model_copy(update={"status": RunStatus.INFRA_FAILED, "metrics": {}})
+    path = write_record(failed, str(tmp_path))
+
+    write_record(_RECORD, str(tmp_path))
+
+    assert read_record(path) == _RECORD
+
+
+def test_competing_success_records_keep_one_canonical_result(tmp_path):
+    alternate = _RECORD.model_copy(update={"metrics": {"gsm8k": {"accuracy": 0.5}}})
+    barrier = Barrier(2)
+
+    def publish(record):
+        barrier.wait()
+        return write_record(record, str(tmp_path))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        paths = list(pool.map(publish, (_RECORD, alternate)))
+
+    assert paths[0] == paths[1]
+    winner = read_record(paths[0])
+    assert winner in (_RECORD, alternate)
+    failed = _RECORD.model_copy(update={"status": RunStatus.INFRA_FAILED, "metrics": {}})
+    write_record(failed, str(tmp_path))
+    assert read_record(paths[0]) == winner
 
 
 def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
