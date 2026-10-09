@@ -91,7 +91,7 @@ class UnsupportedHarborTask(ValueError):
 
 
 @dataclass(frozen=True)
-class HarborRecord:
+class HarborMetadata:
     path: str
     source: str
     family: str
@@ -102,8 +102,21 @@ class HarborRecord:
     language: str
     tags: list[str]
     has_solution: bool
+
+
+@dataclass(frozen=True)
+class HarborRecord(HarborMetadata):
     task_binary: bytes
     solution_binary: bytes | None
+
+
+@dataclass(frozen=True)
+class HarborPayload:
+    metadata: HarborMetadata
+    files: dict[str, bytes]
+    modes: dict[str, str]
+    solution: dict[str, bytes]
+    solution_modes: dict[str, str]
 
 
 TASKS_SCHEMA = arrow_schema(HarborRecord)
@@ -117,6 +130,10 @@ LEGACY_AGENT_TIMEOUT = 900.0
 HARBOR_SCRIPT_ARGV = ("bash", f"/{TEST_SH}")
 
 
+def archive_file_mode(name: str, modes: dict[str, str]) -> int:
+    return int(modes.get(name, "755" if name.endswith(".sh") else "644"), 8)
+
+
 def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
     """Write deterministic regular-file archives without inheriting host ownership."""
     buffer = io.BytesIO()
@@ -124,7 +141,7 @@ def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
         for name, data in sorted(files.items()):
             entry = tarfile.TarInfo(name)
             entry.size = len(data)
-            entry.mode = int(modes.get(name, "755" if name.endswith(".sh") else "644"), 8)
+            entry.mode = archive_file_mode(name, modes)
             archive.addfile(entry, io.BytesIO(data))
     return gzip.compress(buffer.getvalue(), compresslevel=1, mtime=0)
 
@@ -317,10 +334,10 @@ def _validate_tasktrove_dockerfile(files: dict[str, bytes]) -> None:
                 raise UnsupportedHarborTask(f"COPY of a file not in the task: {source}")
 
 
-def harbor_record(
+def harbor_payload(
     row: dict[str, Any], *, grader_image: str | None, family: str, fallback_actor_image: str
-) -> HarborRecord:
-    """Export file graders separately and legacy repository graders in the actor environment."""
+) -> HarborPayload:
+    """Assemble file graders separately and legacy repository graders in the actor environment."""
     if grader_image is not None and re.fullmatch(DOCKER_IMAGE_PATTERN, grader_image) is None:
         raise ValueError("The verifier image must be explicitly pinned by digest")
     task = TaskSpec.model_validate_json(row["task_json"])
@@ -463,7 +480,7 @@ def harbor_record(
     }
     solution_modes = {resource.path: resource.mode for resource in task.resources.oracle if resource.mode}
     template = hashlib.sha256(files[TEST_SH]).hexdigest()[:12]
-    return HarborRecord(
+    record_metadata = HarborMetadata(
         path=row["original_path"],
         source=metadata["tasktrove_source"],
         family=family,
@@ -474,8 +491,19 @@ def harbor_record(
         language=language,
         tags=[tag for tag in task.tags if not tag.startswith("language:")],
         has_solution=bool(solution),
-        task_binary=archive_bytes(files, modes),
-        solution_binary=archive_bytes(solution, solution_modes) if solution else None,
+    )
+    return HarborPayload(record_metadata, files, modes, solution, solution_modes)
+
+
+def harbor_record(
+    row: dict[str, Any], *, grader_image: str | None, family: str, fallback_actor_image: str
+) -> HarborRecord:
+    """Package the shared file assembly into the TaskTrove parquet record."""
+    payload = harbor_payload(row, grader_image=grader_image, family=family, fallback_actor_image=fallback_actor_image)
+    return HarborRecord(
+        **asdict(payload.metadata),
+        task_binary=archive_bytes(payload.files, payload.modes),
+        solution_binary=archive_bytes(payload.solution, payload.solution_modes) if payload.solution else None,
     )
 
 

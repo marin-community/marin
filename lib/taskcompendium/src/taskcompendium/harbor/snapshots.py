@@ -8,6 +8,7 @@ import io
 import json
 import tarfile
 import tomllib
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time
 from typing import Any
@@ -55,22 +56,30 @@ def archive_snapshot(blob: bytes | None, namespace: str) -> dict[str, FileSnapsh
                 stream = archive.extractfile(member)
                 assert stream is not None
                 content = stream.read()
-            parsed, error = None, None
-            if content is not None and member.name.endswith(".toml"):
-                try:
-                    parsed = json.loads(json.dumps(tomllib.loads(content.decode()), default=json_temporal))
-                except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exception:
-                    error = str(exception)
-            files[path] = FileSnapshot(
-                member.type.hex(),
-                member.mode,
-                member.size,
-                hashlib.sha256(content).hexdigest() if content is not None else None,
-                member.linkname,
-                parsed,
-                error,
+            files[path] = _file_snapshot(
+                member.name, content, member.type.hex(), member.mode, member.size, member.linkname
             )
     return files
+
+
+def _file_snapshot(name: str, content: bytes | None, kind: str, mode: int, size: int, link: str) -> FileSnapshot:
+    parsed, error = None, None
+    if content is not None and name.endswith(".toml"):
+        try:
+            parsed = json.loads(json.dumps(tomllib.loads(content.decode()), default=json_temporal))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exception:
+            error = str(exception)
+    return FileSnapshot(
+        kind, mode, size, hashlib.sha256(content).hexdigest() if content is not None else None, link, parsed, error
+    )
+
+
+def file_map_snapshot(files: Mapping[str, bytes], modes: Mapping[str, int], namespace: str) -> dict[str, FileSnapshot]:
+    """Snapshot regular files before archive serialization, with explicit resolved modes."""
+    return {
+        f"{namespace}/{name}": _file_snapshot(name, content, tarfile.REGTYPE.hex(), modes[name], len(content), "")
+        for name, content in files.items()
+    }
 
 
 def task_snapshot(

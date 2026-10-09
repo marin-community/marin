@@ -19,9 +19,9 @@ import click
 import verifyit
 from taskcompendium.harbor import snapshots
 from taskcompendium.harbor.compare import ParityReport, write_archive_diff
-from taskcompendium.harbor.export import UnsupportedHarborTask, harbor_record
+from taskcompendium.harbor.export import UnsupportedHarborTask, archive_bytes, archive_file_mode, harbor_payload
 from taskcompendium.harbor.records import NormalizedIndex
-from taskcompendium.harbor.snapshots import TaskSnapshot, snapshot_from_dict, task_snapshot
+from taskcompendium.harbor.snapshots import TaskSnapshot, file_map_snapshot, snapshot_from_dict, task_snapshot
 from taskcompendium.models import AnswerType, TaskSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO
@@ -79,7 +79,7 @@ def candidate_snapshot(
         )
     task = TaskSpec.model_validate_json(row["task_json"])
     try:
-        record = harbor_record(
+        payload = harbor_payload(
             row,
             family=source.info.family,
             grader_image=None if task.answer_type == AnswerType.WORKSPACE_STATE else grader_image,
@@ -87,18 +87,31 @@ def candidate_snapshot(
         )
     except UnsupportedHarborTask as error:
         return task_snapshot(config, row["original_path"], "lowering_rejection", detail=str(error))
+    record = payload.metadata
     if record.source != config or record.path != row["original_path"]:
         raise ValueError("Export changed the original source/path identity")
     if payload_root is not None:
-        for name, blob in (("task", record.task_binary), ("oracle", record.solution_binary)):
-            if blob is not None:
-                (payload_root / name).write_bytes(blob)
-    return task_snapshot(
+        for name, files, modes in (
+            ("task", payload.files, payload.modes),
+            ("oracle", payload.solution, payload.solution_modes),
+        ):
+            if files:
+                (payload_root / name).write_bytes(archive_bytes(files, modes))
+    return TaskSnapshot(
         record.source,
         record.path,
         "converted",
-        task_binary=record.task_binary,
-        solution_binary=record.solution_binary,
+        "",
+        {
+            **file_map_snapshot(
+                payload.files, {name: archive_file_mode(name, payload.modes) for name in payload.files}, "task"
+            ),
+            **file_map_snapshot(
+                payload.solution,
+                {name: archive_file_mode(name, payload.solution_modes) for name in payload.solution},
+                "oracle",
+            ),
+        },
         metadata={key: getattr(record, key) for key in ROW_METADATA},
     )
 
