@@ -234,9 +234,12 @@ class MixtureDataset(AsyncDataset[T]):
         start_offset = self._start_offsets[dataset_id]
         return dataset_id, int(dataset_index) + int(base_offset) + int(current_stage_offset) + int(start_offset)
 
-    def counts_before(self, index: int) -> dict[str, int]:
-        """Return how many sequences each dataset serves at mixture indices below ``index``, excluding start offsets."""
-        block_id, index_within_block = divmod(index, self.block_size)
+    def sequence_counts_before_block(self, block_id: int) -> dict[str, int]:
+        """Return how many sequences each dataset serves before mixture block ``block_id``, excluding start offsets.
+
+        Takes a block rather than an index: within a partly served block, slots are shuffled, so a count is not a
+        read position.
+        """
         stage = self._get_stage_for_block(block_id)
         counts = np.array(
             [self._count_before_stage(dataset_id, stage) for dataset_id in range(len(self.dataset_index))],
@@ -244,9 +247,6 @@ class MixtureDataset(AsyncDataset[T]):
         )
         blocks_in_stage = (block_id * self.block_size - self.weight_stages[stage][0]) // self.block_size
         counts += blocks_in_stage * self._counts_per_block_per_stage[stage].astype(np.int64)
-        if index_within_block:
-            ids = self._get_block(block_id)[:index_within_block]
-            counts += np.bincount(np.asarray(ids) >> 16, minlength=len(self.dataset_index))
         return {name: int(count) for name, count in zip(self.dataset_index, counts, strict=True)}
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T]:
