@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Time the Pallas-Triton grouped GEMM behind ``haliax.nn.ragged_dot`` on one GPU.
+"""Time the Triton grouped GEMM behind ``haliax.nn.ragged_dot`` on one GPU.
 
 A routed-expert MLP runs three grouped-GEMM layouts per weight. With ``M`` routed rows, ``G``
 local experts and an expert weight ``[G, K, N]``:
@@ -198,7 +198,7 @@ def sweep_implementations(case: Case, configs: list) -> list[Timed]:
     timed = []
     for config in fitted:
         fn = jax.jit(
-            lambda lhs, rhs, gs, config=config: ragged_dot_module._tile_map_pallas_call(lhs, rhs, gs, layout, config)
+            lambda lhs, rhs, gs, config=config: ragged_dot_module._tile_map_triton_call(lhs, rhs, gs, layout, config)
         )
         timed.append(Timed("triton_tile_map", "bfloat16", fn, inputs, str(dataclasses.asdict(config))))
     return timed
