@@ -19,6 +19,7 @@ from marin.evaluation.records import EvalchemyRef, EvalRef, ModelRef
 
 OCTOBER_5_VERSION = "eval-policy-2026-10-05-verified"
 OCTOBER_6_VERSION = "eval-policy-2026-10-06-verified"
+OCTOBER_9_VERSION = "eval-policy-2026-10-09-verified"
 MAX_SERVED_CONTEXT = 131072
 
 
@@ -67,6 +68,14 @@ CAMPAIGNS = {
         }
     ),
 }
+CAMPAIGNS[OCTOBER_9_VERSION] = CAMPAIGNS[OCTOBER_6_VERSION].model_copy(
+    update={
+        "runtimes": {
+            **CAMPAIGNS[OCTOBER_6_VERSION].runtimes,
+            "harbor": "1675efa0f23c0033f0b5028ea42d56ae09f15115",
+        }
+    }
+)
 
 
 def campaign_policy_violations(model: ModelRef, evaluation: EvalRef, profile: CampaignProfile) -> tuple[str, ...]:
