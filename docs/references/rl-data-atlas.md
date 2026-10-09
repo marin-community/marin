@@ -18,17 +18,20 @@ button beside a source name to inspect counts, classifications, and evidence lin
 downloads the filtered rows as CSV. The MarinSkyRL and Task Trove tabs identify
 source origins; their populations can overlap.
 
-Stable source IDs connect each registry entry to its saved reviews. Component
-rows retain their canonical source, selector, and count evidence. Counts describe
-the selected population: Task Trove counts released Harbor tasks, and MarinSkyRL
-counts selected splits, configurations, or components. Generators have no fixed
-count. An estimated row and any total containing it display `≈`; missing finite
-counts are omitted from the tally. The tally can include overlapping records.
+Stable source IDs connect each registry entry to its saved reviews. Dataset
+links point to pinned conversion inputs for runnable sources. **Input rows**
+counts that selected input population before conversion or curation. TaskTrove
+archive entries refer to the pinned `open-thoughts/TaskTrove` parquet inputs;
+their counts do not describe the separate curated release. Generators have no
+fixed count. Unknown counts are omitted from totals, which may include
+overlapping populations. Whole-file parquet counts can be regenerated offline
+with the task-curation `count_inputs` command after verifying download revisions.
 
-Dataset and verifier revisions are stored in each source definition. Refreshing a
-catalog with changed revisions makes previous quality and difficulty judgments
-stale while preserving their history. Historical counts and classifications retain
-their evidence links and dates until the registry is updated.
+Families and tags support discovery. Source-specific aliases are searchable tags.
+Dataset and verifier references provide the revisions used for review applicability.
+A changed revision hides a rating that covers a different revision and preserves
+its review link and history. Counts and source information change through the
+repository definitions and a rebuilt applet.
 
 Quality links to a sample-based review: green Good, yellow Some issues, red Bad,
 or gray Unreviewed/Unrated. Review date records the latest actual judgment time.
@@ -85,12 +88,12 @@ model solve rates; its report includes task counts,
 sampling scope, checkpoint revisions, and uncertainty. These curated columns are
 stored separately and survive refreshes. Changed source data or verifier revisions
 hide stale Quality and Difficulty values while retaining the historical review link.
-Nemotron component definitions retain the counted file SHA-256 and selected
-population in the task-curation registry.
+Nemotron component recipes pin the blend revision and row selection; their counts
+come from the complete selection audit at that revision.
 Reusing a historical review at a later repository revision requires separate
 evidence that its data bytes, component selection, and verifier still apply.
 The review page links that evidence and preserves the actual judgment date and
-executed revision; the catalog still reports the latest repository revision date.
+executed revision; the catalog displays the pinned input revision.
 
 For sources rated Good, the page shows the quality solver's initial solve
 count and the saved [issue #8942](https://github.com/marin-community/marin/issues/8942)

@@ -21,7 +21,7 @@ import sys
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Any
@@ -58,14 +58,10 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
     ANSWER_FILE_DELIVERY,
-    TASKTROVE_RELEASE,
     tasktrove_source,
 )
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-SKYRL_METADATA = DataSourceMetadata(id="", name="", origin="MarinSkyRL", recorded_at="2026-10-08")
-
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
@@ -354,63 +350,20 @@ TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden)
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=replace(
-                SKYRL_METADATA,
+            info=SourceInfo(
                 id="MarinSkyRL:reasoning_gym",
-                name="reasoning_gym",
-                display_name="open-thought/reasoning-gym",
-                url="https://github.com/open-thought/reasoning-gym",
-                dataset_id="open-thought/reasoning-gym",
-                revision="e44c4bfcb62c489286a1264094e6d9c883aaf0d2",
-                revised_at="2026-10-08T02:13:45Z",
-                dataset_revision="49b07130b3fcd12f2d064bba7c43869543a0e7e7",
-                verifier_revision="c4daad3876de66d27fa1a5c6405269165f4ccfc5bd85e4fc65108a802f8d6109",
+                title="open-thought/reasoning-gym",
+                origin="MarinSkyRL",
                 family="reasoning-gym",
-                environment="reasoning_gym",
-                type="RLVR",
-                turns="Single-turn",
-                task_count=None,
-                count_basis="Generated on demand; depends on selected tasks and rows_per_task",
-                count_precision="not-applicable",
-                count_url=(
-                    "https://github.com/open-thought/reasoning-gym/blob/49b07130b3fcd12f2d064bba7c43"
-                    "869543a0e7e7/README.md"
+                tags=("rlvr", "single-turn", "generator", "gym/reasoning_gym"),
+                verifier=SourceReference(
+                    "reasoning_gym",
+                    "c4daad3876de66d27fa1a5c6405269165f4ccfc5bd85e4fc65108a802f8d6109",
+                    (
+                        "https://github.com/marin-community/MarinSkyRL/tree/"
+                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/reasoning_gym"
+                    ),
                 ),
-                kind="Generator",
-                split="generated",
-                benchmark_basis=(
-                    "SkyRL test-only designation or HF benchmark:official tag; false means no " "designation found"
-                ),
-                family_basis="Upstream card/schema and selected SkyRL loader audited 2026-09-28",
-                family_url=(
-                    "https://github.com/open-thought/reasoning-gym/blob/49b07130b3fcd12f2d064bba7c43"
-                    "869543a0e7e7/README.md"
-                ),
-                classification_basis=(
-                    "Inferred from SkyRL environment contract; blended sources may contain " "multiple task types"
-                ),
-                canonical_source="open-thought/reasoning-gym",
-                canonical_url="https://github.com/open-thought/reasoning-gym",
-                provenance_url=(
-                    "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094"
-                    "e6d9c883aaf0d2/infra/rl_data/sources.py"
-                ),
-                verification="two_sided",
-                snapshot_safe=True,
-                gym_alias="gym/reasoning_gym",
-                gym_url=(
-                    "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d"
-                    "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/__init__.py"
-                ),
-                gym_entrypoint="skyrl_gym.envs.reasoning_gym.env:ReasoningGymEnv",
-                dataset_revised_at="2026-04-17T19:39:15Z",
-                registry_revised_at="2026-10-01T14:18:17Z",
-                verifier_url=(
-                    "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e"
-                    "6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/reasoning_gym"
-                ),
-                verifier_revised_at="2026-10-08T02:13:45Z",
-                revision_basis="Latest upstream dataset repository or MarinSkyRL verifier change",
             ),
             pipeline=RlDataPipeline(
                 name="reasoning_gym_generated",
@@ -431,25 +384,14 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
-            metadata=replace(
-                TASKTROVE_RELEASE,
+            info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-reasoning-gym-v2",
-                name="laion__nemotron-gym-reasoning-gym-v2",
-                display_name="laion/nemotron-gym-reasoning-gym-v2",
-                dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-                verifier_revision=None,
+                title="laion/nemotron-gym-reasoning-gym-v2",
+                origin="Task Trove",
                 family="reasoning-gym",
-                task_count=13712,
+                tags=("agentic", "multi-turn"),
+                count=14259,
                 notes="reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
-                canonical_source="laion/nemotron-gym-reasoning-gym-v2",
-                verification="reasoning-gym",
-                snapshot_safe=True,
-                snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-                upstream_repository="laion/nemotron-gym-reasoning-gym-v2",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-reasoning-gym-v2",
-                upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-                input_count=14259,
-                modes=("reasoning-gym",),
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-reasoning-gym",

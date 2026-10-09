@@ -13,7 +13,6 @@ only that an empty reply scores 0.
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -29,43 +28,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-SKYRL_METADATA = DataSourceMetadata(
-    id="",
-    name="",
-    origin="MarinSkyRL",
-    revision="e44c4bfcb62c489286a1264094e6d9c883aaf0d2",
-    revised_at="2026-10-08T02:13:45Z",
-    verifier_revision="c7600581c6ff27b8ebdc5a02954952c77e15b520f8d6da7edb69839dc9948158",
-    family="instruction-following",
-    environment="ifeval",
-    type="RLVR",
-    turns="Single-turn",
-    benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
-    family_basis="Upstream card/schema and selected SkyRL loader audited 2026-09-28",
-    classification_basis="Inferred from SkyRL environment contract; blended sources may contain multiple task types",
-    provenance_url=(
-        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c8"
-        "83aaf0d2/infra/rl_data/sources.py"
-    ),
-    verification="schema_only",
-    snapshot_safe=True,
-    gym_alias="gym/ifeval",
-    gym_url=(
-        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c883a"
-        "af0d2/skyrl-gym/skyrl_gym/envs/__init__.py"
-    ),
-    gym_entrypoint="skyrl_gym.envs.ifeval.env:IFEvalEnv",
-    registry_revised_at="2026-10-01T14:18:17Z",
-    verifier_url=(
-        "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d9c88"
-        "3aaf0d2/skyrl-gym/skyrl_gym/envs/ifeval"
-    ),
-    verifier_revised_at="2026-10-08T02:13:45Z",
-    revision_basis="Latest upstream dataset repository or MarinSkyRL verifier change",
-    recorded_at="2026-10-08",
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -216,30 +179,20 @@ CONTROLS = Controls()
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=replace(
-                SKYRL_METADATA,
+            info=SourceInfo(
                 id="MarinSkyRL:nemotron_if",
-                name="nemotron_if",
-                display_name="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
-                url="https://huggingface.co/datasets/nvidia/Llama-Nemotron-Post-Training-Dataset",
-                dataset_id="nvidia/Llama-Nemotron-Post-Training-Dataset",
-                dataset_revision="ab2a40d258a6a4d9d4c277d702aeea445081766c",
-                task_count=56339,
-                count_basis="Dataset card: instruction following, config RL / split instruction_following",
-                count_precision="reported",
-                count_url=(
-                    "https://huggingface.co/datasets/nvidia/Llama-Nemotron-Post-Training-Dataset/blo"
-                    "b/ab2a40d258a6a4d9d4c277d702aeea445081766c/README.md"
+                title="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
+                origin="MarinSkyRL",
+                family="instruction-following",
+                tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/ifeval"),
+                verifier=SourceReference(
+                    "ifeval",
+                    "c7600581c6ff27b8ebdc5a02954952c77e15b520f8d6da7edb69839dc9948158",
+                    (
+                        "https://github.com/marin-community/MarinSkyRL/tree/"
+                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/ifeval"
+                    ),
                 ),
-                split="instruction_following",
-                family_url=(
-                    "https://huggingface.co/datasets/nvidia/Llama-Nemotron-Post-Training-Dataset/blo"
-                    "b/ab2a40d258a6a4d9d4c277d702aeea445081766c/README.md"
-                ),
-                canonical_source="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
-                canonical_url="https://huggingface.co/datasets/nvidia/Llama-Nemotron-Post-Training-Dataset",
-                license=("cc-by-4.0",),
-                dataset_revised_at="2025-05-08T17:51:50.000Z",
             ),
             pipeline=RlDataPipeline(
                 name="nemotron_if",
@@ -260,29 +213,20 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
-            metadata=replace(
-                SKYRL_METADATA,
+            info=SourceInfo(
                 id="MarinSkyRL:rlvr_ifeval",
-                name="rlvr_ifeval",
-                display_name="allenai/RLVR-IFeval",
-                url="https://huggingface.co/datasets/allenai/RLVR-IFeval",
-                dataset_id="allenai/RLVR-IFeval",
-                dataset_revision="47c03c73621c4aab2b824b7818681117d662770e",
-                task_count=14973,
-                count_basis="HF card / viewer selected split rows, before filtering / deduplication",
-                count_precision="exact",
-                count_url=(
-                    "https://huggingface.co/datasets/allenai/RLVR-IFeval/blob/47c03c73621c4aab2b824b"
-                    "7818681117d662770e/README.md"
+                title="allenai/RLVR-IFeval",
+                origin="MarinSkyRL",
+                family="instruction-following",
+                tags=("rlvr", "single-turn", "license:odc-by", "gym/ifeval"),
+                verifier=SourceReference(
+                    "ifeval",
+                    "c7600581c6ff27b8ebdc5a02954952c77e15b520f8d6da7edb69839dc9948158",
+                    (
+                        "https://github.com/marin-community/MarinSkyRL/tree/"
+                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/ifeval"
+                    ),
                 ),
-                family_url=(
-                    "https://huggingface.co/datasets/allenai/RLVR-IFeval/blob/47c03c73621c4aab2b824b"
-                    "7818681117d662770e/README.md"
-                ),
-                canonical_source="allenai/RLVR-IFeval",
-                canonical_url="https://huggingface.co/datasets/allenai/RLVR-IFeval",
-                license=("odc-by",),
-                dataset_revised_at="2024-11-21T07:17:40.000Z",
             ),
             pipeline=RlDataPipeline(
                 name="rlvr_ifeval",

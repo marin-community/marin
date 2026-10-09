@@ -12,7 +12,6 @@ golden control; an archive whose witness is not a nonempty JSON list of events i
 """
 
 import json
-from dataclasses import replace
 from typing import Any
 
 from taskcompendium.convert.answers import source_defect
@@ -39,20 +38,9 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource
-
-TASKTROVE_METADATA = replace(
-    TASKTROVE_RELEASE,
-    dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-    verifier_revision=None,
-    verification="script",
-    snapshot_safe=True,
-    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-    modes=("script",),
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", "tests/verifier_data.json")
@@ -169,45 +157,37 @@ def sources() -> list[RlDataSource]:
             "tasktrove-calendar",
             "laion__nemotron-gym-agent-calendar-v2",
             CALENDAR_RUBRIC,
-            replace(
-                TASKTROVE_METADATA,
+            SourceInfo(
                 id="Task Trove:laion__nemotron-gym-agent-calendar-v2",
-                name="laion__nemotron-gym-agent-calendar-v2",
-                display_name="laion/nemotron-gym-agent-calendar-v2",
+                title="laion/nemotron-gym-agent-calendar-v2",
+                origin="Task Trove",
                 family="tool-use",
-                task_count=2699,
+                tags=("agentic", "multi-turn"),
+                count=2699,
                 notes="Deterministic schedule check. Templated; dedupe against calendar-v3.",
-                canonical_source="laion/nemotron-gym-agent-calendar-v2",
-                upstream_repository="laion/nemotron-gym-agent-calendar-v2",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-agent-calendar-v2",
-                input_count=2699,
             ),
         ),
         (
             "tasktrove-if_calendar",
             "laion__nemotron-gym-instruction-following-calendar-v3",
             IF_CALENDAR_RUBRIC,
-            replace(
-                TASKTROVE_METADATA,
+            SourceInfo(
                 id="Task Trove:laion__nemotron-gym-instruction-following-calendar-v3",
-                name="laion__nemotron-gym-instruction-following-calendar-v3",
-                display_name="laion/nemotron-gym-instruction-following-calendar-v3",
+                title="laion/nemotron-gym-instruction-following-calendar-v3",
+                origin="Task Trove",
                 family="instruction-following",
-                task_count=5673,
+                tags=("agentic", "multi-turn"),
+                count=5673,
                 notes=(
-                    "Deterministic overlap and constraint check. Synthetic and templated; dedupe "
-                    "against agent-calendar-v2."
+                    "Deterministic overlap and constraint check. Synthetic and templated; dedupe against "
+                    "agent-calendar-v2."
                 ),
-                canonical_source="laion/nemotron-gym-instruction-following-calendar-v3",
-                upstream_repository="laion/nemotron-gym-instruction-following-calendar-v3",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-instruction-following-calendar-v3",
-                input_count=5673,
             ),
         ),
     )
     return [
         RlDataSource(
-            metadata=metadata,
+            info=info,
             pipeline=RlDataPipeline(
                 name=name,
                 source=tasktrove_source(config),
@@ -220,5 +200,5 @@ def sources() -> list[RlDataSource]:
                 grader=GRADER_PACKAGES,
             ),
         )
-        for name, config, rubric, metadata in sources
+        for name, config, rubric, info in sources
     ]

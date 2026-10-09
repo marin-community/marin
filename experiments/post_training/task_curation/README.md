@@ -21,34 +21,59 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.po
 ```
 
 The applet build runs this command and bundles the resulting JSON. Its digest
-covers the complete source inventory. Metadata is reviewed in the repository;
-`recorded_at` identifies the metadata capture date. The Atlas no longer scrapes
-upstream catalogs on refresh.
-
-Inventory counts and reviews refer to the declared release population. For
-TaskTrove, that release can differ from the native archive used for conversion.
-The export retains both the inventory revision and the recipe's input revision
-under `pipeline`.
+covers the complete inventory. The Atlas does not scrape upstream catalogs on refresh.
 
 ## Declaring a dataset
 
-An `RlDataSource` ([source.py](source.py)) combines inventory metadata, an optional
+An `RlDataSource` ([source.py](source.py)) combines source information, an optional
 review and a conversion recipe:
 
 ```python
 RlDataSource(
-    metadata=DataSourceMetadata(id="MarinSkyRL:math500", name="math500", origin="MarinSkyRL"),
+    info=SourceInfo(
+        id="MarinSkyRL:math500", title="MATH-500", origin="MarinSkyRL",
+        family="math-answer", tags=("rlvr", "single-turn", "benchmark"),
+    ),
     pipeline=math500_pipeline,
     review=DataSourceReview(),
 )
 ```
 
-The metadata ID preserves Atlas review links. Optional fields record counts,
-classifications and pinned evidence. Presentation defaults come from the recipe's
-source when omitted. A review remains unrated until an assessment is supplied;
-executed reviews and difficulty measurements remain in the Atlas database.
-Sources without a recipe remain in [datasets/unconverted.py](datasets/unconverted.py).
-`all_pipelines()` projects the runnable recipes for the campaign driver.
+`info.id` preserves Atlas review links; `info.title` is a display label, while
+`source.name` identifies the pipeline. `family` groups related tasks. Free-form
+tags describe task type, interaction, benchmark or excluded status, licenses,
+and source-specific search aliases. `SourceReference(name, revision, url)`
+identifies a verifier, or the dataset of an inventory entry without a pipeline.
+Runnable sources define their dataset only in `pipeline.source`.
+
+`info.count` counts selected input rows at that dataset revision, before
+conversion or curation. Use `None` when the pinned population is unknown.
+The Atlas shows **Input rows** beside links to the same pinned conversion input.
+TaskTrove archive counts therefore refer to `open-thoughts/TaskTrove`, rather
+than counts of successful conversions in a different release. Revisions covered
+by authored or saved reviews are compared with these displayed dataset and
+verifier revisions; a mismatch hides the rating but preserves review history.
+
+Reproduce whole-file counts from a local Hugging Face download with:
+
+```bash
+uv run python -m experiments.post_training.task_curation.count_inputs \
+  --snapshot /path/to/tasktrove/repo \
+  --revision 02923004846e4e73862c20962f823a6d05100e7a \
+  --files '*/tasks.parquet'
+```
+
+This verifies each file's HF download commit metadata and reads parquet footers
+without network access or data-page reads. Sum only the files selected by the
+recipe. A row selector requires a complete count of that selection; do not use
+whole-file or QUICK sample counts. Reset or recount counts whenever the input
+pin or selection changes. The Nemotron blend counts retain the complete pinned
+selection audit, including SWE-Gym membership; card estimates are omitted.
+
+A review remains unrated until an assessment is supplied. Executed reviews and
+difficulty measurements remain in the Atlas database. Sources without a recipe
+remain in [datasets/unconverted.py](datasets/unconverted.py).
+`all_pipelines()` projects runnable recipes for the campaign driver.
 
 A conversion recipe is an `RlDataPipeline` ([pipeline.py](pipeline.py)):
 

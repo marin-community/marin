@@ -52,10 +52,10 @@ def all_sources() -> dict[str, RlDataSource]:
         *nemotron_ultra.sources(),
         *unconverted.sources(),
     ]
-    identifiers = [source.metadata.id for source in sources]
+    identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
-    return {source.metadata.id: source for source in sources}
+    return {source.info.id: source for source in sources}
 
 
 def all_pipelines() -> dict[str, RlDataPipeline]:

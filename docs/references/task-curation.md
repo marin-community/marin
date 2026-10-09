@@ -38,25 +38,29 @@ ArtifactSteps.
 
 ## Declarations
 
-An `RlDataSource` has `metadata`, `review` and an optional `pipeline`.
-`DataSourceMetadata` requires `id`, `name` and `origin`; optional fields record
-counts, classification, release pins and evidence. `DataSourceReview` records an
-authored grade, evidence URL, date and applicable revisions. Its default is
-unrated. Existing executed reviews and difficulty measurements remain in the
-Atlas database. Sources without a recipe stay visible in the inventory and are
-omitted from campaign execution.
+An `RlDataSource` has `info`, `review` and an optional `pipeline`.
+`SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
+search tags, notes and an optional input-row count. A `SourceReference` groups a
+name, revision and URL for the verifier or an inventory-only dataset. Runnable
+sources derive dataset identity from `pipeline.source`, with no second dataset
+definition. `DataSourceReview` records an authored grade, evidence URL, date and
+the dataset/verifier revisions it covers. Its default is unrated. Executed
+reviews and difficulty measurements remain in the Atlas database.
 
-The applet build exports this registry to `dist/catalog.json` using:
+The applet build exports this registry to `dist/catalog.json`:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.export_catalog \
   --output infra/marina/applets/rl_data_catalog/dist/catalog.json
 ```
 
-The export preserves stable IDs and distinguishes the inventory release from the
-recipe's conversion input. Counts describe the inventory population. Metadata
-capture dates appear in `recorded_at`; upstream changes require a repository
-update. See [RL Data Atlas](rl-data-atlas.md) for publishing and saved reviews.
+The exporter alone maps Python declarations to Atlas fields. Dataset links and
+**Input rows** describe the same pinned conversion input, before conversion or
+curation. Unknown counts remain unknown. A changed dataset or verifier revision
+makes reviews covering a different revision stale while preserving their history.
+See [RL Data Atlas](rl-data-atlas.md) for publishing and saved reviews, and the
+[experiment README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
+for offline count regeneration.
 
 The `RlDataPipeline` recipe has these fields:
 

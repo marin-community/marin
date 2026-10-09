@@ -9,7 +9,6 @@ run the source's ``solution/solve.sh`` oracle when the archive ships one, and ot
 submission.
 """
 
-from dataclasses import replace
 
 from taskcompendium.convert.executable import (
     SOLUTION_PATHS,
@@ -29,21 +28,10 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from verifyit.spec import Compare, StdioSpec
 
 from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-TASKTROVE_METADATA = replace(
-    TASKTROVE_RELEASE,
-    verifier_revision=None,
-    verification="stdio",
-    snapshot_safe=True,
-    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-    languages=("python",),
-    modes=("stdio",),
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:d6af0d198b29650fea0eaccb27d01cb9bbfb0aec9e1d5959a74c2ae055b6f305"
@@ -156,9 +144,9 @@ def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> 
     )
 
 
-def stdio_source(name: str, config: str, convert: Converter, rubric: str, metadata: DataSourceMetadata) -> RlDataSource:
+def stdio_source(name: str, config: str, convert: Converter, rubric: str, info: SourceInfo) -> RlDataSource:
     return RlDataSource(
-        metadata=metadata,
+        info=info,
         pipeline=RlDataPipeline(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
@@ -180,19 +168,14 @@ def sources() -> list[RlDataSource]:
             "DCAgent__code-contests-noblock",
             convert_code_contests_task,
             CODE_CONTESTS_RUBRIC,
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:DCAgent__code-contests-noblock",
-                name="DCAgent__code-contests-noblock",
-                display_name="DCAgent/code-contests-noblock",
-                dataset_revision="dcda4effa776640a0b85e0c4b6797921edb03c76",
+                title="DCAgent/code-contests-noblock",
+                origin="Task Trove",
                 family="competitive-programming",
-                task_count=8222,
+                tags=("agentic", "multi-turn", "language:python"),
+                count=8728,
                 notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
-                canonical_source="DCAgent/code-contests-noblock",
-                upstream_repository="DCAgent/code-contests-noblock",
-                upstream_url="https://huggingface.co/datasets/DCAgent/code-contests-noblock",
-                input_count=8728,
             ),
         ),
         stdio_source(
@@ -200,22 +183,17 @@ def sources() -> list[RlDataSource]:
             "laion__codeforces-v3",
             convert_codeforces_task,
             CODEFORCES_RUBRIC,
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:laion__codeforces-v3",
-                name="laion__codeforces-v3",
-                display_name="laion/codeforces-v3",
-                dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+                title="laion/codeforces-v3",
+                origin="Task Trove",
                 family="competitive-programming",
-                task_count=9697,
+                tags=("agentic", "multi-turn", "language:python"),
+                count=10000,
                 notes=(
-                    "Keep rows with at least 5 test files; drop the zero-test fallback (currently "
-                    "full credit for not crashing)."
+                    "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
+                    "credit for not crashing)."
                 ),
-                canonical_source="laion/codeforces-v3",
-                upstream_repository="laion/codeforces-v3",
-                upstream_url="https://huggingface.co/datasets/laion/codeforces-v3",
-                input_count=10000,
             ),
         ),
         stdio_source(
@@ -223,19 +201,14 @@ def sources() -> list[RlDataSource]:
             "laion__nemotron-gym-competitive-coding-v2",
             convert_competitive_coding_task,
             COMPETITIVE_CODING_RUBRIC,
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
-                name="laion__nemotron-gym-competitive-coding-v2",
-                display_name="laion/nemotron-gym-competitive-coding-v2",
-                dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+                title="laion/nemotron-gym-competitive-coding-v2",
+                origin="Task Trove",
                 family="competitive-programming",
-                task_count=13973,
+                tags=("agentic", "multi-turn", "language:python"),
+                count=15713,
                 notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
-                canonical_source="laion/nemotron-gym-competitive-coding-v2",
-                upstream_repository="laion/nemotron-gym-competitive-coding-v2",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-competitive-coding-v2",
-                input_count=15713,
             ),
         ),
         stdio_source(
@@ -243,22 +216,17 @@ def sources() -> list[RlDataSource]:
             "laion__exp_rpt_taco-v2",
             convert_taco_task,
             TACO_RUBRIC,
-            metadata=replace(
-                TASKTROVE_METADATA,
+            info=SourceInfo(
                 id="Task Trove:laion__exp_rpt_taco-v2",
-                name="laion__exp_rpt_taco-v2",
-                display_name="laion/exp_rpt_taco-v2",
-                dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
+                title="laion/exp_rpt_taco-v2",
+                origin="Task Trove",
                 family="stdin-stdout",
-                task_count=5116,
+                tags=("agentic", "multi-turn", "language:python"),
+                count=10000,
                 notes=(
-                    "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add "
-                    "tolerance-aware compare where the prompt promises one."
+                    "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
+                    "aware compare where the prompt promises one."
                 ),
-                canonical_source="laion/exp_rpt_taco-v2",
-                upstream_repository="laion/exp_rpt_taco-v2",
-                upstream_url="https://huggingface.co/datasets/laion/exp_rpt_taco-v2",
-                input_count=10000,
             ),
         ),
     ]

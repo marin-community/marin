@@ -12,7 +12,7 @@ sources have no controls and their kept rows are admitted without them.
 """
 
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.conversation import conversation_task
@@ -26,21 +26,9 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-TASKTROVE_METADATA = replace(
-    TASKTROVE_RELEASE,
-    dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-    verifier_revision=None,
-    family="llm-judge-freeform",
-    verification="judge",
-    snapshot_safe=True,
-    snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-    upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-    modes=("judge",),
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 
@@ -189,7 +177,7 @@ class JudgedSource:
     name: str
     config: str
     rubric: str
-    metadata: DataSourceMetadata = field(kw_only=True)
+    info: SourceInfo = field(kw_only=True)
 
 
 SOURCES = (
@@ -197,162 +185,138 @@ SOURCES = (
         "tasktrove-codereview",
         "laion__stackexchange-codereview-sandboxes-verified-v2",
         CODEREVIEW_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:laion__stackexchange-codereview-sandboxes-verified-v2",
-            name="laion__stackexchange-codereview-sandboxes-verified-v2",
-            display_name="laion/stackexchange-codereview-sandboxes-verified-v2",
-            task_count=10000,
+            title="laion/stackexchange-codereview-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
             notes=(
                 "Judge-only code review with a four-criterion rubric and no reference; the rubric "
-                "ships under tests/, which the agent never sees. Kept as rubric-only (tag "
-                "no-reference)."
+                "ships under tests/, which the agent never sees. Kept as rubric-only (tag no-"
+                "reference)."
             ),
-            canonical_source="laion/stackexchange-codereview-sandboxes-verified-v2",
-            upstream_repository="laion/stackexchange-codereview-sandboxes-verified-v2",
-            upstream_url="https://huggingface.co/datasets/laion/stackexchange-codereview-sandboxes-verified-v2",
-            input_count=10000,
         ),
     ),
     JudgedSource(
         "tasktrove-glaive_code",
         "laion__glaive-code-assistant-sandboxes-verified-v2",
         GLAIVE_CODE_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2",
-            name="laion__glaive-code-assistant-sandboxes-verified-v2",
-            display_name="laion/glaive-code-assistant-sandboxes-verified-v2",
-            task_count=9994,
+            title="laion/glaive-code-assistant-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
             notes=(
-                "Judge-only over code that is never run, four-criterion rubric, no reference. Kept "
-                "as rubric-only (tag no-reference)."
+                "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as "
+                "rubric-only (tag no-reference)."
             ),
-            canonical_source="laion/glaive-code-assistant-sandboxes-verified-v2",
-            upstream_repository="laion/glaive-code-assistant-sandboxes-verified-v2",
-            upstream_url="https://huggingface.co/datasets/laion/glaive-code-assistant-sandboxes-verified-v2",
-            input_count=10000,
         ),
     ),
     JudgedSource(
         "tasktrove-safety",
         "laion__nemotron-gym-safety-v3",
         SAFETY_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:laion__nemotron-gym-safety-v3",
-            name="laion__nemotron-gym-safety-v3",
-            display_name="laion/nemotron-gym-safety-v3",
-            task_count=44884,
+            title="laion/nemotron-gym-safety-v3",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=89066,
             notes=(
                 "Judge-only against a two-line safety principle, no reference. Kept as rubric-only "
                 "(tag no-reference): the principle is specific to each prompt (refuse the harmful "
                 "ones, help with the benign ones)."
             ),
-            canonical_source="laion/nemotron-gym-safety-v3",
-            upstream_repository="laion/nemotron-gym-safety-v3",
-            upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-safety-v3",
-            input_count=89066,
         ),
     ),
     JudgedSource(
         "tasktrove-stack_overflow",
         "laion__stackexchange-overflow-sandboxes-verified-v2",
         STACK_OVERFLOW_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
-            name="laion__stackexchange-overflow-sandboxes-verified-v2",
-            display_name="laion/stackexchange-overflow-sandboxes-verified-v2",
-            task_count=10000,
+            title="laion/stackexchange-overflow-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
             notes=(
                 "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as "
                 "rubric-only (tag no-reference)."
             ),
-            canonical_source="laion/stackexchange-overflow-sandboxes-verified-v2",
-            upstream_repository="laion/stackexchange-overflow-sandboxes-verified-v2",
-            upstream_url="https://huggingface.co/datasets/laion/stackexchange-overflow-sandboxes-verified-v2",
-            input_count=10000,
         ),
     ),
     JudgedSource(
         "tasktrove-superuser",
         "laion__stackexchange-superuser-sandboxes-verified-v2",
         SUPERUSER_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:laion__stackexchange-superuser-sandboxes-verified-v2",
-            name="laion__stackexchange-superuser-sandboxes-verified-v2",
-            display_name="laion/stackexchange-superuser-sandboxes-verified-v2",
-            task_count=10000,
+            title="laion/stackexchange-superuser-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
             notes=(
-                "Judge-only Super User answers, four-criterion rubric, no reference. Kept as "
-                "rubric-only (tag no-reference)."
+                "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-"
+                "only (tag no-reference)."
             ),
-            canonical_source="laion/stackexchange-superuser-sandboxes-verified-v2",
-            upstream_repository="laion/stackexchange-superuser-sandboxes-verified-v2",
-            upstream_url="https://huggingface.co/datasets/laion/stackexchange-superuser-sandboxes-verified-v2",
-            input_count=10000,
         ),
     ),
     JudgedSource(
         "tasktrove-tezos",
         "laion__stackexchange-tezos-sandboxes-verified-v2",
         TEZOS_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:laion__stackexchange-tezos-sandboxes-verified-v2",
-            name="laion__stackexchange-tezos-sandboxes-verified-v2",
-            display_name="laion/stackexchange-tezos-sandboxes-verified-v2",
-            task_count=997,
+            title="laion/stackexchange-tezos-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
             notes=(
-                "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN "
-                "duplicates fall to the dedup step. Kept as rubric-only (tag no-reference)."
+                "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates "
+                "fall to the dedup step. Kept as rubric-only (tag no-reference)."
             ),
-            canonical_source="laion/stackexchange-tezos-sandboxes-verified-v2",
-            upstream_repository="laion/stackexchange-tezos-sandboxes-verified-v2",
-            upstream_url="https://huggingface.co/datasets/laion/stackexchange-tezos-sandboxes-verified-v2",
-            input_count=10000,
         ),
     ),
     JudgedSource(
         "tasktrove-unix",
         "laion__stackexchange-unix-sandboxes-verified-v2",
         UNIX_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:laion__stackexchange-unix-sandboxes-verified-v2",
-            name="laion__stackexchange-unix-sandboxes-verified-v2",
-            display_name="laion/stackexchange-unix-sandboxes-verified-v2",
-            task_count=10000,
+            title="laion/stackexchange-unix-sandboxes-verified-v2",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
             notes=(
-                "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as "
-                "rubric-only (tag no-reference)."
+                "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-"
+                "only (tag no-reference)."
             ),
-            canonical_source="laion/stackexchange-unix-sandboxes-verified-v2",
-            upstream_repository="laion/stackexchange-unix-sandboxes-verified-v2",
-            upstream_url="https://huggingface.co/datasets/laion/stackexchange-unix-sandboxes-verified-v2",
-            input_count=10000,
         ),
     ),
     JudgedSource(
         "tasktrove-wizard_orca",
         "laion__wizardlm-orca-v4",
         WIZARD_ORCA_RUBRIC,
-        metadata=replace(
-            TASKTROVE_METADATA,
+        info=SourceInfo(
             id="Task Trove:laion__wizardlm-orca-v4",
-            name="laion__wizardlm-orca-v4",
-            display_name="laion/wizardlm-orca-v4",
-            task_count=9999,
+            title="laion/wizardlm-orca-v4",
+            origin="Task Trove",
+            family="llm-judge-freeform",
+            tags=("agentic", "multi-turn"),
+            count=10000,
             notes=(
-                "Judge-only over Orca-style instructions, three-criterion rubric, no reference. "
-                "Kept as rubric-only (tag no-reference)."
+                "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept "
+                "as rubric-only (tag no-reference)."
             ),
-            canonical_source="laion/wizardlm-orca-v4",
-            upstream_repository="laion/wizardlm-orca-v4",
-            upstream_url="https://huggingface.co/datasets/laion/wizardlm-orca-v4",
-            input_count=10000,
         ),
     ),
 )
@@ -361,7 +325,7 @@ SOURCES = (
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=source.metadata,
+            info=source.info,
             pipeline=RlDataPipeline(
                 name=source.name,
                 source=tasktrove_source(source.config),
