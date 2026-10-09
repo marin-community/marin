@@ -337,8 +337,8 @@ class GrugEvalConfig:
     # Local MoE kernel used after collapsing the expert axis. ``sonic`` is the Hopper Triton path;
     # ``sonic_cute`` is the Blackwell QuACK/CUTLASS path.
     dropless_eval_moe_implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
-    # Evaluate after the first optimization step of each process, including checkpoint resumes.
-    # This checks the eval-to-train handoff before the next periodic evaluation.
+    # Run the evals once after the first optimization step, for a baseline at the start of the loss
+    # curve. The periodic cadence first fires at `steps_per_eval`, thus it leaves that start bare.
     eval_at_first_step: bool = False
 
 
@@ -495,19 +495,21 @@ def _to_dropless_local(
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
 
 
-def _first_step_only(hook: Callable[..., None], *, start_step: int) -> Callable[..., None]:
-    """Run ``hook`` once after the first update following initialization or restore."""
-    fired = False
+def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
+    """Wrap ``hook`` so that it runs one time only, after the first optimization step.
+
+    ``StateCallbackRunner`` dispatches on ``next_step % every``, thus ``every=1`` is the only
+    interval that covers the first step. The gate makes that registration one-shot. A resumed run
+    starts above step 1 and never fires it.
+    """
 
     # `LambdaCallback` reads the signature to decide whether to pass `force`, and the `**kwargs`
     # below would otherwise advertise a `force` parameter that the wrapped hook can lack.
     @functools.wraps(hook)
     def gated(step, *args, **kwargs):
-        nonlocal fired
-        if fired or step.next_step != start_step + 1:
+        if step.next_step != 1:
             return
         hook(step, *args, **kwargs)
-        fired = True
 
     return gated
 
@@ -1194,11 +1196,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 for hook in eval_hooks:
                     state_callbacks.add_hook(hook, every=interval)
 
-            # Train once before evaluating so its first allocation sees a clean pool, then
-            # exercise the eval-to-train handoff immediately, including after a context switch.
+            # Baseline point at the start of the loss curve. The periodic cadence first fires at
+            # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+            # These run after the first optimization step, not before it: the first train step
+            # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
+            # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+            # the first step, and `_first_step_only` makes the hook fire once. A resumed run
+            # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
+            # is 0 there, so the point lands at step 0 on the curve.
             if eval_cfg.eval_at_first_step:
                 for hook in eval_hooks:
-                    state_callbacks.add_hook(_first_step_only(hook, start_step=int(state.step)), every=1)
+                    state_callbacks.add_hook(_first_step_only(hook), every=1)
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
