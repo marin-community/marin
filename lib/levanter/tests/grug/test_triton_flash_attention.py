@@ -9,15 +9,21 @@ from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mes
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention import AttentionMask, reference_attention
-from levanter.grug.attention._pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
 
-# On a GPU the kernels compile through Triton; elsewhere they run in the Pallas interpreter.
-INTERPRET = jax.default_backend() != "gpu"
+# The kernels are Triton launched through jax_triton, from the gpu extra; Triton has no CPU backend.
+pytest.importorskip("jax_triton")
+if jax.default_backend() != "gpu":
+    pytest.skip("gpu_triton_flash runs only on the JAX GPU backend", allow_module_level=True)
+
+from levanter.grug.attention._triton_flash import TritonFlashBlockSizes, triton_flash_attention  # noqa: E402
+
 SEQ_LEN = 256
 # Small tiles so the short test sequence still crosses masked, unmasked and skipped key blocks.
 SMALL_BLOCKS = TritonFlashBlockSizes(
     block_q=32, block_k=16, block_q_dq=32, block_k_dq=16, block_q_dkv=16, block_k_dkv=32
 )
+# (tiles, head_dim): the small tiles, and the default tiles (None) at the head_dim training uses.
+CASES = {"small_blocks": (SMALL_BLOCKS, 64), "tuned_blocks": (None, 128)}
 # Rows 0-89 are one document, 90-199 another, 200-255 padding (segment -1, its own run).
 SEGMENTS = jnp.concatenate([jnp.zeros(90), jnp.ones(110), -jnp.ones(56)]).astype(jnp.int32)
 
@@ -30,23 +36,13 @@ MASKS = {
 }
 
 
-def _qkv(dtype):
-    """Two sequences with 8 query heads sharing 2 KV heads, head_dim 64."""
+def _qkv(dtype, head_dim):
+    """Two sequences with 8 query heads sharing 2 KV heads."""
     kq, kk, kv = jax.random.split(jax.random.key(0), 3)
-    q = jax.random.normal(kq, (2, SEQ_LEN, 8, 64), jnp.float32).astype(dtype)
-    k = jax.random.normal(kk, (2, SEQ_LEN, 2, 64), jnp.float32).astype(dtype)
-    v = jax.random.normal(kv, (2, SEQ_LEN, 2, 64), jnp.float32).astype(dtype)
+    q = jax.random.normal(kq, (2, SEQ_LEN, 8, head_dim), jnp.float32).astype(dtype)
+    k = jax.random.normal(kk, (2, SEQ_LEN, 2, head_dim), jnp.float32).astype(dtype)
+    v = jax.random.normal(kv, (2, SEQ_LEN, 2, head_dim), jnp.float32).astype(dtype)
     return q, k, v
-
-
-@pytest.fixture(autouse=True)
-def _interpreter_matmul_precision():
-    """Run interpreted kernels at full f32 precision; TPU's default runs f32 matmuls in bf16 passes."""
-    if not INTERPRET:
-        yield
-        return
-    with jax.default_matmul_precision("highest"):
-        yield
 
 
 def _reference(q, k, v, mask):
@@ -56,39 +52,42 @@ def _reference(q, k, v, mask):
         return reference_attention(*f32, mask, logits_dtype=jnp.float32)
 
 
-def _flash(q, k, v, mask):
-    return pallas_triton_flash_attention(q, k, v, mask, block_sizes=SMALL_BLOCKS, interpret=INTERPRET)
-
-
-# Worst cases measured on MI350X and in the CPU interpreter: 9e-7 in f32, and 3.5e-3 in bf16, where P and dS are
-# rounded to bf16 before their matmuls as in every flash kernel.
+# Largest absolute errors measured on MI300X and MI350X: 2.6e-6 in f32, and 8.9e-3 in bf16, in the forward output,
+# which is itself rounded to bf16 (half a bf16 step is 7.8e-3 between 2 and 4).
 TOLERANCE = {jnp.float32: 1e-4, jnp.bfloat16: 1e-2}
 
 
+@pytest.mark.parametrize("case", list(CASES))
 @pytest.mark.parametrize("mask_name", list(MASKS))
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_flash_attention_forward_matches_reference(mask_name, dtype):
-    q, k, v = _qkv(dtype)
+def test_flash_attention_forward_matches_reference(case, mask_name, dtype):
+    block_sizes, head_dim = CASES[case]
+    q, k, v = _qkv(dtype, head_dim)
     mask = MASKS[mask_name]
-    actual = _flash(q, k, v, mask)
+    actual = triton_flash_attention(q, k, v, mask, block_sizes=block_sizes)
     expected = _reference(q, k, v, mask)
     assert actual.dtype == dtype
     tol = TOLERANCE[dtype]
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), atol=tol, rtol=tol)
 
 
+@pytest.mark.parametrize("case", list(CASES))
 @pytest.mark.parametrize("mask_name", list(MASKS))
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_flash_attention_gradients_match_reference(mask_name, dtype):
-    q, k, v = _qkv(dtype)
+def test_flash_attention_gradients_match_reference(case, mask_name, dtype):
+    block_sizes, head_dim = CASES[case]
+    q, k, v = _qkv(dtype, head_dim)
     mask = MASKS[mask_name]
     cotangent = jax.random.normal(jax.random.key(1), q.shape, jnp.float32)
+
+    def flash(q, k, v, mask):
+        return triton_flash_attention(q, k, v, mask, block_sizes=block_sizes)
 
     def loss(attend, q, k, v):
         return jnp.sum(attend(q, k, v, mask).astype(jnp.float32) * cotangent)
 
     expected = jax.grad(lambda *a: loss(_reference, *a), argnums=(0, 1, 2))(q, k, v)
-    actual = jax.grad(lambda *a: loss(_flash, *a), argnums=(0, 1, 2))(q, k, v)
+    actual = jax.grad(lambda *a: loss(flash, *a), argnums=(0, 1, 2))(q, k, v)
     tol = TOLERANCE[dtype]
     for name, want, got in zip("qkv", expected, actual, strict=True):
         want = np.asarray(want, np.float32)
@@ -106,7 +105,7 @@ def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding()
     mask = AttentionMask.causal(sliding_window=40)
 
     def attend(q, k, v):
-        return pallas_triton_flash_attention(q, k, v, mask, block_sizes=SMALL_BLOCKS, interpret=True)
+        return triton_flash_attention(q, k, v, mask, block_sizes=SMALL_BLOCKS)
 
     def loss(q, k, v):
         return jnp.sum(attend(q, k, v).astype(jnp.float32))
