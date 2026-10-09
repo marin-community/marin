@@ -16,8 +16,9 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
     d6144   11    11264   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
-Train batch is 1024 x racks (constant per-rack load); eval batch is 64 x racks (one sequence per
-device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
+At 4K, train batch is 1024 x racks. Longer contexts reduce the sequence batch to preserve tokens
+per step; eval keeps 4K sequences at 64 x racks (one sequence per device). Tokens/steps hold 791 tokens
+per active parameter (18T at d6144); FLOPs are the levanter
 analytic estimate (forward+backward, including attention and the latent-MoE correction).
 
 Changelog:
@@ -55,6 +56,8 @@ from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
+    SIMULATED_EPOCHING_MAX_FLOPS,
+    HarrierPriorContext,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
@@ -80,12 +83,12 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
-    SEQ_LEN,
     SMALL_SHAPES,
     _active_params,
     _small_model,
 )
 from experiments.grug.moe_hero_ep.train import (
+    FlopsBaseline,
     GrugEvalConfig,
     GrugRunConfig,
     TrainingDataMode,
@@ -102,6 +105,18 @@ HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 # Twice the restore barrier, which keeps a barrier expiry ahead of this deadline: the barrier
 # names the ranks that never arrived, while this one only reports that nothing progressed.
 HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
+
+HERO_REFERENCE_SEQ_LEN = HERO_MODEL_CONFIG.max_seq_len
+HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_REFERENCE_SEQ_LEN
+
+
+def ladder_batch_size(seq_len: int, racks: int) -> int:
+    """Return the sequence batch that holds ``HERO_TOKENS_PER_RACK`` per rack at ``seq_len``."""
+    tokens_per_step = HERO_TOKENS_PER_RACK * racks
+    if seq_len <= 0 or tokens_per_step % seq_len:
+        raise ValueError(f"seq_len={seq_len} must divide {tokens_per_step} tokens per step")
+    return tokens_per_step // seq_len
+
 
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 # Each rung uses the rack count that holds its batch. d6144 uses the shared hero recipe. Narrower
@@ -126,11 +141,11 @@ LADDER_MAX_RETRIES_FAILURE = 1000
 LADDER_MAX_TASK_FAILURES = 1000
 
 
-def _ladder_model(size: str):
+def _ladder_model(size: str, seq_len: int):
     """The GrugModelConfig for ``size`` at the hero routing geometry with the QB histogram estimator."""
     if size == "d6144":
         # Only the hero rung is measured with the layer-carry offload.
-        return with_transport_remat_mode(HERO_MODEL_CONFIG)
+        return with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, max_seq_len=seq_len))
     shape = SMALL_SHAPES[size]
     return _small_model(
         shape,
@@ -138,7 +153,7 @@ def _ladder_model(size: str):
         attention_implementation="gpu_fa4_cute",
         moe_implementation="ragged_all_to_all",
         expert_chunks=1,
-        seq_len=SEQ_LEN,
+        seq_len=seq_len,
         num_experts=384,
         num_experts_per_token=8,
         intermediate_dim=None,
@@ -152,11 +167,16 @@ def build_ladder_run(
     *,
     run_id: str,
     size: str,
+    seq_len: int,
+    qk_mult: float | None = None,
+    capacity_factor: float | None = None,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
+    flops_baseline: FlopsBaseline | None = None,
+    context_switch_step: int | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
@@ -173,25 +193,60 @@ def build_ladder_run(
     ``gate_router_weight_decay`` is on by default (see ``GrugMoeMuonHConfig``): the recipe decays the
     attn_gate and router weights, and because the decay reads the Adam step count it also applies at
     the right point when a run resumes an existing checkpoint. Pass 0 to opt out.
+
+    ``context_switch_step`` is the step at which the run left 4K context. A resumed run at another
+    ``seq_len`` requires it; each data bucket then resumes at its next shuffle window (see
+    ``LmDataConfig.prior_phases``).
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in LADDER_RACKS:
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
+    if seq_len != HERO_REFERENCE_SEQ_LEN and qk_mult is None:
+        raise ValueError("A changed context length requires an explicit qk_mult (--qk-mult)")
+    resumed_at_new_context = initialize_from_checkpoint is not None and seq_len != HERO_REFERENCE_SEQ_LEN
+    if resumed_at_new_context and (flops_baseline is None or context_switch_step is None):
+        raise ValueError("A resumed context switch requires the handoff FLOPs baseline and the context switch step")
+    if context_switch_step is not None and seq_len == HERO_REFERENCE_SEQ_LEN:
+        raise ValueError("context_switch_step applies only to a context length other than 4K")
+
     dp_racks = LADDER_RACKS[size]
     # Weak scaling holds per-rack token load constant; eval is one sequence per device.
-    batch_size = HERO_EP_BATCH_SIZE * dp_racks
+    global_tokens_per_step = HERO_TOKENS_PER_RACK * dp_racks
+    batch_size = ladder_batch_size(seq_len, dp_racks)
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
-    global_tokens_per_step = batch_size * SEQ_LEN
+    if batch_size % eval_batch_size:
+        raise ValueError(f"batch_size={batch_size} must divide evenly over {eval_batch_size} batch devices")
 
-    model = _ladder_model(size)
+    model = _ladder_model(size, seq_len)
+    if qk_mult is not None:
+        model = dataclasses.replace(model, qk_mult=qk_mult)
+    if capacity_factor is not None:
+        model = dataclasses.replace(model, capacity_factor=capacity_factor)
     if num_steps is None:
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    prior_contexts = (
+        (
+            HarrierPriorContext(
+                end_step=context_switch_step,
+                seq_len=HERO_REFERENCE_SEQ_LEN,
+                batch_size=global_tokens_per_step // HERO_REFERENCE_SEQ_LEN,
+            ),
+        )
+        if context_switch_step is not None
+        else ()
+    )
     flops_per_example, _ = _compute_flops(model_config=model)
     run_flops = flops_per_example * batch_size * num_steps
+    # Skip-to-window offsets assume every source reads its whole cache, which simulated epoching does not.
+    if context_switch_step is not None and run_flops <= SIMULATED_EPOCHING_MAX_FLOPS:
+        raise ValueError(
+            f"A context switch needs a run above {SIMULATED_EPOCHING_MAX_FLOPS:g} FLOPs, which trains without "
+            f"simulated epoching; this run is {run_flops:.3g} FLOPs"
+        )
 
     # The narrow rungs are short: eval every 5% of the run and keep only the forced final checkpoint.
     # The d6144 hero is long: eval every 3000 steps and keep a permanent checkpoint every 6000.
@@ -215,14 +270,14 @@ def build_ladder_run(
     # The optimizer's LR/epsilon are compute-scaled from the token budget and width; the hero builder
     # already does this at d6144, so reuse it there and the shared MoeHeuristic at the narrow rungs.
     if size == "d6144":
-        _, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
+        _, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size, seq_len=seq_len)
     else:
         optimizer = dataclasses.replace(
             MoeHeuristic().build_optimizer_config(
                 num_train_steps=num_steps,
                 batch_size=batch_size,
                 hidden_dim=model.hidden_dim,
-                seq_len=SEQ_LEN,
+                seq_len=seq_len,
             ),
             use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
         )
@@ -306,6 +361,7 @@ def build_ladder_run(
         )
         return GrugRunConfig(
             model=model,
+            flops_baseline=flops_baseline,
             data=harrier_mix_2026_08_18_data_config(
                 ctx=ctx,
                 total_steps=num_steps,
@@ -313,12 +369,14 @@ def build_ladder_run(
                 max_seq_len=model.max_seq_len,
                 experiment_flops=run_flops,
                 validation=validation,
+                prior_contexts=prior_contexts,
             ),
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
+                max_seq_len=HERO_REFERENCE_SEQ_LEN,
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
                 # The capacity-limited eval breaks the ragged train step at d6144 (#8861). The
@@ -327,8 +385,8 @@ def build_ladder_run(
                 eval_ema=False,
                 compute_bpb=True,
                 dropless_eval=True,
-                # The hero is the run whose full loss curve we report, so give it a baseline point
-                # at the start of the curve.
+                # Evaluate the hero after its first update, both at the start of the curve and after each
+                # resume, so the eval-to-train handoff is exercised before the next periodic eval.
                 eval_at_first_step=size == "d6144",
             ),
             stop_after_steps=num_steps,
@@ -350,6 +408,25 @@ def build_ladder_run(
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
+@click.option(
+    "--seq-len",
+    type=click.IntRange(min=1),
+    default=HERO_REFERENCE_SEQ_LEN,
+    show_default=True,
+    help="Training context length. The sequence batch adjusts to preserve tokens per step.",
+)
+@click.option(
+    "--qk-mult",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Query/key attention multiplier on all layers. Required when changing the context length.",
+)
+@click.option(
+    "--capacity-factor",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Override expert receiver capacity. Defaults to the existing hero value.",
+)
 @click.option("--size", required=True, type=click.Choice(sorted(LADDER_RACKS)), help="Ladder rung width.")
 @click.option(
     "--num-steps",
@@ -379,22 +456,58 @@ def build_ladder_run(
     help="Checkpoint directory of another run to resume from under a new --run-id; this run writes only "
     "to its own tree and later restarts prefer its own, newer checkpoints.",
 )
+@click.option(
+    "--context-switch-step",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Step at which the run left 4K context. Required to resume at another --seq-len.",
+)
+@click.option(
+    "--flops-baseline-step",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Completed steps at the context switch. Requires --flops-baseline-total.",
+)
+@click.option(
+    "--flops-baseline-total",
+    type=click.FloatRange(min=0),
+    default=None,
+    help="Cumulative FLOPs at the context switch. Requires --flops-baseline-step.",
+)
 @build_options
 def main(
     run_id: str,
     size: str,
+    seq_len: int,
+    qk_mult: float | None,
+    capacity_factor: float | None,
     num_steps: int | None,
     checkpoint_every: int | None,
     gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
+    flops_baseline_step: int | None,
+    flops_baseline_total: float | None,
+    context_switch_step: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
+    if (flops_baseline_step is None) != (flops_baseline_total is None):
+        raise click.UsageError("--flops-baseline-step and --flops-baseline-total must be provided together")
+    flops_baseline = (
+        None
+        if flops_baseline_step is None or flops_baseline_total is None
+        else FlopsBaseline(flops_baseline_step, flops_baseline_total)
+    )
     return build_ladder_run(
         run_id=run_id,
         size=size,
+        seq_len=seq_len,
+        qk_mult=qk_mult,
+        capacity_factor=capacity_factor,
         num_steps=num_steps,
         checkpoint_every=checkpoint_every,
         gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
+        flops_baseline=flops_baseline,
+        context_switch_step=context_switch_step,
     )
 
 
