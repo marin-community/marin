@@ -9,7 +9,7 @@ import importlib
 import importlib.util
 import json
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -117,7 +117,7 @@ def main() -> None:
                     snapshot = replace(
                         snapshot, legacy_static_rejection=str(rejection.check), legacy_static_detail=rejection.detail
                     )
-            print(json.dumps(snapshots.snapshot_dict(snapshot), default=snapshots.json_temporal), flush=True)
+            print(json.dumps(asdict(snapshot), default=snapshots.json_temporal), flush=True)
 
 
 if __name__ == "__main__":

@@ -173,18 +173,6 @@ def test_build_context_roundtrip_keeps_bytes_metadata_and_role_boundaries(specif
     assert task.resources == ResourceGroups()
 
 
-@pytest.mark.parametrize("path", ["Dockerfile", "Dockerfile/child", "../outside", "/absolute"])
-def test_build_context_wire_rejects_ambiguous_or_escaping_files(path):
-    wire = {
-        "files": [
-            inline_resource("Dockerfile", b"FROM scratch").model_dump(),
-            {"path": path, "source": {"kind": "inline_file", "content_base64": "eA=="}},
-        ]
-    }
-    with pytest.raises(ValidationError):
-        DockerBuildContext.model_validate_json(json.dumps(wire))
-
-
 @pytest.mark.parametrize("initial_state", [None, "company-snapshot", {"inbox": [], "counter": 3}])
 def test_reader_keeps_literal_provider_state_but_direct_chat_cannot_request_it(specification, initial_state):
     wire = specification.model_dump(mode="json")

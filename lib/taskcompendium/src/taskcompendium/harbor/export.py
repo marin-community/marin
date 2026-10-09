@@ -169,7 +169,6 @@ def verifier_runtime() -> dict[str, bytes]:
 @dataclass(frozen=True)
 class _VerifierProgram:
     files: dict[str, bytes]
-    modes: dict[str, str]
     answer_path: str | None
     mode: str
     timeout: float
@@ -250,7 +249,7 @@ def _verifier_program(
 ) -> _VerifierProgram:
     grader = task.grader
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
-    files, modes = {}, {}
+    files: dict[str, bytes] = {}
     if environment_mode == VerifierEnvironmentMode.SEPARATE:
         if grader_image is None:
             raise ValueError("This task requires an explicit digest-pinned verifier base image")
@@ -323,7 +322,6 @@ def _verifier_program(
         raise UnsupportedHarborTask("Verifier setup commands require an environment build")
     return _VerifierProgram(
         files=files,
-        modes=modes,
         answer_path=answer_path,
         mode=mode,
         timeout=timeout,
@@ -384,7 +382,8 @@ def harbor_payload(
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
     verifier = _verifier_program(task, grader_image, environment_mode)
     assert isinstance(grader, (ScriptGrader, VerifyitGrader))
-    files, modes = verifier.files, verifier.modes
+    files = verifier.files
+    modes: dict[str, str] = {}
     answer_path = verifier.answer_path
     prompt = cast(TextMessage, task.context.events[0]).content
     if task.answer_type == AnswerType.TEXT:
@@ -457,8 +456,7 @@ def harbor_payload(
         mode = mode_of(spec)
         if "tests/verifier.toml" in files:
             raise UnsupportedHarborTask("Repository verifier spec uses Harbor's reserved entrypoint")
-        # Shared Harbor execution retains the actor's installed dependencies and workspace.
-        # This is the legacy TaskTrove execution policy, not ScriptGrader's fresh-machine policy.
+        # Legacy shared execution retains the actor's installed dependencies and workspace.
         files[TEST_SH] = f"#!/bin/bash\nset -euo pipefail\ncd {shlex.quote(verifier.cwd)}\n".encode() + files[TEST_SH]
     if actor_build is not None:
         _validate_tasktrove_dockerfile(files)

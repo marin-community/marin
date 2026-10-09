@@ -77,7 +77,7 @@ def admit_converted_row(converted: ConvertedRow, recipe: SourceRecipe) -> dict[s
         "original_path": converted.original_path,
         "data": converted.raw.data,
     }
-    result: TaskSpec | NormalizedTask | ImportRejection = converted.result
+    result: TaskSpec | ImportRejection
     audit = TaskAudit(
         task_id=task_id,
         source=source,
@@ -90,11 +90,11 @@ def admit_converted_row(converted: ConvertedRow, recipe: SourceRecipe) -> dict[s
         intended_use=recipe.intended_use,
     )
     public_key, semantic_key = task_id, task_id
-    if isinstance(result, NormalizedTask):
-        audit = audit.model_copy(update={"normalization_changes": result.changes})
-        result = result.task
-    if isinstance(result, TaskSpec):
-        result = _within_budget(result, recipe.resource_budget_bytes)
+    if isinstance(converted.result, NormalizedTask):
+        audit = audit.model_copy(update={"normalization_changes": converted.result.changes})
+        result = _within_budget(converted.result.task, recipe.resource_budget_bytes)
+    else:
+        result = converted.result
     if isinstance(result, ImportRejection):
         audit = audit.model_copy(
             update={

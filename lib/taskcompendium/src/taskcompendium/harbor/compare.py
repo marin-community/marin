@@ -190,7 +190,7 @@ class ParityReport:
         self.counts: Counter[str] = Counter()
         self.categories: Counter[str] = Counter()
         self.examples: list[dict[str, Any]] = []
-        self.known_groups: dict[str, None] = {}
+        self.known_groups: set[str] = set()
 
     def __enter__(self) -> "ParityReport":
         return self
@@ -225,7 +225,7 @@ class ParityReport:
                 # This cache bounds memory; SQLite remains the authoritative deduplication index.
                 if len(self.known_groups) >= 4096:
                     self.known_groups.clear()
-                self.known_groups[identity] = None
+                self.known_groups.add(identity)
         self.connection.execute(
             "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
             (

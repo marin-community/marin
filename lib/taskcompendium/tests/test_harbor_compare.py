@@ -224,22 +224,14 @@ def test_file_map_snapshot_matches_actual_export_archives():
         ),
     }
     archived = task_snapshot(
-        record.source, record.path, "converted", task_binary=record.task_binary, solution_binary=record.solution_binary
+        record.source,
+        record.path,
+        "converted",
+        task_binary=gzip.compress(gzip.decompress(record.task_binary), compresslevel=9, mtime=0),
+        solution_binary=record.solution_binary,
     )
     assert direct == archived.files
     assert direct["task/environment/files/app/input.txt"].mode == 0o600
     assert direct["task/tests/helper.sh"].mode == 0o700
     assert direct["oracle/solution/solve.sh"].mode == 0o750
     assert direct["task/tests/test.sh"].mode == 0o755
-
-
-def test_snapshot_preserves_task_and_oracle_content_across_gzip_levels():
-    task = archive_bytes({"instruction.md": b"question\n", "tests/test.sh": b"check\n" * 100}, {"tests/test.sh": "0755"})
-    oracle = archive_bytes({"solution/solve.sh": b"answer\n" * 100}, {"solution/solve.sh": "0700"})
-    slow_task, slow_oracle = [gzip.compress(gzip.decompress(blob), compresslevel=9, mtime=0) for blob in (task, oracle)]
-    assert (task, oracle) != (slow_task, slow_oracle)
-    fast = task_snapshot("source", "path", "converted", task_binary=task, solution_binary=oracle)
-    slow = task_snapshot("source", "path", "converted", task_binary=slow_task, solution_binary=slow_oracle)
-    assert fast == slow
-    assert fast.files["task/tests/test.sh"].mode == 0o755
-    assert fast.files["oracle/solution/solve.sh"].mode == 0o700

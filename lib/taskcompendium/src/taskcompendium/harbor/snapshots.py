@@ -9,7 +9,7 @@ import json
 import tarfile
 import tomllib
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from typing import Any
 
@@ -100,10 +100,6 @@ def task_snapshot(
         {**archive_snapshot(task_binary, "task"), **archive_snapshot(solution_binary, "oracle")},
         metadata or {},
     )
-
-
-def snapshot_dict(snapshot: TaskSnapshot) -> dict[str, Any]:
-    return asdict(snapshot)
 
 
 def json_temporal(value: Any) -> dict[str, str]:
