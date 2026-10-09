@@ -45,7 +45,7 @@ class DPOParallelism:
     last_stage_layers: int
 
 
-POLICY_PARALLELISM = DPOParallelism(2, 4, 1, 8, 6, 6)
+POLICY_PARALLELISM = DPOParallelism(1, 8, 1, 8, 4, 4)
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=8,
