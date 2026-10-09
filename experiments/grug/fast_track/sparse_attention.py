@@ -82,17 +82,13 @@ class Gauss(eqx.Module):
     """Per-head value kernel, a mixture of ``C`` Gaussians: shifts ``mu`` ``[H, C]`` (tokens, positive = later),
     widths ``softplus(rho) + 0.05`` and weights ``softmax(mix)``; ``qscale``: the tied query's per-head scale
     (``mla_gauss_tied``). ``taps`` ``[H, 1 or E, 2K + 1]``: free kernel logits replacing the Gaussian
-    (``mla_gauss_taps``). ``shift_w`` ``[D, H, n]`` / ``shift_b`` ``[H, n]``: a query-token gate over the value
-    shifts ``0..n-1`` (``mla_gauss_query_shifts``, :func:`shift_mixture_attention`). Trained in the ``dcmha``
-    group (``.gauss.``)."""
+    (``mla_gauss_taps``). Trained in the ``dcmha`` group (``.gauss.``)."""
 
     mu: jax.Array
     rho: jax.Array
     mix: jax.Array
     qscale: jax.Array | None
     taps: jax.Array | None = None
-    shift_w: jax.Array | None = None
-    shift_b: jax.Array | None = None
 
 
 class GaussValues(NamedTuple):
@@ -106,8 +102,8 @@ class GaussValues(NamedTuple):
 
 def gauss_values(g: Gauss, v: jax.Array, segment_ids: jax.Array, reach: int) -> GaussValues:
     """Smooth each head's values along the sequence: ``smooth_j = sum_o G(o) v_{j+o}`` within the document."""
-    if g.taps is not None or g.shift_w is not None:
-        raise ValueError("mla_gauss_taps / mla_gauss_query_shifts need mla_gauss_fast")
+    if g.taps is not None:
+        raise ValueError("mla_gauss_taps needs mla_gauss_fast")
     offsets = jnp.arange(-reach, reach + 1, dtype=jnp.float32)
     sigma = jax.nn.softplus(g.rho.astype(jnp.float32)) + 0.05  # [H, C]
     centred = offsets[None, None, :] - g.mu.astype(jnp.float32)[..., None]
@@ -644,6 +640,14 @@ def dcmha_weights(p: "Dcmha | DcmhaPaper", x: jax.Array, heads: int, rank: int) 
     return DcmhaWeights(static, *side(p.q_a, p.q_b1, p.q_b2, p.q_bg), *side(p.k_a, p.k_b1, p.k_b2, p.k_bg))
 
 
+def _copy_gate_parts(cfg) -> tuple[bool, bool]:
+    """``mla_copy_gate`` as (reads the match strength, reads the head output)."""
+    parts = {"none": (False, False), "lse": (True, False), "output": (False, True), "both": (True, True)}
+    if cfg.mla_copy_gate not in parts:
+        raise ValueError(f"mla_copy_gate must be one of {sorted(parts)}, got {cfg.mla_copy_gate!r}")
+    return parts[cfg.mla_copy_gate]
+
+
 def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, init_weight) -> dict:
     """The MLA module's sparse-index, value-tap, previous-token gate and logit-composition parameters (None when off)."""
 
@@ -674,6 +678,8 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
         logit_mix_u=jnp.zeros((d, n), jnp.float32) if cfg.mla_logit_compose_dynamic else None,
         logit_mix_w=matrix(4, 2 * n) if cfg.mla_logit_compose_dynamic else None,
         gauss=_gauss_init(cfg, n, h, d) if cfg.mla_gauss else None,
+        copy_gate_lse=jnp.zeros((n,), jnp.float32) if _copy_gate_parts(cfg)[0] else None,
+        copy_gate_out=jnp.zeros((n, h), jnp.float32) if _copy_gate_parts(cfg)[1] else None,
         dcmha=(
             (
                 _dcmha_paper_init(
@@ -686,10 +692,6 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
             else None
         ),
     )
-
-
-QUERY_SHIFT_BIAS_INIT = (0.0, -2.0, -3.0, -3.0)
-"""``mla_gauss_query_shifts`` gate logits at init: mostly shift 0, with gradient reaching the later shifts."""
 
 
 def _gauss_init(cfg, heads: int, value_dim: int, d: int) -> Gauss:
@@ -710,19 +712,12 @@ def _gauss_init(cfg, heads: int, value_dim: int, d: int) -> Gauss:
         logits = -jnp.square(offsets[None, :] - mu[:, None]) / (2 * cfg.mla_gauss_sigma_init**2)
         width = value_dim if cfg.mla_gauss_taps == TapKind.CHANNEL else 1
         taps = jnp.broadcast_to(logits[:, None, :], (heads, width, offsets.shape[0]))
-    shift_w = shift_b = None
-    if cfg.mla_gauss_query_shifts:
-        n = cfg.mla_gauss_query_shifts
-        shift_w = jnp.zeros((d, heads, n), jnp.float32)
-        shift_b = jnp.broadcast_to(jnp.asarray(QUERY_SHIFT_BIAS_INIT[:n], jnp.float32), (heads, n))
     return Gauss(
         mu=mu.reshape(heads, c),
         rho=rho,
         mix=jnp.zeros((heads, c), jnp.float32),
         qscale=qscale,
         taps=taps,
-        shift_w=shift_w,
-        shift_b=shift_b,
     )
 
 
@@ -817,34 +812,6 @@ def gauss_attention_fast(q, k, v, rel_bias, segment_ids, g: Gauss, reach: int, a
     # pyrefly: ignore[bad-assignment]
     wrapped: Callable[..., jax.Array] = auto_axes(near, out_sharding=out_sharding)
     return wrapped(q, k, v, rel_bias, starts, kernel, far_ok, out_far, lse_far)
-
-
-def shift_mixture_attention(q, k, v, rel_bias, segment_ids, pi, attend_with_lse):
-    """``out_i = sum_o pi_io A_o(i)`` over value shifts ``o = 0..n-1``: ``A_o`` is causal attention where a query
-    matching key ``j`` reads value ``v_{j+o}`` (keys ``j <= i - o``, same document). Each ``A_o`` is one
-    FlashAttention call over keys moved ``o`` slots later against the raw values, so no value after the query is
-    read. ``pi`` ``[B, S, H, n]``: the query token's gate, renormalised over the shifts that have a key.
-
-    ``attend_with_lse(q, k, v, lower_bounds, valid, rel_bias) -> (out [B, S, H, E], lse [B, H, S])``."""
-    seq = q.shape[1]
-    starts = _document_starts(segment_ids)
-    pos = jnp.arange(seq)
-    outs, oks = [], []
-    for o in range(pi.shape[-1]):
-        k_o = jnp.pad(k[:, : seq - o], ((0, 0), (o, 0), (0, 0), (0, 0)))
-        band = (
-            None
-            if rel_bias is None or o == 0
-            else jnp.pad(rel_bias[..., : rel_bias.shape[-1] - o], ((0, 0),) * 3 + ((o, 0),))
-        )
-        ok = pos[None, :] >= starts + o  # [B, S]
-        out_o, _ = attend_with_lse(q, reshard_like(k_o, k), v, starts + o, ok, band)
-        outs.append(jnp.where(ok[:, :, None, None], out_o.astype(jnp.float32), 0.0))
-        oks.append(ok)
-    w = pi.astype(jnp.float32) * jnp.stack(oks, axis=-1)[:, :, None, :].astype(jnp.float32)
-    w = w / jnp.sum(w, axis=-1, keepdims=True)  # shift 0 always has a key
-    out = sum(w[..., o, None] * out_o for o, out_o in enumerate(outs))
-    return out.astype(v.dtype)
 
 
 def _gauss_near_merge(q, k, v, rel_bias, starts, kernel, far_ok, out_far, lse_far, *, reach: int):

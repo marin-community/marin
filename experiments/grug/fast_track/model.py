@@ -90,12 +90,11 @@ from experiments.grug.fast_track.sparse_attention import (
     Gauss,
     SparseIndex,
     TapKind,
+    _document_starts,
     attention_with_lse,
     gauss_attention_fast,
-    gauss_kernel,
     mla_sparse_attention,
     mla_sparse_params,
-    shift_mixture_attention,
 )
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
@@ -786,6 +785,8 @@ class GrugModelConfig:
     # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
     latent_dim: int | None = 256
     latent_out_dim: int | None = None
+    body_latent_out_dim: int | None = None
+    """Non-tail layers' routed write width."""
     """Width the routed experts write (``w_down``'s output dim); None: their input width (``latent_dim``, or
     ``hidden_dim`` without a latent). ``w_latent_up`` maps it to ``hidden_dim`` and is dropped when it equals
     ``hidden_dim`` (the experts write the stream directly). Splits LatentMoE's read and write compression."""
@@ -1008,32 +1009,26 @@ class GrugModelConfig:
     mla_kv_direct: bool = False
     mla_prev_key_concat: bool = False
     kda_state_reads: int = 0
-    """Fixed-query reads per KDA state head into a small MLP (``kda_state_read.py``); 0: off."""
     kda_state_reads_tail: int = 0
     kda_state_read_hidden: int = 512
     mla_far_key_half: str = ""
     mla_far_key_window: int = 128
     mla_value_norm: str = "none"
-    """No KV latent: MLA keys / values project the normed attention input directly."""
     """With ``mla_shared_kv``: the one cached vector is both key and value."""
     """MLA keys and values are one head each (MQA), broadcast to every query head."""
     mla_dcmha_paper: bool = False
     mla_dcmha_static: str = "none"
     mla_gauss: bool = False
-    """MLA values read through a learned per-head shifted Gaussian (``sparse_attention.Gauss``)."""
     mla_gauss_mu_init: tuple[float, ...] = ()
     mla_gauss_sigma_init: float = 0.5
     mla_gauss_reach: int = 16
     mla_gauss_tied: bool = False
     mla_gauss_components: int = 1
     mla_gauss_fast: bool = False
-    """Run the Gaussian kernel via ``gauss_attention_fast``."""
     mla_gauss_taps: TapKind = TapKind.NONE
-    """Free softmax kernel over offsets ``-reach..reach`` (per head or per channel), initialised as the Gaussian."""
-    mla_gauss_query_shifts: int = 0
-    """> 0: values read through a query-gated mixture of shifts ``0..n-1`` (``shift_mixture_attention``)."""
+    mla_copy_gate: str = "none"
+    """MLA output gate also reads the head's match strength (lse), its output, or both."""
     mla_sparse_tail: bool = True
-    """``"count:q_lag:k_lag"`` MLA channel groups replacing ``mla_key_offset`` (``key_offset.apply_lag_groups``)."""
     mla_lookahead_sink: bool = False
     mla_tie_prev_qk: bool = False
     final_num_experts: int = 0
@@ -2325,6 +2320,8 @@ class CausalSelfAttention(eqx.Module):
     logit_mix_w: Float[Array, "D N2"] | None
     dcmha: Dcmha | DcmhaPaper | None
     gauss: Gauss | None
+    copy_gate_lse: Float[Array, " N"] | None  # mla_copy_gate
+    copy_gate_out: Float[Array, "N H"] | None  # mla_copy_gate
     v_norm: "LearnedRMSNorm | None"
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
@@ -2615,6 +2612,8 @@ class CausalSelfAttention(eqx.Module):
             logit_mix_w=None,
             dcmha=None,
             gauss=None,
+            copy_gate_lse=None,
+            copy_gate_out=None,
             v_norm=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
@@ -3008,22 +3007,24 @@ class CausalSelfAttention(eqx.Module):
             qf = rearrange(jnp.einsum("bsd,dc->bsc", x, self.w_qf.astype(x.dtype)), "... (f c) -> ... f c", c=head_dim)
             window = self.cfg.mla_future_window
             k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
-        if self.gauss is not None and self.gauss.shift_w is not None:
-            seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
-            pi_logits = jnp.einsum("bsd,dhn->bshn", x.astype(jnp.float32), self.gauss.shift_w) + self.gauss.shift_b
-            pi = reshard(
-                jax.nn.softmax(pi_logits, axis=-1), _partition_spec_of(q) or P(_BATCH_AXES, None, "model", None)
-            )
-            pi_mean = jax.lax.stop_gradient(jnp.mean(pi, axis=(0, 1)))
-            for (h, o), _ in np.ndenumerate(np.zeros(pi_mean.shape)):
-                stats[f"{_LAYER_KNOB_PREFIX}shift_pi_H{h}_O{o}"] = pi_mean[h, o]
-            attn_out = shift_mixture_attention(q, k, kernel_v, rel_bias, seg, pi, attention_with_lse)
-        elif self.gauss is not None and self.cfg.mla_gauss_fast:
+        if self.gauss is not None and self.cfg.mla_gauss_fast:
             seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
             reach = self.cfg.mla_gauss_reach
             attn_out = gauss_attention_fast(q, k, kernel_v, rel_bias, seg, self.gauss, reach, attention_with_lse)
         elif self.cfg.mla and self.cfg.mla_sparse_window:
             attn_out = mla_sparse_attention(self, x, q, k, kernel_v, rel_bias, sconv_segment_ids, rms_norm, _proj)
+        elif self.copy_gate_lse is not None:
+            # Match strength: the kernel's log-sum-exp relative to uniform.
+            if mask.fa4_bounds is not None:
+                lower, valid = mask.fa4_bounds
+            else:
+                seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
+                lower, valid = _document_starts(seg), jnp.ones(q.shape[:2], jnp.bool_)
+            attn_out, lse = attention_with_lse(q, k, kernel_v, lower, valid, rel_bias)
+            keys = jnp.maximum(jnp.arange(q.shape[1])[None, :] - lower + 1, 1).astype(jnp.float32)
+            strength = jnp.swapaxes(lse.astype(jnp.float32), 1, 2) - jnp.log(keys)[..., None]  # [B, S, N]
+            copy_strength = jnp.where(valid[..., None] & jnp.isfinite(strength), strength, 0.0)
+            stats[f"{_LAYER_KNOB_PREFIX}copy_strength_mean"] = jax.lax.stop_gradient(jnp.mean(copy_strength))
         else:
             attn_out = _attend(q, k)[..., :head_dim]
         if gdla_noise:
@@ -3080,7 +3081,14 @@ class CausalSelfAttention(eqx.Module):
             hidden = jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.attn_gate))
             gate = 2 * jax.nn.sigmoid(jnp.einsum("bsr,rn->bsn", hidden, self.attn_gate_up))
         else:
-            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))
+            gate_logit = jnp.einsum("bsd,dn->bsn", x, self.attn_gate).astype(jnp.float32)
+            if self.copy_gate_lse is not None:
+                gate_logit = gate_logit + self.copy_gate_lse.astype(jnp.float32) * copy_strength
+            if self.copy_gate_out is not None:
+                normed_out = reshard(rms_norm(attn_out.astype(jnp.float32)), P(_BATCH_AXES, None, None, None))
+                read = unshard(self.copy_gate_out).astype(jnp.float32)
+                gate_logit = gate_logit + jnp.einsum("bsnh,nh->bsn", normed_out, read)
+            gate = (2 * jax.nn.sigmoid(gate_logit)).astype(attn_out.dtype)
         per_channel = self.cfg.attn_gate_elementwise or self.attn_gate_up is not None
         gate = rearrange(gate, "... (n d) -> ... n d", d=head_dim) if per_channel else gate[..., None]
         attn_out = gate * attn_out
@@ -3180,11 +3188,6 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
     if gauss is not None:  # per-head shift and width of the value kernel
         sigma = jax.nn.softplus(gauss.rho.astype(jnp.float32)) + 0.05
         weight = jax.nn.softmax(gauss.mix.astype(jnp.float32), axis=-1)
-        if gauss.taps is not None:  # the free kernel's (channel-mean) weight per offset
-            reach = (gauss.taps.shape[-1] - 1) // 2
-            taps = jnp.mean(gauss_kernel(jax.lax.stop_gradient(gauss), reach), axis=1)
-            for (h, t), _ in np.ndenumerate(np.zeros(taps.shape)):
-                stats[f"attn_res_knob_gauss_tap_L{i}_H{h}_O{t - reach}"] = taps[h, t]
         for (h, c), _ in np.ndenumerate(np.zeros(gauss.mu.shape)):
             tag = f"L{i}_H{h}" + (f"_C{c}" if gauss.mu.shape[1] > 1 else "")
             stats[f"attn_res_knob_gauss_mu_{tag}"] = jax.lax.stop_gradient(gauss.mu[h, c]).astype(jnp.float32)
@@ -3478,8 +3481,7 @@ class KimiDeltaAttention(eqx.Module):
     follows ``S_t = (I - beta k k^T) Diag(exp(g)) S_{t-1} + beta k v^T``, read as ``o_t = S_t^T q_t``,
     and is hard-reset at packed-document starts. The output gets a per-head RMSNorm with a learnable
     ``h``-dim scale shared across heads, a full-rank per-channel gate ``sigmoid(x W_g)``, and ``w_o``.
-    No positional encoding (unless ``kda_dd_rope``) and no window. The recurrence runs under ``shard_map``
-    (batch on the batch axes, heads on ``model``).
+    No positional encoding (unless ``kda_dd_rope``) and no window.
     """
 
     w_q: Float[Array, "D NH"]
@@ -7295,6 +7297,11 @@ class Transformer(eqx.Module):
         # The tail layers' config override is static per layer (MoEMLP.cfg); without tail layers there is none
         # (and dense models could not even build one).
         tail_cfg = _tail_layer_config(layer_base) if softmax_tail or kda_tail else layer_base
+        body_cfg = layer_base
+        if cfg.body_latent_out_dim is not None:
+            if not (softmax_tail or kda_tail):
+                raise ValueError("body_latent_out_dim needs latent_out_full_layers")
+            body_cfg = dataclasses.replace(layer_base, latent_out_dim=cfg.body_latent_out_dim, latent_out_full_layers=())
         model = Transformer(
             token_embed=token_embed,
             embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="embed"),
@@ -7302,8 +7309,8 @@ class Transformer(eqx.Module):
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key) if cfg.embed_gated_norm else None
             ),
             output_proj=output_proj,
-            stacked_blocks=stack(softmax_layers, False),
-            kda_blocks=stack(kda_layers, True) if kda_layers else None,
+            stacked_blocks=stack(softmax_layers, False, body_cfg),
+            kda_blocks=stack(kda_layers, True, body_cfg) if kda_layers else None,
             stacked_blocks_tail=(
                 stack(softmax_tail, False, _final_layer_config(cfg, tail_cfg)) if softmax_tail else None
             ),
