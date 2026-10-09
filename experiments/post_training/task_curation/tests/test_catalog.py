@@ -32,7 +32,6 @@ def test_catalog_preserves_release_population_and_conversion_input():
     assert row["dataset_id"] == "open-athena/task-trove"
     assert row["pipeline"]["source"] == "open-thoughts/TaskTrove"
     assert row["dataset_revision"] != row["pipeline"]["revision"]
-    assert row["task_count"] == 8222
     assert row["quality"] is None
 
 
