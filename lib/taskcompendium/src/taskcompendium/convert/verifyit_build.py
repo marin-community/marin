@@ -39,19 +39,17 @@ def verifyit_build_context(
     """Retain source environment files and append the bundled verifier installation."""
     body = re.sub(r"\n{3,}", "\n\n", "\n".join(line.rstrip() for line in dockerfile.splitlines())).strip("\n")
     dockerfile = body + "\n\n" + VERIFYIT_INSTALL
-    files = tuple(
-        resource.model_copy(
-            update={
-                "path": resource.path.removeprefix("environment/"),
-                **(
-                    {"source": inline_resource("Dockerfile", dockerfile.encode()).source}
-                    if resource.path == DOCKERFILE
-                    else {}
-                ),
-            }
-        )
-        for resource in archive_resources
-        if resource.path.startswith("environment/")
+    recipe = inline_resource("Dockerfile", dockerfile.encode())
+    original = next((resource for resource in archive_resources if resource.path == DOCKERFILE), None)
+    if original is not None:
+        recipe = original.model_copy(update={"path": "Dockerfile", "source": recipe.source})
+    files = (
+        recipe,
+        *(
+            resource.model_copy(update={"path": resource.path.removeprefix("environment/")})
+            for resource in archive_resources
+            if resource.path.startswith("environment/") and resource.path != DOCKERFILE
+        ),
     )
     if any(resource.path.startswith(VERIFYIT_CONTEXT) for resource in files):
         raise ValueError("Source build context occupies the bundled verifier path")

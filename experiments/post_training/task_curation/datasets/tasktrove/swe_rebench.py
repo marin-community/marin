@@ -327,6 +327,6 @@ def convert_swe_rebench_task(row: RawRow, _context: ConversionContext) -> Normal
             ),
             *(inline_resource(path.removeprefix("tests/"), data) for path, data in converted.data_files.items()),
         ),
-        tags=converted.tags,
+        tags=(*converted.tags, f"language:{converted.language}"),
         changes=tuple(changes),
     )

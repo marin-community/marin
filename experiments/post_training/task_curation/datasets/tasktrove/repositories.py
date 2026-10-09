@@ -99,7 +99,7 @@ def convert_swesmith_task(row: RawRow, context: ConversionContext) -> Normalized
             for resource in task.resources.verifier
             if resource.path in (TRUSTED_PATHS, "taskcompendium/archive-provenance.json")
         ),
-        tags=("code", "swe", "swe-repo", "trusted-test-paths"),
+        tags=("code", "swe", "swe-repo", "trusted-test-paths", "language:python"),
         changes=tuple(changes),
     )
 

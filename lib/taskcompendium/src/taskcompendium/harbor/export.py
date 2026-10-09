@@ -381,17 +381,16 @@ def harbor_record(
             modes[name] = resource.mode
     if TEST_SH not in files:
         raise UnsupportedHarborTask("Script grader has no test.sh resource")
-    language = ""
+    language = next((tag.removeprefix("language:") for tag in task.tags if tag.startswith("language:")), "")
     mode = verifier.mode
     if repository_state:
         if VERIFIER_SPEC_PATH not in files or "swe-repo" not in task.tags:
             raise UnsupportedHarborTask("Shared repository lowering requires a legacy SWE verifier spec")
         spec = parse_spec(files[VERIFIER_SPEC_PATH].decode())
-        if isinstance(spec, PytestSpec) and {"swe-repo"}.issubset(task.tags):
-            language = "python"
-        elif isinstance(spec, ScriptSpec) and {"swe-repo", "patched", "script-fallback"}.issubset(task.tags):
-            language = json.loads(files["tests/config.json"])["language"]
-        else:
+        if not (
+            isinstance(spec, PytestSpec)
+            or (isinstance(spec, ScriptSpec) and {"swe-repo", "patched", "script-fallback"}.issubset(task.tags))
+        ):
             raise UnsupportedHarborTask(
                 "Shared repository lowering requires the legacy SWE pytest or patched script contract"
             )
@@ -403,8 +402,6 @@ def harbor_record(
         files[TEST_SH] = f"#!/bin/bash\nset -euo pipefail\ncd {shlex.quote(verifier.cwd)}\n".encode() + files[TEST_SH]
     if environment_mode == VerifierEnvironmentMode.SHARED:
         _validate_tasktrove_dockerfile(files)
-        if not repository_state:
-            language = "python"
     outputs = list(task.output_paths)
     if answer_path:
         outputs.append(answer_path)
@@ -475,7 +472,7 @@ def harbor_record(
         mode=mode,
         dockerfile_id=hashlib.sha256(dockerfile.encode()).hexdigest()[:12],
         language=language,
-        tags=list(task.tags),
+        tags=[tag for tag in task.tags if not tag.startswith("language:")],
         has_solution=bool(solution),
         task_binary=archive_bytes(files, modes),
         solution_binary=archive_bytes(solution, solution_modes) if solution else None,
