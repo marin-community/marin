@@ -9,3 +9,6 @@ openai/gpt-oss-20b,2.325384e23,published_hardware_inferred;cohort_mean_ratio_imp
 nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16,4.841876e23,published_proxy;published_proxy;RL omitted
 moonshotai/Kimi-Linear-48B-A3B-Instruct,1.063659e23,published_proxy;cohort_mean_ratio_imputed;RL omitted
 arcee-ai/Trinity-Mini,1.866069e23,published_proxy;cohort_mean_ratio_imputed;RL omitted
+IFM/K2-Horizon-MoVA-36B-A4B,6.018240e23,published 22.9T pretraining plus 2.176T non-RL continuation at 4B active
+zai-org/GLM-4.7-Flash,3.534132715250261e23,pretraining cohort-mean imputation plus documented mean midtraining/pretraining ratio; RL omitted
+Aleph-Alpha/Kolibri-1,4.303440e23,"published 20T pretraining plus 3.44T midtraining, 200B long-context adaptation, and 268B SFT at 3B active; RL omitted"
