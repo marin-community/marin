@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Plan or execute the RL data catalog inside a single Iris driver job."""
+"""Plan RL curation, then run QUICK locally or reviewed SAMPLE/FULL campaigns on Iris."""
 
 import json
 import os
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import click
@@ -31,13 +32,15 @@ from taskcompendium.runtime.local import LocalGraderMachines
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
-from experiments.post_training.task_curation.pipeline import source_step
+from experiments.post_training.task_curation.local import run_local_sources
+from experiments.post_training.task_curation.pipeline import download_identity, source_step
 from experiments.post_training.task_curation.sources import selected_pipelines
 
 REVIEW_REQUEST_TIMEOUT = 60
 IRIS_SCHEDULING_TIMEOUT = 600
 IRIS_MACHINE_CPUS = 4
 IRIS_JOB_TTL = 1800
+QUICK_MAX_WORKERS = 4
 
 
 class VerificationBackend(StrEnum):
@@ -199,23 +202,23 @@ def _pipeline_config(
 
 @click.command(help=__doc__)
 @click.option("--model", default=GLM_MODEL, show_default=True)
-@click.option("--model-revision", required=True)
+@click.option("--model-revision", help="Required for SAMPLE/FULL.")
 @click.option("--base-url", help="OpenAI-compatible review endpoint; defaults to the relay job's endpoint.")
 @click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB, show_default=True, help="Iris GLM relay job to resolve.")
-@click.option("--review-cache", required=True)
-@click.option("--review-mode", type=click.Choice(["batch", "chat"]), required=True)
+@click.option("--review-cache", help="Required for SAMPLE/FULL.")
+@click.option("--review-mode", type=click.Choice(["batch", "chat"]), help="Required for SAMPLE/FULL.")
 @click.option(
     "--review-concurrency",
     type=click.IntRange(min=1, max=MAX_DIRECT_CONCURRENT_REQUESTS),
     default=MAX_DIRECT_CONCURRENT_REQUESTS,
     show_default=True,
 )
-@click.option("--mode", type=click.Choice(["sample", "full"]), default="sample", show_default=True)
-@click.option("--max-workers", type=click.IntRange(min=1), required=True)
-@click.option("--coordinator-memory", required=True, help="Explicit RAM budget for the shared coordinator, e.g. 16g.")
-@click.option("--normalized-shards", type=click.IntRange(min=1), required=True)
+@click.option("--mode", type=click.Choice([mode.value for mode in SourceProcessingMode]), required=True)
+@click.option("--max-workers", type=click.IntRange(min=1), help="Required for SAMPLE/FULL; defaults to 4 for QUICK.")
+@click.option("--coordinator-memory", help="Required for SAMPLE/FULL: RAM for the shared coordinator, e.g. 16g.")
+@click.option("--normalized-shards", type=click.IntRange(min=1), help="Required for SAMPLE/FULL.")
 @click.option("--concurrent-sources", type=click.IntRange(min=10), default=10, show_default=True)
-@click.option("--worker-image", required=True, help="Zephyr worker image; it carries the grading code.")
+@click.option("--worker-image", help="Required for SAMPLE/FULL: Zephyr worker image carrying the grading code.")
 @click.option(
     "--container-profile",
     default="CONTAINER_PROFILE_PRIVILEGED",
@@ -234,38 +237,132 @@ def _pipeline_config(
 )
 @click.option("--seed", type=int, default=0)
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
-@click.option("--report-path", required=True)
+@click.option("--report-path", help="Required for SAMPLE/FULL; QUICK writes campaign.json under --output-root.")
 @click.option("--source", "sources", multiple=True, help="Catalog source name to execute; repeat to select multiple.")
+@click.option(
+    "--input-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="QUICK: staged primary inputs instead of downloading the declared pinned source.",
+)
+@click.option(
+    "--input-file",
+    "local_files",
+    type=(str, click.Path(exists=True, dir_okay=False, path_type=Path)),
+    multiple=True,
+    help="QUICK: local primary file under its declared logical filename; repeat as needed.",
+)
+@click.option(
+    "--input",
+    "auxiliary",
+    type=(str, click.Path(exists=True, file_okay=False)),
+    multiple=True,
+    help="QUICK: override a named auxiliary input with a local directory.",
+)
+@click.option("--output-root", type=click.Path(file_okay=False, path_type=Path), help="Required for QUICK.")
+@click.option(
+    "--download-cache",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="QUICK: pinned download cache; defaults to ~/.cache/marin.",
+)
 @click.option("--run", "do_run", is_flag=True)
 def main(
     model: str,
-    model_revision: str,
+    model_revision: str | None,
     base_url: str | None,
     relay_job: str,
-    review_cache: str,
-    review_mode: str,
+    review_cache: str | None,
+    review_mode: str | None,
     review_concurrency: int,
     mode: str,
-    max_workers: int,
-    coordinator_memory: str,
-    normalized_shards: int,
+    max_workers: int | None,
+    coordinator_memory: str | None,
+    normalized_shards: int | None,
     concurrent_sources: int,
-    worker_image: str,
+    worker_image: str | None,
     container_profile: str,
     verification_backend: str,
     controller_url: str | None,
     seed: int,
     verification_sample_size: int,
-    report_path: str,
+    report_path: str | None,
     sources: tuple[str, ...],
+    input_root: Path | None,
+    local_files: tuple[tuple[str, Path], ...],
+    auxiliary: tuple[tuple[str, str], ...],
+    output_root: Path | None,
+    download_cache: Path | None,
     do_run: bool,
 ) -> None:
-    backend = VerificationBackend(verification_backend)
-    controller_url = _controller_url(backend, controller_url)
     try:
         pipelines = selected_pipelines(sources)
     except ValueError as error:
         raise click.UsageError(str(error)) from error
+    processing_mode = SourceProcessingMode(mode)
+    if processing_mode == SourceProcessingMode.QUICK:
+        if not sources:
+            raise click.UsageError("QUICK requires at least one --source")
+        if output_root is None:
+            raise click.UsageError("QUICK requires --output-root")
+        if input_root is not None and local_files:
+            raise click.UsageError("Choose either --input-root or --input-file")
+        pipelines = {name: pipelines[name] for name in dict.fromkeys(sources)}
+        inputs = {name: str(Path(path).resolve()) for name, path in auxiliary}
+        download_cache = download_cache if download_cache is not None else Path.home() / ".cache/marin"
+        max_workers = max_workers if max_workers is not None else QUICK_MAX_WORKERS
+        if not do_run:
+            click.echo(
+                json.dumps(
+                    {
+                        "mode": processing_mode,
+                        "sources": [
+                            {
+                                "name": pipeline.name,
+                                "source": download_identity(pipeline.source),
+                                "inputs": {name: download_identity(source) for name, source in pipeline.inputs.items()},
+                            }
+                            for pipeline in pipelines.values()
+                        ],
+                        "input_root": str(input_root) if input_root is not None else None,
+                        "input_files": {name: str(path) for name, path in local_files},
+                        "inputs": inputs,
+                        "output_root": str(output_root),
+                        "download_cache": str(download_cache),
+                        "max_workers": max_workers,
+                    },
+                    indent=2,
+                )
+            )
+            return
+        run_local_sources(
+            pipelines,
+            input_root,
+            output_root,
+            inputs=inputs,
+            max_workers=max_workers,
+            download_cache=download_cache,
+            source_files_override=dict(local_files),
+        )
+        return
+    if input_root is not None or local_files or auxiliary or output_root is not None or download_cache is not None:
+        raise click.UsageError("Local input, output, and download-cache options require --mode quick")
+    if model_revision is None:
+        raise click.UsageError("SAMPLE/FULL requires --model-revision")
+    if review_cache is None:
+        raise click.UsageError("SAMPLE/FULL requires --review-cache")
+    if review_mode is None:
+        raise click.UsageError("SAMPLE/FULL requires --review-mode")
+    if max_workers is None:
+        raise click.UsageError("SAMPLE/FULL requires --max-workers")
+    if coordinator_memory is None:
+        raise click.UsageError("SAMPLE/FULL requires --coordinator-memory")
+    if normalized_shards is None:
+        raise click.UsageError("SAMPLE/FULL requires --normalized-shards")
+    if worker_image is None:
+        raise click.UsageError("SAMPLE/FULL requires --worker-image")
+    if report_path is None:
+        raise click.UsageError("SAMPLE/FULL requires --report-path")
+    backend = VerificationBackend(verification_backend)
+    controller_url = _controller_url(backend, controller_url)
     review = ReviewConfig(model=model, model_revision=model_revision, mode=ReviewMode(review_mode))
     reviewer = None
     if do_run:
@@ -277,7 +374,7 @@ def main(
         )
     worker_resources = ResourceConfig(cpu=2, ram="8g", image=worker_image, container_profile=container_profile)
     config = _pipeline_config(
-        SourceProcessingMode(mode),
+        processing_mode,
         review,
         reviewer,
         campaign_machines(backend, worker_image, controller_url),

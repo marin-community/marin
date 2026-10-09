@@ -41,7 +41,6 @@ from experiments.post_training.task_curation.pipeline import (
     source_downloads,
     source_files,
 )
-from experiments.post_training.task_curation.sources import selected_pipelines
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +150,7 @@ def run_local_sources(
                     conversion_context = process_context
                 result = run_curation(
                     pipeline,
+                    mode=SourceProcessingMode.QUICK,
                     context=conversion_context,
                     source_input=source_input,
                     output_path=str(output_root / name),
@@ -170,55 +170,3 @@ def run_local_sources(
         raise CampaignFailed(f"Quick conversion failed for some sources; see {report_path}")
     return tuple(outcomes.values())
 
-
-@click.command(help=__doc__)
-@click.option("--source", "sources", multiple=True, required=True, help="Catalog key; repeat for several sources.")
-@click.option(
-    "--input-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Use staged primary inputs instead of downloading the declared pinned source.",
-)
-@click.option(
-    "--input-file",
-    "local_files",
-    type=(str, click.Path(exists=True, dir_okay=False, path_type=Path)),
-    multiple=True,
-    help="Use a local file under its declared logical source filename; repeat for multiple files.",
-)
-@click.option("--output-root", type=click.Path(file_okay=False, path_type=Path), required=True)
-@click.option(
-    "--download-cache",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=Path.home() / ".cache" / "marin",
-    show_default=True,
-    help="Local cache of pinned primary and auxiliary downloads.",
-)
-@click.option("--input", "auxiliary", type=(str, click.Path(exists=True, file_okay=False)), multiple=True)
-@click.option("--max-workers", type=click.IntRange(min=1), default=4, show_default=True)
-def main(
-    sources: tuple[str, ...],
-    local_files: tuple[tuple[str, Path], ...],
-    input_root: Path | None,
-    output_root: Path,
-    download_cache: Path,
-    auxiliary: tuple[tuple[str, str], ...],
-    max_workers: int,
-) -> None:
-    try:
-        catalog = selected_pipelines(sources)
-    except ValueError as error:
-        raise click.UsageError(str(error)) from error
-    inputs = {name: str(Path(path).resolve()) for name, path in auxiliary}
-    run_local_sources(
-        {name: catalog[name] for name in dict.fromkeys(sources)},
-        input_root,
-        output_root,
-        inputs=inputs,
-        max_workers=max_workers,
-        download_cache=download_cache,
-        source_files_override=dict(local_files),
-    )
-
-
-if __name__ == "__main__":
-    main()

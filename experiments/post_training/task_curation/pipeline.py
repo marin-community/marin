@@ -255,6 +255,7 @@ def source_recipe(
 def run_curation(
     pipeline: RlDataPipeline,
     *,
+    mode: SourceProcessingMode,
     context: ZephyrContext,
     source_input: str,
     output_path: str,
@@ -265,13 +266,12 @@ def run_curation(
 ) -> ConversionResult | SourcePipelineResult:
     """Run a declared source against staged inputs in quick, sample, or full mode.
 
-    Without a config, QUICK records the declared grader lock without building or running it.
-    A config selects SAMPLE or FULL and requires the campaign's resolved grader.
+    QUICK records the declared grader lock without building or running it.
+    SAMPLE and FULL require a matching config and the campaign's resolved grader.
     """
     missing = pipeline.inputs.keys() - inputs.keys()
     if missing:
         raise ValueError(f"Missing staged auxiliary inputs for {pipeline.name}: {sorted(missing)}")
-    mode = config.mode if config is not None else SourceProcessingMode.QUICK
     if config is not None and mode == SourceProcessingMode.QUICK:
         raise ValueError("QUICK conversion does not take review or verification settings")
     if mode == SourceProcessingMode.QUICK:
@@ -469,6 +469,7 @@ def _run_source(
         grader_environment = environment_requirements(pipeline.grader, built)
     result = run_curation(
         pipeline,
+        mode=config.mode,
         context=campaign.context,
         source_input=run.source_input,
         output_path=run.output_path,

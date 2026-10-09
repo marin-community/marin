@@ -11,7 +11,6 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from click.testing import CliRunner
 from taskcompendium.convert.answers import answer_task, exact_answer_task
 from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
@@ -21,7 +20,7 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed
 from experiments.post_training.task_curation.pipeline import HfSource
-from experiments.post_training.task_curation.quick import main, run_local_sources
+from experiments.post_training.task_curation.local import run_local_sources
 from experiments.post_training.task_curation.sources import all_pipelines
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 
@@ -85,43 +84,6 @@ def converted_task(output: Path, name: str) -> TaskSpec:
     records = [row for shard in (output / name / "normalize").glob("*.parquet") for row in load_parquet(str(shard))]
     assert len(records) == 1
     return TaskSpec.model_validate_json(records[0]["task_json"])
-
-
-def test_quick_cli_converts_selected_sources_once_in_request_order(tmp_path):
-    staged = tmp_path / "input"
-    (staged / "data").mkdir(parents=True)
-    (staged / "test.jsonl").write_text('{"problem": "Two plus two?", "answer": "4"}\n')
-    pq.write_table(
-        pa.Table.from_pylist([{"problem": "One plus one?", "answer": "2"}]), staged / "data/train-0000.parquet"
-    )
-    output = tmp_path / "output"
-    result = CliRunner().invoke(
-        main,
-        [
-            "--source",
-            "math500",
-            "--source",
-            "aime24",
-            "--source",
-            "math500",
-            "--input-root",
-            str(staged),
-            "--output-root",
-            str(output),
-            "--max-workers",
-            "1",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    report = json.loads((output / "campaign.json").read_text())
-    assert [source["name"] for source in report["sources"]] == ["math500", "aime24"]
-    assert report["counts"] == {"completed": 2}
-    assert converted_task(output, "math500").source.row == "test.jsonl:0"
-    assert converted_task(output, "aime24").source.row == "data/train-0000.parquet:0"
-
-    unknown = CliRunner().invoke(main, ["--source", "unknown", "--output-root", str(tmp_path / "unknown")])
-    assert unknown.exit_code == 2
-    assert not (tmp_path / "unknown").exists()
 
 
 def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_path, monkeypatch):

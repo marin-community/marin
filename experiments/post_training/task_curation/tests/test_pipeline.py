@@ -264,7 +264,7 @@ def test_declarations_with_the_same_pinned_files_share_one_download():
 
 
 @pytest.mark.parametrize("mode, expected_rows", [(SourceProcessingMode.SAMPLE, 2), (SourceProcessingMode.FULL, 5)])
-def test_reviewed_invocation_uses_config_mode_for_panel_or_full_conversion(
+def test_reviewed_invocation_uses_selected_mode_for_panel_or_full_conversion(
     tmp_path, fixture_converter, config, mode, expected_rows
 ):
     _, convert = fixture_converter
@@ -289,6 +289,7 @@ def test_reviewed_invocation_uses_config_mode_for_panel_or_full_conversion(
     ):
         result = run_curation(
             pipeline,
+            mode=mode,
             context=context,
             source_input=str(source),
             output_path=str(tmp_path / "output"),
