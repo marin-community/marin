@@ -322,10 +322,12 @@ class TreeCache(AsyncDataset[T_co]):
 
     async def _read_sharded_flat_field_slice(self, field: str, item: slice) -> np.ndarray:
         start, stop, step = item.indices(self.flat_field_length(field))
-        if step != 1:
-            data = await self._get_sharded_flat_field(field, start, max(stop - start, 0))
-            return data[::step]
-        return await self._get_sharded_flat_field(field, start, max(stop - start, 0))
+        if step < 0:
+            read_start, read_stop = stop + 1, start + 1
+        else:
+            read_start, read_stop = start, stop
+        data = await self._get_sharded_flat_field(field, read_start, max(read_stop - read_start, 0))
+        return data[::step]
 
     def _read_sharded_flat_field_slice_sync(self, field: str, item: slice) -> np.ndarray:
         return blocking_wait(self._read_sharded_flat_field_slice(field, item))
