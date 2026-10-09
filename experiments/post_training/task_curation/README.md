@@ -244,8 +244,11 @@ must contain the declared relative paths, such as
 revision. The primary input then needs no download. Override individual auxiliary
 inputs with `--input NAME /path/to/staged/input`.
 
-The command runs a local Zephyr pool and keeps its scratch files under the output
-root. Repeat `--source` to reuse the pool across sources.
+The command runs local Zephyr pools and keeps scratch files under the output
+root. Repeat `--source` to reuse the pools across sources. Native Parquet files
+split at row-group boundaries with a 128 MiB target, preserving global row
+locators and task IDs. Sources with split files use up to `--max-workers` local
+processes; small sources and custom readers run inline to avoid process startup overhead.
 Choose a fresh output root for each pass; existing source outputs are refused.
 Failures are recorded in `campaign.json` while the remaining sources continue;
 the command exits unsuccessfully if any source failed.
