@@ -379,7 +379,7 @@ def _gpu_family() -> _GpuFamily:
 
 # The group-grid blocks, for layouts and GPU families without a tuned entry below.
 _TILE_MAP_GENERIC_CONFIG = TritonBlockConfig(
-    block_m=128, block_n=128, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=1
+    block_m=128, block_n=_TRITON_DEFAULT_BLOCK_N, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=1
 )
 _TILE_MAP_BLACKWELL_ROW_CONFIG = dataclasses.replace(_TILE_MAP_GENERIC_CONFIG, block_n=_TRITON_BLACKWELL_BLOCK_N)
 _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
@@ -673,7 +673,7 @@ def _tile_map_pallas_call(
     layout: RaggedLayout,
     config: TritonBlockConfig | None = None,
 ) -> jax.Array:
-    """Tile-map kernels. ``config`` overrides the device-dependent block config; benchmarks use it to sweep tiles."""
+    """Tile-map kernels. ``config``, when given, replaces the device-dependent block config."""
     if layout == RaggedLayout.DRHS:
         rows, m = lhs.shape
         n = rhs.shape[1]
