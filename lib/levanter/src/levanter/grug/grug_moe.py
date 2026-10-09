@@ -53,6 +53,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
+from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.sharding import (
     _axis_names,
     _token_spec_from_x,
@@ -288,8 +289,16 @@ class QBRoutedMoE(eqx.Module):
             router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
             biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
-            topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
-            qb_alpha = topk_logits[:, -1:]
+            token_spec = P(self.batch_axes, None)
+            selected_experts = shard_map(
+                lambda logits: top_k_indices(logits, self.num_experts_per_token + 1),
+                mesh=mesh,
+                in_specs=token_spec,
+                out_specs=token_spec,
+            )(reshard(biased_logits, token_spec))
+            # Return the indices in the logits' layout, as lax.top_k would, so the gathers below keep it.
+            selected_experts = reshard(selected_experts, jax.typeof(biased_logits).sharding.spec)
+            qb_alpha = jnp.take_along_axis(biased_logits, selected_experts[:, -1:], axis=-1)
             selected_experts = selected_experts[:, :-1]
             selected_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
             combine_weights = jax.nn.sigmoid(selected_logits)
