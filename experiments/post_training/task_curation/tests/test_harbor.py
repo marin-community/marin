@@ -24,7 +24,7 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.pipeline.models import NormalizedTask
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.grade import read_output
 from verifyit.spec import parse_spec
 
@@ -37,6 +37,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     puzzles,
     python_tests,
     qa,
+    repositories,
     structured_outputs,
 )
 from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, UnsupportedHarborTask, harbor_record, main
@@ -443,3 +444,81 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
     assert result.returncode != 0
     assert not (tmp_path / "logs/verifier/reward.txt").exists()
+
+
+@pytest.fixture
+def repository_task():
+    source = next(source for source in repositories.sources() if source.name == "tasktrove-swesmith")
+    assert source.pipeline is not None
+    return converted_task(
+        source.pipeline,
+        {"path": "swesmith-fixture", "task_binary": (FIXTURES / "swesmith.tar.gz").read_bytes()},
+    )
+
+
+def test_harbor_repository_keeps_builds_and_protects_captured_workspace(repository_task, tmp_path):
+    task = repository_task.model_copy(
+        update={
+            "resources": repository_task.resources.model_copy(
+                update={
+                    "worker": (
+                        *repository_task.resources.worker,
+                        inline_resource("testbed/product.py", b"initial source"),
+                    )
+                }
+            )
+        }
+    )
+    row = {
+        "task_json": task.model_dump_json(),
+        "original_path": "swesmith-fixture",
+        "source_row": "swesmith/tasks.parquet:0",
+    }
+    files = archive_files(harbor_record(row, grader_image=None, family="swe").task_binary)
+    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    assert config.verifier.environment.docker_image is None
+    assert config.environment.workdir is None  # Inherit the declared Dockerfile WORKDIR.
+    assert config.verifier.environment.workdir == task.grader.cwd
+    assert [(item.source, item.destination, item.exclude) for item in config.artifacts] == [("/testbed", "testbed", [])]
+    for role, environment in [("environment", task.environment_requirements), ("tests", task.grader.environment)]:
+        for resource in environment.docker_build.files:
+            content = files[role + "/" + resource.path]
+            if resource.path == "Dockerfile":
+                assert content.startswith(resource_bytes(resource))
+            else:
+                assert content == resource_bytes(resource)
+    assert files["tests/Dockerfile"].endswith(b"COPY . /tests\nRUN rm -rf /testbed && mkdir -p /testbed\n")
+    assert "tests/verifier.toml" not in files
+    assert "tests/public/testbed/product.py" not in files
+    assert not any(name.startswith(("environment/files/tests/", "environment/files/solution/")) for name in files)
+    for path, content in files.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    original_script = resource_bytes(
+        next(resource for resource in task.resources.verifier if resource.path == "test.sh")
+    )
+    # Execute the actual generated staging/required-artifact prefix without invoking the grader.
+    prefix = files["tests/test.sh"][: -len(original_script)].decode()
+    prefix = prefix.replace(
+        "cp -a /tests/public/. /", f"cp -a {shlex.quote(str(tmp_path / 'tests/public'))}/. {shlex.quote(str(tmp_path))}/"
+    )
+    prefix = prefix.replace("/testbed", str(tmp_path / "testbed"))
+    absent = subprocess.run(["bash", "-c", prefix], capture_output=True, text=True)
+    assert absent.returncode != 0
+    workspace = tmp_path / "testbed"
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / ".git/HEAD").write_text("captured git state")
+    product = workspace / "product.py"
+    product.write_text("candidate repair")
+    product.chmod(0o755)
+    (workspace / "linked.py").symlink_to("product.py")
+    staged = subprocess.run(["bash", "-c", prefix], capture_output=True, text=True)
+    assert staged.returncode == 0, staged.stderr
+    assert product.read_text() == "candidate repair"
+    assert product.stat().st_mode & 0o777 == 0o755
+    assert (workspace / "linked.py").is_symlink()
+    assert (workspace / ".git/HEAD").read_text() == "captured git state"
+    product.unlink()
+    subprocess.run(["bash", "-c", prefix], check=True)
+    assert not product.exists()

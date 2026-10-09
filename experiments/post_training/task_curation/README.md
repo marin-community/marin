@@ -280,8 +280,8 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
 ```
 
 The source name in the QUICK manifest selects the registry declaration, which
-supplies the exported family and Atlas ID. The verifier base image is an explicit
-runtime input. It must contain the dependencies required by the task's grader
+supplies the exported family and Atlas ID. For tasks without a verifier build
+recipe, the verifier base image is an explicit runtime input. It must contain the dependencies required by the task's grader
 package lock. Export emits `tests/Dockerfile` from that pinned base and copies
 the private tests into `/tests`; native Harbor builds this separate verifier
 environment when the task runs. Export itself does not build or run images.
@@ -294,6 +294,13 @@ its stdout with a finite numeric reward; failed commands and invalid rewards
 remain grading errors. Text tasks retain their canonical TaskSpec
 prompt and gain a file-delivery instruction using the grader's declared answer
 path. Export does not need the archived instruction or its delivery filename.
+
+Repository state tasks with declared actor and verifier build contexts carry
+both recipes into the export and can omit `--grader-image`. Their complete
+`/testbed` repository is transferred into the separate verifier before trusted
+test restoration. Initial public files never overwrite that captured tree, and
+a missing repository fails before grading. Other directory or artifact-transfer
+contracts remain explicit export rejections.
 
 In-process exact, math, JSON-schema, MCQ, IFEval, XML-element, and CSV-column
 graders also run in the supplied verifier image after export. The complete

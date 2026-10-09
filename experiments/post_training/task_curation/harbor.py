@@ -12,7 +12,7 @@ import tarfile
 from collections import Counter
 from dataclasses import asdict, dataclass
 from functools import cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import click
@@ -24,7 +24,9 @@ from harbor_config.models.task.config import TaskConfig
 from taskcompendium.convert.script_grader import GRADE_ARGV
 from taskcompendium.models import (
     AnswerType,
+    ArtifactKind,
     FileReward,
+    MissingArtifactPolicy,
     PlainText,
     ScriptGrader,
     StdoutReward,
@@ -68,6 +70,8 @@ TASKS_SCHEMA = arrow_schema(HarborRecord)
 IN_PROCESS_FILE_MODES = frozenset({"exact", "math", "json-schema", "mcq", "ifeval", "xml-elements", "csv-columns"})
 VERIFIER_SPEC_PATH = "tests/taskcompendium-verifier.toml"
 HARBOR_REWARD_PATH = "/logs/verifier/reward.txt"
+REPOSITORY_WORKSPACE = "/testbed"
+HARBOR_SCRIPT_ARGV = ("bash", "/tests/test.sh")
 
 
 def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
@@ -92,24 +96,46 @@ def verifier_runtime() -> dict[str, bytes]:
     }
 
 
-def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> HarborRecord:
+def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str) -> HarborRecord:
     """Export supported file-delivery contracts with separate agent and verifier environments."""
-    if PINNED_IMAGE.fullmatch(grader_image) is None:
+    if grader_image is not None and PINNED_IMAGE.fullmatch(grader_image) is None:
         raise ValueError("The verifier image must be explicitly pinned by digest")
     task = TaskSpec.model_validate_json(row["task_json"])
     environment = task.environment_requirements
     grader = task.grader
-    if environment.docker_build is not None:
-        raise UnsupportedHarborTask("Actor Docker build contexts require native Harbor build lowering")
-    if (
+    repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
+    if repository_state:
+        if (
+            "git_repository" not in environment.capabilities
+            or not isinstance(grader, ScriptGrader)
+            or grader.argv != HARBOR_SCRIPT_ARGV
+            or not isinstance(grader.reward, FileReward)
+            or len(grader.artifacts) != 1
+        ):
+            raise UnsupportedHarborTask("Repository state requires git_repository and one explicit workspace artifact")
+        artifact = grader.artifacts[0]
+        if (
+            artifact.source != REPOSITORY_WORKSPACE
+            or artifact.target != artifact.source
+            or artifact.kind != ArtifactKind.DIRECTORY
+            or artifact.exclude
+            or artifact.missing != MissingArtifactPolicy.ERROR
+            or grader.answer_path is not None
+            or environment.docker_build is None
+            or grader.environment.docker_build is None
+        ):
+            raise UnsupportedHarborTask(
+                "Only required full /testbed repository capture with declared builds is supported"
+            )
+    elif environment.docker_build is not None or (
         isinstance(grader, ScriptGrader | VerifyitGrader)
         and grader.environment is not None
         and grader.environment.docker_build is not None
     ):
-        raise UnsupportedHarborTask("Verifier Docker build contexts require native Harbor build lowering")
+        raise UnsupportedHarborTask("Docker build contexts require a supported repository state contract")
     if len(task.context.events) != 1 or not isinstance(task.context.events[0], TextMessage):
         raise UnsupportedHarborTask("Only a single public text instruction is supported")
-    if task.answer_type not in (AnswerType.TEXT, AnswerType.FILE):
+    if task.answer_type not in (AnswerType.TEXT, AnswerType.FILE, AnswerType.WORKSPACE_STATE):
         raise UnsupportedHarborTask(f"Unsupported answer type: {task.answer_type}")
     if task.answer_type == AnswerType.TEXT and not isinstance(task.answer_format, PlainText):
         raise UnsupportedHarborTask("Text extraction beyond plain text requires dedicated Harbor lowering")
@@ -119,9 +145,23 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         raise UnsupportedHarborTask("Agent setup commands and package locks require an environment build")
     if set(environment.tool_providers) - {"shell"}:
         raise UnsupportedHarborTask("Only shell tool providers have Harbor lowering")
-    # Separate Harbor verifiers own their tests; native execution skips uploading them.
-    files = {"tests/Dockerfile": f"FROM {grader_image}\nCOPY . /tests\n".encode()}
-    modes = {}
+    files, modes = {}, {}
+    if repository_state:
+        assert isinstance(grader, ScriptGrader) and grader.environment.docker_build is not None
+        for resource in grader.environment.docker_build.files:
+            name = "tests/" + resource.path
+            files[name] = resource_bytes(resource)
+            if resource.mode:
+                modes[name] = resource.mode
+        # Build the source recipe and install private grader files in that image.
+        files["tests/Dockerfile"] += (
+            f"\nCOPY . /tests\nRUN rm -rf {REPOSITORY_WORKSPACE} && mkdir -p {REPOSITORY_WORKSPACE}\n"
+        ).encode()
+    else:
+        if grader_image is None:
+            raise ValueError("This task requires an explicit digest-pinned verifier base image")
+        # Separate Harbor verifiers own their tests; native execution skips uploading them.
+        files["tests/Dockerfile"] = f"FROM {grader_image}\nCOPY . /tests\n".encode()
     answer_path = None
     if isinstance(grader, VerifyitGrader):
         spec = verifyit_spec(grader)
@@ -141,7 +181,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         grader_env = {}
         grader_cwd = "/"
     elif isinstance(grader, ScriptGrader):
-        if grader.collect or grader.artifacts:
+        if grader.collect or (grader.artifacts and not repository_state):
             raise UnsupportedHarborTask("Script collection hooks require dedicated Harbor lowering")
         if grader.argv == GRADE_ARGV and isinstance(grader.reward, StdoutReward):
             files.update(verifier_runtime())
@@ -158,7 +198,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
                 "reward = parse_reward_number(last_line(output))\n"
                 f"Path({HARBOR_REWARD_PATH!r}).write_text(str(reward))\nPY\n"
             ).encode()
-        elif grader.argv == ("bash", "/tests/test.sh") and isinstance(grader.reward, FileReward):
+        elif grader.argv == HARBOR_SCRIPT_ARGV and isinstance(grader.reward, FileReward):
             if len(grader.reward.files) != 1:
                 raise UnsupportedHarborTask("Script graders must emit one Harbor reward file")
             reward = grader.reward.files[0]
@@ -196,13 +236,25 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         )
     files["instruction.md"] = prompt.encode()
     public = (*task.resources.all, *task.resources.worker)
-    dockerfile = f"FROM {environment.docker_image or BASE_IMAGE}\n"
+    if environment.docker_build is not None:
+        for resource in environment.docker_build.files:
+            name = "environment/" + resource.path
+            files[name] = resource_bytes(resource)
+            if resource.mode:
+                modes[name] = resource.mode
+        dockerfile = files["environment/Dockerfile"].decode()
+        if not dockerfile.endswith("\n"):
+            dockerfile += "\n"
+    else:
+        dockerfile = f"FROM {environment.docker_image or BASE_IMAGE}\n"
     if public:
         dockerfile += "COPY files/ /\n"
     for resource in public:
         if resource.path.startswith(("tests/", "solution/", "logs/verifier/")):
             raise UnsupportedHarborTask(f"Public resource overlaps a private Harbor root: {resource.path}")
         name = "environment/files/" + resource.path
+        if name in files:
+            raise UnsupportedHarborTask(f"Public resource collides with build input: {name}")
         files[name] = resource_bytes(resource)
         if resource.mode:
             modes[name] = resource.mode
@@ -216,12 +268,27 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
             modes[name] = resource.mode
     if "tests/test.sh" not in files:
         raise UnsupportedHarborTask("Script grader has no test.sh resource")
+    if repository_state:
+        if "tests/verifier.toml" in files:
+            raise UnsupportedHarborTask("Repository verifier spec uses Harbor's reserved entrypoint")
+        # Native artifact collection is best-effort. An absent repository must not
+        # fall back to a fresh empty build workspace or reach the trusted grader.
+        files["tests/test.sh"] = (
+            f"#!/bin/bash\nset -euo pipefail\ntest -d {REPOSITORY_WORKSPACE}/.git\n".encode() + files["tests/test.sh"]
+        )
     outputs = list(task.output_paths)
+    if repository_state:
+        outputs.append(REPOSITORY_WORKSPACE)
     if answer_path:
         outputs.append(answer_path)
     # Harbor uploads submissions before running test.sh. Do not restore initial
     # copies of files the agent edits, including when the agent deleted a file.
-    grader_public = [resource for resource in public if "/" + resource.path not in outputs]
+    grader_public = [
+        resource
+        for resource in public
+        if "/" + resource.path not in outputs
+        and not (repository_state and PurePosixPath("/" + resource.path).is_relative_to(REPOSITORY_WORKSPACE))
+    ]
     if grader_public:
         for resource in grader_public:
             files["tests/public/" + resource.path] = resource_bytes(resource)
@@ -281,7 +348,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
     )
 
 
-def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> dict[str, Any]:
+def export_harbor(input_root: Path, output_root: Path, *, grader_image: str | None) -> dict[str, Any]:
     """Write the legacy parquet view and account for normalization and lowering failures."""
     manifest = json.loads((input_root / "manifest.json").read_text())
     sources = {source.name: source for source in all_sources().values() if source.pipeline is not None}
@@ -325,9 +392,7 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> 
         "atlas_id": source.info.id,
         "harbor_config_validated": True,
         "runtime_verified": False,
-        "limitation": (
-            "Verifier builds and execution have not run; the supplied base image's dependency parity is unverified."
-        ),
+        "limitation": "Builds and execution have not run; base-image dependencies and source recipes remain unverified.",
     }
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
@@ -338,10 +403,9 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> 
 @click.option("--output-root", type=click.Path(file_okay=False, path_type=Path), required=True)
 @click.option(
     "--grader-image",
-    required=True,
-    help="Explicit digest-pinned verifier base image; Harbor builds each task's private tests on top.",
+    help="Pinned verifier base for tasks without their own build recipe; Harbor builds private tests on top.",
 )
-def main(input_root: Path, output_root: Path, grader_image: str) -> None:
+def main(input_root: Path, output_root: Path, grader_image: str | None) -> None:
     result = export_harbor(input_root, output_root, grader_image=grader_image)
     click.echo(json.dumps({key: value for key, value in result.items() if key != "rejections"}))
 
