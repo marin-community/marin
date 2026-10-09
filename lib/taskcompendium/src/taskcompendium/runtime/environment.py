@@ -10,7 +10,7 @@ _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
 
 
 def resolve_env_vars(environment: Mapping[str, str], host_environment: Mapping[str, str]) -> dict[str, str]:
-    """Resolve ``${NAME}`` and ``${NAME:-default}`` in environment values."""
+    """Resolve whole-value ``${NAME}`` and ``${NAME:-default}`` references."""
     resolved = {}
     for key, value in environment.items():
         match = _TEMPLATE_PATTERN.fullmatch(value)

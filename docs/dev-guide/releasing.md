@@ -35,6 +35,12 @@ the names don't collide on PyPI, which has no namespaces. The **import name**
 | `marin-dupekit-native` | `dupekit_native` | `lib/dupekit/rust` |
 | `marin-iris-native` | `iris_native` | `lib/iris/rust` |
 
+The `lib/` directory is not identical to the root uv workspace or the release
+family. `marin-shellbox` is an editable path dependency in the root lock, while
+RolloutEngine has its own lock for test-only Harbor schema imports. The native
+companion projects are excluded from uv workspace discovery. `marin-ducky` is a
+workspace member but is not in this release family.
+
 All publishing uses **OIDC trusted publishing**. There is no API token stored
 in the repository, in GitHub secrets, or anywhere else. At workflow runtime
 GitHub mints a short-lived OIDC token, PyPI validates it against the
@@ -84,8 +90,9 @@ one diverged project from sorting above the new release.
 After PyPI accepts a complete native family release, automation raises its
 consumer dependency floor and locks that exact registry version. A targeted
 lock validation rejects unrelated package churn. The general Python family
-does not need a follow-up pull request because its source packages remain the
-workspace defaults.
+does not need a follow-up pull request because the checkout resolves its
+libraries from workspace or editable path sources for development. Published
+wheels refer to PyPI distributions instead.
 
 To cut a stable release, pick the next [SemVer](https://semver.org/) version
 and push the tag — no `pyproject.toml` edit required:

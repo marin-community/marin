@@ -13,6 +13,7 @@ import json
 import math
 import os
 import tarfile
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -445,7 +446,9 @@ async def grade_in_sandbox(
         and not (task.answer_type == AnswerType.STATE and attempt.state is not None)
     ):
         return GradeResult(Outcome.GRADED, 0.0, "Missing submission")
-    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, task_machine)
+    return await _grade_staged(
+        task, attempt, grading, submissions, factory, machine_spec, task_machine, dict(os.environ)
+    )
 
 
 async def grade_empty_in_sandbox(
@@ -467,7 +470,7 @@ async def grade_empty_in_sandbox(
         answer_file = verifyit_answer_file(grading.spec)
     attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))))
     submissions = [] if answer_file is None else [_StagedFile(answer_file, b"")]
-    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, None)
+    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, None, dict(os.environ))
 
 
 async def _grade_staged(
@@ -478,6 +481,7 @@ async def _grade_staged(
     factory: MachineFactory,
     machine_spec: MachineSpec,
     task_machine: Machine | None,
+    host_environment: Mapping[str, str],
 ) -> GradeResult:
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
     files = _grading_files(task, attempt, grading, submissions)
@@ -489,7 +493,7 @@ async def _grade_staged(
                 Command(
                     command.argv,
                     cwd=command.cwd,
-                    env=resolve_env_vars(command.env, os.environ),
+                    env=resolve_env_vars(command.env, host_environment),
                     timeout=grading.limit,
                     user=ROOT,
                 ),
@@ -509,7 +513,10 @@ async def _grade_staged(
                 replace(
                     machine_spec,
                     workdir=grading.workspace,
-                    env={**machine_spec.env, **resolve_env_vars(grading.environment.environment_variables, os.environ)},
+                    env={
+                        **machine_spec.env,
+                        **resolve_env_vars(grading.environment.environment_variables, host_environment),
+                    },
                 )
             )
             try:

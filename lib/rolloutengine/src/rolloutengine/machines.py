@@ -62,7 +62,9 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             await machine.upload(source, f"/{resource.path}")
 
 
-def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
+def _machine_spec(
+    requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec, host_environment: Mapping[str, str]
+) -> MachineSpec:
     if requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
@@ -76,7 +78,7 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
             if requirements.working_directory is not None
             else "" if requirements.docker_image else "/workspace"
         ),
-        env=resolve_env_vars(requirements.environment_variables, os.environ),
+        env=resolve_env_vars(requirements.environment_variables, host_environment),
         network=runtime.network,
         memory_mb=runtime.memory_mb,
         cpus=runtime.cpus,
@@ -133,7 +135,7 @@ async def _prepare_machine(
         return None
     async with asyncio.timeout(runtime.startup_timeout):
         machine = await _acquire_machine(
-            runtime, _machine_spec(requirements, runtime), factories, cleanup, owned, requirements
+            runtime, _machine_spec(requirements, runtime, dict(os.environ)), factories, cleanup, owned, requirements
         )
         await _install_resources(machine, resources)
         for command in requirements.setup_commands:
