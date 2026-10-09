@@ -20,8 +20,6 @@ from verifyit.spec import Compare, StdioSpec
 from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
 from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
-    Converter,
-    ConverterKey,
     ConvertStatus,
     Rejected,
 )
@@ -117,10 +115,3 @@ def convert_codeforces(task: TaskFiles) -> ConvertedTask | Rejected:
         language="python",
         data_files=data_files,
     )
-
-
-CONVERTER = Converter(
-    name="codeforces",
-    keys=(ConverterKey("competitive-programming", frozenset({"tests/test.sh", "tests/judge.py"})),),
-    convert=convert_codeforces,
-)

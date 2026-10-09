@@ -10,8 +10,6 @@ from verifyit.spec import PytestSpec
 from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, SOLVE_SH, TESTS_MOUNT, TaskFiles
 from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
-    Converter,
-    ConverterKey,
     ConvertStatus,
     Rejected,
 )
@@ -100,10 +98,3 @@ def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> Con
         data_files=data_files,
         solution_files=solution_files,
     )
-
-
-CONVERTER = Converter(
-    name="python_unit_tests",
-    keys=(ConverterKey("unit-test-gen", frozenset({"tests/test.sh"})),),
-    convert=convert,
-)

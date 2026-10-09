@@ -44,8 +44,6 @@ from verifyit.spec import (
 from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
 from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
-    Converter,
-    ConverterKey,
     ConvertStatus,
     Rejected,
 )
@@ -284,10 +282,3 @@ def convert_nemotron_structured_outputs(task: TaskFiles) -> ConvertedTask | Reje
         data_files=nested_files,
         verifier_extras=("schema", "judge"),
     )
-
-
-CONVERTER = Converter(
-    name="nemotron_structured_outputs",
-    keys=(ConverterKey("other", frozenset({"tests/test.sh", "tests/verifier.py"})),),
-    convert=convert_nemotron_structured_outputs,
-)
