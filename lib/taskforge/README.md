@@ -20,6 +20,7 @@ src/taskforge/
   sandbox/    MachineFactory selection per host, up-front task refusals, image builds
   proposal/   the TaskProposal document (model.py), the ProposalSource protocol (source.py), sources/
   triage/     structural checks, the GLM rubric, verdicts
+  builder/    builder programs: memoized steps, the Build SDK, program authoring, the standard template
   validate/   trials, the failure classifier, control replay, evidence aggregation
 scripts/      Iris image builder, cluster probes, ledger summary
 docker/       grader-base image build context
@@ -29,23 +30,28 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> validate
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate
 ```
 
 The foundation packages (`content_hash`, `atomic_file`, `ledger`, `sandbox`, `spec`, `llm`) import
 only each other and external packages. A later stage reaches an earlier one through its seam
 modules, each of which keeps its types beside the code that checks their invariants:
 `proposal.model` (`TaskProposal`), `proposal.source` (`ProposalBatch`, `SlotFailure`,
-`ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `validate.outcome` and
+`ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `builder.run` (`TaskDraft`,
+`load_draft`, `item_id_for`), `builder.author` (`BuildProgram`, `Revision`), `validate.outcome` and
 `validate.evidence`.
 
 ## Seams
 
-- `llm.recording.recorded_complete(client, messages, policy, request_fields, record, attrs)` is the
-  one path that records a GLM call: an `LLM_CALL` span under `record` (a `CallLedger`: ledger,
+- `llm.recording.recorded_complete(client, messages, policy, request_fields, record, attrs)` records
+  one GLM call as an `LLM_CALL` span under `record` (a `CallLedger`: ledger,
   item, round, step) with tokens, finish reason, and the call's attempt record (`attempts`,
-  `attempts_<outcome>` counts, non-200 `http_statuses`, `wall_time`). `run_agent` and
-  `GlmRolloutModel` both use it, so a rollout's 429s, retries and holds reach the ledger.
+  `attempts_<outcome>` counts, non-200 `http_statuses`, `wall_time`). `run_agent`,
+  `GlmRolloutModel` and `BuildLLM.complete` use it, so a rollout's 429s, retries and holds reach
+  the ledger. `llm.recording.recorded_structured(client, messages, policy, tool, record, attrs)` is
+  its structured-output counterpart: one span over the request and its repair, with summed tokens
+  and attempts and a `requests` count. `BuildLLM.structured` and the build author use it, so every
+  model call a build makes records its attempts.
   `GlmRolloutModel(client, policy, record)` takes its `CallLedger`; derive one model per item,
   round and step with `dataclasses.replace`.
 - `llm.client.complete_prefilled(client, messages, policy, prefix, request_fields=None)` sends
@@ -91,6 +97,22 @@ modules, each of which keeps its types beside the code that checks their invaria
 - `triage.program.evaluate(proposal, checks, rubric, ctx) -> Verdict`: structural checks run
   first, and a fatal failure or a null proposal rejects without a model call. The rubric scores
   independent samples, and the decision is ACCEPT or REJECT by strict majority, otherwise REPAIR.
+- `builder.run.run_build(program, proposal, ...)`: runs a builder program of memoized async steps.
+  A step's memo key covers its code, arguments, the data globals it reads, `SDK_VERSION`, the
+  proposal and the model policy. The grader must come from a GRADER step and the controls from
+  a CONTROLS step, and the controls must pass `spec.controls.validate_controls`. The SDK reference
+  lists the concerns each control category allows; a task needs a reference, an acceptance and a
+  shortcut control. The program lowers its task with `Build.lower` (`spec.lower` for the build's
+  host), and `run_build` checks the result with RolloutEngine's `validate_lowered_task`. The draft
+  (`TaskDraft(task, lowered, controls, provenance)`; the task carries its answer format) is written
+  as `task.json`, `lowered.json`, `controls.json` and, last, `provenance.json`; `load_draft` reads it
+  back. A draft is bound to its host: `lowered.json` names that host's machine backends. Images are
+  published by digest through `BuildServices.images` (`Build.publish_image`). A host failure during
+  the build raises `builder.infrastructure.BuildInfrastructureFailure` with a `cause` of
+  `no_factory`, `no_image_builder`, `scheduling_timeout` or `host_unreachable`, even when the
+  program wrapped it; it is never a `BuildFailure`, and the caller does not charge it to the
+  program. `builder.infrastructure.HOST_REJECTIONS` names the causes that hold for as long as the
+  host is unchanged (`no_factory`, `no_image_builder`).
 - `validate.trials.run_trials(lowered, plan, settings, model)`: runs k trials of a
   `LoweredTaskSpec` through `ShellboxRolloutEngine`. `TrialPlan.deadlines` (`total_turn_timeout`,
   `attempt_timeout`) and `EngineSettings` (turn, command, tool-turn, model-turn and cleanup limits)
@@ -179,6 +201,16 @@ continuation under `reasoning`; the call therefore sends `enable_thinking: false
 same prompt tokens and returns the continuation as `content` (measured live). The template strips
 prefilled text, so a prefix with surrounding whitespace is rejected rather than silently changed.
 
+A build tells host failures from program failures by where the error was raised, not by its
+message. `Build` wraps its machine factories (`builder.infrastructure.host_checked_factories`): a
+missing factory for a backend the host should have, a missing image builder, a `TimeoutError`
+from the factory's own wait, and a connection or controller transport error from creating or
+driving a machine are infrastructure. Everything else is the program's, including an image it
+built or named that fails, a spec the backend refuses, and a deadline the program set with
+`spec.machine(startup_timeout=...)`. Shellbox raises a bare
+`RuntimeError` for both a failed Docker build and an unreachable Docker daemon, so the daemon case
+is charged to the program until shellbox types it.
+
 ## Testing
 
 Run every command from `lib/taskforge`. Do not pass a partial marker expression such as
@@ -207,8 +239,8 @@ task, `llm.endpoint.resolve_glm_base_url` resolves the endpoint.
 
 Other live inputs:
 
-- `TASKFORGE_PARALLEL_KEY_FILE` names a file with a `PARALLEL_KEY=...` line, for the agent
-  live tests (`parallel_key` fixture); the tests that need it skip when it is unset.
+- `TASKFORGE_PARALLEL_KEY_FILE` names a file with a `PARALLEL_KEY=...` line, for the agent and
+  builder live tests (`parallel_key` fixture); the tests that need it skip when it is unset.
 
 The package pytest config sets `timeout = 60` and `asyncio_mode = "auto"`. Long live tests carry
 `@pytest.mark.timeout(<seconds>)`.
