@@ -21,6 +21,7 @@ import pyarrow.parquet as pq
 import tomlkit
 from finestore.schema import arrow_schema
 from harbor_config.models.task.config import TaskConfig
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.script_grader import GRADE_ARGV
 from taskcompendium.models import (
     AnswerType,
@@ -42,6 +43,11 @@ from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import render_spec
 
 from experiments.post_training.task_curation.environment import PINNED_IMAGE
+from experiments.post_training.task_curation.harbor_export_contract import (
+    MANIFEST_FILENAME,
+    TASKS_FILENAME,
+    VerifierPayloadIdentity,
+)
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.sources import all_sources
 
@@ -348,38 +354,45 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
     )
 
 
-def export_harbor(input_root: Path, output_root: Path, *, grader_image: str | None) -> dict[str, Any]:
+def export_harbor(input_root: StoragePath, output_root: StoragePath, *, grader_image: str | None) -> dict[str, Any]:
     """Write the legacy parquet view and account for normalization and lowering failures."""
-    manifest = json.loads((input_root / "manifest.json").read_text())
+    manifest = json.loads((input_root / MANIFEST_FILENAME).read_text())
     sources = {source.name: source for source in all_sources().values() if source.pipeline is not None}
     source = sources[manifest["source"]]
-    output_root.mkdir(parents=True, exist_ok=False)
+    for filename in (TASKS_FILENAME, MANIFEST_FILENAME):
+        if (output_root / filename).exists():
+            raise FileExistsError(f"Harbor export already exists: {output_root / filename}")
+    # The artifact runner creates this directory for its status and provenance files.
+    output_root.mkdirs()
     rejected = []
     input_count, exported_count = 0, 0
     counts: Counter[str] = Counter()
-    paths = sorted(input_root.glob("normalize/*.parquet"))
+    verifier_identity = VerifierPayloadIdentity()
+    paths = sorted((input_root / "normalize/*.parquet").glob(), key=str)
     if not paths:
         raise ValueError(f"No normalized parquet shards under {input_root}")
-    with pq.ParquetWriter(output_root / "tasks.parquet", TASKS_SCHEMA) as writer:
+    with (output_root / TASKS_FILENAME).open("wb") as output_file, pq.ParquetWriter(output_file, TASKS_SCHEMA) as writer:
         for path in paths:
-            for batch in pq.ParquetFile(path).iter_batches(batch_size=64):
-                converted = []
-                for row in batch.to_pylist():
-                    input_count += 1
-                    counts.setdefault(row["source_row"].split("/", 1)[0], 0)
-                    reason = row["normalization_reason"] if row["task_json"] is None else None
-                    if row["task_json"] is not None:
-                        try:
-                            record = harbor_record(row, grader_image=grader_image, family=source.info.family)
-                        except UnsupportedHarborTask as error:
-                            reason = str(error)
-                        else:
-                            converted.append(asdict(record))
-                            counts[record.source] += 1
-                            exported_count += 1
-                    if reason is not None:
-                        rejected.append({"task_id": row["task_id"], "path": row["original_path"], "reason": reason})
-                writer.write_table(pa.Table.from_pylist(converted, schema=TASKS_SCHEMA))
+            with path.open("rb") as input_file:
+                for batch in pq.ParquetFile(input_file).iter_batches(batch_size=64):
+                    converted = []
+                    for row in batch.to_pylist():
+                        input_count += 1
+                        counts.setdefault(row["source_row"].split("/", 1)[0], 0)
+                        reason = row["normalization_reason"] if row["task_json"] is None else None
+                        if row["task_json"] is not None:
+                            try:
+                                record = harbor_record(row, grader_image=grader_image, family=source.info.family)
+                            except UnsupportedHarborTask as error:
+                                reason = str(error)
+                            else:
+                                converted.append(asdict(record))
+                                verifier_identity.add(record.task_binary)
+                                counts[record.source] += 1
+                                exported_count += 1
+                        if reason is not None:
+                            rejected.append({"task_id": row["task_id"], "path": row["original_path"], "reason": reason})
+                    writer.write_table(pa.Table.from_pylist(converted, schema=TASKS_SCHEMA))
     manifest = {
         "input_rows": input_count,
         "exported_rows": exported_count,
@@ -387,6 +400,7 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str | No
         "by_source": dict(counts),
         "rejections": rejected,
         "grader_base_image": grader_image,
+        "verify_tool_ref": verifier_identity.ref,
         "verifier_build_required": True,
         "source": source.name,
         "atlas_id": source.info.id,
@@ -394,7 +408,7 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str | No
         "runtime_verified": False,
         "limitation": "Builds and execution have not run; base-image dependencies and source recipes remain unverified.",
     }
-    (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (output_root / MANIFEST_FILENAME).write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
 
 
@@ -406,7 +420,7 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str | No
     help="Pinned verifier base for tasks without their own build recipe; Harbor builds private tests on top.",
 )
 def main(input_root: Path, output_root: Path, grader_image: str | None) -> None:
-    result = export_harbor(input_root, output_root, grader_image=grader_image)
+    result = export_harbor(StoragePath(str(input_root)), StoragePath(str(output_root)), grader_image=grader_image)
     click.echo(json.dumps({key: value for key, value in result.items() if key != "rejections"}))
 
 
