@@ -34,6 +34,11 @@ def test_mcq_candidate_scores_extracted_option(candidate, expected_reward, detai
 @pytest.mark.parametrize(
     "text, reward",
     [
+        ("C", 1.0),
+        (" \n c\t", 1.0),
+        ("B", 0.0),
+        ("E", 0.0),
+        ("CC", 0.0),
         ("The third option fits.\nAnswer: C\n", 1.0),
         ("Answer: c", 1.0),
         ("Answer:C", 1.0),
@@ -57,7 +62,7 @@ def test_mcq_candidate_scores_extracted_option(candidate, expected_reward, detai
         ("   \n\n", 0.0),
     ],
 )
-def test_mcq_scores_only_a_stated_answer_line(tmp_path, text, reward):
+def test_mcq_scores_a_standalone_letter_or_stated_answer(tmp_path, text, reward):
     _answer(tmp_path, text)
     assert grade_mcq.grade(McqSpec(expected="C"), tmp_path, tmp_path).reward == reward
 

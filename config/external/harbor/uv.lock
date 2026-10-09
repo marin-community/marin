@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -803,7 +803,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?branch=main#9f7b8b404711445b6022f72ff7e5715eb0d1a316" }
+source = { git = "https://github.com/marin-community/harbor.git?branch=main#1675efa0f23c0033f0b5028ea42d56ae09f15115" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },

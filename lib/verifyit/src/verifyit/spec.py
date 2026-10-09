@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import Any
 
-import tomlkit
+import tomli_w
 
 from verifyit.json_comparison import JsonValue, NumericTypePolicy
 from verifyit.json_objects import unique_object
@@ -468,4 +468,4 @@ def render_spec(spec: Spec) -> str:
         ]
     if isinstance(spec, StructuredExactSpec):
         table["expected"] = json.dumps(spec.expected, allow_nan=False)
-    return tomlkit.dumps(table)
+    return tomli_w.dumps(table)

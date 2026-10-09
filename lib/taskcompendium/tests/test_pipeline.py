@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow.parquet as pq
 import pytest
@@ -27,11 +27,13 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     ConversationTrace,
+    DockerBuildContext,
     EnvironmentRequirements,
     GradingAttempt,
     NoGrader,
     PlainText,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
@@ -62,6 +64,7 @@ from taskcompendium.pipeline.stages import (
     filter_source,
     prepare_source,
 )
+from taskcompendium.pipeline.transforms import normalize_row
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.resources import inline_resource
 
@@ -232,7 +235,7 @@ def test_conversion_failures_retain_raw_records_without_review_or_accepted_outpu
 
 def convert_with_attachment(row: RawRow, _context: ConversionContext) -> TaskSpec:
     attachment = inline_resource("data/attachment.bin", b"x" * row.data["attachment_bytes"])
-    return svamp_row_task(row).model_copy(update={"resources": ResourceGroups(verifier=(attachment,))})
+    return cast(TaskSpec, svamp_row_task(row)).model_copy(update={"resources": ResourceGroups(verifier=(attachment,))})
 
 
 def test_tasks_over_the_resource_budget_are_deferred_and_counted(tmp_path, apple_row, svamp_recipe):
@@ -252,6 +255,39 @@ def test_tasks_over_the_resource_budget_are_deferred_and_counted(tmp_path, apple
     assert manifest["dispositions"] == {"keep": 1, "defer": 1}
     assert manifest["reasons"] == {"normalize:resources_over_budget": 1}
     assert [row["normalization_reason"] for row in persisted] == [None, "resources_over_budget"]
+
+
+def convert_with_build_contexts(row: RawRow, _context: ConversionContext) -> TaskSpec:
+    actor = EnvironmentRequirements(
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM scratch\n"),))
+    )
+    grader = EnvironmentRequirements(
+        docker_build=DockerBuildContext(
+            files=(
+                inline_resource("Dockerfile", b"FROM scratch\n"),
+                inline_resource("payload", b"x" * row.data["attachment_bytes"]),
+            )
+        )
+    )
+    return cast(TaskSpec, svamp_row_task(row)).model_copy(
+        update={
+            "environment_requirements": actor,
+            "grader": ScriptGrader(environment=grader, argv=("true",)),
+            "resources": ResourceGroups(worker=(inline_resource("input", b"data"),)),
+        }
+    )
+
+
+def test_resource_budget_counts_both_build_contexts_and_workspace_files(apple_row, svamp_recipe):
+    recipe = replace(svamp_recipe, convert=convert_with_build_contexts, resource_budget_bytes=64)
+    audits = [
+        normalize_row({"locator": "fixture:0", "data": {**apple_row, "attachment_bytes": size}}, recipe)["audit"]
+        for size in (34, 35)
+    ]
+    assert audits[0]["normalization_rejection"] is None
+    assert audits[1]["normalized"] is None
+    assert audits[1]["normalization_rejection"]["reason"] == "resources_over_budget"
+    assert audits[1]["decision"]["disposition"] == "defer"
 
 
 def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path, apple_row, svamp_recipe):

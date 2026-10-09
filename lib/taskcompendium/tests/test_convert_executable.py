@@ -7,7 +7,7 @@ import base64
 import io
 import json
 import tarfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
@@ -16,6 +16,7 @@ from verifyit.spec import StdioSpec
 
 from taskcompendium.convert.executable import (
     SOLUTION_PATHS,
+    converted_workspace_task,
     python_delivery,
     solve_script,
     tasktrove_archive_task,
@@ -23,6 +24,8 @@ from taskcompendium.convert.executable import (
 from taskcompendium.convert.tasktrove import INSTRUCTION, SOLUTION_DIR, TaskFiles
 from taskcompendium.convert.tasktrove_converted_task import ConvertedTask
 from taskcompendium.convert.tasktrove_stdio_cases import SOLUTION_COMMAND
+from taskcompendium.convert.verifyit_build import verifyit_build_context
+from taskcompendium.harbor.export import harbor_record
 from taskcompendium.models import (
     ConversationTrace,
     EnvironmentRequirements,
@@ -376,3 +379,40 @@ def test_python_delivery_rejects_an_unstated_output_contract(tests):
     rejection = python_delivery("Implement `add(a, b)`.", tests)
     assert isinstance(rejection, ImportRejection)
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.UNSUPPORTED, "unsupported_public_output_contract")
+
+
+@pytest.mark.parametrize("language,execution", [("python", "shared"), ("cpp", "separate")])
+def test_converter_language_survives_harbor_export_without_changing_payload(executable_row, language, execution):
+    converted = convert_sum(TaskFiles(ARCHIVE))
+    environment = ENVIRONMENT
+    if execution == "shared":
+        # This explicit recipe has no archived Dockerfile to fall back to.
+        build = verifyit_build_context(
+            "FROM python:3.12-slim\nWORKDIR /app\n", (), package=Path(__file__).resolve().parents[2] / "verifyit"
+        )
+        environment = EnvironmentRequirements(docker_build=build)
+    records = []
+    for declared_language in ("", language):
+        task = converted_workspace_task(
+            executable_row,
+            replace(converted, language=declared_language),
+            instruction=converted.instruction,
+            environment=environment,
+            grader_environment=environment,
+            output_paths=SOLUTION_PATHS,
+        )
+        records.append(
+            harbor_record(
+                {
+                    "task_json": task.model_dump_json(),
+                    "original_path": "program-1",
+                    "source_row": "source/tasks.parquet:0",
+                },
+                grader_image=IMAGE,
+                fallback_actor_image=IMAGE,
+                family="stdio",
+            )
+        )
+    baseline, result = records
+    assert result.language == language
+    assert replace(result, language="") == baseline

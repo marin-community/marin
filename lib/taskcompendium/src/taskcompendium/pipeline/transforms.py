@@ -8,10 +8,9 @@ from collections.abc import Iterator
 from tempfile import SpooledTemporaryFile
 from typing import Any
 
-from pydantic import ValidationError
-
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.pipeline.conversion import ConvertedRow, convert_record
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import (
@@ -26,36 +25,30 @@ from taskcompendium.pipeline.models import (
     ImportRejection,
     NormalizedTask,
     QualityBasis,
-    RawRow,
     ReviewRecord,
     SourceRecipe,
     TaskAudit,
 )
-from taskcompendium.pipeline.sources import conversion_context
 from taskcompendium.runtime.resources import resource_bytes
 
 GROUP_MEMORY_BYTES = 1024 * 1024
 
 
-def row_source(recipe: SourceRecipe, locator: str) -> Source:
-    return Source(
-        dataset=recipe.source.dataset,
-        revision=recipe.source.revision,
-        row=locator,
-        importer_revision=recipe.version,
-    )
-
-
-def row_task_id(recipe: SourceRecipe, source: Source) -> str:
-    return f"{recipe.name}-{canonical_sha256(source.model_dump())}"
-
-
 def task_resource_bytes(task: TaskSpec) -> int:
-    """Decoded bytes of every resource the task carries, across all roles."""
+    """Decoded bytes across all roles and build contexts, counting each occurrence."""
     resources = task.resources
+    environments = [task.environment_requirements]
+    if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
+        environments.append(task.grader.environment)
+    build_files = tuple(
+        resource
+        for environment in environments
+        if environment.docker_build is not None
+        for resource in environment.docker_build.files
+    )
     return sum(
         len(resource_bytes(resource))
-        for resource in (*resources.all, *resources.worker, *resources.oracle, *resources.verifier)
+        for resource in (*resources.all, *resources.worker, *resources.oracle, *resources.verifier, *build_files)
     )
 
 
@@ -71,18 +64,20 @@ def _within_budget(task: TaskSpec, budget: int) -> TaskSpec | ImportRejection:
 
 
 def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
-    source = row_source(recipe, record["locator"])
-    task_id = row_task_id(recipe, source)
+    return admit_converted_row(convert_record(record, recipe), recipe)
+
+
+def admit_converted_row(converted: ConvertedRow, recipe: SourceRecipe) -> dict[str, Any]:
+    """Add resource admission, audit identity, and deduplication keys after conversion."""
+    source, task_id = converted.raw.source, converted.raw.id
     raw = {
         "task_id": task_id,
         "source": source.model_dump(),
-        "raw_sha256": canonical_sha256(record["data"]),
-        "data": record["data"],
+        "raw_sha256": canonical_sha256(dict(converted.raw.data)),
+        "original_path": converted.original_path,
+        "data": converted.raw.data,
     }
-    try:
-        result = recipe.convert(RawRow(task_id, source, record["data"]), conversion_context(recipe))
-    except ValidationError as error:
-        result = ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_task_spec", detail=str(error))
+    result: TaskSpec | ImportRejection
     audit = TaskAudit(
         task_id=task_id,
         source=source,
@@ -95,11 +90,11 @@ def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any
         intended_use=recipe.intended_use,
     )
     public_key, semantic_key = task_id, task_id
-    if isinstance(result, NormalizedTask):
-        audit = audit.model_copy(update={"normalization_changes": result.changes})
-        result = result.task
-    if isinstance(result, TaskSpec):
-        result = _within_budget(result, recipe.resource_budget_bytes)
+    if isinstance(converted.result, NormalizedTask):
+        audit = audit.model_copy(update={"normalization_changes": converted.result.changes})
+        result = _within_budget(converted.result.task, recipe.resource_budget_bytes)
+    else:
+        result = converted.result
     if isinstance(result, ImportRejection):
         audit = audit.model_copy(
             update={
@@ -114,13 +109,11 @@ def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any
             }
         )
     else:
-        if result.id != task_id or result.source != source:
-            raise ValueError("A converter must retain its supplied task identity and source provenance")
         audit = audit.model_copy(update={"normalized": result})
         public_key = deduplication_key(result)
         semantic_key = semantic_digest(result, include_reference=True)
     return {
-        "locator": record["locator"],
+        "locator": source.row,
         "public_key": public_key,
         "semantic_key": semantic_key,
         "audit": audit.model_dump(mode="json"),

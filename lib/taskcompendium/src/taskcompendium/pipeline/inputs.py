@@ -17,6 +17,14 @@ type StagedInputs = Mapping[str, StoragePath]
 
 
 @dataclass(frozen=True)
+class SourceFileOverride:
+    """Actual local bytes substituted for one declared logical source filename."""
+
+    path: str
+    sha256: str
+
+
+@dataclass(frozen=True)
 class ConversionContext:
     """What a source's callables receive with each file or row.
 
