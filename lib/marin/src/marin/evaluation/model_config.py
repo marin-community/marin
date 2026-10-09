@@ -13,7 +13,13 @@ from pathlib import Path
 import draccus
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.inference.config import SpeculativeServingConfig, resolve_tokenizer_revision, validate_pipeline_args
+from marin.inference.config import (
+    ObjectStoreLoadMode,
+    SpeculativeServingConfig,
+    VllmSource,
+    resolve_tokenizer_revision,
+    validate_pipeline_args,
+)
 
 
 class ServeBackend(StrEnum):
@@ -68,9 +74,10 @@ class ServeConfig:
 
     ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
     inference settings. The remaining typed vLLM fields map onto command-line flags or process
-    settings. The two ``vllm_*`` boolean process settings apply to GPU workers. ``vllm_extra_args``
-    is the escape hatch for flags without a typed field. Multi-node topology flags are owned by
-    the launcher; a typed GPU memory limit cannot also appear in the escape hatch.
+    settings. The two ``vllm_*`` boolean process settings and the RunAI streamer settings apply to
+    GPU workers. ``vllm_extra_args`` is the escape hatch for flags without a typed field. Multi-node
+    topology flags are owned by the launcher; a typed GPU memory limit cannot also appear in the
+    escape hatch.
 
     When ``auto_overrides`` is true, the lowering path inspects the Hugging Face ``config.json`` to
     fill portable architecture-specific vLLM flags and clamp an explicit context length to the
@@ -91,12 +98,24 @@ class ServeConfig:
     reasoning_parser: str | None = None
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
+    runai_streamer_concurrency: int | None = None
+    runai_streamer_s3_request_timeout_ms: int | None = None
+    vllm_source: VllmSource | None = None
+    vllm_version: str | None = None
+    vllm_plugin_requirements: tuple[str, ...] = ()
+    object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
     vllm_extra_args: tuple[str, ...] = ()
     speculative: SpeculativeServingConfig | None = None
     chat_template: str | None = None
     auto_overrides: bool = True
 
     def __post_init__(self) -> None:
+        if self.vllm_source is VllmSource.UPSTREAM and not self.vllm_version:
+            raise ValueError("upstream vLLM serving requires an exact vllm_version")
+        if self.vllm_version is not None and self.vllm_source is not VllmSource.UPSTREAM:
+            raise ValueError("vllm_version requires vllm_source=upstream")
+        if self.backend is not ServeBackend.VLLM and (self.vllm_source is not None or self.vllm_plugin_requirements):
+            raise ValueError("vLLM source and plugins require the vLLM backend")
         if self.pipeline_parallel_size < 1:
             raise ValueError("pipeline_parallel_size must be >= 1")
         for name in ("tensor_parallel_size", "data_parallel_size"):
@@ -121,6 +140,16 @@ class ServeConfig:
                 raise ValueError("speculative serving requires the vLLM backend")
             if has_vllm_option(self.vllm_extra_args, "--speculative-config"):
                 raise ValueError("speculative serving conflicts with --speculative-config in extra args")
+        if self.runai_streamer_s3_request_timeout_ms is not None:
+            if self.runai_streamer_s3_request_timeout_ms <= 0:
+                raise ValueError("runai_streamer_s3_request_timeout_ms must be positive")
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("runai_streamer_s3_request_timeout_ms requires the vLLM backend")
+        if self.runai_streamer_concurrency is not None:
+            if self.runai_streamer_concurrency <= 0:
+                raise ValueError("runai_streamer_concurrency must be positive")
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("runai_streamer_concurrency requires the vLLM backend")
 
 
 @dataclass(frozen=True)
@@ -128,12 +157,16 @@ class GenerationConfig:
     """Per-model generation settings for evaluation clients.
 
     ``max_gen_toks`` sets the Evalchemy generation limit and Harbor agent output budget.
-    ``extra_gen_kwargs`` apply only to Evalchemy.
+    ``extra_gen_kwargs`` apply only to Evalchemy. ``chat_template_kwargs`` are render-time template
+    arguments forwarded on the Evalchemy chat route; an Evalchemy launch file overrides these per
+    key. ``thinking_off_template_kwargs`` translates a benchmark's ``enable_thinking=false`` into
+    the model's lowest supported reasoning setting when its template cannot disable reasoning.
     """
 
     max_gen_toks: int | None = None
     extra_gen_kwargs: Mapping[str, str] = field(default_factory=dict)
-    chat_template_kwargs: Mapping[str, bool | None] = field(default_factory=dict)
+    chat_template_kwargs: Mapping[str, bool | str] = field(default_factory=dict)
+    thinking_off_template_kwargs: Mapping[str, bool | str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -156,7 +189,8 @@ class ModelConfig:
     ``revision``. ``apply_chat_template`` controls whether Evalchemy formats requests with the
     tokenizer's chat template. ``resource_hint`` states where the model is compatible; ``serve``
     states how its inference server behaves. ``generation`` and ``agent`` are experiment-definition
-    inputs and never affect inference placement.
+    inputs and never affect inference placement. ``evalchemy_num_concurrent`` limits the number of
+    in-flight Evalchemy requests to this model's endpoint without changing benchmark semantics.
     """
 
     name: str
@@ -170,10 +204,13 @@ class ModelConfig:
     serve: ServeConfig = field(default_factory=ServeConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    evalchemy_num_concurrent: int | None = None
 
     def __post_init__(self) -> None:
         if "/" in self.name:
             raise ValueError("model name cannot contain '/'")
+        if self.evalchemy_num_concurrent is not None and self.evalchemy_num_concurrent <= 0:
+            raise ValueError("evalchemy_num_concurrent must be positive")
         if self.serve.pipeline_parallel_size > 1 and not self.resource_hint.gpu:
             raise ValueError("pipeline parallelism requires resource_hint.gpu")
 

@@ -8,16 +8,35 @@
 Modes:
   serve                          Answer /v1/models with 200.
   hang <counter>                 Record the start, then sleep without becoming ready.
-  stuck-fault <counter>          Log a streamer fault while the parent stays alive.
+  stuck-fault <counter> [error]  Log a streamer fault while the parent stays alive.
   exit                           Exit successfully without becoming ready.
   record-args <path>             Record argv, then answer /v1/models.
+  record-engine-timeout <path>   Record the engine timeout env, then answer /v1/models.
 """
 
 import json
+import os
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+
+
+class FakeVllmLauncher:
+    """Runs fake_vllm_server.py (see its modes) in place of the real ``vllm serve`` child."""
+
+    def __init__(self, *mode_args: str) -> None:
+        self._mode_args = mode_args
+
+    def command(self) -> list[str]:
+        return [sys.executable, str(Path(__file__).resolve()), *self._mode_args]
+
+    def env(self) -> dict[str, str]:
+        return {}
+
+    def cache_identity(self) -> str:
+        return "fake"
+
 
 STREAMER_FAULT = "ValueError: Could not receive runai_response from libstreamer due to: b'File access error'"
 
@@ -51,12 +70,16 @@ def main() -> None:
     elif mode == "record-args":
         Path(sys.argv[2]).write_text(json.dumps(sys.argv[3:]))
         _serve()
+    elif mode == "record-engine-timeout":
+        Path(sys.argv[2]).write_text(json.dumps({"engine_ready_timeout": os.environ["VLLM_ENGINE_READY_TIMEOUT_S"]}))
+        _serve()
     elif mode == "hang":
         _record_start(sys.argv[2])
         time.sleep(30)
     elif mode == "stuck-fault":
         _record_start(sys.argv[2])
-        print(STREAMER_FAULT, file=sys.stderr, flush=True)
+        error = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != "serve" else STREAMER_FAULT
+        print(error, file=sys.stderr, flush=True)
         time.sleep(30)
     elif mode == "exit":
         return

@@ -30,6 +30,8 @@ from marin.inference.vllm_server import (
     VllmType,
 )
 
+_VLLM_ENGINE_READY_TIMEOUT_ENV = "VLLM_ENGINE_READY_TIMEOUT_S"
+
 
 def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     if config.launcher is VllmLauncherType.PREINSTALLED:
@@ -43,16 +45,18 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     version = config.version if source is VllmType.UPSTREAM else None
     if source is VllmType.UPSTREAM and version is None:
         version = DEFAULT_CUDA_VLLM_VERSION
-    return IsolatedCudaVllm(source=source, version=version)
+    return IsolatedCudaVllm(source=source, version=version, extra_requirements=config.extra_requirements)
 
 
 def _with_subprocess_env(
     launcher: VllmLauncher,
     subprocess_env: Mapping[str, str] | None,
+    startup_timeout_seconds: int,
 ) -> VllmLauncher:
-    if not subprocess_env:
-        return launcher
-    return VllmLauncherWithEnvironment(launcher, subprocess_env)
+    environment = {_VLLM_ENGINE_READY_TIMEOUT_ENV: str(startup_timeout_seconds)}
+    if subprocess_env:
+        environment.update(subprocess_env)
+    return VllmLauncherWithEnvironment(launcher, environment)
 
 
 def _reserve_localhost_port(host: str) -> int:
@@ -125,7 +129,11 @@ class VllmBackend:
         chat_template_content = _resolved_chat_template(spec)
         resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
         model = self._model_config(spec)
-        launcher = _with_subprocess_env(vllm_launcher(self.config), subprocess_env)
+        launcher = _with_subprocess_env(
+            vllm_launcher(self.config),
+            subprocess_env,
+            self.config.startup_timeout_seconds,
+        )
         with _chat_template_argument(chat_template_content) as chat_template_args:
             with VllmEnvironment(
                 model=model,

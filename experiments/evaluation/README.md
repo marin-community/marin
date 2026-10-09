@@ -66,6 +66,12 @@ heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instanc
 `--seed` overrides the Evalchemy seed for every selected task in that launch and is stored in its record;
 `--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
 verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
+`--seed` overrides the Evalchemy seed for every selected task and records it;
+`--retry-unscored-harbor-trials` requires a results path and retries known unscored Harbor trials,
+while preserving scored agent failures and unknown errors;
+`--resume-results-path` resumes one Harbor evaluation from an object-store result path whose saved
+identity matches the full model and hosted judge configurations, policy, runtime, dataset, and task limit.
+A results root without this model-bound identity is rejected;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
 band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
 launcher always submits through the `marin` Iris controller.

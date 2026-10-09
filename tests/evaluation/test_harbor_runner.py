@@ -3,7 +3,7 @@
 
 import json
 import os
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -27,7 +27,8 @@ from marin.evaluation.harbor.runner import (
     _read_trial,
     _read_trials,
 )
-from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
+from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, ModelConfigRef, RunStatus
 from marin.evaluation.runner import EvaluationError
 from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
@@ -496,6 +497,20 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
     assert terminated_return_codes[0] is not None
 
 
+def test_harbor_driver_environment_preserves_iris_uv_wrapper_variables(monkeypatch):
+    iris_environment = {
+        "IRIS_ATTEMPT_UID": "attempt-123",
+        "IRIS_UV_EXECUTABLE": "/usr/local/bin/uv",
+        "IRIS_WORKDIR": "/app",
+    }
+    for key, value in iris_environment.items():
+        monkeypatch.setenv(key, value)
+
+    environment = driver_config._driver_environment()
+
+    assert {key: environment[key] for key in iris_environment} == iris_environment
+
+
 def test_harbor_driver_can_use_iris_uv_wrapper(tmp_path, monkeypatch):
     uv = tmp_path / "uv"
     uv.write_text(
@@ -579,6 +594,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         ),
         task_limit=7,
         model_agent_kwargs={"extra_body": "{}"},
+        model_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="qwen3-0.6b", location="org/checkpoint"))),
         secret_env_keys=("DAYTONA_API_KEY",),
     )
     env_vars = {"DAYTONA_API_KEY": "daytona-key"}
@@ -609,6 +625,67 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         assert captured["env"]["HF_TOKEN"] == "hf-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
+    assert json.loads((tmp_path / "harbor_resume_identity.json").read_text())["model"]["location"] == "org/checkpoint"
+
+
+def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path, monkeypatch):
+    executor = replace(
+        _harbor_executor("recover-unscored", n_benchmark=2),
+        retry_unscored_trials=True,
+    )
+    session = _inference_session()
+    job_name = runner._job_name(
+        executor.config.record_dataset,
+        (executor.config.digest, session.model.endpoint.model, executor.task_limit),
+    )
+    (tmp_path / "harbor_resume_identity.json").write_text(executor.resume_identity.model_dump_json())
+    job_dir = Path(str(runner._jobs_dir(str(tmp_path)))) / job_name
+    _write_job_record(job_dir, 2, executor.config)
+    scored_result = job_dir / "scored-zero" / "result.json"
+    scored_result.parent.mkdir(parents=True)
+    scored_result.write_text(
+        json.dumps(
+            {
+                "task_name": "scored-zero",
+                "verifier_result": {"rewards": {"reward": 0.0}},
+                "exception_info": {"exception_type": "AgentTimeoutError"},
+            }
+        )
+    )
+    unscored_result = job_dir / "setup-timeout" / "result.json"
+    unscored_result.parent.mkdir(parents=True)
+    unscored_result.write_text(
+        json.dumps(
+            {
+                "task_name": "setup-timeout",
+                "verifier_result": None,
+                "exception_info": {"exception_type": "InfrastructureError"},
+            }
+        )
+    )
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        assert Path(overlay.jobs_dir) / overlay.job_name == job_dir
+        assert scored_result.exists()
+        assert not unscored_result.exists()
+        unscored_result.parent.mkdir(parents=True)
+        unscored_result.write_text(
+            json.dumps(
+                {
+                    "task_name": "setup-timeout",
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                }
+            )
+        )
+
+    monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
+
+    outcome = executor(session, str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    assert outcome.metrics[dataset]["total"] == 2.0
+    assert outcome.canonical_metrics[dataset]["reward"] == 0.5
+    assert outcome.coverage[dataset].errors == {"AgentTimeoutError": 1}
 
 
 def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int = 1) -> HarborExecutor:
@@ -616,6 +693,7 @@ def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int
         _validated_config(dataset_selector=dataset, n_benchmark=n_benchmark, trials_per_task=trials_per_task),
         task_limit=None,
         model_agent_kwargs={},
+        model_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="qwen3-0.6b", location="org/checkpoint"))),
     )
 
 
@@ -892,3 +970,37 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["unscored_trials"] == 0
+
+
+@pytest.mark.parametrize("changed_input", ["checkpoint", "judge", "policy"])
+def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_path, monkeypatch, changed_input):
+    executor = _harbor_executor("aime")
+    stored_results = []
+
+    def driver(config, overlay, _env, _state):
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        trial = job_dir / "scored" / "result.json"
+        if trial.exists():
+            assert trial.read_bytes() == stored_results[0]
+            return
+        _write_job_record(job_dir, 1, config)
+        trial.parent.mkdir()
+        trial.write_text('{"task_name":"scored","verifier_result":{"rewards":{"reward":1}}}')
+        stored_results.append(trial.read_bytes())
+
+    monkeypatch.setattr(runner, "run_harbor_driver", driver)
+    session = _inference_session()
+    assert executor(session, str(tmp_path), {}).canonical_metrics["aime"]["reward"] == 1
+    assert executor(session, str(tmp_path), {}).canonical_metrics["aime"]["reward"] == 1
+    if changed_input == "checkpoint":
+        changed = replace(
+            executor, model_config=executor.model_config.model_copy(update={"location": "org/new-checkpoint"})
+        )
+    elif changed_input == "judge":
+        changed = replace(executor, judge_config=executor.model_config)
+    else:
+        changed = replace(executor, config=replace(executor.config, digest=f"sha256:{'2' * 64}"))
+    before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    with pytest.raises(EvaluationError, match="different dataset, model, policy"):
+        changed(session, str(tmp_path), {})
+    assert {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before

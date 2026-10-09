@@ -1,0 +1,12 @@
+[project]
+name = "marin-external-evalchemy-olympiadbench-judge-ablation"
+version = "0"
+requires-python = "==3.12.*"
+dependencies = ["evalchemy"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+# Includes the merged empty-answer and symbol-free-equation fixes plus the ablation's judge request constraint.
+evalchemy = { git = "https://github.com/marin-community/evalchemy.git", rev = "958cdb8019b7a4c8432fe85eb9572538ceb75950" }

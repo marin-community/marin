@@ -1,0 +1,31 @@
+# tau3-pi-only serving override: 131072 context, 32768 per-turn output.
+# Relay SFT all-Kimi Step1203 is a GrugMoE 256-expert model with a 262,144-token
+# native context window. Use the campaign's canonical Snowball serving topology
+# and 73,728-token suite cap.
+name: laion-snowball-67b-a2b-relay-sft-allkimi-step1203
+location: laion/snowball-67b-a2b-relay-sft-allkimi-step1203
+revision: ff664b48f4c79a81c585dbc9e082b34af3a22b4a
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 131072
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+
+# Benchmark configs select the policy thinking mode through the model's chat template.
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+generation:
+  max_gen_toks: 32768

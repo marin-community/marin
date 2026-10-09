@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
-from marin.evaluation.harbor.driver_config import preflight_harbor_configs
+from marin.evaluation.harbor.driver_config import _driver_environment, preflight_harbor_configs
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 
@@ -52,12 +52,10 @@ def _external_python(
     check: bool = True,
     extra_python_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    environment = dict(os.environ)
+    environment = _driver_environment()
     environment["PYTHONHASHSEED"] = hash_seed
-    python_paths = [str(_ROOT / "lib/marin/src")]
     if extra_python_path is not None:
-        python_paths.insert(0, str(extra_python_path))
-    environment["PYTHONPATH"] = os.pathsep.join(python_paths)
+        environment["PYTHONPATH"] = os.pathsep.join((str(extra_python_path), environment["PYTHONPATH"]))
     return subprocess.run(
         [
             "uv",
@@ -74,6 +72,37 @@ def _external_python(
         text=True,
         env=environment,
     )
+
+
+def test_external_driver_retries_spurious_path_style_response():
+    result = _external_python(
+        "-c",
+        textwrap.dedent(
+            """
+            from io import BytesIO
+            from unittest.mock import MagicMock, patch
+
+            from botocore.exceptions import ClientError
+            from rigging.filesystem.conditional_object import S3ConditionalObject
+
+            client = MagicMock()
+            client.get_object.side_effect = [
+                ClientError(
+                    {"Error": {"Code": "PathStyleRequestNotAllowed", "Message": "use virtual-host addressing"}},
+                    "GetObject",
+                ),
+                {"Body": BytesIO(b"one"), "ETag": '"v1"'},
+            ]
+            S3ConditionalObject._client = staticmethod(lambda _endpoint: client)
+            with patch("rigging.timing.time.sleep", lambda _delay: None):
+                result = S3ConditionalObject("s3://bucket/HEAD").read()
+            assert result is not None
+            assert result.data == b"one"
+            """
+        ),
+    )
+
+    assert result.returncode == 0
 
 
 def _preflight(
@@ -543,6 +572,81 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
         "OPENAI_BASE_URL": "https://judge.example/capability/v1",
         "MODEL_NAME": "judge-model",
     }
+
+
+def test_effective_acp_job_routes_model_requests_to_served_endpoint(tmp_path):
+    task_dir = tmp_path / "tasks" / "task-one"
+    task_dir.mkdir(parents=True)
+    (task_dir / "task.toml").write_text('version = "1.0"\n[task]\nname = "test/task-one"\n[environment]\n')
+    (task_dir / "instruction.md").write_text("Solve the task.")
+    (task_dir / "environment").mkdir()
+    (task_dir / "environment" / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    (task_dir / "tests").mkdir()
+    (task_dir / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [
+                    {
+                        "name": "acp:pi-acp@0.0.33",
+                        "env": {
+                            "OPENAI_API_KEY": "test-key",
+                            "OPENAI_BASE_URL": "https://stale.example/v1",
+                        },
+                    }
+                ],
+                "datasets": [{"path": "tasks"}],
+            }
+        )
+    )
+
+    preflight = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)
+    assert preflight[0]["agent"] == "acp:pi-acp@0.0.33"
+
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "runtime-job",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": None,
+                "endpoint_url": "https://iris.example/capability/v1",
+                "served_model": "served-pi",
+                "task_limit": 1,
+                "model_agent_kwargs": {},
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "tau3-pi",
+            }
+        )
+    )
+    script = (
+        "from pathlib import Path; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
+        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        "print(config.model_dump_json())"
+    )
+    effective = json.loads(_external_python("-c", script).stdout)
+
+    assert effective["agents"][0]["name"] == "acp:pi-acp@0.0.33"
+    assert effective["agents"][0]["env"] == {
+        "OPENAI_API_KEY": "****",
+        "OPENAI_BASE_URL": "https://iris.example/capability/v1",
+    }
+
+
+def test_packaged_sotopia_agent_resolves_in_pinned_runtime():
+    script = (
+        "from marin.evaluation.harbor.sotopia_agent import SotopiaAgent; "
+        "from marin.evaluation.harbor.trial_driver import _validate_agent_callbacks; "
+        '_validate_agent_callbacks(SotopiaAgent, "marin.evaluation.harbor.sotopia_agent:SotopiaAgent"); '
+        "print(SotopiaAgent.name())"
+    )
+
+    completed = _external_python("-c", script)
+
+    assert completed.stdout.strip() == "sotopia"
 
 
 @pytest.mark.parametrize(
