@@ -57,6 +57,7 @@ from rigging.token_authority import (
 )
 
 from iris.cluster.config import AuthConfig, PeerConfig
+from iris.cluster.types import JobName
 from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE, authorize_resource_owner
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,10 @@ DEFAULT_USER_ROLE = "user"
 WORKER_ROLE = "worker"
 # Role granted to a config-listed admin.
 ADMIN_ROLE = "admin"
+# Role of the token a task's own client presents. Its subject is the job's owner,
+# so owner-gated RPCs (child jobs, exec, endpoints) behave as for that user; it
+# never carries admin authority.
+TASK_ROLE = "task"
 
 # TTL for the control-plane admin token LocalCluster mints in-process for its
 # auto-login (aud="iris"). Short-lived and non-refreshable. Deployed clusters
@@ -88,6 +93,10 @@ SESSION_TOKEN_TTL_SECONDS = 3600  # 1 hour
 # short-lived tokens, or a worker-credential rotation lever) are in the auth design
 # doc's follow-ups.
 WORKER_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
+# Task token lifetime. Not revocable; a fresh token is minted for each dispatch,
+# so a retried or rescheduled attempt starts a new lifetime. It must outlive one
+# attempt of a long training task.
+TASK_TOKEN_TTL_SECONDS = 86400 * 30  # 30 days
 
 # Provider name when trusted_cidrs alone enables auth: in-network callers get
 # identity by location, everything else needs a token.
@@ -198,13 +207,16 @@ class NativeProxyIdentityAuthenticator:
         user_id = payload.get("user_id")
         role = payload.get("role")
         audience = payload.get("audience")
+        job_id = payload.get("job_id")
         if not isinstance(user_id, str) or not user_id or not isinstance(role, str) or not role:
             return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         if audience is not None and not isinstance(audience, str):
             return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
+        if job_id is not None and not isinstance(job_id, str):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         return AuthOutcome(
             AuthDecision.AUTHENTICATED,
-            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience),
+            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience, job_id=job_id),
         )
 
 
@@ -276,6 +288,23 @@ class JwtTokenManager:
             {"sub": user_id, "role": role, "jti": key_id},
             audience=CONTROL_PLANE_AUDIENCE,
             ttl_seconds=ttl_seconds,
+        )
+
+    def create_task_token(self, job_id: JobName) -> str:
+        """Mint the control-plane token a task of ``job_id`` presents as its owner.
+
+        The ``job_id`` claim binds the token to ``job_id``, so the controller lets
+        it pass the parent's elevated band or profile only to ``job_id``'s children.
+        """
+        return self._signer.mint(
+            {
+                "sub": job_id.user,
+                "role": TASK_ROLE,
+                "jti": f"iris_task_{secrets.token_urlsafe(8)}",
+                "job_id": job_id.to_wire(),
+            },
+            audience=CONTROL_PLANE_AUDIENCE,
+            ttl_seconds=TASK_TOKEN_TTL_SECONDS,
         )
 
     def create_endpoint_token(
@@ -353,6 +382,7 @@ class JwtTokenManager:
             user_id=claims.sub,
             role=claims.claims.get("role", "user"),
             audience=endpoint,
+            job_id=None if is_proxy_scope else claims.claims.get("job_id"),
         )
 
 

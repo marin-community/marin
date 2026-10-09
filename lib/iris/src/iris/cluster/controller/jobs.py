@@ -14,7 +14,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
-from sqlalchemy import bindparam, func, select
+from sqlalchemy import Row, bindparam, func, select
 
 from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
 from iris.cluster.config import user_admitted
@@ -26,7 +26,7 @@ from iris.cluster.constraints import (
     validate_tpu_request,
 )
 from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.auth import ADMIN_ROLE, ControllerAuth, authorize_owner_if_configured
+from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_owner_if_configured
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import BackendCapability, BackendObservation, JobFeasibilityRequest, TaskBackend
 from iris.cluster.controller.budget import budget_user_id
@@ -316,6 +316,23 @@ def _get_autoscaler_pending_hints(dependencies: JobDependencies) -> dict[str, Pe
     return dependencies.runtime.backend_observation.pending_hints
 
 
+def _task_caller_parent(dependencies: JobDependencies, job_id: JobName) -> Row | None:
+    """The parent's job row when a task of that parent launches ``job_id``, else None.
+
+    A task may give its child the admin-gated band or profile its parent already
+    holds: inheriting it grants nothing the parent's submitter did not. The
+    token's ``job_id`` claim must name the parent, so a task cannot borrow the
+    privileges of another job with the same owner.
+    """
+    identity = get_verified_identity()
+    if identity is None or identity.role != TASK_ROLE or job_id.parent is None:
+        return None
+    if identity.job_id != job_id.parent.to_wire():
+        return None
+    with dependencies.db.read_snapshot() as snapshot:
+        return reads.get_job_detail(snapshot, job_id.parent)
+
+
 def _profile_is_elevated(profile: int) -> bool:
     return resolve_container_profile(profile) in (
         job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
@@ -557,7 +574,9 @@ def _resolve_launch_priority(
     if launch.received_handoff:
         return band
     if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider:
-        authorize(AuthzAction.MANAGE_BUDGETS)
+        parent = _task_caller_parent(dependencies, launch.job_id)
+        if parent is None or priority_band_rank(band) < priority_band_rank(int(parent.priority_band)):
+            authorize(AuthzAction.MANAGE_BUDGETS)
         return band
     with dependencies.db.read_snapshot() as snapshot:
         user_budget = reads.get_user_budget(snapshot, launch.budget_user)
@@ -588,7 +607,11 @@ def _validate_launch_profile(
         )
     if _profile_is_elevated(request.container_profile):
         if dependencies.auth.provider and not launch.received_handoff:
-            authorize(AuthzAction.SET_CONTAINER_PROFILE)
+            parent = _task_caller_parent(dependencies, launch.job_id)
+            if parent is None or resolve_container_profile(parent.container_profile) != resolve_container_profile(
+                request.container_profile
+            ):
+                authorize(AuthzAction.SET_CONTAINER_PROFILE)
         logger.info(
             "Job %s using elevated container profile %s",
             launch.job_id.to_wire(),

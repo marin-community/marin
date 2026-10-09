@@ -79,6 +79,8 @@ class TaskIsolation:
         include_cluster_env: The operator's task_env and, on Kubernetes, the
             env Secret (object-store keys, injected credentials).
         include_controller_address: The controller address in the task env.
+        include_task_token: The controller-minted task token, which lets the
+            task's Iris client act as the job's owner.
         include_shared_caches: The node-shared download caches.
         include_service_account: On Kubernetes, the pod service account and its token.
         network: What the task's network reaches. Outside CLUSTER, a Docker
@@ -91,6 +93,7 @@ class TaskIsolation:
 
     include_cluster_env: bool
     include_controller_address: bool
+    include_task_token: bool
     include_shared_caches: bool
     include_service_account: bool
     network: TaskNetwork
@@ -111,6 +114,7 @@ def task_isolation(profile: int, egress_policy: int) -> TaskIsolation:
     return TaskIsolation(
         include_cluster_env=cluster_resources,
         include_controller_address=cluster_resources,
+        include_task_token=cluster_resources,
         include_shared_caches=cluster_resources,
         include_service_account=cluster_resources,
         network=_NETWORKS[resolve_egress_policy(profile, egress_policy)],

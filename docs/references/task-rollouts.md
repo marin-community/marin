@@ -107,6 +107,17 @@ A `ScriptGrader`'s collect commands run as root on the task machine, then its ar
 Collect commands and artifacts require a task machine.
 Artifacts specify a source, target, kind, exclusions, and missing-file policy.
 Directory exclusions use `tar --exclude` on the task machine.
+Artifact inspection and archive creation use the task machine's default command user.
+RolloutEngine configures this as the agent's execution user.
+Artifact collection requires `sh`, `tar`, and a writable `/tmp` on the task machine.
+Source inspection rejects symlinks in the source path and its ancestors.
+Archive extraction rejects included symlink and hardlink members.
+A root-owned temporary directory that the non-root agent cannot modify prevents archive-path replacement.
+Source inspection does not provide an atomic filesystem snapshot.
+Expanded contents have a 1 GiB limit, with at most 100,000 members.
+These checks run after download and do not limit transfer buffers or downloaded bytes.
+Invalid artifacts and missing required artifacts give `SUBMISSION_FAILURE` with reward zero.
+Archive command failures, archive timeouts, and provider or host I/O failures remain infrastructure errors.
 
 ## Deadlines and failures
 
