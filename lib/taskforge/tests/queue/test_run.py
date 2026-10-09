@@ -4,9 +4,12 @@
 import json
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from taskforge.loop.events import Terminal
 from taskforge.queue.config import load_run_config, run_config
-from taskforge.queue.job import SUMMARY_FILE, RunInputs, RunModel, run_job
+from taskforge.queue.job import SUMMARY_FILE, RunInputs, run_job
 from taskforge.queue.run import FailedItems
 from taskforge.review.decision import BandOutcome
 
@@ -28,16 +31,35 @@ def test_the_committed_example_parses():
     assert load_run_config(EXAMPLE).policy.band_rules.too_easy.then == "accept"
 
 
+@pytest.mark.parametrize("rule", ["too_easy", "too_hard"])
+def test_a_policy_that_asks_for_a_band_repair_is_refused_at_load(tmp_path, rule):
+    document = config(tmp_path, "accept")
+    document["policy"]["band_rules"][rule]["repairs"] = 1
+
+    with pytest.raises(ValidationError, match="cannot repair"):
+        run_config(document)
+
+
+def inputs_for(template_client, proposal_source, solver_models):
+    def inputs(root):
+        return RunInputs(
+            ideas={"IDEA": "idea"},
+            source=proposal_source,
+            describe_idea=lambda idea: {"idea": idea},
+            model=template_client,
+            rollout_models=solver_models,
+        )
+
+    return inputs
+
+
 async def test_a_run_exports_its_accepted_task_and_a_relaunch_runs_nothing_again(
     tmp_path, template_client, proposal_source, solver_models
 ):
     run = run_config(config(tmp_path, "accept"))
-    model = RunModel(client=template_client, rollout_models=solver_models)
+    inputs = inputs_for(template_client, proposal_source, solver_models)
 
-    def inputs(client, root):
-        return RunInputs(ideas={"IDEA": "idea"}, source=proposal_source, describe_idea=lambda idea: {"idea": idea})
-
-    summary = await run_job(run, inputs, FailedItems.SKIP, model)
+    summary = await run_job(run, inputs, FailedItems.SKIP)
 
     assert summary.items == {"IDEA--0": Terminal.ACCEPTED}
     accepted = summary.accepted["IDEA--0"]
@@ -48,7 +70,7 @@ async def test_a_run_exports_its_accepted_task_and_a_relaunch_runs_nothing_again
     ledgers = {path: path.read_bytes() for path in (run.root / "ledger").iterdir()}
     calls = list(template_client.calls)
 
-    again = await run_job(run, inputs, FailedItems.SKIP, model)
+    again = await run_job(run, inputs, FailedItems.SKIP)
 
     assert again.items == summary.items and again.accepted == summary.accepted
     assert (proposal_source.calls, template_client.calls) == (1, calls)
@@ -58,12 +80,9 @@ async def test_a_run_exports_its_accepted_task_and_a_relaunch_runs_nothing_again
 async def test_a_too_easy_task_is_rejected_under_the_reject_choice_and_not_exported(
     tmp_path, template_client, proposal_source, solver_models
 ):
-    model = RunModel(client=template_client, rollout_models=solver_models)
+    inputs = inputs_for(template_client, proposal_source, solver_models)
 
-    def inputs(client, root):
-        return RunInputs(ideas={"IDEA": "idea"}, source=proposal_source, describe_idea=lambda idea: {"idea": idea})
-
-    summary = await run_job(run_config(config(tmp_path, "reject")), inputs, FailedItems.SKIP, model)
+    summary = await run_job(run_config(config(tmp_path, "reject")), inputs, FailedItems.SKIP)
 
     assert summary.items == {"IDEA--0": Terminal.REJECTED}
     assert summary.accepted == {}

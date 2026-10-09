@@ -3,10 +3,8 @@
 
 """Shared fixtures for taskforge tests.
 
-Live tests carry ``@pytest.mark.live_glm`` and request the ``glm_settings`` fixture, which skips
-them unless the interactive GLM-5.3 endpoint is configured through the environment. Tests that run a
-transcript through RolloutEngine take ``scripted_model``. Live tests write raw evidence under
-``evidence_root``, which is outside the checkout.
+Tests that run a transcript through RolloutEngine take ``scripted_model``. Live tests write raw
+evidence under ``evidence_root``, which is outside the checkout.
 
 ``ledger`` is an in-memory ``Ledger`` that keeps every recorded entry in ``entries``.
 
@@ -33,7 +31,6 @@ from taskforge.builder.run import TaskDraft, run_build
 from taskforge.builder.sdk import BuildServices
 from taskforge.builder.template import standard
 from taskforge.ledger.records import LedgerEntry
-from taskforge.llm.endpoint import GLM_MODEL
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
 from taskforge.loop.program import template_program
@@ -42,38 +39,8 @@ from taskforge.proposal.source import ProposalBatch, SlotProposal
 from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.validate.solver import ModelFactory
 
-BASE_URL_ENV = "TASKFORGE_GLM_BASE_URL"
-TOKEN_FILE_ENV = "TASKFORGE_GLM_TOKEN_FILE"
-TOKEN_KEY = "GLM_API_TOKEN"
 EVIDENCE_DIR_ENV = "TASKFORGE_EVIDENCE_DIR"
 DEFAULT_EVIDENCE_ROOT = Path(tempfile.gettempdir()) / "taskforge-evidence"
-
-
-@dataclass(frozen=True)
-class GlmSettings:
-    base_url: str
-    model: str
-    token: str = field(repr=False)
-
-
-def read_key_line(path: Path, key: str) -> str:
-    """Return the value of the ``<key>=...`` line in ``path``; the value is never echoed."""
-    for line in path.read_text().splitlines():
-        name, sep, value = line.strip().partition("=")
-        if sep and name.strip() == key and value.strip():
-            return value.strip()
-    raise ValueError(f"{path} has no non-empty {key}= line")
-
-
-@pytest.fixture(scope="session")
-def glm_settings() -> GlmSettings:
-    base_url = os.environ.get(BASE_URL_ENV)
-    token_file = os.environ.get(TOKEN_FILE_ENV)
-    if not base_url or not token_file:
-        pytest.skip(f"live GLM test: set {BASE_URL_ENV} and {TOKEN_FILE_ENV} (see lib/taskforge/README.md)")
-    return GlmSettings(
-        base_url=base_url.rstrip("/"), model=GLM_MODEL, token=read_key_line(Path(token_file).expanduser(), TOKEN_KEY)
-    )
 
 
 @pytest.fixture(scope="session")

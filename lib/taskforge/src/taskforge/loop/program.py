@@ -10,12 +10,13 @@ proposals re-proposes the idea, up to ``max_idea_reproposals``, then the idea is
 revisions, control replay, solver and adversary trials, the calibration summary and review's decision.
 Here triage has no checks and accepts every proposal, authoring adopts ``services.template`` unchanged
 as the item's program, and control replay and the adversaries run no trial, so their events record
-zero counts and validation is the solver's trials. A ``Repair`` starts the next round, whose build
-recomputes the steps the repair invalidates; a rebuild to the same task is a failed revision. A
+zero counts and validation is the solver's trials. Since authoring cannot revise a program, the
+policy allows no ``Repair`` (``LoopPolicy``): a decisive finding rejects the item for budget. A
 ``Retry`` re-enters validation after a backoff, re-running only unsettled trials. A solve rate outside
-the band gets the repairs ``policy.band_rules`` allows its kind, then that rule's choice accepts the
-task (``ACCEPTED``, labelled with its band) or rejects it. A spent retry budget ends the item
-``ABANDONED`` with its causes. An unhandled exception records ``FAILED`` and propagates.
+the band is decided by that kind's rule in ``policy.band_rules``, which accepts the task
+(``ACCEPTED``, labelled with its band) or rejects it. A spent retry budget ends the item ``ABANDONED``
+with its causes. An unhandled exception, ``GlmUnavailable`` included, records ``FAILED`` and
+propagates.
 
 Each loop iteration derives the item's state from its event log, runs the sub-phase the state names
 and appends that sub-phase's completion event, so a new process resumes an item by re-running only
@@ -50,15 +51,15 @@ from types import ModuleType
 from pydantic import TypeAdapter
 
 from taskforge.atomic_file import write_atomic
+from taskforge.builder.author import PROGRAM_FILE
 from taskforge.builder.run import DRAFT_DIR, TaskDraft, item_id_for, load_draft, run_build
-from taskforge.builder.sdk import Build, BuildFailure, BuildOutput, BuildServices, ModelEndpoint
+from taskforge.builder.sdk import Build, BuildFailure, BuildOutput, BuildServices
 from taskforge.builder.step import CacheStatus
 from taskforge.content_hash import pretty_json, sha256_hex
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry, check_item_id, span
-from taskforge.llm.client import Completion
+from taskforge.llm.client import Completion, GlmUnavailable
 from taskforge.llm.policy import Message
-from taskforge.llm.recording import record_completions
 from taskforge.loop.events import (
     FINAL,
     DecisionKind,
@@ -86,7 +87,6 @@ from taskforge.review.decision import (
     RejectKind,
     Repair,
     Retry,
-    load_decision,
     write_decision,
 )
 from taskforge.review.rules import ItemHistory, decide
@@ -114,7 +114,6 @@ PLAN_DIR = "plan"
 SLOTS_DIR = "slots"
 REQUEST_FILE = "request.json"
 COMPLETIONS_FILE = "completions.json"
-PROGRAM_FILE = "program.py"
 REPAIR_ERROR_FILE = "repair_error.txt"
 SLOT_FAILURE_FILE = "failure.txt"
 
@@ -126,9 +125,8 @@ DIGEST_CHARS = 12
 
 _COMPLETIONS: TypeAdapter[tuple[Completion, ...]] = TypeAdapter(tuple[Completion, ...])
 
-NOOP_FAILURE = """\
-The revised program produced the identical task, so the findings below still stand. Change the steps \
-they name so the task they build changes."""
+NO_TRIAGE = "0 structural checks and 0 rubric samples ran"
+"""The ``TRIAGED`` tally of a proposal no check or rubric sample ran on."""
 
 
 @dataclass(frozen=True)
@@ -136,7 +134,6 @@ class LoopServices[IdeaT]:
     """Everything a run's items share.
 
     Attributes:
-        client: The run's model.
         source: Turns ideas into proposal batches.
         describe_idea: The JSON-serialisable record of an idea, written once to its ``idea.json``.
         template: The builder template every item adopts as its program (``builder.template.standard``).
@@ -148,7 +145,6 @@ class LoopServices[IdeaT]:
         slots: Bounds the model- and sandbox-bound phases running at once across items.
     """
 
-    client: ModelEndpoint
     source: ProposalSource[IdeaT]
     describe_idea: Callable[[IdeaT], Mapping[str, object]]
     template: ModuleType
@@ -251,14 +247,8 @@ async def run_idea[IdeaT](
             log.append(state.reproposals, EventKind.IDEA_EXHAUSTED, None, reproposals=str(state.reproposals))
             return ()
         async with services.slots:
-            with span(
-                services.ledger, EntryKind.LLM_CALL, item_id=item_id, round=state.reproposals, step="propose"
-            ) as f:
+            with span(services.ledger, EntryKind.LLM_CALL, item_id=item_id, round=state.reproposals, step="propose"):
                 batch = await services.source.propose(idea, policy.proposals_per_idea)
-                f.model = services.client.endpoint.model
-                completions = (*batch.planning, *(c for slot in batch.slots for c in slot.completions))
-                if completions:
-                    record_completions(f, completions)
         items = [item_id_for(proposal) for proposal in batch.proposals]
         if len(set(items)) != len(items) or any("," in item for item in items):
             raise ValueError(f"idea {idea_id}: proposal ids must be distinct and comma-free, got {items}")
@@ -438,29 +428,18 @@ def _reject(item: _Item, state: ItemState, kind: RejectKind, reason: str) -> Non
 
 
 async def _triage(item: _Item, state: ItemState) -> None:
-    """Accept the proposal: there are no structural checks and no rubric to triage it with."""
-    item.log.append(0, EventKind.TRIAGED, state.proposal_digest, decision=TriageDecision.ACCEPT, tally="", repairs="0")
+    """Accept the proposal: no structural check and no rubric sample runs on it."""
+    item.log.append(
+        0, EventKind.TRIAGED, state.proposal_digest, decision=TriageDecision.ACCEPT, tally=NO_TRIAGE, repairs="0"
+    )
 
 
 def _revised_source(item: _Item, state: ItemState) -> str | None:
-    """The program the next authoring revises: none, the round's failed program, or the one a repair condemned."""
-    match state.revision:
-        case RevisionKind.NONE:
-            return None
-        case RevisionKind.BUILD_FAILURE:
-            return (item.round_dir(state.round) / PROGRAM_FILE).read_text()
-        case RevisionKind.REPAIR:
-            assert state.repair_round is not None
-            return (item.round_dir(state.repair_round) / PROGRAM_FILE).read_text()
-
-
-def _pending_repair(item: _Item, state: ItemState) -> Repair:
-    assert state.repair_round is not None and state.repaired_task_digest is not None
-    path = item.evidence_dir(state.repair_round, state.repaired_task_digest) / DECISION_FILE
-    decision = load_decision(path)
-    if not isinstance(decision, Repair):
-        raise ValueError(f"{path} holds {type(decision).__name__}, but the item's log records a repair")
-    return decision
+    """The program the next authoring revises: none, or the round's program whose build failed."""
+    if state.revision is RevisionKind.NONE:
+        return None
+    assert state.revision is RevisionKind.BUILD_FAILURE, "the loop policy allows no Repair"
+    return (item.round_dir(state.round) / PROGRAM_FILE).read_text()
 
 
 async def _author(item: _Item, state: ItemState) -> None:
@@ -507,6 +486,8 @@ async def _build(item: _Item, state: ItemState) -> None:
             draft = await run_build(
                 program, proposal, round_dir, services.root / CACHE_DIR, services.build, state.invalidate, state.round
             )
+        except GlmUnavailable:
+            raise
         except Exception as error:
             # A BuildFailure or any other exception the program raised costs a revision.
             failure = "".join(traceback.format_exception(error))[-FAILURE_CHARS:]
@@ -514,10 +495,6 @@ async def _build(item: _Item, state: ItemState) -> None:
             _build_failed(item, state, program.digest, step, failure, noop=False)
             return
     digest = task_digest(draft.lowered)
-    if digest == state.repaired_task_digest:
-        failure = f"{NOOP_FAILURE}\n\n{_pending_repair(item, state).brief.failure}"
-        _build_failed(item, state, program.digest, "", failure, noop=True)
-        return
     steps = draft.provenance.steps
     item.log.append(
         state.round,
@@ -553,8 +530,10 @@ async def _trials(item: _Item, state: ItemState) -> None:
             ungraded=str(len(outcomes) - stats.graded),
         )
     if not state.adversaries_run:
-        # No adversary role runs, so the event carries no per-role counts and no adversary context.
-        item.log.append(state.round, EventKind.ADVERSARIES_RUN, state.task_digest, context_digest="")
+        # No adversary role runs: no per-role counts, and the context digest is "" as for an empty context.
+        item.log.append(
+            state.round, EventKind.ADVERSARIES_RUN, state.task_digest, roles="0", submissions="0", context_digest=""
+        )
 
 
 def retry_wait(backoff: RetryBackoff, retry: int) -> float:

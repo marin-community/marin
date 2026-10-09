@@ -5,8 +5,8 @@ task proposals, a builder program turns each proposal into a `TaskSpec` with fix
 validation runs solver trials on RolloutEngine, and review accepts, repairs, retries or rejects
 the task by its solve rate.
 
-This is the end-to-end skeleton: every stage runs, on ShellSim machines, with the model calls
-supplied by the caller. The follow-up layers fill each stage in without moving a module or
+This is the end-to-end skeleton: every stage runs, on ShellSim machines, with the models supplied
+by the caller. The follow-up layers fill each stage in without moving a module or
 renaming a public name.
 
 Taskforge is a standalone uv project with its own `uv.lock` and `.venv`. It depends on
@@ -44,11 +44,12 @@ content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> t
 
 ## What the skeleton runs, and what follows
 
-- Models: the caller's `queue.job.RunModel` supplies the builder's client (`builder.sdk.ModelEndpoint`)
+- Models: the caller's `queue.job.RunInputs` supplies the builder's model (`builder.sdk.ModelEndpoint`)
   and each solver trial's rollout model. The GLM-5.3 transport, agent loop and rollout model follow.
 - Triage accepts every proposal. Structural checks and the GLM rubric follow.
-- Authoring adopts `builder.template.standard` unchanged as each item's program. GLM program
-  authoring follows.
+- Authoring adopts `builder.template.standard` unchanged as each item's program, so no task can be
+  repaired: `LoopPolicy` refuses `max_repairs` or a band rule's `repairs` above 0. GLM program
+  authoring and repairs follow.
 - Machines are ShellSim only and graders are verifyit graders that run in process. Docker and Iris
   machines, image builds, script graders and `Build.try_grader` follow.
 - Validation runs the solver's trials. Control replay and adversary trials follow; their events and
@@ -70,6 +71,10 @@ It prints the path of `summary.json`, which lists every accepted item with its d
 (`task.json`, `lowered.json`, `controls.json`, `provenance.json`) and its solve rate. A relaunch on
 the same root resumes every item from its event log.
 
+A model a run is given must raise `taskforge.llm.client.GlmUnavailable` for a transient failure. A
+solver model that raises anything else leaves its trial `UNCLASSIFIED`, which no retry runs again, so
+the item ends `ABANDONED`; a builder model's other exceptions cost a build revision.
+
 ## Testing
 
 ```bash
@@ -77,6 +82,3 @@ uv run --project lib/taskforge --frozen --group test pytest -c lib/taskforge/pyp
     lib/taskforge/tests experiments/post_training/capability_driven_envs/tests
 cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
-
-Tests marked `live_glm` are deselected by default and skip unless `TASKFORGE_GLM_BASE_URL` and
-`TASKFORGE_GLM_TOKEN_FILE` are set.

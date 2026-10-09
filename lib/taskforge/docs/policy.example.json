@@ -7,12 +7,12 @@
     "proposals_per_idea": 10,
     "max_idea_reproposals": 1,
     "max_build_revisions": 3,
-    "max_repairs": 2,
+    "max_repairs": 0,
     "max_validation_retries": 2,
     "retry_backoff": {"initial": 60.0, "maximum": 900.0, "factor": 2.0, "jitter": 0.1},
     "band_rules": {
-      "too_easy": {"repairs": 1, "then": "accept"},
-      "too_hard": {"repairs": 1, "then": "reject"}
+      "too_easy": {"repairs": 0, "then": "accept"},
+      "too_hard": {"repairs": 0, "then": "reject"}
     },
     "validation": {
       "k": 8,

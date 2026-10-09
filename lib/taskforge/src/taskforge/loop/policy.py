@@ -33,12 +33,12 @@ class LoopPolicy:
         proposals_per_idea: ``n`` in ``ProposalSource.propose(idea, n)``.
         max_idea_reproposals: Re-proposals of an idea whose batch yielded zero proposals.
         max_build_revisions: Author revisions per item after a build failure or a no-op repair.
-        max_repairs: Review ``Repair`` decisions per item.
+        max_repairs: Review ``Repair`` decisions per item; 0, because this loop cannot repair a task.
         max_validation_retries: Review ``Retry`` decisions per item per launch; then the item is abandoned.
         retry_backoff: Wait before a ``Retry`` re-enters validation; the k-th retry waits the k-th interval.
         band_rules: Per band kind (too easy, too hard), the review ``Repair`` decisions a solve rate
             outside the band may trigger, then whether a task still outside it is accepted (labelled
-            with where it fell) or rejected. Taskforge's own policies reject after one repair.
+            with where it fell) or rejected. Each rule's ``repairs`` is 0, as ``max_repairs`` is.
         validation: The policy of every validation round.
     """
 
@@ -63,6 +63,17 @@ class LoopPolicy:
         negative = sorted(name for name, value in bounds.items() if value < 0)
         if negative:
             raise ValueError(f"Loop policy bounds must be non-negative: {negative}")
+        repairs = {
+            "max_repairs": self.max_repairs,
+            "band_rules.too_easy.repairs": self.band_rules.too_easy.repairs,
+            "band_rules.too_hard.repairs": self.band_rules.too_hard.repairs,
+        }
+        asked = sorted(name for name, value in repairs.items() if value)
+        if asked:
+            raise ValueError(
+                f"This loop cannot repair a task: authoring adopts the template unchanged, so a repair rebuilds "
+                f"the same task. Set {asked} to 0"
+            )
 
     @property
     def digest(self) -> str:

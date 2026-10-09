@@ -43,7 +43,7 @@ packages = ["src/taskforge"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 timeout = 60
-addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not live_glm'"
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
 markers = [
     "slow: long-running test",
     "integration: external service",
@@ -52,7 +52,6 @@ markers = [
     "requires_cluster: live cluster",
     "docker: Docker daemon",
     "manual: explicit validation",
-    "live_glm: calls the live GLM-5.3 endpoint; skips unless TASKFORGE_GLM_BASE_URL and TASKFORGE_GLM_TOKEN_FILE are set",
 ]
 
 [tool.ruff]

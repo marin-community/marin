@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The GLM-5.3 call records: endpoint, completion, usage and attempt types, and the errors a call raises.
+"""The GLM-5.3 call records: completion, usage and attempt types, and the errors a call raises.
 
 Every logical call is a ``Completion``: the concatenation of its continuation segments, with the
 ``Attempt`` record of every HTTP request it made. ``GlmRequestRejected`` is a rejection a retry
@@ -10,31 +10,8 @@ retries or the infrastructure hold running out.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
-
-from taskforge.llm.endpoint import API_ROOT, GLM_MODEL
-
-
-class Pool(StrEnum):
-    """Router worker pool; the bearer token binds which one serves a request."""
-
-    HIGH = "high"
-    BULK = "bulk"
-
-
-@dataclass(frozen=True)
-class GlmEndpoint:
-    """An OpenAI-compatible base URL ending in ``/v1``, its bearer token, and the pool it serves."""
-
-    base_url: str
-    token: str = field(repr=False)
-    pool: Pool
-    model: str = GLM_MODEL
-
-    def __post_init__(self) -> None:
-        if not self.base_url.endswith(API_ROOT):
-            raise ValueError(f"base_url must end in {API_ROOT}: {self.base_url}")
 
 
 class FinishReason(StrEnum):

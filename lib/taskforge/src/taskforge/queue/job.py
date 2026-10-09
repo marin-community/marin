@@ -5,9 +5,9 @@
 
 ``run_job`` is the one entry point. It places the run root, copies the policy in, takes the machine
 factories for the host, builds the run's services, runs ``queue.run.run_queue`` and writes
-``summary.json``. The run's model (``RunModel``) comes from the caller: the client every build step
-calls, and the factory of each solver trial's rollout model. A run lives on a laptop; its ledger is
-the per-item JSONL files under the run root.
+``summary.json``. The run's models come with its inputs (``RunInputs.model`` and
+``RunInputs.rollout_models``). A run lives on a laptop; its ledger is the per-item JSONL files under
+the run root.
 """
 
 import asyncio
@@ -50,27 +50,30 @@ def run_root(config: RunConfig) -> Path:
 
 @dataclass(frozen=True)
 class RunInputs[IdeaT]:
-    """What a run takes beyond its config: its ideas, the source that proposes from them, and each idea's
-    record (``LoopServices.describe_idea``).
+    """What a run takes beyond its config: its ideas, the source that proposes from them, each idea's
+    record (``LoopServices.describe_idea``), and its models.
 
     The capability layer supplies these for the capability catalog.
+
+    Attributes:
+        model: The model every build step calls. A transient failure must raise ``GlmUnavailable``: the
+            item then ends ``FAILED`` and a launch that retries failed items re-enters it, where any
+            other exception costs a build revision.
+        rollout_models: Builds each solver trial's rollout model. A transient failure must raise
+            ``GlmUnavailable`` (``MODEL_UNAVAILABLE``), which the trial and then a ``Retry`` run again. Any
+            other exception settles the trial ``UNCLASSIFIED``: every ``Retry`` reads it back from disk,
+            and the item ends ``ABANDONED`` on every launch.
     """
 
     ideas: Mapping[str, IdeaT]
     source: ProposalSource[IdeaT]
     describe_idea: Callable[[IdeaT], Mapping[str, object]]
-
-
-type InputsFactory[IdeaT] = Callable[[ModelEndpoint, Path], RunInputs[IdeaT]]
-"""Builds a run's inputs from the run's model client and run root."""
-
-
-@dataclass(frozen=True)
-class RunModel:
-    """The run's model: the client every build step calls, and each solver trial's rollout model."""
-
-    client: ModelEndpoint
+    model: ModelEndpoint
     rollout_models: ModelFactory
+
+
+type InputsFactory[IdeaT] = Callable[[Path], RunInputs[IdeaT]]
+"""Builds a run's inputs from the run root."""
 
 
 def prepare_root(config: RunConfig) -> Path:
@@ -83,24 +86,23 @@ def prepare_root(config: RunConfig) -> Path:
 
 @asynccontextmanager
 async def loop_services[IdeaT](
-    config: RunConfig, model: RunModel, root: Path, ledger: Ledger, inputs: InputsFactory[IdeaT]
+    config: RunConfig, root: Path, ledger: Ledger, inputs: InputsFactory[IdeaT]
 ) -> AsyncIterator[tuple[LoopServices[IdeaT], Mapping[str, IdeaT]]]:
-    """The run's ``LoopServices`` and ideas: the run's model, the host's factories, ``width`` slots.
+    """The run's ``LoopServices`` and ideas: the inputs' models, the host's factories, ``width`` slots.
 
     Builders sample at ``BUILD_POLICY``.
     """
     factories = machine_factories(config.host, None, config.image_cache)
-    run_inputs = inputs(model.client, root)
+    run_inputs = inputs(root)
     services = LoopServices(
-        client=model.client,
         source=run_inputs.source,
         describe_idea=run_inputs.describe_idea,
         template=standard,
         build=BuildServices(
-            client=model.client, policy=BUILD_POLICY, host=config.host, factories=factories, ledger=ledger
+            client=run_inputs.model, policy=BUILD_POLICY, host=config.host, factories=factories, ledger=ledger
         ),
         engine=config.engine.settings(factories, factory_capabilities(config.host)),
-        rollout_models=model.rollout_models,
+        rollout_models=run_inputs.rollout_models,
         ledger=ledger,
         root=root,
         slots=asyncio.Semaphore(config.width),
@@ -108,13 +110,11 @@ async def loop_services[IdeaT](
     yield services, run_inputs.ideas
 
 
-async def run_job[IdeaT](
-    config: RunConfig, inputs: InputsFactory[IdeaT], failed: FailedItems, model: RunModel
-) -> RunSummary:
+async def run_job[IdeaT](config: RunConfig, inputs: InputsFactory[IdeaT], failed: FailedItems) -> RunSummary:
     """Run ``config`` on this host to completion and write ``summary.json`` into the run root."""
     root = prepare_root(config)
     ledger = JsonlLedger(root / LEDGER_DIR)
-    async with loop_services(config, model, root, ledger, inputs) as (services, ideas):
+    async with loop_services(config, root, ledger, inputs) as (services, ideas):
         summary = await run_queue(ideas, config.policy, services, failed)
     write_atomic(root / SUMMARY_FILE, pretty_json({"run_id": config.run_id, **summary.summary_json()}).encode())
     return summary

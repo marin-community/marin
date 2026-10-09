@@ -38,7 +38,6 @@ from taskcompendium.models import (
     AnswerType,
     EnvironmentRequirements,
     PlainText,
-    ScriptGrader,
     Source,
     TaskResource,
     TaskSpec,
@@ -340,7 +339,7 @@ async def requirements(b: Build, made: Fixtures, guidance: str) -> EnvironmentRe
     raise b.failure("a container task needs a published image, and this host has no image builder")
 
 
-def grader_package(b: Build, draft: GraderDraft) -> GraderPackage:
+def grader_package(b: Build, draft: GraderDraft, made: Fixtures, task_machine: EnvironmentRequirements) -> GraderPackage:
     """The in-process answer grader a draft describes."""
     if draft.kind == "exact":
         return b.spec.answer_grader(ExactSpec(expected=(draft.expected,), ignore_case=True, ignore_whitespace=True))
@@ -351,15 +350,6 @@ def grader_package(b: Build, draft: GraderDraft) -> GraderPackage:
     if draft.kind == "math":
         return b.spec.answer_grader(MathSpec(expected=draft.expected.strip()))
     return b.spec.answer_grader(McqSpec(expected=draft.expected.strip()))
-
-
-def output_paths(package: GraderPackage, reference_files: Sequence[TaskResource]) -> tuple[str, ...]:
-    """The machine files a grader program reads without artifacts: the reference files' paths. Other
-    graders need none."""
-    grader = package.grader
-    if not isinstance(grader, ScriptGrader) or grader.artifacts:
-        return ()
-    return tuple(sorted(f"/{resource.path}" for resource in reference_files))
 
 
 @step(StepRole.GRADER)
@@ -375,14 +365,14 @@ async def grader(b: Build, made: Fixtures, task_machine: EnvironmentRequirements
 
     async def problem(draft: GraderDraft) -> str | None:
         try:
-            grader_package(b, draft)
+            grader_package(b, draft, made, task_machine)
         except (ValueError, BuildFailure) as error:
             return str(error)
         return None
 
     draft = await structured_until(b, task_messages(b, request, guidance), GraderDraft, "submit_grader", problem)
     return Grader(
-        package=grader_package(b, draft),
+        package=grader_package(b, draft, made, task_machine),
         answer_contract=draft.answer_contract,
         reference_reply=draft.reference_reply,
         reference_files=tuple(task_file(f) for f in draft.reference_files),
@@ -431,7 +421,6 @@ async def assemble(
         source=Source(dataset=SOURCE_DATASET, revision=b.proposal.digest, row=header.id, importer_revision=SDK_VERSION),
         environment=task_machine,
         files=made.agent_files,
-        output_paths=output_paths(graded.package, graded.reference_files),
         system=text.system,
         tags=(header.environment, header.verification),
     )
