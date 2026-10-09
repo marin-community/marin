@@ -368,11 +368,12 @@ jobs:
           -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
           lib/shellbox/tests/test_docker_machine.py -q
 
-      - name: Test Docker command interruption
+      - name: Test Docker command interruption and artifact permissions
         run: |
           docker pull busybox:1.36
           uv run --project lib/rolloutengine --frozen --group test pytest \
-            -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py -m docker -q
+            -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py \
+            lib/rolloutengine/tests/test_rollout.py -m docker -q
 
       - name: Type-check RolloutEngine
         working-directory: lib/rolloutengine
