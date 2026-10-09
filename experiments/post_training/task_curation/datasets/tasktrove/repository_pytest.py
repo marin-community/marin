@@ -147,21 +147,29 @@ def trusted_pytest(task: TaskFiles) -> PytestSpec | ImportRejection:
     )
 
 
+def ensure_pytest_json_report(dockerfile: str, conda_lines: tuple[str, ...] = ()) -> str:
+    """Install the report plugin in the repository's Python, including activated conda environments."""
+    if "pytest-json-report" in dockerfile:
+        return dockerfile
+    lines = dockerfile.splitlines()
+    for index, line in enumerate(lines):
+        tokens = line.split()
+        if tokens[:1] == ["RUN"] and "pip" in tokens and "install" in tokens and "pytest" in tokens:
+            lines[index] = line + " pytest-json-report"
+            return "\n".join(lines) + "\n"
+    if conda_lines:
+        activate = " && ".join(conda_lines)
+        install = f'RUN bash -lc "{activate} && pip install --no-cache-dir pytest-json-report"\n'
+    else:
+        install = (
+            "RUN (pip install --no-cache-dir pytest-json-report || pip3 install --no-cache-dir pytest-json-report)\n"
+        )
+    return dockerfile.rstrip("\n") + "\n" + install
+
+
 def repository_dockerfile(dockerfile: str, instruction: str) -> str:
     """Carry the legacy pytest plugin and repository dependency fixes into the build recipe."""
-    if "pytest-json-report" not in dockerfile:
-        lines = dockerfile.splitlines()
-        for index, line in enumerate(lines):
-            tokens = line.split()
-            if tokens[:1] == ["RUN"] and "pip" in tokens and "install" in tokens and "pytest" in tokens:
-                lines[index] = line + " pytest-json-report"
-                dockerfile = "\n".join(lines) + "\n"
-                break
-        else:
-            dockerfile = dockerfile.rstrip("\n") + (
-                "\nRUN (pip install --no-cache-dir pytest-json-report"
-                " || pip3 install --no-cache-dir pytest-json-report)\n"
-            )
+    dockerfile = ensure_pytest_json_report(dockerfile)
     match = SWESMITH_REPOSITORY.search(instruction)
     if match is None:
         return dockerfile

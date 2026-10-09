@@ -16,14 +16,13 @@ from taskcompendium.convert.tasktrove_converted_task import (
 )
 from verifyit.spec import PytestSpec
 
+from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import repository_dockerfile
 from experiments.post_training.tasktrove.converters.swe_repo import (
     CONFIG_JSON,
     TESTBED,
     TRUSTED_TEST_PATHS,
-    ensure_pytest_json_report,
     pytest_selection,
     restore_setup,
-    swe_test_environment,
     test_ids,
 )
 
@@ -82,7 +81,7 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=spec,
-        dockerfile=swe_test_environment(ensure_pytest_json_report(task.text(DOCKERFILE)), task.text(INSTRUCTION)),
+        dockerfile=repository_dockerfile(task.text(DOCKERFILE), task.text(INSTRUCTION)),
         tags=("code", "swe", "swe-repo", "trusted-test-paths"),
         language="python",
         data_files={TRUSTED_TEST_PATHS: task.files[TRUSTED_TEST_PATHS]},

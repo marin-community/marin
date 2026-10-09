@@ -6,7 +6,7 @@
 import json
 import subprocess
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -20,6 +20,15 @@ from experiments.post_training.task_curation.datasets.tasktrove.repositories imp
 from experiments.post_training.task_curation.tests.conversion import convert_row, tasktrove_row
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@dataclass(frozen=True)
+class RepositoryFixture:
+    task: TaskSpec
+    workspace: Path
+    tests_dir: Path
+    spec: PytestSpec
+    trusted_tests: str
 
 
 def swesmith_pipeline():
@@ -138,26 +147,26 @@ def repository_fixture(tmp_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(resource_bytes(resource))
     spec = replace(verifier_spec(task), workspace=str(workspace), python=sys.executable, timeout=30)
-    return task, workspace, tests_dir, spec, trusted_tests
+    return RepositoryFixture(task, workspace, tests_dir, spec, trusted_tests)
 
 
 @pytest.mark.parametrize("repair, tamper, expected", [(False, False, 0), (True, False, 1), (False, True, 0)])
 def test_converted_grader_restores_tests_and_grades_product_code(repository_fixture, repair, tamper, expected):
-    _task, workspace, tests_dir, spec, trusted_tests = repository_fixture
+    workspace = repository_fixture.workspace
     if repair:
         (workspace / "calc.py").write_text("def add(a, b): return a + b\n")
     if tamper:
         (workspace / "tests/test_calc.py").write_text("def test_add(): pass\n")
-    reward = grade_pytest.grade(spec, tests_dir, workspace)
+    reward = grade_pytest.grade(repository_fixture.spec, repository_fixture.tests_dir, workspace)
     assert reward.reward == expected
-    assert (workspace / "tests/test_calc.py").read_text() == trusted_tests
+    assert (workspace / "tests/test_calc.py").read_text() == repository_fixture.trusted_tests
 
 
 @pytest.mark.parametrize(
     "hook_state", ["untracked", "ignored", "modified", "committed", "assume-unchanged", "skip-worktree"]
 )
 def test_converted_grader_removes_candidate_pytest_hooks(repository_fixture, hook_state):
-    _task, workspace, tests_dir, spec, _trusted_tests = repository_fixture
+    workspace, tests_dir, spec = repository_fixture.workspace, repository_fixture.tests_dir, repository_fixture.spec
     path = "tests/conftest.py" if hook_state in ("untracked", "ignored") else "conftest.py"
     if hook_state == "ignored":
         (workspace / ".gitignore").write_text(path + "\n")
@@ -182,7 +191,7 @@ def test_converted_grader_removes_candidate_pytest_hooks(repository_fixture, hoo
 
 @pytest.mark.parametrize("replacement_kind", ["commit", "blob"])
 def test_converted_grader_ignores_candidate_git_replacement_refs(repository_fixture, replacement_kind):
-    _task, workspace, tests_dir, spec, trusted_tests = repository_fixture
+    workspace, tests_dir, spec = repository_fixture.workspace, repository_fixture.tests_dir, repository_fixture.spec
     trusted = git(workspace, "rev-parse", "HEAD")
     original_blob = git(workspace, "rev-parse", f"{trusted}:tests/test_calc.py")
     forged_tests = "def test_add(): pass\n"
@@ -194,11 +203,11 @@ def test_converted_grader_ignores_candidate_git_replacement_refs(repository_fixt
     assert git(workspace, "show", f"{trusted}:tests/test_calc.py") == forged_tests.strip()
     assert grade_pytest.grade(replace(spec, setup=None), tests_dir, workspace).reward == 1
     assert grade_pytest.grade(spec, tests_dir, workspace).reward == 0
-    assert (workspace / "tests/test_calc.py").read_text() == trusted_tests
+    assert (workspace / "tests/test_calc.py").read_text() == repository_fixture.trusted_tests
 
 
 def test_build_context_keeps_original_auxiliary_bytes(repository_fixture):
-    task, _workspace, _tests_dir, _spec, _trusted_tests = repository_fixture
+    task = repository_fixture.task
     assert task.environment_requirements.docker_build is not None
     files = {item.path: resource_bytes(item) for item in task.environment_requirements.docker_build.files}
     assert files["helper.sh"] == b"#!/bin/sh\nexit 0\n"

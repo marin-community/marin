@@ -24,11 +24,11 @@ from taskcompendium.convert.tasktrove_converted_task import (
 )
 from verifyit.spec import PytestSpec, ScriptSpec
 
+from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import ensure_pytest_json_report
 from experiments.post_training.tasktrove.converters.swe_repo import (
     CONFIG_JSON,
     TESTBED,
     TRUSTED_TEST_PATHS,
-    ensure_pytest_json_report,
     pytest_selection,
     restore_setup,
     test_ids,
