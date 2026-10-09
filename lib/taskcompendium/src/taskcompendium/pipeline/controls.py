@@ -27,6 +27,7 @@ from taskcompendium.models import (
     grader_workspace,
     grades_in_process,
     require_compatible_backend,
+    require_resolved_environment,
     verifyit_spec,
 )
 from taskcompendium.pipeline.fingerprints import function_code_identity
@@ -46,7 +47,7 @@ from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "5"
+CONTROLS_REVISION = "6"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -121,6 +122,7 @@ def _empty_submission(task: TaskSpec) -> ControlSubmission:
 
 
 async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingMachines | None) -> VerificationReport:
+    require_resolved_environment(task.environment_requirements)
     grader = task.grader
     if isinstance(grader, NoGrader | SessionGrader):
         return VerificationReport(
@@ -134,6 +136,7 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
     if not grades_in_process(grader):
         environment = grader.environment
         assert environment is not None
+        require_resolved_environment(environment)
         if machines is None:
             raise ValueError("Sandbox controls require grading machines")
         sandbox = _Sandbox(machines, controls.memory_mb, _image_machine(machines, environment, controls.memory_mb))
@@ -151,6 +154,7 @@ def _image_machine(
     machines: GradingMachines, environment: EnvironmentRequirements, memory_mb: int
 ) -> tuple[MachineFactory, MachineSpec]:
     """A machine for ``environment``, on a backend the environment declares compatible."""
+    require_resolved_environment(environment)
     factory, spec = machines.machine(environment, memory_mb)
     require_compatible_backend(environment, factory.backend)
     return factory, spec
@@ -170,6 +174,7 @@ class _Sandbox:
         The agent's environment chooses the oracle's backend, so a grader that runs locally still gets its
         golden from a sandbox of the agent's image.
         """
+        require_resolved_environment(task.environment_requirements)
         if task.environment_requirements.docker_image is None:
             return self.grader
         return _image_machine(self.machines, task.environment_requirements, self.memory_mb)

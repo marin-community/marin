@@ -10,8 +10,6 @@ from verifyit.spec import PytestSpec
 from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, SOLVE_SH, TESTS_MOUNT, TaskFiles
 from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
-    Converter,
-    ConverterKey,
     ConvertStatus,
     Rejected,
 )
@@ -68,6 +66,15 @@ def _solution_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
     return {**files, SOLVE_SH: ORACLE_SCRIPT.encode()}
 
 
+def pytest_dockerfile(dockerfile: str, tree: ast.Module) -> str:
+    """Install the legacy isolated pytest interpreter and its test-import dependencies."""
+    modules = {
+        alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
+    } | {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+    dependencies = " mock" if "mock" in modules else ""
+    return dockerfile.rstrip() + "\n" + PYTEST_INSTALL.format(dependencies=dependencies)
+
+
 def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> ConvertedTask | Rejected:
     """Convert one self-contained Python task without preserving its legacy shell grader."""
     module = _test_module(task, test_files)
@@ -78,10 +85,6 @@ def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> Con
     if isinstance(solution_files, Rejected):
         return solution_files
 
-    modules = {
-        alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
-    } | {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
-    dependencies = " mock" if "mock" in modules else ""
     data_files = {test_file: task.files[test_file], **task.under("setup_files/")}
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
@@ -89,16 +92,9 @@ def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> Con
             paths=(f"{TESTS_MOUNT}/{test_file.removeprefix('tests/')}",),
             python=PYTEST_PYTHON,
         ),
-        dockerfile=task.text(DOCKERFILE).rstrip() + "\n" + PYTEST_INSTALL.format(dependencies=dependencies),
+        dockerfile=pytest_dockerfile(task.text(DOCKERFILE), tree),
         tags=("code", "python", "unit-test", "kata"),
         language="python",
         data_files=data_files,
         solution_files=solution_files,
     )
-
-
-CONVERTER = Converter(
-    name="python_unit_tests",
-    keys=(ConverterKey("unit-test-gen", frozenset({"tests/test.sh"})),),
-    convert=convert,
-)

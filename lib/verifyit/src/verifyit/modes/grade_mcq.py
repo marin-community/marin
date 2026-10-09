@@ -1,14 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mode mcq: the option letter the candidate wrote on its ``Answer:`` line.
+"""Grade a standalone option letter or the last ``Answer: X`` in the output.
 
-Extraction is the nemotron_gym MCQA pattern, taking the last ``Answer: X`` in the output. Half of
-the Nemotron prompts ask for ``Answer: \\boxed{X}`` and models also write ``**Answer:** (X)``, so
-``\\boxed{}``, markdown emphasis, backticks, and brackets around the letter are dropped before
-matching. The original verifier fell back to any trailing single letter when that pattern missed;
-the fallback scores prose that never states an answer, so it is not reproduced here. Output with no
-``Answer:`` line scores zero, as does a letter outside ``A``..the last option.
+Answer lines may wrap the letter in boxes, markdown or brackets. A bare letter must
+occupy the entire stripped output; prose ending in a letter is not an answer.
 """
 
 import math
@@ -171,6 +167,9 @@ def grade(spec: McqSpec, tests_dir: Path, workspace: Path) -> Reward:
     if text is None:
         return scored(0.0, reason="no_output")
     matches = answer_letters(text)
-    if not matches:
-        return no_answer_line
-    return grade_mcq_candidate(spec, matches[-1])
+    if matches:
+        return grade_mcq_candidate(spec, matches[-1])
+    candidate = text.strip()
+    if len(candidate) == 1 and candidate in string.ascii_letters:
+        return grade_mcq_candidate(spec, candidate)
+    return no_answer_line

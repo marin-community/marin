@@ -20,13 +20,14 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
-from verifyit.modes.grade_judge import normalize as normalize_reference
 from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+
+MCQA_CONFIG = "laion__nemotron-gym-knowledge-mcqa-v2"
 
 OPENQA_REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 MCQA_REWRITE_REASON = "Replace the source's answer-file wrapper with a request for one option letter"
@@ -55,7 +56,8 @@ MCQA_FORMAT_PREFIX = (
 )
 MCQA_FORMAT_WRAPPERS = ("{}", "\\boxed{{{}}}")
 OPTION_LINE = re.compile(r"^[ \t]*([A-Z])[.):][ \t]", re.MULTILINE)
-LISTED_OPTIONS = re.compile(r"'Answer: (?:\\boxed\{)?([A-Z](?:/[A-Z])+)")
+LISTED_OPTIONS = re.compile(r"'Answer: (?:\\boxed\{)?([A-Z](?:/[A-Z])*)")
+ESCAPED_OPTION_NEWLINE = re.compile(r"\\n(?=[ \t]*[A-Z][.):][ \t])")
 MCQA_REGEX = r"Answer\s*:\s*(?!Answer)\s*([A-Za-z0-9])\s*"
 MCQA_BOXED_REGEX = r"\\boxed\{\s*([A-Za-z0-9])\s*\}"
 MCQA_EXTRACTIONS = frozenset(
@@ -116,45 +118,92 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
         return source_defect("missing_question", "The semantic judge requires its source question")
     if not references:
         return source_defect("invalid_references", "At least one reference is required")
-    if any(not normalize_reference(reference) for reference in references):
-        return source_defect("invalid_references", "A reference becomes empty under normalization")
+    # JudgeSpec carries the grading inputs; archived scripts remain private provenance only.
     package = verifyit_package(
         JudgeSpec(references=references, question=question),
-        archive_resources(row.data).verifier,
+        tuple(
+            resource.model_copy(update={"path": "source/" + resource.path})
+            for resource in archive_resources(row.data).verifier
+        ),
         environment=required_grader_environment(context),
     )
     prompt = TextMessage(role="user", content=replace_phrases(instruction, OPENQA_DELIVERY))
     task = conversation_task(row, events=(prompt,), package=package)
+    subject = "knowledge" if isinstance(data.get("expected_answers"), list) else "science"
+    task = task.model_copy(update={"tags": ("qa", "openqa", "judge", "reference", "nemotron", subject)})
     return rewritten_task(task, original=instruction, reason=OPENQA_REWRITE_REASON)
 
 
-def mcqa_question(instruction: str, options: int) -> str:
-    """The question and its options without the file-delivery wrapper, asking for one option letter."""
+def mcqa_option_labels(problem: str) -> tuple[str, ...]:
+    """Choice labels beginning with A, excluding preceding labeled premises."""
+    matches = list(OPTION_LINE.finditer(problem))
+    start = next((index for index, match in enumerate(matches) if match.group(1) == "A"), len(matches))
+    # Source questions can repeat a complete choice list, then append a revised
+    # list. Use the final list, without hiding duplicate labels within one list.
+    for index in range(start + 1, len(matches)):
+        if matches[index].group(1) != "A":
+            continue
+        preceding = {match.group(1) for match in matches[start:index]}
+        maximum = max(preceding)
+        complete = preceding == {chr(letter) for letter in range(65, ord(maximum) + 1)} and maximum != "A"
+        following = {match.group(1) for match in matches[index:]}
+        complete = complete and "B" in following
+        gap = problem[matches[index - 1].end() : matches[index].start()]
+        premise = maximum == "A" and ("\n\n" in gap or len(gap.strip().splitlines()) > 1 or "?" in gap)
+        if complete or premise:
+            start = index
+    end = len(matches)
+    for index in range(start + 1, len(matches)):
+        gap = problem[matches[index - 1].end() : matches[index].start()]
+        if gap.partition("\n\n")[2].lstrip().startswith("(Note:"):
+            end = index
+            break
+    choices = dict.fromkeys(
+        (
+            matches[index].group(1),
+            problem[matches[index].end() : matches[index + 1].start() if index + 1 < end else len(problem)]
+            .partition("\n\n(Note:")[0]
+            .strip(),
+        )
+        for index in range(start, end)
+    )
+    return tuple(label for label, _ in choices)
+
+
+def mcqa_question(instruction: str) -> tuple[str, tuple[str, ...]]:
+    """The question and its choice labels, with source delivery wrappers removed."""
     _, separator, problem = instruction.partition(MCQA_SEPARATOR)
     if not separator:
         raise ValueError("Unrecognized MCQA delivery wrapper")
     if not problem.strip():
         raise ValueError("Missing MCQA question/options")
+    # Some archives contain literal backslash-n separators. Decode only option boundaries,
+    # preserving mathematical escapes and any literal backslashes in the question.
+    problem = ESCAPED_OPTION_NEWLINE.sub("\n", problem)
+    labels = mcqa_option_labels(problem)
+    options = max((ord(label) - 64 for label in labels), default=0)
+    letters = tuple(chr(65 + index) for index in range(options))
+    if not labels:
+        raise ValueError("Missing labeled options beginning at A")
     first, separator, rest = problem.partition("\n\n")
     if first.startswith(MCQA_FORMAT_PREFIX):
-        letters = tuple(chr(65 + index) for index in range(options))
-        option_lists = {"/".join(letters)}
         listed = LISTED_OPTIONS.search(first)
-        # A generated wrapper can list the labels out of order or repeat one; accept any listing of exactly
-        # the actual labels.
-        if listed is not None and set(listed.group(1).split("/")) == set(letters):
-            option_lists.add(listed.group(1))
+        # The generated delivery wrapper can contain stale labels. Its syntax identifies
+        # the wrapper; the actual question determines which answers are available.
+        option_lists = (listed.group(1),) if listed is not None else ()
         valid_formats = {
             f"{MCQA_FORMAT_PREFIX}'Answer: {wrapper.format(listed_options)}' "
             f"(e.g. 'Answer: {wrapper.format(example)}')."
             for wrapper in MCQA_FORMAT_WRAPPERS
             for listed_options in option_lists
-            for example in letters
+            for example in listed_options.split("/")
         }
         if first not in valid_formats or not separator or not rest.strip():
             raise ValueError("Unsupported MCQA format wrapper")
         problem = rest
-    return f"{problem.strip()}\n\nReturn one option letter from A through {chr(64 + options)}."
+    unique_labels = tuple(dict.fromkeys(labels))
+    choices = f"A through {chr(64 + options)}" if unique_labels == letters else ", ".join(unique_labels)
+    return f"{problem.strip()}\n\nReturn one option letter from {choices}.", labels
 
 
 def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
@@ -163,17 +212,19 @@ def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec
         return source_defect("missing_input", "Instruction and verifier_data are required")
     if data.get("output_regex") not in MCQA_EXTRACTIONS:
         return unsupported("unsupported_answer_contract", "Unsupported source MCQA extraction regex")
-    letters = {match.group(1) for match in OPTION_LINE.finditer(instruction)}
-    options = max((ord(letter) - 64 for letter in letters), default=0)
-    if not letters or letters != {chr(65 + index) for index in range(options)}:
-        return unsupported("unsupported_answer_contract", "Options must be a contiguous labeled sequence beginning at A")
     try:
-        question = mcqa_question(instruction, options)
+        question, labels = mcqa_question(instruction)
     except ValueError as error:
         return unsupported("unsupported_answer_contract", str(error))
-    task = mcq_task(row, prompt=question, answer=data.get("expected_answer"), options=options)
+    answer = data.get("expected_answer")
+    if not isinstance(answer, str) or answer.strip().upper() not in labels:
+        return source_defect("invalid_reference", f"The key must name a listed option: {answer!r}")
+    if labels.count(answer.strip().upper()) > 1:
+        return unsupported("unsupported_answer_contract", "The reference names multiple listed options")
+    task = mcq_task(row, prompt=question, answer=answer, options=max(ord(label) - 64 for label in labels))
     if isinstance(task, ImportRejection):
         return task
+    task = task.model_copy(update={"tags": ("qa", "mcq", "nemotron")})
     return rewritten_task(task, original=instruction, reason=MCQA_REWRITE_REASON)
 
 
@@ -219,8 +270,8 @@ def sources() -> list[RlDataSource]:
                 pipeline=RlDataPipeline(
                     name=name,
                     source=tasktrove_source(config),
-                    convert=convert_openqa,
-                    version="1",
+                    convert=TaskTroveConverter(config, convert_openqa),
+                    version="3",
                     environment=ShellSim(),
                     intended_use=IntendedUse.TRAIN,
                     rubric=OPENQA_RUBRIC,
@@ -231,7 +282,7 @@ def sources() -> list[RlDataSource]:
         ),
         RlDataSource(
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-knowledge-mcqa-v2",
+                id=f"Task Trove:{MCQA_CONFIG}",
                 title="laion/nemotron-gym-knowledge-mcqa-v2",
                 origin="Task Trove",
                 family="qa-short-answer",
@@ -244,9 +295,9 @@ def sources() -> list[RlDataSource]:
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-knowledge_mcqa",
-                source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
-                convert=convert_knowledge_mcqa,
-                version="1",
+                source=tasktrove_source(MCQA_CONFIG),
+                convert=TaskTroveConverter(MCQA_CONFIG, convert_knowledge_mcqa),
+                version="5",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=KNOWLEDGE_MCQA_RUBRIC,

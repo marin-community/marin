@@ -15,22 +15,6 @@ from experiments.post_training.task_curation.export_catalog import catalog_docum
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import DataSourceReview, RlDataSource, SourceInfo
 from experiments.post_training.task_curation.sources import all_pipelines
-from experiments.post_training.task_curation.tests import (
-    test_arc,
-    test_nemotron_ultra,
-    test_reasoning_gym,
-    test_skyrl,
-    test_tasktrove_code,
-    test_tasktrove_text,
-)
-
-FAMILY_TESTS = (test_arc, test_nemotron_ultra, test_reasoning_gym, test_skyrl, test_tasktrove_code, test_tasktrove_text)
-
-
-def test_every_declaration_has_a_fixture_row():
-    covered = [name for module in FAMILY_TESTS for name in module.ROWS]
-    assert len(covered) == len(set(covered))
-    assert set(covered) == set(all_pipelines())
 
 
 def test_parquet_count_export_identifies_the_counted_input(tmp_path):

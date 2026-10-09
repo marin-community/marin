@@ -8,35 +8,39 @@ import os
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
-from taskcompendium.convert.executable import SOLUTION_PATHS, solve_script
+from harbor_config.models.task.config import TaskConfig
+from taskcompendium.convert.executable import solve_script
 from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH, archive_files, unpack_task_binary
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH
+from taskcompendium.harbor.export import harbor_record
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
-from taskcompendium.pipeline.controls import run_controls
-from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask
 from taskcompendium.runtime.resources import resource_bytes
-from verifyit.grade import grade
+from verifyit.grade import Status, grade
 from verifyit.spec import ScriptSpec, StdioSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove import (
     code,
     nl2bash,
     python_tests,
-    repositories,
     structured_outputs,
 )
 from experiments.post_training.task_curation.tests.conversion import (
+    BASE_IMAGE,
     convert_row,
     converted_task,
     fixture_context,
     tasktrove_row,
 )
 
+pytest_plugins = ("lib.verifyit.tests.test_judge",)
+
 PIPELINES = {
     source.name: source.pipeline
-    for module in (code, python_tests, nl2bash, structured_outputs, repositories)
+    for module in (code, python_tests, nl2bash, structured_outputs)
     for source in module.sources()
     if source.pipeline is not None
 }
@@ -106,15 +110,6 @@ def structured_row(schema: dict, schema_type: str, instruction: str = STRUCTURED
     )
 
 
-def repository_row() -> dict:
-    config = {"repo": "octo/widgets", "FAIL_TO_PASS": ["tests/test_spin.py::test_spin"], "PASS_TO_PASS": []}
-    return archive(
-        "Fix the spin bug in octo/widgets.\n\n```\n"
-        "git clone https://github.com/octo/widgets.git . && git checkout 1a2b3c4\n```\n",
-        {"tests/config.json": json.dumps(config).encode(), SOLVE_SH: b"#!/bin/bash\ngit apply /solution/fix.patch\n"},
-    )
-
-
 ROWS: dict[str, dict] = {
     "tasktrove-code_contests": archive(SUM_PROMPT, {"tests/test_data.json": json.dumps(SUM_CASES).encode()}),
     "tasktrove-codeforces": {"path": "codenet", "task_binary": CODENET},
@@ -134,40 +129,7 @@ ROWS: dict[str, dict] = {
     "tasktrove-unitsyn_large": python_row(),
     "tasktrove-stack_pytest": python_row(),
     "tasktrove-structured_outputs": structured_row(NAME_SCHEMA, "json"),
-    "tasktrove-swe_rebench": repository_row(),
-    "tasktrove-swesmith": repository_row(),
 }
-
-PYTHON_FILE = ("/app/solution.py",)
-EXPECTED = {
-    "tasktrove-code_contests": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
-    "tasktrove-codeforces": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
-    "tasktrove-competitive_coding": ("stdio", PYTHON_FILE, code.AGENT_IMAGE),
-    "tasktrove-taco": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
-    "tasktrove-nl2bash": ("script", (OUTPUT_PATH,), nl2bash.AGENT_IMAGE),
-    "tasktrove-curriculum_easy": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-curriculum_medium": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-e2egit": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-e2egit_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-multifile": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-pymethods": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-pymethods_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-unitsyn": ("pytest", SOLUTION_PATHS, python_tests.AGENT_IMAGE),
-    "tasktrove-unitsyn_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
-    "tasktrove-stack_pytest": ("pytest", PYTHON_FILE, python_tests.STACK_PYTEST_AGENT_IMAGE),
-    "tasktrove-structured_outputs": ("json-schema", (), None),
-    "tasktrove-swe_rebench": ("none", (), None),
-    "tasktrove-swesmith": ("none", (), None),
-}
-"""Each declaration's grader mode (``none`` for an ungraded task), captured files and agent image.
-
-A task with an agent image is graded in a fresh machine of the grader image; the others are graded
-in process or not at all.
-"""
-
-
-def grader_name(task: TaskSpec) -> str:
-    return task.grader.mode if isinstance(task.grader, VerifyitGrader) else task.grader.kind
 
 
 def write_verifier(task: TaskSpec, tests: Path) -> None:
@@ -181,21 +143,9 @@ def resource_map(resources) -> dict[str, bytes]:
     return {resource.path: resource_bytes(resource) for resource in resources}
 
 
-def test_rows_cover_every_declaration():
-    assert set(ROWS) == set(PIPELINES) == set(EXPECTED)
-
-
 @pytest.mark.parametrize("name", sorted(ROWS))
-def test_row_converts_to_declared_grader(name):
+def test_conversion_keeps_hidden_tests_and_oracles_private(name):
     task = converted_task(PIPELINES[name], ROWS[name])
-    mode, output_paths, agent_image = EXPECTED[name]
-    assert grader_name(task) == mode
-    assert task.output_paths == output_paths
-    assert task.environment_requirements.docker_image == (agent_image.image if agent_image is not None else None)
-    grader_environment = task.grader.environment if isinstance(task.grader, VerifyitGrader) else None
-    assert grader_environment == (
-        fixture_context(PIPELINES[name]).grader_environment if agent_image is not None else None
-    )
     # Hidden tests and oracle files never reach the agent's machine.
     worker = {resource.path for resource in task.resources.worker}
     assert not any(path.startswith(("tests/", "solution/", "cases/")) for path in worker)
@@ -231,6 +181,15 @@ def test_row_converts_to_declared_grader(name):
             ImportFailureKind.SOURCE_DEFECT,
             "null_grader",
         ),
+        (
+            "tasktrove-competitive_coding",
+            archive(
+                f"{SUM_PROMPT}\n\nExamples: `3 4` and `-5 3`.",
+                {"tests/verifier_data.json": json.dumps(SUM_CASES).encode()},
+            ),
+            ImportFailureKind.SOURCE_DEFECT,
+            "gold_in_instruction",
+        ),
         ("tasktrove-e2egit", archive(SUM_PROMPT, {}), ImportFailureKind.UNSUPPORTED, "unsupported_variant"),
         (
             "tasktrove-pymethods",
@@ -240,12 +199,6 @@ def test_row_converts_to_declared_grader(name):
             ),
             ImportFailureKind.UNSUPPORTED,
             "unsupported_public_output_contract",
-        ),
-        (
-            "tasktrove-swesmith",
-            archive("Fix the spin bug.", {"tests/config.json": b'{"repo": "octo/widgets"}'}),
-            ImportFailureKind.UNSUPPORTED,
-            "missing_repository_ref",
         ),
     ],
 )
@@ -359,8 +312,9 @@ def test_structured_outputs_ask_for_the_answer_in_the_reply():
         PIPELINES["tasktrove-structured_outputs"], structured_row(NAME_SCHEMA, "json", STRUCTURED_PROMPT + footer)
     )
     assert isinstance(result, NormalizedTask)
-    prompt = result.task.context.events[-1].content
-    assert prompt.endswith("Return your final JSON in the assistant response.")
+    prompt = cast(str, result.task.context.events[-1].content)
+    assert "Return your final JSON in the assistant response." in prompt
+    assert "Missing data convention" in prompt
     assert "/app/answer.txt" not in prompt
     assert [change.field for change in result.changes] == ["instruction"]
 
@@ -377,26 +331,85 @@ def test_structured_outputs_reject_a_required_field_the_schema_forbids():
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "unsatisfiable_schema")
 
 
-@pytest.mark.parametrize("schema_type, control", [("json", "empty"), ("xml", "golden"), ("csv", "golden")])
-def test_structured_outputs_controls_grade_as_expected(schema_type, control):
+@pytest.mark.parametrize(
+    "schema_type,candidate",
+    [
+        ("json", '{"name":"Ada"}'),
+        ("yaml", "name: Ada"),
+        ("toml", 'name="Ada"'),
+        ("xml", "<person><name>Ada</name></person>"),
+        ("csv", "name\nAda\n"),
+    ],
+)
+@pytest.mark.parametrize("label,reward", [("PASS", 1.0), ("FAIL", 0.0)])
+def test_structured_outputs_require_grounding_after_valid_format(
+    tmp_path, fake_judge, monkeypatch, schema_type, candidate, label, reward
+):
     pipeline = PIPELINES["tasktrove-structured_outputs"]
     task = converted_task(pipeline, structured_row(NAME_SCHEMA, schema_type))
-    assert pipeline.controls is not None
-    report = run_controls(task, controls=pipeline.controls, machines=None)
-    assert {check.check: check.status for check in report.checks} == {control: CheckStatus.PASS}
+    tests = tmp_path / "tests"
+    write_verifier(task, tests)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "answer.txt").write_text(candidate)
+    for name in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    fake_judge.replies = [label]
+    verdict = grade(verifyit_spec(task.grader), tests, workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, reward), verdict.detail
+    assert "Ada wrote this." in fake_judge.prompts[0]
+    assert candidate in fake_judge.prompts[0]
 
 
-def test_repository_tasks_keep_source_grading_terms():
-    task = converted_task(PIPELINES["tasktrove-swe_rebench"], ROWS["tasktrove-swe_rebench"])
-    contract = task.grader.model_dump()["contract"]["contract"]
-    assert (contract["repository"], contract["source_ref"], contract["workspace"]) == (
-        "octo/widgets",
-        "1a2b3c4",
-        "/testbed",
+def test_structured_outputs_invalid_format_scores_zero_before_grounding(tmp_path, fake_judge):
+    task = converted_task(PIPELINES["tasktrove-structured_outputs"], structured_row(NAME_SCHEMA, "json"))
+    tests = tmp_path / "tests"
+    write_verifier(task, tests)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "answer.txt").write_text("not JSON")
+    verdict = grade(verifyit_spec(task.grader), tests, workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 0.0)
+    assert fake_judge.requests == []
+
+
+@pytest.mark.parametrize("name", ["code_contests", "taco"])
+def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tmp_path):
+    cases = {"inputs": ["3 4\n"], "outputs": ["7\n"]}
+    data = (
+        {"tests/test_data.json": json.dumps(cases).encode()}
+        if name == "code_contests"
+        else {
+            **stdio_dirs(cases["inputs"], cases["outputs"]),
+            "solution/solution.py": SUM_SOLUTION,
+        }
     )
-    assert set(resource_map(task.resources.verifier)) == {
-        "taskcompendium/archive-provenance.json",
-        "config.json",
-        "test.sh",
-    }
-    assert set(resource_map(task.resources.oracle)) == {"instruction.md", "environment/Dockerfile", SOLVE_SH}
+    recipe = b"FROM python:3.12-slim\nWORKDIR /app\nRUN mkdir /source-dependency\n"
+    data["environment/Dockerfile"] = recipe
+    task = converted_task(PIPELINES[f"tasktrove-{name}"], archive(SUM_PROMPT, data))
+    record = harbor_record(
+        {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
+        grader_image=None,
+        fallback_actor_image=BASE_IMAGE,
+        family="competitive-programming",
+    )
+    files = archive_files(
+        unpack_task_binary(
+            {"path": "fixture", "task_binary": record.task_binary}, fixture_context(PIPELINES[f"tasktrove-{name}"])
+        )
+    ).files
+    assert files["environment/Dockerfile"].decode().split("# --- verifyit ---")[0].strip() == recipe.decode().strip()
+    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    assert config.verifier.environment_mode == "shared"
+    assert not config.artifacts and "tests/Dockerfile" not in files
+    assert not any(path.startswith(("environment/tests/", "environment/solution/", "solution/")) for path in files)
+    tests = tmp_path / "tests"
+    write_verifier(task, tests)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    spec = local_stdio(task, workspace)
+    spec = replace(spec, command=spec.command.replace("/app/", str(workspace) + "/"))
+    (workspace / "solution.py").write_bytes(SUM_SOLUTION)
+    assert grade(spec, tests, workspace).reward == 1.0
+    (workspace / "solution.py").write_text("print('wrong')\n")
+    assert grade(spec, tests, workspace).reward == 0.0

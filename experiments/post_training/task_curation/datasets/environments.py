@@ -9,6 +9,7 @@ from pathlib import Path
 from experiments.post_training.task_curation.environment import Environment
 
 HERE = Path(__file__).resolve().parent
+VERIFYIT_PACKAGE = HERE.parents[3] / "lib/verifyit"
 
 GRADER_PACKAGES = Environment(lock=HERE / "grader.lock", data=("nltk:punkt_tab", "nltk:wordnet"))
 """The packages every grade script in the catalog imports, compiled from ``grader.in``, and their NLTK data."""

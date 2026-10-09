@@ -26,6 +26,7 @@ Building the catalog performs no downloads, inference or job submission.
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()`, and its runnable `all_pipelines()` projection |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
 | `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
+| `experiments/post_training/task_curation/pipeline.py`, `quick.py` | Source-level mode dispatch and local mechanical conversion |
 | `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
 | `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
@@ -77,7 +78,7 @@ The `RlDataPipeline` recipe has these fields:
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
 | `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
-| `resource_budget_bytes` | Decoded resource bytes a task may carry, default 1,000,000; larger tasks are deferred as `resources_over_budget`. |
+| `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
 
 Families whose members differ only by data are tables: one module builds every
 declaration of the family in a loop.
@@ -194,7 +195,23 @@ task the panel converts is judge-graded, verification samples nothing and
 records `skipped` with reason `judge grader; no control path yet`, and kept rows
 are admitted like rows of in-process graders.
 
+## Conversion modes
+
+`pipeline.run_curation` is the common entry point for local and campaign runs.
+All modes share conversion and the normalized schema. QUICK retains TaskSpecs
+and typed rejections, skipping admission, fingerprints, review, deduplication
+and grading. It records declared images or locks without building environments.
+
+SAMPLE and FULL require `config=SourcePipelineConfig(...)` with the selected
+mode and a resolved `grader_environment`. FULL reviews a bounded panel, then
+reuses those conversions when its quality gate allows expansion. The procedure
+below describes those reviewed stages. See the
+[campaign quickstart](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
+for local overrides, Harbor export and pinned content comparison commands.
+
 ## Source procedure
+
+Sample and full modes run the reviewed procedure below.
 
 1. Download the pinned files once per distinct pin
    (`task-curation/download/<hash>`).

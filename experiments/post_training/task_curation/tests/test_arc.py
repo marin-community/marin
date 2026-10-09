@@ -4,12 +4,22 @@
 """ARC tasks, from TaskTrove archives and Nemotron Ultra rows, ship the NVARC scorer and its grade script."""
 
 import json
+from typing import cast
 
 import pytest
 from taskcompendium.grader import grader_config
-from taskcompendium.models import AnswerType, ScriptGrader, Source, StdoutReward, TextMessage
+from taskcompendium.models import (
+    AnswerType,
+    ScriptGrader,
+    Source,
+    StdoutReward,
+    TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
+)
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow, Reply, WorkspaceFiles
+from verifyit.grade import grade
 
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.tests.conversion import (
@@ -66,16 +76,11 @@ TASKTROVE = {
         {"mode": "inductive", "contract": {"test_input": GRID, "expected_output": GRID}},
         {"/app/solution.py": arc.literal_transform(GRID).encode()},
     ),
-    "tasktrove-arc_transductive": (
-        ("/app/answer.txt",),
-        {"mode": "transductive", "contract": {"expected_output": GRID}},
-        {"/app/answer.txt": b"0 1\n2 9\n"},
-    ),
 }
 
 
-@pytest.mark.parametrize("name", sorted(ROWS))
-def test_tasktrove_arc_grades_the_agents_files_with_nvarc(name):
+def test_tasktrove_arc_grades_the_agents_files_with_nvarc():
+    name = "tasktrove-arc_inductive"
     output_paths, config, golden = TASKTROVE[name]
     task = converted_task(PIPELINES[name], ROWS[name])
     grader = task.grader
@@ -93,6 +98,24 @@ def test_tasktrove_arc_grades_the_agents_files_with_nvarc(name):
     controls = PIPELINES[name].controls
     assert controls is not None and controls.golden is not None
     assert controls.golden(task) == WorkspaceFiles(golden)
+
+
+@pytest.mark.parametrize(
+    ("answer", "reward"),
+    [
+        ("0 1\n2 9\n", 1.0),
+        (" 0\t1  2 9 ", 1.0),
+        ("\\boxed{0 1\n2 9}", 1.0),
+        ("[[0, 1], [2, 9]]", 0.0),
+        ("0 1\n2 8", 0.0),
+    ],
+)
+def test_tasktrove_transductive_preserves_the_release_grid_comparison(answer, reward, tmp_path):
+    task = converted_task(PIPELINES["tasktrove-arc_transductive"], ROWS["tasktrove-arc_transductive"])
+    (tmp_path / "answer.txt").write_text(answer)
+    result = grade(verifyit_spec(cast(VerifyitGrader, task.grader)), tmp_path, tmp_path)
+    assert result.reward == reward
+    assert arc.tasktrove_golden(task) == WorkspaceFiles({"/app/answer.txt": b"0 1\n2 9\n"})
 
 
 @pytest.mark.parametrize(

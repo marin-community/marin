@@ -41,7 +41,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import MathSpec, MathType
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -186,6 +186,7 @@ class MathConverter:
             answer_type=AnswerType.TEXT,
             answer_format=PlainText(),
             grader=package.grader,
+            tags=("math", "nemotron"),
         )
         return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
@@ -305,7 +306,7 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name=source.name,
                 source=tasktrove_source(source.config),
-                convert=source.convert,
+                convert=TaskTroveConverter(source.config, source.convert),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

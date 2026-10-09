@@ -9,9 +9,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.conversion import row_source, row_task_id
 from taskcompendium.pipeline.inputs import ConversionContext, StagedInputs
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawRow
-from taskcompendium.pipeline.transforms import row_source, row_task_id
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
