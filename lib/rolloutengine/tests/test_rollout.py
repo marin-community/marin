@@ -1065,13 +1065,19 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
 
 
 async def test_environment_setup_runs_as_root_before_agent_commands():
-    commands = []
     closed = asyncio.Event()
 
     class Machine:
+        def __init__(self):
+            self.learner_ready = False
+
         async def run(self, command):
-            commands.append(command)
-            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+            if command.user == "0" and command.argv == ("sh", "-c", "mkdir -p /logs/agent"):
+                self.learner_ready = True
+            if command.user != "0" and not self.learner_ready:
+                return Result(126, b"", b"User is not prepared", False, False, ExitReason.EXITED)
+            output = command.user.encode() if command.argv == ("whoami",) else b""
+            return Result(0, output, b"", False, False, ExitReason.EXITED)
 
         async def close(self):
             closed.set()
@@ -1088,7 +1094,8 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
             return SessionStart(({"role": "user", "content": "Run the task."},), {})
 
         async def advance(self, turn):
-            await self.machine.run(Command(("whoami",)))
+            result = await self.machine.run(Command(("whoami",)))
+            assert (result.exit_code, result.stdout) == (0, b"learner")
             return Transition(done=True)
 
         async def grade(self, messages):
@@ -1104,7 +1111,39 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
         ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()}, sessions={"fixture": Session}
     ).run(lowered(task, machine=machine_runtime(user="learner"), task_session="fixture"))
     assert record.grade.reward == 1.0
-    assert [command.user for command in commands] == ["0", "learner"]
+    assert closed.is_set()
+
+
+@pytest.mark.parametrize(
+    "result,cause_type",
+    [
+        (Result(126, b"", b"", False, False, ExitReason.EXITED), RuntimeError),
+        (Result(None, b"", b"", False, False, ExitReason.TIMED_OUT), TimeoutError),
+    ],
+)
+async def test_execution_user_preflight_fails_during_start_before_model_inference(result, cause_type):
+    closed = asyncio.Event()
+
+    class FailedProbeMachine:
+        async def run(self, command):
+            return result
+
+        async def close(self):
+            closed.set()
+
+    class Factory:
+        async def create(self, spec):
+            return FailedProbeMachine()
+
+    model = ReplayModel([])
+    task = arithmetic_task().model_copy(
+        update={"environment_requirements": EnvironmentRequirements(docker_image=FIXTURE_IMAGE)}
+    )
+    with pytest.raises(RolloutInterrupted) as caught:
+        await engine(model, {"local": Factory()}).run(lowered(task, machine=machine_runtime(user="learner")))
+    assert caught.value.operation == RolloutOperation.START
+    assert isinstance(caught.value.__cause__, cause_type)
+    assert model.requests == []
     assert closed.is_set()
 
 
