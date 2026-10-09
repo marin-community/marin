@@ -14,7 +14,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from fractions import Fraction
+from functools import cache
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 from harbor_config.errors import ErrorCategory
@@ -23,6 +25,7 @@ from verifyit.file_ops.read import read_text
 from verifyit.numeric import MAX_NUMERIC_DIGITS, numeric_literal
 from verifyit.spec import (
     DEFAULT_WORKSPACE,
+    MODE_DESCRIPTORS,
     RUBRIC_REFERENCE,
     EmptyOutputPolicy,
     ExactSpec,
@@ -327,31 +330,17 @@ Grader = Callable[[Any, Path, Path], Reward]
 # Mode modules are imported on first use: several depend on an extra (math-verify, jsonschema,
 # reasoning-gym, openai) that only the images needing that mode install. A missing extra
 # surfaces as an ImportError from the grader, which the CLI records as infra_error.
-MODE_MODULES: dict[Mode, str] = {
-    Mode.STRUCTURED_EXACT: "grade_structured_exact",
-    Mode.PREDICTED_ACTION: "grade_predicted_action",
-    Mode.MCQ: "grade_mcq",
-    Mode.MATH: "grade_math",
-    Mode.NUMERIC: "grade_math",
-    Mode.EXACT: "grade_exact",
-    Mode.JSON_SCHEMA: "grade_json_schema",
-    Mode.XML_ELEMENTS: "grade_xml",
-    Mode.CSV_COLUMNS: "grade_csv",
-    Mode.IFEVAL: "grade_ifeval",
-    Mode.REASONING_GYM: "grade_reasoning_gym",
-    Mode.STDIO: "grade_stdio",
-    Mode.PYTEST: "grade_pytest",
-    Mode.JUNIT: "grade_junit",
-    Mode.GOTEST: "grade_gotest",
-    Mode.JUDGE: "grade_judge",
-    Mode.SCRIPT: "grade_script",
-}
 GRADERS: dict[Mode, Grader] = {}
+
+
+@cache
+def mode_module(mode: Mode) -> ModuleType:
+    return importlib.import_module(f"verifyit.modes.{MODE_DESCRIPTORS[mode].module}")
 
 
 def grader_for(mode: Mode) -> Grader:
     if mode not in GRADERS:
-        GRADERS[mode] = importlib.import_module(f"verifyit.modes.{MODE_MODULES[mode]}").grade
+        GRADERS[mode] = mode_module(mode).grade
     return GRADERS[mode]
 
 

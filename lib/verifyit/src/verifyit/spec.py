@@ -344,26 +344,66 @@ Spec = (
     | ScriptSpec
 )
 
-SPEC_TYPES: dict[Mode, type] = {
-    Mode.STRUCTURED_EXACT: StructuredExactSpec,
-    Mode.PREDICTED_ACTION: PredictedActionSpec,
-    Mode.MCQ: McqSpec,
-    Mode.MATH: MathSpec,
-    Mode.NUMERIC: NumericSpec,
-    Mode.EXACT: ExactSpec,
-    Mode.JSON_SCHEMA: JsonSchemaSpec,
-    Mode.XML_ELEMENTS: XmlElementsSpec,
-    Mode.CSV_COLUMNS: CsvColumnsSpec,
-    Mode.IFEVAL: IfevalSpec,
-    Mode.REASONING_GYM: ReasoningGymSpec,
-    Mode.STDIO: StdioSpec,
-    Mode.PYTEST: PytestSpec,
-    Mode.JUNIT: JunitSpec,
-    Mode.GOTEST: GotestSpec,
-    Mode.JUDGE: JudgeSpec,
-    Mode.SCRIPT: ScriptSpec,
+
+@dataclass(frozen=True)
+class CandidateEntrypoints:
+    """Names in the mode module; modules stay lazy to preserve optional dependencies."""
+
+    validate: str
+    grade: str
+
+
+@dataclass(frozen=True)
+class ModeDescriptor:
+    spec_type: type[Spec]
+    module: str
+    candidate: CandidateEntrypoints | None = None
+
+
+MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
+    Mode.STRUCTURED_EXACT: ModeDescriptor(
+        StructuredExactSpec,
+        "grade_structured_exact",
+        CandidateEntrypoints("validate_structured_exact", "grade_structured_exact_candidate"),
+    ),
+    Mode.PREDICTED_ACTION: ModeDescriptor(
+        PredictedActionSpec,
+        "grade_predicted_action",
+        CandidateEntrypoints("validate_predicted_action", "grade_predicted_action_candidate"),
+    ),
+    Mode.MCQ: ModeDescriptor(McqSpec, "grade_mcq", CandidateEntrypoints("validate_mcq", "grade_mcq_candidate")),
+    Mode.MATH: ModeDescriptor(
+        MathSpec, "grade_math", CandidateEntrypoints("validate_math", "grade_math_text_candidate")
+    ),
+    Mode.NUMERIC: ModeDescriptor(
+        NumericSpec, "grade_math", CandidateEntrypoints("validate_numeric", "grade_numeric_text_candidate")
+    ),
+    Mode.EXACT: ModeDescriptor(
+        ExactSpec, "grade_exact", CandidateEntrypoints("validate_exact", "grade_exact_candidate")
+    ),
+    Mode.JSON_SCHEMA: ModeDescriptor(
+        JsonSchemaSpec,
+        "grade_json_schema",
+        CandidateEntrypoints("validate_json_schema", "grade_json_resource_candidate"),
+    ),
+    Mode.XML_ELEMENTS: ModeDescriptor(
+        XmlElementsSpec, "grade_xml", CandidateEntrypoints("validate_xml_elements", "grade_xml_candidate")
+    ),
+    Mode.CSV_COLUMNS: ModeDescriptor(
+        CsvColumnsSpec, "grade_csv", CandidateEntrypoints("validate_csv_columns", "grade_csv_candidate")
+    ),
+    Mode.IFEVAL: ModeDescriptor(
+        IfevalSpec, "grade_ifeval", CandidateEntrypoints("validate_ifeval", "grade_ifeval_candidate")
+    ),
+    Mode.REASONING_GYM: ModeDescriptor(ReasoningGymSpec, "grade_reasoning_gym"),
+    Mode.STDIO: ModeDescriptor(StdioSpec, "grade_stdio"),
+    Mode.PYTEST: ModeDescriptor(PytestSpec, "grade_pytest"),
+    Mode.JUNIT: ModeDescriptor(JunitSpec, "grade_junit"),
+    Mode.GOTEST: ModeDescriptor(GotestSpec, "grade_gotest"),
+    Mode.JUDGE: ModeDescriptor(JudgeSpec, "grade_judge"),
+    Mode.SCRIPT: ModeDescriptor(ScriptSpec, "grade_script"),
 }
-MODES: dict[type, Mode] = {t: m for m, t in SPEC_TYPES.items()}
+MODES: dict[type[Spec], Mode] = {descriptor.spec_type: mode for mode, descriptor in MODE_DESCRIPTORS.items()}
 
 
 def mode_of(spec: Spec) -> Mode:
@@ -416,7 +456,7 @@ def spec_from_table(table: dict[str, Any]) -> Spec:
     if "mode" not in table:
         raise ValueError("verifier spec has no mode")
     mode = Mode(table["mode"])
-    spec_type = SPEC_TYPES[mode]
+    spec_type = MODE_DESCRIPTORS[mode].spec_type
     declared = {f.name: f for f in fields(spec_type)}
     unknown = sorted(set(table) - set(declared) - {"mode"})
     if unknown:

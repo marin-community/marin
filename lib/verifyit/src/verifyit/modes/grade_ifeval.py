@@ -49,6 +49,11 @@ def grade(spec: IfevalSpec, tests_dir: Path, workspace: Path) -> Reward:
     return _grade_checks(checks, text)
 
 
+def validate_ifeval(spec: IfevalSpec) -> None:
+    empty_output_policy(spec)
+    resolve_checks(spec.constraints)
+
+
 def grade_ifeval_candidate(spec: IfevalSpec, candidate: str, *, registry: Mapping[str, Check] | None = None) -> Reward:
     """Grade prepared text with optional additional trusted, process-local checks."""
     checks = resolve_checks(spec.constraints, registry)
