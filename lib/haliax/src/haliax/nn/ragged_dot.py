@@ -403,7 +403,7 @@ _TILE_MAP_GENERIC_CONFIG = TritonBlockConfig(
 _TILE_MAP_BLACKWELL_ROW_CONFIG = dataclasses.replace(_TILE_MAP_GENERIC_CONFIG, block_n=_TRITON_BLACKWELL_BLOCK_N)
 _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
     # Swept on MI350X (gfx950) at the June (G=32, K and N of 1280-2560) and Mixtral-like (G=8, 4096x14336)
-    # expert shapes.
+    # expert shapes; see lib/levanter/scripts/bench/bench_ragged_dot_triton.py.
     _GpuFamily.AMD_INSTINCT: {
         RaggedLayout.FWD: TritonBlockConfig(
             block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=2
