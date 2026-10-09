@@ -29,6 +29,9 @@ from levanter.kernels.pallas.parallax import parallax_attention
 from levanter.sharding import partition_spec_of
 
 AttentionImplementation = Literal["gpu_fa4_cute", "reference"]
+# "fsdp" shards every weight's input dimension over the data axis; "replicated" keeps a full copy per device (plain
+# data parallelism: no per-layer all-gathers, one gradient all-reduce), which suits a 0.5B model on one node.
+ParamSharding = Literal["fsdp", "replicated"]
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,7 @@ class GrugModelConfig:
     parallax: bool
     parallax_rope: bool = True  # RoPE on rho (the paper's best 0.6B arm)
     attention_implementation: AttentionImplementation = "gpu_fa4_cute"
+    param_sharding: ParamSharding = "fsdp"
     layer_norm_eps: float = 1e-6
     initializer_std: float = 0.02
     rope: RotaryConfig = dataclasses.field(default_factory=lambda: RotaryConfig(theta=1e6))
@@ -55,6 +59,16 @@ class GrugModelConfig:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
+
+
+def _in_out(cfg: GrugModelConfig) -> P:
+    """Sharding of a ``[fan_in, fan_out]`` weight."""
+    return P("data" if cfg.param_sharding == "fsdp" else None, "model")
+
+
+def _out_in(cfg: GrugModelConfig) -> P:
+    """Sharding of a ``[fan_in, fan_out]`` output projection (fan_in is the model-sharded side)."""
+    return P("model", "data" if cfg.param_sharding == "fsdp" else None)
 
 
 def flops_per_token(cfg: GrugModelConfig) -> float:
@@ -121,13 +135,13 @@ class CausalSelfAttention(eqx.Module):
         k_q, k_k, k_v, k_o, k_r = random.split(key, 5)
         d, h, hkv, hd, std = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim, cfg.initializer_std
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, h * hd), std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, hkv * hd), std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, hkv * hd), std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (h * hd, d), std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, h * hd), std), _in_out(cfg)),
+            w_k=reshard(_init_weight(k_k, (d, hkv * hd), std), _in_out(cfg)),
+            w_v=reshard(_init_weight(k_v, (d, hkv * hd), std), _in_out(cfg)),
+            w_o=reshard(_init_weight(k_o, (h * hd, d), std), _out_in(cfg)),
             q_norm=RMSNorm.init(hd, cfg.layer_norm_eps),
             k_norm=RMSNorm.init(hd, cfg.layer_norm_eps),
-            w_r=reshard(_init_weight(k_r, (d, h * hd), std), P("data", "model")) if cfg.parallax else None,
+            w_r=reshard(_init_weight(k_r, (d, h * hd), std), _in_out(cfg)) if cfg.parallax else None,
             r_norm=RMSNorm.init(hd, cfg.layer_norm_eps) if cfg.parallax else None,
             cfg=cfg,
         )
@@ -166,9 +180,9 @@ class MLP(eqx.Module):
         k_gate, k_up, k_down = random.split(key, 3)
         d, d_ff, std = cfg.hidden_dim, cfg.intermediate_dim, cfg.initializer_std
         return MLP(
-            w_gate=reshard(_init_weight(k_gate, (d, d_ff), std), P("data", "model")),
-            w_up=reshard(_init_weight(k_up, (d, d_ff), std), P("data", "model")),
-            w_down=reshard(_init_weight(k_down, (d_ff, d), std), P("model", "data")),
+            w_gate=reshard(_init_weight(k_gate, (d, d_ff), std), _in_out(cfg)),
+            w_up=reshard(_init_weight(k_up, (d, d_ff), std), _in_out(cfg)),
+            w_down=reshard(_init_weight(k_down, (d_ff, d), std), _out_in(cfg)),
         )
 
     @named_call
@@ -210,7 +224,8 @@ class Transformer(eqx.Module):
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, *block_keys = random.split(key, cfg.num_layers + 1)
         token_embed = reshard(
-            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std),
+            Pembed_vocab if cfg.param_sharding == "fsdp" else P("model", None),
         )
         return Transformer(
             token_embed=token_embed,
@@ -230,7 +245,7 @@ class Transformer(eqx.Module):
         return self.final_norm(hidden)
 
     def _output_proj(self) -> jax.Array:
-        return reshard(self.token_embed.T, Plm_head)
+        return reshard(self.token_embed.T, Plm_head if self.config.param_sharding == "fsdp" else P(None, "model"))
 
     @named_call
     def logits(self, token_ids: Int[Array, "B S"], mask: AttentionMask | None = None) -> Float[Array, "B S V"]:

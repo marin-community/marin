@@ -47,7 +47,7 @@ from experiments.grug.fast_track.launch import (
     V16384_VOCAB,
     _flat_cache_data_config,
 )
-from experiments.grug.parallax.model import GrugModelConfig
+from experiments.grug.parallax.model import GrugModelConfig, ParamSharding
 from experiments.grug.parallax.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 
 VERSION = "2026.10.09"
@@ -63,7 +63,7 @@ MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 TRAIN_RESOURCES = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="600g", disk="900g", replicas=1)
 
 
-def qwen3_0p6b(arm: str) -> GrugModelConfig:
+def qwen3_0p6b(arm: str, param_sharding: ParamSharding = "fsdp") -> GrugModelConfig:
     """The paper's Table 5 backbone on our vocab."""
     return GrugModelConfig(
         vocab_size=V16384_VOCAB,
@@ -75,6 +75,7 @@ def qwen3_0p6b(arm: str) -> GrugModelConfig:
         head_dim=128,
         max_seq_len=SEQ_LEN,
         parallax=arm == "parallax",
+        param_sharding=param_sharding,
     )
 
 
@@ -165,6 +166,21 @@ def run_name(arm: str, steps: int, batch_size: int, learning_rate: float, microb
     return name
 
 
+def job_name(
+    arm: str,
+    steps: int,
+    batch_size: int,
+    learning_rate: float,
+    microbatches: int,
+    profile: bool,
+    param_sharding: ParamSharding,
+) -> str:
+    name = run_name(arm, steps, batch_size, learning_rate, microbatches)
+    if param_sharding != "fsdp":
+        name += f"-{param_sharding[:4]}"
+    return name + ("-prof" if profile else "")
+
+
 def build(
     arm: str,
     steps: int,
@@ -173,8 +189,9 @@ def build(
     learning_rate: float = PAPER_LR,
     microbatches: int = GRAD_ACCUM_MICROBATCHES,
     profile: bool = False,
+    param_sharding: ParamSharding = "fsdp",
 ) -> ArtifactStep[LevanterCheckpoint]:
-    run_id = run_name(arm, steps, batch_size, learning_rate, microbatches) + ("-prof" if profile else "")
+    run_id = job_name(arm, steps, batch_size, learning_rate, microbatches, profile, param_sharding)
     validation = [
         *uncheatable_datasets(tokenizer=V16384_TOKENIZER, tag=V16384_TOKENIZER).values(),
         *paloma_datasets(
@@ -184,7 +201,7 @@ def build(
 
     def build_config(ctx: StepContext) -> ParallaxLaunchConfig:
         return ParallaxLaunchConfig(
-            model=qwen3_0p6b(arm),
+            model=qwen3_0p6b(arm, param_sharding),
             optimizer=paper_muon(learning_rate),
             data=_flat_cache_data_config(
                 ctx=ctx, validation=validation, tokenizer=V16384_TOKENIZER, train_cache_dir=V16384_CACHE_DIR
@@ -219,6 +236,8 @@ def build(
 @click.option("--lr", "learning_rate", type=float, default=PAPER_LR, show_default=True, help="Peak Muon lr.")
 @click.option("--microbatches", type=int, default=GRAD_ACCUM_MICROBATCHES, show_default=True)
 @click.option("--profile", is_flag=True, help="Capture an xprof trace (run id gets a -prof suffix).")
+@click.option("--param-sharding", type=click.Choice(["fsdp", "replicated"]), default="fsdp", show_default=True)
+@click.option("--env", "job_env", multiple=True, help="KEY=VALUE for the submitted job (repeatable).")
 def main(
     arm: str,
     steps: int,
@@ -229,31 +248,35 @@ def main(
     learning_rate: float,
     microbatches: int,
     profile: bool,
+    param_sharding: ParamSharding,
+    job_env: tuple[str, ...],
 ) -> None:
+    step_args = dict(
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        microbatches=microbatches,
+        profile=profile,
+        param_sharding=param_sharding,
+    )
     if not submit:
-        StepRunner().run(
-            [
-                build(
-                    arm,
-                    steps,
-                    batch_size=batch_size,
-                    learning_rate=learning_rate,
-                    microbatches=microbatches,
-                    profile=profile,
-                ).lower()
-            ]
-        )
+        StepRunner().run([build(arm, steps, **step_args).lower()])
         return
     wandb_key = os.environ.get("WANDB_API_KEY")
     if not wandb_key:
         raise click.ClickException("WANDB_API_KEY must be set to submit")
     args = [a for a in sys.argv[1:] if a != "--submit"]
-    job_run_id = run_name(arm, steps, batch_size, learning_rate, microbatches) + ("-prof" if profile else "")
+    env_args = []
+    for item in job_env:
+        key, sep, value = item.partition("=")
+        if not sep:
+            raise click.BadParameter(f"--env expects KEY=VALUE, got {item!r}")
+        env_args += ["-e", key, value]
+    job_run_id = job_name(arm, steps, batch_size, learning_rate, microbatches, profile, param_sharding)
     cmd = [
         "uv", "run", "iris", "--cluster", "marin", "job", "run", "--no-wait", "--enable-extra-resources",
         "--target-cluster", target_cluster, "--priority", priority,
         "--job-name", f"{job_run_id}-coord",
-        "-e", "WANDB_API_KEY", wandb_key, "-e", "WANDB_PROJECT", WANDB_PROJECT,
+        "-e", "WANDB_API_KEY", wandb_key, "-e", "WANDB_PROJECT", WANDB_PROJECT, *env_args,
         "--", "python", "-m", "experiments.grug.parallax.launch", *args,
     ]  # fmt: skip
     click.echo("submitting: " + " ".join(shlex.quote("$WANDB_API_KEY" if c == wandb_key else c) for c in cmd), err=True)
