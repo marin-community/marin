@@ -59,6 +59,7 @@ from taskforge.spec.controls import (
     Expectation,
     Transcript,
 )
+from taskforge.spec.draft import GRADER_RESOURCE_ROOT
 from taskforge.validate.adversary import CONTEXT_STOP_REASON, AdversaryRole
 from taskforge.validate.controls import ControlOutcome, ControlVerdict, wire_message, workspace_turn
 from taskforge.validate.evidence import Complete, Evidence, Incomplete, RewardStats
@@ -208,7 +209,7 @@ class TaskFacts:
     protected_paths: tuple[str, ...]
 
 
-VERIFIER_ROOT = PurePosixPath("/tests")
+VERIFIER_ROOT = PurePosixPath(GRADER_RESOURCE_ROOT)
 """Where RolloutEngine installs ``resources.verifier`` for the grader."""
 
 
