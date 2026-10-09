@@ -51,6 +51,7 @@ from rolloutengine.contracts import (
     RolloutInterrupted,
     RolloutOperation,
     SessionStart,
+    SuppliedState,
     Transition,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
@@ -1196,3 +1197,147 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
     for machine in factory.machines:
         with pytest.raises(RuntimeError):
             await machine.run(Command(("true",)))
+
+
+FILE_MESSAGES = ({"role": "user", "content": "What is six plus six?"}, {"role": "assistant", "content": "Done."})
+
+
+def seeded_file_task() -> TaskSpec:
+    """A file task whose setup writes a wrong answer that the supplied state must replace."""
+    return file_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                capabilities=("shell", "filesystem"), setup_commands=("echo 0 > /workspace/answer",)
+            )
+        }
+    )
+
+
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_supplied_workspace_grades_like_a_rollout_without_model_calls(answer, reward):
+    task = seeded_file_task()
+    spec = lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    rollout = await engine(
+        ReplayModel([shell_call(f"printf %s {answer} > /workspace/answer"), {"role": "assistant", "content": "Done."}]),
+        {"local": FixtureImageFactory()},
+    ).run(spec)
+    unused_model = ReplayModel([])
+    factory = RecordingShellSimFactory()
+
+    grade = await engine(unused_model, {"local": factory}).grade_state(
+        spec, SuppliedState(FILE_MESSAGES, resources=(inline_resource("workspace/answer", answer.encode()),))
+    )
+
+    assert (grade.status, grade.reward) == (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, reward)
+    assert unused_model.requests == []
+    assert len(factory.machines) == 2
+    for machine in factory.machines:
+        with pytest.raises(RuntimeError, match="closed"):
+            await machine.run(Command(("true",)))
+
+
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_supplied_commands_run_after_task_setup(answer, reward):
+    spec = lowered(seeded_file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+
+    grade = await engine(ReplayModel([]), {"local": FixtureImageFactory()}).grade_state(
+        spec, SuppliedState(FILE_MESSAGES, commands=(f"printf %s {answer} > /workspace/answer",))
+    )
+
+    assert (grade.status, grade.reward) == (Outcome.GRADED, reward)
+
+
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_supplied_transcript_is_graded_with_the_task_answer_format(answer, reward):
+    messages = (
+        {"role": "user", "content": "What is six plus six?"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "answer",
+                    "type": "function",
+                    "function": {"name": "submit_answer", "arguments": json.dumps({"answer": answer})},
+                }
+            ],
+        },
+    )
+    runner = engine(ReplayModel([]))
+    spec = lowered(arithmetic_task(answer_format=AnswerCall()))
+
+    grade = await runner.grade_state(spec, SuppliedState(messages))
+
+    assert (grade.status, grade.reward) == (Outcome.GRADED, reward)
+    with pytest.raises(ValueError, match="without a task machine"):
+        await runner.grade_state(spec, SuppliedState(messages, resources=(inline_resource("workspace/answer", b"12"),)))
+
+
+async def test_supplied_resource_timestamps_are_rejected_before_machine_startup():
+    factory = RecordingShellSimFactory()
+    stamped = inline_resource("workspace/answer", b"12").model_copy(update={"mtime_ns": 1})
+
+    with pytest.raises(NotImplementedError, match="timestamps"):
+        await engine(ReplayModel([]), {"local": factory}).grade_state(
+            lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()),
+            SuppliedState(FILE_MESSAGES, resources=(stamped,)),
+        )
+
+    assert factory.machines == []
+
+
+@dataclass
+class StallingFactory:
+    """Fixture machines whose `stall` command never finishes."""
+
+    machines: list[Machine] = field(default_factory=list)
+
+    async def create(self, spec):
+        machine = await FixtureImageFactory().create(spec)
+        self.machines.append(machine)
+
+        class Stalling:
+            async def run(self, command):
+                if command.argv == ("sh", "-c", "stall"):
+                    await asyncio.Future()
+                return await machine.run(command)
+
+            async def upload(self, source, target):
+                await machine.upload(source, target)
+
+            async def download(self, source, target):
+                await machine.download(source, target)
+
+            async def close(self):
+                await machine.close()
+
+        return Stalling()
+
+
+@pytest.mark.parametrize(
+    "failure,operation",
+    [("setup", RolloutOperation.START), ("state", RolloutOperation.STATE), ("attempt", RolloutOperation.ATTEMPT)],
+)
+async def test_supplied_state_failures_use_rollout_operations_and_release_the_machine(failure, operation):
+    task = file_task()
+    if failure == "setup":
+        task = task.model_copy(
+            update={
+                "environment_requirements": EnvironmentRequirements(
+                    capabilities=("shell", "filesystem"), setup_commands=("false",)
+                )
+            }
+        )
+    commands = {"setup": (), "state": ("false",), "attempt": ("stall",)}[failure]
+    factory = StallingFactory()
+
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await engine(ReplayModel([]), {"local": factory}).grade_state(
+            lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime(), attempt_timeout=1),
+            SuppliedState(FILE_MESSAGES, commands=commands),
+        )
+
+    assert interrupted.value.operation == operation
+    assert interrupted.value.rollout.grade.status == Outcome.UNAVAILABLE
+    assert len(factory.machines) == 1
+    with pytest.raises(RuntimeError, match="closed"):
+        await factory.machines[0].run(Command(("true",)))
