@@ -880,9 +880,8 @@ class GrugModelConfig:
     """Form the erase gate ``2 sigmoid(z)`` (``kda_erase_gate``) inside the fused kernels from its bf16 logits."""
     kda_state_grads: StateGrads = StateGrads.XLA
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
-    # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a per-token softmax
-    # attention over the residual-block history (the embedding, completed block sums and the running
-    # partial), scored by a learned per-sublayer pseudo-query against the RMS-normalized sources.
+    # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a learned per-sublayer
+    # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
     attn_res_num_blocks: int = 8
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
@@ -1364,6 +1363,7 @@ class GrugModelConfig:
     """DeepSeek-V3 FP8 dispatch: the EP dispatch all-to-all sends activations as e4m3 with one fp32 scale per
     128-channel block (~0.52x the bf16 bytes); combine and every backward collective stay bf16 (STE)."""
     moe_ragged_chunks: int = 2
+    moe_serial_pair: bool = False  # ragged experts: neuron halves in series, y1 + mlp_b(x + y1)
     """Sequential local-expert chunks of the ``ragged_all_to_all`` backend (each a dispatch, expert MLP and
     return); fewer chunks mean fewer, larger collectives at more transport-buffer memory."""
     moe_implementation: str = "fixed_pooled_wave_all_to_all"
@@ -6187,6 +6187,7 @@ def _run_expert_bank(
             expert_remat=em.expert_remat,
             overlap=overlap,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
+            expert_serial_pair=cfg.moe_serial_pair,
         )
     if cfg.fp8_recipe != Fp8Recipe.NONE:
         raise ValueError("fp8_recipe supports ungated ReLU^2 expert banks only")

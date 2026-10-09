@@ -471,6 +471,7 @@ def moe_mlp(
     expert_remat: bool = True,
     overlap: MoeOverlapWork | None = None,
     ragged_expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
+    expert_serial_pair: bool = False,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -506,6 +507,8 @@ def moe_mlp(
     that implementation's expert GEMMs on simulated MXFP8 operands (`levanter.grug.mxfp8`).
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
+    `expert_serial_pair` (``ragged_all_to_all`` ungated experts only) runs each expert's two neuron halves
+    in series: ``y1 = mlp_a(x)``, ``y = y1 + mlp_b(x + y1)``.
 
     The output width ``O`` (``w_down``'s last dim) may differ from the input width ``D`` only on the
     ``scatter`` local path and the ``fixed_pooled_wave_all_to_all`` / ``ragged_all_to_all`` EP paths.
@@ -515,6 +518,8 @@ def moe_mlp(
     path just computes it.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
+    if expert_serial_pair and resolved_implementation != "ragged_all_to_all":
+        raise ValueError(f"expert_serial_pair requires ragged_all_to_all, got {resolved_implementation!r}")
     if report_assignment_keep and not report_capacity_overflow:
         raise ValueError("report_assignment_keep requires report_capacity_overflow")
     if report_assignment_keep and expert_chunks != 1:
@@ -664,7 +669,9 @@ def moe_mlp(
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
-            shard_local_fn = partial(_moe_mlp_ep_ragged_a2a_local, expert_chunks=ragged_expert_chunks)
+            shard_local_fn = partial(
+                _moe_mlp_ep_ragged_a2a_local, expert_chunks=ragged_expert_chunks, serial_pair=expert_serial_pair
+            )
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":

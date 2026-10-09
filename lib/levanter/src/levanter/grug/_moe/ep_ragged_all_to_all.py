@@ -181,6 +181,42 @@ class _FusedRelu2ExpertMlp:
         return relu2_ragged_mlp_backward(residuals, cotangent, implementation=self.implementation)
 
 
+@dataclasses.dataclass(frozen=True)
+class _SerialPairExpertMlp:
+    """Each expert as two serial halves of its neurons: ``y1 = mlp_a(x)``, ``y2 = mlp_b(x + y1)``, ``y = y1 + y2``.
+
+    ``mlp_a`` owns the first half of the intermediate dim (``W_up[..., :I/2]``, ``W_down[:I/2]``) and ``mlp_b`` the
+    second; routing, dispatch and combine are unchanged. Needs ungated experts that write the width they read.
+    The routing-weight term ``<y, dy>`` needs ``<y1, dy>`` on its own (``mlp_a``'s backward sees ``dy + dx2``), so
+    ``y1`` is kept.
+    """
+
+    inner: "_ExpertMlp"
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        half = moe_w2_local.shape[1] // 2
+        y1, res_a = self.inner.forward(
+            x_dispatch, moe_w13_local[..., :half], moe_w2_local[:, :half], physical_group_sizes, active_group_sizes
+        )
+        y2, res_b = self.inner.forward(
+            x_dispatch + y1,
+            moe_w13_local[..., half:],
+            moe_w2_local[:, half:],
+            physical_group_sizes,
+            active_group_sizes,
+        )
+        return y1 + y2, (res_a, res_b, y1)
+
+    def backward(self, residuals, cotangent):
+        res_a, res_b, y1 = residuals
+        dx2, dw13_b, dw2_b, dot_b = self.inner.backward(res_b, cotangent)
+        dx1, dw13_a, dw2_a, _ = self.inner.backward(res_a, (cotangent + dx2).astype(cotangent.dtype))
+        dot_a = jnp.sum(y1.astype(jnp.float32) * cotangent.astype(jnp.float32), axis=-1)
+        dw13 = jnp.concatenate([dw13_a, dw13_b], axis=-1)
+        dw2 = jnp.concatenate([dw2_a, dw2_b], axis=1)
+        return (dx1 + dx2).astype(cotangent.dtype), dw13, dw2, dot_a + dot_b
+
+
 def _is_ungated(moe_w13_local: Float[Array, "E H I2"], moe_w2_local: Float[Array, "E I H"]) -> bool:
     return moe_w13_local.shape[-1] == moe_w2_local.shape[1]
 
@@ -665,6 +701,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
     expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
+    serial_pair: bool = False,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -736,6 +773,12 @@ def _moe_mlp_ep_ragged_a2a_local(
     expert_mlp = _select_expert_mlp(activation_fn, ungated=_is_ungated(moe_w13_local, moe_w2_local))
     if isinstance(expert_mlp, _CuteExpertMlp) and moe_w2_local.shape[-1] != x_local.shape[1]:
         raise ValueError("the QuACK grouped-GEMM expert MLP needs w_down output dim equal to the input dim")
+    if serial_pair:
+        if not _is_ungated(moe_w13_local, moe_w2_local) or moe_w2_local.shape[1] % 2:
+            raise ValueError("serial_pair needs ungated experts with an even intermediate dim")
+        if moe_w2_local.shape[-1] != x_local.shape[1]:
+            raise ValueError("serial_pair needs experts that write the width they read (x + y1)")
+        expert_mlp = _SerialPairExpertMlp(expert_mlp)
     layout = _ExpertLayout(
         tokens_per_shard=tokens_per_shard,
         topk=topk,
