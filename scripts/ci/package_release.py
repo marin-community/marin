@@ -763,7 +763,8 @@ def _build_python_bundle(build: PythonBundle, version: str, operation: str, repo
     subprocess.run(
         [
             sys.executable,
-            build.script_path.as_posix(),
+            "-m",
+            ".".join(build.script_path.with_suffix("").parts),
             "--mode",
             "stable",
             "--version",
