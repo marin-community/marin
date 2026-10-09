@@ -64,7 +64,9 @@ type Reward = StdoutReward | ExitCodeReward | FileReward
 
 ANSWER_PATH = "/app/answer.txt"
 """Where a script grader finds the extracted answer of a text, number, JSON or native-action task."""
-PYTHON_GRADER_ARGV = ("python3", "/tests/grade.py")
+GRADER_RESOURCE_ROOT = "/tests"
+"""Where RolloutEngine installs ``resources.verifier`` on the verifier machine."""
+PYTHON_GRADER_ARGV = ("python3", f"{GRADER_RESOURCE_ROOT}/grade.py")
 PYTHON_GRADER_FILES = frozenset({"grade.py", "config.json"})
 MACHINE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.WORKSPACE_STATE})
 """Answers the grader reads from the task machine's files rather than from the conversation."""
