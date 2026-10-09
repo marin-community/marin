@@ -30,7 +30,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 # (or publishing a new build and replacing the reference) needs the capability-registry-publisher credential.
 GRADER_BASE_IMAGE = (
     "envreg.208261-marin-gpu.coreweave.app/capability-infra/taskforge-grader-base"
-    "@sha256:ac2dd82a3da61c50470e042942174f1327b00deed12a9047435aef90befbed1f"
+    "@sha256:63eb0b5c3efb5b2e3def1e81f9e076a4c62a077ad5f631cfef95ea9f441240b3"
 )
 MANIFEST_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 # Repository path components per the OCI distribution spec.
