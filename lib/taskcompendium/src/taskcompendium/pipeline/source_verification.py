@@ -570,7 +570,7 @@ def _write_report(
 
 
 def _gate_rows(run: _VerificationRun, decision: SourceReport, results: list[SampleResult]) -> dict[str, Any]:
-    """Write the gated audit and accepted rows, counting both in the same shard pass."""
+    """Write the gated audit and accepted rows and return manifest counts."""
     result = execute_phase(
         run.context,
         Dataset.from_files(run.inputs)
