@@ -102,7 +102,7 @@ def test_boxed_format_grades_the_last_balanced_box_or_the_whole_message(specific
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
-# The reply GLM-5.3 gave to a number task under JsonAnswer in #9758.
+# A whole-reply fence around a numeric answer, the shape some models emit under JsonAnswer.
 FENCED_NUMBER_REPLY = '```json\n{"answer": 42}\n```'
 EXPECT_42 = NumericSpec("42", tolerance_abs=0.0, tolerance_rel=0.0)
 
