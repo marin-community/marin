@@ -46,6 +46,7 @@ from experiments.post_training.task_curation.environment import PINNED_IMAGE
 from experiments.post_training.task_curation.harbor_export_contract import (
     MANIFEST_FILENAME,
     TASKS_FILENAME,
+    HarborSourceMetadata,
     VerifierPayloadIdentity,
 )
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
@@ -354,11 +355,13 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
     )
 
 
-def export_harbor(input_root: StoragePath, output_root: StoragePath, *, grader_image: str | None) -> dict[str, Any]:
+def export_harbor(
+    input_root: StoragePath, output_root: StoragePath, *, grader_image: str | None, source: HarborSourceMetadata
+) -> dict[str, Any]:
     """Write the legacy parquet view and account for normalization and lowering failures."""
     manifest = json.loads((input_root / MANIFEST_FILENAME).read_text())
-    sources = {source.name: source for source in all_sources().values() if source.pipeline is not None}
-    source = sources[manifest["source"]]
+    if manifest["source"] != source.name:
+        raise ValueError(f"Normalized source {manifest['source']!r} does not match bound export source {source.name!r}")
     for filename in (TASKS_FILENAME, MANIFEST_FILENAME):
         if (output_root / filename).exists():
             raise FileExistsError(f"Harbor export already exists: {output_root / filename}")
@@ -382,7 +385,7 @@ def export_harbor(input_root: StoragePath, output_root: StoragePath, *, grader_i
                         reason = row["normalization_reason"] if row["task_json"] is None else None
                         if row["task_json"] is not None:
                             try:
-                                record = harbor_record(row, grader_image=grader_image, family=source.info.family)
+                                record = harbor_record(row, grader_image=grader_image, family=source.family)
                             except UnsupportedHarborTask as error:
                                 reason = str(error)
                             else:
@@ -403,7 +406,7 @@ def export_harbor(input_root: StoragePath, output_root: StoragePath, *, grader_i
         "verify_tool_ref": verifier_identity.ref,
         "verifier_build_required": True,
         "source": source.name,
-        "atlas_id": source.info.id,
+        "atlas_id": source.atlas_id,
         "harbor_config_validated": True,
         "runtime_verified": False,
         "limitation": "Builds and execution have not run; base-image dependencies and source recipes remain unverified.",
@@ -420,7 +423,15 @@ def export_harbor(input_root: StoragePath, output_root: StoragePath, *, grader_i
     help="Pinned verifier base for tasks without their own build recipe; Harbor builds private tests on top.",
 )
 def main(input_root: Path, output_root: Path, grader_image: str | None) -> None:
-    result = export_harbor(StoragePath(str(input_root)), StoragePath(str(output_root)), grader_image=grader_image)
+    manifest = json.loads((input_root / MANIFEST_FILENAME).read_text())
+    sources = {source.name: source for source in all_sources().values() if source.pipeline is not None}
+    source = sources[manifest["source"]]
+    result = export_harbor(
+        StoragePath(str(input_root)),
+        StoragePath(str(output_root)),
+        grader_image=grader_image,
+        source=HarborSourceMetadata(source.name, source.info.id, source.info.family),
+    )
     click.echo(json.dumps({key: value for key, value in result.items() if key != "rejections"}))
 
 

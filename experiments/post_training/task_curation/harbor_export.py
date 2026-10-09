@@ -13,6 +13,8 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation import harbor, harbor_export_contract
 from experiments.post_training.task_curation.environment import PINNED_IMAGE
+from experiments.post_training.task_curation.harbor_export_contract import HarborSourceMetadata
+from experiments.post_training.task_curation.source import RlDataSource
 
 
 class HarborExportArtifact(Artifact):
@@ -26,12 +28,16 @@ class HarborExportConfig:
     input_root: str
     output_root: str
     grader_image: str | None
+    source: HarborSourceMetadata
     recipe: dict[str, str]
 
 
 def run_harbor_export(config: HarborExportConfig) -> HarborExportArtifact:
     manifest = harbor.export_harbor(
-        StoragePath(config.input_root), StoragePath(config.output_root), grader_image=config.grader_image
+        StoragePath(config.input_root),
+        StoragePath(config.output_root),
+        grader_image=config.grader_image,
+        source=config.source,
     )
     return HarborExportArtifact(
         path=config.output_root,
@@ -44,6 +50,7 @@ def run_harbor_export(config: HarborExportConfig) -> HarborExportArtifact:
 def harbor_export_step(
     normalized: ArtifactStep,
     *,
+    source: RlDataSource,
     name: str,
     version: str,
     grader_image: str | None,
@@ -56,10 +63,14 @@ def harbor_export_step(
         source_file = module.__file__
         assert source_file is not None
         recipe[module.__name__] = hashlib.sha256(Path(source_file).read_bytes()).hexdigest()
+    assert harbor.__file__ is not None
+    wrapper = Path(harbor.__file__).with_name("harbor_candidate.py")
+    recipe["harbor_candidate.py"] = hashlib.sha256(wrapper.read_bytes()).hexdigest()
     recipe.update({name: hashlib.sha256(content).hexdigest() for name, content in harbor.verifier_runtime().items()})
+    metadata = HarborSourceMetadata(source.name, source.info.id, source.info.family)
 
     def build_config(ctx: StepContext) -> HarborExportConfig:
-        return HarborExportConfig(ctx.artifact_path(normalized), ctx.output_path, grader_image, recipe)
+        return HarborExportConfig(ctx.artifact_path(normalized), ctx.output_path, grader_image, metadata, recipe)
 
     return ArtifactStep(
         name=name,

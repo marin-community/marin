@@ -279,13 +279,15 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
   --grader-image '<registry/image>@sha256:<digest>'
 ```
 
-`harbor_export.harbor_export_step(normalized, name=..., version=..., grader_image=...)`
+`harbor_export.harbor_export_step(normalized, source=..., name=..., version=..., grader_image=...)`
 binds the same exporter to an existing normalized artifact. It streams through
 `StoragePath` and writes `tasks.parquet` plus `manifest.json`. The manifest's
 `verify_tool_ref` hashes the emitted verifier files, modes, Docker recipes and
 task dispatch configuration. It identifies those bytes; it does not resolve
 mutable image tags or certify a successful build. The artifact fingerprint also
-includes the exporter and bundled verifier code. Bump its version when that
+includes the exporter, candidate wrapper, bundled verifier code and the selected
+source's name, Atlas ID and family. Pass the selected `RlDataSource` explicitly;
+planning does not open the normalized artifact. Bump its version when that
 recipe or its normalized input changes.
 
 `TaskTroveDataSource` requires an explicit `relative_path`. The curation smoke

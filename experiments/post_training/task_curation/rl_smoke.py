@@ -32,7 +32,7 @@ from marin.rl.skyrl import (
 
 from experiments.post_training.curriculum_rl.launch import HF_EXPORT_SUBDIR, model_step
 from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL, QWEN3_REVISION
-from experiments.post_training.task_curation.datasets.tasktrove.nl2bash import CONFIG as TASKTROVE_SOURCE
+from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
 from experiments.post_training.task_curation.harbor_export import harbor_export_step
 from experiments.post_training.task_curation.harbor_export_contract import MANIFEST_FILENAME, TASKS_FILENAME
 
@@ -200,7 +200,7 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
                 TaskTroveDataSource(
                     release,
                     TaskTroveSelection(
-                        sources=(TASKTROVE_SOURCE,),
+                        sources=(nl2bash.CONFIG,),
                         tags=("bash", "terminal"),
                         modes=("script",),
                         limit=SELECTED_TASKS,
@@ -246,6 +246,7 @@ def main(normalized_source: str, normalized_name: str, normalized_version: str, 
     normalized = ArtifactStep.adopt(normalized_name, normalized_version, normalized_source)
     release = harbor_export_step(
         normalized,
+        source=nl2bash.sources()[0],
         name=EXPORT_ARTIFACT_NAME,
         version=resolve_version(EXPORT_ARTIFACT_NAME, None),
         grader_image=grader_image,

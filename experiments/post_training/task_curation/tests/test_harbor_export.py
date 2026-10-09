@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -9,11 +10,13 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
+from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from taskcompendium.models import NoGrader
 from upath import UPath
 
+from experiments.post_training.task_curation import harbor
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
 from experiments.post_training.task_curation.harbor import archive_bytes
 from experiments.post_training.task_curation.harbor_export import harbor_export_step
@@ -49,7 +52,7 @@ def normalized_rows():
         }
         for index, value in enumerate((task, rejected))
     ]
-    return source.name, rows
+    return source, rows
 
 
 @pytest.mark.parametrize("protocol", ["file", "memory"])
@@ -57,12 +60,15 @@ def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tm
     root = UPath(str(tmp_path)) if protocol == "file" else UPath("memory://harbor-export" + str(tmp_path))
     input_root = root / "normalized"
     (input_root / "normalize").mkdir(parents=True)
-    source_name, rows = normalized_rows
-    (input_root / "manifest.json").write_text(json.dumps({"source": source_name}))
+    declaration, rows = normalized_rows
+    (input_root / "manifest.json").write_text(json.dumps({"source": declaration.name}))
     with (input_root / "normalize/part-00000.parquet").open("wb") as output:
         pq.write_table(pa.Table.from_pylist(rows), output)
     normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(input_root))
-    export = harbor_export_step(normalized, name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE)
+    bound = replace(declaration, info=replace(declaration.info, id="fixture-atlas-id", family="fixture-family"))
+    export = harbor_export_step(
+        normalized, source=bound, name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
+    )
     output_root = export.path(str(root))
     monkeypatch.setenv("MARIN_PREFIX", str(root))
     result = run(export, max_concurrent=1)[0]
@@ -70,6 +76,8 @@ def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tm
     manifest = json.loads((UPath(output_root) / "manifest.json").read_text())
     with (UPath(output_root) / "tasks.parquet").open("rb") as exported_file:
         exported = pq.read_table(exported_file).to_pylist()
+    assert manifest["atlas_id"] == "fixture-atlas-id"
+    assert exported[0]["family"] == "fixture-family"
     identity = VerifierPayloadIdentity()
     identity.add(exported[0]["task_binary"])
     assert manifest["verify_tool_ref"] == identity.ref == result.verify_tool_ref
@@ -90,9 +98,53 @@ def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tm
     assert source["verifier_ref"] == identity.ref
     assert source["kind"] == "tasktrove_parquet"
     selection = source["selection"]
-    assert exported[0]["source"] in selection["sources"]
-    assert exported[0]["mode"] in selection["modes"]
-    assert set(selection["tags"]) <= set(exported[0]["tags"])
+    assert selection["tag_match"] == "all"
+    selected = [
+        row
+        for row in exported
+        if row["source"] in selection["sources"]
+        and row["mode"] in selection["modes"]
+        and set(selection["tags"]) <= set(row["tags"])
+    ]
+    assert [row["path"] for row in selected] == ["0"]
+
+
+def test_wrapper_edit_invalidates_export_fingerprint_pin(tmp_path, monkeypatch):
+    normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(tmp_path / "not-materialized"))
+    assert harbor.__file__ is not None
+    wrapper = Path(harbor.__file__).with_name("harbor_candidate.py")
+    original_read = Path.read_bytes
+    changed_wrapper = wrapper.read_bytes() + b"\n# changed verifier wrapper\n"
+    before = harbor_export_step(
+        normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
+    )
+
+    # Substitute one filesystem read, leaving the checked-out wrapper and the normalized input untouched.
+    def edited_read(path):
+        return changed_wrapper if path == wrapper else original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", edited_read)
+    after = harbor_export_step(
+        normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
+    )
+    assert after.fingerprint() != before.fingerprint()
+    with pytest.raises(FingerprintMismatchError):
+        replace(after, expected_fingerprint=before.fingerprint()).lower()
+    assert not (tmp_path / "not-materialized").exists()
+
+
+@pytest.mark.parametrize("field", ["id", "family"])
+def test_source_metadata_changes_export_fingerprint(field, tmp_path):
+    normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(tmp_path / "not-materialized"))
+    source = nl2bash.sources()[0]
+    changed = replace(source, info=replace(source.info, **{field: "changed"}))
+    before = harbor_export_step(
+        normalized, source=source, name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
+    )
+    after = harbor_export_step(
+        normalized, source=changed, name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
+    )
+    assert after.fingerprint() != before.fingerprint()
 
 
 @pytest.mark.parametrize(

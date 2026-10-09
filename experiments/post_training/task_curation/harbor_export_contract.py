@@ -13,6 +13,13 @@ TASKS_FILENAME = "tasks.parquet"
 MANIFEST_FILENAME = "manifest.json"
 
 
+@dataclass(frozen=True)
+class HarborSourceMetadata:
+    name: str
+    atlas_id: str
+    family: str
+
+
 @dataclass
 class VerifierPayloadIdentity:
     """Identify emitted verifier files, recipes and dispatch configuration without building them."""
