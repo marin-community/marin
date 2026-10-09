@@ -363,7 +363,10 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "lib/rolloutengine/uv.lock"
       - name: Test rollout execution and private grading
-        run: uv run --project lib/rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
+        run: >-
+          uv run --project lib/rolloutengine --frozen --group test pytest
+          -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
+          lib/shellbox/tests/test_docker_machine.py -q
 
       - name: Test Docker command interruption
         run: |

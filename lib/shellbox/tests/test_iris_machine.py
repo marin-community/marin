@@ -5,6 +5,8 @@
 
 import asyncio
 import json
+import os
+import pwd
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
@@ -21,7 +23,7 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy
+from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -311,3 +313,18 @@ def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="container exited"):
         asyncio.run(factory.create(spec))
     assert job.cancelled
+
+
+def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        machine, _ = local_machine(tmp_path)
+        try:
+            by_uid = await machine.run(Command(("id", "-u"), user=str(os.getuid())))
+            by_name = await machine.run(Command(("id", "-u"), user=pwd.getpwuid(os.getuid()).pw_name))
+            assert by_uid.stdout.strip() == by_name.stdout.strip() == str(os.getuid()).encode()
+            with pytest.raises(UnsupportedMachineSpec, match="cannot run as 65534"):
+                await machine.run(Command(("id", "-u"), user="65534"))
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())

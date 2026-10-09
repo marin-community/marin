@@ -25,6 +25,7 @@ class Backend(StrEnum):
     QEMU = "qemu"
     SHELLSIM = "shellsim"
     DAYTONA = "daytona"
+    LOCAL = "local"
 
 
 class ExitReason(StrEnum):
@@ -90,6 +91,14 @@ class ShellSimBuiltins:
 
 
 @dataclass(frozen=True)
+class HostImage:
+    """The host's programs, with optional per-machine read-only mounts and program paths."""
+
+    read_only: tuple[Path, ...] = ()
+    bin_dirs: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True)
 class MachineSpec:
     """Machine inputs, with a provider startup timeout for Daytona.
 
@@ -97,7 +106,7 @@ class MachineSpec:
     deadline for the complete create operation.
     """
 
-    source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | ShellSimBuiltins
+    source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | ShellSimBuiltins | HostImage
     workdir: str = "/workspace"
     env: dict[str, str] = field(default_factory=dict)
     network: NetworkPolicy = NetworkPolicy.DENY

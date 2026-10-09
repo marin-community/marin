@@ -14,15 +14,16 @@ its fail-open exit-code path removed and its grader dependencies installed in th
 import json
 import re
 
-from verifyit.spec import PytestSpec, ScriptSpec
-
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
+from verifyit.spec import PytestSpec, ScriptSpec
+
 from experiments.post_training.tasktrove.converters.swe_repo import (
     CONFIG_JSON,
     TESTBED,
@@ -33,7 +34,6 @@ from experiments.post_training.tasktrove.converters.swe_repo import (
     test_ids,
 )
 from experiments.post_training.tasktrove.task_format import UV_IMAGE
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
 
 TEST_PATCH = "tests/test_patch.diff"
 TRUSTED_PATCH_PATHS = "tests/trusted_patch_paths.txt"
@@ -270,6 +270,7 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
         must_pass=selection.must_pass,
         must_not_break=selection.must_not_break,
         setup=python_setup + restore_setup(trusted_commit, (TRUSTED_TEST_PATHS, TRUSTED_PATCH_PATHS), patch=TEST_PATCH),
+        protected_paths_files=(TRUSTED_TEST_PATHS.removeprefix("tests/"), TRUSTED_PATCH_PATHS.removeprefix("tests/")),
         python=python,
         workspace=workspace,
     )

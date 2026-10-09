@@ -5,7 +5,7 @@
 
 import time
 from _thread import LockType
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Mapping, Sized
 from dataclasses import dataclass
 from typing import Protocol
@@ -40,6 +40,7 @@ from zephyr.stats import ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, ZEPHYR_WORKER_MEM_CU
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
 
 MAX_SHARD_BUCKETS = 32
+MAX_FINISHED_PIPELINES = 100
 
 
 class InFlightTask(Protocol):
@@ -120,6 +121,13 @@ class CoordinatorDashboard:
     def __init__(self, coordinator: DashboardCoordinator, active_worker_state: str) -> None:
         self._coordinator = coordinator
         self._active_worker_state = active_worker_state
+        self._finished: deque[PipelineOverview] = deque(maxlen=MAX_FINISHED_PIPELINES)
+
+    def archive_locked(self, execution_id: str) -> None:
+        """Keep a payload-free summary before release; the caller holds the coordinator lock."""
+        run = self._coordinator._executions[execution_id]
+        plan = self._plan_locked(run)
+        self._finished.append(PipelineOverview(plan, self._status_locked(run, plan), archived=True))
 
     def _run_locked(self, execution_id: str) -> DashboardExecution | None:
         if execution_id:
@@ -251,10 +259,11 @@ class CoordinatorDashboard:
 
     def overview(self) -> DashboardOverview:
         with self._coordinator._lock:
-            pipelines = []
-            for run in reversed(tuple(self._coordinator._executions.values())):
+            pipelines = list(self._finished)
+            for run in self._coordinator._executions.values():
                 plan = self._plan_locked(run)
                 pipelines.append(PipelineOverview(plan=plan, status=self._status_locked(run, plan)))
+            pipelines.sort(key=lambda item: (item.status.started_at_ms, item.status.execution_id))
             return DashboardOverview(pipelines=tuple(pipelines))
 
     def shards(self, execution_id: str, offset: int, limit: int) -> ShardPage:
@@ -277,9 +286,12 @@ class CoordinatorDashboard:
     def metrics(self, execution_id: str, max_points: int) -> PipelineMetrics:
         with self._coordinator._lock:
             run = self._run_locked(execution_id)
-            if run is None:
-                return PipelineMetrics(warning="The selected pipeline is not active.")
-            selected_execution_id = run.execution_id
+            if run is not None:
+                selected_execution_id = run.execution_id
+            elif any(item.status.execution_id == execution_id for item in self._finished):
+                selected_execution_id = execution_id
+            else:
+                return PipelineMetrics(warning="The selected pipeline is no longer retained.")
         result = self._coordinator._stats_writer.query_pipeline_metrics(selected_execution_id, max_points)
         return PipelineMetrics(points=result.points, warning=result.warning)
 

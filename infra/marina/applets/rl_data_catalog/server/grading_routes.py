@@ -9,10 +9,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from .composition import NEMOTRON_ENV
 from .grading_code import DEFINITION_BINDINGS, VERIFYIT_MODES_BINDING, PythonModuleSource
 
 ENVIRONMENT_METHODS = {"__init__", "init", "step", "set_rollout_evidence", "close"}
+NEMOTRON_ENV = "nemotron_ultra"
 NEMOTRON_PREFIX = "skyrl_gym.envs.nemotron_ultra."
 JUDGE_AGENTS = {"abstention_simple_agent", "multichallenge_simple_agent"}
 LCB_EXECUTION_MODULE = "skyrl_gym.envs.lcb.verifyit_execution"

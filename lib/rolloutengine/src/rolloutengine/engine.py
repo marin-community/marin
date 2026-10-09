@@ -11,7 +11,7 @@ from dataclasses import asdict, replace
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
-from taskcompendium.submission import SubmissionConvention, conversation_messages
+from taskcompendium.submission import conversation_messages
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
@@ -38,7 +38,7 @@ from rolloutengine.task_session import _ShellboxTaskSession
 def _empty_rollout(task: TaskSpec) -> RolloutData:
     return RolloutData(
         task.id,
-        tuple(conversation_messages(task.context)),
+        tuple(conversation_messages(task.context.events)),
         (),
         (),
         (),
@@ -56,12 +56,10 @@ class ShellboxRolloutEngine:
         model: Callable[[ModelRequest], Awaitable[ModelTurn]],
         factories: Mapping[str, MachineFactory],
         *,
-        convention: SubmissionConvention,
         sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
     ):
         self.model = model
         self.factories = factories
-        self.convention = convention
         self.sessions = {} if sessions is None else sessions
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
@@ -116,7 +114,7 @@ class ShellboxRolloutEngine:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
         try:
             if lowered.session.task_session == SHELLBOX_SESSION:
-                session = _ShellboxTaskSession(lowered, machine, self.convention, self.factories, cleanup, resources)
+                session = _ShellboxTaskSession(lowered, machine, self.factories, cleanup, resources)
             else:
                 session = self.sessions[lowered.session.task_session](lowered, machine)
         except Exception as error:

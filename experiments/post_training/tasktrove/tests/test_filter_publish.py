@@ -11,6 +11,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from taskcompendium.convert.tasktrove import INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 
 from experiments.post_training.tasktrove.apply_mcqa_routing import (
     ROUTED_GARBAGE_STATUS,
@@ -19,7 +21,6 @@ from experiments.post_training.tasktrove.apply_mcqa_routing import (
     route_tasks,
 )
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.mcqa_routing import ROUTE_MAPPINGS_FILENAME
@@ -31,7 +32,7 @@ from experiments.post_training.tasktrove.publish import (
     publish_to_huggingface,
 )
 from experiments.post_training.tasktrove.task_format import VERIFIER_TOML
-from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, TaskFiles, read_task_binary, write_task_binary
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import DedupStatus, filter_tasks
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"

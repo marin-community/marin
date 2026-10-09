@@ -15,25 +15,23 @@ from harbor_config.models.task.config import (
 
 from taskcompendium.models import (
     AnswerType,
+    ArtifactKind,
     ConversationInput,
     EnvironmentRequirements,
+    FileReward,
+    MissingArtifactPolicy,
+    PlainText,
     ResourceGroups,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
     Source,
     TaskResource,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
-)
-from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.shell_verifier import (
-    ArtifactKind,
-    FileReward,
-    MissingArtifactPolicy,
-    RewardFile,
-    RewardFileFormat,
-    ShellVerifierSpec,
     VerifierArtifact,
 )
+from taskcompendium.runtime.resources import inline_resource
 
 ARTIFACTS_PATH = "/logs/artifacts"
 REWARD_PATH = "/logs/verifier"
@@ -77,7 +75,7 @@ def _environment(config: EnvironmentConfig, *, capabilities: tuple[str, ...] = (
 
 
 def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
-    """Preserve task semantics and keep verifier files outside the agent workspace.
+    """Preserve task semantics and grade with the package's tests in a separate machine.
 
     Shared verifier mode, multi-stage packages, image builds, and healthchecks are unsupported.
     Machine limits, users, and deadlines belong to runtime lowering.
@@ -85,7 +83,7 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
     config = TaskConfig.model_validate_toml((directory / "task.toml").read_text())
     if config.steps or config.multi_step_reward_strategy:
         raise NotImplementedError("Multi-stage Harbor tasks are unsupported")
-    if config.verifier.environment_mode != VerifierEnvironmentMode.SEPARATE and config.verifier.environment is None:
+    if config.verifier.environment_mode != VerifierEnvironmentMode.SEPARATE:
         raise NotImplementedError("Harbor shell grading requires a separate verifier environment")
     requirements = _environment(config.environment, capabilities=("shell", "filesystem"))
     requirements = requirements.model_copy(
@@ -111,8 +109,12 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
     artifacts = [ArtifactConfig(source=item) if isinstance(item, str) else item for item in config.artifacts]
     if not any(artifact.source.rstrip("/") == ARTIFACTS_PATH for artifact in artifacts):
         artifacts.append(ArtifactConfig(source=ARTIFACTS_PATH))
-    verifier = ShellVerifierSpec(
+    grader = ScriptGrader(
         argv=("bash", GRADER_PATH),
+        # Harbor runs its tests in the image's working directory; an unset one becomes the root.
+        cwd=verifier_requirements.working_directory or "/",
+        environment=verifier_requirements,
+        answer_path=None,
         artifacts=tuple(
             VerifierArtifact(
                 source=artifact.source,
@@ -131,11 +133,6 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
             ),
         ),
     )
-    specification = VerifierSpec(
-        kind="shell",
-        parameters_json=verifier.model_dump_json(),
-        environment_requirements=verifier_requirements,
-    )
     return TaskSpec(
         id=f"{source.dataset}:{source.row}",
         context=ConversationInput(
@@ -143,7 +140,8 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
         ),
         environment_requirements=requirements,
         answer_type=AnswerType.WORKSPACE_STATE,
-        verifier=specification,
+        answer_format=PlainText(),
+        grader=grader,
         resources=ResourceGroups(worker=worker, verifier=private),
         source=source,
         tags=("harbor",),

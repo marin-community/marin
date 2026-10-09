@@ -25,6 +25,8 @@ from enum import StrEnum
 from pathlib import Path
 
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TASK_TOML, TEST_SH, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.grade import Status, grade, local_output_path, negative_candidate, positive_candidate
 from verifyit.modes.extract import collapse_whitespace
 from verifyit.modes.ifeval import CONSTRAINTS
@@ -51,7 +53,6 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.post_training.tasktrove.convert import CONVERTED_GLOB, CONVERTED_SCHEMA
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dataset import APPROX_SHARD_BYTES, WORKER_RESOURCES, WORKING_SHARDS
 from experiments.post_training.tasktrove.task_format import (
     INSTALL_MARKER,
@@ -59,15 +60,7 @@ from experiments.post_training.tasktrove.task_format import (
     VERIFIER_TOML,
     VERIFY_TEST_SH,
 )
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    INSTRUCTION,
-    SOLUTION_DIR,
-    TASK_TOML,
-    TEST_SH,
-    TaskFiles,
-    read_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
 FILTERED_GLOB = "graded/*.parquet"
 VERIFIED_STATUS = "verified:"

@@ -8,104 +8,81 @@ from collections.abc import Iterator
 from tempfile import SpooledTemporaryFile
 from typing import Any
 
+from pydantic import ValidationError
+
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import (
+    REJECTING_CHECK_STATUSES,
+    RESOURCES_OVER_BUDGET,
     CheckResult,
-    DatasetRecipe,
+    Confidence,
     Decision,
     Disposition,
     FilterPolicy,
+    ImportFailureKind,
     ImportRejection,
     NormalizedTask,
+    QualityBasis,
     RawRow,
     ReviewRecord,
+    SourceRecipe,
     TaskAudit,
 )
+from taskcompendium.pipeline.sources import conversion_context
+from taskcompendium.runtime.resources import resource_bytes
 
 GROUP_MEMORY_BYTES = 1024 * 1024
 
 
-def canonical_merge_record(row: dict[str, Any]) -> dict[str, Any]:
-    task = TaskSpec.model_validate_json(row["task_json"]) if row["task_json"] is not None else None
-    return {
-        "public_key": deduplication_key(task) if task is not None else row["task_id"],
-        "semantic_key": semantic_digest(task, include_reference=True) if task is not None else row["task_id"],
-        "row": row,
-    }
-
-
-def canonical_representative_order(record: dict[str, Any]) -> str:
-    row = record["row"]
-    return json.dumps(
-        [
-            int(row["intended_use"] != "eval"),
-            row["source_dataset"],
-            row["source_revision"],
-            row["source_row"],
-            row["task_id"],
-        ]
-    )
-
-
-def canonicalize_group(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    """Choose a deterministic accepted representative and retain every audit row."""
-    references = set()
-    representative = None
-    has_eval = False
-    with SpooledTemporaryFile(max_size=GROUP_MEMORY_BYTES, mode="w+t") as spool:
-        for record in records:
-            row = record["row"]
-            has_eval |= row["intended_use"] == "eval"
-            if row["filter_status"] == "keep":
-                if len(references) < 2:
-                    references.add(record["semantic_key"])
-                if representative is None:
-                    representative = row["task_id"]
-            spool.write(json.dumps(record) + "\n")
-        spool.seek(0)
-        for line in spool:
-            row = json.loads(line)["row"]
-            if row["filter_status"] == "keep":
-                reason = None
-                if len(references) > 1:
-                    reason = "cross_source_conflicting_verifier_contracts"
-                elif has_eval and row["intended_use"] != "eval":
-                    reason = "evaluation_overlap"
-                elif row["task_id"] != representative:
-                    reason = "cross_source_exact_duplicate"
-                    row["duplicate_of"] = representative
-                if reason is not None:
-                    row["filter_status"] = "reject"
-                    row["filter_reasons"] = [*row["filter_reasons"], reason]
-            yield row
-
-
-def selected_view(row: dict[str, Any], view: str) -> bool:
-    if row["filter_status"] != "keep":
-        return False
-    if view == "executable":
-        return row["grader_readiness"] == "ready"
-    return view == "accepted" or row["intended_use"] == view
-
-
-def normalize_row(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, Any]:
-    source = Source(
+def row_source(recipe: SourceRecipe, locator: str) -> Source:
+    return Source(
         dataset=recipe.source.dataset,
         revision=recipe.source.revision,
-        row=f"{recipe.source.config}:{recipe.source.split}:{record['locator']}",
+        row=locator,
         importer_revision=recipe.version,
     )
-    task_id = f"{recipe.name}-{canonical_sha256(source.model_dump())}"
+
+
+def row_task_id(recipe: SourceRecipe, source: Source) -> str:
+    return f"{recipe.name}-{canonical_sha256(source.model_dump())}"
+
+
+def task_resource_bytes(task: TaskSpec) -> int:
+    """Decoded bytes of every resource the task carries, across all roles."""
+    resources = task.resources
+    return sum(
+        len(resource_bytes(resource))
+        for resource in (*resources.all, *resources.worker, *resources.oracle, *resources.verifier)
+    )
+
+
+def _within_budget(task: TaskSpec, budget: int) -> TaskSpec | ImportRejection:
+    size = task_resource_bytes(task)
+    if size <= budget:
+        return task
+    return ImportRejection(
+        kind=ImportFailureKind.UNSUPPORTED,
+        reason=RESOURCES_OVER_BUDGET,
+        detail=f"The task's resources hold {size} bytes; the source allows {budget}",
+    )
+
+
+def normalize_row(record: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
+    source = row_source(recipe, record["locator"])
+    task_id = row_task_id(recipe, source)
     raw = {
         "task_id": task_id,
         "source": source.model_dump(),
         "raw_sha256": canonical_sha256(record["data"]),
         "data": record["data"],
     }
-    result = recipe.pipeline.normalize(RawRow(task_id, source, record["data"]))
+    try:
+        result = recipe.convert(RawRow(task_id, source, record["data"]), conversion_context(recipe))
+    except ValidationError as error:
+        result = ImportRejection(kind=ImportFailureKind.CONVERTER_ERROR, reason="invalid_task_spec", detail=str(error))
     audit = TaskAudit(
         task_id=task_id,
         source=source,
@@ -121,14 +98,18 @@ def normalize_row(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, An
     if isinstance(result, NormalizedTask):
         audit = audit.model_copy(update={"normalization_changes": result.changes})
         result = result.task
+    if isinstance(result, TaskSpec):
+        result = _within_budget(result, recipe.resource_budget_bytes)
     if isinstance(result, ImportRejection):
         audit = audit.model_copy(
             update={
                 "normalization_rejection": result,
                 "decision": Decision(
                     task_id=task_id,
-                    disposition=Disposition.REJECT,
-                    reasons=[f"normalize:{result.reason}", result.detail],
+                    disposition=(
+                        Disposition.REJECT if result.kind is ImportFailureKind.SOURCE_DEFECT else Disposition.DEFER
+                    ),
+                    reasons=[f"normalize:{result.reason}"],
                 ),
             }
         )
@@ -186,13 +167,8 @@ def deduplicate_group(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dic
             yield audit
 
 
-def filter_row(row: dict[str, Any], policy: FilterPolicy) -> dict[str, Any]:
-    if (
-        row["normalization_reason"] is not None
-        or row["duplicate_of"] is not None
-        or "conflicting_references" in row["filter_reasons"]
-    ):
-        return row
+def review_record(row: dict[str, Any]) -> ReviewRecord:
+    """Recover the recorded review from curation columns."""
     verdict = None
     if row["review_quality"] is not None:
         verdict = {
@@ -203,16 +179,40 @@ def filter_row(row: dict[str, Any], policy: FilterPolicy) -> dict[str, Any]:
             "defects": row["review_defects"],
             "evidence": row["review_evidence"],
         }
-    review = ReviewRecord.model_validate_json(
+    return ReviewRecord.model_validate_json(
         json.dumps(
             {
                 "task_id": row["task_id"],
                 "status": row["review_status"] or "unavailable",
                 "verdict": verdict,
-                "detail": row["review_detail"] or "No quality assessment available",
+                "detail": row["review_detail"] if row["review_status"] else "No quality assessment available",
             }
         )
     )
+
+
+def filter_row(row: dict[str, Any], policy: FilterPolicy) -> dict[str, Any]:
+    if (
+        row["normalization_reason"] is not None
+        or row["duplicate_of"] is not None
+        or "conflicting_references" in row["filter_reasons"]
+    ):
+        return row
+    if row["quality_basis"] in (
+        QualityBasis.UNREVIEWED,
+        QualityBasis.INFERRED_FROM_SOURCE,
+        QualityBasis.SOURCE_REJECTED,
+        QualityBasis.SOURCE_INCOMPLETE,
+    ):
+        # These are source-level decisions, not missing per-task model responses.
+        # Cheap failures always retain their own rejection evidence.
+        failed = [f"check:{check['check']}" for check in row["checks"] if check["status"] in REJECTING_CHECK_STATUSES]
+        if failed:
+            return {**row, "filter_status": "reject", "filter_reasons": failed}
+        if row["quality_basis"] == QualityBasis.INFERRED_FROM_SOURCE and policy.minimum_confidence == Confidence.HIGH:
+            return {**row, "filter_status": "defer", "filter_reasons": ["source_quality:requires_direct_review"]}
+        return row
+    review = review_record(row)
     decision = task_decision(
         row["task_id"], [CheckResult.model_validate(check) for check in row["checks"]], review, policy
     )
