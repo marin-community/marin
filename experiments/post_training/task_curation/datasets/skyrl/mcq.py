@@ -15,6 +15,15 @@ from verifyit.modes.extract import extract_boxed
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
+MCQ_VERIFIER = SourceReference(
+    "mcq",
+    "0bc12f4e510cd99f34e12ac26599960d96d1ae0a24840eb3fdb9a4e80388e7fb",
+    (
+        "https://github.com/marin-community/MarinSkyRL/tree/"
+        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/mcq"
+    ),
+)
+
 GPQA_CHOICES = ("Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")
 OPTION_LABEL = re.compile(r"(?m)^([A-Z]):")
 
@@ -89,14 +98,7 @@ def sources() -> list[RlDataSource]:
                 origin="MarinSkyRL",
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "benchmark", "license:cc-by-4.0", "gym/mcq"),
-                verifier=SourceReference(
-                    "mcq",
-                    "0bc12f4e510cd99f34e12ac26599960d96d1ae0a24840eb3fdb9a4e80388e7fb",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/mcq"
-                    ),
-                ),
+                verifier=MCQ_VERIFIER,
             ),
             pipeline=RlDataPipeline(
                 name="gpqa",
@@ -120,14 +122,7 @@ def sources() -> list[RlDataSource]:
                 origin="MarinSkyRL",
                 family="qa-multiple-choice",
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/mcq"),
-                verifier=SourceReference(
-                    "mcq",
-                    "0bc12f4e510cd99f34e12ac26599960d96d1ae0a24840eb3fdb9a4e80388e7fb",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/mcq"
-                    ),
-                ),
+                verifier=MCQ_VERIFIER,
             ),
             pipeline=RlDataPipeline(
                 name="openscience",

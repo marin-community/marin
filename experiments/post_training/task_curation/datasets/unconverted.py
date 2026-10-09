@@ -7,6 +7,8 @@
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO, TASKTROVE_REVISION
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
+MIMO_VERIFIER = SourceReference("Harbor", "a2ad9f6160b03ff2d47e59832bfb6b289f37c917", "")
+
 TASKTROVE_INPUT = SourceReference(
     TASKTROVE_REPO,
     TASKTROVE_REVISION,
@@ -845,7 +847,7 @@ def sources() -> list[RlDataSource]:
                     "and dependency resolution remain mutable."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference("Harbor", "a2ad9f6160b03ff2d47e59832bfb6b289f37c917", ""),
+                verifier=MIMO_VERIFIER,
             )
         ),
         RlDataSource(
@@ -867,7 +869,7 @@ def sources() -> list[RlDataSource]:
                     "hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference("Harbor", "a2ad9f6160b03ff2d47e59832bfb6b289f37c917", ""),
+                verifier=MIMO_VERIFIER,
             )
         ),
         RlDataSource(
@@ -889,7 +891,7 @@ def sources() -> list[RlDataSource]:
                     "V2.6-RL-oss__general/source.json) for runtime revisions and file hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference("Harbor", "a2ad9f6160b03ff2d47e59832bfb6b289f37c917", ""),
+                verifier=MIMO_VERIFIER,
             )
         ),
         RlDataSource(
@@ -903,7 +905,7 @@ def sources() -> list[RlDataSource]:
                     "Canonical prompts with the complete native ABC-to-MIDI continuous scorer; no shipped " "solutions."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference("Harbor", "a2ad9f6160b03ff2d47e59832bfb6b289f37c917", ""),
+                verifier=MIMO_VERIFIER,
             )
         ),
         RlDataSource(
@@ -926,7 +928,7 @@ def sources() -> list[RlDataSource]:
                     "hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference("Harbor", "a2ad9f6160b03ff2d47e59832bfb6b289f37c917", ""),
+                verifier=MIMO_VERIFIER,
             )
         ),
     ]
