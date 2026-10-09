@@ -88,6 +88,8 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     config = TaskConfig.model_validate_toml(files["task.toml"].decode())
     assert config.metadata["taskcompendium_id"] == converted.task.id
     assert config.metadata["tasktrove_path"] == record.path == row["original_path"]
+    # Frozen TaskTrove ConvertedTask (61bb85cc) uses this budget for every source.
+    assert config.agent.timeout_sec == 900
     assert config.verifier.environment_mode == VerifierEnvironmentMode.SEPARATE
     # Native separate verification skips tests upload, so tests must be baked in.
     assert config.verifier.environment.docker_image is None

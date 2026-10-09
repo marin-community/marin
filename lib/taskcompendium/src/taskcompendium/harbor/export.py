@@ -432,6 +432,7 @@ def harbor_record(
     config: dict[str, Any] = {
         "schema_version": "1.2",
         "metadata": metadata,
+        "agent": {"timeout_sec": LEGACY_AGENT_TIMEOUT},
         "environment": {"env": environment.environment_variables},
         "verifier": {
             "environment_mode": "separate",
@@ -449,7 +450,6 @@ def harbor_record(
         config["verifier"]["environment_mode"] = "shared"
         config["verifier"].pop("environment")
         config["artifacts"] = []
-        config["agent"] = {"timeout_sec": LEGACY_AGENT_TIMEOUT}
         config["verifier"]["env"] = {**grader.environment.environment_variables, **verifier.env}
         metadata["execution_policy"] = "tasktrove_shared_repository" if repository_state else "tasktrove_shared_stdio"
     if environment.working_directory is not None:
