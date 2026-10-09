@@ -33,6 +33,15 @@ from experiments.post_training.task_curation.datasets.skyrl.scorers import livec
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
+LCB_VERIFIER = SourceReference(
+    "lcb",
+    "a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
+    (
+        "https://github.com/marin-community/MarinSkyRL/tree/"
+        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
+    ),
+)
+
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
 APPS_GRADE = grade_script(HERE / "apps_grade.py", *shipped_files(SCORERS, "apps_testing_util.py"))
@@ -293,14 +302,7 @@ def sources() -> list[RlDataSource]:
                 origin="MarinSkyRL",
                 family="competitive-programming",
                 tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/lcb"),
-                verifier=SourceReference(
-                    "lcb",
-                    "a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
-                    ),
-                ),
+                verifier=LCB_VERIFIER,
             ),
             pipeline=RlDataPipeline(
                 name="apps",
@@ -324,14 +326,7 @@ def sources() -> list[RlDataSource]:
                 origin="MarinSkyRL",
                 family="competitive-programming",
                 tags=("rlvr", "single-turn", "license:mit", "gym/lcb"),
-                verifier=SourceReference(
-                    "lcb",
-                    "a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
-                    ),
-                ),
+                verifier=LCB_VERIFIER,
             ),
             pipeline=RlDataPipeline(
                 name="eurus2_code",
@@ -359,14 +354,7 @@ def sources() -> list[RlDataSource]:
                 origin="MarinSkyRL",
                 family="competitive-programming",
                 tags=("rlvr", "single-turn", "gym/lcb"),
-                verifier=SourceReference(
-                    "lcb",
-                    "a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
-                    ),
-                ),
+                verifier=LCB_VERIFIER,
             ),
             pipeline=RlDataPipeline(
                 name="verifiable_code",
