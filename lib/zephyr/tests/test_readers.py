@@ -167,27 +167,6 @@ def test_compute_parquet_splits_row_ranges_are_readable(tmp_path):
     assert sorted(all_ids) == list(range(20))
 
 
-@pytest.mark.parametrize("row_group_size", [3, 13])
-@pytest.mark.parametrize("approx_shard_bytes", [None, 1])
-def test_parquet_row_limit_preserves_rows(tmp_path, row_group_size, approx_shard_bytes):
-    path = str(tmp_path / "data.parquet")
-    records = [{"id": i, "payload": None if i % 2 else "duplicate"} for i in range(13)]
-    pq.write_table(pa.Table.from_pylist(records), path, row_group_size=row_group_size)
-
-    splits = compute_parquet_splits(path, approx_shard_bytes, max_rows_per_shard=4)
-    shards = [list(load_parquet(InputFileSpec(path=path, row_start=start, row_end=end))) for start, end in splits]
-    assert all(0 < len(shard) <= 4 for shard in shards)
-    assert [row for shard in shards for row in shard] == records
-
-
-def test_parquet_row_limit_retains_empty_file_span(tmp_path):
-    path = str(tmp_path / "empty.parquet")
-    pq.write_table(pa.table({"id": pa.array([], type=pa.int64())}), path)
-    splits = compute_parquet_splits(path, max_rows_per_shard=4)
-    assert splits == [(0, 0)]
-    assert list(load_parquet(InputFileSpec(path=path, row_start=0, row_end=0))) == []
-
-
 def test_load_parquet_no_dataset_api(tmp_path, monkeypatch):
     """Verify that load_parquet does NOT import pyarrow.dataset."""
 

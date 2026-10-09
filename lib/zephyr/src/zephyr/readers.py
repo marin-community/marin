@@ -180,34 +180,23 @@ def open_file(file_path: str, mode: str = "rb"):
         yield f
 
 
-def compute_parquet_splits(
-    path: str,
-    approx_shard_bytes: int | None = None,
-    *,
-    max_rows_per_shard: int | None = None,
-) -> list[tuple[int, int]]:
+def compute_parquet_splits(path: str, approx_shard_bytes: int | None) -> list[tuple[int, int]]:
     """Compute row-range split points from Parquet footer metadata.
 
-    Reads only the file footer. Byte targets preserve row-group boundaries.
-    An optional row limit further divides those spans, allowing a single large
-    row group to supply multiple workers for CPU-heavy processing.
-
-    Row-limited shards still read each overlapping row group in full before
-    slicing. This trades repeated I/O and decoding for more parallelism; it
-    does not bound reader memory. Without either target, returns one span.
+    Reads only the file footer — no data is transferred. Splits are aligned to
+    row-group boundaries, so actual shard sizes may exceed approx_shard_bytes when
+    a single row group is larger than the target. Without a byte target, returns
+    one span covering the entire file.
 
     Args:
         path: Path to the Parquet file (local or remote via fsspec).
-        approx_shard_bytes: Approximate uncompressed bytes per shard. A row
-            group can exceed this target. None skips byte-based splitting.
-        max_rows_per_shard: Maximum input rows per shard, before filtering.
-            None preserves row-group boundaries.
+        approx_shard_bytes: Approximate target split size in uncompressed bytes.
+            A row group will never be split, so individual shards may be larger.
+            None returns a single span covering all rows.
 
     Returns:
         List of (row_start, row_end) tuples where row_end is exclusive.
     """
-    if max_rows_per_shard is not None and max_rows_per_shard <= 0:
-        raise ValueError(f"max_rows_per_shard must be positive, got {max_rows_per_shard}")
     # Read the footer through open_file (fsspec) so CoreWeave object storage's
     # virtual-host addressing is honored; a raw path makes pyarrow use its native
     # path-style S3 client, which CW rejects with HTTP 400.
@@ -231,13 +220,7 @@ def compute_parquet_splits(
         cumulative_rows += rg.num_rows
 
     splits.append((split_start, cumulative_rows))
-    if max_rows_per_shard is None or cumulative_rows == 0:
-        return splits
-    return [
-        (start, min(start + max_rows_per_shard, end))
-        for first, end in splits
-        for start in range(first, end, max_rows_per_shard)
-    ]
+    return splits
 
 
 def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:

@@ -1315,22 +1315,6 @@ def test_input_file_spec_with_columns_and_row_range(tmp_path):
     assert records[-1]["id"] == 9
 
 
-@pytest.mark.parametrize("reader", ["auto", "rows", "batches"])
-def test_dataset_parquet_row_limit_before_filter(tmp_path, zephyr_ctx, reader):
-    path = str(tmp_path / "input.parquet")
-    pq.write_table(pa.table({"id": range(13)}), path, row_group_size=13)
-    ds = Dataset.from_files(path)
-    if reader == "auto":
-        ds = ds.load_file(max_rows_per_shard=4)
-    elif reader == "rows":
-        ds = ds.load_parquet(max_rows_per_shard=4)
-    else:
-        ds = ds.load_parquet(max_rows_per_shard=4, batch_mode=True).flat_map(lambda batch: batch.to_pylist())
-    ds = ds.filter(col("id") >= 5).map_shard(lambda rows, shard: [(shard.shard_idx, [row["id"] for row in rows])])
-    shards = dict(zephyr_ctx.execute(ds).results)
-    assert shards == {0: [], 1: [5, 6, 7], 2: [8, 9, 10, 11], 3: [12]}
-
-
 def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
     """load_parquet(batch_mode=True) yields pa.RecordBatch objects."""
     path = str(tmp_path / "data.parquet")

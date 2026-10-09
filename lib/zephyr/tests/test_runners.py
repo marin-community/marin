@@ -11,8 +11,6 @@ from contextlib import closing, suppress
 from threading import Lock
 
 import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
@@ -74,32 +72,6 @@ def test_simple_map(local_client, tmp_path, runner_factory):
     finally:
         ctx.shutdown()
     assert sorted(results) == [3, 6, 9, 12, 15]
-
-
-def test_parquet_row_offsets_run_concurrently(local_client, tmp_path):
-    source = tmp_path / "input.parquet"
-    pq.write_table(pa.table({"id": range(13)}), source, row_group_size=13)
-
-    def concurrent_shard(rows, info):
-        (tmp_path / f"ready-{info.shard_idx}").touch()
-        # Both shards must enter before either can finish: keeping the single
-        # row group as one task cannot satisfy this barrier.
-        ready = ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
-            lambda: all((tmp_path / f"ready-{index}").exists() for index in range(2)),
-            timeout=Duration.from_seconds(15),
-        )
-        assert ready, "Parquet row ranges did not run concurrently"
-        yield os.getpid(), [row["id"] for row in rows]
-
-    ctx = _ctx(local_client, tmp_path, stage_runner_factory=SubprocessRunner)
-    try:
-        ds = Dataset.from_files(str(source)).load_parquet(max_rows_per_shard=7).map_shard(concurrent_shard)
-        results = ctx.execute(ds).results
-    finally:
-        ctx.shutdown()
-    assert len({pid for pid, _ in results}) == 2
-    assert all(pid != os.getpid() for pid, _ in results)
-    assert sorted(row for _, rows in results for row in rows) == list(range(13))
 
 
 def test_subprocess_runner_limits_polars_threads_to_task_cpu(local_client, tmp_path):
