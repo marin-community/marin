@@ -9,9 +9,7 @@ import torch
 def weight_update_gram(anchor: torch.Tensor, donors: list[torch.Tensor], *, chunk_elements: int) -> torch.Tensor:
     """Return FP64 dot products of [anchor, donors..., donor-anchor updates...].
 
-    Compute updates explicitly before reduction to preserve small differences
-    between nearly identical checkpoints. Zero vectors retain zero dot products;
-    their cosine similarities are undefined.
+    Zero vectors retain zero dot products; their cosine similarities are undefined.
     """
     if any(tensor.shape != anchor.shape for tensor in donors):
         raise ValueError("Checkpoint tensor shapes differ")
@@ -22,6 +20,7 @@ def weight_update_gram(anchor: torch.Tensor, donors: list[torch.Tensor], *, chun
     gram = torch.zeros((count, count), dtype=torch.float64, device=anchor.device)
     for start in range(0, anchor.numel(), chunk_elements):
         weights = [tensor[start : start + chunk_elements].double() for tensor in flattened]
+        # Explicit deltas preserve small differences between nearly identical weights.
         vectors = torch.stack([*weights, *(weight - weights[0] for weight in weights[1:])])
         gram += vectors @ vectors.T
     if not torch.isfinite(gram).all():

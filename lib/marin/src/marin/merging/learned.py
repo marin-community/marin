@@ -70,7 +70,7 @@ def differentiable_weight_blend(
 
     Coefficient rows partition flattened weights into contiguous chunks. Source
     weights remain frozen on CPU; only the output and bounded FP32 blocks use
-    the coefficient device. Backward recomputes deltas from the CPU sources.
+    the coefficient device.
     """
     if coefficients.ndim != 2 or coefficients.shape[1] != len(donors) or not donors:
         raise ValueError("Coefficients must have shape (chunks, donors)")

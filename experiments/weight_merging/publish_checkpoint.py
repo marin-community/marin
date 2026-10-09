@@ -14,6 +14,7 @@ import yaml
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from marin.merging.checkpoint import MANIFEST_NAME
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 logger = logging.getLogger(__name__)
 WARNING = (
@@ -38,7 +39,7 @@ def main() -> None:
     assert yaml.safe_load(card.decode().split("---", 2)[1])["license"] == "openmdw-1.1"
     assert hashlib.sha256(license_text).hexdigest() == args.license_sha256
     fs, path = filesystem_for(args.checkpoint)
-    manifest_bytes = fs.cat_file(f"{path}/{MANIFEST_NAME}")
+    manifest_bytes = fs.cat_file(prefix_join(path, MANIFEST_NAME))
     manifest = json.loads(manifest_bytes)
     objects = manifest["objects"]
     assert len({item["name"] for item in objects}) == len(objects)
@@ -50,7 +51,7 @@ def main() -> None:
         raise FileExistsError(f"Refuse to overwrite populated repository: {args.repo_id}")
 
     def preupload(item: dict) -> CommitOperationAdd:
-        payload = fs.cat_file(f"{path}/{item['name']}")
+        payload = fs.cat_file(prefix_join(path, item["name"]))
         if len(payload) != item["bytes"] or hashlib.sha256(payload).hexdigest() != item["sha256"]:
             raise ValueError(f"Checkpoint object differs from completion manifest: {item['name']}")
         operation = CommitOperationAdd(path_in_repo=item["name"], path_or_fileobj=payload)

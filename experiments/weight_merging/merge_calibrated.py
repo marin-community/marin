@@ -19,6 +19,7 @@ from marin.merging.checkpoint import (
     merge_checkpoint,
 )
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.weight_merging.calibration_model import coefficient_group
 
@@ -53,7 +54,7 @@ def main() -> None:
         moments = tuple(CheckpointSource(**source) for source in recipe["second_moments"])
         for source in moments:
             fs, path = filesystem_for(source.path)
-            if not fs.exists(f"{path}/complete.json"):
+            if not fs.exists(prefix_join(path, "complete.json")):
                 raise ValueError(f"Second-moment collection is incomplete: {source.path}")
         calibration = CurvatureMerge(moments, recipe["density"], recipe["epsilon"])
     else:

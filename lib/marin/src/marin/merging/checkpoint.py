@@ -12,6 +12,7 @@ from typing import Any
 import safetensors.torch
 import torch
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.merging.arithmetic import MergeParameters, merge_tensor
 from marin.merging.curvature import ota_merge_tensor
@@ -68,7 +69,7 @@ class CheckpointReader:
     def __init__(self, source: CheckpointSource):
         self.source = source
         self.fs, self.path = filesystem_for(source.path)
-        self.weight_map = json.loads(self.fs.cat_file(f"{self.path}/{INDEX_NAME}"))["weight_map"]
+        self.weight_map = json.loads(self.fs.cat_file(prefix_join(self.path, INDEX_NAME)))["weight_map"]
         self.shard_name = ""
         self.tensors: dict[str, torch.Tensor] = {}
 
@@ -76,7 +77,7 @@ class CheckpointReader:
         shard = self.weight_map[name]
         if shard != self.shard_name:
             self.tensors.clear()
-            self.tensors = safetensors.torch.load(self.fs.cat_file(f"{self.path}/{shard}"))
+            self.tensors = safetensors.torch.load(self.fs.cat_file(prefix_join(self.path, shard)))
             self.shard_name = shard
         return self.tensors[name]
 
@@ -156,7 +157,7 @@ def merge_checkpoint(
     }
 
     def write(name: str, data: bytes) -> None:
-        fs.pipe_file(f"{output_path}/{name}", data)
+        fs.pipe_file(prefix_join(output_path, name), data)
         manifest["objects"].append({"name": name, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
 
     # Establish provenance before expensive work; the manifest remains the final gate.
@@ -211,11 +212,11 @@ def merge_checkpoint(
         del merged, base_tensor, donor_tensors
         logger.info("Merged %d/%d: %s", index, len(ordered), name)
     for name in METADATA_NAMES:
-        path = f"{readers[0].path}/{name}"
+        path = prefix_join(readers[0].path, name)
         if readers[0].fs.exists(path):
             write(name, readers[0].fs.cat_file(path))
     write(INDEX_NAME, json.dumps({"metadata": {"total_size": total_size}, "weight_map": weight_map}).encode())
     manifest["tensor_count"] = len(weight_map)
     manifest["total_size"] = total_size
-    fs.pipe_file(f"{output_path}/{MANIFEST_NAME}", json.dumps(manifest, indent=2).encode())
+    fs.pipe_file(prefix_join(output_path, MANIFEST_NAME), json.dumps(manifest, indent=2).encode())
     return manifest

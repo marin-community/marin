@@ -19,11 +19,13 @@ import torch
 import torch.nn.functional as F
 from marin.merging.checkpoint import INDEX_NAME, METADATA_NAMES, CheckpointSource
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from transformers import AutoTokenizer
 
 from experiments.weight_merging.calibration_model import FrozenGrugBank, coefficient_group
 
 logger = logging.getLogger(__name__)
+CPU_BLOCK_ELEMENTS = 2**20
 
 
 @dataclass(frozen=True)
@@ -75,11 +77,11 @@ def allocate_chunks(bank: FrozenGrugBank, coefficients: torch.nn.ParameterDict, 
         for donor, value in zip(bank.states[1:], alpha, strict=True):
             # CPU blocks avoid an FP32 copy of an entire expert bank.
             total = 0.0
-            for start in range(0, anchor.numel(), 2**20):
+            for start in range(0, anchor.numel(), CPU_BLOCK_ELEMENTS):
                 total += (
                     (
-                        donor[name].flatten()[start : start + 2**20].float()
-                        - anchor.flatten()[start : start + 2**20].float()
+                        donor[name].flatten()[start : start + CPU_BLOCK_ELEMENTS].float()
+                        - anchor.flatten()[start : start + CPU_BLOCK_ELEMENTS].float()
                     )
                     .abs()
                     .sum()
@@ -200,11 +202,11 @@ def collect_moments(bank: FrozenGrugBank, examples: list[TokenExample], write) -
         for name, value in weights.items():
             if value.grad is not None:
                 disconnected.discard(name)
-                for start in range(0, value.numel(), 2**20):
-                    grad = value.grad.flatten()[start : start + 2**20].float().cpu()
+                for start in range(0, value.numel(), CPU_BLOCK_ELEMENTS):
+                    grad = value.grad.flatten()[start : start + CPU_BLOCK_ELEMENTS].float().cpu()
                     if not torch.isfinite(grad).all():
                         raise ValueError(f"Nonfinite gradient: {name}")
-                    moments[name].flatten()[start : start + 2**20].add_(grad.square() / len(examples))
+                    moments[name].flatten()[start : start + CPU_BLOCK_ELEMENTS].add_(grad.square() / len(examples))
                 value.grad = None
         losses.append(loss.item())
         logger.info("Moment sample %d/%d %s: %.6f", len(losses), len(examples), example.identity, loss.item())
@@ -280,7 +282,7 @@ def main() -> None:
     torch.set_num_threads(recipe["threads"])
     sources = [CheckpointSource(**source) for source in recipe["sources"]]
     fs, path = filesystem_for(sources[0].path)
-    config = json.loads(fs.cat_file(f"{path}/config.json"))
+    config = json.loads(fs.cat_file(prefix_join(path, "config.json")))
     data = Path(recipe["data"]).read_bytes()
     assert hashlib.sha256(data).hexdigest() == recipe["data_sha256"]
     rows = [json.loads(line) for line in data.splitlines()]
@@ -288,8 +290,8 @@ def main() -> None:
         rows = [row for row in rows if row["domain"] == recipe["domain"]]
     with tempfile.TemporaryDirectory() as directory:
         for name in METADATA_NAMES:
-            if fs.exists(f"{path}/{name}"):
-                Path(directory, name).write_bytes(fs.cat_file(f"{path}/{name}"))
+            if fs.exists(prefix_join(path, name)):
+                Path(directory, name).write_bytes(fs.cat_file(prefix_join(path, name)))
         tokenizer = AutoTokenizer.from_pretrained(directory)
         examples = token_examples(tokenizer, rows, recipe["max_length"], recipe["max_positions"])
     devices = tuple(torch.device(f"cuda:{index}") for index in range(torch.cuda.device_count()))
@@ -301,7 +303,7 @@ def main() -> None:
     output_fs.makedirs(output_path, exist_ok=True)
 
     def write(name: str, payload: bytes) -> None:
-        output_fs.pipe_file(f"{output_path}/{name}", payload)
+        output_fs.pipe_file(prefix_join(output_path, name), payload)
 
     write(
         "recipe.json",

@@ -10,28 +10,33 @@ import json
 import random
 from pathlib import Path
 
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+
+LAYER_COUNT = 26
+EXPERT_COUNT = 256
+
 
 def build_recipes(
     comparison: dict, template: dict, counts: list[int], seed: int, benchmark: str, recipient: str
 ) -> tuple[dict, dict]:
     """Rank experts independently by layer and preserve the recipient elsewhere."""
     scores = comparison["phases"]["generated"]["selection_score"]
-    if len(scores) != 26 or any(len(layer) != 256 for layer in scores):
+    if len(scores) != LAYER_COUNT or any(len(layer) != EXPERT_COUNT for layer in scores):
         raise ValueError("Expected 26 layers of 256 expert scores")
-    ranked = [sorted(range(256), key=lambda expert: (-layer[expert], expert)) for layer in scores]
-    randomized = [random.Random(seed + layer).sample(range(256), 256) for layer in range(26)]
+    ranked = [sorted(range(EXPERT_COUNT), key=lambda expert: (-layer[expert], expert)) for layer in scores]
+    randomized = [random.Random(seed + layer).sample(range(EXPERT_COUNT), EXPERT_COUNT) for layer in range(LAYER_COUNT)]
     base = copy.deepcopy(template)
     base["parameters"]["coefficients"] = [0.0, 1.0]
     base["tensor_coefficients"] = {}
     base["row_overrides"] = {}
-    output_root = template["output"].rsplit("/", 1)[0]
+    output_root = str(StoragePath.parse(template["output"]).parent)
     recipes = {}
     selections = {"seed": seed, "randomization": "Uniform permutation of 256 IDs using seed + layer", "variants": {}}
     base_name = f"routing-base-{recipient}"
-    base["output"] = f"{output_root}/{base_name}"
+    base["output"] = prefix_join(output_root, base_name)
     recipes[base_name] = base
     for count in counts:
-        if not 0 < count <= 256:
+        if not 0 < count <= EXPERT_COUNT:
             raise ValueError("Expert counts must be between 1 and 256")
         for method, ordering in ((benchmark, ranked), ("random", randomized)):
             name = f"routing-{method}{count:03d}-{recipient}"
@@ -41,7 +46,7 @@ def build_recipes(
             ):
                 raise ValueError("Targeted selection includes experts without positive benchmark enrichment")
             recipe = copy.deepcopy(base)
-            recipe["output"] = f"{output_root}/{name}"
+            recipe["output"] = prefix_join(output_root, name)
             for layer, experts in enumerate(selected):
                 for projection in ("gate_proj", "up_proj", "down_proj"):
                     key = f"model.layers.{layer}.mlp.experts.{projection}.weight"

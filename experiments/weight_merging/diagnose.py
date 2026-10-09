@@ -12,6 +12,7 @@ import torch
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
 from marin.merging.geometry import weight_update_gram
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +59,11 @@ def main() -> None:
             "gram": gram.tolist(),
         }
         filename = f"tensor-{index:05d}.json"
-        fs.pipe_file(f"{output}/{filename}", json.dumps(row, allow_nan=False).encode())
+        fs.pipe_file(prefix_join(output, filename), json.dumps(row, allow_nan=False).encode())
         manifest["tensors"].append({"name": name, "file": filename})
         del tensors, gram
         logger.info("Measured %d/%d: %s", index, len(ordered), name)
-    fs.pipe_file(f"{output}/manifest.json", json.dumps(manifest, indent=2).encode())
+    fs.pipe_file(prefix_join(output, "manifest.json"), json.dumps(manifest, indent=2).encode())
 
 
 if __name__ == "__main__":
