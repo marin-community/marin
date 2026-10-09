@@ -55,7 +55,7 @@ from levanter.data.text.formats import (
     TextLmDatasetFormat,
 )
 from levanter.models.lm_model import LmExample
-from levanter.schedule import BatchSchedule
+from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.store.cache import CacheCatalog, CacheCatalogEntry, CacheLedger, CacheOptions, TreeCache
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
@@ -624,7 +624,8 @@ class ContextPhaseConfig:
 
     end_step: int
     seq_len: int
-    batch_size: int
+    batch_size: int | IntSchedule
+    """Batch size, or a schedule of batch sizes from step 0, as in ``TrainerConfig.train_batch_size``."""
     train_weights: list[tuple[int, dict[str, float]]]
     """Mixture stages in training steps at this phase's batch size."""
     shuffle: BlockShuffleConfig
