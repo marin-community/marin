@@ -332,6 +332,12 @@ def _kma_model(model: GrugModelConfig) -> GrugModelConfig:
     )
 
 
+def _keep_policy(entry: str) -> tuple[int, int | None]:
+    """``EVERY[:UNTIL]`` -> ``(every, until)``."""
+    every, _, until = entry.partition(":")
+    return int(every), int(until) if until else None
+
+
 def _active_params(cfg: GrugModelConfig) -> int:
     """Active (non-embedding) params per token, summed over layers: attention plus either the dense
     MLP or the router + top-k routed experts + LatentMoE projections + shared experts."""
@@ -439,6 +445,8 @@ def build_h100_ladder_run(
     muon_probe_steps: tuple[int, ...] = (),
     snr_probe_steps: tuple[int, ...] = (),
     noise_scale_steps: tuple[int, ...] = (),
+    checkpoint_keep: tuple[tuple[int, int | None], ...] = (),
+    stop_after_steps: int | None = None,
     train_batch_dump_steps: tuple[int, ...] = (),
     train_text_count_patterns: tuple[str, ...] = (),
     fact_probe_input: str | None = None,
@@ -647,7 +655,7 @@ def build_h100_ladder_run(
                 base_path=permanent_checkpoint_path,
                 temporary_base_path=temporary_checkpoint_path,
                 save_interval=RESUME_SAVE_INTERVAL,
-                keep=None,
+                keep=[dict(every=every, until=until) for every, until in checkpoint_keep] or None,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
@@ -702,7 +710,7 @@ def build_h100_ladder_run(
                     dropless_eval_moe_implementation=dropless_moe_implementation(model),
                 )
             ),
-            stop_after_steps=num_steps,
+            stop_after_steps=num_steps if stop_after_steps is None else stop_after_steps,
             processes_per_task=1 if single_process else rung.gpus_per_task,
             ragged_transport=ragged_transport,
             collective_overlap_limit=collective_overlap_limit,
@@ -1012,6 +1020,18 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Comma-separated steps at which to run the SNR probe (snr_probe.py); results go to <output>/muon_probe/.",
 )
 @click.option(
+    "--checkpoint-keep",
+    default="",
+    help="Comma-separated EVERY[:UNTIL] permanent-checkpoint policies (levanter keep), e.g. 350:350,1400 saves at "
+    "350, 1400 and 2800 (with --save-checkpoints).",
+)
+@click.option(
+    "--stop-after-steps",
+    type=int,
+    default=None,
+    help="Stop at this step without changing the schedule's length (e.g. a probe-only job resumed at that step).",
+)
+@click.option(
     "--noise-scale-steps",
     default="",
     help="Comma-separated steps at which to measure the per-component gradient noise scale (noise_scale.py); "
@@ -1127,6 +1147,8 @@ def main(
     muon_probe_steps: str,
     snr_probe_steps: str,
     noise_scale_steps: str,
+    checkpoint_keep: str,
+    stop_after_steps: int | None,
     dump_train_batches: str,
     count_train_text: tuple[str, ...],
     fact_probe_input: str | None,
@@ -1196,6 +1218,8 @@ def main(
         muon_probe_steps=tuple(int(step) for step in muon_probe_steps.split(",") if step),
         snr_probe_steps=tuple(int(step) for step in snr_probe_steps.split(",") if step),
         noise_scale_steps=tuple(int(step) for step in noise_scale_steps.split(",") if step),
+        checkpoint_keep=tuple(_keep_policy(entry) for entry in checkpoint_keep.split(",") if entry),
+        stop_after_steps=stop_after_steps,
         train_batch_dump_steps=tuple(int(step) for step in dump_train_batches.split(",") if step),
         train_text_count_patterns=tuple(count_train_text),
         fact_probe_input=fact_probe_input,

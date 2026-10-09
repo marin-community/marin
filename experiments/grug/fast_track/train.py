@@ -2753,6 +2753,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 )
                 for step in config.trainer.snr_probe_steps
             ]
+        for noise_probe in noise_probes:
+            # A probe-only job resumed at the probe step (``stop_after_steps``) runs it before any training step.
+            if noise_probe.step == int(state.step):
+                noise_probe.run(
+                    state.params,
+                    state.step,
+                    lambda p, b, w, st, betas=state.pending_qb_betas, rt=_router_ties_active(
+                        config.model, int(state.step)
+                    ): (noise_gradients(p, b, w, betas, st, loop_active=None, router_tie_active=rt)),
+                )
         batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
 
