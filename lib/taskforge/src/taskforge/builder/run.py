@@ -8,8 +8,8 @@ provenance.
 output of a GRADER step, the controls are the output of a CONTROLS step, the two roles are separate
 steps, the lowered spec carries exactly the task and passes RolloutEngine's
 ``validate_lowered_task`` on this host's factories, and the controls are a complete set for the task
-(``validate_controls``). Controls are not replayed here; ``validate`` does that. The draft is
-written to ``<item_dir>/draft/``.
+(``validate_controls``). Controls are not replayed here. The draft is written to
+``<item_dir>/draft/``.
 
 A draft is bound to the host it was built on: ``lowered.json`` names that host's machine backends,
 and validation evidence is keyed by the lowered spec.

@@ -5,9 +5,7 @@ task proposals, a builder program turns each proposal into a `TaskSpec` with fix
 validation runs solver trials on RolloutEngine, and review accepts, retries or rejects the task by
 its solve rate. Review's repairs are refused here: `LoopPolicy` requires every repair budget to be 0.
 
-This is the end-to-end skeleton: every stage runs, on ShellSim machines, with the models supplied
-by the caller. The follow-up layers fill each stage in without moving a module or
-renaming a public name.
+Every stage runs end to end on ShellSim machines, with the models supplied by the caller.
 
 Taskforge is a standalone uv project with its own `uv.lock` and `.venv`. It depends on
 `taskcompendium`, `rolloutengine`, `shellbox`, `verifyit` and `rigging` through path dependencies

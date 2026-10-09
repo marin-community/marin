@@ -94,7 +94,9 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
         ValueError: a solver index below the highest one on disk has no attempt.
     """
     solver = {int(name): _last(files.last) for name, files in trial_files(evidence_dir, TrialKind.SOLVER).items()}
-    return ValidationEvidence(task_digest=task_digest(draft.lowered), solver=_by_index("solver", solver, evidence_dir))
+    return ValidationEvidence(
+        task_digest=task_digest(draft.lowered), solver=_by_index(TrialKind.SOLVER, solver, evidence_dir)
+    )
 
 
 def _by_index[T](prefix: str, trials: Mapping[int, T], evidence_dir: Path) -> tuple[T, ...]:

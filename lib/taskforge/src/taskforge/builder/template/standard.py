@@ -272,7 +272,7 @@ def task_messages(b: Build, request: str, guidance: str) -> list[Message]:
 
 
 async def accept(value: BaseModel) -> str | None:
-    """A ``structured_until`` check that accepts any valid submission."""
+    """Accept every submission that parses; no check beyond the output schema."""
     return None
 
 
@@ -410,7 +410,7 @@ async def instructions(
 async def assemble(
     b: Build, made: Fixtures, task_machine: EnvironmentRequirements, graded: Grader, text: Instructions
 ) -> TaskSpec:
-    """The TaskSpec, checked by ``b.spec.assemble``."""
+    """The item's TaskSpec: the instructions, grader, agent files and task machine, sourced to the proposal."""
     header = b.proposal.header
     return b.spec.assemble(
         task_id=b.item_id,
@@ -456,7 +456,7 @@ def control_from_draft(draft: ControlDraft) -> Control:
 
 @step(StepRole.CONTROLS)
 async def controls(b: Build, task: TaskSpec, graded: Grader, guidance: str) -> tuple[Control, ...]:
-    """Write fixed controls for the assembled task; ``validate`` replays them later."""
+    """Write the fixed controls for the assembled task."""
     request = (
         f"# Task conversation\n\n{format_conversation(task.context.events)}\n\n"
         f"# Answer contract\n\n{graded.answer_contract}\n\n{SUBMISSION}\n\n"

@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adversary trials: an agent loop that red-teams a task's grader with the verifier as a tool.
-
-The calibration summary keys its per-role adversary statistics by ``AdversaryRole``.
-"""
+"""The adversary roles that key the calibration summary's per-role adversary statistics."""
 
 from enum import StrEnum
 

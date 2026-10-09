@@ -10,12 +10,8 @@ a spec that survives a JSON round trip.
 
 A ``TaskSpec`` holds the semantic task only. How it runs (machine backend,
 limits, user, deadlines) is the ``LoweredTaskSpec`` RolloutEngine executes, and
-``lower`` alone builds one, choosing each machine's backend for the host. A
-lowered spec is therefore bound to the host whose factories it names.
-
-Only ``_presentation`` builds the presented context, concrete tools and answer
-format, and only ``lower`` builds a ``LoweredTaskSpec``, so moving either is a
-single-site change.
+``lower`` builds one, choosing each machine's backend for the host. A lowered
+spec is therefore bound to the host whose factories it names.
 """
 
 from collections.abc import Mapping, Sequence
@@ -286,11 +282,7 @@ def lower(
 def machine_runtime(
     settings: MachineSettings, requirements: EnvironmentRequirements, host: MachineHost
 ) -> MachineRuntimeSpec:
-    """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``.
-
-    ``lower`` builds every task and verifier machine with it; a builder prototyping a machine
-    outside a lowered task uses it too, so the backend choice stays in one place.
-    """
+    """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``, on the backend that host gives it."""
     return MachineRuntimeSpec(
         backend=machine_backend(requirements, host).value,
         network=settings.network,
