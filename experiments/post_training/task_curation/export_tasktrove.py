@@ -12,7 +12,7 @@ import click
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.convert import tasktrove_python_unit_tests, verifyit_build
+from taskcompendium.convert import tasktrove, tasktrove_python_unit_tests, verifyit_build
 from taskcompendium.harbor import export as harbor
 from taskcompendium.harbor.export import MANIFEST_FILENAME, HarborSourceMetadata
 
@@ -74,7 +74,7 @@ def harbor_export_step(
     assert source_file is not None
     for path in Path(source_file).parent.glob("*.py"):
         recipe[f"harbor/{path.name}"] = hashlib.sha256(path.read_bytes()).hexdigest()
-    for module in (verifyit_build, tasktrove_python_unit_tests):
+    for module in (verifyit_build, tasktrove_python_unit_tests, tasktrove):
         assert module.__file__ is not None
         recipe[module.__name__] = hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
     # The build uses package metadata and README as well as the runtime Python files.

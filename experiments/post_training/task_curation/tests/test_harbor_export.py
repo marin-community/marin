@@ -14,7 +14,7 @@ from click.testing import CliRunner
 from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext, run
-from taskcompendium.convert import tasktrove_python_unit_tests
+from taskcompendium.convert import tasktrove, tasktrove_python_unit_tests
 from taskcompendium.harbor import export as harbor
 from taskcompendium.harbor.export import VerifierPayloadIdentity
 from taskcompendium.models import NoGrader
@@ -142,6 +142,7 @@ def test_candidate_grader_edit_invalidates_export_fingerprint_pin(tmp_path, monk
     [
         Path(harbor.__file__).with_name("tasktrove.py"),
         Path(tasktrove_python_unit_tests.__file__),
+        Path(tasktrove.__file__),
         VERIFYIT_PACKAGE / "pyproject.toml",
         VERIFYIT_PACKAGE / "README.md",
     ],
