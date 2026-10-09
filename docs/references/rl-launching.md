@@ -102,10 +102,11 @@ forwarding tests at every process boundary.
 
 ## SkyRL role plan
 
-`SkyRLRolePlan` is the source of truth for policy, rollout, and batch geometry. Every parallelism
+`SkyRLRolePlan` is the source of truth for policy, reference, rollout, and batch geometry. Every parallelism
 field is required:
 
 - policy node and per-node GPU counts;
+- reference node and per-node GPU counts, and whether policy/reference share GPUs;
 - inference engine count;
 - tensor, pipeline, data, and expert parallel sizes;
 - train, policy mini-batch, and per-GPU micro-batch sizes;
@@ -134,6 +135,11 @@ rollout GPUs = engine count * engine ranks
 separate roles: policy GPUs + rollout GPUs
 colocated roles: policy GPUs, which must equal rollout GPUs
 ```
+
+When `colocate_policy_ref=false`, add `reference_num_nodes * reference_num_gpus_per_node`
+to the allocation. Shared policy/reference roles must declare the same footprint.
+Reference parallelism remains explicit in the recipe's `trainer.ref.megatron_config`; it can differ
+from policy parallelism when the roles use separate GPUs.
 
 That total must equal `num_nodes * gpus_per_node`. For example, four 8-GPU policy nodes plus four
 node-sized rollout engines require 64 GPUs. Leaving rollout DP at one describes only 36 GPUs and is

@@ -46,10 +46,14 @@ class DPOParallelism:
 
 
 POLICY_PARALLELISM = DPOParallelism(1, 13, 1, 8, 2, 2)
+REFERENCE_PARALLELISM = DPOParallelism(1, 8, 1, 8, 4, 4)
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=13,
     policy_num_gpus_per_node=8,
+    colocate_policy_ref=False,
+    reference_num_nodes=8,
+    reference_num_gpus_per_node=8,
     num_inference_engines=1,
     inference_engine_tensor_parallel_size=1,
     inference_engine_pipeline_parallel_size=1,
@@ -65,6 +69,20 @@ MODEL_NAME = "models/bfcl-rl-recovery-dpo-native"
 MODEL_URI = "s3://marin-us-east-02a/marin/users/benfeuer/models/bfcl-rl-recovery-dpo-native/2026.10.08.304"
 INPUT_NAME = "data/bfcl-rl-final-dpo-inputs"
 POLICY_FILE = "final_dpo_pi_policy.yaml"
+
+
+def megatron_config(parallel: DPOParallelism) -> dict[str, object]:
+    return {
+        "tensor_model_parallel_size": parallel.tensor,
+        "pipeline_model_parallel_size": parallel.pipeline,
+        "context_parallel_size": parallel.context,
+        "expert_model_parallel_size": parallel.expert,
+        "expert_tensor_parallel_size": 1,
+        "transformer_config_kwargs": {
+            "num_layers_in_first_pipeline_stage": parallel.first_stage_layers,
+            "num_layers_in_last_pipeline_stage": parallel.last_stage_layers,
+        },
+    }
 
 
 def final_dpo_recipe(scale: RunScale) -> str:
@@ -90,18 +108,6 @@ def final_dpo_recipe(scale: RunScale) -> str:
         **policy["environment"]["kwargs"],
         **policy["retry"],
     )
-    parallel = POLICY_PARALLELISM
-    megatron = {
-        "tensor_model_parallel_size": parallel.tensor,
-        "pipeline_model_parallel_size": parallel.pipeline,
-        "context_parallel_size": parallel.context,
-        "expert_model_parallel_size": parallel.expert,
-        "expert_tensor_parallel_size": 1,
-        "transformer_config_kwargs": {
-            "num_layers_in_first_pipeline_stage": parallel.first_stage_layers,
-            "num_layers_in_last_pipeline_stage": parallel.last_stage_layers,
-        },
-    }
     updates = 4 if scale is RunScale.SMOKE else 1712 // ROLE_PLAN.train_batch_size
     recipe["data"] = {
         "kind": "parquet",
@@ -133,7 +139,7 @@ def final_dpo_recipe(scale: RunScale) -> str:
         project_name="bfcl-rl",
         policy={
             "sequence_parallel_size": 1,
-            "megatron_config": megatron,
+            "megatron_config": megatron_config(POLICY_PARALLELISM),
             "optimizer_config": {
                 "optimizer": "AdamW",
                 "lr": 4e-6,
@@ -144,7 +150,7 @@ def final_dpo_recipe(scale: RunScale) -> str:
                 "scheduler": "constant_with_warmup",
             },
         },
-        ref={"sequence_parallel_size": 1, "megatron_config": megatron},
+        ref={"sequence_parallel_size": 1, "megatron_config": megatron_config(REFERENCE_PARALLELISM)},
         rollout_buffer={"max_staleness_steps": 0, "max_in_flight": 16, "batch_policy": "full_batch"},
         step_phase_budgets={"evaluation": 21600, "policy_training": 7200, "checkpoint_work": 7200},
         callbacks=[
@@ -198,7 +204,7 @@ def final_dpo_spec(input_version: str, scale: RunScale) -> SkyRLSpec:
         model=ArtifactHfModel(checkpoint, tokenizer.model, tokenizer.revision, relative_path="hf/step-1"),
         train_data=(ArtifactDataSource(inputs, relative_path=data_file),),
         validation_data=(ArtifactDataSource(inputs, relative_path="bfcl_parity"),),
-        topology=SkyRLTopology(num_nodes=14, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
+        topology=SkyRLTopology(num_nodes=22, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=14),
         seed=42,
     )
