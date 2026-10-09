@@ -374,7 +374,7 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
             payload["grader_data"] = parameters
     payload["resource_preview_policy"] = (
         "Resources are private reviewer evidence, with roles identifying what the actor sees. "
-        "actor_build and grader_build describe unresolved build inputs, not workspace mounts. "
+        "actor_build and grader_build are unresolved image-build inputs, separate from workspace mounts. "
         f"Text previews reserve the first {RESOURCE_PREFIX_CHARACTERS} characters of each selected UTF-8 file, "
         f"then expand in file order up to {RESOURCE_PREVIEW_CHARACTERS:,} characters per file "
         f"and {TOTAL_RESOURCE_PREVIEW_CHARACTERS:,} characters in total. Truncation is explicit; "

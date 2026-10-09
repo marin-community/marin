@@ -66,6 +66,6 @@ def source_actor_build(task: TaskSpec, *, source: str, mode: str, package: Path 
         resources = {resource.path: resource for resource in task.resources.verifier}
         test = resources[spec.paths[0].removeprefix("/tests/")]
         dockerfile = pytest_dockerfile(dockerfile, ast.parse(resource_bytes(test)))
-    # Legacy text converters emitted the recipe, not arbitrary source environment files.
+    # Legacy text converters retained only the source Dockerfile.
     # Declared executable build contexts are handled before this compatibility path.
     return verifyit_build_context(dockerfile, (recipe,), package=package, extras=MODE_EXTRAS.get(mode, ()))

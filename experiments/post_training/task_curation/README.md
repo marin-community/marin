@@ -100,8 +100,8 @@ separately from conversion outcomes. It skips grading, review, deduplication and
 release caps; archive compression, ownership, ordering and timestamps are ignored.
 
 Each source gets `summary.json`, `provenance.json` and `parity.sqlite`; `run.json`
-records overall provenance. Differences require review, not byte-for-byte
-identity. Record accepted changes and unresolved gaps separately. Operational
+records overall provenance. Review differences and record accepted changes and
+unresolved gaps separately. Operational
 failures make the command exit unsuccessfully after trying the remaining sources.
 
 For readable file diffs, repeat with one `--source` and

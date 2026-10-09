@@ -41,6 +41,7 @@ from verifyit.spec import (
 
 from taskcompendium.convert.script_grader import GRADE_ARGV
 from taskcompendium.convert.tasktrove import TEST_SH
+from taskcompendium.convert.verifyit_build import VERIFYIT_CONTEXT
 from taskcompendium.harbor.tasktrove import source_actor_build
 from taskcompendium.models import (
     DOCKER_IMAGE_PATTERN,
@@ -407,7 +408,7 @@ def harbor_payload(
             if (
                 environment_mode == VerifierEnvironmentMode.SHARED
                 and resource.path != "Dockerfile"
-                and not resource.path.startswith("taskcompendium-verifyit/")
+                and not resource.path.startswith(VERIFYIT_CONTEXT + "/")
             ):
                 continue
             name = "environment/" + resource.path
