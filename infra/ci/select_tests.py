@@ -211,19 +211,6 @@ PACKAGE_IDENTITY_FIELDS = ("name", "version", "source")
 LEVANTER_TORCH_SUITE = "levanter-torch"
 LEVANTER_TPU_SUITE = "levanter-tpu"
 
-# These files are intentionally absent from the TPU command today. Keep the selection
-# rule next to the selector so an affected-file TPU run does not start only to collect
-# zero runnable tests.
-TPU_IGNORED_TEST_PATHS: frozenset[str] = frozenset(
-    {
-        "lib/levanter/tests/test_audio.py",
-        "lib/levanter/tests/test_new_cache.py",
-        "lib/levanter/tests/test_hf_checkpoints.py",
-        "lib/levanter/tests/test_hf_gpt2_serialize.py",
-        "lib/levanter/tests/test_gdn_layer.py",
-    }
-)
-
 
 # ---------------------------------------------------------------------------
 # Import parsing
@@ -778,57 +765,52 @@ def extra_suites(changed_files: list[str]) -> list[str]:
     )
 
 
-def _node_has_torch_marker(node: ast.AST) -> bool:
-    return any(
-        (isinstance(child, ast.Name) and child.id == "skip_if_no_torch")
-        or (isinstance(child, ast.Attribute) and child.attr == "torch")
-        for child in ast.walk(node)
-    )
+def _node_markers(node: ast.AST) -> set[str]:
+    markers: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and child.id == "skip_if_no_torch":
+            markers.add("torch")
+        if (
+            isinstance(child, ast.Attribute)
+            and isinstance(child.value, ast.Attribute)
+            and child.value.attr == "mark"
+            and isinstance(child.value.value, ast.Name)
+            and child.value.value.id == "pytest"
+        ):
+            markers.add(child.attr)
+    return markers
 
 
-def torch_membership_for_test_file(path: Path) -> tuple[bool, bool]:
-    """Return whether a test file contains torch and non-torch tests.
+def markers_for_test_file(path: Path) -> frozenset[str]:
+    """Return markers used to select a test file's accelerator lanes.
 
-    The Levanter helper ``skip_if_no_torch`` applies ``pytest.mark.torch``. The
-    selector cannot import test modules because its job intentionally installs no test
-    dependencies, so inspect decorators and module-level ``pytestmark`` assignments.
-    Unknown/dynamically generated test shapes conservatively enter both lanes.
+    Inspect module-level pytestmark, test/class decorators, and parameter marks
+    without importing tests. The skip_if_no_torch helper also supplies torch.
+    Unknown/generated test shapes conservatively include the Torch lane.
     """
     tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
-    module_is_torch = any(
-        isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets)
-        and _node_has_torch_marker(node.value)
-        for node in tree.body
-    )
-
-    has_torch = module_is_torch
-    has_non_torch = False
+    markers: set[str] = set()
     found_test = False
     for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets
+        ):
+            markers.update(_node_markers(node.value))
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
             found_test = True
-            is_torch = module_is_torch or any(_node_has_torch_marker(decorator) for decorator in node.decorator_list)
-            has_torch |= is_torch
-            has_non_torch |= not is_torch
-            continue
-
+            for decorator in node.decorator_list:
+                markers.update(_node_markers(decorator))
         if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
-            class_is_torch = module_is_torch or any(
-                _node_has_torch_marker(decorator) for decorator in node.decorator_list
-            )
+            for decorator in node.decorator_list:
+                markers.update(_node_markers(decorator))
             for method in node.body:
                 if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name.startswith("test_"):
                     found_test = True
-                    is_torch = class_is_torch or any(
-                        _node_has_torch_marker(decorator) for decorator in method.decorator_list
-                    )
-                    has_torch |= is_torch
-                    has_non_torch |= not is_torch
-
+                    for decorator in method.decorator_list:
+                        markers.update(_node_markers(decorator))
     if not found_test:
-        return True, True
-    return has_torch, has_non_torch
+        markers.add("torch")
+    return frozenset(markers)
 
 
 # ---------------------------------------------------------------------------
@@ -999,17 +981,14 @@ def accelerator_suite_test_paths(
 
     torch_paths: list[str] = []
     tpu_paths: list[str] = []
+    if any(test_path in TEST_DIRS["levanter"] for test_path in selected):
+        selected = all_test_files("levanter", repo_root)
     for test_path in selected:
-        if test_path in TEST_DIRS["levanter"]:
+        markers = markers_for_test_file(repo_root / test_path)
+        # TPU coverage is opt-in, including for full-suite and scheduled runs.
+        if "torch" in markers:
             torch_paths.append(test_path)
-            tpu_paths.append(test_path)
-            continue
-
-        path = repo_root / test_path
-        has_torch, has_non_torch = torch_membership_for_test_file(path)
-        if has_torch:
-            torch_paths.append(test_path)
-        if has_non_torch and test_path not in TPU_IGNORED_TEST_PATHS:
+        if "tpu" in markers:
             tpu_paths.append(test_path)
 
     suites: dict[str, list[str]] = {}

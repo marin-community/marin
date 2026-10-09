@@ -220,6 +220,7 @@ filterwarnings = [
     "ignore:Passing 'msg' argument to Future\\.cancel\\(\\) is deprecated since Python 3\\.11, and scheduled for removal in Python 3\\.14\\.:DeprecationWarning",
 ]
 markers = [
+    "tpu: include in TPU CI; also run on CPU when supported",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
 ]

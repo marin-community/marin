@@ -527,6 +527,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
+    "tpu: include in TPU CI; also run on CPU when supported",
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",

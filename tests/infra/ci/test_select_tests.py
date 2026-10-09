@@ -431,7 +431,9 @@ def _tpu_manifest(verifier_source: str = "workspace") -> str:
 def _commit_base_tpu_workspace(tmp_path: Path) -> str:
     write(tmp_path, "uv.lock", _tpu_lock())
     write(tmp_path, "pyproject.toml", _tpu_manifest())
-    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    write(
+        tmp_path, "lib/levanter/tests/test_flash_attention.py", "@pytest.mark.tpu\ndef test_model():\n    assert True\n"
+    )
     write(tmp_path, "lib/levanter/tests/test_torch.py", "@pytest.mark.torch\ndef test_torch():\n    assert True\n")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
@@ -472,7 +474,7 @@ def test_reachable_dependency_changes_select_tpu(tmp_path: Path, lock_change: di
 
     selection = select_changed_tests(["uv.lock"], tmp_path, base_ref=base)
 
-    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_flash_attention.py"]
 
 
 @pytest.mark.parametrize("missing", [True, False])
@@ -489,13 +491,15 @@ def test_unavailable_or_invalid_dependency_graph_selects_tpu(tmp_path: Path, mis
 
 
 def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
-    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    write(
+        tmp_path, "lib/levanter/tests/test_flash_attention.py", "@pytest.mark.tpu\ndef test_model():\n    assert True\n"
+    )
 
     selection = select_all_tests(tmp_path)
 
     assert selection.reason == "run-all-tests"
     assert "shellbox-unit" in selection.suites
-    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_flash_attention.py"]
 
 
 @pytest.mark.parametrize(
@@ -508,10 +512,105 @@ def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
     ],
 )
 def test_source_and_ci_changes_still_select_tpu(tmp_path: Path, path: str) -> None:
-    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    write(
+        tmp_path, "lib/levanter/tests/test_flash_attention.py", "@pytest.mark.tpu\ndef test_model():\n    assert True\n"
+    )
     selection = select_changed_tests([path], tmp_path, run_all_tests=True)
 
     assert "levanter-tpu" in selection.suites
+
+
+@pytest.mark.parametrize("mode", ["diff", "scheduled", "manifest"])
+def test_tpu_marker_keeps_accelerator_files_and_full_cpu_coverage(tmp_path: Path, mode: str) -> None:
+    write(tmp_path, "lib/levanter/src/levanter/shared.py", "VALUE = 1\n")
+    cpu_path = "lib/levanter/tests/test_tokenizers.py"
+    kernel_path = "lib/levanter/tests/test_flash_attention.py"
+    mixed_path = "lib/levanter/tests/test_checkpoint.py"
+    torch_path = "lib/levanter/tests/test_torch.py"
+    write(tmp_path, cpu_path, "from levanter.shared import VALUE\n\ndef test_tokenizer(): ...\n")
+    write(
+        tmp_path,
+        kernel_path,
+        "from levanter.shared import VALUE\n\npytestmark = pytest.mark.tpu\n\ndef test_kernel(): ...\n",
+    )
+    write(
+        tmp_path,
+        mixed_path,
+        """\
+        from levanter.shared import VALUE
+
+        def test_checkpointer_temporal_policy(): ...
+        @pytest.mark.tpu
+        def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(): ...
+        """,
+    )
+    write(
+        tmp_path,
+        torch_path,
+        "from levanter.shared import VALUE\n\n@skip_if_no_torch\ndef test_torch(): ...\n",
+    )
+
+    if mode == "scheduled":
+        selection = select_all_tests(tmp_path)
+    else:
+        changed = ["lib/levanter/src/levanter/shared.py"] if mode == "diff" else ["lib/levanter/pyproject.toml"]
+        selection = select_changed_tests(changed, tmp_path)
+
+    cpu_paths = leg_paths(selection.matrix, "levanter")
+    assert cpu_paths == sorted([cpu_path, mixed_path, kernel_path, torch_path])
+    assert selection.suite_test_paths["levanter-tpu"] == [
+        mixed_path,
+        kernel_path,
+    ]
+    assert selection.suite_test_paths["levanter-torch"] == [torch_path]
+
+
+@pytest.mark.parametrize("changed", ["source", "test"])
+def test_cpu_only_change_does_not_start_tpu_job(tmp_path: Path, changed: str) -> None:
+    source_path = "lib/levanter/src/levanter/tokenizers.py"
+    test_path = "lib/levanter/tests/test_tokenizers.py"
+    write(tmp_path, source_path, "def tokenize(): ...\n")
+    write(tmp_path, test_path, "from levanter.tokenizers import tokenize\n\ndef test_tokenize(): ...\n")
+    write(tmp_path, "lib/levanter/tests/test_flash_attention.py", "def test_kernel(): ...\n")
+
+    selection = select_changed_tests([source_path if changed == "source" else test_path], tmp_path)
+
+    assert leg_paths(selection.matrix, "levanter") == [test_path]
+    assert "levanter-tpu" not in selection.suites
+    assert "levanter-tpu" not in selection.suite_test_paths
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "@pytest.mark.tpu\ndef test_accelerator(): ...\n",
+        "pytestmark = [pytest.mark.tpu]\ndef test_accelerator(): ...\n",
+        "@pytest.mark.tpu\nclass TestAccelerator:\n    def test_kernel(self): ...\n",
+        "class TestAccelerator:\n    @pytest.mark.tpu\n    def test_kernel(self): ...\n",
+        '@pytest.mark.parametrize("backend", [pytest.param("tpu", marks=pytest.mark.tpu), "cpu"])\n'
+        "def test_accelerator(backend): ...\n",
+    ],
+    ids=["function", "module", "class", "method", "parameter"],
+)
+def test_tpu_marked_tests_enter_the_hardware_lane(tmp_path: Path, declaration: str) -> None:
+    test_path = "lib/levanter/tests/test_new_kernel.py"
+    write(tmp_path, test_path, "import pytest\n\n" + declaration)
+
+    selection = select_changed_tests([test_path], tmp_path)
+
+    assert leg_paths(selection.matrix, "levanter") == [test_path]
+    assert selection.suite_test_paths["levanter-tpu"] == [test_path]
+
+
+@pytest.mark.parametrize("marker", ["skipif(False)", "tpu"])
+def test_generated_tests_preserve_torch_selection_and_opt_into_tpu(tmp_path: Path, marker: str) -> None:
+    test_path = "lib/levanter/tests/test_generated.py"
+    write(tmp_path, test_path, f"pytestmark = pytest.mark.{marker}\ntest_generated = make_test()\n")
+
+    selection = select_all_tests(tmp_path)
+
+    assert selection.suite_test_paths["levanter-torch"] == [test_path]
+    assert ("levanter-tpu" in selection.suites) == (marker == "tpu")
 
 
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:

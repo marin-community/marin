@@ -25,6 +25,7 @@ def _small_dataset(seq_len=128, num_sequences=200) -> AsyncDataset[Sequence[int]
     return ListAsyncDataset(sequences)
 
 
+@pytest.mark.tpu
 @skip_if_not_enough_devices(2)
 def test_local_batched_data_loading_model_axis_2():
     devices = jax.devices()
@@ -107,6 +108,7 @@ def test_structured_batches_model_axis_1():
             check_sharded_consistency(batch, check_disjoint_indices_are_different=True)
 
 
+@pytest.mark.tpu
 @skip_if_not_enough_devices(2)
 def test_structured_batches_model_axis_2():
     devices = jax.devices()

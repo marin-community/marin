@@ -329,6 +329,7 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.tpu
 def test_moe_mlp_padding_matches_compact_value_and_gradients():
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
         key=jax.random.key(52),
@@ -389,6 +390,7 @@ def test_moe_mlp_padding_matches_compact_value_and_gradients():
     assert int(overflow.padding_skipped) == 4
 
 
+@pytest.mark.tpu
 def test_moe_mlp_all_padding_has_no_expert_output_or_gradients():
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
         key=jax.random.key(54),
@@ -1094,6 +1096,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
         assert lowered is not None
 
 
+@pytest.mark.tpu
 def test_fixed_all_to_all_drops_assignments_over_capacity():
     mesh = Mesh(
         np.asarray([jax.devices()[0]]),
@@ -1175,6 +1178,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
     assert int(overflow.receiver_dropped) == 0
 
 
+@pytest.mark.tpu
 def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
     mesh = _make_single_expert_mesh()
     x, _, combine_weights, w_up_gate, w_down = _make_inputs(
@@ -1264,6 +1268,7 @@ def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
     assert padded_overflow.dropped == compact_overflow.dropped == 4
 
 
+@pytest.mark.tpu
 @pytest.mark.timeout(180)
 def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
     mesh = _make_single_expert_mesh()
@@ -1352,6 +1357,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
     assert _count_jaxpr_primitives(gradient_jaxpr, "all_to_all") == 6 * num_expert_waves
 
 
+@pytest.mark.tpu
 def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     mesh = _make_single_expert_mesh()
     tokens = 6
@@ -1713,6 +1719,7 @@ def _force_routing_weight_gradient(
     )
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize(
     ("implementation", "routing_weight_gradient"),
     [
@@ -2062,6 +2069,7 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
     assert dropped["mostly-padded"] == 0, dropped
 
 
+@pytest.mark.tpu
 def test_moe_mlp_runs_with_ep_axis_when_available():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
@@ -2156,6 +2164,7 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.tpu
 def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
@@ -2200,6 +2209,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     assert int(dispatch_counts.dropped) > 0
 
 
+@pytest.mark.tpu
 def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
@@ -2244,6 +2254,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
     assert int(dispatch_counts.dropped) > 0
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("traced_capacity", [False, True])
 @pytest.mark.parametrize(
     "capacity, expected",
@@ -2290,6 +2301,7 @@ def _optimized_hlo_opcode_count(fill_fn, opcode_name: str) -> int:
     )
 
 
+@pytest.mark.tpu
 def test_transport_buffer_is_not_a_foldable_constant():
     assert (
         _optimized_hlo_opcode_count(
@@ -2306,6 +2318,7 @@ def test_transport_buffer_is_not_a_foldable_constant():
     ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
 
 
+@pytest.mark.tpu
 def test_transport_buffer_sites_prevent_cse():
     def distinct_sites(tie):
         return (
