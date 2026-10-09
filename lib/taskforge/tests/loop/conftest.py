@@ -24,7 +24,6 @@ import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
-from taskcompendium.submission import PlainText
 
 from taskforge.builder.author import SUBMIT_TOOL
 from taskforge.builder.sdk import BuildServices
@@ -38,7 +37,7 @@ from taskforge.loop.program import LEDGER_DIR, LoopServices
 from taskforge.proposal.model import TaskProposal, parse, render
 from taskforge.proposal.source import ProposalBatch, SlotFailure, SlotProposal
 from taskforge.review.rules import BandChoice, BandRule, BandRules
-from taskforge.sandbox.factories import SHELLSIM, MachineHost
+from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM, MachineHost
 from taskforge.triage.checks import CheckContext, CheckResult
 from taskforge.triage.program import Repair as TriageRepair
 from taskforge.triage.program import RubricAssessment
@@ -47,11 +46,13 @@ from taskforge.validate.adversary import NO_SHORTCUT_LINE, SUBMIT_TOOL_NAME, Adv
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
+from tests.sandbox.fixture_images import FixtureImageFactory
 from tests.validate.conftest import TemplateTokenizer
 
 CORRECT = "ANSWER = 42"
 WRONG = "ANSWER = 41"
-CONVENTION = PlainText(id="plain_text")
+FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: FixtureImageFactory()}
+"""ShellSim task machines; verifier machines on the ShellSim-backed fixture image factory."""
 FAST = RetryBackoff(initial=0.001, maximum=0.001, factor=1.5, jitter=0.1)
 
 PROPOSAL = """---
@@ -87,25 +88,22 @@ None.
 """
 
 GRADE = """
-import json, os, pathlib
-final = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
-verdict = {"status": "scored", "reward": float(final.endswith("ANSWER = 42")), "detail": {}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+import pathlib
+final = pathlib.Path("/app/answer.txt").read_text().strip()
+print(float(final.endswith("ANSWER = 42")))
 """
 
 LENIENT_GRADE = """
-import json, os, pathlib, re
-final = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
-verdict = {"status": "scored", "reward": float(bool(re.search(r"ANSWER = -?[0-9]+$", final))), "detail": {}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+import pathlib, re
+final = pathlib.Path("/app/answer.txt").read_text().strip()
+print(float(bool(re.search(r"ANSWER = -?[0-9]+$", final))))
 """
 
 PROGRAM = """
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec
-from taskcompendium.submission import PlainText
+from taskcompendium.models import AnswerType, EnvironmentRequirements, PlainText, Source, TaskSpec
 
-CONVENTION = PlainText(id="plain_text")
+ANSWER_FORMAT = PlainText()
 MACHINE = spec.machine(startup_timeout=60)
 SESSION = spec.session(
     max_turns=8,
@@ -129,8 +127,10 @@ async def machine(b: Build) -> EnvironmentRequirements:
 
 @step(StepRole.GRADER)
 async def grader(b: Build, env: EnvironmentRequirements) -> Grader:
-    package = spec.script_verifier(GRADE, {}, timeout=GRADER_TIMEOUT)
-    reference = await b.try_grader(env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)
+    package = spec.python_grader(
+        GRADE, {}, environment=spec.grader_environment(None), answer_path=spec.ANSWER_PATH, timeout=GRADER_TIMEOUT
+    )
+    reference = await b.try_grader(env, package, AnswerType.TEXT, ANSWER_FORMAT, "question", "ANSWER = 42", files=FILES)
     b.check(reference.reward == 1.0, f"reference scored {reference.reward}")
     return Grader(package=package, answer_contract="End with ANSWER = <n>.", reference_reply="ANSWER = 42")
 
@@ -141,6 +141,7 @@ async def assemble(b: Build, env: EnvironmentRequirements, graded: Grader) -> Ta
         task_id=b.item_id,
         instruction="Compute the product in question.txt. " + graded.answer_contract,
         answer_type=AnswerType.TEXT,
+        answer_format=ANSWER_FORMAT,
         grader=graded.package,
         source=Source(dataset="test", revision="r1", row="0", importer_revision="test"),
         environment=env,
@@ -180,8 +181,9 @@ async def build(b: Build) -> BuildOutput:
     env = await machine(b)
     graded = await grader(b, env)
     task = await assemble(b, env, graded)
-    lowered = b.lower(task, task_machine=MACHINE, verifier_machine=None, session=SESSION)
-    return BuildOutput(task=task, lowered=lowered, convention=CONVENTION, controls=await fixed_controls(b, task))
+    verifier_machine = None if spec.grading_environment(task) is None else MACHINE
+    lowered = b.lower(task, task_machine=MACHINE, verifier_machine=verifier_machine, session=SESSION)
+    return BuildOutput(task=task, lowered=lowered, controls=await fixed_controls(b, task))
 """
 
 
@@ -403,19 +405,18 @@ class Loop:
                     client=client,
                     policy=LLMPolicy(),
                     host=MachineHost.LAPTOP,
-                    factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
+                    factories=FACTORIES,
                     images=None,
                     ledger=ledger,
                 ),
                 engine=EngineSettings(
-                    factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
-                    capabilities={Backend.SHELLSIM.value: SHELLSIM},
+                    factories=FACTORIES,
+                    capabilities={Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: LOCAL_DOCKER},
                     max_turns=6,
                     command_timeout=10,
                     tool_turn_timeout=20,
                     model_turn_timeout=30,
                     cleanup_timeout=10,
-                    conventions=(CONVENTION,),
                 ),
                 rollout_models=lambda _: self.model,
                 adversary_context=self.context,

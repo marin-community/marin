@@ -416,7 +416,12 @@ async def test_a_dropped_host_connection_rebuilds_the_program_without_telling_th
     programs.adversary_turns(fake_glm)
 
     async with loop.services() as services:
-        flaky = replace(services, build=replace(services.build, factories={Backend.SHELLSIM.value: DroppingFactory(1)}))
+        flaky = replace(
+            services,
+            build=replace(
+                services.build, factories={**services.build.factories, Backend.SHELLSIM.value: DroppingFactory(1)}
+            ),
+        )
         assert (
             await run_item(proposal, ProposalOrigin.SUPPLIED, programs.policy(max_build_retries=1), flaky)
             is Terminal.ACCEPTED
@@ -439,7 +444,10 @@ async def test_a_build_the_host_keeps_failing_is_abandoned_and_a_relaunch_rebuil
 
     async with loop.services() as services:
         dropping = replace(
-            services, build=replace(services.build, factories={Backend.SHELLSIM.value: DroppingFactory(2)})
+            services,
+            build=replace(
+                services.build, factories={**services.build.factories, Backend.SHELLSIM.value: DroppingFactory(2)}
+            ),
         )
         assert await run_item(proposal, ProposalOrigin.SUPPLIED, policy, dropping) is Terminal.ABANDONED
     item_id = item_id_for(proposal)

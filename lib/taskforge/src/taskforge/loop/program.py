@@ -157,7 +157,7 @@ class LoopServices[IdeaT]:
         check_context: What the structural checks read besides the proposal.
         template: The builder template the author adapts (``builder.template.standard``).
         build: The author's and builder's services; its ledger is ``ledger``.
-        engine: Run-wide engine settings; each draft's trials run under its own convention alone.
+        engine: Run-wide engine settings; each draft's trials present the task in its own answer format.
         rollout_models: Builds each solver trial's model, recording under the trial's step.
         adversary_context: The consumer's section of the adversary brief for an item's proposal;
             ``""`` for none. Adversary trials run their own agent loop on ``client``.
@@ -346,7 +346,7 @@ class _Item:
     def draft(self, state: ItemState) -> TaskDraft:
         assert state.task_digest is not None
         draft = load_draft(self.round_dir(state.round) / DRAFT_DIR)
-        built = task_digest(draft.lowered, draft.convention)
+        built = task_digest(draft.lowered)
         if built != state.task_digest:
             raise ValueError(f"{self.item_id}: the stored draft has digest {built}, its BUILT event {state.task_digest}")
         return draft
@@ -574,7 +574,7 @@ async def _build(item: _Item, state: ItemState) -> None:
             step = (error.step or "") if isinstance(error, BuildFailure) else ""
             _build_failed(item, state, program.digest, step, failure, noop=False)
             return
-    digest = task_digest(draft.lowered, draft.convention)
+    digest = task_digest(draft.lowered)
     if digest == state.repaired_task_digest:
         failure = f"{NOOP_FAILURE}\n\n{_pending_repair(item, state).brief.failure}"
         _build_failed(item, state, program.digest, "", failure, noop=True)

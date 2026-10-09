@@ -25,7 +25,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from taskcompendium.submission import JsonAnswer, JsonValueAnswer, PlainText
 
 from taskforge.builder.run import item_id_for
 from taskforge.builder.sdk import BuildServices
@@ -156,11 +155,6 @@ async def test_a_proposal_runs_through_the_loop_to_a_terminal(glm_settings, para
                     tool_turn_timeout=240.0,
                     model_turn_timeout=600.0,
                     cleanup_timeout=120.0,
-                    conventions=(
-                        PlainText(id="plain_text"),
-                        JsonAnswer(id="json_answer"),
-                        JsonValueAnswer(id="json_value"),
-                    ),
                 ),
                 rollout_models=partial(GlmRolloutModel, client, SAMPLING),
                 adversary_context=lambda proposal: "",
