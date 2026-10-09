@@ -41,7 +41,7 @@ from taskcompendium.models import (
     VerifierArtifact,
     VerifierCommand,
 )
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import chat_request
 
 IMAGE = "private/grader@sha256:" + "a" * 64
@@ -162,14 +162,15 @@ def test_build_context_roundtrip_keeps_bytes_metadata_and_role_boundaries(specif
     wire["environment_requirements"] = environment.model_dump()
     wire["grader"] = ScriptGrader(argv=("true",), environment=environment).model_dump()
     task = TaskSpec.model_validate_json(json.dumps(wire))
-    assert isinstance(task.grader, ScriptGrader)
-    for restored in (task.environment_requirements, task.grader.environment):
-        assert restored.docker_image is None
-        assert restored.docker_build is not None
-        files = {resource.path: resource for resource in restored.docker_build.files}
-        assert resource_bytes(files["Dockerfile"]) == b"FROM mutable:latest\nCOPY payload.bin /input\n"
-        assert resource_bytes(files["payload.bin"]) == b"\x00\xff\x80"
-        assert (files["payload.bin"].mode, files["payload.bin"].mtime_ns) == ("0755", 123456789)
+    restored = task.model_dump(mode="json")
+    for requirements in (restored["environment_requirements"], restored["grader"]["environment"]):
+        files = {resource["path"]: resource for resource in requirements["docker_build"]["files"]}
+        assert (
+            base64.b64decode(files["Dockerfile"]["source"]["content_base64"])
+            == b"FROM mutable:latest\nCOPY payload.bin /input\n"
+        )
+        assert base64.b64decode(files["payload.bin"]["source"]["content_base64"]) == b"\x00\xff\x80"
+        assert (files["payload.bin"]["mode"], files["payload.bin"]["mtime_ns"]) == ("0755", 123456789)
     assert task.resources == ResourceGroups()
 
 

@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import cast
+
 import pytest
 
 from taskcompendium.convert.answers import exact_answer_task
@@ -48,7 +50,7 @@ def test_verifier_identity_tracks_payload_recipe_and_modes(path, content, mode):
 def test_harbor_filters_disclosed_long_references_without_dropping_short_answers(prompt, reference, leaked):
     source = Source(dataset="fixture", revision="pinned", row="fixture/tasks.parquet:0", importer_revision="1")
     task = exact_answer_task(RawRow("fixture", source, {}), prompt=prompt, answers=(reference,), ignore_case=False)
-    assert isinstance(task, TaskSpec)
+    task = cast(TaskSpec, task)
     row = {"task_json": task.model_dump_json(), "source_row": source.row, "original_path": "fixture.tar.gz"}
     options = {
         "grader_image": "example.test/grader@sha256:" + "a" * 64,

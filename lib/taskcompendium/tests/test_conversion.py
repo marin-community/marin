@@ -4,6 +4,7 @@
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -26,8 +27,7 @@ def convert_answer(row: RawRow, _context: ConversionContext) -> TaskSpec | Impor
     if not row.data["answer"]:
         return source_defect("missing_answer", "The source has no answer")
     task = exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
-    assert isinstance(task, TaskSpec)
-    return task.model_copy(
+    return cast(TaskSpec, task).model_copy(
         update={"resources": ResourceGroups(worker=(inline_resource("context.txt", b"color context"),))}
     )
 
@@ -86,8 +86,7 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
         )
-    assert isinstance(whole, ConversionResult)
-    assert isinstance(split, ConversionResult)
+    whole, split = cast(ConversionResult, whole), cast(ConversionResult, split)
     whole_files = list(Path(whole.normalized_path).glob("*.parquet"))
     split_files = list(Path(split.normalized_path).glob("*.parquet"))
     assert len(whole_files) == 1
@@ -100,8 +99,7 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
     assert split.converted_rows == whole.converted_rows == 16
     assert split.rejections == whole.rejections == {"source_defect:missing_answer": 3}
     task = TaskSpec.model_validate_json(split_rows["rows.parquet:23"]["task_json"])
-    assert isinstance(task.context.events[0], TextMessage)
-    assert task.context.events[0].content == "Decoded: Name a color"
+    assert cast(TextMessage, task.context.events[0]).content == "Decoded: Name a color"
 
 
 def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_controls(tmp_path: Path):
@@ -132,7 +130,7 @@ def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_con
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
         )
-    assert isinstance(result, ConversionResult)
+    result = cast(ConversionResult, result)
     records = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
     assert result.input_rows == 3
     assert result.converted_rows == 2

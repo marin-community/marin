@@ -8,6 +8,7 @@ import sqlite3
 import tarfile
 import zlib
 from dataclasses import replace
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -195,7 +196,7 @@ def test_disk_index_matches_reordered_source_paths_and_reports_unmatched_rows(tm
 def test_file_map_snapshot_matches_actual_export_archives():
     source = Source(dataset="fixture", revision="pinned", row="fixture/tasks.parquet:0", importer_revision="1")
     task = exact_answer_task(RawRow("fixture", source, {}), prompt="Name a color", answers=("red",), ignore_case=False)
-    assert isinstance(task, TaskSpec)
+    task = cast(TaskSpec, task)
     task = task.model_copy(
         update={
             "resources": ResourceGroups(

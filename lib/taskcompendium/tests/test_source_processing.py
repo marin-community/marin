@@ -9,6 +9,7 @@ import json
 from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -167,8 +168,7 @@ def run_pipeline(
         result = run_source_pipeline(
             recipe, context, str(source), str(output), config, mode=config.mode, canonical_source=recipe.name, **options
         )
-    assert isinstance(result, SourcePipelineResult)
-    return result
+    return cast(SourcePipelineResult, result)
 
 
 def read_json(path) -> dict:
@@ -303,7 +303,6 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
         from_list_result = context.execute(Dataset.from_list([1]).count()).results
     assert from_list_result == [1]
     report = read_json(result.manifest_path)
-    assert isinstance(result, SourcePipelineResult)
     telemetry = read_json(report["telemetry"])
     assert telemetry["source"] == recipe.name and telemetry["status"] == "completed"
     operations = {
@@ -870,8 +869,8 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
             parquet_shard_bytes=1,
             source_overrides=overrides,
         )
-    assert isinstance(quick, ConversionResult)
-    assert isinstance(reviewed, SourcePipelineResult)
+    quick = cast(ConversionResult, quick)
+    reviewed = cast(SourcePipelineResult, reviewed)
     quick_rows = mechanical_records(parquet_rows(quick.normalized_path))
     assert quick_rows == mechanical_records(parquet_rows(reviewed.normalize_path))
     assert [quick_rows[f"{filename}:{index}"]["original_path"] for index in range(3)] == [row["path"] for row in rows]

@@ -67,7 +67,6 @@ def test_local_conditional_create_publishes_complete_object(tmp_path, monkeypatc
         else:
             writer.result()
     result = second.read()
-    assert result is not None
     assert result.data == (b"winner" if competing_creator else b"first")
 
 

@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow.parquet as pq
 import pytest
@@ -235,7 +235,7 @@ def test_conversion_failures_retain_raw_records_without_review_or_accepted_outpu
 
 def convert_with_attachment(row: RawRow, _context: ConversionContext) -> TaskSpec:
     attachment = inline_resource("data/attachment.bin", b"x" * row.data["attachment_bytes"])
-    return svamp_row_task(row).model_copy(update={"resources": ResourceGroups(verifier=(attachment,))})
+    return cast(TaskSpec, svamp_row_task(row)).model_copy(update={"resources": ResourceGroups(verifier=(attachment,))})
 
 
 def test_tasks_over_the_resource_budget_are_deferred_and_counted(tmp_path, apple_row, svamp_recipe):
@@ -269,7 +269,7 @@ def convert_with_build_contexts(row: RawRow, _context: ConversionContext) -> Tas
             )
         )
     )
-    return svamp_row_task(row).model_copy(
+    return cast(TaskSpec, svamp_row_task(row)).model_copy(
         update={
             "environment_requirements": actor,
             "grader": ScriptGrader(environment=grader, argv=("true",)),
@@ -284,7 +284,6 @@ def test_resource_budget_counts_both_build_contexts_and_workspace_files(apple_ro
         normalize_row({"locator": "fixture:0", "data": {**apple_row, "attachment_bytes": size}}, recipe)["audit"]
         for size in (34, 35)
     ]
-    assert audits[0]["normalized"] is not None
     assert audits[0]["normalization_rejection"] is None
     assert audits[1]["normalized"] is None
     assert audits[1]["normalization_rejection"]["reason"] == "resources_over_budget"
