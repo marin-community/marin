@@ -30,7 +30,7 @@ from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
-from experiments.post_training.task_curation.tasktrove_reference import REFERENCE_COMPRESSION_LEVEL
+from experiments.post_training.task_curation.tasktrove.reference import REFERENCE_COMPRESSION_LEVEL
 
 FROZEN_PATHS = (
     "experiments/post_training/tasktrove",
@@ -176,7 +176,7 @@ def compare_source(
     }
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     started = time.monotonic()
-    worker = Path(__file__).with_name("tasktrove_reference.py")
+    worker = Path(__file__).with_name("reference.py")
     assert snapshots.__file__ is not None
     command = [
         sys.executable,
@@ -329,7 +329,7 @@ def main(
         "implementation_files": [
             file_identity(path)
             for path in sorted(
-                {Path(__file__), Path(__file__).with_name("tasktrove_reference.py")}
+                {Path(__file__), Path(__file__).with_name("reference.py")}
                 | set(Path(snapshots.__file__).parent.glob("*.py"))
                 | set(Path(verifyit.__file__).parent.rglob("*.py"))
             )

@@ -18,10 +18,10 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed
-from experiments.post_training.task_curation.compare_tasktrove import source_file_path
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, code
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.quick import run_local_sources
+from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 from experiments.post_training.task_curation.tests.conversion import tasktrove_row
 
 

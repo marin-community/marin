@@ -6,7 +6,6 @@ import json
 import shlex
 import subprocess
 import tarfile
-from dataclasses import asdict
 from pathlib import Path
 
 import pyarrow as pa
@@ -14,8 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
-from taskcompendium.harbor.compare import compare_harbor
-from taskcompendium.harbor.export import TASKS_SCHEMA, UnsupportedHarborTask, harbor_record
+from taskcompendium.harbor.export import UnsupportedHarborTask, harbor_record
 from taskcompendium.models import (
     DockerBuildContext,
     EnvironmentRequirements,
@@ -42,10 +40,10 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     repositories,
     structured_outputs,
 )
-from experiments.post_training.task_curation.export_tasktrove import main
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_sources
+from experiments.post_training.task_curation.tasktrove.export import main
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -162,38 +160,6 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
             grader_image=GRADER_IMAGE,
             family="fixture",
         )
-
-
-def test_harbor_comparison_reports_population_difference_without_claiming_runtime_parity(
-    normalized_row, tmp_path
-) -> None:
-    row, _ = normalized_row
-    record = harbor_record(
-        row,
-        fallback_actor_image=BASE_IMAGE,
-        verifyit_package_root=VERIFYIT_PACKAGE,
-        grader_image=GRADER_IMAGE,
-        family="fixture",
-    )
-    output = tmp_path / "tasks.parquet"
-    pq.write_table(pa.Table.from_pylist([asdict(record)], schema=TASKS_SCHEMA), output)
-    schema = pq.ParquetFile(output).schema_arrow
-    assert [[field.name, str(field.type), field.nullable] for field in schema] == json.loads(
-        (FIXTURES / "harbor-wire-schema.json").read_text()
-    )
-    golden = tmp_path / "golden.json"
-    golden.write_text(
-        json.dumps({"by_source": {record.source: {"converted": 2, "duplicate": 1}, "missing": {"converted": 3}}})
-    )
-    report = compare_harbor(output, golden, sources=(record.source, "missing"), golden_revision="release1")
-    assert report["rows"] == 1
-    populations = {source["source"]: source for source in report["sources"]}
-    assert populations[record.source]["delta"] == -1
-    assert populations["missing"]["generated"] == 0
-    assert populations["missing"]["delta"] == -3
-    assert not report["golden_counts_match"]
-    assert not report["runtime_verified"]
-    assert report["harbor_configs_valid"] and report["oracle_solutions_separate"]
 
 
 def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path) -> None:
@@ -368,9 +334,20 @@ def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(no
     assert report["rejections"] == [
         {"task_id": "unavailable", "path": row["original_path"], "reason": "Unsupported grader: none"}
     ]
-    exported = pq.read_table(output_root / "tasks.parquet").to_pylist()
+    table = pq.read_table(output_root / "tasks.parquet")
+    assert [[field.name, str(field.type), field.nullable] for field in table.schema] == json.loads(
+        (FIXTURES / "harbor-wire-schema.json").read_text()
+    )
+    exported = table.to_pylist()
     assert len(exported) == 1
     assert exported[0]["family"] == source.info.family
+    files = archive_files(exported[0]["task_binary"])
+    assert {"instruction.md", "task.toml", "environment/Dockerfile", "tests/test.sh"} <= files.keys()
+    assert not any(path.startswith("solution/") for path in files)
+    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    assert config.metadata["tasktrove_path"] == exported[0]["path"] == row["original_path"]
+    assert config.metadata["tasktrove_source"] == exported[0]["source"] == row["source_row"].split("/", 1)[0]
+    assert config.metadata["taskcompendium_id"] == converted.task.id
     assert report["source_id"] == source.info.id
 
 

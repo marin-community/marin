@@ -312,13 +312,13 @@ Lower QUICK output to Task Trove's 12-column parquet format:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.export_tasktrove \
+  -m experiments.post_training.task_curation.tasktrove.export \
   --input-root /tmp/curation-quick/tasktrove-calendar \
   --output-root /tmp/curation-harbor/calendar \
   --grader-image '<registry/image>@sha256:<digest>'
 ```
 
-`harbor_export.harbor_export_step(normalized, source=..., name=..., version=..., grader_image=...)`
+`tasktrove.export.harbor_export_step(normalized, source=..., name=..., version=..., grader_image=...)`
 binds the same exporter to an existing normalized artifact. It streams through
 `StoragePath` and writes `tasks.parquet` plus `manifest.json`. The manifest's
 `verify_tool_ref` hashes the emitted verifier files, modes, Docker recipes and
@@ -403,37 +403,13 @@ output files; shared repository verifiers run against the agent workspace.
 Oracle files are stored in `solution_binary`. Generated
 `task.toml` files are parsed with Harbor's native configuration model.
 
-Compare the output with a downloaded, pinned release manifest:
-
-Download `manifest.json` from
-`https://huggingface.co/datasets/open-athena/task-trove/resolve/<release-commit>/manifest.json`
-and pass that same commit to `--golden-revision`.
-
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m taskcompendium.harbor.compare \
-  --tasks /tmp/curation-harbor/calendar/tasks.parquet \
-  --source laion__nemotron-gym-agent-calendar-v2 \
-  --golden-manifest /path/to/tasktrove-manifest.json \
-  --golden-revision '<release-commit>' \
-  --output /tmp/curation-harbor/calendar/comparison.json
-```
-
-Repeat `--source` for every expected source, including sources with no generated
-rows. The comparison records the golden manifest's hash and supplied release
-revision. It checks every generated archive, source identity, schema, and source
-count. Count differences remain visible: QUICK skips release deduplication and
-verification, so its output may include rows absent from the released dataset.
-The comparison does not establish grader equivalence or compare golden task
-binaries.
-
 ### Full TaskTrove content comparison
 
 Compare all retained TaskTrove sources with a pinned legacy converter:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' \
-  -m experiments.post_training.task_curation.compare_tasktrove \
+  -m experiments.post_training.task_curation.tasktrove.compare \
   --normalized-root /tmp/curation-quick \
   --baseline-repository . \
   --baseline-revision 61bb85cc5231d8ac9344696ef51766257940538d \

@@ -34,7 +34,7 @@ from taskcompendium.harbor.export import MANIFEST_FILENAME, TASKS_FILENAME
 from experiments.post_training.curriculum_rl.launch import HF_EXPORT_SUBDIR, model_step
 from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL, QWEN3_REVISION
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
-from experiments.post_training.task_curation.export_tasktrove import harbor_export_step
+from experiments.post_training.task_curation.tasktrove.export import harbor_export_step
 
 RL_ARTIFACT_NAME = "checkpoints/tasktrove-rl-smoke"
 # The curriculum experiment's mirrored Qwen3-0.6B snapshot; reused rather than mirrored again.
