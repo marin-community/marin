@@ -14,7 +14,8 @@ from experiments.post_training.task_curation.count_inputs import parquet_counts
 from experiments.post_training.task_curation.export_catalog import catalog_document, source_row
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import DataSourceReview, RlDataSource, SourceInfo
-from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.sources import standard_pipelines
+from experiments.post_training.task_curation.tests.test_campaign import number_source
 
 
 def test_parquet_count_export_identifies_the_counted_input(tmp_path):
@@ -26,7 +27,7 @@ def test_parquet_count_export_identifies_the_counted_input(tmp_path):
     metadata.write_text("pinned-input\nfile-etag\n0\n")
     count = parquet_counts(snapshot, "pinned-input", "*.parquet")["tasks.parquet"]
     pipeline = replace(
-        all_pipelines()["math500"],
+        standard_pipelines()["math500"],
         source=HfSource("local/questions", "pinned-input", ("tasks.parquet",), SourceFormat.PARQUET),
     )
     source = RlDataSource(
@@ -64,3 +65,18 @@ def test_catalog_export_is_deterministic_and_keeps_metadata_only_sources():
     )
     changed = replace(reviewed, info=replace(reviewed.info, count=8))
     assert catalog_document([changed, excluded])["revision"] != document["revision"]
+
+
+def test_custom_catalog_identity_is_available_without_execution(tmp_path):
+    source = number_source(tmp_path / "not-staged")
+    row = source_row(source)
+    assert row["dataset_id"] == "local-numbers"
+    assert row["dataset_revision"] == "pinned"
+    assert row["pipeline"] == {
+        "name": "numbers",
+        "version": "1",
+        "source": "local-numbers",
+        "revision": "pinned",
+        "files": (),
+    }
+    assert row["url"] == "https://example.org/numbers"

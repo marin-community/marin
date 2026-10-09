@@ -17,7 +17,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from verifyit.modes import grade_pytest
 from verifyit.spec import PytestSpec, parse_spec
 
-from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.sources import standard_pipelines
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 
 
@@ -71,7 +71,7 @@ def test_unusable_repository_grading_contract_is_rejected(problem, reason):
     else:
         files["instruction.md"] = b"Fix the spin bug."
     files["tests/config.json"] = json.dumps(config).encode()
-    result = convert_row(all_pipelines()["tasktrove-swesmith"], tasktrove_row(files))
+    result = convert_row(standard_pipelines()["tasktrove-swesmith"], tasktrove_row(files))
     assert cast(ImportRejection, result).reason == reason
 
 
@@ -121,7 +121,7 @@ def repository_fixture(tmp_path) -> RepositoryFixture:
     git(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base")
     commit = git(workspace, "rev-parse", "HEAD")
     files = source_files(commit)
-    task = converted_task(all_pipelines()["tasktrove-swesmith"], tasktrove_row(files))
+    task = converted_task(standard_pipelines()["tasktrove-swesmith"], tasktrove_row(files))
     tests_dir = tmp_path / "private"
     tests_dir.mkdir()
     for resource in task.resources.verifier:

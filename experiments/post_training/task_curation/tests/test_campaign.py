@@ -3,15 +3,20 @@
 
 import json
 import threading
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from pathlib import Path
 
 import pytest
 from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep, StepContext
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.pipeline.models import SourceStatus
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from zephyr.dataset import Dataset
 
+from experiments.post_training.task_curation.binding import pipeline_step
 from experiments.post_training.task_curation.campaign import (
     CampaignArtifact,
     CampaignFailed,
@@ -19,6 +24,91 @@ from experiments.post_training.task_curation.campaign import (
     CampaignRuntime,
     run_campaign,
 )
+from experiments.post_training.task_curation.invocation import CurationSource, PipelineResult, PipelineRun
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+
+
+@dataclass(frozen=True)
+class LocalNumbers:
+    """Fixture ingestion has no HF files, converters, grading or review configuration."""
+
+    path: str
+
+    def __call__(self, source: CurationSource, run: PipelineRun) -> PipelineResult:
+        path = Path(run.source_input or self.path)
+        values = [int(line) for line in path.read_text().splitlines()]
+        if run.mode == SourceProcessingMode.SAMPLE:
+            values = values[:2]
+        factor = int(Path(run.inputs["factor"]).read_text()) if "factor" in run.inputs else 2
+        numbers = [value * factor for value in values]
+        output = StoragePath(run.output_path) / "numbers.json"
+        output.write_text(json.dumps(numbers))
+        evidence = StoragePath(run.output_path) / "ingestion.json"
+        evidence.write_text(json.dumps({"source": source.name, "mode": run.mode, "input": str(path)}))
+        return PipelineResult(
+            SourceStatus.SAMPLED if run.mode == SourceProcessingMode.SAMPLE else SourceStatus.COMPLETED,
+            {"numbers": str(output)},
+            {"ingestion": str(evidence)},
+            ("ingest", "multiply"),
+        )
+
+
+def number_source(path: Path, name: str = "numbers") -> RlDataSource:
+    return RlDataSource(
+        info=SourceInfo(
+            id=f"fixture:{name}",
+            title=name,
+            origin="fixture",
+            dataset=SourceReference("local-numbers", "pinned", "https://example.org/numbers"),
+        ),
+        pipeline=LocalNumbers(str(path)),
+        version="1",
+    )
+
+
+@pytest.mark.parametrize(
+    "mode, expected", [(SourceProcessingMode.SAMPLE, [3, 6]), (SourceProcessingMode.FULL, [3, 6, 9])]
+)
+def test_custom_campaign_retains_named_products_without_standard_dependencies(tmp_path, monkeypatch, mode, expected):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    primary = tmp_path / "numbers.txt"
+    primary.write_text("1\n2\n3\n")
+    unused = tmp_path / "unused.txt"
+    factor = tmp_path / "factor.txt"
+    factor.write_text("3")
+    runtime = CampaignRuntime()
+    step = pipeline_step(
+        number_source(unused), mode=mode, campaign=runtime, source_input=str(primary), inputs={"factor": str(factor)}
+    )
+    client = LocalClient()
+    try:
+        with set_current_client(client):
+            outcomes = run_campaign(
+                [step],
+                runtime=runtime,
+                pool=CampaignPool(
+                    1,
+                    coordinator_resources=ResourceConfig(cpu=1, ram="1g"),
+                    chunk_storage_prefix=str(tmp_path / "chunks"),
+                ),
+                report_path=str(tmp_path / "report.json"),
+                mode=mode,
+            )
+        result = outcomes[0].result
+        assert result is not None
+        assert json.loads(StoragePath(result.outputs["numbers"]).read_text()) == expected
+        assert json.loads(StoragePath(result.evidence["ingestion"]).read_text()) == {
+            "source": "numbers",
+            "mode": mode,
+            "input": str(primary),
+        }
+        report = json.loads((tmp_path / "report.json").read_text())
+        assert report["sources"][0]["result"]["stages"] == ["ingest", "multiply"]
+        assert report["sources"][0]["result"]["outputs"] == result.outputs
+        assert not (Path(outcomes[0].path) / "final").exists()
+    finally:
+        client.shutdown()
 
 
 class CampaignResult(CampaignArtifact):

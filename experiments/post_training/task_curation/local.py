@@ -20,7 +20,6 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.execution.step_runner import StepRunner
 from taskcompendium.pipeline.inputs import SourceFileOverride
-from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.pipeline.sources import conversion_shards
 from zephyr.context import ZephyrContext
@@ -35,12 +34,13 @@ from experiments.post_training.task_curation.campaign import (
     error_chain,
     write_campaign_report,
 )
+from experiments.post_training.task_curation.invocation import PipelineRun
 from experiments.post_training.task_curation.pipeline import (
     RlDataPipeline,
-    run_curation,
     source_downloads,
     source_files,
 )
+from experiments.post_training.task_curation.source import RlDataSource
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ def stage_local_download(download: ArtifactStep[Artifact], cache_root: Path) -> 
 
 
 def run_local_sources(
-    sources: Mapping[str, RlDataPipeline],
+    sources: Mapping[str, RlDataSource],
     input_root: Path | None,
     output_root: Path,
     *,
@@ -98,7 +98,7 @@ def run_local_sources(
         ExitStack() as process_pools,
     ):
         process_context: ZephyrContext | None = None
-        for name, pipeline in sources.items():
+        for name, source in sources.items():
             outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.RUNNING)
             report(CampaignStatus.RUNNING)
             try:
@@ -109,6 +109,7 @@ def run_local_sources(
                     source_input = str(input_root)
                 else:
                     source_input = None
+<<<<<<< HEAD
                 primary, auxiliary = source_downloads(pipeline, campaign)
                 if source_input is None:
                     source_input = stage_local_download(primary, download_cache)
@@ -118,35 +119,56 @@ def run_local_sources(
                         staged_inputs[input_name] = stage_local_download(download, download_cache)
                 logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
                 shards = conversion_shards(source_input, source_files(pipeline.source), overrides=source_overrides)
+||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
+                source_input, staged_inputs = stage_local_inputs(
+                    pipeline, download_cache, campaign, source_input=source_input, inputs=inputs
+                )
+                logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
+                shards = conversion_shards(source_input, source_files(pipeline.source), overrides=source_overrides)
+=======
+                pipeline = source.pipeline
+                if pipeline is None:
+                    raise ValueError(f"Source has no pipeline: {source.name}")
+                staged_inputs = dict(inputs)
+>>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
                 conversion_context = context
-                if max_workers > 1 and any(shard.row_end is not None and shard.parts > 1 for shard in shards):
-                    # Process startup dominates small conversions; reserve it for split Parquet files.
-                    if process_context is None:
-                        process_context = process_pools.enter_context(
-                            ZephyrContext(
-                                client=client,
-                                max_workers=max_workers,
-                                resources=context.resources,
-                                chunk_storage_prefix=str(output_root / ".zephyr-process"),
-                                name="task-curation-quick-process",
-                                stage_runner_factory=SubprocessRunner,
+                if isinstance(pipeline, RlDataPipeline):
+                    source_input, staged_inputs = stage_local_inputs(
+                        pipeline, download_cache, campaign, source_input=source_input, inputs=inputs
+                    )
+                    logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
+                    shards = conversion_shards(source_input, source_files(pipeline.source), overrides=source_overrides)
+                    conversion_context = context
+                    if max_workers > 1 and any(shard.row_end is not None and shard.parts > 1 for shard in shards):
+                        # Process startup dominates small conversions; reserve it for split Parquet files.
+                        if process_context is None:
+                            process_context = process_pools.enter_context(
+                                ZephyrContext(
+                                    client=client,
+                                    max_workers=max_workers,
+                                    resources=context.resources,
+                                    chunk_storage_prefix=str(output_root / ".zephyr-process"),
+                                    name="task-curation-quick-process",
+                                    stage_runner_factory=SubprocessRunner,
+                                )
                             )
-                        )
-                    conversion_context = process_context
-                result = run_curation(
-                    pipeline,
-                    mode=SourceProcessingMode.QUICK,
-                    context=conversion_context,
-                    source_input=source_input,
-                    output_path=str(output_root / name),
-                    inputs=staged_inputs,
-                    source_overrides=source_overrides,
+                        conversion_context = process_context
+                result = pipeline(
+                    source,
+                    PipelineRun(
+                        mode=SourceProcessingMode.QUICK,
+                        context=conversion_context,
+                        source_input=source_input,
+                        output_path=str(output_root / name),
+                        inputs=staged_inputs,
+                        source_overrides=source_overrides,
+                    ),
                 )
             except Exception as error:
                 outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.FAILED, error_chain(error))
                 click.echo(json.dumps(asdict(outcomes[name])), err=True)
             else:
-                outcomes[name] = SourceOutcome(name, str(output_root / name), SourceStatus.COMPLETED)
+                outcomes[name] = SourceOutcome(name, str(output_root / name), result.status, result=result)
                 click.echo(json.dumps({"source": name, **asdict(result)}))
             report(CampaignStatus.RUNNING)
     failed = any(outcome.status == OutcomeStatus.FAILED for outcome in outcomes.values())

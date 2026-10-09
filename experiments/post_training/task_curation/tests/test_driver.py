@@ -10,9 +10,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.lazy import run
+from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
@@ -21,6 +24,7 @@ from taskcompendium.convert.environment import grading_environment
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from zephyr.readers import load_parquet
 
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import (
     VerificationBackend,
@@ -31,11 +35,13 @@ from experiments.post_training.task_curation.driver import (
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.post_training.task_curation.pipeline import environment_requirements
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
     REPOSITORY,
     install_fake_build_tools,
     tracked_lock,
 )
+from experiments.post_training.task_curation.tests.test_campaign import number_source
 
 PINNED_WORKER = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
 CONTROLLER_URL = "http://controller.invalid"
@@ -51,7 +57,19 @@ def math500():
 @pytest.fixture
 def catalog(monkeypatch):
     pipelines = {name: replace(math500(), name=name) for name in ("first", "second", "third")}
+<<<<<<< HEAD
     monkeypatch.setattr("experiments.post_training.task_curation.driver.all_pipelines", lambda: pipelines)
+||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_pipelines", lambda: pipelines)
+=======
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.sources.runnable_sources",
+        lambda: {
+            name: RlDataSource(info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), pipeline=pipeline)
+            for name, pipeline in pipelines.items()
+        },
+    )
+>>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
     return pipelines
 
 
@@ -211,3 +229,44 @@ def test_reviewed_cli_rejects_local_input_and_output_options(tmp_path, catalog, 
     assert not (tmp_path / "report.json").exists()
     assert not (tmp_path / "output").exists()
     assert not (tmp_path / "downloads").exists()
+
+
+@pytest.mark.parametrize("mode, expected", [("quick", [2, 4, 6]), ("sample", [2, 4]), ("full", [2, 4, 6])])
+def test_custom_cli_runs_own_ingestion_without_review_controller_or_build_settings(
+    tmp_path, monkeypatch, mode, expected
+):
+    monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    input_file = tmp_path / "numbers.txt"
+    input_file.write_text("1\n2\n3\n")
+    source = number_source(input_file)
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.sources.runnable_sources", lambda: {source.name: source}
+    )
+    options = ["--mode", mode, "--source", source.name, "--max-workers", "1"]
+    if mode == "quick":
+        output_root = tmp_path / "output"
+        report = output_root / "campaign.json"
+        options += ["--output-root", str(output_root), "--download-cache", str(tmp_path / "downloads")]
+    else:
+        report = tmp_path / "report.json"
+        options += ["--coordinator-memory", "1g", "--worker-image", "fixture-image", "--report-path", str(report)]
+    runner = CliRunner()
+    planned = runner.invoke(main, options)
+    assert planned.exit_code == 0, planned.output
+    assert len(json.loads(planned.output)["sources"]) == 1
+    assert not report.exists()
+    client = LocalClient()
+    try:
+        with set_current_client(client):
+            executed = runner.invoke(main, [*options, "--run"])
+        assert executed.exit_code == 0, executed.output
+        outcome = json.loads(report.read_text())["sources"][0]
+        result = outcome["result"]
+        assert json.loads(StoragePath(result["outputs"]["numbers"]).read_text()) == expected
+        assert json.loads(StoragePath(result["evidence"]["ingestion"]).read_text())["mode"] == mode
+        assert result["stages"] == ["ingest", "multiply"]
+        assert not (tmp_path / "downloads").exists()
+    finally:
+        client.shutdown()

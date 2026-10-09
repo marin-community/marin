@@ -22,6 +22,8 @@ from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 
+from experiments.post_training.task_curation.invocation import PipelineResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,6 +79,7 @@ class SourceOutcome:
     path: str
     status: str
     error: str | None = None
+    result: PipelineResult | None = None
 
 
 class CampaignFailed(RuntimeError):
@@ -87,6 +90,7 @@ class CampaignArtifact(Artifact):
     """A source artifact that records the terminal status the campaign reports for it."""
 
     status: str
+    result: PipelineResult | None = None
 
 
 def campaign_plan(steps: Sequence[ArtifactStep[Artifact]], pool: CampaignPool) -> dict[str, object]:
@@ -113,7 +117,7 @@ def _build_source(
 ) -> SourceOutcome:
     started(step)
     result = run(step, max_concurrent=1)[0]
-    return SourceOutcome(step.name, result.path, result.status)
+    return SourceOutcome(step.name, result.path, result.status, result=result.result)
 
 
 def error_chain(error: BaseException) -> str:

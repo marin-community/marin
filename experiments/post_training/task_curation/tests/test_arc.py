@@ -22,6 +22,7 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, R
 from verifyit.grade import grade
 
 from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.pipeline import RlDataPipeline
 from experiments.post_training.task_curation.tests.conversion import (
     FIXTURE_GRADER_ENVIRONMENT,
     convert_row,
@@ -29,7 +30,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     tasktrove_row,
 )
 
-PIPELINES = {source.name: source.pipeline for source in arc.sources() if source.pipeline is not None}
+PIPELINES = {source.name: source.pipeline for source in arc.sources() if isinstance(source.pipeline, RlDataPipeline)}
 # The Nemotron Ultra declarations that use convert_ultra_arc name the grader packages.
 ULTRA_CONTEXT = ConversionContext({}, FIXTURE_GRADER_ENVIRONMENT)
 GRID = [[0, 1], [2, 9]]

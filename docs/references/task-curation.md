@@ -15,6 +15,39 @@ sources = all_sources()  # stable Atlas ID -> RlDataSource
 
 Building the catalog performs no downloads, inference or job submission.
 
+## Dataset-owned invocation
+
+`RlDataSource.pipeline` is a `CurationPipeline` callable:
+
+```python
+def curate(source: CurationSource, run: PipelineRun) -> PipelineResult:
+    ...
+```
+
+`PipelineRun` carries an explicit QUICK, SAMPLE or FULL mode, the active Zephyr
+context, output location, optional primary input path, auxiliary input paths and
+per-file overrides. Each implementation owns ingestion and chooses its
+conversion, validation, review and control stages. A custom callable can read a
+local format or generate inputs without declaring an HF download, grader or
+reviewer.
+
+`PipelineResult` contains the existing `SourceStatus`, named output and evidence
+paths, and the names of the stages it ran. Outputs need no `final` or admitted
+view. Exceptions enter the campaign's existing failure report while peer results
+remain available. The campaign report retains the result envelope for completed
+invocations.
+
+The existing `RlDataPipeline` is the standard implementation. Its artifact
+binding retains pinned downloads, grader dependencies, policies and cache
+identity. Only this implementation receives the standard review configuration
+and resolved grader environment.
+
+Catalog fields are available on `RlDataSource` without executing its callable.
+Standard declarations derive `name`, `version`, `dataset` and `files` once at
+construction from their immutable recipe. Custom declarations use the suffix of
+`SourceInfo.id` as their invocation name and supply `SourceInfo.dataset`,
+`version` and optional `files`. Atlas reads these fields directly.
+
 ## Package organization
 
 | Package | Responsibility |
@@ -23,7 +56,7 @@ Building the catalog performs no downloads, inference or job submission.
 | `experiments/post_training/task_curation/environment.py` | `Environment`, what a machine must provide, and `placement`, which decides where it runs |
 | `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
 | `experiments/post_training/task_curation/environment_runtime.py` | The uv environments that local graders run in on the Zephyr worker |
-| `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()`, and its runnable `all_pipelines()` projection |
+| `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()`, `runnable_sources()` and the standard-only `standard_pipelines()` projection |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
 | `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
 | `experiments/post_training/task_curation/pipeline.py`, `local.py` | Source-level mode dispatch and local mechanical conversion |
@@ -42,9 +75,9 @@ ArtifactSteps.
 An `RlDataSource` has `info`, `review` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
 search tags, notes and an optional input-row count. A `SourceReference` groups a
-name, revision and URL for the verifier or an inventory-only dataset. Runnable
-sources derive dataset identity from `pipeline.source`, with no second dataset
-definition. `DataSourceReview` records an authored grade, evidence URL, date and
+name, revision and URL for the verifier or dataset. Standard sources derive
+dataset identity from their recipe; custom sources specify it independently of
+execution. `DataSourceReview` records an authored grade, evidence URL, date and
 the dataset/verifier revisions it covers. Its default is unrated. Executed
 reviews and difficulty measurements remain in the Atlas database.
 
@@ -197,17 +230,17 @@ are admitted like rows of in-process graders.
 
 ## Conversion modes
 
-`pipeline.run_curation` is the common entry point for local and campaign runs.
-Pass an explicit `mode`: QUICK takes no config; SAMPLE/FULL require a matching
-`config.mode`. The single `driver` CLI requires `--mode quick|sample|full` and
+Each dataset's callable receives `PipelineRun` with an explicit mode. The
+single `driver` CLI requires `--mode quick|sample|full` and
 prints a plan unless `--run` is supplied. QUICK runs locally without review or
 controller settings. See the campaign quickstart below for input overrides.
-All modes share conversion and the normalized schema. QUICK retains TaskSpecs
+The standard implementation shares conversion and the normalized schema across
+its modes. QUICK retains TaskSpecs
 and typed rejections, skipping admission, fingerprints, review, deduplication
 and grading. It records declared images or locks without building environments.
 
-SAMPLE and FULL require `config=SourcePipelineConfig(...)` with the selected
-mode and a resolved `grader_environment`. FULL reviews a bounded panel, then
+Standard SAMPLE and FULL bind `SourcePipelineConfig` and a resolved grader
+environment. Custom callables require neither. FULL reviews a bounded panel, then
 reuses those conversions when its quality gate allows expansion. The procedure
 below describes those reviewed stages. See the
 [campaign quickstart](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)

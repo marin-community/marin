@@ -45,7 +45,7 @@ from experiments.post_training.task_curation.datasets.environments import VERIFY
 from experiments.post_training.task_curation.datasets.tasktrove import qa
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import HfSource
-from experiments.post_training.task_curation.sources import all_pipelines, all_sources
+from experiments.post_training.task_curation.sources import all_sources, standard_pipelines
 from experiments.post_training.task_curation.tasktrove.export import main
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 
@@ -342,7 +342,7 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
     source = next(source for source in qa.sources() if source.name == "knowledge-openqa")
     question = "Which planet is known as the red planet?"
     original = f"Write your concise final answer to `/app/response.txt`.\n\n{question}"
-    pipeline = all_pipelines()[source.name]
+    pipeline = standard_pipelines()[source.name]
     task = converted_task(
         pipeline,
         tasktrove_row(
@@ -394,7 +394,7 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
     grid = [[0, 1], [2, 9]]
     data = {"test_cases": [{"input": grid, "output": grid}]} if mode == "inductive" else {"expected_output": grid}
     task = converted_task(
-        all_pipelines()[source.name],
+        standard_pipelines()[source.name],
         tasktrove_row(
             {"instruction.md": b"Solve the grid puzzle.", "tests/verifier_data.json": json.dumps(data).encode()}
         ),
@@ -442,7 +442,7 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
 def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
     source = next(source for source in arc.sources() if source.name == "tasktrove-arc_transductive")
     task = converted_task(
-        all_pipelines()[source.name],
+        standard_pipelines()[source.name],
         tasktrove_row({"instruction.md": b"Solve.", "tests/verifier_data.json": b'{"expected_output":[[1]]}'}),
     )
     task = task.model_copy(
@@ -596,7 +596,7 @@ def test_openqa_keeps_conversion_but_filters_disclosed_reference():
     source = next(source for source in qa.sources() if source.name == "science-openqa")
     reference = "alpha beta gamma"
     task = converted_task(
-        all_pipelines()[source.name],
+        standard_pipelines()[source.name],
         tasktrove_row(
             {
                 "instruction.md": f"Prove the answer is {reference}.".encode(),

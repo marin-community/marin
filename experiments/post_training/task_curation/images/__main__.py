@@ -20,14 +20,14 @@ from experiments.post_training.task_curation.images.build import (
     environment_artifact,
     identity_digest,
 )
-from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.sources import standard_pipelines
 
 
 def declared_environments() -> dict[str, Environment]:
     """Every environment the catalog declares that the pipeline builds, by identity."""
     declared = [
         environment
-        for pipeline in all_pipelines().values()
+        for pipeline in standard_pipelines().values()
         for environment in (pipeline.environment, pipeline.grader)
         if isinstance(environment, Environment) and placement(environment) != Placement.IMAGE
     ]

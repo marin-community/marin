@@ -27,7 +27,7 @@ from taskcompendium.models import AnswerType, TaskSpec
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
-from experiments.post_training.task_curation.pipeline import HfSource
+from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tasktrove.reference import REFERENCE_COMPRESSION_LEVEL
@@ -143,7 +143,7 @@ def compare_source(
 ) -> dict[str, Any]:
     """Stream one exact source population and persist every matching or mismatching task."""
     pipeline = source.pipeline
-    assert pipeline is not None and isinstance(pipeline.source, HfSource)
+    assert isinstance(pipeline, RlDataPipeline) and isinstance(pipeline.source, HfSource)
     if len(pipeline.source.files) != 1:
         raise ValueError(f"Expected one pinned TaskTrove file for {source.name}")
     config = pipeline.source.files[0].split("/", 1)[0]
@@ -291,7 +291,7 @@ def main(
     catalog = {
         source.name: source
         for source in all_sources().values()
-        if source.pipeline is not None
+        if isinstance(source.pipeline, RlDataPipeline)
         and isinstance(source.pipeline.source, HfSource)
         and source.pipeline.source.repo == TASKTROVE_REPO
     }

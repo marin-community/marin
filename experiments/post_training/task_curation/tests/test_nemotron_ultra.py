@@ -47,7 +47,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     REASONING_GYM_CONTROLS,
     TOOL_ACTION_CONTROLS,
 )
-from experiments.post_training.task_curation.pipeline import source_files
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, source_files
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
@@ -55,7 +55,7 @@ from experiments.post_training.task_curation.tests.conversion import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures/nemotron_ultra"
-PIPELINES = {source.name: source.pipeline for source in sources() if source.pipeline is not None}
+PIPELINES = {source.name: source.pipeline for source in sources() if isinstance(source.pipeline, RlDataPipeline)}
 SWE_GYM_INSTANCE = "gym-1"
 SWE_REBENCH_INSTANCE = "rebench-1"
 DAPO_QUESTION = "What is 2 + 3?"

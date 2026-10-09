@@ -5,7 +5,7 @@
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -31,10 +31,20 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 from taskcompendium.runtime.local import LocalGraderMachines
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
+from experiments.post_training.task_curation.binding import pipeline_step
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
 from experiments.post_training.task_curation.local import run_local_sources
+<<<<<<< HEAD
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, download_identity, source_step
 from experiments.post_training.task_curation.sources import all_pipelines
+||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
+from experiments.post_training.task_curation.pipeline import download_identity, source_step
+from experiments.post_training.task_curation.sources import selected_pipelines
+=======
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, download_identity
+from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.sources import selected_sources
+>>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
 
 REVIEW_REQUEST_TIMEOUT = 60
 IRIS_SCHEDULING_TIMEOUT = 600
@@ -181,7 +191,7 @@ def _pipeline_config(
     mode: SourceProcessingMode,
     review: ReviewConfig,
     reviewer: Reviewer | None,
-    machines: GradingMachines,
+    machines: GradingMachines | None,
     *,
     seed: int,
     verification_sample_size: int,
@@ -207,6 +217,18 @@ def _pipeline_config(
         normalized_shards=normalized_shards,
         machines=machines,
     )
+
+
+def local_source_plan(source: RlDataSource) -> dict[str, Any]:
+    """Describe local invocation without staging inputs or inspecting custom ingestion."""
+    pipeline = source.pipeline
+    if isinstance(pipeline, RlDataPipeline):
+        return {
+            "name": source.name,
+            "source": download_identity(pipeline.source),
+            "inputs": {name: download_identity(upstream) for name, upstream in pipeline.inputs.items()},
+        }
+    return {"name": source.name, "dataset": asdict(source.dataset) if source.dataset is not None else None}
 
 
 @click.command(help=__doc__)
@@ -302,7 +324,19 @@ def main(
     download_cache: Path | None,
     do_run: bool,
 ) -> None:
+<<<<<<< HEAD
     pipelines = _selected_pipelines(sources)
+||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
+    try:
+        pipelines = selected_pipelines(sources)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
+=======
+    try:
+        selected = selected_sources(sources)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
+>>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
     processing_mode = SourceProcessingMode(mode)
     if processing_mode == SourceProcessingMode.QUICK:
         if not sources:
@@ -311,7 +345,7 @@ def main(
             raise click.UsageError("QUICK requires --output-root")
         if input_root is not None and local_files:
             raise click.UsageError("Choose either --input-root or --input-file")
-        pipelines = {name: pipelines[name] for name in dict.fromkeys(sources)}
+        selected = {name: selected[name] for name in dict.fromkeys(sources)}
         inputs = {name: str(Path(path).resolve()) for name, path in auxiliary}
         download_cache = download_cache if download_cache is not None else Path.home() / ".cache/marin"
         max_workers = max_workers if max_workers is not None else QUICK_MAX_WORKERS
@@ -320,6 +354,7 @@ def main(
                 "mode": processing_mode,
                 "sources": [
                     {
+<<<<<<< HEAD
                         "name": pipeline.name,
                         "source": download_identity(pipeline.source),
                         "inputs": {name: download_identity(source) for name, source in pipeline.inputs.items()},
@@ -334,9 +369,43 @@ def main(
                 "max_workers": max_workers,
             }
             click.echo(json.dumps(plan, indent=2))
+||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
+                        "mode": processing_mode,
+                        "sources": [
+                            {
+                                "name": pipeline.name,
+                                "source": download_identity(pipeline.source),
+                                "inputs": {name: download_identity(source) for name, source in pipeline.inputs.items()},
+                            }
+                            for pipeline in pipelines.values()
+                        ],
+                        "input_root": str(input_root) if input_root is not None else None,
+                        "input_files": {name: str(path) for name, path in local_files},
+                        "inputs": inputs,
+                        "output_root": str(output_root),
+                        "download_cache": str(download_cache),
+                        "max_workers": max_workers,
+                    },
+                    indent=2,
+                )
+            )
+=======
+                        "mode": processing_mode,
+                        "sources": [local_source_plan(source) for source in selected.values()],
+                        "input_root": str(input_root) if input_root is not None else None,
+                        "input_files": {name: str(path) for name, path in local_files},
+                        "inputs": inputs,
+                        "output_root": str(output_root),
+                        "download_cache": str(download_cache),
+                        "max_workers": max_workers,
+                    },
+                    indent=2,
+                )
+            )
+>>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
             return
         run_local_sources(
-            pipelines,
+            selected,
             input_root,
             output_root,
             inputs=inputs,
@@ -347,47 +416,56 @@ def main(
         return
     if input_root is not None or local_files or auxiliary or output_root is not None or download_cache is not None:
         raise click.UsageError("Local input, output, and download-cache options require --mode quick")
-    if model_revision is None:
-        raise click.UsageError("SAMPLE/FULL requires --model-revision")
-    if review_cache is None:
-        raise click.UsageError("SAMPLE/FULL requires --review-cache")
-    if review_mode is None:
-        raise click.UsageError("SAMPLE/FULL requires --review-mode")
     if max_workers is None:
         raise click.UsageError("SAMPLE/FULL requires --max-workers")
     if coordinator_memory is None:
         raise click.UsageError("SAMPLE/FULL requires --coordinator-memory")
-    if normalized_shards is None:
-        raise click.UsageError("SAMPLE/FULL requires --normalized-shards")
     if worker_image is None:
         raise click.UsageError("SAMPLE/FULL requires --worker-image")
     if report_path is None:
         raise click.UsageError("SAMPLE/FULL requires --report-path")
-    backend = VerificationBackend(verification_backend)
-    controller_url = _controller_url(backend, controller_url)
-    review = ReviewConfig(model=model, model_revision=model_revision, mode=ReviewMode(review_mode))
-    reviewer = None
-    if do_run:
-        reviewer = _reviewer(
-            review,
-            base_url if base_url is not None else resolve_glm_base_url(relay_job),
-            review_cache=review_cache,
-            review_concurrency=review_concurrency,
-        )
     worker_resources = ResourceConfig(cpu=2, ram="8g", image=worker_image, container_profile=container_profile)
-    config = _pipeline_config(
-        processing_mode,
-        review,
-        reviewer,
-        campaign_machines(backend, worker_image, controller_url),
-        seed=seed,
-        verification_sample_size=verification_sample_size,
-        max_workers=max_workers,
-        worker_resources=worker_resources,
-        normalized_shards=normalized_shards,
-    )
+    standard = [source.pipeline for source in selected.values() if isinstance(source.pipeline, RlDataPipeline)]
+    config = None
+    if standard:
+        if model_revision is None:
+            raise click.UsageError("Standard SAMPLE/FULL requires --model-revision")
+        if review_cache is None:
+            raise click.UsageError("Standard SAMPLE/FULL requires --review-cache")
+        if review_mode is None:
+            raise click.UsageError("Standard SAMPLE/FULL requires --review-mode")
+        if normalized_shards is None:
+            raise click.UsageError("Standard SAMPLE/FULL requires --normalized-shards")
+        review = ReviewConfig(model=model, model_revision=model_revision, mode=ReviewMode(review_mode))
+        reviewer = None
+        if do_run and any(pipeline.rubric is not None for pipeline in standard):
+            reviewer = _reviewer(
+                review,
+                base_url if base_url is not None else resolve_glm_base_url(relay_job),
+                review_cache=review_cache,
+                review_concurrency=review_concurrency,
+            )
+        machines = None
+        if any(pipeline.controls is not None for pipeline in standard):
+            backend = VerificationBackend(verification_backend)
+            controller_url = _controller_url(backend, controller_url)
+            machines = campaign_machines(backend, worker_image, controller_url)
+        config = _pipeline_config(
+            processing_mode,
+            review,
+            reviewer,
+            machines,
+            seed=seed,
+            verification_sample_size=verification_sample_size,
+            max_workers=max_workers,
+            worker_resources=worker_resources,
+            normalized_shards=normalized_shards,
+        )
     runtime = CampaignRuntime()
-    steps = [source_step(pipeline, config, runtime) for pipeline in pipelines.values()]
+    steps = [
+        pipeline_step(source, mode=processing_mode, standard_config=config, campaign=runtime)
+        for source in selected.values()
+    ]
     pool = CampaignPool(
         max_workers,
         concurrent_sources,
@@ -397,7 +475,7 @@ def main(
     if not do_run:
         click.echo(json.dumps(campaign_plan(steps, pool), indent=2))
         return
-    run_campaign(steps, runtime=runtime, pool=pool, report_path=report_path, mode=config.mode)
+    run_campaign(steps, runtime=runtime, pool=pool, report_path=report_path, mode=processing_mode)
 
 
 if __name__ == "__main__":

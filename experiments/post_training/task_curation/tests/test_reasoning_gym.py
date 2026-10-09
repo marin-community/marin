@@ -22,6 +22,7 @@ from verifyit.grade import Status, grade
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.reasoning_gym import generate
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as declarations
+from experiments.post_training.task_curation.pipeline import RlDataPipeline
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
@@ -29,7 +30,9 @@ from experiments.post_training.task_curation.tests.conversion import (
     tasktrove_row,
 )
 
-PIPELINES = {source.name: source.pipeline for source in declarations.sources() if source.pipeline is not None}
+PIPELINES = {
+    source.name: source.pipeline for source in declarations.sources() if isinstance(source.pipeline, RlDataPipeline)
+}
 EXCLUDED = (("composite", "Requires explicit component configuration"),)
 TASKTROVE_INSTRUCTION = "Solve x + 8 = 50. Write ONLY your final answer to **`/app/answer.txt`**"
 TASKTROVE_ENTRY = {"question": "Solve x + 8 = 50.", "answer": "42", "metadata": {"source_dataset": "simple_equations"}}

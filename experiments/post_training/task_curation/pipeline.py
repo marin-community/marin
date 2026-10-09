@@ -15,7 +15,7 @@ import os
 import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -68,6 +68,7 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
+from experiments.post_training.task_curation.invocation import CurationSource, PipelineResult, PipelineRun
 
 PIPELINE_VERSION = "2026.10.07.1"
 URL_CHUNK_BYTES = 1024 * 1024
@@ -183,6 +184,8 @@ class RlDataPipeline:
     grader: Environment | None = None
     ships: tuple[Path, ...] = ()
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
+    config: SourcePipelineConfig | None = field(default=None, kw_only=True, repr=False, compare=False)
+    grader_environment: EnvironmentRequirements | None = field(default=None, kw_only=True, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         missing = [str(path) for path in self.ships if not path.is_dir()]
@@ -191,6 +194,47 @@ class RlDataPipeline:
         # Converters record the agent's requirements on each task without a built artifact to consult.
         if isinstance(self.environment, Environment) and self.environment.image is None:
             raise ValueError(f"{self.name} must name the agent environment's image")
+
+    def __call__(self, source: CurationSource, run: PipelineRun) -> PipelineResult:
+        """Run the standard processor; reviewed settings are bound by its artifact builder."""
+        if run.source_input is None:
+            raise ValueError(f"Standard curation requires staged primary inputs: {source.name}")
+        config = None
+        if run.mode != SourceProcessingMode.QUICK:
+            if self.config is None:
+                raise ValueError(f"Reviewed standard curation requires settings: {source.name}")
+            config = replace(self.config, mode=run.mode)
+        result = _run_standard_curation(
+            self,
+            mode=run.mode,
+            context=run.context,
+            source_input=run.source_input,
+            output_path=run.output_path,
+            inputs=run.inputs,
+            config=config,
+            grader_environment=self.grader_environment,
+            source_overrides=run.source_overrides,
+        )
+        if isinstance(result, ConversionResult):
+            return PipelineResult(
+                SourceStatus.COMPLETED,
+                {"normalize": result.normalized_path},
+                {"manifest": result.manifest_path},
+                ("normalize",),
+            )
+        if result.status == SourceStatus.INCOMPLETE:
+            raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
+        return PipelineResult(
+            result.status,
+            {"normalize": result.normalize_path, "final": result.final_path},
+            {
+                "download": result.download_path,
+                "review": result.review_path,
+                "verify": result.verify_path,
+                "manifest": result.manifest_path,
+            },
+            ("download", "normalize", "review", "verify", "final"),
+        )
 
 
 class RlDataArtifact(CampaignArtifact):
@@ -252,7 +296,7 @@ def source_recipe(
     )
 
 
-def run_curation(
+def _run_standard_curation(
     pipeline: RlDataPipeline,
     *,
     mode: SourceProcessingMode,
@@ -266,8 +310,16 @@ def run_curation(
 ) -> ConversionResult | SourcePipelineResult:
     """Run a declared source against staged inputs in quick, sample, or full mode.
 
+<<<<<<< HEAD
     Quick conversion records the declared grader lock without building or running it.
     Sample and full runs require the campaign's review configuration and resolved grader.
+||||||| parent of a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
+    QUICK records the declared grader lock without building or running it.
+    SAMPLE and FULL require a matching config and the campaign's resolved grader.
+=======
+    QUICK records the declared grader lock without building or running it.
+    SAMPLE and FULL use the invocation mode and the campaign's resolved settings.
+>>>>>>> a6ae499b25 ([rl-data] Invoke dataset-owned curation pipelines)
     """
     missing = pipeline.inputs.keys() - inputs.keys()
     if missing:
@@ -461,30 +513,44 @@ def _source_run(
 
 
 def _run_source(
-    pipeline: RlDataPipeline, config: SourcePipelineConfig, run: SourceRun, *, campaign: CampaignRuntime
+    pipeline: RlDataPipeline,
+    config: SourcePipelineConfig,
+    source: CurationSource,
+    run: SourceRun,
+    *,
+    campaign: CampaignRuntime,
 ) -> RlDataArtifact:
     grader_environment = None
     if pipeline.grader is not None:
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
-    result = run_curation(
-        pipeline,
-        mode=config.mode,
-        context=campaign.context,
-        source_input=run.source_input,
-        output_path=run.output_path,
-        inputs=run.inputs,
-        config=config,
-        grader_environment=grader_environment,
+    implementation = replace(pipeline, config=config, grader_environment=grader_environment)
+    result = implementation(
+        source,
+        PipelineRun(
+            mode=config.mode,
+            context=campaign.context,
+            source_input=run.source_input,
+            output_path=run.output_path,
+            inputs=run.inputs,
+        ),
     )
-    assert isinstance(result, SourcePipelineResult)
-    if result.status == SourceStatus.INCOMPLETE:
-        raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
-    return RlDataArtifact(path=run.output_path, status=result.status, manifest=asdict(result))
+    manifest = asdict(
+        SourcePipelineResult(
+            result.evidence["download"],
+            result.outputs["normalize"],
+            result.evidence["review"],
+            result.evidence["verify"],
+            result.outputs["final"],
+            result.evidence["manifest"],
+            result.status,
+        )
+    )
+    return RlDataArtifact(path=run.output_path, status=result.status, manifest=manifest, result=result)
 
 
 def source_step(
-    pipeline: RlDataPipeline, config: SourcePipelineConfig, campaign: CampaignRuntime
+    pipeline: RlDataPipeline, config: SourcePipelineConfig, campaign: CampaignRuntime, *, source: CurationSource
 ) -> ArtifactStep[RlDataArtifact]:
     """The ``data/rl/<name>-<hash>`` artifact for one declaration.
 
@@ -492,7 +558,9 @@ def source_step(
     ``images.build``.
     """
     if config.mode == SourceProcessingMode.QUICK:
-        raise ValueError("QUICK conversion uses run_curation with staged inputs; it does not build reviewed artifacts")
+        raise ValueError(
+            "QUICK conversion invokes the pipeline with staged inputs; it does not build reviewed artifacts"
+        )
     downloaded, inputs = source_downloads(pipeline, campaign)
     grader_step = None
     grader_built = None
@@ -505,7 +573,7 @@ def source_step(
         name=f"data/rl/{pipeline.name}-{digest}",
         version=PIPELINE_VERSION,
         artifact_type=RlDataArtifact,
-        run=partial(_run_source, pipeline, config, campaign=campaign),
+        run=partial(_run_source, pipeline, config, source, campaign=campaign),
         build_config=partial(_source_run, identity, downloaded, inputs, grader_step),
         deps=(downloaded, *inputs.values(), *((grader_step,) if grader_step is not None else ())),
     )

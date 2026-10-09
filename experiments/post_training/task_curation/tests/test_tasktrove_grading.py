@@ -15,6 +15,7 @@ from taskcompendium.pipeline.models import CheckStatus, WorkspaceFiles
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, math, python_tests
+from experiments.post_training.task_curation.pipeline import RlDataPipeline
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 from experiments.post_training.task_curation.tests.local_grader import grade
 from experiments.post_training.task_curation.tests.test_tasktrove_text import fixture_files
@@ -26,7 +27,7 @@ PIPELINES = {
     source.name: source.pipeline
     for module in (calendar, math, python_tests)
     for source in module.sources()
-    if source.pipeline is not None
+    if isinstance(source.pipeline, RlDataPipeline)
 }
 ARCHIVE_GRADERS = [
     ("tasktrove-math_gym", "math_gym"),

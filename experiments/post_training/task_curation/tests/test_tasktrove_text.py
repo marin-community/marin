@@ -45,6 +45,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     qa,
 )
 from experiments.post_training.task_curation.datasets.tasktrove import math as math_sources
+from experiments.post_training.task_curation.pipeline import RlDataPipeline
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
@@ -57,7 +58,7 @@ PIPELINES = {
     source.name: source.pipeline
     for module in (math_sources, judged, qa, calendar_sources, instruction_following, multichallenge, puzzles)
     for source in module.sources()
-    if source.pipeline is not None
+    if isinstance(source.pipeline, RlDataPipeline)
 }
 
 

@@ -10,34 +10,22 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from experiments.post_training.task_curation.pipeline import HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
 
 
 def source_row(source: RlDataSource) -> dict[str, Any]:
     """Project a declaration into the Atlas wire format without executing it."""
     info, pipeline = source.info, source.pipeline
-    dataset = info.dataset
+    dataset = source.dataset
     invocation = None
     if pipeline is not None:
-        upstream = pipeline.source
-        if isinstance(upstream, HfSource):
-            dataset = SourceReference(
-                upstream.repo,
-                upstream.revision,
-                f"https://huggingface.co/datasets/{upstream.repo}/tree/{upstream.revision}",
-            )
-            files = upstream.files
-        else:
-            dataset = SourceReference(upstream.filename, upstream.sha256, upstream.url)
-            files = (upstream.filename,)
         invocation = {
-            "name": pipeline.name,
-            "version": pipeline.version,
-            "source": dataset.name,
-            "revision": dataset.revision,
-            "files": files,
+            "name": source.name,
+            "version": source.version,
+            "source": dataset.name if dataset else None,
+            "revision": dataset.revision if dataset else None,
+            "files": source.files,
         }
     verifier = info.verifier
     tags = info.tags

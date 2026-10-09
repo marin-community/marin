@@ -27,7 +27,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
-from experiments.post_training.task_curation.pipeline import source_files
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, source_files
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
@@ -38,7 +38,7 @@ PIPELINES = {
     source.name: source.pipeline
     for module in (math, code, ifeval, mcq, preference)
     for source in module.sources()
-    if source.pipeline is not None
+    if isinstance(source.pipeline, RlDataPipeline)
 }
 
 SUM_TESTS = {"inputs": ["1 2\n"], "outputs": ["3\n"]}

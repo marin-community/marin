@@ -28,6 +28,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     python_tests,
     structured_outputs,
 )
+from experiments.post_training.task_curation.pipeline import RlDataPipeline
 from experiments.post_training.task_curation.tests.conversion import (
     BASE_IMAGE,
     convert_row,
@@ -42,7 +43,7 @@ PIPELINES = {
     source.name: source.pipeline
     for module in (code, python_tests, nl2bash, structured_outputs)
     for source in module.sources()
-    if source.pipeline is not None
+    if isinstance(source.pipeline, RlDataPipeline)
 }
 
 CODENET = (Path(__file__).parent / "fixtures/codenet.tar.gz").read_bytes()
