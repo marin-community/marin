@@ -178,7 +178,7 @@ _GROUP_SIZE_CASES = {
     "all_empty": [0, 0, 0, 0],
 }
 # Odd sizes: rows, contraction and columns are not multiples of the tile-map blocks below.
-_ROWS, _K, _N, _GROUPS = 300, 96, 200, 4
+_ROWS, _K, _N, _GROUPS = 300, 80, 200, 4
 _LAYOUTS = [layout.value for layout in ragged_dot_module.RaggedLayout]
 
 
