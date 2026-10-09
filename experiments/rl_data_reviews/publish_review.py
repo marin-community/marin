@@ -187,7 +187,7 @@ def archive_evidence(publication: ReviewPublication, review_id: str) -> None:
 
 
 def publish_grading_applicability(publication: ReviewPublication, review_id: str) -> str | None:
-    """Archive and bind the executed grading proof, or return None for an untracked source."""
+    """Archive an executed grading proof and request its guarded binding."""
     root, payload, atlas_id = publication.root, publication.payload, publication.atlas_id
     if not payload.get("grading_revision"):
         return None
