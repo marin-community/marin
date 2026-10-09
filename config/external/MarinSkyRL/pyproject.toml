@@ -12,5 +12,5 @@ required-environments = ["sys_platform == 'linux'"]
 override-dependencies = ["marin-rigging[secrets]>=0.2.139.dev37117265303"]
 
 [tool.uv.sources]
-# Keep the artifact capture fix on the existing runtime baseline.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "eb37093eda9ee02e187c3ab26954bdb56f613446" }
+# The isolated lock keeps the selected branch revision immutable.
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }
