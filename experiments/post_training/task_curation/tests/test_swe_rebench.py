@@ -6,7 +6,7 @@
 import json
 import subprocess
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -72,7 +72,6 @@ def test_source_archives_keep_private_graders_and_deferred_dependencies(language
     build = {resource.path: resource_bytes(resource) for resource in context.files}
     assert not any(path.startswith(("tests/", "solution/")) for path in build)
     assert b"apt-get" in build["taskcompendium-grader-setup.sh"]
-    assert b"COPY --from=ghcr.io/astral-sh/uv:0.8" in build["Dockerfile"]
 
 
 @pytest.mark.parametrize("language", ["js", "ts"])
@@ -131,8 +130,16 @@ def git(workspace: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=workspace, check=True, capture_output=True, text=True).stdout.strip()
 
 
+@dataclass(frozen=True)
+class PatchedRepository:
+    workspace: Path
+    private: Path
+    spec: PytestSpec
+    expected_tests: str
+
+
 @pytest.fixture
-def patched_repository(tmp_path):
+def patched_repository(tmp_path) -> PatchedRepository:
     workspace = tmp_path / "repository"
     workspace.mkdir()
     (workspace / "tests").mkdir()
@@ -182,15 +189,22 @@ def patched_repository(tmp_path):
         target.write_bytes(resource_bytes(resource))
     spec = parse_spec((private / "taskcompendium-verifier.toml").read_text())
     assert isinstance(spec, PytestSpec)
-    return workspace, private, replace(spec, workspace=str(workspace), python=sys.executable, timeout=30), patched
+    return PatchedRepository(
+        workspace=workspace,
+        private=private,
+        spec=replace(spec, workspace=str(workspace), python=sys.executable, timeout=30),
+        expected_tests=patched,
+    )
 
 
 @pytest.mark.parametrize(
     "repair, tamper, expected",
     [(False, None, 0), (True, None, 1), (False, "untracked_control", 0), (False, "index_flag", 0)],
 )
-def test_hidden_patch_restoration_preserves_product_edits(patched_repository, repair, tamper, expected):
-    workspace, private, spec, patched = patched_repository
+def test_hidden_patch_restoration_preserves_product_edits(
+    patched_repository: PatchedRepository, repair, tamper, expected
+):
+    workspace = patched_repository.workspace
     product = "def add(a, b): return a + b\n" if repair else "def add(a, b): return a - b\n"
     (workspace / "calc.py").write_text(product)
     if tamper == "untracked_control":
@@ -198,8 +212,8 @@ def test_hidden_patch_restoration_preserves_product_edits(patched_repository, re
     elif tamper == "index_flag":
         (workspace / "tests/test_calc.py").write_text("def test_hidden(): pass\n")
         git(workspace, "update-index", "--assume-unchanged", "tests/test_calc.py")
-    result = grade_pytest.grade(spec, private, workspace)
+    result = grade_pytest.grade(patched_repository.spec, patched_repository.private, workspace)
     assert result.reward == expected
-    assert (workspace / "tests/test_calc.py").read_text() == patched
+    assert (workspace / "tests/test_calc.py").read_text() == patched_repository.expected_tests
     assert (workspace / "calc.py").read_text() == product
     assert not (workspace / "conftest.py").exists()

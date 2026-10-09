@@ -14,7 +14,7 @@ import hashlib
 import re
 
 import tomlkit
-from taskcompendium.convert.tasktrove import TESTS_MOUNT
+from taskcompendium.convert.tasktrove import TESTS_MOUNT, UV_IMAGE
 from verifyit.spec import Mode
 
 VERIFIER_TOML = "tests/verifier.toml"
@@ -28,7 +28,6 @@ exec verifyit {TESTS_MOUNT}/verifier.toml
 
 VERIFY_TOOL_URL = "git+https://github.com/marin-community/marin@{ref}#subdirectory=lib/verifyit"
 TOOL_PYTHON = ">=3.11"
-UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
 INSTALL_MARKER = "# --- verifyit ---"
 OLD_GRADER_LINE = re.compile(r"rewardkit|litellm", re.IGNORECASE)
 """A Dockerfile line installing the old judge graders; converters strip it and the filter stage

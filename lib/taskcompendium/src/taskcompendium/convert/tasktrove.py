@@ -43,6 +43,7 @@ SOLUTION_DIR = "solution/"
 SOLVE_SH = "solution/solve.sh"
 TESTS_MOUNT = "/tests"
 """Where Harbor mounts a task's ``tests/`` directory, and only at grading time."""
+UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
 TEST_SH_REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
 """The numeric reward file a Harbor ``tests/test.sh`` writes."""
 ANSWER_PATH = "/app/answer.txt"

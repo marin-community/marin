@@ -14,7 +14,7 @@ its fail-open exit-code path removed and its grader dependencies installed in th
 import json
 import re
 
-from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, UV_IMAGE, TaskFiles
 from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
@@ -28,6 +28,7 @@ from verifyit.spec import PytestSpec, ScriptSpec
 from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import (
     ensure_pytest_json_report,
     pytest_selection,
+    python_command,
 )
 from experiments.post_training.tasktrove.converters.swe_repo import (
     CONFIG_JSON,
@@ -36,7 +37,6 @@ from experiments.post_training.tasktrove.converters.swe_repo import (
     restore_setup,
     test_ids,
 )
-from experiments.post_training.tasktrove.task_format import UV_IMAGE
 
 TEST_PATCH = "tests/test_patch.diff"
 TRUSTED_PATCH_PATHS = "tests/trusted_patch_paths.txt"
@@ -132,26 +132,6 @@ def _conda_activation(test_sh: str) -> tuple[str, ...]:
         if line not in seen:
             seen.append(line)
     return tuple(seen)
-
-
-def _python_command(conda_lines: tuple[str, ...]) -> tuple[str, str]:
-    """The interpreter to grade with, and the setup line that makes it resolve.
-
-    A conda repo needs its env activated before ``python`` resolves to the right interpreter; that
-    activation does not survive between the ``setup`` shell command and the separate ``pytest``
-    subprocess, so a small wrapper script does the activation and execs ``python`` itself.
-    """
-    if not conda_lines:
-        return "python3", ""
-    wrapper = "/tmp/tasktrove-python"
-    body = "\n".join(conda_lines)
-    heredoc = (
-        f"cat > {wrapper} << 'TASKTROVE_PYTHON_EOF'\n"
-        f'#!/bin/bash\n{body}\nexec python "$@"\n'
-        f"TASKTROVE_PYTHON_EOF\n"
-        f"chmod +x {wrapper}\n"
-    )
-    return wrapper, heredoc
 
 
 def _legacy_script_task(
@@ -266,7 +246,7 @@ def convert_swe_patched(task: TaskFiles) -> ConvertedTask | Rejected:
     workspace_match = _REPO_DIR_RE.search(test_sh)
     workspace = workspace_match.group(1) if workspace_match else TESTBED
     conda_lines = _conda_activation(test_sh)
-    python, python_setup = _python_command(conda_lines)
+    python, python_setup = python_command(conda_lines)
 
     spec = PytestSpec(
         paths=selection.files,

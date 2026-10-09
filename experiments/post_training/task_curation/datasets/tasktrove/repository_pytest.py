@@ -170,6 +170,21 @@ def trusted_pytest(task: TaskFiles) -> PytestSpec | ImportRejection:
     )
 
 
+def python_command(conda_lines: tuple[str, ...]) -> tuple[str, str]:
+    """Return the grading interpreter and setup script for the source's Python environment."""
+    if not conda_lines:
+        return "python3", ""
+    wrapper = "/tmp/tasktrove-python"
+    body = "\n".join(conda_lines)
+    heredoc = (
+        f"cat > {wrapper} << 'TASKTROVE_PYTHON_EOF'\n"
+        f'#!/bin/bash\n{body}\nexec python "$@"\n'
+        f"TASKTROVE_PYTHON_EOF\n"
+        f"chmod +x {wrapper}\n"
+    )
+    return wrapper, heredoc
+
+
 def ensure_pytest_json_report(dockerfile: str, conda_lines: tuple[str, ...] = ()) -> str:
     """Install the report plugin in the repository's Python, including activated conda environments."""
     if PYTEST_REPORT_PLUGIN in dockerfile:
