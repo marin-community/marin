@@ -481,7 +481,10 @@ def test_harbor_repository_keeps_builds_and_protects_captured_workspace(reposito
     assert config.verifier.environment.docker_image is None
     assert config.environment.workdir is None  # Inherit the declared Dockerfile WORKDIR.
     assert config.verifier.environment.workdir == task.grader.cwd
-    assert [(item.source, item.destination, item.exclude) for item in config.artifacts] == [("/testbed", "testbed", [])]
+    assert [(item.source, item.destination, item.exclude) for item in config.artifacts] == [
+        ("/logs/artifacts", "taskcompendium-convention", ["./taskcompendium-convention", "./testbed"]),
+        ("/testbed", "testbed", []),
+    ]
     for role, environment in [("environment", task.environment_requirements), ("tests", task.grader.environment)]:
         for resource in environment.docker_build.files:
             content = files[role + "/" + resource.path]

@@ -328,6 +328,16 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         },
         "artifacts": [{"source": path, "destination": path.removeprefix("/")} for path in dict.fromkeys(outputs)],
     }
+    if repository_state:
+        # Keep agent-written convention logs separate from the captured checkout.
+        config["artifacts"].insert(
+            0,
+            {
+                "source": "/logs/artifacts",
+                "destination": "taskcompendium-convention",
+                "exclude": ["./taskcompendium-convention", f".{REPOSITORY_WORKSPACE}"],
+            },
+        )
     if environment.working_directory is not None:
         config["environment"]["workdir"] = environment.working_directory
     files["task.toml"] = tomlkit.dumps(config).encode()
