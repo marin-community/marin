@@ -92,7 +92,10 @@ class ShellSimBuiltins:
 
 @dataclass(frozen=True)
 class HostImage:
-    """The host's own programs and filesystem, used by the local backend instead of an image."""
+    """The host's programs, with optional per-machine read-only mounts and program paths."""
+
+    read_only: tuple[Path, ...] = ()
+    bin_dirs: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -1126,6 +1126,24 @@ def test_default_profile_off_the_cluster_network_keeps_cluster_env_but_no_cluste
     assert manifest["metadata"]["labels"][EGRESS_LABEL] == "internet"
 
 
+@pytest.mark.parametrize(
+    "profile, egress, expected_token",
+    [
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, "task-token"),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, None),
+    ],
+)
+def test_task_token_reaches_every_pod_but_a_sandbox(profile, egress, expected_token):
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = profile
+    req.egress_policy = egress
+    req.task_token = "task-token"
+
+    task = _build_pod_manifest(req, pod_config())["spec"]["containers"][0]
+
+    assert {e["name"]: e.get("value") for e in task["env"]}.get("IRIS_TASK_TOKEN") == expected_token
+
+
 # ---------------------------------------------------------------------------
 # Service account
 # ---------------------------------------------------------------------------

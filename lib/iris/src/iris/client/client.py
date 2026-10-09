@@ -827,7 +827,6 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
-        credentials: ClientCredentials | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for code running inside the cluster (in-task).
 
@@ -835,14 +834,16 @@ class IrisClient:
         to the resolved finelog server instead of through the controller's
         endpoint proxy — so high-frequency task-status pushes don't compete for
         the controller's HTTP proxy. Only valid where the finelog server's
-        internal address is reachable (i.e. inside the cluster).
+        internal address is reachable (i.e. inside the cluster). Presents the
+        current task's token, when it has one.
         """
+        job_info = get_job_info()
         return cls._make(
             controller_address,
             workspace=workspace,
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
-            credentials=credentials,
+            credentials=job_info.credentials if job_info is not None else None,
             use_controller_proxy=False,
         )
 

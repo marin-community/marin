@@ -175,6 +175,19 @@ def test_bin_dirs_win_path_lookup_and_host_environment_is_not_inherited(tmp_path
     assert b"SHELLBOX_HOST_SECRET" not in environment.stdout
 
 
+def test_host_image_adds_read_only_mount_and_program_path(tmp_path, factory):
+    bin_dir = tmp_path / "venv-bin"
+    bin_dir.mkdir()
+    command = bin_dir / "grader-python"
+    command.write_text("#!/bin/sh\necho mounted-runtime\n")
+    command.chmod(0o755)
+    spec = MachineSpec(HostImage(read_only=(bin_dir,), bin_dirs=(bin_dir,)), workdir="/app")
+
+    result = run_command(factory, Command(("grader-python",)), spec)
+
+    assert (result.exit_code, result.stdout) == (0, b"mounted-runtime\n")
+
+
 def test_timeout_kills_the_command_and_its_descendants(factory):
     # run() returns only once the output pipes close, so a surviving grandchild would hold it past the test timeout.
     command = Command(("sh", "-c", "sleep 3600 & wait"), timeout=1, stdin=b"unread")
