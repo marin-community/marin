@@ -165,6 +165,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
             "Defect, Salt, chair",
             "chair, Salt, Defect",
         ),
+        ("exact", {"gold": "gold", "answer_type": "exact"}, "gold", r"\boxed{gold}"),
         ("math", {"gold": "3", "answer_type": "number"}, r"\boxed{3}", r"\boxed{4}"),
         (
             "json-schema",

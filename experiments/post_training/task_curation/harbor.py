@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import io
 import json
+import shlex
 import tarfile
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -139,6 +140,17 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
     if grader.environment is None:
         if not isinstance(grader, VerifyitGrader) or grader.mode not in IN_PROCESS_FILE_MODES:
             raise UnsupportedHarborTask("In-process grader mode has no supported file-delivery lowering")
+        if task.answer_type != AnswerType.TEXT or answer_path is None:
+            raise UnsupportedHarborTask("In-process graders require a plain-text answer file")
+        files["tests/grade_candidate.py"] = Path(__file__).with_name("harbor_candidate.py").read_bytes()
+        files["tests/taskcompendium-resources.json"] = json.dumps(
+            [resource.path for resource in task.resources.verifier]
+        ).encode()
+        files["tests/test.sh"] = (
+            "#!/bin/bash\nset -euo pipefail\nexport PYTHONPATH=/tests/runtime\n"
+            "exec python3 /tests/grade_candidate.py /tests/taskcompendium-verifier.toml "
+            f"{shlex.quote(answer_path)}\n"
+        ).encode()
     elif grader.environment.setup_commands:
         raise UnsupportedHarborTask("Verifier setup commands require an environment build")
     prompt = task.context.events[0].content
