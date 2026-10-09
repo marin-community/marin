@@ -18,6 +18,7 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed
+from experiments.post_training.task_curation.compare_tasktrove import source_file_path
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, code
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.quick import run_local_sources
@@ -158,6 +159,10 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     assert isinstance(task.grader, VerifyitGrader)
     assert verifyit_spec(task.grader) == ExactSpec(("two",), ignore_case=False)
     assert not list(cache.rglob("unselected.jsonl"))
+    manifest = json.loads((cold / source.name / "manifest.json").read_text())
+    staged = source_file_path(manifest, "rows.jsonl")
+    assert staged.is_relative_to(cache)
+    assert json.loads(staged.read_text()) == {"prompt": "What is one plus one?"}
 
     shutil.rmtree(remote)
     warm = tmp_path / "warm"
@@ -222,4 +227,9 @@ def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes
     assert manifest["source_file_overrides"] == {
         logical_path: {"path": str(local_file.resolve()), "sha256": hashlib.sha256(local_file.read_bytes()).hexdigest()}
     }
+    # A per-file override remains authoritative even when another staging root is supplied.
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    assert source_file_path(manifest, logical_path) == local_file
+    assert source_file_path(manifest, logical_path, alternate) == local_file
     assert not (tmp_path / "downloads").exists()

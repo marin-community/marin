@@ -44,6 +44,18 @@ def file_identity(path: Path) -> dict[str, Any]:
     return {"path": str(path.resolve()), "bytes": path.stat().st_size, "sha256": digest}
 
 
+def source_file_path(manifest: dict[str, Any], logical_file: str, raw_root: Path | None = None) -> Path:
+    """Resolve the bytes QUICK read, preserving explicit per-file overrides."""
+    override = manifest.get("source_file_overrides", {}).get(logical_file)
+    if override is not None:
+        return Path(override["path"])
+    if raw_root is not None:
+        return raw_root / logical_file
+    if "source_input" not in manifest:
+        raise ValueError("This manifest predates recorded staging paths; provide --raw-root")
+    return Path(manifest["source_input"]) / logical_file
+
+
 def frozen_checkout(repository: Path, revision: str, destination: Path) -> dict[str, str]:
     """Extract only the pinned reference implementation, including its shared helpers."""
     if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
@@ -119,7 +131,7 @@ def candidate_snapshot(
 def compare_source(
     source: RlDataSource,
     normalized: Path,
-    raw: Path,
+    raw: Path | None,
     reference: Path,
     revision: str,
     output: Path,
@@ -132,8 +144,8 @@ def compare_source(
     if len(pipeline.source.files) != 1:
         raise ValueError(f"Expected one pinned TaskTrove file for {source.name}")
     config = pipeline.source.files[0].split("/", 1)[0]
-    raw_file = raw / pipeline.source.files[0]
     manifest = json.loads((normalized / "manifest.json").read_text())
+    raw_file = source_file_path(manifest, pipeline.source.files[0], raw)
     if (manifest["source"], manifest["source_dataset"], manifest["source_revision"]) != (
         source.name,
         pipeline.source.repo,
@@ -245,7 +257,11 @@ def compare_source(
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Source directory or parent containing source manifests; later roots override earlier ones.",
 )
-@click.option("--raw-root", required=True, type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "--raw-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Override the recorded staging root, or supply one for older manifests.",
+)
 @click.option("--baseline-repository", required=True, type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--baseline-revision", required=True, help="Full legacy converter commit SHA.")
 @click.option("--source", "selected", multiple=True, help="Pipeline name; default is all retained TaskTrove sources.")
@@ -258,7 +274,7 @@ def compare_source(
 @click.option("--output-root", required=True, type=click.Path(file_okay=False, path_type=Path))
 def main(
     normalized_roots: tuple[Path, ...],
-    raw_root: Path,
+    raw_root: Path | None,
     baseline_repository: Path,
     baseline_revision: str,
     selected: tuple[str, ...],
@@ -321,7 +337,7 @@ def main(
             summary = compare_source(
                 catalog[name],
                 inputs[name],
-                raw_root.resolve(),
+                raw_root.resolve() if raw_root is not None else None,
                 output_root / "reference",
                 baseline_revision,
                 output_root / name,

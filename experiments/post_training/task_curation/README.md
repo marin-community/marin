@@ -420,14 +420,16 @@ Compare all retained TaskTrove sources with a pinned legacy converter:
 uv run --with-editable './lib/taskcompendium[pipeline]' \
   -m experiments.post_training.task_curation.compare_tasktrove \
   --normalized-root /tmp/curation-quick \
-  --raw-root /path/to/staged/tasktrove \
   --baseline-repository . \
   --baseline-revision 61bb85cc5231d8ac9344696ef51766257940538d \
   --grader-image 'registry/grader@sha256:<digest>' \
   --output-root /tmp/tasktrove-content-report
 ```
 
-The raw root contains the pinned `<config>/tasks.parquet` files. Each normalized
+The source manifest locates the cached input files downloaded by QUICK. Explicit
+per-file overrides recorded there remain authoritative. Use `--raw-root` to point
+to a different staging root containing `<config>/tasks.parquet`, or to compare
+older manifests that lack staging paths. Each normalized
 source directory contains `manifest.json` and `normalize/*.parquet` from QUICK conversion. Repeat
 `--normalized-root` to combine campaigns; later roots override earlier ones for
 the same source. Repeat `--source` to restrict a run. Without it, the command
