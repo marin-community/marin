@@ -39,6 +39,8 @@ from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plgpu
 
 _MASK_VALUE = -0.7 * float(np.finfo(np.dtype("float32")).max)
+# Query-row block of the banded Inkling bias layout (``levanter.grug.attention._inkling_relpos.REL_BIAS_BLOCK``).
+REL_BIAS_BLOCK = 128
 _LOG2E = math.log2(math.e)
 
 
@@ -113,13 +115,16 @@ def _forward_kernel(q_ref, r_ref, k_ref, v_ref, seg_ref, o_ref, barv_ref, m_ref,
     bart_ref[...] = bart
 
 
-def _softmax_forward_kernel(q_ref, k_ref, v_ref, seg_ref, o_ref, lse_ref, *, scale, bq, bk):
-    """``_forward_kernel`` without the probe branch: causal softmax attention and its natural-log row LSE."""
+def _softmax_forward_kernel(
+    q_ref, k_ref, v_ref, lb_ref, valid_ref, bias_ref, o_ref, lse_ref, *, scale, bq, bk, extent
+):
+    """``_forward_kernel`` without the probe branch, masked like FA4 (query ``i`` sees keys ``lb[i] <= j <= i``) and
+    with an optional banded Inkling bias: causal softmax attention and its natural-log row LSE."""
     start_q = pl.program_id(0)
     head_dim = q_ref.shape[-1]
     q = q_ref[...]
     q_idx = start_q * bq + jnp.arange(bq)
-    q_seg = None if seg_ref is None else seg_ref[pl.ds(start_q * bq, bq)]
+    lower = None if lb_ref is None else lb_ref[...]
     qk_scale = scale * _LOG2E
 
     def body(start_k, carry):
@@ -128,8 +133,17 @@ def _softmax_forward_kernel(q_ref, k_ref, v_ref, seg_ref, o_ref, lse_ref, *, sca
         k = k_ref[k_slice, :]
         v = v_ref[k_slice, :]
         qk = plgpu.dot(q, k.T).astype(jnp.float32) * qk_scale
-        k_seg = None if seg_ref is None else seg_ref[k_slice]
-        qk = jnp.where(_mask(q_idx, start_k * bk + jnp.arange(bk), q_seg, k_seg), qk, _MASK_VALUE)
+        if bias_ref is not None:
+            # Key-aligned band: this (query block, key tile) is band columns [k0 - q0 + extent, +bk), zero before it.
+            column = start_k * bk - start_q * bq + extent
+            in_band = column >= 0
+            band = bias_ref[:, pl.ds(jnp.maximum(column, 0), bk)].astype(jnp.float32)
+            qk = qk + jnp.where(in_band, band, 0.0) * _LOG2E
+        k_idx = start_k * bk + jnp.arange(bk)
+        keep = q_idx[:, None] >= k_idx[None, :]
+        if lower is not None:
+            keep = keep & (k_idx[None, :] >= lower[:, None])
+        qk = jnp.where(keep, qk, _MASK_VALUE)
         m_new = jnp.maximum(m, jnp.max(qk, axis=-1))
         alpha = jnp.exp2(m - m_new)
         w = jnp.exp2(qk - m_new[:, None])
@@ -142,8 +156,12 @@ def _softmax_forward_kernel(q_ref, k_ref, v_ref, seg_ref, o_ref, lse_ref, *, sca
         jnp.zeros((bq,), jnp.float32),
         jnp.zeros((bq, head_dim), jnp.float32),
     )
-    m, d1, o1 = lax.fori_loop(0, lax.div(bq * (start_q + 1) + bk - 1, bk), body, init)
-    o_ref[...] = (o1 / d1[:, None]).astype(o_ref.dtype)
+    first = 0 if lower is None else lax.div(jnp.min(lower), bk)
+    m, d1, o1 = lax.fori_loop(first, lax.div(bq * (start_q + 1) + bk - 1, bk), body, init)
+    o = o1 / d1[:, None]
+    if valid_ref is not None:
+        o = jnp.where(valid_ref[...][:, None] != 0, o, 0.0)
+    o_ref[...] = o.astype(o_ref.dtype)
     lse_ref[...] = (m + jnp.log2(d1)) / _LOG2E
 
 
@@ -313,20 +331,41 @@ def parallax_forward(q, r, k, v, segment_ids, *, scale: float, block_sizes: Bloc
 
 
 def softmax_forward(
-    q, k, v, segment_ids, *, scale: float, block_q: int, block_k: int, num_warps: int, interpret: bool
+    q,
+    k,
+    v,
+    lower_bounds,
+    valid,
+    rel_bias,
+    *,
+    scale: float,
+    block_q: int,
+    block_k: int,
+    num_warps: int,
+    interpret: bool,
 ):
-    """Causal (same-segment) softmax attention ``(o, lse)``; ``lse`` is ``[B, H, L]`` fp32 natural-log
-    ``log sum_j exp(scale q.k_j)``, the FlashAttention backward's residual."""
+    """FA4-masked causal softmax attention ``(o, lse)``: query ``i`` attends keys ``lower_bounds[b, i] <= j <= i``
+    (rows with ``valid`` false output zero; both ``None`` for plain causal attention), plus the optional banded Inkling bias ``rel_bias`` ``[B, H, L, W]``
+    (``levanter.grug.attention._inkling_relpos``; needs ``block_q`` equal to its 128-row block). ``lse`` is
+    ``[B, H, L]`` fp32 natural-log ``log sum_j exp(scale q.k_j + bias_ij)``, the FlashAttention backward's residual."""
     _check(q, k, BlockSizes(block_q=block_q, block_k=block_k))
     batch, seq, heads, head_dim = q.shape
     reps = heads // k.shape[2]
+    extent = 0
+    if rel_bias is not None:
+        extent = rel_bias.shape[-1] - REL_BIAS_BLOCK
+        if block_q != REL_BIAS_BLOCK or extent % block_k:
+            raise ValueError(f"rel_bias needs block_q={REL_BIAS_BLOCK} and block_k dividing {extent}")
     row_block = pl.BlockSpec((None, block_q, None, head_dim), lambda i, b, h: (b, i, h, 0))
     kv_full = pl.BlockSpec((None, seq, None, head_dim), lambda i, b, h: (b, 0, h // reps, 0))
-    seg_spec = None if segment_ids is None else pl.BlockSpec((None, seq), lambda i, b, h: (b, 0))
+    meta = None if lower_bounds is None else pl.BlockSpec((None, block_q), lambda i, b, h: (b, i))
+    bias_spec = None
+    if rel_bias is not None:
+        bias_spec = pl.BlockSpec((None, None, block_q, rel_bias.shape[-1]), lambda i, b, h: (b, h, i, 0))
     return pl.pallas_call(
-        functools.partial(_softmax_forward_kernel, scale=scale, bq=block_q, bk=block_k),
+        functools.partial(_softmax_forward_kernel, scale=scale, bq=block_q, bk=block_k, extent=extent),
         grid=(seq // block_q, batch, heads),
-        in_specs=[row_block, kv_full, kv_full, seg_spec],
+        in_specs=[row_block, kv_full, kv_full, meta, meta, bias_spec],
         out_specs=[row_block, pl.BlockSpec((None, None, block_q), lambda i, b, h: (b, h, i))],
         out_shape=[
             jax.ShapeDtypeStruct(q.shape, q.dtype),
@@ -335,7 +374,14 @@ def softmax_forward(
         compiler_params=plgpu.CompilerParams(num_warps=num_warps, num_stages=2),
         interpret=interpret,
         name="softmax_forward",
-    )(q, k, v, segment_ids)
+    )(
+        q,
+        k,
+        v,
+        None if lower_bounds is None else lower_bounds.astype(jnp.int32),
+        None if valid is None else valid.astype(jnp.int32),
+        rel_bias,
+    )
 
 
 def parallax_backward(

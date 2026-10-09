@@ -457,11 +457,11 @@ def attention(
     if rel_bias is not None and implementation in ("gpu_fa4_cute_sm100", "tpu_splash"):
         raise NotImplementedError(f"rel_bias is not supported by the {implementation} attention implementation.")
     if implementation == "gpu_pallas_fa4":
-        if rel_bias is not None or isinstance(mask, jax.Array) or mask is None:
-            raise NotImplementedError("gpu_pallas_fa4 supports AttentionMask causal masks without rel_bias.")
+        if isinstance(mask, jax.Array) or mask is None:
+            raise NotImplementedError("gpu_pallas_fa4 supports AttentionMask causal masks only.")
         from levanter.grug.attention._pallas_fa4 import gpu_pallas_fa4_attention  # noqa: PLC0415
 
-        return gpu_pallas_fa4_attention(q, k, v, mask)
+        return gpu_pallas_fa4_attention(q, k, v, mask, rel_bias=rel_bias)
     if implementation == "gpu_fa4_cute_sm100":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention  # noqa: PLC0415
 
