@@ -35,6 +35,7 @@ from experiments.post_training.bfcl_rl.offline_curate import (
     collection_teacher_traces,
 )
 from experiments.post_training.bfcl_rl.offline_data import (
+    NativeAssistantCaptureError,
     NativeModelTrace,
     build_verified_sft_store,
     native_chat_document,
@@ -102,6 +103,93 @@ def _identity(model: str) -> CollectionIdentity:
         DATASET_COMMIT,
         "/staged/bfcl_complement",
     )
+
+
+@pytest.mark.parametrize("capture_fault", [None, "missing", "ambiguous"])
+def test_native_compaction_requires_unique_captured_summary_and_preserves_task_request(capture_fault):
+    original = [{"role": "system", "content": "Policy"}, {"role": "user", "content": "Original task"}]
+    summary = {"role": "assistant", "content": "Captured compact summary"}
+    history = [
+        original[0],
+        {"role": "user", "content": "Compacted context"},
+        summary,
+        {"role": "user", "content": "Continue"},
+    ]
+    tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+    record = _record("student", 0.0)
+    record["response"] = {
+        "token_ids": [21],
+        "loss_mask": [1],
+        "step_boundaries": [{"prompt_token_ids": [1, 2], "token_start": 0, "token_end": 1}],
+    }
+    trial = {
+        "task_name": TASK.name,
+        "exception_info": None,
+        "verifier_result": {"rewards": {"reward": 0.0}},
+        "config": {"agent": {"name": "opencode"}},
+        "agent_info": {"name": "opencode", "version": "1.18.2"},
+        "agent_result": {"metadata": {"rollout_correlation_id": "compaction-trial"}},
+    }
+    entries = [
+        {
+            "trial_id": "compaction-trial",
+            "timestamp": 1,
+            "status_code": 200,
+            "request": {"messages": original, "tools": tools},
+            "literal": {
+                "prompt_token_ids": [8],
+                "completion_token_ids": [40, 41],
+                "assistant_message": {"role": "assistant", "content": "Earlier answer"},
+            },
+        },
+        {
+            "trial_id": "compaction-trial",
+            "timestamp": 2,
+            "status_code": 200,
+            "request": {"messages": [{"role": "user", "content": "Summarize context"}], "tools": []},
+            "literal": {
+                "prompt_token_ids": [9],
+                "completion_token_ids": [30, 31],
+                "assistant_message": {**summary, "provider_specific_fields": {"token_ids": [30, 31]}},
+            },
+        },
+        {
+            "trial_id": "compaction-trial",
+            "timestamp": 3,
+            "status_code": 200,
+            "request": {"messages": history, "tools": tools},
+            "literal": {
+                "prompt_token_ids": [1, 2],
+                "completion_token_ids": [21],
+                "assistant_message": {"role": "assistant", "content": "Incorrect answer"},
+            },
+        },
+    ]
+    if capture_fault == "missing":
+        entries.pop(1)
+    elif capture_fault == "ambiguous":
+        entries.insert(2, {**entries[1], "timestamp": 2.5})
+    arguments = {
+        "identity": replace(_identity("student"), harness="opencode@1.18.2"),
+        "seed": 7,
+        "retained_record": record,
+        "retained_uri": "retained",
+        "native_trace_uri": "literal",
+        "trial_result": trial,
+        "literal_entries": entries,
+        "partition": PARTITION,
+        "assistant_prefill": "<think>\n",
+        "model_tokenizer": "unused-model",
+        "tool_call_format": LiteralToolCallFormat.HERMES,
+    }
+    if capture_fault:
+        with pytest.raises(NativeAssistantCaptureError, match="unambiguous captured completion"):
+            native_model_trace(**arguments)
+        return
+    trace = native_model_trace(**arguments)
+    assert trace.initial_messages == original
+    assert trace.messages[:-1] == history
+    assert trace.assistant_completion_token_ids == ((30, 31), (21,))
 
 
 def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path: Path):

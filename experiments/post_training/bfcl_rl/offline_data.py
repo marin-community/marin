@@ -164,6 +164,8 @@ def native_model_trace(
             break
     messages = [*request["messages"], assistant]
     completions = []
+    captured_compaction = False
+    previous_timestamp = float("-inf")
     for index, message in enumerate(messages):
         if message["role"] != "assistant" or (index and messages[index - 1]["role"] == "assistant"):
             continue
@@ -176,12 +178,46 @@ def native_model_trace(
         retained_candidates = [entry for entry in candidates if entry in selected]
         if retained_candidates:
             candidates = retained_candidates
+        if not candidates and not message.get("tool_calls"):
+            # OpenCode can replace history with a model-generated summary. Its
+            # tool-free request has a different prefix, but the captured body
+            # must exactly equal the history turn; transport metadata is not text.
+            body = {key: value for key, value in message.items() if key != "provider_specific_fields"}
+            candidates = [
+                entry
+                for entry in entries
+                if not entry["request"].get("tools")
+                and entry["literal"]["assistant_message"] is not None
+                and not entry["literal"]["assistant_message"].get("tool_calls")
+                and previous_timestamp < entry["timestamp"] < final["timestamp"]
+                and {
+                    key: value
+                    for key, value in entry["literal"]["assistant_message"].items()
+                    if key != "provider_specific_fields"
+                }
+                == body
+            ]
+            captured_compaction = bool(candidates)
         if len(candidates) != 1:
             raise NativeAssistantCaptureError(
                 "Every native assistant turn requires one unambiguous captured completion "
                 f"(turn={index}, candidates={len(candidates)})"
             )
+        if candidates[0]["timestamp"] <= previous_timestamp:
+            raise NativeAssistantCaptureError("Native assistant history requires ordered captured completions")
+        previous_timestamp = candidates[0]["timestamp"]
         completions.append(tuple(candidates[0]["literal"]["completion_token_ids"]))
+    if captured_compaction:
+        task_requests = [
+            entry["request"]
+            for entry in entries
+            if (entry["request"].get("tools") or []) == (request.get("tools") or [])
+            and any(message["role"] == "user" for message in entry["request"]["messages"])
+            and all(message["role"] in ("system", "developer", "user") for message in entry["request"]["messages"])
+        ]
+        if not task_requests:
+            raise NativeAssistantCaptureError("Captured compaction lacks an original task request")
+        initial = task_requests[0]
     return NativeModelTrace(
         identity,
         seed,
