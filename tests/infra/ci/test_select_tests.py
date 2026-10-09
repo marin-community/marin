@@ -264,14 +264,18 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "changed_path,suites",
     [
-        ("lib/taskcompendium/src/taskcompendium/lowering.py", ["rolloutengine-unit", "taskcompendium-unit"]),
-        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit"]),
-        ("lib/shellbox/src/shellbox/machine.py", ["rolloutengine-unit"]),
+        (
+            "lib/taskcompendium/src/taskcompendium/lowering.py",
+            ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "taskforge-unit"]),
+        ("lib/shellbox/src/shellbox/machine.py", ["rolloutengine-unit", "taskforge-unit"]),
         (
             "lib/verifyit/src/verifyit/grading.py",
-            ["rolloutengine-unit", "taskcompendium-unit"],
+            ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
         ),
-        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit"]),
+        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"]),
+        ("lib/taskforge/src/taskforge/loop/program.py", ["taskforge-unit"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
@@ -282,6 +286,12 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
 
     full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
     assert set(suites) <= set(full_selection.suites)
+
+
+def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Path) -> None:
+    selection = select_changed_tests(["experiments/post_training/capability_driven_envs/driver.py"], tmp_path)
+
+    assert "taskforge-unit" in selection.suites
 
 
 @pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])

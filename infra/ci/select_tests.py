@@ -153,7 +153,7 @@ DEFAULT_LEG_TIMEOUT = 15
 
 # Suites outside the import-selected Python matrix.
 # TaskCompendium tests its optional pinned Harbor dependency. RolloutEngine
-# uses a separate uv lock. Iris smoke
+# and Taskforge use separate uv locks. Iris smoke
 # drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
@@ -172,6 +172,18 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/verifyit/",
         "lib/rigging/",
         "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "taskforge-unit": (
+        "lib/taskforge/",
+        "experiments/post_training/capability_driven_envs/",
+        "lib/taskcompendium/",
+        "lib/rolloutengine/",
+        "lib/shellbox/",
+        "lib/verifyit/",
+        "lib/rigging/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,
