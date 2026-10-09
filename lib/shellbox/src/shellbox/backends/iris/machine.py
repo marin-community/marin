@@ -10,9 +10,11 @@ import re
 import shlex
 import tarfile
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from connectrpc.code import Code
@@ -51,7 +53,11 @@ IDLE_ENTRYPOINT = "trap 'exit 0' TERM INT; sleep infinity & wait"
 """Keeps the sandbox alive for exec while exiting promptly when Iris stops it."""
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
+# How long ``close`` waits for admitted execs to end after it cancels the sandbox job.
+CLOSE_DRAIN_SECONDS = 60
 EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
+# How much of each stuck exec's command ``close`` quotes when the drain times out.
+STUCK_EXEC_PREVIEW_CHARS = 120
 
 # ALLOW reaches public internet addresses only; neither mode reaches the cluster.
 EGRESS_POLICIES = {
@@ -66,6 +72,15 @@ def _exec_was_shed(error: Exception) -> bool:
     Only this refusal is retried: after any other error the command may already have run.
     """
     return isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED
+
+
+@dataclass(frozen=True)
+class ExecOutput:
+    """The completed command's exit code and text output from one Iris container exec."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
 
 
 class IrisMachine:
@@ -88,20 +103,35 @@ class IrisMachine:
         self.spec = spec
         self._closed = False
         self._container_user: tuple[str, str] | None = None
+        # Guards ``_closed`` and ``_in_flight`` so ``close`` cannot interleave with an exec attempt's
+        # check-then-send; it can only wait for attempts that already passed the check.
+        self._admission = threading.Condition()
+        self._in_flight: dict[str, list[str]] = {}
 
-    def _exec_sync(
-        self, argv: list[str], timeout: float | None = None
-    ) -> controller_pb2.Controller.ExecInContainerResponse:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
+    def _exec_sync(self, argv: list[str], timeout: float | None = None) -> ExecOutput:
         seconds = math.ceil(timeout) if timeout is not None else -1
         request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
         )
         timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000
+
+        def attempt() -> controller_pb2.Controller.ExecInContainerResponse:
+            # A timed-out ``run`` closes the machine while this thread may still be retrying.
+            with self._admission:
+                if self._closed:
+                    raise RuntimeError("Machine is closed")
+                attempt_id = uuid.uuid4().hex
+                self._in_flight[attempt_id] = argv
+            try:
+                return self.rpc.exec_in_container(request, timeout_ms=timeout_ms)
+            finally:
+                with self._admission:
+                    del self._in_flight[attempt_id]
+                    self._admission.notify_all()
+
         try:
             response = retry_with_backoff(
-                lambda: self.rpc.exec_in_container(request, timeout_ms=timeout_ms),
+                attempt,
                 retryable=_exec_was_shed,
                 max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
                 max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
@@ -115,7 +145,7 @@ class IrisMachine:
             error = RuntimeError(f"Iris exec failed: {response.error}")
             self._raise_if_terminated(error)
             raise error
-        return response
+        return ExecOutput(exit_code=response.exit_code, stdout=response.stdout, stderr=response.stderr)
 
     def _raise_if_terminated(self, cause: Exception) -> None:
         """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
@@ -125,9 +155,7 @@ class IrisMachine:
                 f"Iris sandbox task {self.task.task_id} is {status.state}: {status.error_message or cause}"
             ) from cause
 
-    async def _script(
-        self, script: str, timeout: float | None = None
-    ) -> controller_pb2.Controller.ExecInContainerResponse:
+    async def _script(self, script: str, timeout: float | None = None) -> ExecOutput:
         return await asyncio.to_thread(self._exec_sync, ["sh", "-c", script], timeout)
 
     async def _checked(self, script: str) -> str:
@@ -239,12 +267,26 @@ class IrisMachine:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 
+    def _drain_in_flight(self) -> None:
+        with self._admission:
+            if self._admission.wait_for(lambda: not self._in_flight, timeout=CLOSE_DRAIN_SECONDS):
+                return
+            stuck = [shlex.join(argv)[:STUCK_EXEC_PREVIEW_CHARS] for argv in self._in_flight.values()]
+        raise RuntimeError(
+            f"{len(stuck)} Iris exec(s) still in flight {CLOSE_DRAIN_SECONDS} s after terminating the sandbox: "
+            + "; ".join(stuck)
+        )
+
     async def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
+        with self._admission:
+            if self._closed:
+                return
+            self._closed = True
         try:
             await asyncio.to_thread(self.job.cancel)
+            # Terminating the task ends execs the controller already admitted and refuses later ones,
+            # so attempts that passed the closed check return; once they have, none can start.
+            await asyncio.to_thread(self._drain_in_flight)
         finally:
             try:
                 await asyncio.to_thread(self.client.shutdown)
