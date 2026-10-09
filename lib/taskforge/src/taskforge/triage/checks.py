@@ -167,10 +167,9 @@ def combination_allowed(p: TaskProposal, ctx: CheckContext) -> Outcome:
 
 # Keyword evidence in the grader section (and, for executable checks, a code file among the
 # resources). Expected false positives: a section that describes mechanical checks in none of the
-# EXECUTABLE_CHECK words, or a rubric only as "scored items". Measured on the 43 proposals of
-# 2026-10-05: with only file/script/program/pytest words, 17 of 35 code or composite graders FAILed,
-# all false positives (they say "checker", "parse", "recompute"); with the current vocabulary
-# plus code-file resources, 0.
+# EXECUTABLE_CHECK words, or a rubric only as "scored items". The vocabulary goes beyond
+# file/script/program/pytest because code graders are often described as a "checker", a "parse"
+# or a "recompute", and a code file among the resources counts as evidence too.
 # Expected false negatives: the vocabulary is broad ("parse", "criteria"), so a judge-only design
 # that parses the answer passes as code, and keywords cannot read negation ("no rubric is used").
 # Advisory for that reason.
