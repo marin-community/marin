@@ -40,20 +40,17 @@ packages; `tests/test_imports.py` fails on any import that points right:
 content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate -> review -> loop -> queue
 ```
 
-## What the skeleton runs, and what follows
+## What each stage does
 
 - Models: the caller's `queue.job.RunInputs` supplies the builder's model (`builder.sdk.ModelEndpoint`)
-  and each solver trial's rollout model. The GLM-5.3 transport, agent loop and rollout model follow.
-- Triage accepts every proposal. Structural checks and the GLM rubric follow.
+  and each solver trial's rollout model.
+- Triage accepts every proposal.
 - Authoring adopts `builder.template.standard` unchanged as each item's program, so no task can be
-  repaired: `LoopPolicy` refuses `max_repairs` or a band rule's `repairs` above 0. GLM program
-  authoring and repairs follow.
-- Machines are ShellSim only and graders are verifyit graders that run in process. Docker and Iris
-  machines, image builds, script graders and `Build.try_grader` follow.
-- Validation runs the solver's trials. Control replay and adversary trials follow; their events and
+  repaired: `LoopPolicy` refuses `max_repairs` or a band rule's `repairs` above 0.
+- Machines are ShellSim only, and graders are verifyit graders that run in process.
+- Validation runs the solver's trials and no others; the control and adversary events and
   `CalibrationSummary` fields are recorded empty.
-- The queue runs on a laptop with a JSONL ledger. The Iris job, secrets, restore and the Finelog
-  mirror follow.
+- The queue runs on a laptop with a JSONL ledger.
 
 ## Running
 

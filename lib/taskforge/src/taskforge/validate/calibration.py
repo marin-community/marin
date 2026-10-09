@@ -246,7 +246,7 @@ class CalibrationSummary:
     notes: tuple[Finding, ...]
 
     @property
-    def decisive(self) -> tuple[Finding, ...]:
+    def decisive_findings(self) -> tuple[Finding, ...]:
         return tuple(finding for finding in self.findings if finding.kind in DECISIVE)
 
     @property

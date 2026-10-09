@@ -24,7 +24,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from rolloutengine.contracts import ModelRequest, ModelTurn
-from taskforge.builder.template.standard import WORKDIR, WORKSPACE
+from taskforge.builder.template.standard import WORKDIR, WORKSPACE, ControlDraft
 from taskforge.llm.policy import Message
 from taskforge.llm.recording import CallLedger
 from taskforge.proposal.model import parse
@@ -104,17 +104,17 @@ def _file(name: str, content: str) -> dict[str, object]:
 
 
 def _control(control_id: str, kind: str, category: str, concern: str, reply: str, *, passes: bool) -> dict[str, object]:
-    return {
-        "id": control_id,
-        "kind": kind,
-        "category": category,
-        "concern": concern,
-        "final_reply": reply,
-        "files": [],
-        "reward_min": 0.99 if passes else None,
-        "reward_max": None if passes else 0.0,
-        "rationale": "fixed by the scaling problem",
-    }
+    return ControlDraft(
+        id=control_id,
+        kind=kind,
+        category=category,
+        concern=concern,
+        final_reply=reply,
+        files=[],
+        reward_min=0.99 if passes else None,
+        reward_max=None if passes else 0.0,
+        rationale="fixed by the scaling problem",
+    ).model_dump(mode="json")
 
 
 def builder_answers(problem: ScalingProblem) -> dict[str, dict[str, Any]]:

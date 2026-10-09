@@ -210,7 +210,7 @@ def _most_common(causes: Counter[Cause]) -> tuple[Cause, int]:
 
 def decide(draft: TaskDraft, summary: CalibrationSummary, history: ItemHistory, rules: BandRules) -> Decision:
     """The decision for one validation round of ``draft``; see the module docstring for the rules."""
-    decisive = summary.decisive
+    decisive = summary.decisive_findings
     if decisive:
         return _repair(draft, summary, decisive, history)
     if isinstance(summary.status, Incomplete):

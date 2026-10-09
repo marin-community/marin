@@ -563,7 +563,7 @@ def _decision_attrs(decision: Decision, state: ItemState, policy: LoopPolicy) ->
     counts = {"repairs_used": str(state.repairs_used), "retries_used": str(state.validation_retries)}
     match decision:
         case Accept(summary=summary, band=band):
-            return {"decision": DecisionKind.ACCEPT, "band": band, **_pass_rate(summary), **counts}
+            return {"decision": DecisionKind.ACCEPT, "band": band, **_accepted_attrs(summary), **counts}
         case Reject(kind=kind, reasons=reasons):
             return {"decision": DecisionKind.REJECT, "kind": kind, "reasons": _clip("; ".join(reasons)), **counts}
         case Repair(brief=brief, invalidate=invalidate):
@@ -589,7 +589,7 @@ def _decision_attrs(decision: Decision, state: ItemState, policy: LoopPolicy) ->
             }
 
 
-def _pass_rate(summary: CalibrationSummary) -> dict[str, str]:
+def _accepted_attrs(summary: CalibrationSummary) -> dict[str, str]:
     """The synthesis pass rate an accepted task is labelled with, as ``DECIDED`` attrs."""
     assert summary.solve_rate is not None, "an accepted summary has graded solver trials"
     return {

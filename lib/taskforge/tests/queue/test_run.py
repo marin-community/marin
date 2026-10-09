@@ -5,11 +5,11 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
+from taskforge.builder.sdk import ModelEndpoint, ModelName
 from taskforge.ledger.jsonl import read_entries
 from taskforge.loop.events import Terminal
 from taskforge.proposal.model import TaskProposal
@@ -129,11 +129,11 @@ async def test_proposals_of_two_ideas_that_share_an_item_id_fail_the_run(
 class HeldClient:
     """Answers like ``client`` but holds every build on its first call, after setting ``building``."""
 
-    client: Any
+    client: ModelEndpoint
     building: asyncio.Event
 
     @property
-    def endpoint(self) -> Any:
+    def endpoint(self) -> ModelName:
         return self.client.endpoint
 
     async def structured(self, messages, output_type, name):

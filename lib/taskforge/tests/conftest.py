@@ -121,17 +121,17 @@ None.
 
 
 def _control(control_id: str, kind: str, category: str, concern: str, reply: str, passes: bool) -> dict[str, Any]:
-    return {
-        "id": control_id,
-        "kind": kind,
-        "category": category,
-        "concern": concern,
-        "final_reply": reply,
-        "files": [],
-        "reward_min": 0.99 if passes else None,
-        "reward_max": None if passes else 0.0,
-        "rationale": "fixed",
-    }
+    return standard.ControlDraft(
+        id=control_id,
+        kind=kind,
+        category=category,
+        concern=concern,
+        final_reply=reply,
+        files=[],
+        reward_min=0.99 if passes else None,
+        reward_max=None if passes else 0.0,
+        rationale="fixed",
+    ).model_dump(mode="json")
 
 
 ANSWERS: dict[str, dict[str, Any]] = {

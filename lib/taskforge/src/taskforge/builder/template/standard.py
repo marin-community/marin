@@ -168,7 +168,7 @@ class FixturesDraft(BaseModel):
     @field_validator("agent_files")
     @classmethod
     def visible(cls, files: list[FileDraft]) -> list[FileDraft]:
-        return _under(files, WORKSPACE)
+        return _validated_under(files, WORKSPACE)
 
 
 class GraderDraft(BaseModel):
@@ -194,7 +194,7 @@ class GraderDraft(BaseModel):
     @field_validator("reference_files")
     @classmethod
     def workspace(cls, files: list[FileDraft]) -> list[FileDraft]:
-        return _under(files, WORKSPACE)
+        return _validated_under(files, WORKSPACE)
 
 
 class InstructionsDraft(BaseModel):
@@ -230,7 +230,7 @@ class ControlDraft(BaseModel):
     @field_validator("files")
     @classmethod
     def workspace(cls, files: list[FileDraft]) -> list[FileDraft]:
-        return _under(files, WORKSPACE)
+        return _validated_under(files, WORKSPACE)
 
 
 class ControlsDraft(BaseModel):
@@ -239,7 +239,7 @@ class ControlsDraft(BaseModel):
     controls: list[ControlDraft]
 
 
-def _under(files: list[FileDraft], root: str) -> list[FileDraft]:
+def _validated_under(files: list[FileDraft], root: str) -> list[FileDraft]:
     outside = [f.path for f in files if not f.path.startswith(f"{root}/")]
     if outside:
         raise ValueError(f"these files must be under {root}/: {outside}")
@@ -302,7 +302,7 @@ async def structured_until[T: BaseModel](
 
 @step(StepRole.SOURCES)
 async def sources(b: Build, guidance: str) -> Sources:
-    """Research the proposal's research items on the web; the notes feed every later step."""
+    """Empty notes when the proposal has no research items; web research is not configured, so any item fails."""
     items = b.proposal.header.research
     if not items:
         return Sources(notes="", turns=0)
