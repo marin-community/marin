@@ -35,10 +35,16 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.experiment.namespacing import user_namespaced_name
-from marin.experiment.train import MARIN_PRECISION, _marin_mesh, _train_job
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
+from marin.experiment.train import MARIN_PRECISION, _marin_mesh
+from marin.training.training import (
+    LevanterCheckpoint,
+    TrainLmOnPodConfig,
+    resolve_training_env,
+    run_levanter_train_lm,
+)
 
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -55,6 +61,11 @@ BATCH_SIZE = 960  # 3.93M tokens
 PER_DEVICE_BATCH = 8  # gradient-accumulation microbatch per H100
 ARMS = ("transformer", "parallax")
 WANDB_PROJECT = "marin_moe"
+# Levanter's in-training harness needs its pinned lm-eval fork (levanter's ``lm_eval`` extra), which the default
+# GPU training environment does not install.
+LM_EVAL_PACKAGE = (
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab"
+)
 
 # The paper's evals (all 0-shot, lm-eval-harness). WikiText perplexity comes from Paloma's wikitext_103 set.
 EVAL_TASKS = (
@@ -106,6 +117,14 @@ def paper_muon() -> MuonConfig:
         decay=0.2,
         lr_schedule="linear",
         min_lr_ratio=0.0,
+    )
+
+
+def _train_job(pod_config: TrainLmOnPodConfig) -> None:
+    """``marin.experiment.train._train_job`` for GPU, plus the lm-eval package the harness imports."""
+    env_vars = resolve_training_env(pod_config.env_vars, pod_config.resources)
+    remote(run_levanter_train_lm, resources=pod_config.resources, env_vars=env_vars, pip_packages=[LM_EVAL_PACKAGE])(
+        pod_config
     )
 
 
