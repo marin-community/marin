@@ -23,6 +23,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
+from rigging.timing import retry_with_backoff
 
 from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_PATTERN
 
@@ -519,18 +520,22 @@ def write_record(record: EvalRunRecord, prefix: str) -> str:
     path = record_path(prefix, record.run_id)
     target = conditional_object(path)
     payload = record.model_dump_json(indent=2, by_alias=True).encode()
-    for _ in range(_MAX_RECORD_WRITE_ATTEMPTS):
+
+    def publish() -> str:
         current = target.read()
         if current is not None:
             prior = EvalRunRecord.model_validate_json(current.data)
             if prior.status is RunStatus.SUCCEEDED:
                 return path
-        try:
-            target.write(payload, expected_version=None if current is None else current.version)
-            return path
-        except ConditionalWriteError:
-            continue
-    raise ConditionalWriteError(f"record changed repeatedly while publishing {path}")
+        target.write(payload, expected_version=None if current is None else current.version)
+        return path
+
+    return retry_with_backoff(
+        publish,
+        retryable=lambda exc: isinstance(exc, ConditionalWriteError),
+        max_attempts=_MAX_RECORD_WRITE_ATTEMPTS,
+        operation=f"publish evaluation record {path}",
+    )
 
 
 def read_record(path: str) -> EvalRunRecord:

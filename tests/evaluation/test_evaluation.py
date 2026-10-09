@@ -646,7 +646,7 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
         lambda _self: scrapes.pop(0),
     )
     clock = iter((10.0, 12.0))
-    monkeypatch.setattr("marin.evaluation.inference_metrics.time.monotonic", lambda: next(clock))
+    monkeypatch.setattr("marin.evaluation.inference_metrics.time.monotonic", lambda: next(clock, 12.0))
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _row: None)
     monkeypatch.setattr(
         "marin.evaluation.runner.iris_ctx",

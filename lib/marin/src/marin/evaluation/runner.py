@@ -567,7 +567,7 @@ def _evaluate_with_hosted_judge(
 
 
 def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
-    """Serve once, run every evaluation, and write each record as it finishes."""
+    """Serve pending evaluations and reuse records that already succeeded."""
     configure_coreweave_s3()
     if not batch.evaluations:
         raise ValueError("an evaluation batch requires at least one evaluation")
