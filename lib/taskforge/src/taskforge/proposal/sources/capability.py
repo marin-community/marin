@@ -293,8 +293,8 @@ def proposal_prefix(proposal_id: str, idea: CapabilityIdea) -> str:
     """The front matter's fixed lines, ending at ``null_reason:``; the prefilled start of a repair reply.
 
     ``parse`` accepts the header keys in any order and ``render`` restores the canonical order, so
-    the fixed keys come first and ``null_reason``, which the model used to drop as the last key,
-    comes before the keys it fills in.
+    the prefix puts the fixed keys first and ends at ``null_reason``, which the model therefore
+    cannot omit; the model fills in the keys after it.
     """
     return PREFIX_TEMPLATE.format(id=proposal_id, ref=idea.capability_id, hash=idea.capability_hash)
 
