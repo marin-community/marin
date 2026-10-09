@@ -77,15 +77,24 @@ def candidate_step(
     )
 
 
+def policy_key(run: PivotRLRun) -> str:
+    """Names the frozen policy's pass rates; seeded runs of the same policy get their own."""
+    return run.model.name if run.sampling.seed is None else f"{run.model.name}/seed-{run.sampling.seed}"
+
+
+def selection_key(run: PivotRLRun) -> str:
+    """Names a selection over the policy's pass rates: its criterion and lambda."""
+    criterion = "" if run.criterion == "passed" else f"/{run.criterion}"
+    return f"{policy_key(run)}{criterion}/lambda-{run.difficulty_threshold}"
+
+
 def pivot_steps(run: PivotRLRun) -> dict[str, ArtifactStep[Artifact]]:
     """The pass-rate and selection artifacts for one run."""
     dataset = run.candidates.label
-    # Seeded runs of the same candidates and policy get their own artifacts.
-    policy = run.model.name if run.sampling.seed is None else f"{run.model.name}/seed-{run.sampling.seed}"
     candidates = candidate_step(run.candidates)
     grading_env = env_vars_from_keys(run.secret_env_keys)
     pass_rates = apply(
-        user_owned_name(f"pivotrl/{dataset}/pass-rates/{policy}"),
+        user_owned_name(f"pivotrl/{dataset}/pass-rates/{policy_key(run)}"),
         # The orchestrator is a CPU job; remote inference launches the GPU serving job beside it.
         remote(
             measure_pass_rates,
@@ -101,9 +110,8 @@ def pivot_steps(run: PivotRLRun) -> dict[str, ArtifactStep[Artifact]]:
         sampling=run.sampling,
     )
     # Each criterion and lambda is its own small artifact over the same pass rates.
-    criterion = "" if run.criterion == "passed" else f"/{run.criterion}"
     pivots = apply(
-        user_owned_name(f"pivotrl/{dataset}/pivots/{policy}{criterion}/lambda-{run.difficulty_threshold}"),
+        user_owned_name(f"pivotrl/{dataset}/pivots/{selection_key(run)}"),
         remote(select_pivots, resources=ResourceConfig.with_cpu(cpu=2, ram="16g")),
         pass_rates_path=pass_rates,
         output_path=OUT,
