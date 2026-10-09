@@ -17,7 +17,7 @@ import math
 import re
 from pathlib import Path
 
-SCORE = re.compile(r"^([01](?:\.\d+)?)\s+\(s3://[^)]+/results\)$")
+SCORE = re.compile(r"^([01](?:\.\d+)?)\s+\(s3://[^)]+\)$")
 
 
 def is_candidate(model: str) -> bool:

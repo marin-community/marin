@@ -16,7 +16,7 @@ def test_new_grug_rows_enter_tournament_and_joint_leaders_share_rank(tmp_path: P
         "| Model | math500 | swebench-verified | tau3-pi |\n"
         "| --- | --- | --- | --- |\n"
         "| Metric | accuracy | accuracy | accuracy |\n"
-        "| open-athena/Snowball-Step92 | 0.900 (s3://bucket/step-math/results) | "
+        "| open-athena/Snowball-Step92 | 0.900 (s3://bucket/regraded/step-math.json) | "
         "0.300 (s3://bucket/step-swe/results) | 0.500 (s3://bucket/step-tau/results) |\n"
         "| open-athena/Grug-Antidoom-Step12 | 0.900 (s3://bucket/anti-math/results) | "
         "0.300 (s3://bucket/anti-swe/results) | 0.500 (s3://bucket/anti-tau/results) |\n"
