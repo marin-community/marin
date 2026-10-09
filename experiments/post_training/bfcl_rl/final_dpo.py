@@ -45,10 +45,10 @@ class DPOParallelism:
     last_stage_layers: int
 
 
-POLICY_PARALLELISM = DPOParallelism(1, 8, 1, 8, 4, 4)
+POLICY_PARALLELISM = DPOParallelism(1, 13, 1, 8, 2, 2)
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
-    policy_num_nodes=8,
+    policy_num_nodes=13,
     policy_num_gpus_per_node=8,
     num_inference_engines=1,
     inference_engine_tensor_parallel_size=1,
@@ -198,7 +198,7 @@ def final_dpo_spec(input_version: str, scale: RunScale) -> SkyRLSpec:
         model=ArtifactHfModel(checkpoint, tokenizer.model, tokenizer.revision, relative_path="hf/step-1"),
         train_data=(ArtifactDataSource(inputs, relative_path=data_file),),
         validation_data=(ArtifactDataSource(inputs, relative_path="bfcl_parity"),),
-        topology=SkyRLTopology(num_nodes=9, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
+        topology=SkyRLTopology(num_nodes=14, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=14),
         seed=42,
     )
