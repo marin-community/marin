@@ -1635,7 +1635,8 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, loop_active: bool | None = None, router_tie_active: bool | None = None):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side kernel launches that can cause SPMD sync issues).
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        with jax.named_scope("qb_apply"):
+            qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
 
         head_replay = None
         if state.replay_hidden is not None:
@@ -1701,12 +1702,15 @@ def _make_train_step(
             params = qb_params
             master_params = state.master_params
         else:
-            updates, opt_state = optimizer.update(opt_grads, opt_state_in, qb_params)
-            metrics.update(optimizer_diagnostics(opt_state))
-            metrics.update(magma_metrics(opt_state))
-            metrics.update(hyperball_metrics(opt_state))
-            metrics.update(expert_consistency_metrics(opt_state))
-            params = optax.apply_updates(qb_params, updates)
+            with jax.named_scope("opt_update"):
+                updates, opt_state = optimizer.update(opt_grads, opt_state_in, qb_params)
+            with jax.named_scope("opt_metrics"):
+                metrics.update(optimizer_diagnostics(opt_state))
+                metrics.update(magma_metrics(opt_state))
+                metrics.update(hyperball_metrics(opt_state))
+                metrics.update(expert_consistency_metrics(opt_state))
+            with jax.named_scope("apply_updates"):
+                params = optax.apply_updates(qb_params, updates)
             if params.config.dual_attn_prev:
                 params = refresh_attn_prev(params, qb_params)
             master_params = None
@@ -1718,13 +1722,14 @@ def _make_train_step(
             ema_params = None
         else:
             # EMA tracks the QB-biased params, so re-apply the pending betas before blending.
-            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
-            ema_active = state.step >= ema_start_step
-            ema_params = jax.tree_util.tree_map(
-                lambda old, new: jnp.where(ema_active, ema_beta * old + (1.0 - ema_beta) * new, new),
-                qb_ema_params,
-                params,
-            )
+            with jax.named_scope("ema"):
+                qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
+                ema_active = state.step >= ema_start_step
+                ema_params = jax.tree_util.tree_map(
+                    lambda old, new: jnp.where(ema_active, ema_beta * old + (1.0 - ema_beta) * new, new),
+                    qb_ema_params,
+                    params,
+                )
             if params.ngram_stat_table is not None:
                 # The statistic table is a running sum, not a trained weight: the EMA keeps the live table.
                 ema_params = eqx.tree_at(lambda m: m.ngram_stat_table, ema_params, params.ngram_stat_table)

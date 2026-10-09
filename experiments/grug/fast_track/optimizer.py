@@ -23,6 +23,16 @@ from experiments.grug.fast_track.okls import OKLS_MATMUL_DTYPES, scale_with_grug
 from experiments.grug.fast_track.stiefel import scale_with_stiefel_muon
 
 
+def _named_scope_transform(name: str, tx: optax.GradientTransformation) -> optax.GradientTransformation:
+    """``tx`` with its update traced under ``jax.named_scope(name)`` (attributes the group's kernels in profiles)."""
+
+    def update_fn(updates, state, params=None):
+        with jax.named_scope(name):
+            return tx.update(updates, state, params)
+
+    return optax.GradientTransformation(tx.init, update_fn)
+
+
 def _match_named_update_sharding() -> optax.GradientTransformation:
     """Restore named mesh sharding without touching single-device arrays."""
 
@@ -2213,7 +2223,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 upper = jnp.asarray(self.upper_qk_slice_mask)
                 slice_lr = jnp.where(upper, upper_qk_mult, 1.0)[:, None, None]
                 transforms["upper_qk"] = muonh_transform_at(learning_rate * self.muonh_attn_lr_mult * slice_lr, 4)
-            inner = optax.multi_transform(transforms, self.create_mask)
+            inner = optax.multi_transform(
+                {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in transforms.items()}, self.create_mask
+            )
             if self.grokfast_lambda and not self.grokfast_adam_only:
                 inner = optax.chain(scale_by_grokfast_ema(self.grokfast_alpha, self.grokfast_lambda), inner)
             if self.snoo_period > 0:
