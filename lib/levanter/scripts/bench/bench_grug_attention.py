@@ -7,8 +7,8 @@ heads, 5 KV heads, head_dim 128, bf16. Each mask (sliding window 2048, global ca
 implementation. TFLOP/s counts only the FLOPs the mask needs: 2 matmuls forward and 5 backward (QK^T recompute,
 dP, dV, dQ, dK) over the allowed (query, key) pairs.
 
-    python lib/levanter/scripts/bench/bench_grug_attention.py --impl reference xla_flash gpu_pallas_triton_flash
-    python lib/levanter/scripts/bench/bench_grug_attention.py --impl gpu_pallas_triton_flash --sweep
+    python lib/levanter/scripts/bench/bench_grug_attention.py --impl reference xla_flash gpu_triton_flash
+    python lib/levanter/scripts/bench/bench_grug_attention.py --impl gpu_triton_flash --sweep
 """
 
 import argparse
@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 
 from levanter.grug.attention import AttentionMask, attention
-from levanter.grug.attention._pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
+from levanter.grug.attention._triton_flash import TritonFlashBlockSizes, triton_flash_attention
 
 WARMUP_SECONDS = 1.0
 WINDOWS = 10
@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kv-heads", type=int, default=5)
     parser.add_argument("--head-dim", type=int, default=128)
     parser.add_argument("--window", type=int, default=2048)
-    parser.add_argument("--impl", nargs="+", default=["reference", "xla_flash", "gpu_pallas_triton_flash"])
+    parser.add_argument("--impl", nargs="+", default=["reference", "xla_flash", "gpu_triton_flash"])
     parser.add_argument("--sweep", action="store_true", help="Sweep Triton tile sizes instead of comparing impls.")
     parser.add_argument("--sweep-part", choices=["fwd", "dq", "dkv"], default="fwd")
     parser.add_argument("--masks", nargs="+", choices=["window", "causal"], default=["window", "causal"])
@@ -152,7 +152,7 @@ def sweep(args) -> None:
         for overrides in grid:
             blocks = TritonFlashBlockSizes(**overrides)
             forward, grad = make_fns(
-                lambda q, k, v, blocks=blocks: pallas_triton_flash_attention(q, k, v, mask, block_sizes=blocks)
+                lambda q, k, v, blocks=blocks: triton_flash_attention(q, k, v, mask, block_sizes=blocks)
             )
             try:
                 if args.sweep_part == "fwd":
