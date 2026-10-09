@@ -25,7 +25,6 @@ import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory
-from taskcompendium.submission import PlainText
 
 from taskforge.builder.author import SUBMIT_TOOL
 from taskforge.builder.sdk import BuildServices
@@ -39,7 +38,7 @@ from taskforge.proposal.model import TaskProposal, parse
 from taskforge.proposal.source import ProposalBatch, SlotProposal
 from taskforge.queue.run import FailedItems, RunSummary, run_queue
 from taskforge.review.rules import BandChoice, BandRule, BandRules
-from taskforge.sandbox.factories import SHELLSIM, MachineHost
+from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM, MachineHost
 from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext, CheckResult
 from taskforge.triage.program import Repair, RubricAssessment
 from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision, Verdict
@@ -47,7 +46,11 @@ from taskforge.validate.adversary import NO_SHORTCUT_LINE, SUBMIT_TOOL_NAME
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
+from tests.sandbox.fixture_images import FixtureImageFactory
 from tests.validate.conftest import TemplateTokenizer
+
+FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: FixtureImageFactory()}
+"""ShellSim task machines; verifier machines on the ShellSim-backed fixture image factory."""
 
 PROPOSAL = """---
 id: "IDEA/SLOT"
@@ -82,18 +85,16 @@ None.
 """
 
 GRADE = """
-import json, os, pathlib
-final = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
-verdict = {"status": "scored", "reward": float(final.endswith("ANSWER = 42")), "detail": {}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+import pathlib
+final = pathlib.Path("/app/answer.txt").read_text().strip()
+print(float(final.endswith("ANSWER = 42")))
 """
 
 PROGRAM = """
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec
-from taskcompendium.submission import PlainText
+from taskcompendium.models import AnswerType, EnvironmentRequirements, PlainText, Source, TaskSpec
 
-CONVENTION = PlainText(id="plain_text")
+ANSWER_FORMAT = PlainText()
 MACHINE = spec.machine(startup_timeout=60)
 SESSION = spec.session(
     max_turns=8,
@@ -117,7 +118,9 @@ async def machine(b: Build) -> EnvironmentRequirements:
 
 @step(StepRole.GRADER)
 async def grader(b: Build, env: EnvironmentRequirements) -> Grader:
-    package = spec.script_verifier(GRADE, {}, timeout=60)
+    package = spec.python_grader(
+        GRADE, {}, environment=spec.grader_environment(None), answer_path=spec.ANSWER_PATH, timeout=60
+    )
     return Grader(package=package, answer_contract="End with ANSWER = <n>.", reference_reply="ANSWER = 42")
 
 
@@ -127,6 +130,7 @@ async def assemble(b: Build, env: EnvironmentRequirements, graded: Grader) -> Ta
         task_id=b.item_id,
         instruction="Compute the product in question.txt. " + graded.answer_contract,
         answer_type=AnswerType.TEXT,
+        answer_format=ANSWER_FORMAT,
         grader=graded.package,
         source=Source(dataset="test", revision="r1", row="0", importer_revision="test"),
         environment=env,
@@ -163,15 +167,16 @@ async def build(b: Build) -> BuildOutput:
     env = await machine(b)
     graded = await grader(b, env)
     task = await assemble(b, env, graded)
-    lowered = b.lower(task, task_machine=MACHINE, verifier_machine=None, session=SESSION)
-    return BuildOutput(task=task, lowered=lowered, convention=CONVENTION, controls=await fixed_controls(b, task))
+    verifier_machine = None if spec.grading_environment(task) is None else MACHINE
+    lowered = b.lower(task, task_machine=MACHINE, verifier_machine=verifier_machine, session=SESSION)
+    return BuildOutput(task=task, lowered=lowered, controls=await fixed_controls(b, task))
 """.replace(
     "GRADE_SOURCE", repr(GRADE)
 )
 # PROGRAM, with a grader step that tries the reference reply on a machine.
 MACHINE_PROGRAM = PROGRAM.replace(
     "    return Grader(",
-    '    await b.try_grader(env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)\n'
+    '    await b.try_grader(env, package, AnswerType.TEXT, ANSWER_FORMAT, "question", "ANSWER = 42", files=FILES)\n'
     "    return Grader(",
 )
 
@@ -313,7 +318,8 @@ def no_context(proposal: TaskProposal) -> str:
 class QueueRun:
     """Runs a queue over ``root`` with the given fakes; the GLM server answers every author request.
 
-    Builds run on ``build_factories``; trials always run on ShellSim.
+    Builds run on ``build_factories``; trials always run on ShellSim, their verifier machines on the
+    ShellSim-backed fixture image factory.
     """
 
     root: Path
@@ -327,7 +333,7 @@ class QueueRun:
         self, ideas: Mapping[str, str], policy: LoopPolicy, width: int, failed: FailedItems = FailedItems.SKIP
     ) -> RunSummary:
         ledger = JsonlLedger(self.root / LEDGER_DIR)
-        factories = {Backend.SHELLSIM.value: ShellSimMachineFactory()}
+        factories = FACTORIES
         endpoint = GlmEndpoint(base_url=self.glm_base_url, token="test-token", pool=Pool.HIGH)
         async with GlmClient(endpoint, backoff=FAST.schedule()) as client:
             services = LoopServices(
@@ -349,13 +355,12 @@ class QueueRun:
                 ),
                 engine=EngineSettings(
                     factories=factories,
-                    capabilities={Backend.SHELLSIM.value: SHELLSIM},
+                    capabilities={Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: LOCAL_DOCKER},
                     max_turns=4,
                     command_timeout=30,
                     tool_turn_timeout=40,
                     model_turn_timeout=60,
                     cleanup_timeout=30,
-                    conventions=(PlainText(id="plain_text"),),
                 ),
                 rollout_models=lambda _: self.model,
                 tokenize=TemplateTokenizer(),
@@ -385,9 +390,7 @@ def queue_run(tmp_path, fake_glm) -> Callable[..., QueueRun]:
             source=source or FakeSource(),
             rubric=rubric or FakeRubric(TriageDecision.ACCEPT),
             model=model or SolverModel(),
-            build_factories=(
-                {Backend.SHELLSIM.value: ShellSimMachineFactory()} if build_factories is None else build_factories
-            ),
+            build_factories=(FACTORIES if build_factories is None else build_factories),
         )
 
     return make

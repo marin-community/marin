@@ -73,14 +73,6 @@ def test_every_field_is_required(path, removed):
         run_config(obj)
 
 
-def test_an_unknown_convention_type_is_a_config_error():
-    obj = example()
-    obj["engine"]["conventions"][0]["type"] = "no_such_convention"
-
-    with pytest.raises(ValueError, match="unknown type 'no_such_convention'"):
-        run_config(obj)
-
-
 def test_a_config_cannot_carry_a_token_inline():
     obj = example()
     obj["glm"]["token"] = "secret"

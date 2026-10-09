@@ -233,8 +233,8 @@ or on a package the order does not name.
   (`load_run_config`; every field required) names the host and its `image_cache` (a directory on a
   laptop, `null` on Iris), the GLM endpoint as `LaptopGlm` or
   `RelayGlm` with an explicit `Pool`, the builders' Parallel key source, the `LoopPolicy`, the
-  `EngineConfig` (the turn, command, tool-turn, model-turn and cleanup limits of `EngineSettings`,
-  and the conventions), the width and `restore_from`. The run's builders get the host's factories
+  `EngineConfig` (the turn, command, tool-turn, model-turn and cleanup limits of `EngineSettings`;
+  each task carries its own answer format), the width and `restore_from`. The run's builders get the host's factories
   and no `ImageBuilder`, so a build that publishes a task image is abandoned with
   `no_image_builder`. Local paths (a laptop root, `image_cache`, a token
   or key file) are absolute; the config reader expands no `~` and resolves nothing against the

@@ -15,7 +15,6 @@ import time
 from pathlib import Path
 
 import pytest
-from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import ledger_files, read_entries
 from taskforge.ledger.records import EntryKind, LedgerEntry
@@ -177,7 +176,6 @@ async def test_a_laptop_run_reaches_a_terminal_and_a_relaunch_repeats_no_model_c
             tool_turn_timeout=240,
             model_turn_timeout=600,
             cleanup_timeout=120,
-            conventions=(PlainText(id="plain_text"),),
         ),
         width=64,
         restore_from=None,

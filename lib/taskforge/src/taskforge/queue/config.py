@@ -20,8 +20,7 @@ A config file looks like ``docs/policy.example.json``::
      "web": null | {"kind": "key_file", "path": ...} | {"kind": "key_env", "env": ...},
      "policy": <loop.policy.POLICY>,
      "engine": {"max_turns": ..., "command_timeout": ..., "tool_turn_timeout": ...,
-                "model_turn_timeout": ..., "cleanup_timeout": ...,
-                "conventions": [{"type": "PlainText", "convention": {"id": ...}}, ...]},
+                "model_turn_timeout": ..., "cleanup_timeout": ...},
      "width": ..., "restore_from": null | "<archived run root>"}
 """
 
@@ -34,9 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from shellbox.machine import MachineFactory
-from taskcompendium.submission import SubmissionConvention
 
-from taskforge.builder.run import CONVENTION_TYPES
 from taskforge.llm.client import Pool
 from taskforge.loop.policy import POLICY, LoopPolicy
 from taskforge.sandbox.factories import FactoryCapabilities, MachineHost
@@ -125,10 +122,7 @@ type WebConfig = ParallelKeyFile | ParallelKeyEnv
 @dataclass(frozen=True)
 class EngineConfig:
     """The run-wide RolloutEngine session limits (``validate.trials.EngineSettings``); the factories
-    come from the host at run time.
-
-    ``conventions`` are what tasks may be presented with, in preference order; each draft is
-    validated under its own convention only.
+    come from the host at run time. Each task carries its own answer format.
     """
 
     max_turns: int
@@ -136,7 +130,6 @@ class EngineConfig:
     tool_turn_timeout: float
     model_turn_timeout: float
     cleanup_timeout: float
-    conventions: tuple[SubmissionConvention, ...]
 
     def settings(
         self, factories: Mapping[str, MachineFactory], capabilities: Mapping[str, FactoryCapabilities]
@@ -150,7 +143,6 @@ class EngineConfig:
             tool_turn_timeout=self.tool_turn_timeout,
             model_turn_timeout=self.model_turn_timeout,
             cleanup_timeout=self.cleanup_timeout,
-            conventions=self.conventions,
         )
 
 
@@ -233,9 +225,7 @@ def web_config(obj: Mapping[str, Any] | None) -> WebConfig | None:
 def engine_config(obj: Mapping[str, Any]) -> EngineConfig:
     _fields(
         obj,
-        frozenset(
-            {"max_turns", "command_timeout", "tool_turn_timeout", "model_turn_timeout", "cleanup_timeout", "conventions"}
-        ),
+        frozenset({"max_turns", "command_timeout", "tool_turn_timeout", "model_turn_timeout", "cleanup_timeout"}),
         "engine",
     )
     return EngineConfig(
@@ -244,15 +234,7 @@ def engine_config(obj: Mapping[str, Any]) -> EngineConfig:
         tool_turn_timeout=obj["tool_turn_timeout"],
         model_turn_timeout=obj["model_turn_timeout"],
         cleanup_timeout=obj["cleanup_timeout"],
-        conventions=tuple(convention(c) for c in obj["conventions"]),
     )
-
-
-def convention(obj: Mapping[str, Any]) -> SubmissionConvention:
-    _fields(obj, frozenset({"type", "convention"}), "convention")
-    if obj["type"] not in CONVENTION_TYPES:
-        raise ValueError(f"convention: unknown type {obj['type']!r}, known {sorted(CONVENTION_TYPES)}")
-    return CONVENTION_TYPES[obj["type"]].model_validate(obj["convention"])
 
 
 def run_config(obj: Mapping[str, Any]) -> RunConfig:

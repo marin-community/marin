@@ -17,6 +17,7 @@ from taskforge.review.rules import BandChoice, BandRule, BandRules
 from taskforge.triage.verdict import TriageDecision
 from taskforge.validate.adversary import AdversaryRole
 from taskforge.validate.outcome import Cause
+from tests.sandbox.fixture_images import FixtureImageFactory
 
 ACCEPT, REJECT = TriageDecision.ACCEPT, TriageDecision.REJECT
 SHORTCUT = AdversaryRole.SHORTCUT
@@ -151,7 +152,10 @@ async def test_build_host_failures_abandon_the_item_by_cause_and_the_next_launch
 ):
     author_replies(1, fakes.machine_program)
     no_shortcut(1)
-    unreachable = queue_run(rubric=fakes.rubric(ACCEPT), build_factories={Backend.SHELLSIM.value: UnreachableHost()})
+    unreachable = queue_run(
+        rubric=fakes.rubric(ACCEPT),
+        build_factories={Backend.SHELLSIM.value: UnreachableHost(), Backend.DOCKER.value: FixtureImageFactory()},
+    )
     policy = fakes.policy(max_build_retries=1)
 
     first = await unreachable({"a": "a"}, policy, width=2)

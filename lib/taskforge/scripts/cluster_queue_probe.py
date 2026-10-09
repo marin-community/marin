@@ -58,8 +58,7 @@ import httpx
 from shellbox.image import RegistryImage as ShellboxRegistryImage
 from shellbox.machine import Backend, Command, MachineFactory, MachineSpec, NetworkPolicy, ShellSimBuiltins
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, Source
-from taskcompendium.submission import PlainText
+from taskcompendium.models import AnswerType, PlainText, Source
 from verifyit.spec import NumericSpec
 
 from taskforge.builder.run import Provenance, TaskDraft
@@ -87,7 +86,7 @@ from taskforge.queue.job import (
 from taskforge.queue.run import FailedItems, item_terminal, run_queue
 from taskforge.sandbox.factories import MachineHost, container_backend, factory_capabilities, machine_factories
 from taskforge.spec.controls import Control, ControlCategory, ControlConcern, ControlKind, Expectation, Transcript, reply
-from taskforge.spec.draft import answer_verifier, assemble, lower, session
+from taskforge.spec.draft import answer_grader, assemble, lower, session
 from taskforge.triage.checks import ALL_COMBINATIONS, CheckContext, CheckResult
 from taskforge.triage.program import Repair, RubricAssessment
 from taskforge.triage.verdict import ModelCall, RubricAxis, RubricResult, TriageDecision, Verdict
@@ -167,7 +166,8 @@ def math_draft(index: int, host: MachineHost, factories: Mapping[str, MachineFac
         f"probe-math-{index}",
         "What is 17 * 23 + 4? Reply with only the number, nothing else.",
         AnswerType.NUMBER,
-        answer_verifier(NumericSpec(expected=MATH_ANSWER, tolerance_abs=0, tolerance_rel=0)),
+        PlainText(),
+        answer_grader(NumericSpec(expected=MATH_ANSWER, tolerance_abs=0, tolerance_rel=0)),
         Source(dataset="taskforge-queue-probe", revision="1", row=str(index), importer_revision="1"),
         environment=None,
     )
@@ -215,7 +215,7 @@ def math_draft(index: int, host: MachineHost, factories: Mapping[str, MachineFac
         ),
     )
     provenance = Provenance(task.id, "probe", "probe", "probe", "probe", "probe", 0, (), ())
-    return TaskDraft(task, lowered, PlainText(id="plain_text"), controls, provenance)
+    return TaskDraft(task, lowered, controls, provenance)
 
 
 def max_concurrency(spans: list[tuple[float, float]]) -> int:

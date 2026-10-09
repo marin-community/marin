@@ -51,12 +51,7 @@
     "command_timeout": 120.0,
     "tool_turn_timeout": 240.0,
     "model_turn_timeout": 1800.0,
-    "cleanup_timeout": 120.0,
-    "conventions": [
-      {"type": "PlainText", "convention": {"id": "plain_text"}},
-      {"type": "JsonAnswer", "convention": {"id": "json_answer"}},
-      {"type": "JsonValueAnswer", "convention": {"id": "json_value_answer"}}
-    ]
+    "cleanup_timeout": 120.0
   },
   "width": 256,
   "restore_from": null
