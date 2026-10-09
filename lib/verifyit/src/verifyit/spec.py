@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import Any
 
-import tomlkit
+import tomli_w
 
 from verifyit.json_comparison import JsonValue, NumericTypePolicy
 from verifyit.json_objects import unique_object
@@ -468,10 +468,4 @@ def render_spec(spec: Spec) -> str:
         ]
     if isinstance(spec, StructuredExactSpec):
         table["expected"] = json.dumps(spec.expected, allow_nan=False)
-    # Bulk construction avoids tomlkit's quadratic reindexing for repository test-ID lists.
-    for key, value in table.items():
-        if isinstance(value, list) and all(isinstance(element, str) for element in value):
-            array = tomlkit.array()
-            array.add_line(*value, indent="", newline=False)
-            table[key] = array
-    return tomlkit.dumps(table)
+    return tomli_w.dumps(table)

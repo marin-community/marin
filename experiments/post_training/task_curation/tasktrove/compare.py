@@ -324,7 +324,8 @@ def main(
         ),
         "python": sys.version,
         "package_versions": {
-            name: importlib.metadata.version(name) for name in ("pyarrow", "pydantic", "tomlkit", "harbor-config")
+            name: importlib.metadata.version(name)
+            for name in ("pyarrow", "pydantic", "tomlkit", "tomli-w", "harbor-config")
         },
         "implementation_files": [
             file_identity(path)

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 # Grading dependencies remain optional; shared error metadata uses Harbor's config-only package.
 dependencies = [
-    "tomlkit>=0.13",
+    "tomli-w>=1.2",
     "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
 ]
 
