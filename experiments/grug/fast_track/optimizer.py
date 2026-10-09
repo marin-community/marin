@@ -100,6 +100,7 @@ def _scale_invariant_hyperball_updates(
     lr_mults=None,
     cautious_wd: float = 0.0,
     with_stats: bool = False,
+    radius_factors=None,
 ):
     """MuonH hyperball step: move along the orthogonalized direction, then project back to the
     parameter's Frobenius sphere (scale-invariant update). Stacked leaves take one sphere per layer, and
@@ -119,8 +120,12 @@ def _scale_invariant_hyperball_updates(
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
     if lr_mults is None:
         lr_mults = jax.tree.map(lambda _: None, params)
+    if radius_factors is None:
+        radius_factors = jax.tree.map(lambda _: None, params)
+    elif with_stats:
+        raise ValueError("radius_factors (muonh_radius_growth) does not combine with the hyperball stats")
 
-    def scale_invariant_update(param, update, lr_mult):
+    def scale_invariant_update(param, update, lr_mult, radius_factor):
         if update is None:
             return None
         if not hasattr(param, "ndim"):
@@ -138,7 +143,8 @@ def _scale_invariant_hyperball_updates(
                 new_param = new_param - lr * cautious_wd * jnp.where(update * param > 0, param, 0)
             new_param = _pin_sharding(new_param, param)
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
-            return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+            target = param_norm if radius_factor is None else param_norm * radius_factor
+            return new_param / jnp.maximum(new_param_norm, 1e-10) * target - param
 
         axes = (2, 3) if per_expert and param.ndim == 4 else tuple(range(1, param.ndim))
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
@@ -148,9 +154,12 @@ def _scale_invariant_hyperball_updates(
             new_param = new_param - lr * cautious_wd * jnp.where(update * param > 0, param, 0)
         new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
         new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
-        return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+        target = param_norm if radius_factor is None else param_norm * radius_factor
+        return new_param / jnp.maximum(new_param_norm, 1e-10) * target - param
 
-    out = jax.tree.map(scale_invariant_update, params, direction_updates, lr_mults, is_leaf=lambda x: x is None)
+    out = jax.tree.map(
+        scale_invariant_update, params, direction_updates, lr_mults, radius_factors, is_leaf=lambda x: x is None
+    )
     if not with_stats:
         return out
     is_pair = lambda x: x is None or isinstance(x, _StepWithStats)  # noqa: E731
@@ -961,6 +970,8 @@ def scale_with_grug_muonh(
     precond_beta2: float | None = None,
     truncate_frac: float = 0.0,
     post_blend: float = 0.0,
+    radius_growth: float = 1.0,
+    radius_pattern: str = "",
     momentum_schedule=None,
     bimaxwell_switch_step: int | None = None,
     bimaxwell_rails: BiMaxwellRails = DEFAULT_RAILS,
@@ -1059,10 +1070,24 @@ def scale_with_grug_muonh(
             momentum_stage.init(params), core_init(params), magma, sphere, hyperball, step_ref, step_count, step_ema
         )
 
+    def radius_factors(params):
+        """Per-step norm growth of the leaves matching ``radius_pattern`` (None elsewhere, or when off)."""
+        if radius_growth == 1.0:
+            return None
+        pattern = re.compile(radius_pattern)
+        names = jax.tree.map(str, leaf_key_paths(params))
+        return jax.tree.map(lambda name: radius_growth if pattern.search(name) else None, names)
+
     def retract(params, directions, lr_mults, sphere):
         if sphere is None:
             updates = _scale_invariant_hyperball_updates(
-                params, directions, learning_rate, hyperball_per_expert, lr_mults, cautious_wd
+                params,
+                directions,
+                learning_rate,
+                hyperball_per_expert,
+                lr_mults,
+                cautious_wd,
+                radius_factors=radius_factors(params),
             )
             return updates, None
         return _spectral_sphere_updates(params, directions, learning_rate, sphere, lr_mults)
@@ -1627,6 +1652,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     singular directions (``_truncate_bottom_directions``). None: no truncation."""
     muon_truncate_frac: float = 0.0
     muon_post_blend: float = 0.0
+    muonh_radius_growth: float = 1.0
+    """Final / initial Frobenius norm of the MuonH matrices matching ``muonh_radius_paths`` (geometric per step)."""
+    muonh_radius_paths: str = (
+        r"\.attn\.w_o$|\.w_latent_up$|\.shared\.\d+\.w_down$|_tail\.stacked\.mlp\.expert_mlp\.w_down$"
+    )
+    """The sublayer writers by default: attention ``w_o``, the LatentMoE up-projection, the shared experts' and the
+    full-write tail experts' down-projections."""
     """MuonH: blend this fraction of the (norm-matched) pre-orthogonalization matrix back into the direction."""
     muonh_routed_post_blend: float | None = None
     """``muon_post_blend`` for the routed experts only (None: ``muon_post_blend``)."""
@@ -1922,6 +1954,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         precond_beta2=self.muon_precond_beta2,
                         truncate_frac=truncate_frac,
                         post_blend=post_blend,
+                        radius_growth=self.muonh_radius_growth ** (1.0 / num_train_steps),
+                        radius_pattern=self.muonh_radius_paths,
                         retraction=self.muonh_retraction,
                         spectral_radius_c=self.spectral_radius_c,
                         momentum_schedule=momentum_schedule,
