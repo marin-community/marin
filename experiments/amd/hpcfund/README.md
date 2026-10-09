@@ -22,10 +22,7 @@ sbatch -N1 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh
     experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full --expert-axis 8
 ```
 
-The wrapper turns off XLA command buffers, allocator preallocation and HSA
-scratch reclaim, keeps XLA autotune results out of the JAX compilation cache,
-and filters repeated ROCm log lines. Variables already set in the environment
-take precedence.
+The wrapper turns off XLA command buffers, allocator preallocation and HSA scratch reclaim, keeps XLA autotune results out of the JAX compilation cache, and filters repeated ROCm log lines. Variables already set in the environment take precedence.
 
 The wrapper leaves `RAGGED_DOT_IMPL` unset, so Haliax picks the `ragged_dot`
 implementation: on GPU it tries Triton and falls back to XLA. Set
@@ -48,11 +45,7 @@ uv pip install --extra-index-url https://stable.repo.amd.com/rocm/whl-next/ \
 uv pip install jax==0.11.1 jaxlib==0.11.1 jax-triton==0.3.1 triton==3.6.0
 ```
 
-jaxlib 0.11.0 does not load `jax_rocm10_plugin`'s kernel modules, so kernels
-written with `jax_triton`, such as Grug's routing top-k, need 0.11.1.
-`jax-triton` and `triton` match Levanter's GPU pins. Do not add `jax-triton` to
-a 0.11.0 venv: importing it there raises `ImportError`, and
-`levanter.grug.grug_moe` then fails to import.
+jaxlib 0.11.0 does not load `jax_rocm10_plugin`'s kernel modules, so kernels written with `jax_triton`, such as Grug's routing top-k, need 0.11.1. `jax-triton` and `triton` match Levanter's GPU pins. Do not add `jax-triton` to a 0.11.0 venv: importing it there raises `ImportError`, and `levanter.grug.grug_moe` then fails to import.
 
 ## Known issues
 
@@ -73,9 +66,4 @@ a 0.11.0 venv: importing it there raises `ImportError`, and
   pool grows by region. Step time is unchanged.
 - Processes can report a `double free` at exit, after the last step. It does
   not affect the results the run already printed or wrote.
-- The cluster's default module puts `/opt/rocm-7.2.0` on `LD_LIBRARY_PATH`, so
-  jobs load its HIP runtime and RCCL rather than the wheel's. With jax 0.11.1,
-  RCCL then aborts at the first collective with `HSA_NO_SCRATCH_RECLAIM=1 must
-  be set`; the wrapper sets it. Removing `/opt/rocm` from the paths also avoids
-  the abort, but makes `jax.lax.top_k` on rows under 1,024 entries 2.4-4.2x
-  slower on MI350X.
+- The cluster's default module puts `/opt/rocm-7.2.0` on `LD_LIBRARY_PATH`, so jobs load its HIP runtime and RCCL rather than the wheel's. With jax 0.11.1, RCCL then aborts at the first collective with `HSA_NO_SCRATCH_RECLAIM=1 must be set`; the wrapper sets it. Removing `/opt/rocm` from the paths also avoids the abort, but makes `jax.lax.top_k` on rows under 1,024 entries 2.4-4.2x slower on MI350X.
