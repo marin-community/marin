@@ -364,15 +364,14 @@ jobs:
           cache-dependency-glob: "lib/rolloutengine/uv.lock"
       - name: Test rollout execution and private grading
         run: >-
-          uv run --project lib/rolloutengine --frozen --group test
-          --with-editable 'lib/shellbox[daytona]' pytest
+          uv run --project lib/rolloutengine --frozen --group test pytest
           -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
           lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py -q
 
       - name: Test Docker and Daytona command interruption
         run: |
           docker pull busybox:1.36
-          uv run --project lib/rolloutengine --frozen --group test --with-editable 'lib/shellbox[daytona]' pytest \
+          uv run --project lib/rolloutengine --frozen --group test pytest \
             -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py \
             lib/shellbox/tests/test_daytona_machine.py -m docker -q
 
