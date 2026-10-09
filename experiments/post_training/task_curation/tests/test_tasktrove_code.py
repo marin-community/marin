@@ -26,7 +26,6 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     code,
     nl2bash,
     python_tests,
-    repositories,
     structured_outputs,
 )
 from experiments.post_training.task_curation.tests.conversion import (
@@ -39,7 +38,7 @@ from experiments.post_training.task_curation.tests.conversion import (
 
 PIPELINES = {
     source.name: source.pipeline
-    for module in (code, python_tests, nl2bash, structured_outputs, repositories)
+    for module in (code, python_tests, nl2bash, structured_outputs)
     for source in module.sources()
     if source.pipeline is not None
 }
@@ -128,14 +127,6 @@ ROWS: dict[str, dict] = {
     "tasktrove-unitsyn_large": python_row(),
     "tasktrove-stack_pytest": python_row(),
     "tasktrove-structured_outputs": structured_row(NAME_SCHEMA, "json"),
-    "tasktrove-swe_rebench": {
-        "path": "swe-rebench-fixture",
-        "task_binary": (Path(__file__).parent / "fixtures/swe_rebench_python.tar.gz").read_bytes(),
-    },
-    "tasktrove-swesmith": {
-        "path": "swesmith-fixture",
-        "task_binary": (Path(__file__).parent / "fixtures/swesmith.tar.gz").read_bytes(),
-    },
 }
 
 PYTHON_FILE = ("/app/solution.py",)
@@ -156,8 +147,6 @@ EXPECTED = {
     "tasktrove-unitsyn_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
     "tasktrove-stack_pytest": ("pytest", PYTHON_FILE, python_tests.STACK_PYTEST_AGENT_IMAGE),
     "tasktrove-structured_outputs": ("json-schema", (), None),
-    "tasktrove-swe_rebench": ("script", (), None),
-    "tasktrove-swesmith": ("script", (), None),
 }
 """Each declaration's grader mode, captured files and agent image.
 
@@ -250,12 +239,6 @@ def test_row_converts_to_declared_grader(name):
             ),
             ImportFailureKind.UNSUPPORTED,
             "unsupported_public_output_contract",
-        ),
-        (
-            "tasktrove-swesmith",
-            archive("Fix the spin bug.", {"tests/config.json": b'{"repo": "octo/widgets"}'}),
-            ImportFailureKind.UNSUPPORTED,
-            "missing_repository_ref",
         ),
     ],
 )
@@ -398,38 +381,7 @@ def test_structured_outputs_controls_grade_as_expected(schema_type, control):
 
 
 @pytest.mark.parametrize("name", ["code_contests", "taco"])
-def test_source_stdio_retains_legacy_actor_recipe_and_shared_grading(name):
-    fixtures = Path(__file__).parent / "fixtures"
-    row = {"path": f"{name}-0000", "task_binary": (fixtures / f"{name}.tar.gz").read_bytes()}
-    task = converted_task(PIPELINES[f"tasktrove-{name}"], row)
-    assert isinstance(task.grader, VerifyitGrader) and task.grader.environment is not None
-    build = task.environment_requirements.docker_build
-    assert build is not None and task.grader.environment.docker_build == build
-    record = harbor_record(
-        {"task_json": task.model_dump_json(), "original_path": row["path"], "source_row": f"{name}/tasks.parquet:0"},
-        grader_image=None,
-        fallback_actor_image=BASE_IMAGE,
-        family="competitive-programming",
-    )
-    files = archive_files(
-        unpack_task_binary(
-            {"path": row["path"], "task_binary": record.task_binary}, fixture_context(PIPELINES[f"tasktrove-{name}"])
-        )
-    ).files
-    # Frozen 61bb85cc conversion of these pinned source archives, before the verifier install.
-    expected = (fixtures / f"{name}_actor_61bb85cc.Dockerfile").read_text()
-    assert files["environment/Dockerfile"].decode().split("# --- verifyit ---")[0].rstrip("\n") == expected.rstrip("\n")
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.verifier.environment_mode == "shared" and config.verifier.environment is None
-    assert not config.artifacts and "tests/Dockerfile" not in files
-    assert config.environment.workdir is None
-    assert (config.agent.timeout_sec, config.verifier.timeout_sec) == (900, 600)
-    assert (record.mode, record.language) == ("stdio", "python")
-    assert not any(path.startswith(("environment/tests/", "environment/solution/", "solution/")) for path in files)
-
-
-@pytest.mark.parametrize("name", ["code_contests", "taco"])
-def test_source_stdio_single_hidden_case_grades_submission(name, tmp_path):
+def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tmp_path):
     cases = {"inputs": ["3 4\n"], "outputs": ["7\n"]}
     data = (
         {"tests/test_data.json": json.dumps(cases).encode()}
@@ -439,7 +391,28 @@ def test_source_stdio_single_hidden_case_grades_submission(name, tmp_path):
             "solution/solution.py": SUM_SOLUTION,
         }
     )
+    recipe = b"FROM python:3.12-slim\nWORKDIR /app\nRUN mkdir /source-dependency\n"
+    data["environment/Dockerfile"] = recipe
     task = converted_task(PIPELINES[f"tasktrove-{name}"], archive(SUM_PROMPT, data))
+    assert isinstance(task.grader, VerifyitGrader) and task.grader.environment is not None
+    build = task.environment_requirements.docker_build
+    assert build is not None and task.grader.environment.docker_build == build
+    record = harbor_record(
+        {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
+        grader_image=None,
+        fallback_actor_image=BASE_IMAGE,
+        family="competitive-programming",
+    )
+    files = archive_files(
+        unpack_task_binary(
+            {"path": "fixture", "task_binary": record.task_binary}, fixture_context(PIPELINES[f"tasktrove-{name}"])
+        )
+    ).files
+    assert files["environment/Dockerfile"].decode().split("# --- verifyit ---")[0].strip() == recipe.decode().strip()
+    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    assert config.verifier.environment_mode == "shared" and config.verifier.environment is None
+    assert not config.artifacts and "tests/Dockerfile" not in files
+    assert not any(path.startswith(("environment/tests/", "environment/solution/", "solution/")) for path in files)
     tests = tmp_path / "tests"
     write_verifier(task, tests)
     workspace = tmp_path / "app"

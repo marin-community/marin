@@ -10,9 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
-from taskcompendium.convert.tasktrove import archive_files, unpack_task_binary
 from taskcompendium.models import AnswerType, ScriptGrader
-from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.modes import grade_pytest
@@ -30,9 +28,59 @@ def pipeline():
     return source.pipeline
 
 
-def original(language: str):
-    blob = (FIXTURES / f"swe_rebench_{language}.tar.gz").read_bytes()
-    return archive_files(unpack_task_binary({"path": "fixture", "task_binary": blob}, ConversionContext({}, None)))
+def python_source(commit: str) -> dict[str, bytes]:
+    return {
+        "instruction.md": (
+            (
+                "## Environment Setup (complete these steps first)\n\n```bash\n"
+                f"cd /testbed\ngit checkout {commit}\n```\nFix add.\n"
+            ).encode()
+        ),
+        "environment/Dockerfile": b"FROM python:3.12-slim\nRUN mkdir -p /testbed\n",
+        "tests/config.json": (
+            json.dumps(
+                {
+                    "repo": "fixture/calc",
+                    "language": "python",
+                    "FAIL_TO_PASS": ["tests/test_calc.py::test_hidden"],
+                    "PASS_TO_PASS": [],
+                }
+            ).encode()
+        ),
+        "tests/test.sh": f"install_trusted_test_patch.sh /testbed /tests/test_patch.diff {commit}\n".encode(),
+        "tests/test_patch.diff": b"private test patch",
+        "tests/trusted_test_paths.txt": b"tests/test_calc.py\n",
+        "tests/trusted_patch_paths.txt": b"tests/test_calc.py\n",
+        "solution/solve.sh": b"private oracle",
+    }
+
+
+def go_source() -> dict[str, bytes]:
+    # Preserve the real source parser because conversion removes its exact fail-open block.
+    # Extracted from the pinned SWE-rebench Go task; unrelated task files are constructed here.
+    return {
+        **python_source("abcdef0"),
+        "tests/config.json": (
+            json.dumps(
+                {
+                    "repo": "fixture/calc",
+                    "language": "go",
+                    "FAIL_TO_PASS": ["TestRepair"],
+                    "PASS_TO_PASS": [],
+                    "install_config": {"log_parser": "parse_log_gotest"},
+                }
+            ).encode()
+        ),
+        "tests/test_state.py": (FIXTURES / "swe_rebench_parser.txt").read_bytes(),
+        "tests/test.sh": (
+            b"cd /tests\n"
+            b"uv init --python 3.12 --no-progress >/dev/null 2>&1 || true\n"
+            b"uv add --no-progress pytest==8.4.1 pytest-json-ctrf==0.3.5 >/dev/null 2>&1\n"
+            b"uv run --no-progress pytest --ctrf /logs/verifier/ctrf.json test_state.py -rA\n"
+        ),
+        "tests/install_trusted_test_paths.sh": b"private trusted paths installer",
+        "tests/install_trusted_test_patch.sh": b"private trusted patch installer",
+    }
 
 
 def converted(files) -> NormalizedTask:
@@ -42,9 +90,9 @@ def converted(files) -> NormalizedTask:
 
 
 @pytest.mark.parametrize("language", ["python", "go"])
-def test_source_archives_keep_private_graders_and_deferred_dependencies(language):
-    source = original(language)
-    task = converted(source.files).task
+def test_source_contract_keeps_private_graders_and_deferred_dependencies(language):
+    files = python_source("abcdef0") if language == "python" else go_source()
+    task = converted(files).task
     assert isinstance(task.grader, ScriptGrader)
     assert task.answer_type == AnswerType.WORKSPACE_STATE
     assert task.grader.artifacts[0].source == task.grader.artifacts[0].target == "/testbed"
@@ -56,15 +104,15 @@ def test_source_archives_keep_private_graders_and_deferred_dependencies(language
         if language == "python"
         else ("install_trusted_test_paths.sh", "install_trusted_test_patch.sh", "test_patch.diff")
     ):
-        assert private[path] == source.files[f"tests/{path}"]
+        assert private[path] == files[f"tests/{path}"]
         assert path not in public
-    assert oracle["source_archive/tests/test.sh"] == source.files["tests/test.sh"]
-    assert oracle["solution/solve.sh"] == source.files["solution/solve.sh"]
+    assert oracle["source_archive/tests/test.sh"] == files["tests/test.sh"]
+    assert oracle["solution/solve.sh"] == files["solution/solve.sh"]
     assert "verifier.toml" not in private
     spec = parse_spec(private["taskcompendium-verifier.toml"].decode())
     if language == "python":
         assert isinstance(spec, PytestSpec)
-        config = json.loads(source.text("tests/config.json"))
+        config = json.loads(files["tests/config.json"])
         assert spec.must_pass == tuple(config["FAIL_TO_PASS"])
         assert spec.must_not_break == tuple(config["PASS_TO_PASS"])
     else:
@@ -76,32 +124,23 @@ def test_source_archives_keep_private_graders_and_deferred_dependencies(language
     assert not any(path.startswith(("tests/", "solution/")) for path in build)
     assert "taskcompendium-grader-setup.sh" not in build
     assert "taskcompendium-repository-setup.sh" not in build
-    if language == "python":
-        # Frozen 61bb85cc conversion of this source archive, before the verifier install block.
-        expected = (FIXTURES / "swe_rebench_python_actor_61bb85cc.Dockerfile").read_text()
-        assert build["Dockerfile"].decode().split("# --- verifyit ---")[0].rstrip("\n") == expected.rstrip("\n")
 
 
-@pytest.mark.parametrize("language", ["js", "ts"])
-def test_source_language_exclusions_remain_explicit(language):
-    source = original("go")
-    config = json.loads(source.text("tests/config.json"))
-    config["language"] = language
-    source.files["tests/config.json"] = json.dumps(config).encode()
-    result = convert_row(pipeline(), tasktrove_row(source.files))
-    assert isinstance(result, ImportRejection)
-    assert result.reason == "unsupported_variant"
-
-
-@pytest.mark.parametrize("problem", ["truncated_id", "unprotected_test"])
-def test_python_source_contract_gaps_remain_explicit(problem):
-    source = original("python")
-    config = json.loads(source.text("tests/config.json"))
-    config["FAIL_TO_PASS"] = [
-        "tests/uncovered.py::test_value[unfinished" if problem == "truncated_id" else "tests/uncovered.py::test_value"
-    ]
-    source.files["tests/config.json"] = json.dumps(config).encode()
-    result = convert_row(pipeline(), tasktrove_row(source.files))
+@pytest.mark.parametrize(
+    "language, node_id",
+    [
+        ("js", "tests/test_calc.py::test_hidden"),
+        ("ts", "tests/test_calc.py::test_hidden"),
+        ("python", "tests/uncovered.py::test_value[unfinished"),
+        ("python", "tests/uncovered.py::test_value"),
+    ],
+)
+def test_unsupported_language_or_test_contract_is_rejected(language, node_id):
+    files = python_source("abcdef0")
+    config = json.loads(files["tests/config.json"])
+    config.update(language=language, FAIL_TO_PASS=[node_id])
+    files["tests/config.json"] = json.dumps(config).encode()
+    result = convert_row(pipeline(), tasktrove_row(files))
     assert isinstance(result, ImportRejection)
     assert result.reason == "unsupported_variant"
 
@@ -115,7 +154,7 @@ def test_python_source_contract_gaps_remain_explicit(problem):
     ],
 )
 def test_non_python_parser_requires_named_test_results(tmp_path, log, resolved):
-    task = converted(original("go").files).task
+    task = converted(go_source()).task
     parser = next(resource_bytes(resource) for resource in task.resources.verifier if resource.path == "test_state.py")
     namespace = {}
     exec(compile(parser, "test_state.py", "exec"), namespace)
@@ -162,32 +201,12 @@ def patched_repository(tmp_path) -> PatchedRepository:
     target.write_text(patched)
     patch = git(workspace, "diff", "--", "tests/test_calc.py") + "\n"
     git(workspace, "checkout", "--", "tests/test_calc.py")
-    source = original("python")
-    source.files.update(
-        {
-            "instruction.md": (
-                (
-                    "## Environment Setup (complete these steps first)\n\n```bash\n"
-                    f"cd /testbed\ngit checkout {commit}\n```\nFix add.\n"
-                ).encode()
-            ),
-            "tests/config.json": (
-                json.dumps(
-                    {
-                        "repo": "fixture/calc",
-                        "language": "python",
-                        "FAIL_TO_PASS": ["tests/test_calc.py::test_hidden"],
-                        "PASS_TO_PASS": ["tests/test_calc.py::test_existing"],
-                    }
-                ).encode()
-            ),
-            "tests/test.sh": f"install_trusted_test_patch.sh /testbed /tests/test_patch.diff {commit}\n".encode(),
-            "tests/test_patch.diff": patch.encode(),
-            "tests/trusted_test_paths.txt": b"tests/test_calc.py\n",
-            "tests/trusted_patch_paths.txt": b"tests/test_calc.py\n",
-        }
-    )
-    task = converted(source.files).task
+    files = python_source(commit)
+    config = json.loads(files["tests/config.json"])
+    config["PASS_TO_PASS"] = ["tests/test_calc.py::test_existing"]
+    files["tests/config.json"] = json.dumps(config).encode()
+    files["tests/test_patch.diff"] = patch.encode()
+    task = converted(files).task
     private = tmp_path / "private"
     private.mkdir()
     for resource in task.resources.verifier:

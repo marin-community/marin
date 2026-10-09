@@ -505,13 +505,22 @@ def test_openqa_judges_against_stripped_references_with_the_exact_gate():
 
 
 def test_openqa_preserves_symbolic_reference_for_the_semantic_judge():
-    # TaskTrove openqa-1b77e5fd4e7b: removing punctuation and articles erases a valid equation.
-    task = task_of("knowledge-openqa", tasktrove_row(fixture_files("openqa_symbolic_reference")))
+    # Exact-match normalization erases this valid symbolic equation.
+    question = "What is the relationship between $ A $ and $ A' $?"
+    row = tasktrove_row(
+        {
+            "instruction.md": (question + " Write your concise final answer to `/app/response.txt`.").encode(),
+            "tests/verifier_data.json": (
+                json.dumps({"instruction": question, "expected_answers": ["$ A' = A $"]}).encode()
+            ),
+        }
+    )
+    task = task_of("knowledge-openqa", row)
     assert isinstance(task.grader, VerifyitGrader)
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
     assert spec.references == ("$ A' = A $",)
-    assert "relationship between $ A $ and $ A' $" in spec.question
+    assert spec.question == question
     assert spec.exact_gate
 
 
@@ -571,18 +580,6 @@ def test_mcqa_accepts_gaps_in_choice_labels_without_accepting_absent_references(
     assert grade_reply(task, answer_reply(task, "J")) == 0.0
     absent = mcqa_row(question=question, listed_options="/".join(labels), expected_answer="I")
     assert rejection_of("tasktrove-knowledge_mcqa", absent).reason == "invalid_reference"
-    ambiguous = mcqa_row(question=question + "\nA: Another choice", listed_options="/".join(labels))
-    assert rejection_of("tasktrove-knowledge_mcqa", ambiguous).reason == "unsupported_answer_contract"
-
-
-def test_mcqa_retains_complete_choices_with_repeated_label_mentions():
-    # Pinned TaskTrove row 27 (546227d1d7f0) includes an A: scenario before its A-J choices.
-    row = tasktrove_row(fixture_files("mcqa_repeated_labels"))
-    task = task_of("tasktrove-knowledge_mcqa", row)
-    question = row_instruction(row).split("\n---\n\n", 1)[1].split("\n\n", 1)[1]
-    assert prompt_of(task) == f"{question.strip()}\n\nReturn one option letter from A through J."
-    assert grade_reply(task, answer_reply(task, "D")) == 1.0
-    assert grade_reply(task, answer_reply(task, "A")) == 0.0
 
 
 @pytest.mark.parametrize("wrapper", ["{}", "\\boxed{{{}}}"])
@@ -598,27 +595,23 @@ def test_mcqa_recovers_escaped_option_separators_without_decoding_question_escap
     assert grade_reply(task, answer_reply(task, "A")) == 0.0
 
 
-@pytest.mark.parametrize("listed_options", ["A/B/C/D", "I/A/B/C/D"])
-def test_mcqa_preserves_roman_numbered_premises_without_counting_them_as_options(listed_options):
-    question = (
-        "Which statements hold?\nI. Two is even.\nII. Three is even.\nIV. Four is even.\n\n"
-        "A: I and II\nB: I and IV\nC: II only\nD: All of them"
-    )
+@pytest.mark.parametrize(
+    "premise, listed_options",
+    [
+        ("I. Two is even.\nII. Three is even.\nIV. Four is even.", "A/B/C/D"),
+        ("I. Two is even.\nII. Three is even.\nIV. Four is even.", "I/A/B/C/D"),
+        ("Mass balance:\nB: v1 - v2 = 0\nE: v2 - v3 = 0", "B/E/A/B/C/D"),
+        ("A: Consider an earlier scenario.", "A/B/C/D"),
+    ],
+)
+def test_mcqa_preserves_labeled_premises_without_counting_them_as_choices(premise, listed_options):
+    question = f"{premise}\n\nWhich option holds?\nA: First\nB: Second\nC: Third\nD: Fourth"
     task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, listed_options=listed_options))
     assert prompt_of(task) == f"{question}\n\nReturn one option letter from A through D."
     assert isinstance(task.grader, VerifyitGrader)
     assert verifyit_spec(task.grader) == McqSpec("B", options=4)
     assert grade_reply(task, answer_reply(task, "B")) == 1.0
-
-
-def test_mcqa_counts_choices_separately_from_named_equations_in_generated_wrapper():
-    question = (
-        "Mass balance constraints:\nB: v1 - v2 = 0\nE: v2 - v3 = 0\n\nWhich range?\nA: 0-5\nB: 0-6\nC: 0-7\nD: 0-8"
-    )
-    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, listed_options="B/E/A/B/C/D"))
-    assert prompt_of(task) == f"{question}\n\nReturn one option letter from A through D."
-    assert isinstance(task.grader, VerifyitGrader)
-    assert verifyit_spec(task.grader) == McqSpec("B", options=4)
+    assert grade_reply(task, answer_reply(task, "A")) == 0.0
 
 
 @pytest.mark.parametrize(

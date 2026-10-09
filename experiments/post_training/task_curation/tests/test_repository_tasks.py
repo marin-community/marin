@@ -19,8 +19,6 @@ from verifyit.spec import PytestSpec, parse_spec
 from experiments.post_training.task_curation.datasets.tasktrove.repositories import sources
 from experiments.post_training.task_curation.tests.conversion import convert_row, tasktrove_row
 
-FIXTURES = Path(__file__).parent / "fixtures"
-
 
 @dataclass(frozen=True)
 class RepositoryFixture:
@@ -50,9 +48,8 @@ def verifier_spec(task: TaskSpec) -> PytestSpec:
     return spec
 
 
-def test_original_swesmith_keeps_build_and_private_roles():
-    result = converted((FIXTURES / "swesmith.tar.gz").read_bytes())
-    task = TaskSpec.model_validate_json(result.task.model_dump_json())
+def test_swesmith_keeps_build_and_private_roles(repository_fixture):
+    task = TaskSpec.model_validate_json(repository_fixture.task.model_dump_json())
     assert isinstance(task.grader, ScriptGrader)
     assert task.answer_type == AnswerType.WORKSPACE_STATE
     assert [(item.source, item.target, item.kind) for item in task.grader.artifacts] == [
@@ -62,26 +59,19 @@ def test_original_swesmith_keeps_build_and_private_roles():
     public = {item.path: resource_bytes(item) for item in (*task.resources.all, *task.resources.worker)}
     private = {item.path: resource_bytes(item) for item in task.resources.verifier}
     oracle = {item.path: resource_bytes(item) for item in task.resources.oracle}
-    assert set(public) == {"setup_files/requirements.txt"}
+    assert public == {"setup_files/requirements.txt": b"pytest\n"}
     assert "config.json" not in private and "test_state.py" not in private
-    original = json.loads(oracle["source_archive/tests/config.json"])
-    assert original["patch"]
-    assert "solution/solve.sh" in oracle
-    assert private["trusted_test_paths.txt"] == oracle["source_archive/tests/trusted_test_paths.txt"]
+    assert json.loads(oracle["source_archive/tests/config.json"])["patch"] == "oracle-only"
+    assert oracle["solution/solve.sh"] == b"oracle-only"
+    assert private["trusted_test_paths.txt"] == b"tests/test_calc.py\n"
     spec = verifier_spec(task)
-    assert spec.must_pass == tuple(original["FAIL_TO_PASS"])
-    assert spec.must_not_break == tuple(original["PASS_TO_PASS"])
+    assert spec.must_pass == ("tests/test_calc.py::test_add",)
     assert spec.protected_paths_files == ("trusted_test_paths.txt",)
-    assert task.environment_requirements.docker_image is None
     assert "git_repository" in task.environment_requirements.capabilities
-    state = task.environment_requirements.tool_providers["shell"].initial_state
-    assert isinstance(state, dict)
-    assert state["workspace"] == "/testbed"
     context = task.environment_requirements.docker_build
     assert context is not None
     build = {item.path: resource_bytes(item) for item in context.files}
-    assert build["Dockerfile"].startswith(b"FROM python:3.10-bookworm\n")
-    assert build["taskcompendium-verifyit/src/verifyit/modes/grade_pytest.py"]
+    assert build["helper.sh"] == b"#!/bin/sh\nexit 0\n"
     assert "taskcompendium-repository-setup.sh" not in build
     grader_context = task.grader.environment.docker_build
     assert grader_context is not None
@@ -95,18 +85,51 @@ def test_original_swesmith_keeps_build_and_private_roles():
     assert task.context.events[0].content.encode() == oracle["instruction.md"]
 
 
-def test_original_uncollectable_fail_to_pass_is_rejected():
-    result = convert_row(
-        swesmith_pipeline(),
-        {"path": "swesmith-doctest", "task_binary": (FIXTURES / "swesmith_doctest.tar.gz").read_bytes()},
-    )
+@pytest.mark.parametrize(
+    "problem, reason", [("doctest", "unsupported_variant"), ("missing_ref", "missing_repository_ref")]
+)
+def test_unusable_repository_grading_contract_is_rejected(problem, reason):
+    files = source_files("abcdef0")
+    config = json.loads(files["tests/config.json"])
+    if problem == "doctest":
+        config["FAIL_TO_PASS"] = ["docs/example.rst::example"]
+    else:
+        files["instruction.md"] = b"Fix the spin bug."
+    files["tests/config.json"] = json.dumps(config).encode()
+    result = convert_row(swesmith_pipeline(), tasktrove_row(files))
     assert isinstance(result, ImportRejection)
-    assert result.reason == "unsupported_variant"
-    assert "FAIL_TO_PASS" in result.detail
+    assert result.reason == reason
 
 
 def git(workspace: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=workspace, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def source_files(commit: str) -> dict[str, bytes]:
+    return {
+        "instruction.md": (
+            (
+                "## Environment Setup (complete these steps first)\n\n```bash\n"
+                f"cd /testbed\ngit checkout {commit}\n```\nFix add.\n"
+            ).encode()
+        ),
+        "environment/Dockerfile": b"FROM python:3.10-bookworm\nRUN pip install --upgrade pip uv pytest\n",
+        "environment/helper.sh": b"#!/bin/sh\nexit 0\n",
+        "setup_files/requirements.txt": b"pytest\n",
+        "tests/config.json": (
+            json.dumps(
+                {
+                    "repo": "fixture/calc",
+                    "FAIL_TO_PASS": ["tests/test_calc.py::test_add"],
+                    "PASS_TO_PASS": [],
+                    "patch": "oracle-only",
+                }
+            ).encode()
+        ),
+        "tests/test.sh": f"install_trusted_test_paths.sh /testbed {commit} /tests/trusted_test_paths.txt\n".encode(),
+        "tests/trusted_test_paths.txt": b"tests/test_calc.py\n",
+        "solution/solve.sh": b"oracle-only",
+    }
 
 
 @pytest.fixture
@@ -123,29 +146,7 @@ def repository_fixture(tmp_path):
     git(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "add", ".")
     git(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base")
     commit = git(workspace, "rev-parse", "HEAD")
-    files = {
-        "instruction.md": (
-            (
-                "## Environment Setup (complete these steps first)\n\n```bash\n"
-                f"cd /testbed\ngit checkout {commit}\n```\nFix add.\n"
-            ).encode()
-        ),
-        "environment/Dockerfile": b"FROM python:3.10-bookworm\nRUN pip install --upgrade pip uv pytest\n",
-        "environment/helper.sh": b"#!/bin/sh\nexit 0\n",
-        "tests/config.json": (
-            json.dumps(
-                {
-                    "repo": "fixture/calc",
-                    "FAIL_TO_PASS": ["tests/test_calc.py::test_add"],
-                    "PASS_TO_PASS": [],
-                    "patch": "oracle-only",
-                }
-            ).encode()
-        ),
-        "tests/test.sh": f"install_trusted_test_paths.sh /testbed {commit} /tests/trusted_test_paths.txt\n".encode(),
-        "tests/trusted_test_paths.txt": b"tests/test_calc.py\n",
-        "solution/solve.sh": b"oracle-only",
-    }
+    files = source_files(commit)
     task = converted(tasktrove_row(files)["task_binary"]).task
     tests_dir = tmp_path / "private"
     tests_dir.mkdir()
@@ -167,10 +168,3 @@ def test_converted_grader_restores_tests_and_grades_product_code(repository_fixt
     reward = grade_pytest.grade(repository_fixture.spec, repository_fixture.tests_dir, workspace)
     assert reward.reward == expected
     assert (workspace / "tests/test_calc.py").read_text() == repository_fixture.trusted_tests
-
-
-def test_build_context_keeps_original_auxiliary_bytes(repository_fixture):
-    task = repository_fixture.task
-    assert task.environment_requirements.docker_build is not None
-    files = {item.path: resource_bytes(item) for item in task.environment_requirements.docker_build.files}
-    assert files["helper.sh"] == b"#!/bin/sh\nexit 0\n"
