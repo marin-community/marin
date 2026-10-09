@@ -7,8 +7,7 @@ provenance.
 ``run_build`` enforces the library rules a program cannot opt out of: the task's grader is the
 output of a GRADER step, the controls are the output of a CONTROLS step, the two roles are separate
 steps, the lowered spec carries exactly the task and passes RolloutEngine's
-``validate_lowered_task`` on this host's factories, the submission convention can carry the task's
-answer (``submission_compatibility``), and the controls are a complete set for the task
+``validate_lowered_task`` on this host's factories, and the controls are a complete set for the task
 (``validate_controls``). Controls are not replayed here; ``validate`` does that. A build whose
 controls include a candidate ``b.try_grader`` graded (other than a grader's reference answer or the
 empty answer) fails, so a program cannot fit its controls to its grader. The draft is written to
@@ -21,7 +20,6 @@ A host failure during the build (``taskforge.builder.infrastructure``) raises
 ``BuildInfrastructureFailure`` rather than ``BuildFailure``, even when the program wrapped it.
 """
 
-import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,15 +29,6 @@ from pydantic import TypeAdapter
 from rolloutengine.lowering import validate_lowered_task
 from rolloutengine.spec import LoweredTaskSpec
 from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.submission import (
-    AnswerCall,
-    FinalAction,
-    JsonAnswer,
-    JsonValueAnswer,
-    PlainText,
-    SubmissionConvention,
-    submission_compatibility,
-)
 
 from taskforge.atomic_file import write_atomic
 from taskforge.builder.infrastructure import BuildInfrastructureFailure, host_checked_factories, infrastructure_failure
@@ -54,23 +43,16 @@ from taskforge.builder.sdk import (
     file_set,
 )
 from taskforge.builder.step import SDK_VERSION, CacheStatus, Resource, StepCache, StepRecord, StepRole
-from taskforge.content_hash import pretty_json
 from taskforge.ledger.records import EntryKind, span
 from taskforge.proposal.model import TaskProposal
 from taskforge.spec.controls import Control, Workspace, controls_json, validate_controls
-from taskforge.spec.draft import MACHINE_ANSWER_TYPES
 
 DRAFT_DIR = "draft"
 TASK_FILE = "task.json"
 LOWERED_FILE = "lowered.json"
-CONVENTION_FILE = "convention.json"
 CONTROLS_FILE = "controls.json"
 PROVENANCE_FILE = "provenance.json"
 SCRATCH_DIR = "scratch"
-CONVENTION_TYPES: dict[str, type[SubmissionConvention]] = {
-    convention.__name__: convention for convention in (PlainText, JsonAnswer, JsonValueAnswer, AnswerCall, FinalAction)
-}
-"""The submission conventions a draft can record, by class name (``convention.json``'s ``type``)."""
 
 
 @dataclass(frozen=True)
@@ -90,12 +72,11 @@ class Provenance:
 
 @dataclass(frozen=True)
 class TaskDraft:
-    """A built task. ``lowered`` (whose ``task`` is ``task``) and ``convention`` are what validation
-    runs it with."""
+    """A built task. ``lowered`` (whose ``task`` is ``task``, answer format included) is what validation
+    runs."""
 
     task: TaskSpec
     lowered: LoweredTaskSpec
-    convention: SubmissionConvention
     controls: tuple[Control, ...]
     provenance: Provenance
 
@@ -128,10 +109,10 @@ def check_roles(output: BuildOutput, records: Sequence[StepRecord], outputs: Seq
     packages = [grader.package for grader in graders if isinstance(grader, Grader)]
     task = output.task
     if not any(
-        package.verifier == task.verifier and file_set(package.resources) == file_set(task.resources.verifier)
+        package.grader == task.grader and file_set(package.resources) == file_set(task.resources.verifier)
         for package in packages
     ):
-        raise BuildFailure(f"the task's {task.verifier.kind} grader is not the output of a GRADER step", None)
+        raise BuildFailure(f"the task's {task.grader.kind} grader is not the output of a GRADER step", None)
     if not any(tuple(value) == output.controls for value in controls if isinstance(value, tuple)):
         raise BuildFailure("the task's controls are not the output of a CONTROLS step", None)
 
@@ -177,36 +158,10 @@ def check_controls_not_graded(
         )
 
 
-def check_convention(task: TaskSpec, convention: SubmissionConvention) -> None:
-    """Raise ``BuildFailure`` unless ``convention`` can carry ``task``'s answer.
-
-    A task whose answer is the machine state submits nothing through a convention, so any
-    recordable convention fits it.
-    """
-    if type(convention).__name__ not in CONVENTION_TYPES:
-        raise BuildFailure(f"convention: {type(convention).__name__} is not one of {sorted(CONVENTION_TYPES)}", None)
-    if task.answer_type in MACHINE_ANSWER_TYPES:
-        return
-    compatibility = submission_compatibility(task, convention)
-    if not compatibility.compatible:
-        raise BuildFailure(f"convention {convention.id!r}: {'; '.join(compatibility.reasons)}", None)
-
-
-def convention_json(convention: SubmissionConvention) -> bytes:
-    """``convention`` with its class name, as ``load_convention`` reads it."""
-    return pretty_json({"type": type(convention).__name__, "convention": convention}).encode()
-
-
-def load_convention(content: bytes) -> SubmissionConvention:
-    record = json.loads(content)
-    return CONVENTION_TYPES[record["type"]].model_validate(record["convention"])
-
-
 def _write_draft(directory: Path, draft: TaskDraft) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     write_atomic(directory / TASK_FILE, draft.task.model_dump_json(indent=2).encode())
     write_atomic(directory / LOWERED_FILE, draft.lowered.model_dump_json(indent=2).encode())
-    write_atomic(directory / CONVENTION_FILE, convention_json(draft.convention))
     write_atomic(directory / CONTROLS_FILE, controls_json(draft.controls))
     write_atomic(directory / PROVENANCE_FILE, _PROVENANCE.dump_json(draft.provenance, indent=2))
 
@@ -259,7 +214,6 @@ async def run_build(
         draft = TaskDraft(
             task=output.task,
             lowered=output.lowered,
-            convention=output.convention,
             controls=output.controls,
             provenance=Provenance(
                 item_id=item_id,
@@ -281,7 +235,7 @@ async def run_build(
 
 def _check_output(output: BuildOutput, b: Build, step_cache: StepCache, services: BuildServices) -> None:
     """The library rules a program's output must keep: step roles, ungraded controls, a lowering of the
-    task its host can run, the submission convention, and well-formed controls.
+    task its host can run, and well-formed controls.
 
     Raises:
         BuildFailure: the first rule ``output`` breaks.
@@ -298,7 +252,6 @@ def _check_output(output: BuildOutput, b: Build, step_cache: StepCache, services
         )
     except (ValueError, NotImplementedError) as error:
         raise BuildFailure(f"lowered: {error}", None) from error
-    check_convention(output.task, output.convention)
     try:
         validate_controls(output.task, output.controls)
     except ValueError as error:
@@ -324,7 +277,6 @@ def load_draft(directory: Path) -> TaskDraft:
     return TaskDraft(
         task=TaskSpec.model_validate_json((directory / TASK_FILE).read_bytes()),
         lowered=lowered,
-        convention=load_convention((directory / CONVENTION_FILE).read_bytes()),
         controls=_CONTROLS.validate_json((directory / CONTROLS_FILE).read_bytes()),
         provenance=_PROVENANCE.validate_json((directory / PROVENANCE_FILE).read_bytes()),
     )

@@ -78,7 +78,7 @@ async def test_authored_program_builds_a_task_its_positive_control_passes(
     # Replay the positive control's whole transcript (shell turns included) through RolloutEngine.
     positive = next(c for c in draft.controls if c.kind == ControlKind.POSITIVE)
     turns = control_turns(positive)
-    engine = ShellboxRolloutEngine(scripted(turns), factories, convention=draft.convention)
+    engine = ShellboxRolloutEngine(scripted(turns), factories)
     session = draft.lowered.session.model_copy(update={"max_turns": len(turns), "command_timeout": 60})
     rollout = await engine.run(draft.lowered.model_copy(update={"session": session}))
     assert rollout.grade.status == Outcome.GRADED

@@ -28,9 +28,8 @@ from rolloutengine.spec import LoweredTaskSpec, TaskSessionSpec
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskResource, TaskSpec
+from taskcompendium.models import AnswerFormat, AnswerType, EnvironmentRequirements, Source, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import SubmissionConvention, submission_compatibility
 
 from taskforge.builder import step as step_module
 from taskforge.builder.infrastructure import (
@@ -91,11 +90,18 @@ HOST_FAILURES = (
     "build, setup command or grader is the program's."
 )
 GRADERS = (
-    "Graders: an image-less task (no task machine, or a ShellSim one) is graded by `spec.script_verifier`, a "
-    "Python script verifyit runs on the host under CPython after the attempt; it reads the text answer and the "
-    "task's `output_paths` captured from the machine. A task with an image is graded by `spec.shell_verifier` "
-    "with `image=` the task image, in a separate verifier machine. `spec.answer_verifier` checks the final "
-    "answer in process. Answer and script graders take no verifier machine; a shell grader takes one."
+    "Graders: prefer `spec.answer_grader(spec)` with a verifyit mode that grades in process (exact, numeric, mcq, "
+    "math, ifeval, json_schema, xml_elements, csv_columns, structured_exact, predicted_action); it takes no "
+    "verifier machine. Any other check is a program in a separate verifier machine: `spec.python_grader` "
+    "(`python3 /tests/grade.py`) or `spec.script_grader` (any command), with "
+    "`environment=spec.grader_environment(image)`: the task image for a task with one, otherwise Taskforge's "
+    "grader-base image (CPython 3.12, standard library, `sh`, root). The program reads the extracted answer at "
+    "`/app/answer.txt` (`answer_path=spec.ANSWER_PATH`; `None` for a file or workspace-state answer), each "
+    "captured `output_paths` file at its own absolute path, its private files under `/tests` (`config` at "
+    "`/tests/config.json`) and the conversation at `/tests/conversation.json`; it never reads stdin, and its "
+    "last stdout line is the reward (`StdoutReward`). A grader in a verifier machine takes a `verifier_machine` "
+    "in `b.lower`; an in-process grader takes none. The task's `answer_format` (`spec.assemble`) is how the "
+    "answer is requested and read."
 )
 TRY_GRADER_SOURCE = "taskforge.try_grader"
 """``Source.dataset`` of the provisional task ``Build.try_grader`` grades against."""
@@ -115,8 +121,8 @@ class Grader:
     """What a GRADER step returns: the grader and the evidence it was prototyped on.
 
     Attributes:
-        package: The task's grader (``spec.script_verifier``, ``spec.shell_verifier`` or
-            ``spec.answer_verifier``), passed to ``spec.assemble`` as ``grader``.
+        package: The task's grader (``spec.answer_grader``, ``spec.python_grader`` or
+            ``spec.script_grader``), passed to ``spec.assemble`` as ``grader``.
         answer_contract: The exact output format the solver must follow, for the instructions.
         reference_reply: A correct final reply, used to prototype the grader.
         reference_files: Files a correct solver leaves in the task machine (``spec.file``, paths
@@ -158,16 +164,13 @@ class BuildOutput:
     timeout) RolloutEngine runs it with. Validation replaces the session's turn budget and deadlines
     with its own; the verifier timeout and machine settings stand.
 
-    ``convention`` is the ``taskcompendium.submission`` convention the solver submits under, for
-    example ``PlainText(id="plain_text")``: RolloutEngine appends its submission instruction to the
-    task prompt and extracts the answer with it. Reference replies and control replies follow it.
-    It must be compatible with the task (``submission_compatibility``); a task whose answer is the
-    machine state submits nothing through it. Like ``lowered``, it is not part of the TaskSpec.
+    The task carries its answer format (``spec.assemble(answer_format=...)``): RolloutEngine appends
+    its submission instruction to the task prompt and extracts the answer with it. Reference replies
+    and control replies follow it.
     """
 
     task: TaskSpec
     lowered: LoweredTaskSpec
-    convention: SubmissionConvention
     controls: tuple[Control, ...]
 
 
@@ -242,7 +245,8 @@ class Build:
         item_id: The item's file-safe id.
         llm: Model access (``complete``, ``structured``, ``agent``).
         spec: ``taskforge.spec.draft``: ``requirements``, ``machine``, ``session``, ``file``,
-            ``script_verifier``, ``shell_verifier``, ``answer_verifier``, ``assemble`` and friends.
+            ``answer_grader``, ``python_grader``, ``script_grader``, ``grader_environment``,
+            ``assemble`` and friends.
         controls: ``taskforge.spec.controls``: ``Control``, ``Expectation``, ``Transcript``,
             ``Workspace``, ``reply``, ``shell_turn``.
         ledger: The build ledger.
@@ -355,7 +359,8 @@ class Build:
         """``spec.lower`` for this host and its machine factories: what ``BuildOutput.lowered`` holds.
 
         ``task_machine`` is the task machine's settings (``spec.machine``), ``None`` exactly when the
-        task has none; ``verifier_machine`` likewise, given only for a ``spec.shell_verifier`` grader.
+        task has none; ``verifier_machine`` likewise, given exactly when the grader has an environment
+        (``spec.python_grader``, ``spec.script_grader``, or ``spec.answer_grader`` with one).
 
         Raises:
             BuildFailure: ``spec.lower`` or RolloutEngine rejects the lowered task.
@@ -400,7 +405,7 @@ class Build:
         requirements: EnvironmentRequirements | None,
         grader: GraderPackage,
         answer_type: AnswerType,
-        convention: SubmissionConvention,
+        answer_format: AnswerFormat,
         instruction: str,
         reply: str,
         *,
@@ -414,11 +419,11 @@ class Build:
         RolloutEngine prepares the task machine for ``requirements`` with the agent-visible
         ``files`` (none when ``requirements`` is ``None``), installs the ``workspace`` files relative
         to the machine root (as root, after setup), and grades ``instruction`` and ``reply`` as a
-        two-message conversation with ``grader`` under ``convention``: any grader and answer type
-        ``spec.assemble`` accepts, with a reply in the form ``convention`` extracts (the final
-        assistant text). A script grader reads the ``output_paths`` captured from the machine. A
-        shell grader runs in its own verifier machine. ``machine`` sets both machines. No model is
-        called.
+        two-message conversation with ``grader`` and ``answer_format``: any grader, answer type and
+        format ``spec.assemble`` accepts, with a reply in the form ``answer_format`` extracts (the
+        final assistant text for ``PlainText``). A grader with an environment runs in its own
+        verifier machine and reads the ``output_paths`` captured from the task machine. ``machine``
+        sets both machines. No model is called.
 
         This prototypes a grader while it is being written: on its reference answer, an empty
         answer, and wrong answers you invent for the purpose. Every graded candidate is recorded,
@@ -427,7 +432,7 @@ class Build:
 
         Raises:
             BuildFailure: ``spec.assemble`` or ``spec.lower`` rejects the task these arguments
-                describe, or ``convention`` cannot carry ``answer_type`` to ``grader``.
+                describe, including an ``answer_format`` that cannot carry ``answer_type`` to ``grader``.
             BuildInfrastructureFailure: the host failed to create or drive a grading machine.
         """
         candidate = GradedCandidate(reply=reply, files=tuple(sorted(workspace, key=lambda f: f.path)))
@@ -437,6 +442,7 @@ class Build:
                 task_id=f"{self.item_id}.try_grader",
                 instruction=instruction,
                 answer_type=answer_type,
+                answer_format=answer_format,
                 grader=grader,
                 source=Source(
                     dataset=TRY_GRADER_SOURCE,
@@ -450,15 +456,10 @@ class Build:
             )
         except ValueError as error:
             raise self.failure(f"try_grader: {error}") from error
-        if answer_type not in draft_module.MACHINE_ANSWER_TYPES:
-            compatibility = submission_compatibility(task, convention)
-            self.check(
-                compatibility.compatible, f"try_grader: convention {convention.id!r}: {'; '.join(compatibility.reasons)}"
-            )
         lowered = self.lower(
             task,
             task_machine=None if requirements is None else machine,
-            verifier_machine=machine if grader.verifier.kind == draft_module.SHELL_KIND else None,
+            verifier_machine=None if draft_module.grading_environment(task) is None else machine,
             session=draft_module.session(
                 max_turns=1,
                 model_turn_timeout=None,
@@ -470,7 +471,7 @@ class Build:
                 cleanup_timeout=MACHINE_CLEANUP_TIMEOUT,
             ),
         )
-        engine = ShellboxRolloutEngine(_no_model, self._factories, convention=convention)
+        engine = ShellboxRolloutEngine(_no_model, self._factories)
         state = SuppliedState(
             messages=({"role": "user", "content": instruction}, {"role": "assistant", "content": reply}),
             resources=candidate.files,
@@ -553,10 +554,12 @@ def sdk_reference() -> str:
             "session",
             "lower",
             "file",
-            "script_verifier",
-            "shell_verifier",
+            "answer_grader",
+            "grader_environment",
+            "grading_environment",
+            "python_grader",
+            "script_grader",
             "reward_file",
-            "answer_verifier",
             "assemble",
         ),
     )

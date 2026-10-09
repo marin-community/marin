@@ -8,8 +8,8 @@ from dataclasses import replace
 
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, MachineSpec, ShellSimBuiltins
+from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.shell_verifier import ArtifactKind, ShellVerifierSpec
 
 from taskforge.builder.author import compile_program
 from taskforge.builder.run import item_id_for, run_build
@@ -18,16 +18,14 @@ from taskforge.builder.step import StepCache
 from taskforge.builder.template import standard
 from taskforge.llm.agent import AgentTool
 from taskforge.proposal.model import parse
-from taskforge.sandbox.images import DockerBuild
+from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec.controls import ControlCategory
 from tests.builder.conftest import PROPOSAL
 
-GOOD_GRADER = """import json, os, pathlib
-final = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "answer.txt").read_text().strip()
-expected = pathlib.Path(os.environ["VERIFYIT_TESTS_DIR"], "key.txt").read_text().strip()
-reward = float(final.endswith("ANSWER = " + expected))
-verdict = {"status": "scored", "reward": reward, "detail": {}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+GOOD_GRADER = """import pathlib
+final = pathlib.Path("/app/answer.txt").read_text().strip()
+expected = pathlib.Path("/tests/key.txt").read_text().strip()
+print(float(final.endswith("ANSWER = " + expected)))
 """
 IMAGE = f"registry.example/taskforge-tasks/d00@sha256:{'2' * 64}"
 
@@ -122,11 +120,13 @@ async def test_template_builds_a_checked_task_and_retries_failed_checks(proposal
     assert task.environment_requirements.docker_image is None
     assert draft.lowered.runtime.task_machine is not None
     assert draft.lowered.runtime.task_machine.backend == Backend.SHELLSIM
-    assert draft.lowered.runtime.verifier_machine is None
+    assert draft.lowered.runtime.verifier_machine is not None
+    assert draft.lowered.runtime.verifier_machine.backend == Backend.DOCKER
     assert [f.path for f in task.resources.worker] == ["workspace/question.txt"]
-    assert task.verifier.kind == "script"
+    assert isinstance(task.grader, ScriptGrader) and task.grader.answer_path == "/app/answer.txt"
+    assert task.grader.environment.docker_image == GRADER_BASE_IMAGE
     assert {f.path: resource_bytes(f).decode() for f in task.resources.verifier} == {
-        "grader.py": GOOD_GRADER,
+        "grade.py": GOOD_GRADER,
         "config.json": "{}",
         "key.txt": "42",
     }
@@ -154,7 +154,7 @@ async def test_grader_step_feeds_back_a_numeric_answer_that_is_not_a_literal(pro
         machine = b.spec.requirements(image=None, workdir=standard.WORKDIR)
         graded = await standard.grader(b, made, machine, "")
 
-    assert graded.package.verifier.kind == "numeric"
+    assert isinstance(graded.package.grader, VerifyitGrader) and graded.package.grader.mode == "numeric"
     retry = fake_glm.requests[1]["messages"][-1]["content"]
     assert "numeric value requires one finite scalar literal" in retry
 
@@ -210,10 +210,14 @@ async def test_a_container_task_publishes_its_image_and_grades_in_a_copy_of_it(t
 
     assert machine.docker_image == IMAGE
     assert [resource_bytes(f).decode() for f in images.published[0][0].files] == [dockerfile]
-    assert package.verifier.kind == "shell"
-    assert package.verifier.environment_requirements.docker_image == IMAGE
-    shell = ShellVerifierSpec.model_validate_json(package.verifier.parameters_json)
-    assert shell.argv == ("python3", "/tests/grade.py")
+    shell = package.grader
+    assert isinstance(shell, ScriptGrader)
+    assert shell.environment.docker_image == IMAGE
+    assert (shell.argv, shell.cwd, shell.answer_path) == (
+        ("python3", "/tests/grade.py"),
+        "/workspace",
+        "/app/answer.txt",
+    )
     assert [(a.source, a.target, a.kind) for a in shell.artifacts] == [
         ("/workspace", "/workspace", ArtifactKind.DIRECTORY)
     ]

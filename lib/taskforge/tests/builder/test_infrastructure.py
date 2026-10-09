@@ -14,8 +14,7 @@ from connectrpc.errors import ConnectError
 from rolloutengine.contracts import RolloutInterrupted
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, Machine, MachineSpec, Result, UnsupportedMachineSpec
-from taskcompendium.models import AnswerType
-from taskcompendium.submission import PlainText
+from taskcompendium.models import AnswerType, PlainText
 
 from taskforge.builder.author import compile_program
 from taskforge.builder.infrastructure import BuildInfrastructureFailure, InfrastructureCause
@@ -29,12 +28,11 @@ from taskforge.spec import draft
 SHELLSIM = draft.requirements(image=None)
 DOCKER = draft.requirements(image=f"registry.example/task@sha256:{'0' * 64}")
 MACHINE = draft.machine(startup_timeout=60)
-PLAIN = PlainText(id="plain_text")
-FULL_CREDIT = """import json, os, pathlib
-verdict = {"status": "scored", "reward": 1.0, "detail": {}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
-"""
-GRADER = draft.script_verifier(FULL_CREDIT, {}, timeout=60)
+PLAIN = PlainText()
+FULL_CREDIT = "print(1.0)\n"
+GRADER = draft.python_grader(
+    FULL_CREDIT, {}, environment=draft.grader_environment(None), answer_path=draft.ANSWER_PATH, timeout=60
+)
 UNAVAILABLE = ConnectError(Code.UNAVAILABLE, "controller connection refused")
 
 
@@ -188,12 +186,12 @@ async def build_on(factory, source, proposal, tmp_path, services):
 
 PROTOTYPE = (
     "    reference = await b.try_grader("
-    'env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)\n'
+    'env, package, AnswerType.TEXT, ANSWER_FORMAT, "question", "ANSWER = 42", files=FILES)\n'
 )
 WRAPPED = (
     "    try:\n"
     "        reference = await b.try_grader("
-    'env, package, AnswerType.TEXT, CONVENTION, "question", "ANSWER = 42", files=FILES)\n'
+    'env, package, AnswerType.TEXT, ANSWER_FORMAT, "question", "ANSWER = 42", files=FILES)\n'
     "    except Exception as error:\n"
     '        raise b.failure(f"the grader did not run: {error}") from error\n'
 )

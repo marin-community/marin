@@ -8,8 +8,16 @@ import pytest
 from shellbox.machine import Backend, Command
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec
-from taskcompendium.submission import JsonAnswer, JsonValueAnswer, PlainText, SubmissionConvention
+from taskcompendium.models import (
+    AnswerFormat,
+    AnswerType,
+    EnvironmentRequirements,
+    JsonAnswer,
+    JsonValueAnswer,
+    PlainText,
+    Source,
+    TaskSpec,
+)
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec, StructuredExactSpec
 
 from taskforge.builder.run import item_id_for
@@ -20,14 +28,12 @@ from taskforge.spec import draft
 
 SHELLSIM = draft.requirements(image=None)
 MACHINE = draft.machine(startup_timeout=60)
-PLAIN = PlainText(id="plain_text")
+PLAIN = PlainText()
 IMAGE = f"registry.example/taskforge-tasks/d00-arithmetic-products--1@sha256:{'1' * 64}"
 
-READS_REPORT = """import json, os, pathlib
-report = pathlib.Path(os.environ["VERIFYIT_WORKSPACE"], "captured/workspace/report.txt")
-reward = float(report.is_file() and report.read_text().strip() == "total=42")
-verdict = {"status": "scored", "reward": reward, "detail": {}}
-pathlib.Path(os.environ["VERIFYIT_LOGS_DIR"], "verdict.json").write_text(json.dumps(verdict))
+READS_REPORT = """import pathlib
+report = pathlib.Path("/workspace/report.txt")
+print(float(report.is_file() and report.read_text().strip() == "total=42"))
 """
 
 
@@ -49,51 +55,53 @@ async def b(proposal, tmp_path, services) -> AsyncIterator[Build]:
 
 @pytest.mark.parametrize("requirements", [SHELLSIM, None], ids=["shellsim", "no-machine"])
 @pytest.mark.parametrize(
-    ("grader", "answer_type", "convention", "right", "wrong"),
+    ("grader", "answer_type", "answer_format", "right", "wrong"),
     [
-        (draft.answer_verifier(ExactSpec(expected=("42",))), AnswerType.TEXT, PLAIN, "42", "41"),
+        (draft.answer_grader(ExactSpec(expected=("42",))), AnswerType.TEXT, PLAIN, "42", "41"),
         (
-            draft.answer_verifier(NumericSpec(expected="0.5", tolerance_abs=0.0, tolerance_rel=0.0)),
+            draft.answer_grader(NumericSpec(expected="0.5", tolerance_abs=0.0, tolerance_rel=0.0)),
             AnswerType.NUMBER,
             PLAIN,
             "1/2",
             "0.25",
         ),
-        (draft.answer_verifier(McqSpec(expected="B")), AnswerType.TEXT, PLAIN, "B", "A"),
+        (draft.answer_grader(McqSpec(expected="B")), AnswerType.TEXT, PLAIN, "B", "A"),
         (
-            draft.answer_verifier(ExactSpec(expected=("42",))),
+            draft.answer_grader(ExactSpec(expected=("42",))),
             AnswerType.TEXT,
-            JsonAnswer(id="json_answer"),
+            JsonAnswer(),
             '{"answer": "42"}',
             "42",
         ),
         (
-            draft.answer_verifier(StructuredExactSpec(expected={"total": 42})),
+            draft.answer_grader(StructuredExactSpec(expected={"total": 42})),
             AnswerType.JSON,
-            JsonValueAnswer(id="json"),
+            JsonValueAnswer(),
             '{"total": 42}',
             '{"total": 41}',
         ),
     ],
 )
-async def test_try_grader_grades_answers_through_the_convention(
+async def test_try_grader_grades_answers_through_the_answer_format(
     b: Build,
     requirements: EnvironmentRequirements | None,
     grader: GraderPackage,
     answer_type: AnswerType,
-    convention: SubmissionConvention,
+    answer_format: AnswerFormat,
     right: str,
     wrong: str,
 ):
-    graded = await b.try_grader(requirements, grader, answer_type, convention, "question", right)
-    rejected = await b.try_grader(requirements, grader, answer_type, convention, "question", wrong)
+    graded = await b.try_grader(requirements, grader, answer_type, answer_format, "question", right)
+    rejected = await b.try_grader(requirements, grader, answer_type, answer_format, "question", wrong)
 
     assert (graded.status, graded.reward) == (Outcome.GRADED, 1.0)
     assert rejected.reward == 0.0
 
 
 async def test_try_grader_grades_the_workspace_a_candidate_leaves(b: Build):
-    grader = draft.script_verifier(READS_REPORT, {}, timeout=60)
+    grader = draft.python_grader(
+        READS_REPORT, {}, environment=draft.grader_environment(None), answer_path=draft.ANSWER_PATH, timeout=60
+    )
 
     async def grade(report: str) -> float | None:
         files = (draft.file("workspace/report.txt", report),)
@@ -113,10 +121,10 @@ async def test_try_grader_grades_the_workspace_a_candidate_leaves(b: Build):
     assert await grade("total=41\n") == 0.0
 
 
-async def test_try_grader_rejects_a_convention_that_cannot_carry_the_answer(b: Build):
-    grader = draft.answer_verifier(ExactSpec(expected=("42",)))
-    with pytest.raises(BuildFailure, match="convention 'json'"):
-        await b.try_grader(SHELLSIM, grader, AnswerType.TEXT, JsonValueAnswer(id="json"), "question", "42")
+async def test_try_grader_rejects_an_answer_format_that_cannot_carry_the_answer(b: Build):
+    grader = draft.answer_grader(ExactSpec(expected=("42",)))
+    with pytest.raises(BuildFailure, match="json_value cannot carry a text answer"):
+        await b.try_grader(SHELLSIM, grader, AnswerType.TEXT, JsonValueAnswer(), "question", "42")
 
 
 async def test_machine_installs_the_files_and_runs_the_setup(b: Build):
@@ -146,7 +154,8 @@ def answer_task(requirements: EnvironmentRequirements) -> TaskSpec:
         "t",
         "What is six times seven?",
         AnswerType.TEXT,
-        draft.answer_verifier(ExactSpec(expected=("42",))),
+        PLAIN,
+        draft.answer_grader(ExactSpec(expected=("42",))),
         Source(dataset="test", revision="r", row="0", importer_revision="test"),
         environment=requirements,
     )

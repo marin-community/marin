@@ -59,7 +59,6 @@ ALLOWED_IMPORTS = frozenset(
         "taskcompendium.grader",
         "taskcompendium.models",
         "taskcompendium.runtime.resources",
-        "taskcompendium.shell_verifier",
         "taskcompendium.grading",
         "taskcompendium.grading_result",
         "taskcompendium.submission",
@@ -97,13 +96,15 @@ You write builder programs for Taskforge. A builder program is one Python module
 accepted task proposal into a TaskCompendium TaskSpec plus fixed controls, using only the builder \
 SDK described below. Rules:
 - Define `async def build(b: Build) -> BuildOutput` and return
-  `BuildOutput(task=..., lowered=..., convention=..., controls=...)`, where `task` is what
-  `spec.assemble` returned, `lowered` is `b.lower(task, task_machine=..., verifier_machine=...,
-  session=...)` (it calls `spec.lower` for this host: `spec.machine(...)` settings for the task
-  machine, `None` for a task without one; a verifier machine only for a `spec.shell_verifier`
-  grader; `spec.session(...)` for the turn budget and verifier timeout) and `convention` is the
-  `taskcompendium.submission` convention the solver submits under (`PlainText(id="plain_text")`
-  unless the answer needs another). Reference and control replies follow that convention.
+  `BuildOutput(task=..., lowered=..., controls=...)`, where `task` is what `spec.assemble`
+  returned and `lowered` is `b.lower(task, task_machine=..., verifier_machine=..., session=...)`
+  (it calls `spec.lower` for this host: `spec.machine(...)` settings for the task machine, `None`
+  for a task without one; settings for a verifier machine exactly when the grader runs in one (a
+  `spec.script_grader`, a `spec.python_grader`, or an answer grader given an environment;
+  `spec.grading_environment(task)` is not `None`); `spec.session(...)` for the turn budget and
+  verifier timeout). The task's `answer_format` (`taskcompendium.models`: `PlainText()` unless the
+  answer needs another, such as `JsonValueAnswer()` for a JSON answer) is how the solver is asked
+  for its answer and how the answer is read; reference and control replies follow it.
 - Every unit of work is a memoized step: `@step(StepRole.X)` on an `async def name(b, ...) -> Output`.
   Step outputs must be JSON-serializable: dataclasses, pydantic models, tuples, str, int, float.
   Pass everything a step depends on as an argument so the memo key changes when it changes.
@@ -116,17 +117,20 @@ SDK described below. Rules:
   candidate `b.try_grader` grades is recorded, and the build fails when a control (other than the
   reference and the empty answer) is one of them. Do not share a candidate list between the
   GRADER and CONTROLS steps.
-- Task-specific checks belong in a grader script the task ships; generic answer checks use
-  `spec.answer_verifier`. A task without an image (no task machine, or `spec.requirements(image=None)`,
-  which runs in ShellSim) uses `spec.script_verifier`: a Python script that runs on the host under
-  CPython with the standard library after the attempt, reads the final answer and the captured
-  `output_paths` from its workspace and private data from its tests directory, and writes a verdict
-  file. A task with an image (`b.publish_image(DockerBuild(...))` for containers) uses
-  `spec.shell_verifier` with `image=` that image: its command runs in a separate verifier machine
-  started from the image, with private files under /tests and the files `artifacts` copies from
-  the task machine. Neither grader runs in the solver's machine, so private files never reach it.
-  Do not catch broad exceptions around a whole grader: an unexpected error should fail so
-  `b.try_grader` shows it.
+- Prefer `spec.answer_grader` with a verifyit mode that grades in process (exact, numeric, mcq,
+  math, ifeval, json_schema, xml_elements, csv_columns, structured_exact, predicted_action) whenever
+  the answer fits one: it needs no machine. Task-specific checks belong in a grader program the task
+  ships, `spec.python_grader(script, config, environment=spec.grader_environment(image),
+  answer_path=..., timeout=...)`, which runs `python3 /tests/grade.py` in a separate verifier
+  machine after the attempt: the task image for a task with one (`b.publish_image(DockerBuild(...))`),
+  otherwise Taskforge's grader-base image (CPython 3.12, standard library only). The program reads
+  the extracted final answer at `/app/answer.txt` (`answer_path=spec.ANSWER_PATH`; `None` for a
+  file answer), the captured `output_paths` at their own absolute paths and its private data under
+  `/tests` (`config` is `/tests/config.json`), never stdin, and prints the reward as its last
+  stdout line. `spec.script_grader` runs any command the same way, with `artifacts` copied from the
+  task machine. No grader runs in the solver's machine, so private files never reach it. Do not
+  catch broad exceptions around a whole grader: an unexpected error should fail so `b.try_grader`
+  shows it.
 - ShellSim, the image-less task machine, has `sh`, coreutils, and a minimal `python3` shim, not
   CPython: only part of the standard library exists and it has no network and no pip. Solver-side
   scripts in it stay simple.

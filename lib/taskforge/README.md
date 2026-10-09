@@ -104,8 +104,8 @@ modules, each of which keeps its types beside the code that checks their invaria
   lists the concerns each control category allows; a task needs a reference, an acceptance and a
   shortcut control. The program lowers its task with `Build.lower` (`spec.lower` for the build's
   host), and `run_build` checks the result with RolloutEngine's `validate_lowered_task`. The draft
-  (`TaskDraft(task, lowered, convention, controls, provenance)`) is written as `task.json`,
-  `lowered.json`, `convention.json`, `controls.json` and `provenance.json`; `load_draft` reads it
+  (`TaskDraft(task, lowered, controls, provenance)`; the task carries its answer format) is written
+  as `task.json`, `lowered.json`, `controls.json` and, last, `provenance.json`; `load_draft` reads it
   back. A draft is bound to its host: `lowered.json` names that host's machine backends. Images are
   published by digest through `BuildServices.images` (`Build.publish_image`). A host failure during
   the build raises `builder.infrastructure.BuildInfrastructureFailure` with a `cause` of
