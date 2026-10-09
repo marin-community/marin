@@ -620,6 +620,15 @@ def _build_sharded_cache(root: Path, num_shards: int, rows_per_shard: int, seq_l
     return TreeCache.load(str(root), exemplar)
 
 
+@pytest.mark.parametrize("field_slice", [slice(None, None, -1), slice(6, 1, -2), slice(2, 6, -1)])
+def test_sharded_flat_field_reverse_slice_matches_numpy(tmp_path, field_slice):
+    cache = _build_sharded_cache(tmp_path, num_shards=2, rows_per_shard=2, seq_len=2)
+    flat_field = cache.jagged_array_tree()["input_ids"].data
+    expected = np.array([0, 0, 1, 1, 2, 2, 3, 3], dtype=np.int32)
+
+    np.testing.assert_array_equal(flat_field[field_slice].read().result(), expected[field_slice])
+
+
 class _AsyncOpenTracker:
     def __init__(self, monkeypatch):
         self.paths: list[str] = []
