@@ -1,35 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dataset recipes and persisted curation evidence."""
+"""Source recipes and persisted curation evidence."""
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-from taskcompendium.models import Source, TaskSpec
-from taskcompendium.pipeline.inputs import RecipeInputs
+from taskcompendium.models import AssistantToolCalls, EnvironmentRequirements, Source, TaskSpec, TextMessage
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles
 from taskcompendium.runtime.models import RolloutRecord
 
-
-@dataclass(frozen=True)
-class HFSource:
-    dataset: str
-    revision: str
-    config: str
-    split: str
-
-
-@dataclass(frozen=True)
-class GeneratedSource:
-    dataset: str
-    revision: str
-    config: str
-    split: str
-    module: str
+RESOURCE_BUDGET_BYTES = 1_000_000
+"""Default limit on one task's decoded resource bytes; larger rows are deferred at normalization."""
+RESOURCES_OVER_BUDGET = "resources_over_budget"
 
 
 @dataclass(frozen=True)
@@ -39,8 +26,17 @@ class RawRow:
     data: Mapping[str, Any]
 
 
+class ImportFailureKind(StrEnum):
+    SOURCE_DEFECT = "source_defect"
+    UNSUPPORTED = "unsupported"
+    CONVERTER_ERROR = "converter_error"
+
+
 class ImportRejection(BaseModel):
+    """An import failure; only demonstrated source defects warrant rejection."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: ImportFailureKind
     reason: str
     detail: str
 
@@ -83,37 +79,126 @@ class NormalizedTask:
     changes: tuple[NormalizationChange, ...]
 
 
-@dataclass(frozen=True)
-class TaskPipeline:
-    """Reusable conversion and review policy, independent of source acquisition."""
-
-    normalize: Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection]
-    rubric: ReviewRubric
-    check_suite: "CheckSuite | None" = None
+type Converter = Callable[[RawRow, ConversionContext], TaskSpec | NormalizedTask | ImportRejection]
+"""Convert one raw row into a task with its grader fixed, or reject it."""
 
 
 @dataclass(frozen=True)
-class DatasetRecipe:
-    """An experiment's source and acquisition inputs bound to conversion policy."""
+class Reply:
+    """A final assistant event, graded after the task's context."""
+
+    event: TextMessage | AssistantToolCalls
+
+
+@dataclass(frozen=True)
+class WorkspaceFiles:
+    """Agent output files, graded as a file submission."""
+
+    files: Mapping[str, bytes]
+
+
+@dataclass(frozen=True)
+class OracleCommand:
+    """A shell command run with the task's worker and oracle files; its output is the submission.
+
+    It runs in a machine of the task's agent image, or of the grader image when the task has none.
+    File-answer tasks submit their captured output files. Conversation-answer tasks submit the
+    contents of ``answer_file``, resolved in the grader workspace, as the final assistant message.
+    """
+
+    command: str
+    answer_file: str | None = None
+
+
+type ControlSubmission = Reply | WorkspaceFiles | OracleCommand
+
+
+@dataclass(frozen=True)
+class Controls:
+    """The one control submission that tests a source's grader on each sampled task.
+
+    ``golden(task)`` is a known-correct submission, which must score one. When ``golden`` is
+    absent or returns ``None`` because the source supplies no known-correct answer, the task is
+    graded on an empty submission instead, which must score zero; a sandbox grader grades it in a
+    fresh grading machine. ``memory_mb`` sizes each fresh grading machine.
+    """
+
+    golden: Callable[[TaskSpec], ControlSubmission | None] | None = None
+    memory_mb: int = 512
+
+
+@dataclass(frozen=True)
+class SourceRecipe:
+    """One staged source and how its rows become reviewed, verified tasks.
+
+    ``rubric=None`` skips model review. ``controls=None`` skips grader verification, so sandbox
+    graders other than judges remain unverified. ``inputs`` holds staged auxiliary input paths by name, and
+    ``grader_environment`` the source's grader image; both reach the source callables through
+    their ``ConversionContext``. A task whose decoded resources exceed ``resource_budget_bytes``
+    is deferred as ``resources_over_budget``.
+    """
 
     name: str
     version: str
-    source: HFSource | GeneratedSource
-    pipeline: TaskPipeline
+    source: SourceFiles
+    convert: Converter
+    rubric: ReviewRubric | None
+    controls: Controls | None
     intended_use: IntendedUse
-    inputs: RecipeInputs
+    inputs: Mapping[str, str] = field(default_factory=dict)
+    grader_environment: EnvironmentRequirements | None = None
+    resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
 
 
 class CheckStatus(StrEnum):
+    """A check's outcome.
+
+    ``DEFECT``: the grader ran cleanly and rewarded a submission that should earn nothing, such as an
+    empty reply to a constraint an empty reply satisfies. The task is trivially satisfiable; the grader
+    is not at fault.
+    """
+
     PASS = "pass"
     FAIL = "fail"
+    DEFECT = "defect"
+    SKIPPED = "skipped"
     UNSUPPORTED = "unsupported"
     INFRA_ERROR = "infra_error"
 
 
+REJECTING_CHECK_STATUSES = frozenset({CheckStatus.FAIL, CheckStatus.DEFECT})
+"""Check outcomes that reject the checked row with a ``check:<name>`` reason."""
+
+
 class GraderReadiness(StrEnum):
     READY = "ready"
+    SOURCE_SAMPLED = "source_sampled"
     FAILED = "failed"
+    UNVERIFIED = "unverified"
+
+
+class SourceStatus(StrEnum):
+    """The terminal status of one source pipeline run, recorded in its manifest.
+
+    ``SAMPLED``: a sample-mode run processed only its panel. ``COMPLETED``: every row was processed,
+    by full expansion or because the panel is a census. ``GATED``: a quality or verification gate
+    rejected the source. ``INCOMPLETE``: the quality gate could not decide or a control trial hit an
+    infrastructure error; evidence is retained for a retry.
+    """
+
+    SAMPLED = "sampled"
+    COMPLETED = "completed"
+    GATED = "gated"
+    INCOMPLETE = "incomplete"
+
+
+class Admission(StrEnum):
+    """Whether a row reaches the final export, and why not."""
+
+    ADMITTED = "admitted"
+    REJECTED = "rejected"
+    DEFERRED = "deferred"
+    NO_GRADER = "no_grader"
     UNVERIFIED = "unverified"
 
 
@@ -175,7 +260,9 @@ class ReviewVerdict(BaseModel):
     confidence: Confidence
     reference_status: ReferenceStatus
     defects: list[Defect]
-    evidence: str = Field(min_length=1, max_length=1000)
+    # Keep the provider's brevity guidance and exact request identity, but retain
+    # longer explanations rather than invalidate an otherwise usable verdict.
+    evidence: str = Field(min_length=1, json_schema_extra={"maxLength": 1000})
 
 
 class ReviewStatus(StrEnum):
@@ -195,11 +282,20 @@ class ReviewRecord(BaseModel):
 class Disposition(StrEnum):
     KEEP = "keep"
     REJECT = "reject"
+    DEFER = "defer"
+
+
+class QualityBasis(StrEnum):
+    UNREVIEWED = "unreviewed"
+    DIRECT_REVIEW = "direct_review"
+    INFERRED_FROM_SOURCE = "inferred_from_source"
+    SOURCE_REJECTED = "source_rejected"
+    SOURCE_INCOMPLETE = "source_incomplete"
 
 
 @dataclass(frozen=True)
 class FilterPolicy:
-    id: str = "binary-static-v1"
+    id: str = "evidence-static-v2"
     minimum_confidence: Confidence = Confidence.MEDIUM
 
 
@@ -209,61 +305,6 @@ class Decision(BaseModel):
     disposition: Disposition
     reasons: list[str]
     duplicate_of: str | None = None
-
-
-class RewriteAction(StrEnum):
-    REWRITE = "rewrite"
-    UNCHANGED = "unchanged"
-    UNREPAIRABLE = "unrepairable"
-
-
-class InstructionEdit(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-    old_text: str = Field(min_length=1)
-    replacement: str
-
-
-class RewriteProposal(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-    task_id: str
-    action: RewriteAction
-    edits: list[InstructionEdit]
-    reason: str = Field(min_length=1, max_length=1000)
-
-    @model_validator(mode="after")
-    def validate_replacement(self) -> "RewriteProposal":
-        if (self.action == RewriteAction.REWRITE) != bool(self.edits):
-            raise ValueError("Only a rewrite must supply nonempty edits")
-        return self
-
-
-class RewriteRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    task_id: str
-    status: ReviewStatus
-    proposal: RewriteProposal | None
-    detail: str
-
-
-class RewriteIdentity(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    tasks_sha256: str
-    rubric: ReviewRubric
-    model: str
-    model_revision: str
-    max_tokens: int
-    max_prompt_characters: int
-    instructions_sha256: str
-
-
-class RewriteLineage(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    task_id: str
-    parent_id: str
-    parent_sha256: str
-    candidate_sha256: str
-    rewrite: RewriteIdentity
-    original_audit: dict[str, Any] | None = None
 
 
 class TaskAudit(BaseModel):
@@ -278,8 +319,7 @@ class TaskAudit(BaseModel):
     checks: list[CheckResult]
     review: ReviewRecord | None
     decision: Decision | None
-    original: TaskSpec | None = None
-    cleanup: RewriteRecord | None = None
-    lineage: RewriteLineage | None = None
     normalization_changes: tuple[NormalizationChange, ...] = ()
     intended_use: IntendedUse | None = None
+    quality_basis: QualityBasis | None = None
+    source_quality_report: str | None = None

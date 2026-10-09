@@ -1,457 +1,447 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build pinned source acquisition, Zephyr audit, filtering, and merged task artifacts.
+"""Dataset declarations and the artifact steps that ingest them.
 
-The default prints the artifact plan. Add --run to build it using the configured
-Marin storage prefix and a GLM batch endpoint.
+An ``RlDataPipeline`` names one pinned source, the converter that turns each row into a
+``TaskSpec`` with its grader fixed, the agent's environment, what its graders' environment must
+provide, an optional review rubric and optional grader controls. ``source_step`` turns a declaration
+into one cached ``data/rl/<name>-<hash>`` artifact produced by
+``taskcompendium.pipeline.source_processing.run_source_pipeline``.
 """
 
 import hashlib
 import os
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
+import re
+import sys
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import asdict, dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-import click
-from fray.types import ResourceConfig
+import requests
+from marin.datakit.download.huggingface import (
+    DownloadConfig,
+    finish_download,
+    plan_download,
+    stream_file_to_fsspec,
+)
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
-from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower, run
-from marin.execution.remote import remote
-from marin.inference.openai_batch import OpenAIBatchClient
-from pydantic import TypeAdapter
-from taskcompendium.pipeline.fingerprints import recipe_code_identity
-from taskcompendium.pipeline.models import DatasetRecipe, EnvironmentInventory, FilterPolicy, ReviewRubric
-from taskcompendium.pipeline.review import DEFAULT_PROMPT_CHARACTERS, DEFAULT_REVIEW_MAX_TOKENS, BatchReviewer
-from taskcompendium.pipeline.rewriting import REWRITE_INSTRUCTIONS, BatchRewriter
+from marin.execution.lazy import ArtifactStep, StepContext
+from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import Backend
+from taskcompendium.convert.environment import IMAGE_BACKENDS
+from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.pipeline.controls import controls_identity
+from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
+from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFiles, SourceFormat
+from taskcompendium.pipeline.models import (
+    RESOURCE_BUDGET_BYTES,
+    Controls,
+    Converter,
+    IntendedUse,
+    ReviewRubric,
+    SourceRecipe,
+    SourceStatus,
+)
+from taskcompendium.pipeline.source_processing import (
+    SOURCE_PIPELINE_REVISION,
+    SourcePipelineConfig,
+    run_source_pipeline,
+)
+from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION
+from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION
 from taskcompendium.pipeline.sources import source_files_identity
-from taskcompendium.pipeline.stages import (
-    AuditExecution,
-    ReviewConfig,
-    rewrite_audit_source,
-)
-from taskcompendium.pipeline.stages import (
-    audit_source as audit_source_rows,
-)
-from taskcompendium.pipeline.stages import canonicalize_sources as canonicalize_source_rows
-from taskcompendium.pipeline.stages import (
-    concat_sources as concatenate_source_rows,
-)
-from taskcompendium.pipeline.stages import (
-    filter_source as filter_source_rows,
+from taskcompendium.runtime.local import context_paths
+from zephyr.dataset import Dataset
+
+from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime
+from experiments.post_training.task_curation.environment import Environment, Placement, placement
+from experiments.post_training.task_curation.images.build import (
+    EnvironmentArtifact,
+    built_environment,
+    environment_artifact,
 )
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
-from experiments.post_training.task_curation.downloads import source_download
-from experiments.post_training.task_curation.source_bindings import SOURCE_NAMES, source_recipe
+PIPELINE_VERSION = "2026.10.07.1"
+URL_CHUNK_BYTES = 1024 * 1024
+URL_TIMEOUT = 60
 
-PIPELINE_VERSION = "2026.10.02.1"
-AUDIT_REVISION = "staged-source-v1"
-PIPELINE_PREFIX = "task-curation"
-WORKER_PACKAGE = "./lib/taskcompendium[pipeline]"
+type RowSelector = Callable[[dict[str, Any], ConversionContext], bool]
+type RowDecoder = Callable[[dict[str, Any], ConversionContext], dict[str, Any]]
+type FileReader = Callable[[StoragePath, ConversionContext], Iterator[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
-class RewriteSelection:
-    task_ids: tuple[str, ...]
-    rubric: ReviewRubric
-    max_tokens: int = BatchRewriter.max_tokens
-    prompt_budget: int = BatchRewriter.max_prompt_characters
+class HfSource:
+    """Files from a Hugging Face dataset repository at a pinned revision.
+
+    ``select`` drops rows before raw sampling (for example, one component of a blend). ``decode``
+    rewrites a selected row before conversion (for example, unpacking an archive). ``read`` replaces
+    the format reader for files that need a custom parser; ``parts`` replaces it for a file several
+    workers read in parts, such as a slow generator. Each receives the ``ConversionContext``: the
+    staged auxiliary inputs and the grader's environment.
+    """
+
+    repo: str
+    revision: str
+    files: tuple[str, ...]
+    format: SourceFormat
+    select: RowSelector | None = None
+    decode: RowDecoder | None = None
+    read: FileReader | None = None
+    parts: FileParts | None = None
 
 
 @dataclass(frozen=True)
-class SourceBinding:
+class UrlSource:
+    """One file fetched from ``url`` and checked against ``sha256``, staged as ``filename``."""
+
+    url: str
+    sha256: str
+    filename: str
+    format: SourceFormat
+    select: RowSelector | None = None
+    decode: RowDecoder | None = None
+    read: FileReader | None = None
+    parts: FileParts | None = None
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"[0-9a-f]{64}", self.sha256) is None:
+            raise ValueError(f"URL source requires a lowercase SHA-256 digest: {self.url}")
+
+
+@dataclass(frozen=True)
+class ShellSim:
+    """No agent machine: conversation tasks, or shell tasks served by the simulated shell."""
+
+
+def environment_requirements(
+    environment: Environment, built: EnvironmentArtifact | None = None
+) -> EnvironmentRequirements:
+    """The requirements a task records for ``environment``; they name where the pipeline runs it.
+
+    A declared image runs in a sandbox of that image, and an environment that needs apt packages the
+    worker image lacks runs in a sandbox of the image built for it. Any other environment runs in the
+    Zephyr worker, which builds a uv environment from the lock its artifact stores. ``built`` is that
+    artifact, which every environment without a declared image requires.
+    """
+    where = placement(environment)
+    if where == Placement.IMAGE:
+        assert environment.image is not None
+        return EnvironmentRequirements(docker_image=environment.image, compatible_backends=IMAGE_BACKENDS)
+    if built is None:
+        raise ValueError("An environment without a declared image runs from its built artifact")
+    if where == Placement.BUILT_IMAGE:
+        assert built.image is not None
+        return EnvironmentRequirements(docker_image=built.image, compatible_backends=IMAGE_BACKENDS)
+    return EnvironmentRequirements(compatible_backends=(Backend.LOCAL,), packages_lock=built.lock_url)
+
+
+def environment_record(environment: Environment, built: EnvironmentArtifact | None) -> dict[str, Any]:
+    """What a source artifact's identity records of an environment: its image, or its build and built image."""
+    if environment.image is not None:
+        return {"image": environment.image}
+    assert built is not None
+    return {"identity": built.identity, "image": built.image}
+
+
+@dataclass(frozen=True)
+class RlDataPipeline:
+    """One RL data source and how its rows become tasks.
+
+    ``name`` is the catalog key and artifact name. ``version`` is the converter revision; bump it
+    when conversion changes in a way the hashed files do not capture. ``rubric=None`` skips model
+    review and ``controls=None`` skips grader verification. ``inputs`` are auxiliary pinned files
+    staged before conversion; the source callables and converter find them in ``context.inputs``.
+
+    ``environment`` is the agent's: ``ShellSim()`` or an ``Environment`` naming its image, which the
+    converter records on each task. ``grader`` is what the source's grader scripts need; the pipeline
+    builds it, decides where it runs (``environment_requirements``) and passes the result to the
+    converter as ``context.grader_environment``. ``ships`` are directories, such as
+    ``datasets/<family>/scorers``, whose files the converter packages into tasks. The artifact
+    identity hashes the converter module's directory, every file below ``ships`` and the grader's
+    built environment. A task whose decoded resources exceed ``resource_budget_bytes`` is deferred as
+    ``resources_over_budget``.
+    """
+
     name: str
+    source: HfSource | UrlSource
+    convert: Converter
     version: str
-    recipe: DatasetRecipe
-    downloaded: ArtifactStep[Artifact]
-    review: ReviewConfig
-    limit: int | None
-    rewrite: RewriteSelection | None = None
+    environment: Environment | ShellSim
+    intended_use: IntendedUse
+    rubric: str | None = None
+    controls: Controls | None = None
+    inputs: Mapping[str, HfSource | UrlSource] = field(default_factory=dict)
+    grader: Environment | None = None
+    ships: tuple[Path, ...] = ()
+    resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
+
+    def __post_init__(self) -> None:
+        missing = [str(path) for path in self.ships if not path.is_dir()]
+        if missing:
+            raise ValueError(f"{self.name} ships directories that do not exist: {missing}")
+        # Converters record the agent's requirements on each task without a built artifact to consult.
+        if isinstance(self.environment, Environment) and self.environment.image is None:
+            raise ValueError(f"{self.name} must name the agent environment's image")
 
 
-@dataclass(frozen=True)
-class SourceArtifacts:
-    name: str
-    downloaded: ArtifactStep[Artifact]
-    audited: ArtifactStep[Artifact]
-    accepted: ArtifactStep[Artifact]
+class RlDataArtifact(CampaignArtifact):
+    manifest: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class CurationWorkflow:
-    sources: tuple[SourceArtifacts, ...]
-    canonical: ArtifactStep[Artifact]
+class SourcePipelineIncomplete(RuntimeError):
+    """The quality gate could not decide or a control trial hit an infrastructure error; evidence is retained."""
 
 
-@dataclass(frozen=True)
-class AuditStageConfig:
-    source_path: str
-    output_path: str
-    recipe_identity: dict[str, Any]
-    files_identity: dict[str, Any]
-    review: ReviewConfig
-    limit: int | None
-    max_workers: int
-    review_batch_size: int
-    resources: ResourceConfig
+def review_rubric(pipeline: RlDataPipeline) -> ReviewRubric | None:
+    """Split a rubric string into criteria at blank lines."""
+    if pipeline.rubric is None:
+        return None
+    criteria = tuple(" ".join(part.split()) for part in pipeline.rubric.strip().split("\n\n"))
+    if not all(criteria):
+        raise ValueError(f"Rubric criteria must be nonempty: {pipeline.name}")
+    return ReviewRubric(id=pipeline.name, version=pipeline.version, criteria=criteria)
 
 
-@dataclass(frozen=True)
-class RewriteStageConfig:
-    source_path: str
-    output_path: str
-    identity: dict[str, Any]
-    recipe_identity: dict[str, Any]
-    max_workers: int
-    review_batch_size: int
-    resources: ResourceConfig
+def source_files(source: HfSource | UrlSource) -> SourceFiles:
+    if isinstance(source, HfSource):
+        return SourceFiles(
+            source.repo,
+            source.revision,
+            source.files,
+            source.format,
+            source.select,
+            source.decode,
+            source.read,
+            source.parts,
+        )
+    return SourceFiles(
+        source.url,
+        source.sha256,
+        (source.filename,),
+        source.format,
+        source.select,
+        source.decode,
+        source.read,
+        source.parts,
+    )
 
 
-def content_name(name: str, config: object) -> str:
-    """Address config changes separately so fixed artifacts cannot mask changed inputs."""
-    return f"{name}-{hashlib.sha256(canonical_json(config).encode()).hexdigest()[:16]}"
+def source_recipe(
+    pipeline: RlDataPipeline, inputs: Mapping[str, str], grader_environment: EnvironmentRequirements | None
+) -> SourceRecipe:
+    return SourceRecipe(
+        name=pipeline.name,
+        version=pipeline.version,
+        source=source_files(pipeline.source),
+        convert=pipeline.convert,
+        rubric=review_rubric(pipeline),
+        controls=pipeline.controls,
+        intended_use=pipeline.intended_use,
+        inputs=dict(inputs),
+        grader_environment=grader_environment,
+        resource_budget_bytes=pipeline.resource_budget_bytes,
+    )
 
 
-def recipe_identity(recipe: DatasetRecipe) -> dict[str, Any]:
-    """Record explicit recipe revisions and parameters without serializing callables."""
-    checks = recipe.pipeline.check_suite
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def converter_identity(pipeline: RlDataPipeline, grader: EnvironmentArtifact | None) -> dict[str, Any]:
+    """The converter, every file it can package into a task, and the environment its graders run in.
+
+    Files are the converter module's directory's ``*.py`` and everything below ``ships``, keyed
+    by path relative to the module's directory. Library code the converter calls, such as
+    ``taskcompendium.convert.script_grader``, is not hashed: as for every ``taskcompendium.convert``
+    helper, a library change that alters tasks bumps the normalization stage revision or the
+    declaration's ``version``.
+    """
+    module = sys.modules[callable_module(pipeline.convert)]
+    assert module.__file__ is not None
+    directory = Path(module.__file__).parent
+    files = {*directory.glob("*.py"), *(path for root in pipeline.ships for path in context_paths(root))}
     return {
-        "name": recipe.name,
-        "version": recipe.version,
-        "source": recipe.source,
-        "rubric": recipe.pipeline.rubric,
-        "intended_use": recipe.intended_use,
-        "check_suite": (
-            {"id": checks.id, "revision": checks.revision, "parameters": checks.parameters}
-            if checks is not None
-            else None
+        "function": callable_identity(pipeline.convert),
+        "files": {os.path.relpath(path, directory): _file_sha256(path) for path in sorted(files)},
+        "grader": environment_record(pipeline.grader, grader) if pipeline.grader is not None else None,
+    }
+
+
+def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
+    """The pinned bytes a source download stages; reader callables do not change them."""
+    if isinstance(source, HfSource):
+        return {"repo": source.repo, "revision": source.revision, "files": sorted(source.files)}
+    return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
+
+
+def pipeline_identity(
+    pipeline: RlDataPipeline, config: SourcePipelineConfig, grader: EnvironmentArtifact | None
+) -> dict[str, Any]:
+    """Everything that can change a source artifact's contents; ``grader`` is the grader's built environment."""
+    recipe = source_recipe(pipeline, {}, None)
+    execution = config.execution
+    return {
+        "name": pipeline.name,
+        "version": pipeline.version,
+        "intended_use": pipeline.intended_use,
+        "source": {**download_identity(pipeline.source), "files": source_files_identity(recipe.source)},
+        "inputs": {name: download_identity(source) for name, source in sorted(pipeline.inputs.items())},
+        "code": recipe_code_identity(recipe),
+        "converter": converter_identity(pipeline, grader),
+        "environment": (
+            environment_record(pipeline.environment, None)
+            if isinstance(pipeline.environment, Environment)
+            else {"shellsim": True}
         ),
-        "audit_revision": AUDIT_REVISION,
-        "implementation": recipe_code_identity(recipe),
-    }
-
-
-def audit_source(
-    binding: SourceBinding,
-    downloaded: ArtifactStep[Artifact],
-    execution: AuditExecution,
-    resources: ResourceConfig,
-) -> ArtifactStep[Artifact]:
-    """Normalize, check, and review the acquired shards through the Zephyr stage."""
-    recipe_config = recipe_identity(binding.recipe)
-    identity = {
-        "recipe": recipe_config,
-        "review": binding.review,
-        "downloaded": (downloaded.name, downloaded.version),
-        "files": source_files_identity(binding.recipe.inputs.files),
-        "limit": binding.limit,
-    }
-
-    def build_config(ctx: StepContext) -> AuditStageConfig:
-        return AuditStageConfig(
-            source_path=ctx.artifact_path(downloaded),
-            output_path=ctx.output_path,
-            recipe_identity=recipe_config,
-            files_identity=source_files_identity(binding.recipe.inputs.files),
-            limit=binding.limit,
-            review=binding.review,
-            max_workers=ctx.runtime_arg("max_workers"),
-            review_batch_size=ctx.runtime_arg("review_batch_size"),
-            resources=ctx.runtime_arg("resources"),
-        )
-
-    def execute(config: AuditStageConfig) -> None:
-        # Artifact sidecars persist build_config values; clients and credentials stay outside it.
-        remote(
-            audit_source_rows,
-            resources=config.resources,
-            pip_packages=[WORKER_PACKAGE],
-        )(
-            source_path=config.source_path,
-            output_path=config.output_path,
-            recipe=binding.recipe,
-            review=config.review,
-            files=binding.recipe.inputs.files,
-            limit=config.limit,
-            execution=replace(execution, max_workers=config.max_workers, review_batch_size=config.review_batch_size),
-        )
-
-    return ArtifactStep(
-        name=content_name(f"{PIPELINE_PREFIX}/{binding.name}/audited", identity),
-        version=binding.version,
-        artifact_type=Artifact,
-        run=execute,
-        build_config=build_config,
-        deps=(downloaded,),
-        runtime_args={
-            "max_workers": execution.max_workers,
-            "review_batch_size": execution.review_batch_size,
-            "resources": resources,
+        "resource_budget_bytes": pipeline.resource_budget_bytes,
+        "rubric": pipeline.rubric,
+        "review": asdict(config.review) if pipeline.rubric is not None else None,
+        "controls": controls_identity(pipeline.controls) if pipeline.controls is not None else None,
+        "machines": (
+            config.machines.identity() if pipeline.controls is not None and config.machines is not None else None
+        ),
+        "mode": config.mode,
+        "review_batch_size": execution.review_batch_size,
+        "review_input_bytes": execution.review_input_bytes,
+        "worker_image": execution.worker_resources.image if execution.worker_resources else None,
+        "normalized_shards": config.normalized_shards,
+        "quality_policy": asdict(config.quality_policy),
+        "verification_policy": asdict(config.verification_policy),
+        "filter_policy": asdict(config.filter_policy),
+        "revisions": {
+            "procedure": SOURCE_PIPELINE_REVISION,
+            "quality": SOURCE_QUALITY_REVISION,
+            "verification": SOURCE_VERIFICATION_REVISION,
         },
-    )
-
-
-def filter_source(
-    binding: SourceBinding,
-    audited: ArtifactStep[Artifact],
-    policy: FilterPolicy,
-    resources: ResourceConfig,
-) -> ArtifactStep[Artifact]:
-    """Keep final decisions in an audit view beside the accepted task view."""
-    return apply(
-        content_name(
-            f"{PIPELINE_PREFIX}/{binding.name}/filtered", {"audited": (audited.name, audited.version), "policy": policy}
-        ),
-        remote(filter_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
-        version=binding.version,
-        audit_path=audited,
-        output_path=OUT,
-        policy=policy,
-    )
-
-
-def rewrite_source(
-    binding: SourceBinding,
-    filtered: ArtifactStep[Artifact],
-    policy: FilterPolicy,
-    execution: AuditExecution,
-    rewriter: BatchRewriter | None,
-    resources: ResourceConfig,
-) -> ArtifactStep[Artifact]:
-    """Recheck selected instruction repairs and preserve the original audit evidence."""
-    assert binding.rewrite is not None
-    identity = {
-        "input": (filtered.name, filtered.version),
-        "selection": binding.rewrite,
-        "recipe": recipe_identity(binding.recipe),
-        "policy": policy,
-        "model": binding.review.model,
-        "model_revision": binding.review.model_revision,
-        "rewrite_revision": "instruction-edits-v2",
-        "instructions_sha256": hashlib.sha256(REWRITE_INSTRUCTIONS.encode()).hexdigest(),
     }
 
-    def config(ctx: StepContext) -> RewriteStageConfig:
-        return RewriteStageConfig(
-            source_path=ctx.artifact_path(filtered),
-            output_path=ctx.output_path,
-            identity=identity,
-            recipe_identity=recipe_identity(binding.recipe),
-            max_workers=ctx.runtime_arg("max_workers"),
-            review_batch_size=ctx.runtime_arg("review_batch_size"),
-            resources=ctx.runtime_arg("resources"),
+
+@dataclass(frozen=True)
+class DownloadRequest:
+    source: HfSource | UrlSource
+    output_path: str
+
+
+def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> None:
+    """Stage a source's pinned files; a URL download must match its declared digest."""
+    source = request.source
+    if isinstance(source, HfSource):
+        download = DownloadConfig(
+            hf_dataset_id=source.repo,
+            revision=source.revision,
+            hf_urls_glob=list(source.files),
+            gcs_output_path=request.output_path,
+            wait_for_completion=True,
         )
-
-    def execute(values: RewriteStageConfig) -> None:
-        if execution.reviewer is None or rewriter is None:
-            raise ValueError("Rewrite execution requires both a rewriter and a reviewer")
-        assert binding.rewrite is not None
-        remote(rewrite_audit_source, resources=values.resources, pip_packages=[WORKER_PACKAGE])(
-            source_path=values.source_path,
-            output_path=values.output_path,
-            recipe=binding.recipe,
-            policy=policy,
-            rewrite_rubric=binding.rewrite.rubric,
-            rewriter=replace(
-                rewriter,
-                model=binding.review.model,
-                model_revision=binding.review.model_revision,
-                max_tokens=binding.rewrite.max_tokens,
-                max_prompt_characters=binding.rewrite.prompt_budget,
-            ),
-            reviewer=execution.reviewer,
-            selected_task_ids=binding.rewrite.task_ids,
-            review_batch_size=values.review_batch_size,
-            max_workers=values.max_workers,
+        plan = plan_download(download)
+        campaign.context.execute(
+            Dataset.from_list(list(plan.tasks))
+            .map(stream_file_to_fsspec)
+            .write_jsonl(plan.metrics_path, skip_existing=True)
         )
-
-    return ArtifactStep(
-        name=content_name(f"{PIPELINE_PREFIX}/{binding.name}/rewritten", identity),
-        version=binding.version,
-        artifact_type=Artifact,
-        run=execute,
-        build_config=config,
-        deps=(filtered,),
-        runtime_args={
-            "max_workers": execution.max_workers,
-            "review_batch_size": execution.review_batch_size,
-            "resources": resources,
-        },
-    )
-
-
-def concat_sources(sources: Sequence[SourceArtifacts], resources: ResourceConfig) -> ArtifactStep[Artifact]:
-    """Merge the selected source views with explicit source dependencies."""
-    inputs = tuple(source.accepted for source in sources)
-    return apply(
-        content_name(
-            f"{PIPELINE_PREFIX}/merged-audit",
-            {"sources": [(step.name, step.version) for step in inputs], "view": "audit"},
-        ),
-        remote(concatenate_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
-        version=PIPELINE_VERSION,
-        input_paths=inputs,
-        output_path=OUT,
-        view="audit",
-    )
-
-
-def build_workflow(
-    bindings: Sequence[SourceBinding],
-    *,
-    execution: AuditExecution,
-    resources: ResourceConfig,
-    policy: FilterPolicy = FilterPolicy(),
-    rewriter: BatchRewriter | None = None,
-) -> CurationWorkflow:
-    """Build source branches and one canonical artifact containing all output views."""
-    if not bindings or len({binding.name for binding in bindings}) != len(bindings):
-        raise ValueError("Choose at least one source, with unique artifact names")
-    sources = []
-    for binding in bindings:
-        audited = audit_source(binding, binding.downloaded, execution, resources)
-        accepted = filter_source(binding, audited, policy, resources)
-        if binding.rewrite is not None:
-            accepted = rewrite_source(binding, accepted, policy, execution, rewriter, resources)
-        sources.append(SourceArtifacts(binding.name, binding.downloaded, audited, accepted))
-    merged = concat_sources(sources, resources)
-    canonical = apply(
-        content_name(f"{PIPELINE_PREFIX}/canonical", {"merged": (merged.name, merged.version), "policy": "exact-v1"}),
-        remote(canonicalize_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
-        version=PIPELINE_VERSION,
-        merged_path=merged,
-        output_path=OUT,
-    )
-    return CurationWorkflow(tuple(sources), canonical)
-
-
-@click.command(help=__doc__)
-@click.option("--source", "source_names", multiple=True, required=True, type=click.Choice(SOURCE_NAMES))
-@click.option("--image", help="Immutable Docker image for selected coding-source grader controls.")
-@click.option("--version", default=PIPELINE_VERSION, show_default=True)
-@click.option(
-    "--limit",
-    type=int,
-    default=100,
-    show_default=True,
-    help="At most this many input records per source, across all staged files.",
-)
-@click.option("--model", default=GLM_MODEL, show_default=True)
-@click.option("--all-rows", is_flag=True, help="Process every selected source record instead of applying --limit.")
-@click.option("--model-revision", required=True)
-@click.option("--max-tokens", type=int, default=DEFAULT_REVIEW_MAX_TOKENS, show_default=True)
-@click.option("--prompt-budget", type=int, default=DEFAULT_PROMPT_CHARACTERS, show_default=True)
-@click.option("--base-url", help="GLM batch endpoint, required with --run.")
-@click.option("--review-cache", help="Stable FineStore query cache location, shared across catalog versions.")
-@click.option(
-    "--environment-inventory",
-    "environment_inventories",
-    type=(str, click.Path(exists=True, path_type=Path)),
-    multiple=True,
-    metavar="SOURCE JSON",
-    help="Attach a scoped Shellbox or source-manifest file inventory to this source's review rubric.",
-)
-@click.option(
-    "--rewrite-plan",
-    "rewrite_plans",
-    type=(str, click.Path(exists=True, path_type=Path)),
-    multiple=True,
-    metavar="SOURCE JSON",
-    help="Select task_ids and a separate instruction-repair rubric for a source.",
-)
-@click.option("--max-workers", type=int, default=4, show_default=True)
-@click.option("--review-batch-size", type=int, default=100, show_default=True)
-@click.option("--cpu", type=int, default=4, show_default=True)
-@click.option("--ram", default="16g", show_default=True)
-@click.option("--max-concurrent", type=int, default=8, show_default=True)
-@click.option("--run", "do_run", is_flag=True, help="Build the canonical views; the default prints the artifact plan.")
-def main(
-    source_names: tuple[str, ...],
-    image: str | None,
-    version: str,
-    limit: int,
-    all_rows: bool,
-    model: str,
-    model_revision: str,
-    max_tokens: int,
-    prompt_budget: int,
-    base_url: str | None,
-    review_cache: str | None,
-    environment_inventories: tuple[tuple[str, Path], ...],
-    rewrite_plans: tuple[tuple[str, Path], ...],
-    max_workers: int,
-    review_batch_size: int,
-    cpu: int,
-    ram: str,
-    max_concurrent: int,
-    do_run: bool,
-) -> None:
-    if limit < 1:
-        raise click.UsageError("--limit must be positive")
-    row_limit = None if all_rows else limit
-    review = ReviewConfig(model=model, model_revision=model_revision, prompt_budget=prompt_budget, max_tokens=max_tokens)
-    reviewer = None
-    if do_run:
-        if base_url is None:
-            raise click.UsageError("--base-url is required with --run")
-        reviewer = BatchReviewer(
-            OpenAIBatchClient(base_url, os.environ[GLM_BULK_TOKEN_ENV]),
-            model,
-            model_revision,
-            max_tokens=max_tokens,
-            max_prompt_characters=prompt_budget,
-            query_cache_root=review_cache,
-        )
-    resources = ResourceConfig.with_cpu(cpu=cpu, ram=ram)
-    bindings = []
-    for name in source_names:
-        recipe = source_recipe(name, image)
-        downloaded = source_download(recipe, resources)
-        bindings.append(SourceBinding(name, version, recipe, downloaded, review, row_limit))
-    inventories = {
-        name: TypeAdapter(EnvironmentInventory).validate_json(path.read_bytes())
-        for name, path in environment_inventories
-    }
-    if set(inventories) - {binding.name for binding in bindings}:
-        raise click.UsageError("--environment-inventory must name a selected source")
-    bindings = [
-        (
-            replace(
-                binding,
-                recipe=replace(
-                    binding.recipe,
-                    pipeline=replace(
-                        binding.recipe.pipeline,
-                        rubric=replace(binding.recipe.pipeline.rubric, environment_inventory=inventories[binding.name]),
-                    ),
-                ),
-            )
-            if binding.name in inventories
-            else binding
-        )
-        for binding in bindings
-    ]
-    plans = {name: TypeAdapter(RewriteSelection).validate_json(path.read_bytes()) for name, path in rewrite_plans}
-    if set(plans) - set(source_names):
-        raise click.UsageError("--rewrite-plan must name a selected source")
-    bindings = [replace(binding, rewrite=plans.get(binding.name)) for binding in bindings]
-    rewriter = None
-    if plans and reviewer is not None:
-        rewriter = BatchRewriter(reviewer.client, model, model_revision)
-    workflow = build_workflow(
-        bindings,
-        execution=AuditExecution(max_workers=max_workers, review_batch_size=review_batch_size, reviewer=reviewer),
-        resources=resources,
-        rewriter=rewriter,
-    )
-    if do_run:
-        run(workflow.canonical, max_concurrent=max_concurrent)
+        finish_download(plan)
         return
-    click.echo(lower(workflow.canonical))
+    digest = hashlib.sha256()
+    destination = StoragePath(request.output_path) / source.filename
+    with requests.get(source.url, stream=True, timeout=URL_TIMEOUT) as response:
+        response.raise_for_status()
+        with destination.open("wb", auto_mkdir=True) as stream:
+            for chunk in response.iter_content(URL_CHUNK_BYTES):
+                digest.update(chunk)
+                stream.write(chunk)
+    if digest.hexdigest() != source.sha256:
+        destination.rm()
+        raise ValueError(f"{source.url} has SHA-256 {digest.hexdigest()}; expected {source.sha256}")
 
 
-if __name__ == "__main__":
-    main()
+def _download_request(source: HfSource | UrlSource, ctx: StepContext) -> DownloadRequest:
+    return DownloadRequest(source, ctx.output_path)
+
+
+def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
+    """One shared artifact per distinct set of pinned bytes."""
+    identity = hashlib.sha256(canonical_json(download_identity(source)).encode()).hexdigest()[:16]
+    return ArtifactStep(
+        name=f"task-curation/download/{identity}",
+        version=PIPELINE_VERSION,
+        artifact_type=Artifact,
+        run=partial(download_source, campaign=campaign),
+        build_config=partial(_download_request, source),
+    )
+
+
+@dataclass(frozen=True)
+class SourceRun:
+    identity: dict[str, Any]
+    source_input: str
+    inputs: dict[str, str]
+    output_path: str
+    grader_artifact: str | None
+
+
+def _source_run(
+    identity: dict[str, Any],
+    downloaded: ArtifactStep[Artifact],
+    inputs: Mapping[str, ArtifactStep[Artifact]],
+    grader: ArtifactStep[EnvironmentArtifact] | None,
+    ctx: StepContext,
+) -> SourceRun:
+    return SourceRun(
+        identity=identity,
+        source_input=ctx.artifact_path(downloaded),
+        inputs={name: ctx.artifact_path(step) for name, step in inputs.items()},
+        output_path=ctx.output_path,
+        grader_artifact=ctx.artifact_path(grader) if grader is not None else None,
+    )
+
+
+def _run_source(
+    pipeline: RlDataPipeline, config: SourcePipelineConfig, run: SourceRun, *, campaign: CampaignRuntime
+) -> RlDataArtifact:
+    grader_environment = None
+    if pipeline.grader is not None:
+        built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
+        grader_environment = environment_requirements(pipeline.grader, built)
+    result = run_source_pipeline(
+        source_recipe(pipeline, run.inputs, grader_environment),
+        campaign.context,
+        run.source_input,
+        run.output_path,
+        config,
+        canonical_source=pipeline.name,
+    )
+    if result.status == SourceStatus.INCOMPLETE:
+        raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
+    return RlDataArtifact(path=run.output_path, status=result.status, manifest=asdict(result))
+
+
+def source_step(
+    pipeline: RlDataPipeline, config: SourcePipelineConfig, campaign: CampaignRuntime
+) -> ArtifactStep[RlDataArtifact]:
+    """The ``data/rl/<name>-<hash>`` artifact for one declaration.
+
+    A ``grader`` without a declared image requires its environment's artifact to be built already; see
+    ``images.build``.
+    """
+    downloaded = download_step(pipeline.source, campaign)
+    inputs = {name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())}
+    grader_step = None
+    grader_built = None
+    if pipeline.grader is not None and placement(pipeline.grader) != Placement.IMAGE:
+        grader_built = built_environment(pipeline.grader)
+        grader_step = environment_artifact(pipeline.grader)
+    identity = pipeline_identity(pipeline, config, grader_built)
+    digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:16]
+    return ArtifactStep(
+        name=f"data/rl/{pipeline.name}-{digest}",
+        version=PIPELINE_VERSION,
+        artifact_type=RlDataArtifact,
+        run=partial(_run_source, pipeline, config, campaign=campaign),
+        build_config=partial(_source_run, identity, downloaded, inputs, grader_step),
+        deps=(downloaded, *inputs.values(), *((grader_step,) if grader_step is not None else ())),
+    )

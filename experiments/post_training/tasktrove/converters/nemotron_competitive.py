@@ -3,22 +3,17 @@
 
 """Nemotron competitive coding stdin/stdout tasks."""
 
-from verifyit.spec import Compare, StdioSpec
-
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
-from experiments.post_training.tasktrove.converters.stdio_cases import (
-    SOLUTION_COMMAND,
-    case_files,
-    hidden_case_rejection,
-)
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
+from taskcompendium.convert.tasktrove_stdio_cases import SOLUTION_COMMAND, case_files, hidden_case_rejection
+from verifyit.spec import Compare, StdioSpec
 
 
 def convert_nemotron_competitive(task: TaskFiles) -> ConvertedTask | Rejected:

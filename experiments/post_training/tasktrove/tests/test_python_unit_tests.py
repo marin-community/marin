@@ -3,22 +3,17 @@
 
 import sys
 
+import pytest
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TEST_SH, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.grade import Status, run
 from verifyit.spec import PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    INSTRUCTION,
-    TEST_SH,
-    TaskFiles,
-    read_task_binary,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 
 TOOL_REF = "0123abc"
 SOURCE = "DCAgent__exp_rpt_unitsyn-python-large-v2"
@@ -85,6 +80,33 @@ def test_invalid_test_is_rejected():
     assert "not valid Python" in record.error
 
 
+@pytest.mark.parametrize("path", [TEST_FILE, "solution/solution.py"])
+def test_malformed_python_encoding_is_rejected_without_aborting_conversion(path):
+    task = read_task_binary(_task())
+    task.files[path] = b'def test_text():\n    assert "\xff"\n'
+    record = _convert(write_task_binary(task))
+    assert record.status == ConvertStatus.UNSUPPORTED_VARIANT
+    assert record.task_binary is None
+
+
+def test_declared_python_encoding_is_preserved_and_can_be_graded(tmp_path):
+    task = read_task_binary(_task())
+    task.files[TEST_FILE] = (
+        b"# coding: latin-1\nfrom solution import add\n\ndef test_add():\n" b'    assert add(2, 3) == 5, "\xff"\n'
+    )
+    record = _convert(write_task_binary(task))
+    converted = read_task_binary(record.task_binary)
+    converted.write_to(tmp_path)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "solution.py").write_text("def add(left, right):\n    return left + right\n")
+    spec = PytestSpec(paths=(str(tmp_path / TEST_FILE),), python=sys.executable)
+    spec_path = tmp_path / VERIFIER_TOML
+    spec_path.write_text(render_spec(spec))
+    verdict = run(spec_path, workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 1.0)
+
+
 def test_file_without_local_test_function_is_rejected_as_null_grader():
     record = _convert(_task(test="def helper():\n    return True\n"))
     assert record.status == ConvertStatus.NULL_GRADER
@@ -107,6 +129,7 @@ def test_pytest_mode_distinguishes_collection_failure_wrong_answer_and_oracle(tm
     solution.write_text("")
     missing_implementation = run(spec_path, workspace)
     assert (missing_implementation.status, missing_implementation.reward) == (Status.SCORED, 0.0)
+    assert missing_implementation.detail["reason"] == "collection_error"
 
     solution.write_text("def add(left, right):\n    return left - right - 1\n")
     wrong_answer = run(spec_path, workspace)

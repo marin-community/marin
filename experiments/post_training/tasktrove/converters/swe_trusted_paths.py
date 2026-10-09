@@ -6,15 +6,16 @@
 import json
 import re
 
-from verifyit.spec import PytestSpec
-
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
+from verifyit.spec import PytestSpec
+
 from experiments.post_training.tasktrove.converters.swe_repo import (
     CONFIG_JSON,
     TESTBED,
@@ -22,9 +23,9 @@ from experiments.post_training.tasktrove.converters.swe_repo import (
     ensure_pytest_json_report,
     pytest_selection,
     restore_setup,
+    swe_test_environment,
     test_ids,
 )
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, TEST_SH, TaskFiles
 
 # The old ``tests/test.sh`` invokes ``install_trusted_test_paths.sh <repo> <trusted_commit>
 # <manifest> [<patch_path>] [<fallback_commit>]``; the commits are the only per-task values we need
@@ -81,7 +82,7 @@ def convert_swe_trusted_paths(task: TaskFiles) -> ConvertedTask | Rejected:
     return ConvertedTask(
         instruction=task.text(INSTRUCTION),
         spec=spec,
-        dockerfile=ensure_pytest_json_report(task.text(DOCKERFILE)),
+        dockerfile=swe_test_environment(ensure_pytest_json_report(task.text(DOCKERFILE)), task.text(INSTRUCTION)),
         tags=("code", "swe", "swe-repo", "trusted-test-paths"),
         language="python",
         data_files={TRUSTED_TEST_PATHS: task.files[TRUSTED_TEST_PATHS]},

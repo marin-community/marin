@@ -6,17 +6,13 @@
 import re
 from pathlib import Path
 
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
+
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    INSTRUCTION,
-    TaskFiles,
-    read_task_binary,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import Check, verify_task
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"

@@ -14,7 +14,6 @@ class Outcome(StrEnum):
     INVALID_TASK = "invalid_task"
     INFRA_ERROR = "infra_error"
     UNAVAILABLE = "unavailable"
-    SKIPPED = "skipped"
 
 
 class GradingFailure(StrEnum):

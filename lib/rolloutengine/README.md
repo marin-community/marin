@@ -6,14 +6,17 @@
 Callers supply a model callable, machine factories, and optional `TaskSession`
 factories for task actions and grading.
 The default session handles shell tools.
+For text, number, JSON, and native-action answers, it adds the task's answer-format instruction and tools to the model request.
 For workspace-state tasks, this session adds shell and final-response instructions to the model request.
 Importers retain the task problem without these interface instructions.
 The engine owns model calls, conversation and token accumulation, deadlines, and resource cleanup.
 
 `ShellboxRolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
 The lowered record preserves its `TaskSpec` and adds machine selections and session limits.
-The supported scope is single-stage tasks with prebuilt, digest-pinned images or the built-in ShellSim filesystem.
-Shell verifiers require a prebuilt, digest-pinned image and a separate machine.
+The supported scope is single-stage tasks with prebuilt, digest-pinned images, local package-lock environments, or the built-in ShellSim filesystem.
+After the turn loop, the default session grades an in-process `VerifyitGrader` on the host.
+A `ScriptGrader`, or a `VerifyitGrader` with an environment, grades in a separate verifier machine using its digest-pinned image or a local environment built from its package lock.
+A `SessionGrader` requires a registered task session. A `NoGrader` task receives an `unavailable` grade.
 The Harbor importer accepts only separate verifier environments.
 An unset verifier mode without a separate environment selects shared mode and causes rejection.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
