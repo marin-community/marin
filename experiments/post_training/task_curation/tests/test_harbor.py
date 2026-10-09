@@ -19,11 +19,17 @@ from taskcompendium.pipeline.models import NormalizedTask
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.compare_harbor import compare_harbor
-from experiments.post_training.task_curation.datasets.tasktrove import calendar, math, python_tests
+from experiments.post_training.task_curation.datasets.tasktrove import (
+    calendar,
+    instruction_following,
+    math,
+    puzzles,
+    python_tests,
+)
 from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, harbor_record, main
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_sources
-from experiments.post_training.task_curation.tests.conversion import convert_row
+from experiments.post_training.task_curation.tests.conversion import convert_row, tasktrove_row
 from experiments.post_training.tasktrove.publish import TASKS_SCHEMA as RELEASE_SCHEMA
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -75,9 +81,6 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
         # Harbor bypasses test.sh when this reserved filename exists. The wrapper
         # must run to load our bundled verifyit and install public grader inputs.
         assert "tests/verifier.toml" not in files
-        command = shlex.split(files["tests/test.sh"].decode().splitlines()[-1])
-        assert command[:2] == ["exec", "python3"]
-        assert command[-1].removeprefix("/") in files
     for resource in converted.task.resources.verifier:
         assert "tests/" + resource.path in files
     if converted.task.answer_type == "text":
@@ -151,6 +154,64 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
     submitted.unlink()
     subprocess.run(command, check=True)
     assert not submitted.exists()
+
+
+@pytest.mark.parametrize(
+    "mode,reference,valid,invalid",
+    [
+        (
+            "exact",
+            {"gold": "Defect, Salt, chair", "answer_type": "ordered_list"},
+            "Defect, Salt, chair",
+            "chair, Salt, Defect",
+        ),
+        ("math", {"gold": "3", "answer_type": "number"}, r"\boxed{3}", r"\boxed{4}"),
+        (
+            "json-schema",
+            {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+            '{"name":"Ada"}',
+            '{"name":3}',
+        ),
+    ],
+)
+def test_harbor_in_process_contract_runs_bundled_grader(mode, reference, valid, invalid, tmp_path) -> None:
+    if mode == "json-schema":
+        source = next(source for source in instruction_following.sources() if source.name == "tasktrove-structured")
+        prompt = "Produce JSON with a string name. Write your final JSON to `/app/answer.txt`."
+        private = {"tests/verifier_data.json": json.dumps({"schema_type": "json", "schema": reference}).encode()}
+    else:
+        source = puzzles.sources()[0]
+        prompt = "Solve the puzzle. Write ONLY your final answer to **`/app/answer.txt`**."
+        private = {"tests/gold.json": json.dumps(reference).encode()}
+    assert source.pipeline is not None
+    assert isinstance(source.pipeline.source, HfSource)
+    converted = convert_row(source.pipeline, tasktrove_row({"instruction.md": prompt.encode(), **private}))
+    assert isinstance(converted, NormalizedTask)
+    row = {
+        "task_json": converted.task.model_dump_json(),
+        "source_row": source.pipeline.source.files[0] + ":0",
+        "original_path": "fixture-task",
+        "normalization_changes": [change.model_dump() for change in converted.changes],
+    }
+    record = harbor_record(row, grader_image=GRADER_IMAGE, family=source.info.family)
+    files = archive_files(record.task_binary)
+    assert files["instruction.md"].decode() == prompt
+    assert not any(path.startswith("environment/files/") for path in files)
+    for name, data in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    workspace, logs = tmp_path / "app", tmp_path / "logs"
+    workspace.mkdir()
+    # Relocate only the container's absolute paths; run the archive's wrapper and bundled runtime.
+    script = files["tests/test.sh"].decode().replace("/tests/", str(tmp_path / "tests") + "/").rstrip()
+    script += f" --workspace {shlex.quote(str(workspace))} --logs-dir {shlex.quote(str(logs))}\n"
+    for answer, expected in ((valid, 1.0), (invalid, 0.0)):
+        (workspace / "answer.txt").write_text(answer)
+        subprocess.run(["bash", "-c", script], check=True, capture_output=True, text=True)
+        verdict = json.loads((logs / "verdict.json").read_text())
+        assert verdict["status"] == "scored"
+        assert verdict["reward"] == expected
 
 
 def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(normalized_row, tmp_path) -> None:

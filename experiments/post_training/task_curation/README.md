@@ -273,8 +273,13 @@ its manifest records that dependency parity and runtime behavior remain
 unverified. Current verifyit code is bundled under the hidden `tests/` directory.
 The exporter supports plain-text answers with recorded original file-delivery
 instructions, and file submissions graded by verifyit or an archived Harbor
-`test.sh` emitting `reward.txt`. Other contracts produce explicit rejection
-records. Rejections from normalization remain in the export manifest.
+`test.sh` emitting `reward.txt`. Exact, math, and JSON-schema graders declared
+without a separate environment also run in the supplied verifier image after
+export. This covers `tasktrove-puzzles` and `tasktrove-structured`: the original
+answer-file instruction is restored, and
+reference answers and schemas remain private verifier resources. Other
+contracts produce explicit rejection records. Rejections from normalization
+remain in the export manifest.
 
 Each task keeps its source, original archive path, and TaskSpec ID. The agent image
 contains only public resources; the verifier runs separately and receives the
