@@ -403,9 +403,7 @@ _TILE_MAP_GENERIC_CONFIG = TritonBlockConfig(
 _TILE_MAP_BLACKWELL_ROW_CONFIG = dataclasses.replace(_TILE_MAP_GENERIC_CONFIG, block_n=_TRITON_BLACKWELL_BLOCK_N)
 _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
     # Swept on MI350X (gfx950) at the June (G=32, K and N of 1280-2560) and Mixtral-like (G=8, 4096x14336)
-    # expert shapes. DRHS was swept again for the jax-triton kernel, which Triton 3.6 compiles differently
-    # from XLA's Pallas-Triton pipeline: the earlier 256x128x64 entry, with 4 warps and 1 stage, ran 25-40%
-    # slower here.
+    # expert shapes.
     _GpuFamily.AMD_INSTINCT: {
         RaggedLayout.FWD: TritonBlockConfig(
             block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=2
@@ -672,7 +670,7 @@ def _tile_map_triton_call(
     layout: RaggedLayout,
     config: TritonBlockConfig | None = None,
 ) -> jax.Array:
-    """Tile-map kernels. ``config`` overrides the device-dependent block config; benchmarks use it to sweep tiles."""
+    """Tile-map kernels. ``config``, when given, replaces the device-dependent block config."""
     if layout == RaggedLayout.DRHS:
         rows, m = lhs.shape
         n = rhs.shape[1]
@@ -766,7 +764,7 @@ _LAYOUT_DIM_NUMS: dict[RaggedLayout, jax.lax.RaggedDotDimensionNumbers] = {
 }
 
 
-def _triton_pallas_call(
+def _triton_kernel_call(
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
@@ -781,19 +779,20 @@ def _triton_pallas_call(
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=())
 def _ragged_dot_triton_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
-    """Pallas-Triton grouped matmul with explicit backward pass.
+    """Triton grouped matmul with explicit backward pass.
 
-    Uses custom_vjp so JAX never tries to autodiff directly through pallas_call.
-    Direct autodiff still fails for this kernel on JAX 0.9.2, while the explicit
-    VJP can use the Triton kernels for each ragged-dot contraction layout.
+    Uses custom_vjp so JAX never tries to autodiff directly through pallas_call or
+    triton_call. Direct autodiff fails for the Pallas kernels on JAX 0.9.2, and
+    triton_call has no differentiation rule, while the explicit VJP can use the
+    Triton kernels for each ragged-dot contraction layout.
     """
     if not _has_pallas_triton:
         raise NotImplementedError("Pallas Triton backend is not available")
-    return _triton_pallas_call(lhs, rhs, group_sizes)
+    return _triton_kernel_call(lhs, rhs, group_sizes)
 
 
 def _ragged_dot_triton_fwd(lhs, rhs, group_sizes):
-    out = _triton_pallas_call(lhs, rhs, group_sizes)
+    out = _triton_kernel_call(lhs, rhs, group_sizes)
     return out, (lhs, rhs, group_sizes)
 
 
@@ -801,10 +800,10 @@ def _ragged_dot_triton_bwd(residuals, dout):
     lhs, rhs, group_sizes = residuals
 
     # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T
-    dlhs = _triton_pallas_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
+    dlhs = _triton_kernel_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
 
     # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N]
-    drhs = _triton_pallas_call(lhs, dout, group_sizes, _DRHS_DIM_NUMS)
+    drhs = _triton_kernel_call(lhs, dout, group_sizes, _DRHS_DIM_NUMS)
 
     return dlhs, drhs, None  # None for group_sizes (integer, no gradient)
 

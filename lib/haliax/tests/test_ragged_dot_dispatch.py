@@ -108,7 +108,7 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     lhs, rhs, group_sizes = _inputs()
     calls = []
 
-    def fake_triton_pallas_call(
+    def fake_triton_kernel_call(
         lhs,
         rhs,
         group_sizes,
@@ -123,7 +123,7 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
         )
 
     monkeypatch.setattr(ragged_dot_module, "_has_pallas_triton", True)
-    monkeypatch.setattr(ragged_dot_module, "_triton_pallas_call", fake_triton_pallas_call)
+    monkeypatch.setattr(ragged_dot_module, "_triton_kernel_call", fake_triton_kernel_call)
 
     def triton_loss(lhs, rhs):
         return jnp.sum(ragged_dot_module._ragged_dot_triton_impl(lhs, rhs, group_sizes))
@@ -181,7 +181,7 @@ _GROUP_SIZE_CASES = {
     "all_empty": [0, 0, 0, 0],
 }
 # Odd sizes: rows, contraction and columns are not multiples of the tile-map blocks below.
-_ROWS, _K, _N, _GROUPS = 300, 96, 200, 4
+_ROWS, _K, _N, _GROUPS = 300, 80, 200, 4
 _LAYOUTS = [layout.value for layout in ragged_dot_module.RaggedLayout]
 
 
