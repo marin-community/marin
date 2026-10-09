@@ -12,7 +12,7 @@ no rule matches is ``UNCLASSIFIED``, which ``Evidence`` counts like any other ca
 
 A rollout with a grade can still have a cause. A task without a grader (``NoGrader``) grades
 ``UNAVAILABLE``, which is ``VERIFIER_SKIPPED``. A verifyit ``pytest`` grader scores a candidate whose
-own code fails to import or be collected as reward 0 (verifyit #9923); that is
+own code fails to import or be collected as reward 0; that is
 ``CANDIDATE_CODE_ERROR``, not a wrong answer, so the classifier needs the task.
 
 Task setup failures are told apart from machine failures only by their message text
@@ -68,8 +68,7 @@ def classify(failure: BaseException | RolloutData, task: TaskSpec) -> Cause:
 def candidate_code_error(grade: GradeResult, task: TaskSpec) -> bool:
     """Whether a verifyit pytest grader gave reward 0 because the candidate's own code did not load.
 
-    Since #9923 verifyit scores a candidate's startup or collection error as a failed attempt with
-    reward 0. The attribution arguably belongs upstream in verifyit: it should surface it as a
+    verifyit scores a candidate's startup or collection error as a failed attempt with reward 0. The attribution arguably belongs upstream in verifyit: it should surface it as a
     documented field of ``GradeResult.detail`` (today it is an undocumented ``reason`` key, with
     ``category`` "agent", that TaskCompendium copies through), so that every consumer can tell a
     candidate that did not load from a wrong one. Taskforge reads the key locally for now because a
