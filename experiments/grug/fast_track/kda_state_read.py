@@ -7,7 +7,11 @@ Each of the layer's ``H`` state heads is read with ``m`` learned, token-independ
 ``r_t = [a_{h,i}^T S_{h,t}]`` (``H * m * Dv`` features, the same questions asked of the memory at every position).
 The reads reuse the KDA kernel: query head ``h * m + i`` gets head ``h``'s decay, write strength and erase gate,
 so it sees exactly head ``h``'s state (the kernel recomputes that state per query head, so ``m`` reads cost about
-``m`` extra passes of the layer). ``out = relu(rms(r) W_in)^2 W_out`` with ``W_out`` zero-init: silent at init."""
+``m`` extra passes of the layer).
+
+``out = gate * relu(rms(r) W_in)^2 W_out``: ``W_in`` / ``W_out`` are ordinary MuonH matrices and the scalar
+``gate`` (Adam) starts at 0, so the readout is silent at init (a zero-init ``W_out`` under Adam injects a large
+write on the first steps)."""
 
 import equinox as eqx
 import jax
@@ -16,21 +20,25 @@ from jax import random
 
 
 class StateRead(eqx.Module):
-    """``queries`` ``[H m, Dk]`` (2-D so a stacked leaf stays 3-D); ``state_read_in`` ``[H m Dv, hidden]``;
-    ``state_read_out`` ``[hidden, D]``. Trained in the ``adam`` group (``.state_read.``)."""
+    """``queries`` ``[H m, Dk]`` and ``gate`` ``[1]`` (Adam); ``state_read_in`` ``[H m Dv, hidden]`` and
+    ``state_read_out`` ``[hidden, D]`` (MuonH)."""
 
     queries: jax.Array
+    gate: jax.Array
     state_read_in: jax.Array
     state_read_out: jax.Array
 
 
-def state_read_init(key: jax.Array, heads: int, reads: int, dk: int, dv: int, hidden: int, d: int) -> StateRead:
-    kq, kin = random.split(key)
+def state_read_init(
+    key: jax.Array, heads: int, reads: int, dk: int, dv: int, hidden: int, d: int, std: float
+) -> StateRead:
+    kq, kin, kout = random.split(key, 3)
     width = heads * reads * dv
     return StateRead(
         queries=random.normal(kq, (heads * reads, dk)) / jnp.sqrt(dk),
-        state_read_in=random.normal(kin, (width, hidden)) / jnp.sqrt(width),
-        state_read_out=jnp.zeros((hidden, d), jnp.float32),
+        gate=jnp.zeros((1,), jnp.float32),
+        state_read_in=random.normal(kin, (width, hidden)) * std,
+        state_read_out=random.normal(kout, (hidden, d)) * std,
     )
 
 
@@ -45,4 +53,4 @@ def state_read_features(p: StateRead, reads_out: jax.Array) -> jax.Array:
     flat = reads_out.reshape(b, s, -1).astype(jnp.float32)
     flat = flat * jax.lax.rsqrt(jnp.mean(jnp.square(flat), axis=-1, keepdims=True) + 1e-6)
     hidden = jnp.square(jax.nn.relu(flat @ p.state_read_in.astype(jnp.float32)))
-    return hidden @ p.state_read_out.astype(jnp.float32)
+    return p.gate.astype(jnp.float32) * (hidden @ p.state_read_out.astype(jnp.float32))

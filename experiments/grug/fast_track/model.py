@@ -2917,6 +2917,8 @@ class CausalSelfAttention(eqx.Module):
             if self.cfg.mla and self.cfg.mla_lag_groups:
                 q, k = apply_lag_groups(q, k, sconv_segment_ids, parse_lag_groups(self.cfg.mla_lag_groups, head_dim))
             if self.cfg.mla and self.cfg.mla_key_offset:
+                if k.shape[2] < len(self.cfg.mla_key_offset_channels):  # shared KV: per-query-head offsets
+                    k = reshard(jnp.broadcast_to(k, q.shape[:3] + k.shape[3:]), _partition_spec_of(q))
                 k = partial_key_offset(k, sconv_segment_ids, _partition_spec_of(k), self.cfg.mla_key_offset_channels)
             if self.cfg.qk_norm:
                 q = rms_norm(q)
@@ -3588,7 +3590,16 @@ class KimiDeltaAttention(eqx.Module):
             vres_lambda=_vres_lambda_init(cfg),
             push_decay=_kda_push_decay_init(cfg, n, h) if cfg.kda_push_buckets else None,
             state_read=(
-                state_read_init(random.fold_in(k_o, 3), n, cfg.kda_state_reads, h, h, cfg.kda_state_read_hidden, d)
+                state_read_init(
+                    random.fold_in(k_o, 3),
+                    n,
+                    cfg.kda_state_reads,
+                    h,
+                    h,
+                    cfg.kda_state_read_hidden,
+                    d,
+                    cfg.initializer_std,
+                )
                 if cfg.kda_state_reads
                 else None
             ),
