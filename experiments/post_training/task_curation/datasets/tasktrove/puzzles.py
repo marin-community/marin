@@ -8,7 +8,6 @@ item, numbers and coordinates with the symbolic math comparator, and other answe
 """
 
 import json
-from dataclasses import replace
 
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
@@ -21,11 +20,10 @@ from verifyit.spec import ExactSpec, MathSpec, MathType, Spec
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
     ANSWER_FILE_DELIVERY,
-    TASKTROVE_RELEASE,
     tasktrove_source,
 )
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 ANSWER_TYPES = frozenset({"choice", "exact", "ordered_list", "number", "coords"})
 MATH_ANSWER_TYPES = frozenset({"number", "coords"})
@@ -74,28 +72,17 @@ def convert_puzzle(row: RawRow, _context: ConversionContext) -> TaskSpec | Norma
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=replace(
-                TASKTROVE_RELEASE,
+            info=SourceInfo(
                 id="Task Trove:laion__all-puzzles-v2",
-                name="laion__all-puzzles-v2",
-                display_name="laion/all-puzzles-v2",
-                dataset_revision="4b0dbad71fce1c2a286e2348b3fe5df588b3c1e8",
-                verifier_revision=None,
+                title="laion/all-puzzles-v2",
+                origin="Task Trove",
                 family="math-answer",
-                task_count=6719,
+                tags=("agentic", "multi-turn"),
+                count=6926,
                 notes=(
-                    "Numeric compare on real puzzles. Gold lives in /tests, which the harness must "
-                    "hide; fine under the new grader."
+                    "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
+                    "fine under the new grader."
                 ),
-                canonical_source="laion/all-puzzles-v2",
-                verification="exact, math",
-                snapshot_safe=True,
-                snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-                upstream_repository="laion/all-puzzles-v2",
-                upstream_url="https://huggingface.co/datasets/laion/all-puzzles-v2",
-                upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-                input_count=6926,
-                modes=("exact", "math"),
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-puzzles",

@@ -11,7 +11,6 @@ terminal agent to write ``/app/answer.txt``; the task asks for the answer in the
 import csv
 import io
 import json
-from dataclasses import replace
 
 from taskcompendium.convert.answers import answer_task, json_schema_task, source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
@@ -38,9 +37,9 @@ from taskcompendium.pipeline.models import (
 )
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, Spec, XmlElementsSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (
@@ -170,28 +169,17 @@ def structured_witness(task: TaskSpec) -> Reply | None:
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=replace(
-                TASKTROVE_RELEASE,
+            info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
-                name="laion__nemotron-gym-structured-outputs-v4",
-                display_name="laion/nemotron-gym-structured-outputs-v4",
-                dataset_revision="4b0dbad71fce1c2a286e2348b3fe5df588b3c1e8",
-                verifier_revision=None,
+                title="laion/nemotron-gym-structured-outputs-v4",
+                origin="Task Trove",
                 family="instruction-following",
-                task_count=50446,
+                tags=("agentic", "multi-turn"),
+                count=53870,
                 notes=(
-                    "Keep JSON/YAML/TOML rows (full jsonschema validation); drop XML and CSV rows, "
-                    "which only check key presence."
+                    "Keep JSON/YAML/TOML rows (full jsonschema validation); drop XML and CSV rows, which "
+                    "only check key presence."
                 ),
-                canonical_source="laion/nemotron-gym-structured-outputs-v4",
-                verification="script",
-                snapshot_safe=True,
-                snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-                upstream_repository="laion/nemotron-gym-structured-outputs-v4",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-structured-outputs-v4",
-                upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-                input_count=53870,
-                modes=("script",),
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-structured_outputs",

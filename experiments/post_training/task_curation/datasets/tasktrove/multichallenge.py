@@ -12,7 +12,6 @@ source has no controls and its kept rows are admitted without them.
 """
 
 import tomllib
-from dataclasses import replace
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.conversation import conversation_task
@@ -26,10 +25,10 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_RELEASE, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
 CONTEXT_FILE = "conversation.txt"
@@ -88,28 +87,17 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec 
 def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
-            metadata=replace(
-                TASKTROVE_RELEASE,
+            info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
-                name="laion__nemotron-gym-multichallenge-advanced-v4",
-                display_name="laion/nemotron-gym-multichallenge-advanced-v4",
-                dataset_revision="9065fa568394f286dab0081e43dc76fc87c48984",
-                verifier_revision=None,
+                title="laion/nemotron-gym-multichallenge-advanced-v4",
+                origin="Task Trove",
                 family="llm-judge-freeform",
-                task_count=1052,
+                tags=("agentic", "multi-turn"),
+                count=1068,
                 notes=(
                     "Multi-turn with four factual or formatting criteria per task. The converter "
                     "preserves the source's explicit positive or negated pass condition."
                 ),
-                canonical_source="laion/nemotron-gym-multichallenge-advanced-v4",
-                verification="judge",
-                snapshot_safe=True,
-                snapshot_safety_basis="Accepted as snapshot-safe in the Atlas inventory",
-                upstream_repository="laion/nemotron-gym-multichallenge-advanced-v4",
-                upstream_url="https://huggingface.co/datasets/laion/nemotron-gym-multichallenge-advanced-v4",
-                upstream_link_basis="Dataset identifier encoded in Task Trove source name; not independently resolved",
-                input_count=1068,
-                modes=("judge",),
             ),
             pipeline=RlDataPipeline(
                 name="tasktrove-multichallenge",

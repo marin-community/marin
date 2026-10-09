@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
@@ -61,46 +61,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
 )
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, RowDecoder, ShellSim
-from experiments.post_training.task_curation.source import DataSourceMetadata, RlDataSource
-
-SKYRL_METADATA = DataSourceMetadata(
-    id="",
-    name="",
-    origin="MarinSkyRL",
-    dataset_id="nvidia/Nemotron-RL-Ultra-Training-Blends",
-    revision="e44c4bfcb62c489286a1264094e6d9c883aaf0d2",
-    revised_at="2026-10-08T05:59:16Z",
-    dataset_revision="482392c14c6418e26804ea2e5d10359df9877df4",
-    environment="nemotron_ultra",
-    count_precision="exact",
-    notes="Complete-file count of this component selection; not the original component repository size.",
-    benchmark_basis="SkyRL test-only designation or HF benchmark:official tag; false means no designation found",
-    family_basis="Actual record dataset/agent contract and component card, audited 2026-09-28",
-    family_url=(
-        "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/79f8eda"
-        "15ea12e1adf7bb14dcb338a29d391b80e/README.md"
-    ),
-    classification_basis="Actual selected record population; Agentic tasks use Multi-turn",
-    canonical_url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends",
-    provenance_url=(
-        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c8"
-        "83aaf0d2/infra/rl_data/sources.py"
-    ),
-    license=("cc-by-4.0",),
-    verification="row_selected",
-    snapshot_safe=True,
-    gym_alias="gym/nemotron_ultra",
-    gym_url=(
-        "https://github.com/marin-community/MarinSkyRL/blob/e44c4bfcb62c489286a1264094e6d9c883a"
-        "af0d2/skyrl-gym/skyrl_gym/envs/__init__.py"
-    ),
-    gym_entrypoint="skyrl_gym.envs.nemotron_ultra.env:NemotronUltraEnv",
-    dataset_revised_at="2026-09-29T05:46:42.000Z",
-    registry_revised_at="2026-10-01T14:18:17Z",
-    verifier_revised_at="2026-10-08T05:59:16Z",
-    revision_basis="Latest upstream dataset repository or MarinSkyRL verifier change",
-    recorded_at="2026-10-08",
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 ULTRA_REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
@@ -453,2250 +414,1220 @@ COMPONENTS: dict[str, Component] = {
 }
 
 
-MOPD_FILE_SHA256 = "c6c94da041c6ef2e2e7b057f10817418f134ed46a33a274eede892fc089f0f28"
-RLVR1_FILE_SHA256 = "b73d72788ecf13ab15457ea475f4ee619eccb1a6c0e211be999ffcf835c10ccf"
-RLVR2_FILE_SHA256 = "fc3987d28bc8cd942c9012388dd25808582f5d41b3d79e9514f90c574b23dfd3"
-BLENDS: dict[str, dict[str, DataSourceMetadata]] = {
+# Counts come from a complete selection audit of ULTRA_REVISION's blend files,
+# including SWE-Gym instance membership. They count input rows before conversion.
+BLENDS: dict[str, dict[str, SourceInfo]] = {
     "mopd": {
-        "hs3_en": replace(
-            SKYRL_METADATA,
+        "hs3_en": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/hs3_en",
-            name="nemotron_ultra_mopd/hs3_en",
-            display_name="nvidia/Nemotron-RLHF-GenRM-v1 · hs3_en · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RLHF-GenRM-v1",
-            verifier_revision="4fa7989c106455b584397fb18b72ca84f44f10b3cf122c6d24c4d325a9c2f308",
+            title="nvidia/Nemotron-RLHF-GenRM-v1 · hs3_en · mopd",
+            origin="MarinSkyRL",
             family="preference",
-            type="Alignment",
-            turns="Single-turn",
-            task_count=1281,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="hs3_en",
-            component_selector="hs3_en",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="1.4899%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1281,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "4fa7989c106455b584397fb18b72ca84f44f10b3cf122c6d24c4d325a9c2f308",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "hs3_multi": replace(
-            SKYRL_METADATA,
+        "hs3_multi": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/hs3_multi",
-            name="nemotron_ultra_mopd/hs3_multi",
-            display_name="nvidia/Nemotron-RLHF-GenRM-v1 · hs3_multi · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RLHF-GenRM-v1",
-            verifier_revision="110a1af331809e56e1268bcdd9f524a11dd0f69b5a0e7adca218c422e23d7e2e",
+            title="nvidia/Nemotron-RLHF-GenRM-v1 · hs3_multi · mopd",
+            origin="MarinSkyRL",
             family="preference",
-            type="Alignment",
-            turns="Single-turn",
-            task_count=962,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="hs3_multi",
-            component_selector="hs3_multi",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="1.1189%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=962,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "110a1af331809e56e1268bcdd9f524a11dd0f69b5a0e7adca218c422e23d7e2e",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "hs3_multiturn": replace(
-            SKYRL_METADATA,
+        "hs3_multiturn": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/hs3_multiturn",
-            name="nemotron_ultra_mopd/hs3_multiturn",
-            display_name="nvidia/Nemotron-RLHF-GenRM-v1 · hs3_multiturn · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RLHF-GenRM-v1",
-            verifier_revision="0f8e77dcd20b0046901d41e55bb31278c7e50da693ec5a1a3c36e485da86b0d0",
+            title="nvidia/Nemotron-RLHF-GenRM-v1 · hs3_multiturn · mopd",
+            origin="MarinSkyRL",
             family="preference",
-            type="Alignment",
-            turns="Multi-turn",
-            task_count=1243,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="hs3_multiturn",
-            component_selector="hs3_multiturn",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="1.4457%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("alignment", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1243,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "0f8e77dcd20b0046901d41e55bb31278c7e50da693ec5a1a3c36e485da86b0d0",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "makeshn_ultra_v3_ipi_train": replace(
-            SKYRL_METADATA,
+        "makeshn_ultra_v3_ipi_train": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
-            name="nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
-            display_name="nvidia/Nemotron-RL-Agentic-Indirect-Prompt-Injection-v1 · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Indirect-Prompt-Injection-v1",
-            verifier_revision="3c22687383fb3360c57685b0f92a2123f94f4e1e",
+            title="nvidia/Nemotron-RL-Agentic-Indirect-Prompt-Injection-v1 · mopd",
+            origin="MarinSkyRL",
             family="agentic-safety",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=2000,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="makeshn_ultra_v3_ipi_train",
-            component_selector="makeshn_ultra_v3_ipi_train",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="2.3261%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2000,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "3c22687383fb3360c57685b0f92a2123f94f4e1e",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "safety_en": replace(
-            SKYRL_METADATA,
+        "safety_en": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/safety_en",
-            name="nemotron_ultra_mopd/safety_en",
-            display_name="nvidia/Nemotron-RLHF-GenRM-v1 · safety_en · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RLHF-GenRM-v1",
-            verifier_revision="b2b02d239d99ad683992c24f962736ba8b85cc2a04084e3174657820d0751e13",
+            title="nvidia/Nemotron-RLHF-GenRM-v1 · safety_en · mopd",
+            origin="MarinSkyRL",
             family="preference",
-            type="Alignment",
-            turns="Single-turn",
-            task_count=629,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="safety_en",
-            component_selector="safety_en",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="0.7316%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=629,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "b2b02d239d99ad683992c24f962736ba8b85cc2a04084e3174657820d0751e13",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": replace(
-            SKYRL_METADATA,
+        f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_GYM}": SourceInfo(
             id=(
                 "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_com"
                 "parison_agent/SWE-Gym/SWE-Gym"
             ),
-            name=(
-                "nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_ag"
-                "ent/SWE-Gym/SWE-Gym"
-            ),
-            display_name="SWE-Gym/SWE-Gym · unlabeled dataset records · mopd",
-            url="https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            verifier_revision="3b04884dd2139714321f8e06416596dd5e60dd79d6cb4c3aab2a86b52e96bcdb",
+            title="SWE-Gym/SWE-Gym · unlabeled dataset records · mopd",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=1884,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
-            component_selector="agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="2.1912%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1884,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "3b04884dd2139714321f8e06416596dd5e60dd79d6cb4c3aab2a86b52e96bcdb",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
-        "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": replace(
-            SKYRL_METADATA,
+        f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
             id=(
                 "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_com"
                 "parison_agent/nebius/SWE-rebench-V2"
             ),
-            name=(
-                "nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_ag"
-                "ent/nebius/SWE-rebench-V2"
-            ),
-            display_name="nebius/SWE-rebench-V2 · unlabeled dataset records · mopd",
-            url="https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            verifier_revision="5f19be9f7240c4b6cc597922b4037fb08648738cd6593c4ff18a98ccc94e792b",
+            title="nebius/SWE-rebench-V2 · unlabeled dataset records · mopd",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=5307,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
-            component_selector="agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="6.1724%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=5307,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "5f19be9f7240c4b6cc597922b4037fb08648738cd6593c4ff18a98ccc94e792b",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
-        "swe_pivot_len40k/SWE-Gym/SWE-Gym": replace(
-            SKYRL_METADATA,
+        "swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
-            name="nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
-            display_name="SWE-Gym/SWE-Gym · pivot records · mopd",
-            url="https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            verifier_revision="8d531a83a74e477b9adae6dd7cf2af3af1e17800a051ebdabe37f468acee61ac",
+            title="SWE-Gym/SWE-Gym · pivot records · mopd",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=860,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="swe_pivot_len40k/SWE-Gym/SWE-Gym",
-            component_selector="swe_pivot_len40k",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="1.0002%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=860,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "8d531a83a74e477b9adae6dd7cf2af3af1e17800a051ebdabe37f468acee61ac",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
-        "swe_pivot_len40k/nebius/SWE-rebench-V2": replace(
-            SKYRL_METADATA,
+        "swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
-            name="nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
-            display_name="nebius/SWE-rebench-V2 · pivot records · mopd",
-            url="https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            verifier_revision="011ce022c8a4ec20f483945ae34e42169f0034da9d65e980e509392f6ad913c3",
+            title="nebius/SWE-rebench-V2 · pivot records · mopd",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=3903,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="swe_pivot_len40k/nebius/SWE-rebench-V2",
-            component_selector="swe_pivot_len40k",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="4.5394%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=3903,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "011ce022c8a4ec20f483945ae34e42169f0034da9d65e980e509392f6ad913c3",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
-        "ultra_sft_step3200_abstention": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_abstention": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_abstention",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_abstention",
-            display_name="nvidia/Nemotron-RL-QA-Abstention-v1 · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-QA-Abstention-v1",
-            verifier_revision="e3e85a847527d0ace97e1a6459ce92b3ce54d5278ac6f5a4eae7e6da9a564623",
+            title="nvidia/Nemotron-RL-QA-Abstention-v1 · mopd",
+            origin="MarinSkyRL",
             family="qa-abstention",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=4025,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_abstention",
-            component_selector="ultra_sft_step3200_abstention",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="4.6813%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4025,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "e3e85a847527d0ace97e1a6459ce92b3ce54d5278ac6f5a4eae7e6da9a564623",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_calendar_v2": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_calendar_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Calendar-v2 · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
-            verifier_revision="5c9656671baf79a9711cd5c7ecbacffc6d1a169129b81ab098c00a4be8838833",
+            title="nvidia/Nemotron-RL-Instruction-Following-Calendar-v2 · mopd",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=910,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_calendar_v2",
-            component_selector="ultra_sft_step3200_calendar_v2",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="1.0584%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=910,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "5c9656671baf79a9711cd5c7ecbacffc6d1a169129b81ab098c00a4be8838833",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_comp_coding": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_comp_coding": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_comp_coding",
-            display_name="nvidia/Nemotron-RL-coding-competitive_coding · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-coding-competitive_coding",
-            verifier_revision="0878a10ef2dd4c89daf18e325b48720553c3f5f0ab60d99d233b4520db3e7684",
+            title="nvidia/Nemotron-RL-coding-competitive_coding · mopd",
+            origin="MarinSkyRL",
             family="competitive-programming",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=7929,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_comp_coding",
-            component_selector="ultra_sft_step3200_comp_coding",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="9.2219%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=7929,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "0878a10ef2dd4c89daf18e325b48720553c3f5f0ab60d99d233b4520db3e7684",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_instruction_following": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_instruction_following": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_instruction_following",
-            display_name="nvidia/Nemotron-RL-instruction_following · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-instruction_following",
-            verifier_revision="f0571dbf560eaceae2609645364cb6df639318e701a31e0cb55303adfa6539bc",
+            title="nvidia/Nemotron-RL-instruction_following · mopd",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=10409,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_instruction_following",
-            component_selector="ultra_sft_step3200_instruction_following",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="12.1063%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=10409,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "f0571dbf560eaceae2609645364cb6df639318e701a31e0cb55303adfa6539bc",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_jailbreak": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_jailbreak": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_jailbreak",
-            display_name="nvidia/Nemotron-RL-Safety-v1 · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Safety-v1",
-            verifier_revision="76b4bdebc9c8a2db5ee4b9b1bd6d1703b556e8ab00a9a8426aa942e3d2778022",
+            title="nvidia/Nemotron-RL-Safety-v1 · mopd",
+            origin="MarinSkyRL",
             family="safety",
-            type="Alignment",
-            turns="Single-turn",
-            task_count=2861,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_jailbreak",
-            component_selector="ultra_sft_step3200_jailbreak",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="3.3275%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2861,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "76b4bdebc9c8a2db5ee4b9b1bd6d1703b556e8ab00a9a8426aa942e3d2778022",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_lean": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_lean": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_lean",
-            display_name="nvidia/Nemotron-Math-Proofs-v1 · Lean refinement · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-Math-Proofs-v1",
-            verifier_revision="44e963bdf18c6b3e95f85aee3ab59c03fc5c9e8fa1c598bc633ae117dd3d0315",
+            title="nvidia/Nemotron-Math-Proofs-v1 · Lean refinement · mopd",
+            origin="MarinSkyRL",
             family="math-proof",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=902,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_lean",
-            component_selector="ultra_sft_step3200_lean",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="1.0491%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=902,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "44e963bdf18c6b3e95f85aee3ab59c03fc5c9e8fa1c598bc633ae117dd3d0315",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_math_cot": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_math_cot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_cot",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_math_cot",
-            display_name="nvidia/Nemotron-RL-Math-v2 · chain of thought · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Math-v2",
-            verifier_revision="7fff13efc379f4bfd200ecd2d225dad60c79be801d09ddc27439f10b5fd87abb",
+            title="nvidia/Nemotron-RL-Math-v2 · chain of thought · mopd",
+            origin="MarinSkyRL",
             family="math-answer",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=4776,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_math_cot",
-            component_selector="ultra_sft_step3200_math_cot",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="5.5548%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4776,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "7fff13efc379f4bfd200ecd2d225dad60c79be801d09ddc27439f10b5fd87abb",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_math_tir": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_math_tir": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
-            display_name="nvidia/Nemotron-RL-Math-v2 · tool-assisted reasoning · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Math-v2",
-            verifier_revision="2ab0dc76ee4bab074aec8879a6a6aa44405868d2ced449fbb2d64e3e9f9ab2d5",
+            title="nvidia/Nemotron-RL-Math-v2 · tool-assisted reasoning · mopd",
+            origin="MarinSkyRL",
             family="math-answer",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=5917,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_math_tir",
-            component_selector="ultra_sft_step3200_math_tir",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="6.8818%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=5917,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "2ab0dc76ee4bab074aec8879a6a6aa44405868d2ced449fbb2d64e3e9f9ab2d5",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_multichallenge_len40k": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1 · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1",
-            verifier_revision="abeefa8df27e3ab6decdfbfa33e7eca3abf6e7c7f37019d29419663ca7424b8e",
+            title="nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1 · mopd",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Multi-turn",
-            task_count=4028,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_multichallenge_len40k",
-            component_selector="ultra_sft_step3200_multichallenge_len40k",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="4.6848%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4028,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "abeefa8df27e3ab6decdfbfa33e7eca3abf6e7c7f37019d29419663ca7424b8e",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_nvarc_inductive": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_nvarc_inductive": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive",
-            display_name="nvidia/Nemotron-RL-ARC-AGI-v1 · inductive · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-ARC-AGI-v1",
-            verifier_revision="7593b96ad47dc731d023f6d4e8d45df8d456b309fad6374698f815287470aa10",
+            title="nvidia/Nemotron-RL-ARC-AGI-v1 · inductive · mopd",
+            origin="MarinSkyRL",
             family="arc-agi",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2097,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_nvarc_inductive",
-            component_selector="ultra_sft_step3200_nvarc_inductive",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="2.4389%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2097,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "7593b96ad47dc731d023f6d4e8d45df8d456b309fad6374698f815287470aa10",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_nvarc_transductive": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_nvarc_transductive": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive",
-            display_name="nvidia/Nemotron-RL-ARC-AGI-v1 · transductive · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-ARC-AGI-v1",
-            verifier_revision="43c2d7cd6b0cb7365492cef009595a9687f2671ed545d7d209b354c358eda40f",
+            title="nvidia/Nemotron-RL-ARC-AGI-v1 · transductive · mopd",
+            origin="MarinSkyRL",
             family="arc-agi",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2069,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_nvarc_transductive",
-            component_selector="ultra_sft_step3200_nvarc_transductive",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="2.4064%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2069,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "43c2d7cd6b0cb7365492cef009595a9687f2671ed545d7d209b354c358eda40f",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_rdkit": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_rdkit": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-            display_name="nvidia/Nemotron-RL-Litmus-Bench-v0.1 · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Litmus-Bench-v0.1",
-            verifier_revision="cf4029df469964dabedfa347aa974e590744e9d4807d132042641e024d5d83f1",
+            title="nvidia/Nemotron-RL-Litmus-Bench-v0.1 · mopd",
+            origin="MarinSkyRL",
             family="chemistry",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=1403,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_rdkit",
-            component_selector="ultra_sft_step3200_rdkit",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="1.6318%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1403,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "cf4029df469964dabedfa347aa974e590744e9d4807d132042641e024d5d83f1",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_reasoning_gym": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_reasoning_gym": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym",
-            display_name="nvidia/Nemotron-RL-ReasoningGym-v1 · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-ReasoningGym-v1",
-            verifier_revision="9d4d3a356f99a79533ac7d25cf25481f6c975a75532c9e3ddbc0e9f4dbc4dea9",
+            title="nvidia/Nemotron-RL-ReasoningGym-v1 · mopd",
+            origin="MarinSkyRL",
             family="reasoning-gym",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=1385,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_reasoning_gym",
-            component_selector="ultra_sft_step3200_reasoning_gym",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="1.6108%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1385,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "9d4d3a356f99a79533ac7d25cf25481f6c975a75532c9e3ddbc0e9f4dbc4dea9",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_stem_mcqa": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_stem_mcqa": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa",
-            display_name="nvidia/Nemotron-RL-knowledge-mcqa · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-knowledge-mcqa",
-            verifier_revision="4e21612c6acfff9c614d0c5e0e6868e0b137609aa2dca3c5f70aadf38dfa8aa0",
+            title="nvidia/Nemotron-RL-knowledge-mcqa · mopd",
+            origin="MarinSkyRL",
             family="qa-multiple-choice",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2097,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_stem_mcqa",
-            component_selector="ultra_sft_step3200_stem_mcqa",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="2.4389%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2097,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "4e21612c6acfff9c614d0c5e0e6868e0b137609aa2dca3c5f70aadf38dfa8aa0",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_stem_mcqa_cot_rima_new": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            display_name="nvidia/Nemotron-SFT-Science-v2 · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-SFT-Science-v2",
-            verifier_revision="c745334d6e868cfa4388f84f39a11c4985fe3bc28996c306d3db9eb5a16800c5",
+            title="nvidia/Nemotron-SFT-Science-v2 · mopd",
+            origin="MarinSkyRL",
             family="qa-multiple-choice",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2077,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            component_selector="ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="2.4157%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2077,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "c745334d6e868cfa4388f84f39a11c4985fe3bc28996c306d3db9eb5a16800c5",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_structured_outputs_v2": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · v2 records · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-            verifier_revision="b84e98dd9bfc9daff96f66dc2f7fa9779d6dd31ed04e01b5a7a1b437a6b31ad8",
+            title="nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · v2 records · mopd",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=682,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_structured_outputs_v2",
-            component_selector="ultra_sft_step3200_structured_outputs_v2",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="0.7932%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=682,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "b84e98dd9bfc9daff96f66dc2f7fa9779d6dd31ed04e01b5a7a1b437a6b31ad8",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_toolcall_schema": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_toolcall_schema": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
-            name="nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
-            display_name="nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1 · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1",
-            verifier_revision="752d664be2f90fd7b5b87f042b5e710734a9c927cc44e2d77a5729261390c34f",
+            title="nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1 · mopd",
+            origin="MarinSkyRL",
             family="tool-use",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=2666,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_sft_step3200_toolcall_schema",
-            component_selector="ultra_sft_step3200_toolcall_schema",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="3.1007%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2666,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "752d664be2f90fd7b5b87f042b5e710734a9c927cc44e2d77a5729261390c34f",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_v3_agentic_rl_step73_citation_format_v2": replace(
-            SKYRL_METADATA,
+        "ultra_v3_agentic_rl_step73_citation_format_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2",
-            name="nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1 · step73 v2 records · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
-            verifier_revision="bb2fa3ad44683ff0912d4d9b354ec259af50ffaf4d83d0d7e85c0ae4abf7460d",
+            title=("nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1 · step73 v2 records " "· mopd"),
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=250,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_v3_agentic_rl_step73_citation_format_v2",
-            component_selector="ultra_v3_agentic_rl_step73_citation_format_v2",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="0.2908%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=250,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "bb2fa3ad44683ff0912d4d9b354ec259af50ffaf4d83d0d7e85c0ae4abf7460d",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_v3_agentic_rl_step73_freeform_text_v2": replace(
-            SKYRL_METADATA,
+        "ultra_v3_agentic_rl_step73_freeform_text_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2",
-            name="nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1 · step73 v2 records · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
-            verifier_revision="31f2227faf10acc6c12d2072e0b9210cd965edf9e8afe31309f5de24af007741",
+            title=("nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1 · step73 v2 records " "· mopd"),
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=250,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_v3_agentic_rl_step73_freeform_text_v2",
-            component_selector="ultra_v3_agentic_rl_step73_freeform_text_v2",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="0.2908%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=250,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "31f2227faf10acc6c12d2072e0b9210cd965edf9e8afe31309f5de24af007741",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_v3_agentic_rl_step73_structured_outputs_v2": replace(
-            SKYRL_METADATA,
+        "ultra_v3_agentic_rl_step73_structured_outputs_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2",
-            name="nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · step73 v2 records · mopd",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-            verifier_revision="a0bf6ec5d0ef1f5a2ed62b485210c371209c85a84c01e33e9e668e8356bfab57",
+            title=("nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · step73 v2 records · " "mopd"),
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=10000,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_v3_agentic_rl_step73_structured_outputs_v2",
-            component_selector="ultra_v3_agentic_rl_step73_structured_outputs_v2",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="11.6306%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=10000,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "a0bf6ec5d0ef1f5a2ed62b485210c371209c85a84c01e33e9e668e8356bfab57",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": replace(
-            SKYRL_METADATA,
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
-            name="nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
-            display_name="SWE-Gym/SWE-Gym · step73 pivot records · mopd",
-            url="https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            verifier_revision="1b8b156a91f4647ed898c1fa0899447b2b08b2419acf292ca05110510fc2e028",
+        "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": SourceInfo(
+            id=("MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-" "Gym/SWE-Gym"),
+            title="SWE-Gym/SWE-Gym · step73 pivot records · mopd",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=246,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
-            component_selector="ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="0.2861%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=246,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "1b8b156a91f4647ed898c1fa0899447b2b08b2419acf292ca05110510fc2e028",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
-        "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": replace(
-            SKYRL_METADATA,
-            id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
-            name="nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
-            display_name="nebius/SWE-rebench-V2 · step73 pivot records · mopd",
-            url="https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            verifier_revision="dd3310c994d63f365d41bba3ca91deda96c8c472e13a68b751f26610e99ca83d",
+        "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceInfo(
+            id=(
+                "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/" "SWE-rebench-V2"
+            ),
+            title="nebius/SWE-rebench-V2 · step73 pivot records · mopd",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=932,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/mopd.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · mopd",
-            canonical_id="MarinSkyRL:nemotron_ultra_mopd",
-            registry_name="nemotron_ultra_mopd",
-            component_name="ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
-            component_selector="ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k",
-            component_file_sha256=MOPD_FILE_SHA256,
-            canonical_task_count=85980,
-            component_ratio="1.0840%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=932,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "dd3310c994d63f365d41bba3ca91deda96c8c472e13a68b751f26610e99ca83d",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
     },
     "rlvr1": {
-        "language_mixing_hs3_ultra_genrm_fmt": replace(
-            SKYRL_METADATA,
+        "language_mixing_hs3_ultra_genrm_fmt": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt",
-            name="nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt",
-            display_name="nvidia/Nemotron-RLHF-GenRM-v1 · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RLHF-GenRM-v1",
-            verifier_revision="b280136ced512ece80e95ba06ccd4a72b89dbd83009e91204dc537296e1ee379",
+            title="nvidia/Nemotron-RLHF-GenRM-v1 · rlvr1",
+            origin="MarinSkyRL",
             family="preference",
-            type="Alignment",
-            turns="Single-turn",
-            task_count=4795,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="language_mixing_hs3_ultra_genrm_fmt",
-            component_selector="language_mixing_hs3_ultra_genrm_fmt",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="4.8718%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4795,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "b280136ced512ece80e95ba06ccd4a72b89dbd83009e91204dc537296e1ee379",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_abstention": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_abstention": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_abstention",
-            display_name="nvidia/Nemotron-RL-QA-Abstention-v1 · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-QA-Abstention-v1",
-            verifier_revision="e3e85a847527d0ace97e1a6459ce92b3ce54d5278ac6f5a4eae7e6da9a564623",
+            title="nvidia/Nemotron-RL-QA-Abstention-v1 · rlvr1",
+            origin="MarinSkyRL",
             family="qa-abstention",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=4025,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_abstention",
-            component_selector="ultra_sft_step3200_abstention",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="4.0894%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4025,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "e3e85a847527d0ace97e1a6459ce92b3ce54d5278ac6f5a4eae7e6da9a564623",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_calendar_v2": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_calendar_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Calendar-v2 · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
-            verifier_revision="5c9656671baf79a9711cd5c7ecbacffc6d1a169129b81ab098c00a4be8838833",
+            title="nvidia/Nemotron-RL-Instruction-Following-Calendar-v2 · rlvr1",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=910,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_calendar_v2",
-            component_selector="ultra_sft_step3200_calendar_v2",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="0.9246%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=910,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "5c9656671baf79a9711cd5c7ecbacffc6d1a169129b81ab098c00a4be8838833",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_comp_coding": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_comp_coding": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding",
-            display_name="nvidia/Nemotron-RL-coding-competitive_coding · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-coding-competitive_coding",
-            verifier_revision="0878a10ef2dd4c89daf18e325b48720553c3f5f0ab60d99d233b4520db3e7684",
+            title="nvidia/Nemotron-RL-coding-competitive_coding · rlvr1",
+            origin="MarinSkyRL",
             family="competitive-programming",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=7929,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_comp_coding",
-            component_selector="ultra_sft_step3200_comp_coding",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="8.0560%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=7929,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "0878a10ef2dd4c89daf18e325b48720553c3f5f0ab60d99d233b4520db3e7684",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_instruction_following": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_instruction_following": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following",
-            display_name="nvidia/Nemotron-RL-instruction_following · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-instruction_following",
-            verifier_revision="f0571dbf560eaceae2609645364cb6df639318e701a31e0cb55303adfa6539bc",
+            title="nvidia/Nemotron-RL-instruction_following · rlvr1",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=11828,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_instruction_following",
-            component_selector="ultra_sft_step3200_instruction_following",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="12.0174%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=11828,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "f0571dbf560eaceae2609645364cb6df639318e701a31e0cb55303adfa6539bc",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_jailbreak": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_jailbreak": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak",
-            display_name="nvidia/Nemotron-RL-Safety-v1 · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Safety-v1",
-            verifier_revision="76b4bdebc9c8a2db5ee4b9b1bd6d1703b556e8ab00a9a8426aa942e3d2778022",
+            title="nvidia/Nemotron-RL-Safety-v1 · rlvr1",
+            origin="MarinSkyRL",
             family="safety",
-            type="Alignment",
-            turns="Single-turn",
-            task_count=2861,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_jailbreak",
-            component_selector="ultra_sft_step3200_jailbreak",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="2.9068%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2861,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "76b4bdebc9c8a2db5ee4b9b1bd6d1703b556e8ab00a9a8426aa942e3d2778022",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_lean": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_lean": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-            display_name="nvidia/Nemotron-Math-Proofs-v1 · Lean refinement · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-Math-Proofs-v1",
-            verifier_revision="44e963bdf18c6b3e95f85aee3ab59c03fc5c9e8fa1c598bc633ae117dd3d0315",
+            title="nvidia/Nemotron-Math-Proofs-v1 · Lean refinement · rlvr1",
+            origin="MarinSkyRL",
             family="math-proof",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=902,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_lean",
-            component_selector="ultra_sft_step3200_lean",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="0.9164%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=902,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "44e963bdf18c6b3e95f85aee3ab59c03fc5c9e8fa1c598bc633ae117dd3d0315",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_math_cot": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_math_cot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot",
-            display_name="nvidia/Nemotron-RL-Math-v2 · chain of thought · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Math-v2",
-            verifier_revision="7fff13efc379f4bfd200ecd2d225dad60c79be801d09ddc27439f10b5fd87abb",
+            title="nvidia/Nemotron-RL-Math-v2 · chain of thought · rlvr1",
+            origin="MarinSkyRL",
             family="math-answer",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=4776,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_math_cot",
-            component_selector="ultra_sft_step3200_math_cot",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="4.8525%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4776,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "7fff13efc379f4bfd200ecd2d225dad60c79be801d09ddc27439f10b5fd87abb",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_math_tir": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_math_tir": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
-            display_name="nvidia/Nemotron-RL-Math-v2 · tool-assisted reasoning · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Math-v2",
-            verifier_revision="2ab0dc76ee4bab074aec8879a6a6aa44405868d2ced449fbb2d64e3e9f9ab2d5",
+            title="nvidia/Nemotron-RL-Math-v2 · tool-assisted reasoning · rlvr1",
+            origin="MarinSkyRL",
             family="math-answer",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=5917,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_math_tir",
-            component_selector="ultra_sft_step3200_math_tir",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="6.0117%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=5917,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "2ab0dc76ee4bab074aec8879a6a6aa44405868d2ced449fbb2d64e3e9f9ab2d5",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_multichallenge_len40k": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1 · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1",
-            verifier_revision="abeefa8df27e3ab6decdfbfa33e7eca3abf6e7c7f37019d29419663ca7424b8e",
+            title="nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1 · rlvr1",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Multi-turn",
-            task_count=4028,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_multichallenge_len40k",
-            component_selector="ultra_sft_step3200_multichallenge_len40k",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="4.0925%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4028,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "abeefa8df27e3ab6decdfbfa33e7eca3abf6e7c7f37019d29419663ca7424b8e",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_nvarc_inductive": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_nvarc_inductive": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive",
-            display_name="nvidia/Nemotron-RL-ARC-AGI-v1 · inductive · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-ARC-AGI-v1",
-            verifier_revision="7593b96ad47dc731d023f6d4e8d45df8d456b309fad6374698f815287470aa10",
+            title="nvidia/Nemotron-RL-ARC-AGI-v1 · inductive · rlvr1",
+            origin="MarinSkyRL",
             family="arc-agi",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2097,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_nvarc_inductive",
-            component_selector="ultra_sft_step3200_nvarc_inductive",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="2.1306%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2097,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "7593b96ad47dc731d023f6d4e8d45df8d456b309fad6374698f815287470aa10",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_nvarc_transductive": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_nvarc_transductive": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive",
-            display_name="nvidia/Nemotron-RL-ARC-AGI-v1 · transductive · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-ARC-AGI-v1",
-            verifier_revision="43c2d7cd6b0cb7365492cef009595a9687f2671ed545d7d209b354c358eda40f",
+            title="nvidia/Nemotron-RL-ARC-AGI-v1 · transductive · rlvr1",
+            origin="MarinSkyRL",
             family="arc-agi",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2069,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_nvarc_transductive",
-            component_selector="ultra_sft_step3200_nvarc_transductive",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="2.1021%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2069,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "43c2d7cd6b0cb7365492cef009595a9687f2671ed545d7d209b354c358eda40f",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_reasoning_gym": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_reasoning_gym": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym",
-            display_name="nvidia/Nemotron-RL-ReasoningGym-v1 · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-ReasoningGym-v1",
-            verifier_revision="9d4d3a356f99a79533ac7d25cf25481f6c975a75532c9e3ddbc0e9f4dbc4dea9",
+            title="nvidia/Nemotron-RL-ReasoningGym-v1 · rlvr1",
+            origin="MarinSkyRL",
             family="reasoning-gym",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2089,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_reasoning_gym",
-            component_selector="ultra_sft_step3200_reasoning_gym",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="2.1224%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2089,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "9d4d3a356f99a79533ac7d25cf25481f6c975a75532c9e3ddbc0e9f4dbc4dea9",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_stem_mcqa": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_stem_mcqa": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa",
-            display_name="nvidia/Nemotron-RL-knowledge-mcqa · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-knowledge-mcqa",
-            verifier_revision="4e21612c6acfff9c614d0c5e0e6868e0b137609aa2dca3c5f70aadf38dfa8aa0",
+            title="nvidia/Nemotron-RL-knowledge-mcqa · rlvr1",
+            origin="MarinSkyRL",
             family="qa-multiple-choice",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2097,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_stem_mcqa",
-            component_selector="ultra_sft_step3200_stem_mcqa",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="2.1306%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2097,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "4e21612c6acfff9c614d0c5e0e6868e0b137609aa2dca3c5f70aadf38dfa8aa0",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_stem_mcqa_cot_rima_new": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            display_name="nvidia/Nemotron-SFT-Science-v2 · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-SFT-Science-v2",
-            verifier_revision="c745334d6e868cfa4388f84f39a11c4985fe3bc28996c306d3db9eb5a16800c5",
+            title="nvidia/Nemotron-SFT-Science-v2 · rlvr1",
+            origin="MarinSkyRL",
             family="qa-multiple-choice",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2077,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            component_selector="ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="2.1103%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2077,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "c745334d6e868cfa4388f84f39a11c4985fe3bc28996c306d3db9eb5a16800c5",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_structured_outputs_v2": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · v2 records · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-            verifier_revision="b84e98dd9bfc9daff96f66dc2f7fa9779d6dd31ed04e01b5a7a1b437a6b31ad8",
+            title="nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · v2 records · rlvr1",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2080,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_structured_outputs_v2",
-            component_selector="ultra_sft_step3200_structured_outputs_v2",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="2.1133%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2080,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "b84e98dd9bfc9daff96f66dc2f7fa9779d6dd31ed04e01b5a7a1b437a6b31ad8",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-            display_name="SWE-Gym/SWE-Gym · rlvr1",
-            url="https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            verifier_revision="0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
+            title="SWE-Gym/SWE-Gym · rlvr1",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=2838,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-            component_selector="ultra_sft_step3200_swe_pivot_len40k",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="2.8834%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2838,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
-        "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": replace(
-            SKYRL_METADATA,
-            id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-            display_name="nebius/SWE-rebench-V2 · rlvr1",
-            url="https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            verifier_revision="5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
+        "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
+            id=("MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-" "rebench-V2"),
+            title="nebius/SWE-rebench-V2 · rlvr1",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=11060,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-            component_selector="ultra_sft_step3200_swe_pivot_len40k",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="11.2371%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=11060,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
-        "ultra_sft_step3200_tau_pivot": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_tau_pivot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
-            display_name="nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-v1 · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-v1",
-            verifier_revision="997b4d12a352345341d33861763b3680dee9d4039156cf9d0a21e7a18102620e",
+            title="nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-v1 · rlvr1",
+            origin="MarinSkyRL",
             family="tool-use",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=20035,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_tau_pivot",
-            component_selector="ultra_sft_step3200_tau_pivot",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="20.3558%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=20035,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "997b4d12a352345341d33861763b3680dee9d4039156cf9d0a21e7a18102620e",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_toolcall_schema": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_toolcall_schema": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
-            name="nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
-            display_name="nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1 · rlvr1",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1",
-            verifier_revision="752d664be2f90fd7b5b87f042b5e710734a9c927cc44e2d77a5729261390c34f",
+            title="nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1 · rlvr1",
+            origin="MarinSkyRL",
             family="tool-use",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=4011,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr1.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr1",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr1",
-            registry_name="nemotron_ultra_rlvr1",
-            component_name="ultra_sft_step3200_toolcall_schema",
-            component_selector="ultra_sft_step3200_toolcall_schema",
-            component_file_sha256=RLVR1_FILE_SHA256,
-            canonical_task_count=98424,
-            component_ratio="4.0752%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4011,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "752d664be2f90fd7b5b87f042b5e710734a9c927cc44e2d77a5729261390c34f",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
     },
     "rlvr2": {
-        "language_mixing_hs3_ultra_genrm_fmt": replace(
-            SKYRL_METADATA,
+        "language_mixing_hs3_ultra_genrm_fmt": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt",
-            name="nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt",
-            display_name="nvidia/Nemotron-RLHF-GenRM-v1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RLHF-GenRM-v1",
-            verifier_revision="b280136ced512ece80e95ba06ccd4a72b89dbd83009e91204dc537296e1ee379",
+            title="nvidia/Nemotron-RLHF-GenRM-v1 · rlvr2",
+            origin="MarinSkyRL",
             family="preference",
-            type="Alignment",
-            turns="Single-turn",
-            task_count=4757,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="language_mixing_hs3_ultra_genrm_fmt",
-            component_selector="language_mixing_hs3_ultra_genrm_fmt",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="4.7994%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4757,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "b280136ced512ece80e95ba06ccd4a72b89dbd83009e91204dc537296e1ee379",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_abstention": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_abstention": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_abstention",
-            display_name="nvidia/Nemotron-RL-QA-Abstention-v1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-QA-Abstention-v1",
-            verifier_revision="e3e85a847527d0ace97e1a6459ce92b3ce54d5278ac6f5a4eae7e6da9a564623",
+            title="nvidia/Nemotron-RL-QA-Abstention-v1 · rlvr2",
+            origin="MarinSkyRL",
             family="qa-abstention",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=4025,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_abstention",
-            component_selector="ultra_sft_step3200_abstention",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="4.0609%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4025,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "e3e85a847527d0ace97e1a6459ce92b3ce54d5278ac6f5a4eae7e6da9a564623",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_calendar_v2": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_calendar_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Calendar-v2 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
-            verifier_revision="5c9656671baf79a9711cd5c7ecbacffc6d1a169129b81ab098c00a4be8838833",
+            title="nvidia/Nemotron-RL-Instruction-Following-Calendar-v2 · rlvr2",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=910,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_calendar_v2",
-            component_selector="ultra_sft_step3200_calendar_v2",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="0.9181%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=910,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "5c9656671baf79a9711cd5c7ecbacffc6d1a169129b81ab098c00a4be8838833",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_comp_coding": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_comp_coding": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding",
-            display_name="nvidia/Nemotron-RL-coding-competitive_coding · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-coding-competitive_coding",
-            verifier_revision="0878a10ef2dd4c89daf18e325b48720553c3f5f0ab60d99d233b4520db3e7684",
+            title="nvidia/Nemotron-RL-coding-competitive_coding · rlvr2",
+            origin="MarinSkyRL",
             family="competitive-programming",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=7929,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_comp_coding",
-            component_selector="ultra_sft_step3200_comp_coding",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="7.9997%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=7929,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "0878a10ef2dd4c89daf18e325b48720553c3f5f0ab60d99d233b4520db3e7684",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_instruction_following": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_instruction_following": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following",
-            display_name="nvidia/Nemotron-RL-instruction_following · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-instruction_following",
-            verifier_revision="f0571dbf560eaceae2609645364cb6df639318e701a31e0cb55303adfa6539bc",
+            title="nvidia/Nemotron-RL-instruction_following · rlvr2",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=10409,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_instruction_following",
-            component_selector="ultra_sft_step3200_instruction_following",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="10.5018%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=10409,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "f0571dbf560eaceae2609645364cb6df639318e701a31e0cb55303adfa6539bc",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_jailbreak": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_jailbreak": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak",
-            display_name="nvidia/Nemotron-RL-Safety-v1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Safety-v1",
-            verifier_revision="76b4bdebc9c8a2db5ee4b9b1bd6d1703b556e8ab00a9a8426aa942e3d2778022",
+            title="nvidia/Nemotron-RL-Safety-v1 · rlvr2",
+            origin="MarinSkyRL",
             family="safety",
-            type="Alignment",
-            turns="Single-turn",
-            task_count=2861,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_jailbreak",
-            component_selector="ultra_sft_step3200_jailbreak",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="2.8865%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("alignment", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2861,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "76b4bdebc9c8a2db5ee4b9b1bd6d1703b556e8ab00a9a8426aa942e3d2778022",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_lean": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_lean": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-            display_name="nvidia/Nemotron-Math-Proofs-v1 · Lean refinement · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-Math-Proofs-v1",
-            verifier_revision="44e963bdf18c6b3e95f85aee3ab59c03fc5c9e8fa1c598bc633ae117dd3d0315",
+            title="nvidia/Nemotron-Math-Proofs-v1 · Lean refinement · rlvr2",
+            origin="MarinSkyRL",
             family="math-proof",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=902,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_lean",
-            component_selector="ultra_sft_step3200_lean",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="0.9100%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=902,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "44e963bdf18c6b3e95f85aee3ab59c03fc5c9e8fa1c598bc633ae117dd3d0315",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_math_cot": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_math_cot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot",
-            display_name="nvidia/Nemotron-RL-Math-v2 · chain of thought · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Math-v2",
-            verifier_revision="7fff13efc379f4bfd200ecd2d225dad60c79be801d09ddc27439f10b5fd87abb",
+            title="nvidia/Nemotron-RL-Math-v2 · chain of thought · rlvr2",
+            origin="MarinSkyRL",
             family="math-answer",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=4776,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_math_cot",
-            component_selector="ultra_sft_step3200_math_cot",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="4.8186%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4776,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "7fff13efc379f4bfd200ecd2d225dad60c79be801d09ddc27439f10b5fd87abb",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_math_tir": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_math_tir": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
-            display_name="nvidia/Nemotron-RL-Math-v2 · tool-assisted reasoning · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Math-v2",
-            verifier_revision="2ab0dc76ee4bab074aec8879a6a6aa44405868d2ced449fbb2d64e3e9f9ab2d5",
+            title="nvidia/Nemotron-RL-Math-v2 · tool-assisted reasoning · rlvr2",
+            origin="MarinSkyRL",
             family="math-answer",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=5917,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_math_tir",
-            component_selector="ultra_sft_step3200_math_tir",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="5.9698%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=5917,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "2ab0dc76ee4bab074aec8879a6a6aa44405868d2ced449fbb2d64e3e9f9ab2d5",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_multichallenge_len40k": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1",
-            verifier_revision="abeefa8df27e3ab6decdfbfa33e7eca3abf6e7c7f37019d29419663ca7424b8e",
+            title="nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1 · rlvr2",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Multi-turn",
-            task_count=4028,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_multichallenge_len40k",
-            component_selector="ultra_sft_step3200_multichallenge_len40k",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="4.0639%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=4028,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "abeefa8df27e3ab6decdfbfa33e7eca3abf6e7c7f37019d29419663ca7424b8e",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_nvarc_inductive": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_nvarc_inductive": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive",
-            display_name="nvidia/Nemotron-RL-ARC-AGI-v1 · inductive · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-ARC-AGI-v1",
-            verifier_revision="7593b96ad47dc731d023f6d4e8d45df8d456b309fad6374698f815287470aa10",
+            title="nvidia/Nemotron-RL-ARC-AGI-v1 · inductive · rlvr2",
+            origin="MarinSkyRL",
             family="arc-agi",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2097,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_nvarc_inductive",
-            component_selector="ultra_sft_step3200_nvarc_inductive",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="2.1157%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2097,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "7593b96ad47dc731d023f6d4e8d45df8d456b309fad6374698f815287470aa10",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_nvarc_transductive": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_nvarc_transductive": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
-            display_name="nvidia/Nemotron-RL-ARC-AGI-v1 · transductive · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-ARC-AGI-v1",
-            verifier_revision="43c2d7cd6b0cb7365492cef009595a9687f2671ed545d7d209b354c358eda40f",
+            title="nvidia/Nemotron-RL-ARC-AGI-v1 · transductive · rlvr2",
+            origin="MarinSkyRL",
             family="arc-agi",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2069,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_nvarc_transductive",
-            component_selector="ultra_sft_step3200_nvarc_transductive",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="2.0875%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2069,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "43c2d7cd6b0cb7365492cef009595a9687f2671ed545d7d209b354c358eda40f",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_reasoning_gym": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_reasoning_gym": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym",
-            display_name="nvidia/Nemotron-RL-ReasoningGym-v1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-ReasoningGym-v1",
-            verifier_revision="9d4d3a356f99a79533ac7d25cf25481f6c975a75532c9e3ddbc0e9f4dbc4dea9",
+            title="nvidia/Nemotron-RL-ReasoningGym-v1 · rlvr2",
+            origin="MarinSkyRL",
             family="reasoning-gym",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=1385,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_reasoning_gym",
-            component_selector="ultra_sft_step3200_reasoning_gym",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="1.3974%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1385,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "9d4d3a356f99a79533ac7d25cf25481f6c975a75532c9e3ddbc0e9f4dbc4dea9",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_stem_mcqa": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_stem_mcqa": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa",
-            display_name="nvidia/Nemotron-RL-knowledge-mcqa · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-knowledge-mcqa",
-            verifier_revision="4e21612c6acfff9c614d0c5e0e6868e0b137609aa2dca3c5f70aadf38dfa8aa0",
+            title="nvidia/Nemotron-RL-knowledge-mcqa · rlvr2",
+            origin="MarinSkyRL",
             family="qa-multiple-choice",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2097,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_stem_mcqa",
-            component_selector="ultra_sft_step3200_stem_mcqa",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="2.1157%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2097,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "4e21612c6acfff9c614d0c5e0e6868e0b137609aa2dca3c5f70aadf38dfa8aa0",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_stem_mcqa_cot_rima_new": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_stem_mcqa_cot_rima_new": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            display_name="nvidia/Nemotron-SFT-Science-v2 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-SFT-Science-v2",
-            verifier_revision="c745334d6e868cfa4388f84f39a11c4985fe3bc28996c306d3db9eb5a16800c5",
+            title="nvidia/Nemotron-SFT-Science-v2 · rlvr2",
+            origin="MarinSkyRL",
             family="qa-multiple-choice",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=2077,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            component_selector="ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="2.0955%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2077,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "c745334d6e868cfa4388f84f39a11c4985fe3bc28996c306d3db9eb5a16800c5",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_structured_outputs_v2": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_structured_outputs_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · v2 records · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-            verifier_revision="b84e98dd9bfc9daff96f66dc2f7fa9779d6dd31ed04e01b5a7a1b437a6b31ad8",
+            title="nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · v2 records · rlvr2",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=682,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_structured_outputs_v2",
-            component_selector="ultra_sft_step3200_structured_outputs_v2",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="0.6881%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=682,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "b84e98dd9bfc9daff96f66dc2f7fa9779d6dd31ed04e01b5a7a1b437a6b31ad8",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-            display_name="SWE-Gym/SWE-Gym · rlvr2",
-            url="https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            verifier_revision="0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
+            title="SWE-Gym/SWE-Gym · rlvr2",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=2838,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-            component_selector="ultra_sft_step3200_swe_pivot_len40k",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="2.8633%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2838,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
-        "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": replace(
-            SKYRL_METADATA,
-            id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-            display_name="nebius/SWE-rebench-V2 · rlvr2",
-            url="https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            verifier_revision="5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
+        "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
+            id=("MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-" "rebench-V2"),
+            title="nebius/SWE-rebench-V2 · rlvr2",
+            origin="MarinSkyRL",
             family="swe-repo",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=11060,
-            count_basis=(
-                "Every record in the pinned original blend JSONL was counted once by dataset "
-                "selection. SWE-Gym records match instance_id membership in SWE-Gym/SWE-Gym; "
-                "remaining SWE records are attributed to SWE-rebench-V2 by the blend card "
-                "exhaustive two-source composition."
-            ),
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-            component_selector="ultra_sft_step3200_swe_pivot_len40k",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="11.1586%",
-            verifier_url=(
-                "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d21"
-                "22598f3/src/harbor/verifier"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=11060,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
+                (
+                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
+                    "f3/src/harbor/verifier"
+                ),
             ),
         ),
-        "ultra_sft_step3200_tau_pivot": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_tau_pivot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
-            display_name="nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-v1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-v1",
-            verifier_revision="997b4d12a352345341d33861763b3680dee9d4039156cf9d0a21e7a18102620e",
+            title="nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-v1 · rlvr2",
+            origin="MarinSkyRL",
             family="tool-use",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=20035,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_tau_pivot",
-            component_selector="ultra_sft_step3200_tau_pivot",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="20.2137%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=20035,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "997b4d12a352345341d33861763b3680dee9d4039156cf9d0a21e7a18102620e",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_toolcall_schema": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_toolcall_schema": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
-            display_name="nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1",
-            verifier_revision="752d664be2f90fd7b5b87f042b5e710734a9c927cc44e2d77a5729261390c34f",
+            title="nvidia/Nemotron-RL-Agentic-Function-Calling-Pivot-v1 · rlvr2",
+            origin="MarinSkyRL",
             family="tool-use",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=2666,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_toolcall_schema",
-            component_selector="ultra_sft_step3200_toolcall_schema",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="2.6898%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=2666,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "752d664be2f90fd7b5b87f042b5e710734a9c927cc44e2d77a5729261390c34f",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_ds2_freeform": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_ds2_freeform": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
-            verifier_revision="78997a2391c51890ea9ef737c3c894a4307b90561bde4cfd3f730e283e9ad352",
+            title="nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1 · rlvr2",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=1392,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_ds2_freeform",
-            component_selector="ultra_sft_step3200_ds2_freeform",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="1.4044%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1392,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "78997a2391c51890ea9ef737c3c894a4307b90561bde4cfd3f730e283e9ad352",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_ds3_citation": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_ds3_citation": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
-            verifier_revision="11de81bec2bbf26a6480ca9a43065fafe7638181cefd13926869f3a5d54ae6c0",
+            title="nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1 · rlvr2",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=1403,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_ds3_citation",
-            component_selector="ultra_sft_step3200_ds3_citation",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="1.4155%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1403,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "11de81bec2bbf26a6480ca9a43065fafe7638181cefd13926869f3a5d54ae6c0",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_rdkit": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_rdkit": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-            display_name="nvidia/Nemotron-RL-Litmus-Bench-v0.1 · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Litmus-Bench-v0.1",
-            verifier_revision="cf4029df469964dabedfa347aa974e590744e9d4807d132042641e024d5d83f1",
+            title="nvidia/Nemotron-RL-Litmus-Bench-v0.1 · rlvr2",
+            origin="MarinSkyRL",
             family="chemistry",
-            type="Agentic",
-            turns="Multi-turn",
-            task_count=1403,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_rdkit",
-            component_selector="ultra_sft_step3200_rdkit",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="1.4155%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1403,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "cf4029df469964dabedfa347aa974e590744e9d4807d132042641e024d5d83f1",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
-        "ultra_sft_step3200_structured_outputs_v3": replace(
-            SKYRL_METADATA,
+        "ultra_sft_step3200_structured_outputs_v3": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3",
-            name="nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3",
-            display_name="nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · v3 records · rlvr2",
-            url="https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-            verifier_revision="1d36a9a2a0d93c9acb61bfb3eccc498d2c359e5ab2bfc76ccc28aadc9de224b1",
+            title="nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · v3 records · rlvr2",
+            origin="MarinSkyRL",
             family="instruction-following",
-            type="RLVR",
-            turns="Single-turn",
-            task_count=1398,
-            count_basis="Every record in the pinned original blend JSONL was counted once by dataset selection. ",
-            count_url=(
-                "https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/482"
-                "392c14c6418e26804ea2e5d10359df9877df4/rlvr2.jsonl"
-            ),
-            canonical_source="nvidia/Nemotron-RL-Ultra-Training-Blends · rlvr2",
-            canonical_id="MarinSkyRL:nemotron_ultra_rlvr2",
-            registry_name="nemotron_ultra_rlvr2",
-            component_name="ultra_sft_step3200_structured_outputs_v3",
-            component_selector="ultra_sft_step3200_structured_outputs_v3",
-            component_file_sha256=RLVR2_FILE_SHA256,
-            canonical_task_count=99116,
-            component_ratio="1.4105%",
-            verifier_url=(
-                "https://github.com/marin-community/MarinSkyRL/tree/e44c4bfcb62c489286a1264094e6d"
-                "9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+            tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
+            count=1398,
+            verifier=SourceReference(
+                "nemotron_ultra",
+                "1d36a9a2a0d93c9acb61bfb3eccc498d2c359e5ab2bfc76ccc28aadc9de224b1",
+                (
+                    "https://github.com/marin-community/MarinSkyRL/tree/"
+                    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+                ),
             ),
         ),
     },
@@ -2713,7 +1644,7 @@ def _source(blend: str, path: str) -> RlDataSource:
     select = SweRows(name, SweSplit(split)) if split else ComponentRows(name)
     inputs = {SWE_GYM.repo: SWE_GYM} if split else dict(component.inputs)
     return RlDataSource(
-        metadata=BLENDS[blend][path],
+        info=BLENDS[blend][path],
         pipeline=RlDataPipeline(
             name=pipeline_name(blend, path),
             source=HfSource(

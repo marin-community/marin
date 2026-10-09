@@ -13,12 +13,14 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignFailed
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
+from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.quick import run_local_sources
 
 
 def test_local_campaign_continues_after_missing_source_and_converts_calendar(tmp_path: Path):
     source = calendar.sources()[0]
     assert source.pipeline is not None
+    assert isinstance(source.pipeline.source, HfSource)
     missing = replace(
         source,
         pipeline=replace(

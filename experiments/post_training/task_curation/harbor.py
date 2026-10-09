@@ -110,11 +110,14 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         spec = verifyit_spec(grader)
         answer_path = verifyit_answer_file(spec) if task.answer_type == AnswerType.TEXT else None
         files.update(verifier_runtime())
-        files["tests/verifier.toml"] = render_spec(spec).encode()
+        # Harbor reserves tests/verifier.toml for its image-installed verifyit command.
+        # Keep the bundled runtime wrapper in control of grading and public-file staging.
+        files["tests/taskcompendium-verifier.toml"] = render_spec(spec).encode()
         files["tests/test.sh"] = (
             b"#!/bin/bash\nset -euo pipefail\n"
             b"export PYTHONPATH=/tests/runtime\n"
-            b"exec python3 -c 'from verifyit.grade import main; raise SystemExit(main())' /tests/verifier.toml\n"
+            b"exec python3 -c 'from verifyit.grade import main; raise SystemExit(main())' "
+            b"/tests/taskcompendium-verifier.toml\n"
         )
         mode = grader.mode
         timeout = float(grader.parameters.get("timeout", 600))
@@ -170,16 +173,18 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
             modes[name] = resource.mode
     if "tests/test.sh" not in files:
         raise UnsupportedHarborTask("Script grader has no test.sh resource")
-    # Public resources also belong to the fresh grading environment; the agent never sees tests/.
-    if public:
-        for resource in public:
+    outputs = list(task.output_paths)
+    if answer_path:
+        outputs.append(answer_path)
+    # Harbor uploads submissions before running test.sh. Do not restore initial
+    # copies of files the agent edits, including when the agent deleted a file.
+    grader_public = [resource for resource in public if "/" + resource.path not in outputs]
+    if grader_public:
+        for resource in grader_public:
             files["tests/public/" + resource.path] = resource_bytes(resource)
             if resource.mode:
                 modes["tests/public/" + resource.path] = resource.mode
         files["tests/test.sh"] = b"#!/bin/bash\nset -euo pipefail\ncp -a /tests/public/. /\n" + files["tests/test.sh"]
-    outputs = list(task.output_paths)
-    if answer_path:
-        outputs.append(answer_path)
     metadata = {
         "taskcompendium_id": task.id,
         "source_dataset": task.source.dataset,
@@ -256,7 +261,7 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> 
                     reason = row["normalization_reason"] if row["task_json"] is None else None
                     if row["task_json"] is not None:
                         try:
-                            record = harbor_record(row, grader_image=grader_image, family=source.metadata.family)
+                            record = harbor_record(row, grader_image=grader_image, family=source.info.family)
                         except UnsupportedHarborTask as error:
                             reason = str(error)
                         else:
@@ -274,7 +279,7 @@ def export_harbor(input_root: Path, output_root: Path, *, grader_image: str) -> 
         "rejections": rejected,
         "grader_image": grader_image,
         "source": source.name,
-        "atlas_id": source.metadata.id,
+        "atlas_id": source.info.id,
         "harbor_config_validated": True,
         "runtime_verified": False,
         "limitation": "The supplied verifier image's dependency parity with the source package lock is unverified.",

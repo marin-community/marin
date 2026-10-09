@@ -3,6 +3,8 @@
 
 import io
 import json
+import shlex
+import subprocess
 import tarfile
 from dataclasses import asdict
 from pathlib import Path
@@ -12,12 +14,14 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
-from taskcompendium.models import NoGrader
+from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader, verifyit_answer_file, verifyit_spec
 from taskcompendium.pipeline.models import NormalizedTask
+from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.compare_harbor import compare_harbor
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, math, python_tests
 from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, harbor_record, main
+from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tests.conversion import convert_row
 from experiments.post_training.tasktrove.publish import TASKS_SCHEMA as RELEASE_SCHEMA
@@ -42,10 +46,11 @@ def normalized_row(request) -> tuple[dict, NormalizedTask]:
     source = next(source for source in module.sources() if source.name == f"tasktrove-{name}")
     pipeline = source.pipeline
     assert pipeline is not None
+    assert isinstance(pipeline.source, HfSource)
     source_path = f"{name}-original.tar.gz"
     converted = convert_row(pipeline, {"path": source_path, "task_binary": (FIXTURES / f"{name}.tar.gz").read_bytes()})
     assert isinstance(converted, NormalizedTask)
-    config = source.metadata.name
+    config = Path(pipeline.source.files[0]).parent.name
     return {
         "task_id": converted.task.id,
         "task_json": converted.task.model_dump_json(),
@@ -66,6 +71,13 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     assert config.verifier.environment.docker_image == GRADER_IMAGE
     assert not any(path.startswith("solution/") for path in files)
     assert not any(path.startswith(("environment/files/tests/", "environment/files/solution/")) for path in files)
+    if isinstance(converted.task.grader, VerifyitGrader):
+        # Harbor bypasses test.sh when this reserved filename exists. The wrapper
+        # must run to load our bundled verifyit and install public grader inputs.
+        assert "tests/verifier.toml" not in files
+        command = shlex.split(files["tests/test.sh"].decode().splitlines()[-1])
+        assert command[:2] == ["exec", "python3"]
+        assert command[-1].removeprefix("/") in files
     for resource in converted.task.resources.verifier:
         assert "tests/" + resource.path in files
     if converted.task.answer_type == "text":
@@ -102,6 +114,45 @@ def test_harbor_comparison_reports_population_difference_without_claiming_runtim
     assert report["harbor_configs_valid"] and report["oracle_solutions_separate"]
 
 
+def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path) -> None:
+    row, converted = normalized_row
+    task = converted.task
+    answer_path = task.grader.answer_path if isinstance(task.grader, ScriptGrader) else None
+    if isinstance(task.grader, VerifyitGrader) and task.answer_type == "text":
+        answer_path = verifyit_answer_file(verifyit_spec(task.grader))
+    output = (answer_path or task.output_paths[0]).removeprefix("/")
+    resources = task.resources.model_copy(
+        update={
+            "worker": (
+                *task.resources.worker,
+                inline_resource(output, b"initial contents"),
+                inline_resource("app/staging-input.txt", b"public input"),
+            )
+        }
+    )
+    edited = task.model_copy(update={"resources": resources})
+    record = harbor_record({**row, "task_json": edited.model_dump_json()}, grader_image=GRADER_IMAGE, family="fixture")
+    files = archive_files(record.task_binary)
+    workspace, public = tmp_path / "workspace", tmp_path / "public"
+    submitted = workspace / output
+    submitted.parent.mkdir(parents=True)
+    submitted.write_text("agent's edited contents")
+    for name, data in files.items():
+        if name.startswith("tests/public/"):
+            path = public / name.removeprefix("tests/public/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+    # Execute the emitted staging command against an isolated filesystem root.
+    command = shlex.split(files["tests/test.sh"].decode().splitlines()[2])
+    command[-2:] = [str(public) + "/.", str(workspace)]
+    subprocess.run(command, check=True)
+    assert submitted.read_text() == "agent's edited contents"
+    assert (workspace / "app/staging-input.txt").read_text() == "public input"
+    submitted.unlink()
+    subprocess.run(command, check=True)
+    assert not submitted.exists()
+
+
 def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(normalized_row, tmp_path) -> None:
     row, converted = normalized_row
     source = all_sources()["Task Trove:" + row["source_row"].split("/", 1)[0]]
@@ -126,5 +177,5 @@ def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(no
     ]
     exported = pq.read_table(output_root / "tasks.parquet").to_pylist()
     assert len(exported) == 1
-    assert exported[0]["family"] == source.metadata.family
-    assert report["atlas_id"] == source.metadata.id
+    assert exported[0]["family"] == source.info.family
+    assert report["atlas_id"] == source.info.id

@@ -3,8 +3,8 @@ const $ = (id) => document.getElementById(id);
 const isPublicView = window.location.hostname === "public.applets.marina.oa.dev";
 const state = { sources: [], refreshes: [], origin: "all", sort: "display_name", direction: 1, refreshing: false, error: false };
 const columns = [
-  ["display_name", "Source name"], ["origin", "Catalog"], ["canonical_source", "Canonical source"], ["environment", "Environment"],
-  ["task_count", "Tasks / rows"], ["revised_at", "Last revision"], ["turns", "Interaction"],
+  ["display_name", "Source name"], ["origin", "Catalog"], ["canonical_source", "Dataset"],
+  ["task_count", "Input rows"], ["turns", "Interaction"],
   ["type", "Type"], ["is_benchmark", "Benchmark"], ["family", "Family"],
   ["difficulty", "Difficulty"], ["quality", "Quality"], ["review_date", "Review date"], ["status", "Status"],
 ];
@@ -35,10 +35,9 @@ function filtered() {
     matchesDifficulty(row) &&
     ($("type").value === "all" || ($("type").value === "unknown" ? !row.type : row.type === $("type").value)) &&
     ($("turns").value === "all" || row.turns === $("turns").value) &&
-    ($("environment").value === "all" || row.environment === $("environment").value) &&
     ($("family").value === "all" || ($("family").value === "unknown" ? !row.family : row.family === $("family").value)) &&
     ($("benchmark").value === "all" || String(row.is_benchmark) === $("benchmark").value) &&
-    (!search || [row.display_name,row.canonical_source,row.component_name,row.name,row.gym_alias,row.family,row.dataset_id,row.environment,row.notes,row.origin,row.verification].join(" ").toLowerCase().includes(search))
+    (!search || [row.display_name,row.canonical_source,row.name,row.family,row.dataset_id,row.notes,row.origin,...(row.tags || [])].join(" ").toLowerCase().includes(search))
   );
   return rows.sort((a,b) => {
     const value = row => state.sort === "difficulty" ? AtlasDifficulty.currentLarge(row.difficulty_summary)?.solve_rate : row[state.sort];
@@ -54,9 +53,9 @@ function render() {
   const available = state.sources.filter(row => row.status === "Available");
   $("metric-sources").textContent = number.format(available.length);
   const counted = rows;
-  $("metric-tasks").textContent = (counted.some(row=>row.count_precision === "estimated") ? "≈ " : "") + number.format(counted.reduce((total,row)=>total+(row.task_count||0),0));
+  $("metric-tasks").textContent = number.format(counted.reduce((total,row)=>total+(row.task_count||0),0));
   const unknownCounts = counted.filter(row=>row.kind === "Dataset" && row.task_count === null).length;
-  $("task-count-context").textContent = `${rows.length} visible entries · ${unknownCounts} unknown dataset counts${counted.some(row=>row.count_precision === "estimated") ? " · includes estimates" : ""} · may overlap`;
+  $("task-count-context").textContent = `${rows.length} visible entries · ${unknownCounts} unknown dataset counts · may overlap`;
   for (const [id,origin] of [["all-count",null],["sky-count","MarinSkyRL"],["trove-count","Task Trove"]]) $(id).textContent = number.format(state.sources.filter(row => (!origin || row.origin === origin) && ($("excluded").checked || row.status !== "Excluded")).length);
   $("headers").replaceChildren();
   for (const [key,title] of columns) {
@@ -69,7 +68,7 @@ function render() {
     const tr=node("tr");tr.dataset.sourceId=row.id;
     for (const [key] of columns) {
       const td=node("td");const value=row[key];
-      if (key === "display_name") {td.className="name-cell";const line=node("div",undefined,"name-top");const button=node("button","ⓘ","detail-button");button.setAttribute("aria-label",`Details for ${row.display_name}`);button.addEventListener("click",()=>details(row));line.append(link(row.display_name,row.url),button);td.append(line,node("div",row.environment ? `Environment: ${row.environment}` : row.dataset_id,"source-subtitle"));}
+      if (key === "display_name") {td.className="name-cell";const line=node("div",undefined,"name-top");const button=node("button","ⓘ","detail-button");button.setAttribute("aria-label",`Details for ${row.display_name}`);button.addEventListener("click",()=>details(row));line.append(link(row.display_name,row.url),button);td.append(line,node("div",row.dataset_id,"source-subtitle"));}
       else if (key === "canonical_source") td.append(link(value,row.canonical_url));
       else if (key === "difficulty") {
         if (row.difficulty_summary) {
@@ -83,10 +82,9 @@ function render() {
       else if (key === "origin") td.append(chip(value,value === "MarinSkyRL" ? "sky" : "trove"));
       else if (key === "type") td.append(chip(value,(value||"").toLowerCase()));
       else if (key === "status") td.append(chip(value,value === "Excluded" ? "excluded" : ""));
-      else if (key === "task_count") {td.textContent=value === null || value === undefined ? (row.kind === "Generator" ? "Generated" : "—") : (row.count_precision === "estimated" ? "≈ " : "") + number.format(value);td.className=`num ${value === null || value === undefined ? "muted" : ""}`;td.title=row.count_basis;}
-      else if (key === "revised_at") {td.textContent=date(value);td.title=`${value} · ${row.revision_basis || "Release repository last changed"}`;}
-      else if (key === "is_benchmark") {td.textContent=value ? "True" : "False";td.className=value ? "benchmark-yes" : "muted";td.title=row.benchmark_basis;}
-      else {td.textContent=value || "—";if (!value || value === "Unknown") td.className="muted";if(key === "turns") td.title=row.classification_basis;}
+      else if (key === "task_count") {td.textContent=value === null || value === undefined ? (row.kind === "Generator" ? "Generated" : "—") : number.format(value);td.className=`num ${value === null || value === undefined ? "muted" : ""}`;td.title="Selected input rows before conversion or curation";}
+      else if (key === "is_benchmark") {td.textContent=value ? "True" : "False";td.className=value ? "benchmark-yes" : "muted";}
+      else {td.textContent=value || "—";if (!value || value === "Unknown") td.className="muted";}
       tr.append(td);
     }
     fragment.append(tr);
@@ -94,24 +92,22 @@ function render() {
   $("rows").replaceChildren(fragment);$("empty").hidden=rows.length > 0 || state.sources.length === 0;
   const excluded = state.sources.filter(row=>row.status === "Excluded").length;
   $("result-count").textContent=`${number.format(rows.length)} of ${number.format(state.sources.length)} entries · ${excluded} excluded sources${$("excluded").checked ? " included" : " hidden"} · bad quality ${$("show-bad").checked ? "included" : "hidden"}`;
-  const errors=state.refreshes.filter(item=>item.error);
-  $("metric-status").replaceChildren(node("span",isPublicView ? "Saved snapshot" : state.refreshing ? "Checking…" : state.error || errors.length ? "Needs attention" : state.refreshes.length > 0 ? "Up to date" : "Awaiting sync"),node("span",undefined,"live-dot"));
+  $("metric-status").replaceChildren(node("span",isPublicView ? "Saved snapshot" : state.refreshing ? "Checking…" : state.error ? "Needs attention" : state.refreshes.length > 0 ? "Up to date" : "Awaiting sync"),node("span",undefined,"live-dot"));
   const checked=state.refreshes.map(item=>item.checked_at).filter(Boolean).sort()[0];
   $("checked-at").textContent=checked ? `Last checked ${new Date(checked).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})} · ${date(checked)}` : "No successful sync yet";
 }
 function details(row) {
   $("detail-name").textContent=row.display_name;$("detail-chips").replaceChildren(chip(row.origin,row.origin === "MarinSkyRL" ? "sky" : "trove"),chip(row.type,(row.type||"").toLowerCase()));
   $("detail-notes").textContent=row.notes;
-  const fields=[["Canonical source",row.canonical_source],["Canonical task count",row.canonical_task_count],["Component",row.component_name],["Component proportion",row.component_ratio],["Record dataset selector",row.component_selector],["Counted file SHA-256",row.component_file_sha256],["Registry ID",row.registry_name || row.name],["Task count",row.task_count === null ? row.kind === "Dataset" ? "Not published" : "No fixed count" : (row.count_precision === "estimated" ? "≈ " : "") + number.format(row.task_count)],["Count precision",row.count_precision],["Count basis",row.count_basis],["Input task count",row.input_count],["Interaction",row.turns],["Type",row.type||"Mixed / unclassified"],["Classification",row.classification_basis],["Benchmark",row.is_benchmark ? "True" : "False"],["Benchmark basis",row.benchmark_basis],["Family",row.family],["Family basis",row.family_basis],["Environment",row.environment],["Gym alias",row.gym_alias],["Gym entrypoint",row.gym_entrypoint],["Registry split selector",row.split],["Verification",row.verification],["Languages",row.languages],["License",row.license],["Last revision",row.revised_at],["Revision basis",row.revision_basis],["Registry date",row.registry_revised_at],["Verifier date",row.verifier_revised_at],["Verifier commit",row.verifier_revision],["Metadata error",row.metadata_error],["Count metadata error",row.count_metadata_error],["Registry / release SHA",row.revision],["Dataset date",row.dataset_revised_at],["Dataset SHA",row.dataset_revision],["Quality",row.quality||"Not curated"],["Upstream link",row.upstream_link_basis]];
+  const fields=[["Dataset",row.dataset_id],["Dataset revision",row.dataset_revision],["Source ID",row.id],["Input rows",row.task_count === null ? row.kind === "Generator" ? "No fixed count" : "Unknown" : number.format(row.task_count)],["Input files",row.pipeline?.files],["Pipeline",row.pipeline?.name],["Pipeline version",row.pipeline?.version],["Family",row.family],["Tags",row.tags],["Verifier",row.verifier_name],["Verifier revision",row.verifier_revision],["Quality",row.quality||"Not curated"]];
   $("detail-fields").replaceChildren();for(const [title,value] of fields) {if(value === undefined || value === null || value === "" || Array.isArray(value) && !value.length)continue;const dl=node("dl",undefined,"field");dl.append(node("dt",title),node("dd",Array.isArray(value) ? value.join(", ") : String(value)));$("detail-fields").append(dl);}
   if(row.difficulty_summary){const chart=AtlasDifficulty.comparison(row.difficulty_summary.models, row.difficulty_summary, true);$("detail-fields").append(chart);}
-  $("detail-links").replaceChildren(link("Open source ↗",row.url),link("Pinned catalog ↗",row.provenance_url));if(row.upstream_url) $("detail-links").append(link("Original source ID ↗",row.upstream_url));if(row.verifier_url) $("detail-links").append(link("Verifier code ↗",row.verifier_url));if(row.count_url) $("detail-links").append(link("Count evidence ↗",row.count_url));if(row.family_url) $("detail-links").append(link("Family evidence ↗",row.family_url));
+  $("detail-links").replaceChildren(link("Pinned dataset ↗",row.url));if(row.verifier_url) $("detail-links").append(link("Verifier code ↗",row.verifier_url));
   if(row.review_id){const anchor=node("a","Read quality review ↗");anchor.href=`review.html?id=${encodeURIComponent(row.review_id)}`;$("detail-links").append(anchor);}
   if(row.difficulty_summary){const anchor=node("a","Read difficulty attempts & verifier results ↗");anchor.href=`review.html?id=${encodeURIComponent(row.review_id)}#difficulty`;$("detail-links").append(anchor);}
-  if(row.gym_url) $("detail-links").append(link("Gym registration ↗",row.gym_url));
   $("details").showModal();
 }
-async function load() { const response=await fetch("api/sources",{cache:"no-store"});if(!response.ok)throw new Error(`Catalog read failed (${response.status})`);const data=await response.json();state.sources=data.sources;state.refreshes=data.refreshes;for(const [field,title] of [["environment","environments"],["family","families"]]) {
+async function load() { const response=await fetch("api/sources",{cache:"no-store"});if(!response.ok)throw new Error(`Catalog read failed (${response.status})`);const data=await response.json();state.sources=data.sources;state.refreshes=data.refreshes;for(const [field,title] of [["family","families"]]) {
     const selected=$(field).value;
     const options=[node("option",`All ${title}`)];options[0].value="all";
     for(const name of [...new Set(state.sources.map(row=>row[field]).filter(Boolean))].sort()) {
@@ -127,18 +123,18 @@ async function refresh(force=false) {
     const response=await fetch(`api/refresh${force ? "?force=true" : ""}`,{method:"POST"});if(!response.ok)throw new Error(`Refresh failed (${response.status})`);
     const result=await response.json();await load();
     if(result.busy) {$("sync-banner").textContent=result.message;setTimeout(async()=>{try{await load();}catch(error){showError(error);}},2500);}
-    else {const errors=state.refreshes.filter(item=>item.error);if(errors.length){$("sync-banner").classList.add("warning");$("sync-banner").textContent=errors.map(item=>`${item.origin}: ${item.error}. Keeping the last successful snapshot.`).join(" ");}else {$("sync-banner").textContent=state.refreshes.map(item=>`${item.origin} ${item.revision.slice(0,8)}`).join("  ·  ")+"  ·  Packaged task-curation catalog loaded.";}}
+    else {$("sync-banner").textContent=state.refreshes.map(item=>`${item.origin} ${item.revision.slice(0,8)}`).join("  ·  ")+"  ·  Packaged task-curation catalog loaded.";}
   }catch(error){showError(error);}finally{state.refreshing=false;$("refresh").disabled=false;render();}
 }
 function showError(error){state.error=true;$("sync-banner").className="sync-banner warning";$("sync-banner").textContent=isPublicView ? `${error.message}. Reload this page to retry.` : `${error.message}. Saved sources remain available; retry with Refresh sources.`;$("metric-status").textContent="Needs attention";}
-for(const id of ["type","turns","environment","family","benchmark","difficulty","excluded"]) $(id).addEventListener("change",render);$("search").addEventListener("input",render);
+for(const id of ["type","turns","family","benchmark","difficulty","excluded"]) $(id).addEventListener("change",render);$("search").addEventListener("input",render);
 $("quality").addEventListener("change",()=>{if($("quality").value === "bad")$("show-bad").checked=true;render();});
 $("show-bad").addEventListener("change",()=>{if(!$("show-bad").checked && $("quality").value === "bad")$("quality").value="all";render();});
 for(const button of document.querySelectorAll(".tab"))button.addEventListener("click",()=>{state.origin=button.dataset.origin;for(const other of document.querySelectorAll(".tab"))other.classList.toggle("selected",other===button);render();});
-$("reset").addEventListener("click",()=>{for(const id of ["type","turns","environment","family","benchmark","quality","difficulty"])$(id).value="all";$("search").value="";$("excluded").checked=false;$("show-bad").checked=false;state.origin="all";for(const button of document.querySelectorAll(".tab"))button.classList.toggle("selected",button.dataset.origin==="all");render();});
+$("reset").addEventListener("click",()=>{for(const id of ["type","turns","family","benchmark","quality","difficulty"])$(id).value="all";$("search").value="";$("excluded").checked=false;$("show-bad").checked=false;state.origin="all";for(const button of document.querySelectorAll(".tab"))button.classList.toggle("selected",button.dataset.origin==="all");render();});
 $("refresh").hidden=isPublicView;
 if(!isPublicView)$("refresh").addEventListener("click",()=>refresh(true));
 $("close-details").addEventListener("click",()=>$("details").close());
 document.addEventListener("keydown",event=>{if(event.key==="/" && !["INPUT","SELECT","TEXTAREA"].includes(document.activeElement.tagName) && !$("details").open){event.preventDefault();$("search").focus();}});
-$("export").addEventListener("click",()=>{const quote=value=>`"${String(value ?? "").replaceAll('"','""')}"`;const fields=[...columns,["canonical_url","Canonical source URL"],["url","Source URL"],["provenance_url","Provenance URL"],["revision","Revision SHA"],["name","Registry ID"],["component_selector","Record dataset selector"],["component_file_sha256","Counted file SHA-256"],["count_basis","Count basis"],["count_precision","Count precision"],["count_url","Count evidence URL"],["gym_alias","Gym alias"],["gym_entrypoint","Gym entrypoint"],["gym_url","Gym registration URL"],["family_basis","Family basis"],["family_url","Family evidence URL"],["classification_basis","Classification basis"]];const csv=[fields.map(([,title])=>quote(title)).join(","),...filtered().map(row=>fields.map(([key])=>quote(row[key])).join(","))].join("\r\n");const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));const a=node("a");a.href=url;a.download="rl-data-atlas.csv";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+$("export").addEventListener("click",()=>{const quote=value=>`"${String(value ?? "").replaceAll('"','""')}"`;const fields=[...columns,["url","Pinned dataset URL"],["dataset_revision","Dataset revision"],["name","Pipeline / source name"],["tags","Tags"],["verifier_url","Verifier URL"],["verifier_revision","Verifier revision"]];const csv=[fields.map(([,title])=>quote(title)).join(","),...filtered().map(row=>fields.map(([key])=>quote(row[key])).join(","))].join("\r\n");const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));const a=node("a");a.href=url;a.download="rl-data-atlas.csv";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
 (async()=>{try{await load();if(isPublicView){$("sync-banner").textContent="Showing the latest saved catalog. The last catalog sync is shown above.";}else await refresh();}catch(error){showError(error);}})();
