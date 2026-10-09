@@ -26,9 +26,6 @@ pipeline = [
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-shellbox[shellsim]"]
 
-[tool.uv.sources]
-marin-shellbox = { path = "../shellbox", editable = true }
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
 
@@ -58,5 +55,3 @@ use-ignore-files = false
 project-includes = ["src/**/*.py"]
 search-path = ["src", "../verifyit/src", "../rigging/src"]
 python-interpreter = "../../.venv/bin/python"
-# The optional Harbor task importer is exercised from RolloutEngine's test lock.
-ignore-missing-imports = ["harbor_config", "harbor_config.*"]

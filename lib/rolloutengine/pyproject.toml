@@ -19,18 +19,7 @@ test = [
     "pytest-asyncio",
     "pytest-timeout",
     "marin-shellbox[daytona,shellsim]",
-    # Only the Harbor task importer tests need its schema; published wheels do not.
-    "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
 ]
-
-[tool.uv.workspace]
-
-[tool.uv]
-prerelease = "allow"
-
-[tool.uv.sources]
-marin-taskcompendium = { path = "../taskcompendium", editable = true }
-marin-shellbox = { path = "../shellbox", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rolloutengine"]

@@ -17,14 +17,11 @@ The supported scope is single-stage tasks with prebuilt, digest-pinned images, l
 After the turn loop, the default session grades an in-process `VerifyitGrader` on the host.
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, grades in a separate verifier machine using its digest-pinned image or a local environment built from its package lock.
 A `SessionGrader` requires a registered task session. A `NoGrader` task receives an `unavailable` grade.
-The optional Harbor importer requires `harbor_config` from a pinned Harbor checkout in the
-calling environment. It accepts only separate verifier environments.
-An unset verifier mode without a separate environment selects shared mode and causes rejection.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
 for the session lifecycle, exact-token contract, failure handling, and backend configuration.
 
 From the Marin repository root:
 
 ```bash
-uv run --project lib/rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
+uv run --package marin-rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
 ```

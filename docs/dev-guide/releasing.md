@@ -1,51 +1,18 @@
 # Releasing Packages to PyPI
 
-Marin publishes seventeen distributions to [PyPI](https://pypi.org/).
-[`marin-release-libs-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-release-libs-wheels.yaml)
-is their single build and publish workflow. Its dynamic matrix handles four
-release families:
+The [package release workflow](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-release-libs-wheels.yaml)
+builds and publishes Marin distributions to PyPI. Its release registry,
+`PACKAGES` in `scripts/ci/package_release.py`, defines the distributions,
+source paths, build jobs, and release families. Distribution names start with
+`marin-`; Python import names come from each package's manifest.
 
-- The twelve general pure-Python libraries share one version and exact sibling
-  dependency pins.
-- Dupekit and Finelog each publish a pure-Python distribution with a native
-  companion.
-- Iris publishes its native companion independently.
+The general Python family shares one version per release. Each wheel pins its
+Marin dependencies in that family to the exact release version. The root uv
+workspace supplies editable packages for development; published wheels depend
+on PyPI packages. Native companions have separate build jobs and versions.
 
-All **distribution names** (what you `pip install`) carry a `marin-` prefix so
-the names don't collide on PyPI, which has no namespaces. The **import name**
-(what you `import`) is unchanged.
-
-| Distribution | Import | Source |
-| --- | --- | --- |
-| `marin-core` | `marin` | `lib/marin` |
-| `marin-iris` | `iris` | `lib/iris` |
-| `marin-fray` | `fray` | `lib/fray` |
-| `marin-haliax` | `haliax` | `lib/haliax` |
-| `marin-levanter` | `levanter` | `lib/levanter` |
-| `marin-rigging` | `rigging` | `lib/rigging` |
-| `marin-zephyr` | `zephyr` | `lib/zephyr` |
-| `marin-finestore` | `finestore` | `lib/finestore` |
-| `marin-shellbox` | `shellbox` | `lib/shellbox` |
-| `marin-verifyit` | `verifyit` | `lib/verifyit` |
-| `marin-taskcompendium` | `taskcompendium` | `lib/taskcompendium` |
-| `marin-rolloutengine` | `rolloutengine` | `lib/rolloutengine` |
-| `marin-finelog` | `finelog` | `lib/finelog` |
-| `marin-finelog-server` | `finelog_server` | `lib/finelog/rust` |
-| `marin-dupekit` | `dupekit` | `lib/dupekit` |
-| `marin-dupekit-native` | `dupekit_native` | `lib/dupekit/rust` |
-| `marin-iris-native` | `iris_native` | `lib/iris/rust` |
-
-The `lib/` directory is not identical to the root uv workspace or the release
-family. `marin-shellbox` is an editable path dependency in the root lock, while
-RolloutEngine has its own lock for test-only Harbor schema imports. The native
-companion projects are excluded from uv workspace discovery. `marin-ducky` is a
-workspace member but is not in this release family.
-
-All publishing uses **OIDC trusted publishing**. There is no API token stored
-in the repository, in GitHub secrets, or anywhere else. At workflow runtime
-GitHub mints a short-lived OIDC token, PyPI validates it against the
-publisher binding configured on each project, and PyPI issues a one-shot
-upload token that expires when the run ends.
+Publishing uses PyPI trusted publishers and GitHub OIDC. The workflow does not
+store a PyPI API token.
 
 ## How releases happen
 
@@ -60,10 +27,6 @@ upload token that expires when the run ends.
 Stable tags are `marin-libs-v<X.Y.Z>`, `dupekit-v<X.Y.Z>`,
 `finelog-v<X.Y.Z>`, and `iris-native-v<X.Y.Z>`.
 
-The twelve general libs always share one version per build, and each published
-wheel pins its sibling dependencies to that exact version. Harbor-specific
-imports stay in isolated evaluation jobs and optional task-import tests.
-
 Native implementation pull requests compile their changed Rust sources in
 `unified-unit` and in the package release workflow. The follow-up dependency
 pull request changes only the consumer compatibility floor and `uv.lock`, so
@@ -71,13 +34,9 @@ CI exercises the newly published wheels before they become the repository
 default. The shared update branch serializes releases from different native
 packages and uses a GitHub App token so its pull request triggers normal CI.
 
-Package-family differences are declared in `PACKAGES` in
-`scripts/ci/package_release.py`: source paths, version files, distributions,
-build legs, import probes, and optional dependency-floor targets. Adding a
-family extends that registry and adds its PyPI projects' Trusted Publisher
-bindings to `marin-release-libs-wheels.yaml`; it does not require another
-workflow. Add build-driver code only when the family introduces a genuinely
-new build system.
+To add a distribution, update `PACKAGES` and configure its trusted publisher
+for this workflow. Add a build driver only if the package uses a new build
+system.
 
 ### Versioning
 
@@ -91,8 +50,7 @@ After PyPI accepts a complete native family release, automation raises its
 consumer dependency floor and locks that exact registry version. A targeted
 lock validation rejects unrelated package churn. The general Python family
 does not need a follow-up pull request because the checkout resolves its
-libraries from workspace or editable path sources for development. Published
-wheels refer to PyPI distributions instead.
+workspace packages locally. Published wheels refer to PyPI distributions.
 
 To cut a stable release, pick the next [SemVer](https://semver.org/) version
 and push the tag — no `pyproject.toml` edit required:
@@ -107,40 +65,15 @@ release must use a fresh version.
 
 ## One-time PyPI setup
 
-This is performed once by a PyPI admin who owns the `marin-community`
-organization. It cannot be automated from the release workflow.
+An admin configures each new PyPI project before its first release.
 
 ### 1. Organization
 
-Ensure a `marin-community` [PyPI organization](https://pypi.org/manage/organizations/)
-exists with at least two human admins. Every `marin-*` project is owned by it.
+Create each project under the
+[`marin-community` PyPI organization](https://pypi.org/manage/organizations/).
+Keep at least two human organization admins.
 
-The `marin-verifyit`, `marin-taskcompendium`, and `marin-rolloutengine` projects
-have trusted publishers under the Marin PyPI organization. The general-library
-release includes all three RL distributions. Their published wheels do not depend on
-Harbor. The optional Harbor task-import tests install its schema from a pinned
-Git checkout; Marin evaluation installs the complete Harbor runtime from its
-external lock.
-
-### 2. Clear the placeholder releases
-
-The older `marin-*` libraries already exist on PyPI with placeholder releases:
-`0.99` for seven of them (`marin-core`, `marin-iris`, `marin-fray`,
-`marin-haliax`, `marin-levanter`, `marin-rigging`, `marin-zephyr`) and `0.1.0`
-for `marin-finelog`. Delete that **release** from each project (project page →
-*Manage project* → *Releases* → per-release *Options* → *Delete*). The project
-itself stays — its name, ownership, and any configured trusted publisher are
-preserved; the first real publish simply adds a new release.
-
-PyPI permanently retires a deleted `(name, version)` pair — it can never be
-re-uploaded. The libs therefore ship starting at **`0.2.0`**, which avoids
-both retired placeholder versions (`0.99` and `0.1.0`), so no project has to
-be deleted wholesale.
-
-(`marin-core` is the distribution name for the top-level package; the
-unprefixed `marin` name is not used.)
-
-### 3. Configure a trusted publisher for each distribution
+### 2. Configure a trusted publisher for each distribution
 
 Open each project's publishing page and add the publisher there:
 
@@ -157,7 +90,7 @@ project:
 
 | Field | Value |
 | --- | --- |
-| PyPI project name | the distribution name from the table above |
+| PyPI project name | the distribution name in `PACKAGES` |
 | Repository owner | `marin-community` |
 | Repository name | `marin` |
 | Workflow filename | `marin-release-libs-wheels.yaml` |
@@ -168,19 +101,10 @@ job remains in this top-level workflow because
 [PyPI Trusted Publishing does not currently support naming a reusable workflow](https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github)
 as the publisher.
 
-The existing general-library bindings already name
-`marin-release-libs-wheels.yaml`. Before enabling consolidated native
-publishing, change the five native project bindings (`marin-dupekit`,
-`marin-dupekit-native`, `marin-finelog`, `marin-finelog-server`, and
-`marin-iris-native`) to that same filename and the `pypi-publish` environment.
-No Google Cloud WIF or long-lived credential change is required.
+When moving a project from an older release workflow, update its publisher
+binding to this workflow and the `pypi-publish` environment.
 
-The `marin-verifyit`, `marin-taskcompendium`, and `marin-rolloutengine` projects
-use these publisher settings. The general-library schedule and `marin-libs-v*`
-tags publish them at the same version as their siblings. No PyPI API token or
-GitHub secret is needed.
-
-### 4. The `pypi-publish` GitHub Actions environment
+### 3. The `pypi-publish` GitHub Actions environment
 
 The release workflow publishes through the `pypi-publish`
 [deployment environment](https://github.com/marin-community/marin/settings/environments).
@@ -195,27 +119,15 @@ It already exists for `marin-dupekit`. Recommended settings:
 
 ## Secrets posture
 
-No long-lived PyPI credential exists in the repository, in GitHub secrets, or
-in GitHub variables.
-
-- The trusted-publisher binding is public information, shown on each PyPI
-  project's publishing page.
-- The GitHub OIDC trust config lives in the committed workflow files.
-- The per-run PyPI upload token lives only in RAM and expires (~15 min) when
-  the workflow ends.
-- The only secret that must be shared is the **2FA recovery codes** for the
-  PyPI account(s) that administer the `marin-community` organization. Store
-  these in the team password vault.
-
-Storing a classic `PYPI_API_TOKEN` in GitHub Actions secrets is explicitly
-rejected: it rotates poorly, any workflow on the repo can read it, and it
-needs manual revocation if exposed.
+The workflow obtains a short-lived upload token through OIDC. Do not add a
+`PYPI_API_TOKEN` GitHub secret. Store organization admin 2FA recovery codes in
+the team password vault.
 
 ## Troubleshooting
 
 - **`gh-action-pypi-publish` fails with 403 for one project.** Its
   trusted-publisher binding is missing or a field does not match. Re-check
-  the four fields in step 3 — they must match the workflow exactly.
+  the fields in step 2; they must match the workflow exactly.
 - **A family release stopped after some files uploaded.** Rerun the failed
   jobs in the same workflow run. The version is stable across reruns, and the
   preflight accepts only remote files whose hashes match the complete family

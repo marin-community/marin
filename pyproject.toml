@@ -84,7 +84,7 @@ fork-strategy = "fewest"
 # marin-dupekit-native nightly (floor in lib/dupekit/pyproject.toml); the
 # omegaconf dev pin in override-dependencies
 # below; and the prerelease-only transitive deps in constraint-dependencies
-# (tfp-nightly and the OpenTelemetry instrumentation packages publish no stable
+# (tfp-nightly and some OpenTelemetry packages publish no stable
 # release).
 prerelease = "explicit"
 constraint-dependencies = [
@@ -95,6 +95,8 @@ constraint-dependencies = [
     "tfp-nightly>=0.1.dev0",
     "opentelemetry-instrumentation>=0.41b0",
     "opentelemetry-instrumentation-grpc>=0.41b0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.59b0",
+    "opentelemetry-util-http>=0.59b0",
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
@@ -198,6 +200,8 @@ members = [
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
+    "lib/rolloutengine",
+    "lib/shellbox",
     "lib/taskcompendium",
     "lib/zephyr",
     "lib/verifyit",
@@ -228,6 +232,8 @@ marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
+marin-rolloutengine = { workspace = true }
+marin-shellbox = { workspace = true }
 marin-zephyr = { workspace = true }
 marin-verifyit = { workspace = true }
 marin-taskcompendium = { workspace = true }
