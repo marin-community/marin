@@ -279,6 +279,31 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
   --grader-image '<registry/image>@sha256:<digest>'
 ```
 
+`harbor_export.harbor_export_step(normalized, name=..., version=..., grader_image=...)`
+binds the same exporter to an existing normalized artifact. It streams through
+`StoragePath` and writes `tasks.parquet` plus `manifest.json`. The manifest's
+`verify_tool_ref` hashes the emitted verifier files, modes, Docker recipes and
+task dispatch configuration. It identifies those bytes; it does not resolve
+mutable image tags or certify a successful build. The artifact fingerprint also
+includes the exporter and bundled verifier code. Bump its version when that
+recipe or its normalized input changes.
+
+`TaskTroveDataSource` requires an explicit `relative_path`. The curation smoke
+graph supplies `tasks.parquet` and binds the export as its data dependency:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.rl_smoke --version 2026.10.09 \
+  --normalized-name data/rl/tasktrove-nl2bash --normalized-version 2026.10.09 \
+  --normalized-source /tmp/curation-quick/tasktrove-nl2bash \
+  --grader-image '<registry/image>@sha256:<digest>'
+```
+
+This prints the graph without exporting, building images or launching training.
+For execution, the adopted input must be accessible to the coordinator. QUICK
+inputs retain their conversion-only status; exporting them adds no runtime
+verification. The smoke graph does not construct the legacy TaskTrove pipeline.
+
 The source name in the QUICK manifest selects the registry declaration, which
 supplies the exported family and Atlas ID. For tasks without a verifier build
 recipe, the verifier base image is an explicit runtime input. It must contain the dependencies required by the task's grader

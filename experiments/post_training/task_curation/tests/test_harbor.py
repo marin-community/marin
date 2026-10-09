@@ -44,7 +44,6 @@ from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, Unsuppo
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
-from experiments.post_training.tasktrove.publish import TASKS_SCHEMA as RELEASE_SCHEMA
 
 FIXTURES = Path(__file__).parent / "fixtures"
 GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64
@@ -138,7 +137,10 @@ def test_harbor_comparison_reports_population_difference_without_claiming_runtim
     record = harbor_record(row, grader_image=GRADER_IMAGE, family="fixture")
     output = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([asdict(record)], schema=TASKS_SCHEMA), output)
-    assert pq.ParquetFile(output).schema_arrow.equals(RELEASE_SCHEMA, check_metadata=False)
+    schema = pq.ParquetFile(output).schema_arrow
+    assert [[field.name, str(field.type), field.nullable] for field in schema] == json.loads(
+        (FIXTURES / "harbor-wire-schema.json").read_text()
+    )
     golden = tmp_path / "golden.json"
     golden.write_text(
         json.dumps({"by_source": {record.source: {"converted": 2, "duplicate": 1}, "missing": {"converted": 3}}})

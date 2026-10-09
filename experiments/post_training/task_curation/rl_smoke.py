@@ -1,19 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke-train Qwen3-0.6B directly from a packed TaskTrove Clean release.
+"""Bind a normalized nl2bash artifact through Harbor export to a Qwen3-0.6B smoke graph.
 
-The run proves the release drives a Harbor RL loop end to end without an exploded staging
-artifact. Each Iris node caches the clean Parquet file, and MarinSkyRL extracts a task only when
-its rollout batch is about to construct the Harbor trial.
-
-Plan or run::
-
-    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2
-    python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --run
-
-``--run`` validates the graph and submits a CPU coordinator to Iris. Set ``DAYTONA_API_KEY`` and
-``HF_TOKEN`` on the submit host; the coordinator forwards both without embedding them in its command.
+The normalized input is an explicit adopted artifact. Planning performs no conversion, image
+builds or training; execution remains behind the standard ``--run`` option.
 """
 
 from __future__ import annotations
@@ -41,12 +32,14 @@ from marin.rl.skyrl import (
 
 from experiments.post_training.curriculum_rl.launch import HF_EXPORT_SUBDIR, model_step
 from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL, QWEN3_REVISION
-from experiments.post_training.tasktrove.pipeline import build_workflow, launch_commit
+from experiments.post_training.task_curation.datasets.tasktrove.nl2bash import CONFIG as TASKTROVE_SOURCE
+from experiments.post_training.task_curation.harbor_export import harbor_export_step
+from experiments.post_training.task_curation.harbor_export_contract import MANIFEST_FILENAME, TASKS_FILENAME
 
 RL_ARTIFACT_NAME = "checkpoints/tasktrove-rl-smoke"
 # The curriculum experiment's mirrored Qwen3-0.6B snapshot; reused rather than mirrored again.
 MODEL_VERSION = "2026.08.29"
-TASKTROVE_SOURCE = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+EXPORT_ARTIFACT_NAME = "data/rl/nl2bash-harbor"
 SELECTED_TASKS = 8
 CLUSTER = "cw-rno2a"
 GPU_VARIANT = "H100"
@@ -213,6 +206,8 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
                         limit=SELECTED_TASKS,
                         seed=SEED,
                     ),
+                    relative_path=TASKS_FILENAME,
+                    manifest_path=MANIFEST_FILENAME,
                 ),
             ),
             validation_data=(),
@@ -242,9 +237,19 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
 
 
 @click.command(help=__doc__)
+@click.option("--normalized-source", required=True, help="Location of the normalized nl2bash artifact.")
+@click.option("--normalized-name", required=True, help="Artifact name for the normalized input.")
+@click.option("--normalized-version", required=True, help="Immutable version of the normalized input.")
+@click.option("--grader-image", required=True, help="Digest-pinned verifier base image.")
 @rl_build_options
-def main() -> ArtifactStep:
-    release = build_workflow(launch_commit()).release
+def main(normalized_source: str, normalized_name: str, normalized_version: str, grader_image: str) -> ArtifactStep:
+    normalized = ArtifactStep.adopt(normalized_name, normalized_version, normalized_source)
+    release = harbor_export_step(
+        normalized,
+        name=EXPORT_ARTIFACT_NAME,
+        version=resolve_version(EXPORT_ARTIFACT_NAME, None),
+        grader_image=grader_image,
+    )
     return smoke_step(release)
 
 
