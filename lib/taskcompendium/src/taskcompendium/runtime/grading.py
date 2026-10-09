@@ -208,24 +208,25 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         raise SubmissionFailure(f"Grading artifact has the wrong kind: {artifact.source}")
     remote_directory = f"/tmp/taskcompendium-artifact-{uuid4().hex}"
     remote_archive = f"{remote_directory}/archive.tar"
-    await _run_checked(
-        machine,
-        Command(
-            (
-                "sh",
-                "-c",
-                'umask 077; mkdir "$1" && chmod 755 "$1" && : > "$1/archive.tar" && chmod 666 "$1/archive.tar"',
-                "artifact-directory",
-                remote_directory,
-            ),
-            timeout=timeout,
-            user=ROOT,
-            env={"PATH": "/usr/bin:/bin"},
-        ),
-        "Cannot create protected artifact directory",
-    )
+    primary_error = None
     try:
         # The agent can write this file, but the root-owned parent prevents pathname replacement.
+        await _run_checked(
+            machine,
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    'umask 077; mkdir "$1" && chmod 755 "$1" && : > "$1/archive.tar" && chmod 666 "$1/archive.tar"',
+                    "artifact-directory",
+                    remote_directory,
+                ),
+                timeout=timeout,
+                user=ROOT,
+                env={"PATH": "/usr/bin:/bin"},
+            ),
+            "Cannot create protected artifact directory",
+        )
         await _run_checked(
             machine,
             Command(
@@ -245,12 +246,20 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         )
         archive_path = target.with_suffix(".tar")
         await machine.download(remote_archive, archive_path)
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        await _run_checked(
-            machine,
-            Command(("rm", "-rf", remote_directory), timeout=timeout, user=ROOT, env={"PATH": "/usr/bin:/bin"}),
-            "Cannot remove private artifact archive",
-        )
+        try:
+            await _run_checked(
+                machine,
+                Command(("rm", "-rf", remote_directory), timeout=timeout, user=ROOT, env={"PATH": "/usr/bin:/bin"}),
+                "Cannot remove private artifact archive",
+            )
+        except Exception as error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(f"Artifact archive cleanup failed: {error!r}")
     extracted = target.with_suffix(".contents")
     extracted.mkdir()
     expanded_bytes = 0

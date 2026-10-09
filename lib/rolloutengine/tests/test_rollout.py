@@ -67,7 +67,6 @@ TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
 @pytest.mark.docker
 @pytest.mark.parametrize("attack", [None, "source", "archive"])
 async def test_artifact_collection_cannot_read_root_files_through_candidate_path_changes(attack):
-    # The successful case checks archive write permissions with a real non-root guest user.
     machines = []
 
     class CandidateMachine:
@@ -143,7 +142,10 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
             reward=ExitCodeReward(),
             artifacts=(
                 VerifierArtifact(
-                    source="/workspace/artifacts", target="/workspace/artifacts", kind=ArtifactKind.DIRECTORY
+                    source="/workspace/artifacts",
+                    target="/workspace/artifacts",
+                    kind=ArtifactKind.DIRECTORY,
+                    exclude=("cache",),
                 ),
             ),
         ),
@@ -151,13 +153,14 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
     )
     runtime = lowered(task, machine=machine_runtime(user="nobody"), verifier_machine=machine_runtime())
     rollout_engine = engine(ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()})
+    record = await rollout_engine.run(runtime)
     if attack == "source":
-        with pytest.raises(RolloutInterrupted) as caught:
-            await rollout_engine.run(runtime)
-        assert caught.value.operation is RolloutOperation.GRADE
-        assert caught.value.rollout.grade.reward is None
+        assert (record.grade.status, record.grade.reward, record.grade.failure) == (
+            Outcome.INFRA_ERROR,
+            None,
+            GradingFailure.EXECUTION,
+        )
     else:
-        record = await rollout_engine.run(runtime)
         assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     for machine in machines:
         assert (await docker("inspect", machine.name)).exit_code != 0
@@ -1105,7 +1108,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     assert closed.is_set()
 
 
-@pytest.mark.parametrize("failure", [None, "download", "remove"])
+@pytest.mark.parametrize("failure", [None, "download", "remove", "download_and_remove"])
 async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_path, failure):
     answer = tmp_path / "answer"
     answer.write_bytes(b"12\n")
@@ -1119,7 +1122,7 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
             if command.argv[:2] == ("tar", "-cf"):
                 return Result(0, b"", b"", False, False, ExitReason.EXITED)
             if (
-                failure == "remove"
+                failure in {"remove", "download_and_remove"}
                 and command.argv[:2] == ("rm", "-rf")
                 and command.argv[2].startswith("/tmp/taskcompendium-artifact-")
             ):
@@ -1128,7 +1131,7 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
 
         async def download(self, source, target):
             if source.startswith("/tmp/taskcompendium-artifact-"):
-                if failure == "download":
+                if failure in {"download", "download_and_remove"}:
                     raise ConnectionError("Artifact download failed")
                 with tarfile.open(target, "w") as archive:
                     archive.add(answer, arcname="answer")
@@ -1164,7 +1167,7 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
     )
     runner = engine(ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()})
     spec = lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
-    if failure == "download":
+    if failure in {"download", "download_and_remove"}:
         with pytest.raises(RolloutInterrupted) as caught:
             await runner.run(spec)
         assert caught.value.operation == RolloutOperation.GRADE

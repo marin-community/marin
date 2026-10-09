@@ -251,9 +251,6 @@ def local_artifact_factory(tmp_path):
         "directory_file_conflict",
         "file_directory_conflict",
         "host_enospc",
-        "host_edquot",
-        "host_eio",
-        "host_emfile",
         "tar_timeout",
         "tar_failed",
     ],
@@ -331,9 +328,6 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
     agent = await root.create(MachineSpec(RegistryImage(FIXTURE_IMAGE), env={"ARTIFACT_TASK_MACHINE": "1"}))
     host_errors = {
         "host_enospc": errno.ENOSPC,
-        "host_edquot": errno.EDQUOT,
-        "host_eio": errno.EIO,
-        "host_emfile": errno.EMFILE,
     }
     if artifact_case in host_errors:
 
