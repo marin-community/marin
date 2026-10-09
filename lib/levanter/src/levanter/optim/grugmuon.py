@@ -72,7 +72,8 @@ class GrugMuonConfig(MuonConfig):
 
     Routing rules:
     - 2D arrays whose path does NOT contain 'embed', 'lm_head', or 'output' -> Muon
-    - Everything else -> AdamW
+    - Everything else -> AdamW, except that ``embedding_lr_mult`` / ``norm_lr_mult`` move the embedding/output
+      arrays / 1D arrays (norm gains) into their own Adam groups at that multiple of the scheduled Muon lr
     """
 
     def build(self, num_train_steps):
@@ -98,25 +99,32 @@ class GrugMuonConfig(MuonConfig):
                 components.append(_match_update_sharding())
                 return optax.chain(*components)
 
-            def adamw_transform():
+            def adam_group(lr):
                 components = []
-                if self.max_grad_norm:
+                if self.max_grad_norm and self.max_grad_norm_scope == "adam":
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
                 adam_weight_decay = self.adam_weight_decay if self.adam_weight_decay is not None else self.weight_decay
                 if adam_weight_decay > 0:
                     components.append(optax.add_decayed_weights(adam_weight_decay, self.build_weight_decay_mask()))
-                components.append(optax.scale(-adam_lr))
+                components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
             transformations = {
                 "muon": muon_transform(),
-                "adamw": adamw_transform(),
+                "adamw": adam_group(adam_lr),
             }
+            if self.embedding_lr_mult is not None:
+                transformations["embed"] = adam_group(learning_rate * self.embedding_lr_mult)
+            if self.norm_lr_mult is not None:
+                transformations["norm"] = adam_group(learning_rate * self.norm_lr_mult)
 
-            return optax.multi_transform(
+            split = optax.multi_transform(
                 transformations, partial(self.create_mask, use_kimi_scaling=self.use_kimi_scaling)
             )
+            if self.max_grad_norm and self.max_grad_norm_scope == "global":
+                return optax.chain(optax.clip_by_global_norm(self.max_grad_norm), split)
+            return split
 
         return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule)
 
@@ -127,7 +135,9 @@ class GrugMuonConfig(MuonConfig):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
             if "embed" in path_lower or "lm_head" in path_lower or "output" in path_lower:
-                return "adamw"
+                return "embed" if self.embedding_lr_mult is not None else "adamw"
+            elif self.norm_lr_mult is not None and hasattr(param, "ndim") and param.ndim == 1:
+                return "norm"
             elif hasattr(param, "ndim") and param.ndim == 2:
                 return "muon"
             elif (
