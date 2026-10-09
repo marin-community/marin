@@ -642,20 +642,21 @@ def _verify(run: _SourceRun, panel: _Panel) -> tuple[dict[str, Any], StoragePath
 
 def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
     recipe, source_input, output = run.recipe, run.source_input, run.output
-    source_files = source_files_identity(recipe.source)
+    inputs = {
+        "source_input": source_input,
+        "inputs": dict(recipe.inputs),
+        "files": source_files_identity(recipe.source),
+        "source_file_overrides": {name: asdict(file) for name, file in (run.source_overrides or {}).items()},
+    }
     _write_json(
         output / "download/manifest.json",
         {
-            "source_input": source_input,
-            "inputs": dict(recipe.inputs),
-            "files": source_files,
-            "staged_files": staged_files(source_input, recipe.source),
-            "input_identity_sha256": canonical_sha256(
-                {"source_input": source_input, "inputs": dict(recipe.inputs), "files": source_files}
-            ),
+            **inputs,
+            "staged_files": staged_files(source_input, recipe.source, run.source_overrides),
+            "input_identity_sha256": canonical_sha256(inputs),
             "population_count": population_count,
             "locator_sidecars": str(output / "download/locators/*.parquet"),
-            "raw_payloads": "Retained at the immutable source input",
+            "raw_payloads": "Retained at source_input or the recorded per-file override paths",
             "raw_input_sha256": (
                 "Canonical source JSON with binary values represented by their SHA256 and byte size; "
                 "absent for rows of a parted source that a sample did not read"
@@ -816,6 +817,7 @@ def _write_manifest(
         "quality_revision": SOURCE_QUALITY_REVISION,
         "verification_revision": SOURCE_VERIFICATION_REVISION,
         "normalized_shards": config.normalized_shards,
+        "source_input": run.source_input,
         "source_file_overrides": {name: asdict(file) for name, file in (run.source_overrides or {}).items()},
         "datasets": {name: str(output / name) for name in OUTPUT_VIEWS},
         "source_dataset": recipe.source.dataset,

@@ -4,9 +4,10 @@
 """Source gates bound conversion, conserve the raw source ledger and admit only ready rows to final/."""
 
 import gzip
+import hashlib
 import json
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -22,7 +23,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
     FilterPolicy,
@@ -823,7 +824,8 @@ def drop_archive_path(row, _context):
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 @pytest.mark.parametrize("source_format", [SourceFormat.JSONL, SourceFormat.PARQUET])
-def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path, mode, source_format):
+@pytest.mark.parametrize("location", ["declared", "override"])
+def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path, mode, source_format, location):
     source = tmp_path / "input"
     rows = [{**row, "path": f"archive-{index}"} for index, row in enumerate(apple_rows(3))]
     filename = f"source.{source_format.value}"
@@ -832,6 +834,13 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
         pq.write_table(pa.Table.from_pylist(rows), source / filename, row_group_size=1)
     else:
         write_jsonl(source, rows)
+    overrides = None
+    if location == "override":
+        replacement = tmp_path / f"replacement.{source_format.value}"
+        (source / filename).replace(replacement)
+        overrides = {
+            filename: SourceFileOverride(str(replacement), hashlib.sha256(replacement.read_bytes()).hexdigest())
+        }
     conversions = tmp_path / "conversions"
     conversions.mkdir()
     recipe = fixture_recipe(
@@ -848,6 +857,7 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
             mode=SourceProcessingMode.QUICK,
             canonical_source=recipe.name,
             parquet_shard_bytes=1,
+            source_overrides=overrides,
         )
         reviewed = run_source_pipeline(
             recipe,
@@ -858,6 +868,7 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
             mode=mode,
             canonical_source=recipe.name,
             parquet_shard_bytes=1,
+            source_overrides=overrides,
         )
     assert isinstance(quick, ConversionResult)
     assert isinstance(reviewed, SourcePipelineResult)
@@ -866,6 +877,14 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
     assert [quick_rows[f"{filename}:{index}"]["original_path"] for index in range(3)] == [row["path"] for row in rows]
     assert quick_rows[f"{filename}:1"]["normalization_reason"] == "unsupported_variant"
     assert all(file.read_text().splitlines() == ["converted", "converted"] for file in conversions.iterdir())
+    quick_manifest = read_json(quick.manifest_path)
+    reviewed_manifest = read_json(reviewed.manifest_path)
+    download_manifest = read_json(tmp_path / "reviewed" / "download" / "manifest.json")
+    assert quick_manifest["source_input"] == reviewed_manifest["source_input"] == str(source)
+    assert download_manifest["staged_files"] == [filename]
+    expected_overrides = {name: asdict(file) for name, file in (overrides or {}).items()}
+    assert quick_manifest["source_file_overrides"] == reviewed_manifest["source_file_overrides"] == expected_overrides
+    assert download_manifest["source_file_overrides"] == expected_overrides
 
 
 def mechanical_records(records):
