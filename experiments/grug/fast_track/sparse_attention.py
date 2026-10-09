@@ -15,34 +15,19 @@ this measures quality, not speed.
 import functools
 import math
 from collections.abc import Callable
-from enum import StrEnum
 from typing import NamedTuple
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jax import random
-from jax.sharding import PartitionSpec as P
 from jax.sharding import auto_axes, reshard
 from jaxtyping import Array, Float, Int
-from levanter.grug.attention import gpu_fa4_cute_attention_with_lse
 from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, rel_extent_of_band
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
-from experiments.grug.fast_track.key_offset import shift_tokens, shifted_channels
+from experiments.grug.fast_track.key_offset import shift_tokens
 
 _QUERY_CHUNK = 256
-
-
-class SparseIndex(StrEnum):
-    """How ``mla_sparse_topk`` picks the far keys."""
-
-    FOLLOW = "follow"
-    """The followers of the best tied low-rank matches, scored onto their logits."""
-    LIGHTNING = "lightning"
-    """DSA's lightning indexer over the keys themselves, trained by KL to the dense attention."""
-    BLOCK = "block"
-    """NSA-style: the ``topk`` key blocks whose compressed (block-mean) keys the heads attend to most."""
 
 
 class IndexSpec(NamedTuple):
@@ -68,16 +53,6 @@ class Compose(NamedTuple):
     offset_mask: jax.Array  # [H, D] channels whose key is the previous token's
 
 
-class TapKind(StrEnum):
-    """``mla_gauss_taps``: the value kernel as a free softmax over offsets instead of a Gaussian."""
-
-    NONE = "none"
-    HEAD = "head"
-    """One kernel per head."""
-    CHANNEL = "channel"
-    """One kernel per head and value channel."""
-
-
 class Gauss(eqx.Module):
     """Per-head value kernel, a mixture of ``C`` Gaussians: shifts ``mu`` ``[H, C]`` (tokens, positive = later),
     widths ``softplus(rho) + 0.05`` and weights ``softmax(mix)``; ``qscale``: the tied query's per-head scale
@@ -98,27 +73,6 @@ class GaussValues(NamedTuple):
     kernel: jax.Array
     smooth: jax.Array
     mass: jax.Array
-
-
-def gauss_values(g: Gauss, v: jax.Array, segment_ids: jax.Array, reach: int) -> GaussValues:
-    """Smooth each head's values along the sequence: ``smooth_j = sum_o G(o) v_{j+o}`` within the document."""
-    if g.taps is not None:
-        raise ValueError("mla_gauss_taps needs mla_gauss_fast")
-    offsets = jnp.arange(-reach, reach + 1, dtype=jnp.float32)
-    sigma = jax.nn.softplus(g.rho.astype(jnp.float32)) + 0.05  # [H, C]
-    centred = offsets[None, None, :] - g.mu.astype(jnp.float32)[..., None]
-    components = jax.nn.softmax(-jnp.square(centred) / (2 * sigma[..., None] ** 2), axis=-1)  # [H, C, 2K + 1]
-    weights = jax.nn.softmax(g.mix.astype(jnp.float32), axis=-1)  # [H, C]
-    kernel = jnp.einsum("hc,hco->ho", weights, components)
-    vf = v.astype(jnp.float32)
-    ones = jnp.ones(v.shape[:3], jnp.float32)
-    smooth = jnp.zeros_like(vf)
-    mass = jnp.zeros(v.shape[:3], jnp.float32)
-    for i, o in enumerate(range(-reach, reach + 1)):
-        w = kernel[:, i]  # [H]
-        smooth = smooth + w[None, None, :, None] * shift_tokens(vf, segment_ids, -o)
-        mass = mass + w[None, None, :] * shift_tokens(ones, segment_ids, -o)
-    return GaussValues(kernel, smooth, mass)
 
 
 def _gauss_read(a, gv: GaussValues, v, segment_ids, qi, seg_q):
@@ -328,7 +282,7 @@ def _sparse_math(
             lw = jax.lax.dynamic_slice_in_dim(lightning.w, c0, chunk, axis=1).astype(jnp.float32)
             per_head = jax.nn.relu(jnp.einsum("bqgr,bkr->bqgk", lq, lightning.k.astype(jnp.float32)))
             visible = same & (dist >= 0)
-            index_logits = jnp.where(visible, jnp.einsum("bqgk,bqg->bqk", per_head, lw), -1e9)
+            index_logits = jnp.where(visible, jnp.einsum("bqgk,bqg->bqk", per_head, lw), -1000000000.0)
             kth = jax.lax.top_k(index_logits, dsa_topk)[0][..., -1:]
             allowed = allowed | (visible & (index_logits >= kth))[:, None]
         chosen = None
@@ -368,7 +322,7 @@ def _sparse_math(
             # Fully past (so never the query's own, partly future block) and in the query's document.
             c_ok = whole[:, None, :] & (seg_blocks[:, None, :, 0] == seg_q[:, :, None])
             c_ok = c_ok & (block_end[None, None, :] < qi[None, :, None])  # [B, C, nb]
-            c_logits = jnp.where(c_ok[:, None], c_logits, -1e9)
+            c_logits = jnp.where(c_ok[:, None], c_logits, -1000000000.0)
             if block_select:
                 importance = jnp.mean(jax.nn.softmax(c_logits, axis=-1), axis=1)  # [B, C, nb]
                 importance = jnp.where(c_ok, importance, -1.0)
@@ -379,14 +333,16 @@ def _sparse_math(
         if spec.score_only and chosen is not None:
             # The picks are weighted by their low-rank score alone; the document start is a zero-logit null slot.
             sink = (keys[None, None, :] == start_q[:, :, None])[:, None]
-            logits = jnp.where(chosen, bias * lam.astype(jnp.float32)[None, :, None, None], jnp.where(sink, 0.0, -1e9))
+            logits = jnp.where(
+                chosen, bias * lam.astype(jnp.float32)[None, :, None, None], jnp.where(sink, 0.0, -1000000000.0)
+            )
             allowed = chosen | sink
         else:
             logits = logits + bias * lam.astype(jnp.float32)[None, :, None, None]
         if dcmha is not None and dcmha_mode.pre:
             logits = _dcmha_compose(logits, dcmha, 0, c0, chunk, dcmha_mode.terms)
         dense = logits
-        logits = jnp.where(allowed, logits, -1e9)
+        logits = jnp.where(allowed, logits, -1000000000.0)
         if gauss is not None:
             out = _gauss_read(jax.nn.softmax(logits, axis=-1), gauss, v, segment_ids, qi, seg_q).astype(v.dtype)
         elif dcmha is not None and dcmha_mode.post:
@@ -423,7 +379,7 @@ def _sparse_math(
             return out
         # DSA target: the dense causal attention, summed over heads and renormalised.
         visible = same & (dist >= 0)
-        target = jnp.mean(jax.nn.softmax(jnp.where(visible[:, None], dense, -1e9), axis=-1), axis=1)
+        target = jnp.mean(jax.nn.softmax(jnp.where(visible[:, None], dense, -1000000000.0), axis=-1), axis=1)
         kl_scale = jnp.asarray(lightning.kl_weight / (batch * seq), jnp.float32)
         return _inject_kl(out, index_logits, jax.lax.stop_gradient(target), kl_scale)
 
@@ -486,49 +442,13 @@ def sparse_index_attention(
 
 def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, project):
     """The MLA layer's sparse attention from its config and index parameters (``attn``: the MLA module)."""
-    cfg = attn.cfg
-    dsa_first = cfg.mla_sparse_index == SparseIndex.LIGHTNING
     idx = jnp.zeros((*x.shape[:2], 1, 1))
-    if attn.w_sidx is not None:
-        flat = project(cfg, x, attn.w_sidx)
-        idx = flat.reshape(*flat.shape[:-1], -1, cfg.mla_sparse_index_dim * (2 if cfg.mla_sparse_untied else 1))
-        if cfg.mla_sparse_untied:  # RMS-norm the query and key halves separately
-            r = cfg.mla_sparse_index_dim
-            idx = jnp.concatenate([rms_norm(idx[..., :r]), rms_norm(idx[..., r:])], axis=-1)
-        else:
-            idx = rms_norm(idx)
-    lam = jnp.zeros((q.shape[2],)) if attn.sparse_lam is None else attn.sparse_lam
-    light = None
-    if attn.w_lq is not None and attn.w_lk is not None and attn.w_lw is not None:
-        xs = jax.lax.stop_gradient(x)
-        lq = project(cfg, xs, attn.w_lq)
-        lq = lq.reshape(*lq.shape[:-1], cfg.mla_sparse_index_heads, -1)
-        light = Lightning(lq, project(cfg, xs, attn.w_lk), project(cfg, xs, attn.w_lw), cfg.mla_sparse_kl_weight)
-    compose = None
-    if attn.logit_mix is not None:
-        heads, head_dim = q.shape[2], q.shape[3]
-        dynamic = attn.logit_mix_u is not None and attn.logit_mix_w is not None
-        compose = Compose(
-            attn.logit_mix,
-            project(cfg, x, attn.logit_mix_u) if dynamic else None,
-            project(cfg, x, attn.logit_mix_w) if dynamic else None,
-            (
-                shifted_channels(heads, head_dim, cfg.mla_key_offset_channels)
-                if cfg.mla_key_offset
-                else jnp.zeros((heads, head_dim), bool)
-            ),
-        )
-    gv = None
-    if attn.gauss is not None:
-        seg = jnp.zeros(q.shape[:2], jnp.int32) if segment_ids is None else segment_ids
-        gv = gauss_values(attn.gauss, v, seg, cfg.mla_gauss_reach)
-        if attn.gauss.qscale is not None:  # tied: the query is the token's own key
-            q = (k.astype(jnp.float32) * attn.gauss.qscale.astype(jnp.float32)[None, None, :, None]).astype(q.dtype)
+    lam = jnp.zeros((q.shape[2],))
     spec = IndexSpec(
-        untied=cfg.mla_sparse_untied,
-        anchor_match=cfg.mla_sparse_anchor_match,
-        lookback=cfg.mla_sparse_lookback,
-        score_only=cfg.mla_sparse_score_only,
+        untied=(False),
+        anchor_match=(False),
+        lookback=(0),
+        score_only=(False),
     )
     return sparse_index_attention(
         q,
@@ -538,27 +458,27 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         segment_ids,
         idx,
         lam,
-        light,
-        attn.sparse_taps,
-        compose,
-        None if attn.dcmha is None else dcmha_weights(attn.dcmha, x, q.shape[2], cfg.mla_dcmha_rank),
-        gv,
-        window=cfg.mla_sparse_window,
+        (None),
+        None,
+        (None),
+        None,
+        (None),
+        window=(0),
         spec=spec,
-        tap_offsets=cfg.mla_sparse_taps,
-        far_half=cfg.mla_far_key_half,
-        far_window=cfg.mla_far_key_window,
+        tap_offsets=(),
+        far_half=(""),
+        far_window=(128),
         dcmha_mode=DcmhaMode(
-            pre="pre" in cfg.mla_dcmha_parts,
-            post="post" in cfg.mla_dcmha_parts,
-            terms=_dcmha_terms(cfg.mla_dcmha_parts),
+            pre=True,
+            post=True,
+            terms=_dcmha_terms(("pre", "post", "dynamic")),
         ),
-        topk=0 if dsa_first else cfg.mla_sparse_topk,
-        dsa_topk=cfg.mla_sparse_topk if dsa_first else cfg.mla_sparse_dsa_topk,
-        select_match=cfg.mla_sparse_select_match,
-        block=cfg.mla_sparse_block,
-        compress=cfg.mla_sparse_compress,
-        block_select=cfg.mla_sparse_index == SparseIndex.BLOCK,
+        topk=(0),
+        dsa_topk=(0),
+        select_match=(False),
+        block=(32),
+        compress=(False),
+        block_select=False,
     )
 
 
@@ -638,126 +558,6 @@ def dcmha_weights(p: "Dcmha | DcmhaPaper", x: jax.Array, heads: int, rank: int) 
     eye = jnp.eye(heads, dtype=jnp.float32)
     static = jnp.stack([eye + _DCMHA_BOUND * jnp.tanh(p.static_pre), eye + _DCMHA_BOUND * jnp.tanh(p.static_post)])
     return DcmhaWeights(static, *side(p.q_a, p.q_b1, p.q_b2, p.q_bg), *side(p.k_a, p.k_b1, p.k_b2, p.k_bg))
-
-
-def _copy_gate_parts(cfg) -> tuple[bool, bool]:
-    """``mla_copy_gate`` as (reads the match strength, reads the head output)."""
-    parts = {"none": (False, False), "lse": (True, False), "output": (False, True), "both": (True, True)}
-    if cfg.mla_copy_gate not in parts:
-        raise ValueError(f"mla_copy_gate must be one of {sorted(parts)}, got {cfg.mla_copy_gate!r}")
-    return parts[cfg.mla_copy_gate]
-
-
-def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, init_weight) -> dict:
-    """The MLA module's sparse-index, value-tap, previous-token gate and logit-composition parameters (None when off)."""
-
-    def matrix(i: int, width: int) -> jax.Array:
-        return reshard(init_weight(random.fold_in(key, i), (d, width), std), P(None, None))
-
-    follow = cfg.mla_sparse_topk > 0 and cfg.mla_sparse_index == SparseIndex.FOLLOW
-    lightning = cfg.mla_sparse_dsa_topk > 0 or (
-        cfg.mla_sparse_topk > 0 and cfg.mla_sparse_index == SparseIndex.LIGHTNING
-    )
-    groups = n if cfg.mla_sparse_index_per_head else 1
-    r = cfg.mla_sparse_index_dim
-    taps = None
-    if cfg.mla_sparse_taps:
-        shape = (n, len(cfg.mla_sparse_taps)) + ((h,) if cfg.mla_sparse_taps_per_channel else ())
-        taps = jnp.zeros(shape).at[:, cfg.mla_sparse_taps.index(0)].set(1.0)
-    return dict(
-        w_sidx=matrix(0, groups * r * (2 if cfg.mla_sparse_untied else 1)) if follow else None,
-        w_lq=matrix(1, cfg.mla_sparse_index_heads * r) if lightning else None,
-        w_lk=matrix(2, r) if lightning else None,
-        w_lw=matrix(3, cfg.mla_sparse_index_heads) if lightning else None,
-        sparse_lam=jnp.ones((n,), jnp.float32) if follow else None,
-        sparse_taps=taps,
-        prev_gate=jnp.zeros((d, n), jnp.float32) if cfg.mla_prev_gate else None,
-        logit_mix=(
-            jnp.concatenate([jnp.eye(n), jnp.eye(n)], axis=1).astype(jnp.float32) if cfg.mla_logit_compose else None
-        ),
-        logit_mix_u=jnp.zeros((d, n), jnp.float32) if cfg.mla_logit_compose_dynamic else None,
-        logit_mix_w=matrix(4, 2 * n) if cfg.mla_logit_compose_dynamic else None,
-        gauss=_gauss_init(cfg, n, h, d) if cfg.mla_gauss else None,
-        copy_gate_lse=jnp.zeros((n,), jnp.float32) if _copy_gate_parts(cfg)[0] else None,
-        parallax_w=matrix(7, n * h) if cfg.mla_parallax else None,
-        parallax_gain=jnp.zeros((n,), jnp.float32) if cfg.mla_parallax and cfg.mla_parallax_form == "scaled" else None,
-        copy_gate_out=jnp.zeros((n, h), jnp.float32) if _copy_gate_parts(cfg)[1] else None,
-        dcmha=(
-            (
-                _dcmha_paper_init(
-                    random.fold_in(key, 5), d, n, cfg.mla_dcmha_rank, cfg.mla_dcmha_hidden, cfg.mla_dcmha_static
-                )
-                if cfg.mla_dcmha_paper
-                else _dcmha_init(random.fold_in(key, 5), d, n, cfg.mla_dcmha_rank, cfg.mla_dcmha_hidden)
-            )
-            if cfg.mla_dcmha
-            else None
-        ),
-    )
-
-
-def _gauss_init(cfg, heads: int, value_dim: int, d: int) -> Gauss:
-    c = cfg.mla_gauss_components
-    mu = jnp.asarray(cfg.mla_gauss_mu_init if cfg.mla_gauss_mu_init else (0.0,) * (heads * c), jnp.float32)
-    if mu.shape != (heads * c,):
-        raise ValueError(
-            f"mla_gauss_mu_init needs heads x components ({heads * c}) entries, got {cfg.mla_gauss_mu_init}"
-        )
-    rho = jnp.full((heads, c), math.log(math.expm1(cfg.mla_gauss_sigma_init - 0.05)), jnp.float32)
-    qscale = jnp.full((heads,), cfg.qk_mult, jnp.float32) if cfg.mla_gauss_tied else None
-    taps = None
-    if cfg.mla_gauss_taps != TapKind.NONE:
-        if c != 1:
-            raise ValueError("mla_gauss_taps replaces the Gaussian mixture: mla_gauss_components must be 1")
-        # Logits of the Gaussian init (centre mu_init, width sigma_init), so the taps start where the Gaussian does.
-        offsets = jnp.arange(-cfg.mla_gauss_reach, cfg.mla_gauss_reach + 1, dtype=jnp.float32)
-        logits = -jnp.square(offsets[None, :] - mu[:, None]) / (2 * cfg.mla_gauss_sigma_init**2)
-        width = value_dim if cfg.mla_gauss_taps == TapKind.CHANNEL else 1
-        taps = jnp.broadcast_to(logits[:, None, :], (heads, width, offsets.shape[0]))
-    return Gauss(
-        mu=mu.reshape(heads, c),
-        rho=rho,
-        mix=jnp.zeros((heads, c), jnp.float32),
-        qscale=qscale,
-        taps=taps,
-    )
-
-
-def _dcmha_paper_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int, static: str) -> DcmhaPaper:
-    """The released initialisation: ``dw1 ~ N(0, 2/(D+K))``, ``qkw ~ N(0, (0.02 / (sqrt(2HR)(H+R)))^2)``,
-    ``dd ~ N(0, (0.05 sqrt(2/(H+D)))^2)``; ``sw`` (``static``): ``none`` (identity only), ``zero`` or ``xavier``."""
-    k1, k2, k3, k4 = random.split(key, 4)
-    dw1 = random.normal(k1, (d, 4, hidden)) * math.sqrt(2 / (d + hidden))
-    qkw = random.normal(k2, (4, hidden, 2 * rank, heads)) * (0.02 / (math.sqrt(2 * heads * rank) * (heads + rank)))
-    dd = random.normal(k3, (d, 4 * heads)) * (0.05 * math.sqrt(2 / (heads + d)))
-    if static == "none":
-        sw = None
-    elif static == "zero":
-        sw = jnp.zeros((2, heads, heads), jnp.float32)
-    elif static == "xavier":
-        sw = random.normal(k4, (2, heads, heads)) * math.sqrt(2 / (2 * heads))
-    else:
-        raise ValueError(f"mla_dcmha_static must be none, zero or xavier, got {static!r}")
-    return DcmhaPaper(dw1=dw1, qkw=qkw, dd=dd, sw=sw)
-
-
-def _dcmha_init(key: jax.Array, d: int, heads: int, rank: int, hidden: int) -> Dcmha:
-    ka, kb, kc, kd = random.split(key, 4)
-    width = 2 * heads * rank  # pre- and post-softmax
-    a = lambda k: random.normal(k, (d, hidden)) / math.sqrt(d)  # noqa: E731
-    b1 = lambda k: random.normal(k, (hidden, width)) / math.sqrt(hidden)  # noqa: E731
-    return Dcmha(
-        static_pre=jnp.zeros((heads, heads), jnp.float32),
-        static_post=jnp.zeros((heads, heads), jnp.float32),
-        q_a=a(ka),
-        q_b1=b1(kb),
-        q_b2=jnp.zeros((hidden, width)),
-        q_bg=jnp.zeros((hidden, 2 * heads)),
-        k_a=a(kc),
-        k_b1=b1(kd),
-        k_b2=jnp.zeros((hidden, width)),
-        k_bg=jnp.zeros((hidden, 2 * heads)),
-    )
 
 
 def gauss_kernel(g: Gauss, reach: int) -> jax.Array:
@@ -863,25 +663,6 @@ def reshard_like(x: jax.Array, like: jax.Array) -> jax.Array:
     return x if spec is None else reshard(x, spec.spec)
 
 
-def dense_attention_with_lse(q, k, v, lower_bounds, valid, rel_bias):
-    """Reference ``(out, lse)`` for :func:`gauss_attention_fast` off GPU: causal, keys ``>= lower_bounds``."""
-    seq = q.shape[1]
-    pos = jnp.arange(seq)
-    scores = jnp.einsum("bqhd,bkhd->bhqk", q.astype(jnp.float32), k.astype(jnp.float32)) / math.sqrt(q.shape[-1])
-    if rel_bias is not None:
-        extent = rel_extent_of_band(rel_bias)
-        column = pos[None, :] - (pos[:, None] // REL_BIAS_BLOCK) * REL_BIAS_BLOCK + extent
-        in_band = (column >= 0) & (column < rel_bias.shape[-1])
-        idx = jnp.broadcast_to(jnp.clip(column, 0, rel_bias.shape[-1] - 1), rel_bias.shape[:2] + column.shape)
-        scores = scores + jnp.where(in_band, jnp.take_along_axis(rel_bias.astype(jnp.float32), idx, axis=-1), 0.0)
-    vis = (pos[None, None, :] <= pos[None, :, None]) & (pos[None, None, :] >= lower_bounds[:, :, None])
-    vis = vis & valid[:, :, None]
-    scores = jnp.where(vis[:, None], scores, -jnp.inf)
-    lse = jax.nn.logsumexp(scores, axis=-1)
-    p = jnp.where(vis[:, None], jnp.exp(scores - jnp.where(jnp.isfinite(lse), lse, 0.0)[..., None]), 0.0)
-    return jnp.einsum("bhqk,bkhd->bqhd", p, v.astype(jnp.float32)).astype(v.dtype), lse
-
-
 PARALLAX_QUERY_BLOCK = 256
 
 
@@ -933,10 +714,3 @@ def parallax_attention(q, k, v, r, rel_bias, segment_ids):
     # pyrefly: ignore[bad-assignment]
     wrapped: Callable[..., jax.Array] = auto_axes(compute, out_sharding=out_sharding)
     return wrapped(q, k, v, r, rel_bias, segment_ids)
-
-
-def attention_with_lse(q, k, v, lower_bounds, valid, rel_bias):
-    """FA4 ``(out, lse)`` on GPU, :func:`dense_attention_with_lse` elsewhere (for :func:`gauss_attention_fast`)."""
-    if jax.default_backend() != "gpu":
-        return dense_attention_with_lse(q, k, v, lower_bounds, valid, rel_bias)
-    return gpu_fa4_cute_attention_with_lse(q, k, v, lower_bounds, valid, rel_bias=rel_bias)

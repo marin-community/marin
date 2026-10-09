@@ -60,21 +60,11 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.fast_track.byte_targets import token_byte_table
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
-    FINAL_HIDDEN_KEY,
-    NEWTON_GRAM_KEY,
     DenseMLP,
-    FutureAux,
     GrugModelConfig,
-    HeadReplay,
-    MtpMode,
     Transformer,
-    ngram_stat_table_add,
-    refresh_attn_prev,
-    tie_routers,
-    write_ngram_stats,
 )
 from experiments.grug.fast_track.optimizer import (
     expert_consistency_metrics,
@@ -415,8 +405,6 @@ def _to_dropless_local(
         banks = []
         for stack in m.layer_stacks():
             banks.append(stack.stacked.mlp.expert_mlp)
-            if stack.stacked.mlp.expert_mlp_b is not None:
-                banks.append(stack.stacked.mlp.expert_mlp_b)
         return banks
 
     dropless = [
@@ -427,15 +415,7 @@ def _to_dropless_local(
 
 
 def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:
-    """``mp.cast_to_compute``, except the n-gram statistic table stays float32: it is only gathered from, and a bf16
-    copy would round its counts and cost a table-sized cast every step. The lm_head bias also stays float32 (the
-    loss splits it into two compute-dtype parts)."""
-    compute = mp.cast_to_compute(model)
-    if model.lm_head_bias is not None:
-        compute = eqx.tree_at(lambda m: m.lm_head_bias, compute, model.lm_head_bias)
-    if model.ngram_stat_table is None:
-        return compute
-    return eqx.tree_at(lambda m: m.ngram_stat_table, compute, model.ngram_stat_table)
+    return mp.cast_to_compute(model)
 
 
 def build_tagged_evaluator(
@@ -452,8 +432,6 @@ def build_tagged_evaluator(
     if len(tagged_eval_sets) == 0:
         logger.warning("No evaluation datasets provided.")
         return None
-
-    max_examples_per_dataset = None
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
     # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
@@ -490,7 +468,7 @@ def build_tagged_evaluator(
         tokenizer=tokenizer,
         device_mesh=mesh,
         axis_mapping=eval_axis_mapping,
-        max_examples_per_dataset=max_examples_per_dataset,
+        max_examples_per_dataset=None,
     )
 
 
@@ -644,17 +622,6 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 
 @register_dataclass
 @dataclass(frozen=True)
-class NewtonMuonState:
-    """``newton_muon`` preconditioner state, per layer in layer order (``GrugModelConfig.newton_muon``)."""
-
-    second_moment: jax.Array  # [L, n, n] EMA of the expert-input Z Z^T / N
-    inverse: jax.Array  # [L, n, n] (second_moment + damping I)^{-1}, refreshed every newton_muon_every steps
-    eigenvalues: jax.Array  # [L, n] ascending eigenvalues of second_moment at the last refresh
-    damping: jax.Array  # [L] gamma * tr(second_moment) / n at the last refresh
-
-
-@register_dataclass
-@dataclass(frozen=True)
 class GrugTrainState:
     step: jax.Array
     params: Transformer
@@ -662,10 +629,6 @@ class GrugTrainState:
     ema_params: Transformer | None  # EMA of params for eval/checkpoint; None unless ema_beta is set.
     opt_state: optax.OptState
     pending_qb_betas: jax.Array
-    replay_hidden: jax.Array | None = None  # [slots, B, S, D] stored final hidden states (head replay)
-    replay_labels: jax.Array | None = None  # [slots, B, S]
-    replay_weight: jax.Array | None = None  # [slots, B, S]
-    newton_muon: NewtonMuonState | None = None
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
@@ -684,114 +647,6 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: [stack.stacked.mlp.router_bias for stack in t.layer_stacks()], model, per_stack)
 
 
-def _next_qb_betas(state: GrugTrainState, new_betas: jax.Array) -> jax.Array:
-    """This step's QB betas (damped toward the held ones by ``qb_bias_damping``), or the held ones once
-    ``qb_freeze_step`` is reached. The bias is ``-beta`` mean-centered, a linear map, so damping the betas is
-    damping the bias: ``b <- (1 - gamma) b + gamma (-beta)``."""
-    config = state.params.config
-    if config.qb_bias_damping is not None:
-        gamma = config.qb_bias_damping
-        new_betas = (1.0 - gamma) * state.pending_qb_betas + gamma * new_betas
-    freeze_step = config.qb_freeze_step
-    if freeze_step is None:
-        return new_betas
-    return jnp.where(state.step + 1 >= freeze_step, state.pending_qb_betas, new_betas)
-
-
-def _initial_newton_muon(config: GrugModelConfig) -> NewtonMuonState | None:
-    if not config.newton_muon:
-        return None
-    n = config.latent_dim if config.latent_dim is not None else config.hidden_dim
-    layers = config.num_layers
-
-    def replicated(x):
-        return jax.sharding.reshard(x, P(*(None,) * x.ndim))
-
-    return NewtonMuonState(
-        second_moment=replicated(jnp.zeros((layers, n, n), jnp.float32)),
-        inverse=replicated(jnp.broadcast_to(jnp.eye(n, dtype=jnp.float32), (layers, n, n))),
-        eigenvalues=replicated(jnp.zeros((layers, n), jnp.float32)),
-        damping=replicated(jnp.zeros((layers,), jnp.float32)),
-    )
-
-
-def _refresh_newton_muon(
-    config: GrugModelConfig, state: NewtonMuonState, gram: jax.Array, step: jax.Array
-) -> NewtonMuonState:
-    """Every ``newton_muon_every`` steps, fold this batch's ``Z Z^T / N`` into the EMA and re-invert.
-
-    The first step sets the EMA to the batch moment (the paper starts from ``1e-3 I``, which at its
-    ``k``-step refresh makes the first ``k`` steps plain Muon with a rescaled gradient in the momentum).
-    The damped inverse is taken through ``eigh``, which also gives the spectrum for logging.
-    """
-
-    def refresh(prev: NewtonMuonState) -> NewtonMuonState:
-        beta = config.newton_muon_beta
-        second_moment = jnp.where(step == 0, gram, beta * prev.second_moment + (1.0 - beta) * gram)
-        n = second_moment.shape[-1]
-        damping = config.newton_muon_eps * jnp.trace(second_moment, axis1=-2, axis2=-1) / n
-        eigenvalues, eigenvectors = jnp.linalg.eigh(second_moment)
-        scaled = eigenvectors / (jnp.maximum(eigenvalues, 0.0) + damping[:, None])[:, None, :]
-        inverse = jnp.einsum("lij,lkj->lik", scaled, eigenvectors)
-        return NewtonMuonState(second_moment, inverse, eigenvalues, damping)
-
-    return jax.lax.cond(step % config.newton_muon_every == 0, refresh, lambda prev: prev, state)
-
-
-def _newton_precondition(grads: Transformer, inverse: jax.Array) -> Transformer:
-    """Right-precondition the routed-expert gate/up gradients: ``G <- G K^{-1}`` (arXiv 2604.01472).
-
-    The stacks are ``[L, E, n_in, n_out]`` (``x @ W``), so the paper's ``G K^{-1}`` on an ``[out, in]``
-    matrix is ``K^{-1} G`` here, contracting the input axis, which is gathered for the product.
-    """
-
-    def precondition(grad: jax.Array, layer_inverse: jax.Array) -> jax.Array:
-        spec = tuple(jax.typeof(grad).sharding.spec)
-        spec = P(*spec, *(None,) * (grad.ndim - len(spec)))
-        gathered = P(spec[0], spec[1], None, spec[3])
-        product = jnp.einsum(
-            "lnm,lemi->leni",
-            layer_inverse,
-            jax.sharding.reshard(grad, gathered).astype(jnp.float32),
-            out_sharding=gathered,
-        )
-        return jax.sharding.reshard(product.astype(grad.dtype), spec)
-
-    sites, replacements = [], []
-    for k, indices in enumerate(grads.stack_layer_indices()):
-        layer_inverse = inverse[np.asarray(indices)]
-        mlp = grads.layer_stacks()[k].stacked.mlp
-        for bank in ("expert_mlp", "expert_mlp_b"):
-            for leaf in ("w_gate", "w_up"):
-                grad = None if getattr(mlp, bank) is None else getattr(getattr(mlp, bank), leaf)
-                if grad is not None:
-                    sites.append((k, bank, leaf))
-                    replacements.append(precondition(grad, layer_inverse))
-
-    def expert_leaves(model: Transformer) -> list[jax.Array]:
-        return [getattr(getattr(model.layer_stacks()[k].stacked.mlp, b), leaf) for k, b, leaf in sites]
-
-    return eqx.tree_at(expert_leaves, grads, replacements)
-
-
-def _newton_muon_metrics(state: NewtonMuonState) -> dict[str, jax.Array]:
-    """Per-layer spectrum of the expert-input second moment ``K``: raw and damped condition numbers."""
-    lo = jnp.maximum(state.eigenvalues[:, 0], 0.0)
-    hi = state.eigenvalues[:, -1]
-    cond = hi / jnp.maximum(lo, 1e-30)
-    damped_cond = (hi + state.damping) / (lo + state.damping)
-    metrics = {
-        "train/newton_muon/log10_cond_mean": jnp.mean(jnp.log10(cond)),
-        "train/newton_muon/damped_cond_mean": jnp.mean(damped_cond),
-    }
-    for i in range(cond.shape[0]):
-        metrics[f"train/newton_muon/log10_cond_L{i}"] = jnp.log10(cond[i])
-        metrics[f"train/newton_muon/damped_cond_L{i}"] = damped_cond[i]
-        metrics[f"train/newton_muon/eig_max_L{i}"] = hi[i]
-        metrics[f"train/newton_muon/eig_min_L{i}"] = lo[i]
-    return metrics
-
-
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -799,38 +654,16 @@ def initial_state(
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None = None,
-    head_replay_shape: tuple[int, int, int, int] | None = None,
 ) -> GrugTrainState:
-    initialized_params = Transformer.init(model_config, key=key)
-    num_moe_layers = model_config.num_layers
-    params = mp.cast_to_param(initialized_params)
-    master_params = None
-    opt_state = optimizer.init(params)
+    params = mp.cast_to_param(Transformer.init(model_config, key=key))
     return GrugTrainState(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
-        master_params=master_params,
+        master_params=None,
         ema_params=params if ema_beta is not None else None,
-        opt_state=opt_state,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.qb_num_experts)),
-        **_empty_head_replay(head_replay_shape, mp),
-        newton_muon=_initial_newton_muon(model_config),
+        opt_state=optimizer.init(params),
+        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.qb_num_experts)),
     )
-
-
-def _empty_head_replay(shape: tuple[int, int, int, int] | None, mp: jmp.Policy) -> dict[str, jax.Array | None]:
-    """Zeroed ``[slots, B, S, D]`` head-replay buffers, batch-sharded (or Nones when off)."""
-    if shape is None:
-        return {"replay_hidden": None, "replay_labels": None, "replay_weight": None}
-    slots, b, s, d = shape
-    spec3, spec4 = P(None, _BATCH_AXES, None), P(None, _BATCH_AXES, None, None)
-    return {
-        "replay_hidden": jax.sharding.reshard(jnp.zeros((slots, b, s, d), mp.compute_dtype), spec4),
-        "replay_labels": jax.sharding.reshard(jnp.zeros((slots, b, s), jnp.int32), spec3),
-        # Ones, not zeros: an unfilled slot must give a finite CE (its replay scale is 0 until filled),
-        # while an all-zero weight makes the weighted-mean CE 0/0 = NaN in the loss and the gradients.
-        "replay_weight": jax.sharding.reshard(jnp.ones((slots, b, s), jnp.float32), spec3),
-    }
 
 
 def _drop_metrics(
@@ -866,59 +699,7 @@ def _drop_metrics(
     }
 
 
-def _store_head_replay(state: GrugTrainState, final_hidden: jax.Array | None, batch, period: int) -> dict:
-    """Every ``period`` steps, write this batch's final hidden states and labels into the next slot."""
-    if state.replay_hidden is None or final_hidden is None:
-        return {}
-    assert state.replay_labels is not None and state.replay_weight is not None
-    slots = state.replay_hidden.shape[0]
-    slot = (state.step // period) % slots
-    write = state.step % period == 0
-    labels = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
-
-    def put(buf, new):
-        updated = jax.lax.dynamic_update_index_in_dim(buf, new.astype(buf.dtype), slot, axis=0)
-        return jnp.where(write, updated, buf)
-
-    return {
-        "replay_hidden": put(state.replay_hidden, final_hidden),
-        "replay_labels": put(state.replay_labels, labels),
-        "replay_weight": put(state.replay_weight, batch.loss_weight.astype(jnp.float32)),
-    }
-
-
-def _aux_loss_weight(model_config, step: jax.Array) -> jax.Array | None:
-    """The early auxiliary LM loss weight at ``step``: linear from ``aux_lm_weight`` to 0 at ``aux_lm_steps``."""
-    if model_config.aux_lm_layer is None:
-        return None
-    frac = jnp.clip(1.0 - step.astype(jnp.float32) / model_config.aux_lm_steps, 0.0, 1.0)
-    return model_config.aux_lm_weight * frac
-
-
-def _loss_and_grads(
-    params,
-    batch,
-    mp: jmp.Policy,
-    z_loss: float | None,
-    step: jax.Array | None = None,
-    loop_active: bool | None = None,
-    head_replay: HeadReplay | None = None,
-    byte_table: jax.Array | None = None,
-    byte_weight: jax.Array | None = None,
-    router_tie_active: bool | None = None,
-    future_weight: jax.Array | None = None,
-):
-    """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``);
-    ``router_tie_active`` statically applies the router ties (see ``GrugModelConfig.router_embed_tie_release_step``)."""
-    aux_weight = None if step is None else _aux_loss_weight(params.config, step)
-    route_key = None
-    cfg = params.config
-    mtp_subsample = cfg.mtp_mode != MtpMode.OFF and cfg.mtp_position_frac < 1.0
-    # dual_attn_prev and sublayer_dropout need a key to tell training from evaluation (both are training-only).
-    training_key = cfg.dual_attn_prev or cfg.sublayer_dropout > 0
-    if step is not None and (cfg.moe_gumbel_tau > 0 or cfg.erc_loss_weight > 0 or mtp_subsample or training_key):
-        route_key = jax.random.fold_in(jax.random.PRNGKey(ROUTE_NOISE_SEED), step)
-
+def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
     def loss_fn(model):
         compute_params = _cast_to_compute(mp, model)
         return compute_params.next_token_loss(
@@ -928,23 +709,13 @@ def _loss_and_grads(
             reduction="mean",
             logsumexp_weight=z_loss,
             return_router_metrics=True,
-            aux_loss_weight=aux_weight,
-            loop_active=loop_active,
             train_terms=True,
-            route_key=route_key,
-            head_replay=head_replay,
-            byte_table=byte_table,
-            byte_aux_weight=byte_weight,
-            router_tie_active=router_tie_active,
-            future_aux_weight=future_weight,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
 
 
-def _accumulated_loss_and_grads(
-    num_microbatches: int, params, batch, mp: jmp.Policy, z_loss, step, loop_active, router_tie_active
-):
+def _accumulated_loss_and_grads(num_microbatches: int, params, batch, mp: jmp.Policy, z_loss):
     """``_loss_and_grads`` over ``num_microbatches`` equal slices of ``batch``, one at a time: the loss, gradients
     and float metrics are averaged, integer metrics (counts) summed. Every microbatch runs in one ``lax.scan``
     body from a zero accumulator, so the forward and backward compile once and one microbatch's activations are
@@ -952,7 +723,7 @@ def _accumulated_loss_and_grads(
     micro = reshape_batch_into_microbatches(batch, num_microbatches)
 
     def one(microbatch):
-        return _loss_and_grads(params, microbatch, mp, z_loss, step, loop_active, router_tie_active=router_tie_active)
+        return _loss_and_grads(params, microbatch, mp, z_loss)
 
     shapes = jax.eval_shape(one, jax.tree.map(lambda x: x[0], micro))
     zeros = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype, out_sharding=getattr(s.sharding, "spec", None)), shapes)
@@ -965,10 +736,8 @@ def _accumulated_loss_and_grads(
     return (loss / num_microbatches, jax.tree.map(mean, metrics)), jax.tree.map(mean, grads)
 
 
-def _compute_diagnostic_watch_stats(
-    params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig, router_tie_active: bool
-):
-    (_, _), grads = _loss_and_grads(params, batch, mp, z_loss, router_tie_active=router_tie_active)
+def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig):
+    (_, _), grads = _loss_and_grads(params, batch, mp, z_loss)
     return compute_watch_stats(
         watch_targets=watch_config.watch_targets,
         include_norms=watch_config.include_norms,
@@ -993,10 +762,10 @@ def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_c
     diagnostic_watch_config = replace(watch_config, watch_targets=list(watch_targets))
     z_loss = z_loss_weight if z_loss_weight > 0 else None
 
-    @functools.partial(jax.jit, static_argnames=("router_tie_active",))
-    def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array, router_tie_active: bool):
+    @jax.jit
+    def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
         params = _apply_qb_betas(params, pending_qb_betas)
-        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config, router_tie_active)
+        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
 
     return diagnostic_watch_step
 
@@ -1008,18 +777,11 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None = None,
     ema_start_step: int = 0,
-    head_replay_period: int = 100,
-    head_replay_scale: float = 0.1,
     watch_config: WatchConfig | None = None,
-    byte_table: jax.Array | None = None,
-    byte_aux_steps: int = 0,
-    future_aux_steps: int | None = None,
     grad_accum_microbatches: int = 1,
 ):
-    """``grad_accum_microbatches`` > 1 averages gradients over that many microbatches (``_accumulated_loss_and_grads``).
-    ``byte_table`` (with ``byte_aux_steps``) turns on the byte-level auxiliary loss, its weight decaying
-    linearly from the model's ``byte_aux_weight`` to 0 at ``byte_aux_steps``. The ``future_aux`` weight decays
-    the same way to 0 at ``future_aux_steps`` (None: constant)."""
+    """``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
+    (``_accumulated_loss_and_grads``)."""
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -1030,65 +792,18 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    def train_step(state: GrugTrainState, batch, loop_active: bool | None = None, router_tie_active: bool | None = None):
+    def train_step(state: GrugTrainState, batch):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side kernel launches that can cause SPMD sync issues).
         with jax.named_scope("qb_apply"):
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
 
-        head_replay = None
-        if state.replay_hidden is not None:
-            slots = state.replay_hidden.shape[0]
-            wave = state.step // head_replay_period
-            oldest = (wave + 1) % slots
-            filled = state.step >= slots * head_replay_period
-            head_replay = HeadReplay(
-                hidden=state.replay_hidden[oldest],
-                labels=state.replay_labels[oldest],
-                weight=state.replay_weight[oldest],
-                scale=jnp.where(filled, head_replay_scale, 0.0).astype(jnp.float32),
-            )
-        byte_weight = None
-        if byte_table is not None:
-            progress = state.step.astype(jnp.float32) / max(byte_aux_steps, 1)
-            byte_weight = qb_params.config.byte_aux_weight * jnp.clip(1.0 - progress, 0.0, 1.0)
-        future_weight = None
-        if qb_params.config.future_aux != FutureAux.NONE:
-            future_weight = jnp.asarray(qb_params.config.future_aux_weight, jnp.float32)
-            if future_aux_steps is not None:
-                progress = state.step.astype(jnp.float32) / max(future_aux_steps, 1)
-                future_weight = future_weight * jnp.clip(1.0 - progress, 0.0, 1.0)
         if grad_accum_microbatches > 1:
-            if future_weight is not None:
-                raise ValueError("grad_accum_microbatches does not support future_aux")
-            if head_replay is not None or byte_table is not None or state.newton_muon is not None:
-                raise ValueError("grad_accum_microbatches needs no head replay, byte aux loss or Newton-Muon")
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-                grad_accum_microbatches, qb_params, batch, mp, z_loss, state.step, loop_active, router_tie_active
+                grad_accum_microbatches, qb_params, batch, mp, z_loss
             )
         else:
-            (loss, summarized_metrics), grads = _loss_and_grads(
-                qb_params,
-                batch,
-                mp,
-                z_loss,
-                state.step,
-                loop_active,
-                head_replay,
-                byte_table,
-                byte_weight,
-                router_tie_active,
-                future_weight,
-            )
-        final_hidden = summarized_metrics.pop(FINAL_HIDDEN_KEY, None)
-        newton_muon = state.newton_muon
-        opt_grads = grads
-        if newton_muon is not None:
-            newton_muon = _refresh_newton_muon(
-                qb_params.config, newton_muon, summarized_metrics.pop(NEWTON_GRAM_KEY), state.step
-            )
-            opt_grads = _newton_precondition(grads, newton_muon.inverse)
-            summarized_metrics.update(_newton_muon_metrics(newton_muon))
+            (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -1101,7 +816,7 @@ def _make_train_step(
             master_params = state.master_params
         else:
             with jax.named_scope("opt_update"):
-                updates, opt_state = optimizer.update(opt_grads, opt_state_in, qb_params)
+                updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
             with jax.named_scope("opt_metrics"):
                 metrics.update(optimizer_diagnostics(opt_state))
                 metrics.update(magma_metrics(opt_state))
@@ -1109,12 +824,7 @@ def _make_train_step(
                 metrics.update(expert_consistency_metrics(opt_state))
             with jax.named_scope("apply_updates"):
                 params = optax.apply_updates(qb_params, updates)
-            if params.config.dual_attn_prev:
-                params = refresh_attn_prev(params, qb_params)
             master_params = None
-        if params.ngram_stat_table is not None:
-            # Write after read: this batch's targets enter the statistic table only once its step is done.
-            params = write_ngram_stats(params, batch.tokens, batch.loss_weight, _segment_ids(batch))
 
         if ema_beta is None:
             ema_params = None
@@ -1128,9 +838,6 @@ def _make_train_step(
                     qb_ema_params,
                     params,
                 )
-            if params.ngram_stat_table is not None:
-                # The statistic table is a running sum, not a trained weight: the EMA keeps the live table.
-                ema_params = eqx.tree_at(lambda m: m.ngram_stat_table, ema_params, params.ngram_stat_table)
 
         watch_stats = None
         if watch_config is not None:
@@ -1154,11 +861,9 @@ def _make_train_step(
             master_params=master_params,
             ema_params=ema_params,
             opt_state=opt_state,
-            **_store_head_replay(state, final_hidden, batch, head_replay_period),
             # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
             # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
-            pending_qb_betas=_next_qb_betas(state, metrics.get("qb_beta_per_layer", state.pending_qb_betas)),
-            newton_muon=newton_muon,
+            pending_qb_betas=metrics.get("qb_beta_per_layer", state.pending_qb_betas),
         )
         if next_state.pending_qb_betas.shape[-1] <= _LOGGED_QB_BETA_MAX_EXPERTS:
             # Few experts (the specialization study models): log every expert's QB balancing bias.
@@ -1178,12 +883,10 @@ def _flat_train_step(step_fn, treedef):
     module node: 25-40 ms per step at d512, with the GPUs idle). A list of arrays takes JAX's C++ path; the tree is
     rebuilt inside the trace, and ``treedef`` must stay the step's output structure."""
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("loop_active", "router_tie_active"))
-    def train_step(leaves, batch, loop_active: bool | None = None, router_tie_active: bool | None = None):
+    @functools.partial(jax.jit, donate_argnums=(0,))
+    def train_step(leaves, batch):
         state = jax.tree.unflatten(treedef, leaves)
-        next_state, metrics, watch_stats = step_fn(
-            state, batch, loop_active=loop_active, router_tie_active=router_tie_active
-        )
+        next_state, metrics, watch_stats = step_fn(state, batch)
         next_leaves, next_treedef = jax.tree.flatten(next_state)
         if next_treedef != treedef:
             raise ValueError("the train step changed the state's tree structure")
@@ -1195,111 +898,6 @@ def _flat_train_step(step_fn, treedef):
 def _segment_ids(batch) -> jax.Array | None:
     segment_ids = batch.attn_mask.segment_ids
     return None if segment_ids is None else segment_ids[0]
-
-
-def _prefill_ngram_stats(state: GrugTrainState, train_loader, *, start_step: int, num_batches: int) -> GrugTrainState:
-    """Write ``num_batches`` training batches from ``start_step`` on into the n-gram statistic table (see
-    ``GrugTrainerConfig.ngram_stat_prefill_batches``).
-
-    Only the table goes through the jitted write (donated), and each write is waited on before the next is
-    dispatched: without the wait the host runs hundreds of writes ahead of the GPU, each holding its temporaries,
-    and exhausts HBM (the first d512 pre-fill runs died this way)."""
-    cfg = state.params.config
-    code = state.params.ngram_stat_code
-
-    @functools.partial(jax.jit, donate_argnums=(0,))
-    def write(table: jax.Array, batch) -> jax.Array:
-        return ngram_stat_table_add(cfg, table, code, batch.tokens, batch.loss_weight, _segment_ids(batch))
-
-    @jax.jit
-    def filled_fraction(table: jax.Array) -> jax.Array:
-        return jnp.mean((table[:, -1] > 0).astype(jnp.float32))
-
-    started = time.time()
-    table = state.params.ngram_stat_table
-    batches = train_loader.iter_from_step(start_step)
-    for i in range(num_batches):
-        table = jax.block_until_ready(write(table, next(batches)))
-        if (i + 1) % 500 == 0:
-            logger.info("ngram stat prefill: %d / %d batches (%.0fs)", i + 1, num_batches, time.time() - started)
-    filled = float(filled_fraction(table))
-    logger.info(
-        "ngram stat prefill done: %d batches in %.0fs, %.1f%% rows filled",
-        num_batches,
-        time.time() - started,
-        100 * filled,
-    )
-    levanter.tracker.log_summary({"ngram_stat/prefill_batches": num_batches, "ngram_stat/prefill_rows_filled": filled})
-    params = eqx.tree_at(lambda m: m.ngram_stat_table, state.params, table)
-    # The EMA carries the live table (see the train step). It gets its own copy: the train step donates the state, and
-    # one buffer cannot be donated twice.
-    ema_params = (
-        None
-        if state.ema_params is None
-        else eqx.tree_at(lambda m: m.ngram_stat_table, state.ema_params, jnp.copy(table))
-    )
-    return dataclasses.replace(state, params=params, ema_params=ema_params)
-
-
-_materialize_router_ties = eqx.filter_jit(tie_routers)
-
-
-def _router_ties_active(config: GrugModelConfig, step: int) -> bool:
-    """Whether the train step at ``step`` runs the tied router (before ``router_embed_tie_release_step``)."""
-    release = config.router_embed_tie_release_step
-    return release is None or step < release
-
-
-def _router_tie_view(model: Transformer, step: int) -> Transformer:
-    """The model an untied forward (evals, routing dumps) sees at ``step``: before the tie release, the ties
-    materialized into the router columns (the same function as the tied forward)."""
-    release = model.config.router_embed_tie_release_step
-    if release is not None and step < release:
-        return _materialize_router_ties(model)
-    return model
-
-
-def _release_router_ties(state: GrugTrainState) -> GrugTrainState:
-    """The ``router_embed_tie_release_step`` rewrite: every param copy's tied router columns take their tied value
-    ``alpha * mean(token_embed[V...])`` (the EMA its own), so the untied program continues the tied function. The
-    optimizer state is kept: the tied columns got zero gradient, so their Adam moments are zero and restart."""
-
-    def release(model: Transformer | None) -> Transformer | None:
-        return None if model is None else _materialize_router_ties(model)
-
-    return dataclasses.replace(
-        state,
-        params=release(state.params),
-        master_params=release(state.master_params),
-        ema_params=release(state.ema_params),
-    )
-
-
-def _init_unigram_bias(state: GrugTrainState, train_loader, *, num_batches: int) -> GrugTrainState:
-    """Set ``lm_head_bias`` to ``log((count + 1) / (total + V))``, the add-one log unigram frequency of the
-    loss-weighted tokens of the first ``num_batches`` training batches (the EMA copy too). Adam's moments are
-    zeros either way, so the optimizer state needs no change."""
-    vocab = state.params.config.vocab_size
-
-    @functools.partial(jax.jit, donate_argnums=(0,))
-    def add(counts: jax.Array, tokens: jax.Array, loss_weight: jax.Array) -> jax.Array:
-        weight = loss_weight.astype(jnp.float32).reshape(-1)
-        return counts + jnp.zeros((vocab,), jnp.float32).at[tokens.reshape(-1)].add(weight, out_sharding=P(None))
-
-    started = time.time()
-    counts = jnp.zeros((vocab,), jnp.float32)
-    batches = train_loader.iter_from_step(0)
-    for _ in range(num_batches):
-        batch = next(batches)
-        counts = jax.block_until_ready(add(counts, batch.tokens, batch.loss_weight))
-    bias = jnp.log((counts + 1.0) / (jnp.sum(counts) + vocab))
-    bias = jax.device_put(bias, state.params.lm_head_bias.sharding)
-    logger.info("unigram lm_head bias from %d batches in %.0fs", num_batches, time.time() - started)
-    params = eqx.tree_at(lambda m: m.lm_head_bias, state.params, bias)
-    ema_params = (
-        None if state.ema_params is None else eqx.tree_at(lambda m: m.lm_head_bias, state.ema_params, jnp.copy(bias))
-    )
-    return dataclasses.replace(state, params=params, ema_params=ema_params)
 
 
 _PY_SPY_TIMEOUT = 60
@@ -1341,11 +939,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id was not initialized")
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
-    byte_table = None
-    if config.model.byte_aux_bytes:
-        byte_table = jnp.asarray(
-            token_byte_table(config.data.the_tokenizer, config.model.vocab_size, config.model.byte_aux_bytes)
-        )
     watch_config = trainer.watch
     diagnostic_watch_step = None
     inline_watch_config = watch_config if watch_config.is_enabled else None
@@ -1365,16 +958,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         ema_start_step=ema_start_step,
-        head_replay_period=config.trainer.head_replay_period,
-        head_replay_scale=config.trainer.head_replay_scale,
         watch_config=inline_watch_config,
-        byte_table=byte_table,
-        byte_aux_steps=int(config.model.byte_aux_decay_frac * trainer.num_train_steps),
-        future_aux_steps=(
-            None
-            if config.model.future_aux_decay_frac is None
-            else int(config.model.future_aux_decay_frac * trainer.num_train_steps)
-        ),
         grad_accum_microbatches=config.trainer.grad_accum_microbatches,
     )
 
@@ -1410,16 +994,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
-                head_replay_shape=(
-                    (
-                        config.trainer.head_replay_slots,
-                        trainer.train_batch_size,
-                        config.model.max_seq_len,
-                        config.model.hidden_dim,
-                    )
-                    if config.trainer.head_replay_slots > 0
-                    else None
-                ),
             )
 
         state = _init_state(model_key)
@@ -1508,17 +1082,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
-        if config.trainer.ngram_stat_prefill_batches and int(state.step) == 0:
-            if state.params.ngram_stat_table is None:
-                raise ValueError("ngram_stat_prefill_batches needs a model with ngram_stat_rows > 0")
-            state = _prefill_ngram_stats(
-                state,
-                train_loader,
-                start_step=trainer.num_train_steps,
-                num_batches=config.trainer.ngram_stat_prefill_batches,
-            )
-        if state.params.lm_head_bias is not None and int(state.step) == 0:
-            state = _init_unigram_bias(state, train_loader, num_batches=config.trainer.lm_head_unigram_batches)
         batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
 
@@ -1530,9 +1093,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             eval_model_getter=lambda s: (
                 None
                 if s.params is None
-                else _router_tie_view(
-                    s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params, int(s.step)
-                )
+                else (s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params)
             ),
             opt_state_getter=lambda s: s.opt_state,
         )
@@ -1570,20 +1131,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     )
                 )
             if dropless_evaluator is not None and dropless_eval_mesh is not None:
-                # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
-                # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
-                # the train mesh -- must be resharded onto the eval mesh before its eval jit (JAX
-                # does not auto-reshard across explicit meshes), then the local backend sees
-                # expert=1. PGLE is disabled for the eval module as in `cb_tagged_evaluate`.
-                # Log the dropless (accurate) eval under the normal prefix -- it is the primary eval
-                # for EP runs (the lossy train-mesh evaluator is skipped above when dropless).
-                dropless_prefix = "eval"
                 # The forced end-of-run callback pass revisits the last step; skip it when the
                 # periodic cadence already scored that step, as `cb_tagged_evaluate` does.
                 last_dropless_eval_step: int | None = None
 
                 def dropless_eval_hook(
-                    step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=dropless_prefix, **kwargs
+                    step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=("eval"), **kwargs
                 ):
                     nonlocal last_dropless_eval_step
                     step_count = int(step.step)
@@ -1647,22 +1200,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         train_step,
                         state_leaves,
                         rec.batch,
-                        rec.loop_active,
-                        rec.router_tie_active,
                         config.trainer.hlo_dump_path,
                     )
                 hlo_written = True
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
             if not math.isfinite(loss):
                 raise RuntimeError(f"Non-finite loss ({loss}) at step {step + 1}.")
-            if step_state is not None and step + 1 == config.model.router_embed_tie_release_step:
-                # Before the callbacks, so the checkpoint and evals at this step already see the release.
-                step_state = _release_router_ties(step_state)
-                state = step_state
-                state_leaves, released_treedef = jax.tree.flatten(state)
-                if released_treedef != state_treedef:
-                    raise ValueError("releasing the router ties changed the state's tree structure")
-                logger.info("router ties released at step %d", step + 1)
             hook_start = time.perf_counter()
             with jax.profiler.TraceAnnotation("callbacks"):
                 view = step_state if step_state is not None else _LaggedStateView(step=step + 1)
@@ -1685,7 +1228,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 "moe_bias/",
                                 "train/attn_res/",
                                 "train/aux/",
-                                "train/newton_muon/",
                                 "train/optim/",
                             )
                         )
@@ -1758,7 +1300,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             state.params,
                             batch,
                             state.pending_qb_betas,
-                            router_tie_active=_router_ties_active(config.model, current_step),
                         )
                         jax.block_until_ready(watch_stats)
                     else:
@@ -1773,15 +1314,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             iterator.this_load_time,
                         )
                     state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
-                    grow_step = config.model.loop_grow_step
-                    # Looped growth compiles one program per pass count (a traced switch would keep both alive).
-                    loop_active = None if grow_step is None else current_step >= grow_step
-                    # The router tie release likewise switches programs once (plus a host-side param rewrite below).
-                    router_tie_active = _router_ties_active(config.model, current_step)
                     dispatch_start = time.perf_counter()
-                    state_leaves, metrics, inline_watch_stats = train_step(
-                        state_leaves, batch, loop_active=loop_active, router_tie_active=router_tie_active
-                    )
+                    state_leaves, metrics, inline_watch_stats = train_step(state_leaves, batch)
                     state = jax.tree.unflatten(state_treedef, state_leaves)
                     # Host time to hand the step to the devices (rebuilding the state tree, launch).
                     dispatch_time = time.perf_counter() - dispatch_start
@@ -1795,8 +1329,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         step=current_step,
                         metrics=metrics,
                         batch=batch,
-                        loop_active=loop_active,
-                        router_tie_active=router_tie_active,
                         watch_stats=watch_stats,
                         dispatch_time=dispatch_time,
                         step_start=step_start,
@@ -1805,7 +1337,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             or config.trainer.pipeline_depth == 0
                             or (eval_interval is not None and host_step % eval_interval == 0)
                             or host_step % CHECKPOINT_POLL_STEPS == 0
-                            or host_step == config.model.router_embed_tie_release_step
                             or (config.trainer.hlo_dump_path is not None and not hlo_written)
                         ),
                     )
@@ -1845,8 +1376,6 @@ HOST_GAP_WARN = 0.1
 HOST_STALL_SAMPLE_THRESHOLD = 0.3
 
 
-# Seed of the training-only router noise (``moe_gumbel_tau``); folded with the step.
-ROUTE_NOISE_SEED = 7
 GC_EVERY_STEPS = 50
 # The pipelined loop finishes a step with its state (for the checkpointer's time-based saves) at least this often.
 CHECKPOINT_POLL_STEPS = 25
@@ -1870,8 +1399,6 @@ class _PendingStep:
     step: int
     metrics: dict
     batch: object
-    loop_active: bool | None
-    router_tie_active: bool | None
     watch_stats: object
     dispatch_time: float
     step_start: float
@@ -1891,15 +1418,9 @@ def _warn_on_long_gc(phase: str, info: dict) -> None:
         logger.warning("gc gen%d pause %.3f s on process %d", info.get("generation", -1), pause, jax.process_index())
 
 
-def _write_train_step_hlo(
-    train_step, state_leaves, batch, loop_active: bool | None, router_tie_active: bool, path: str
-) -> None:
+def _write_train_step_hlo(train_step, state_leaves, batch, path: str) -> None:
     """Write the optimized HLO of the flat ``train_step`` (with op metadata) to ``path``; recompiles once."""
-    text = (
-        train_step.lower(state_leaves, batch, loop_active=loop_active, router_tie_active=router_tie_active)
-        .compile()
-        .as_text()
-    )
+    text = train_step.lower(state_leaves, batch).compile().as_text()
     with fsspec.open(path, "w") as f:
         f.write(text)
     logger.info("Wrote train-step HLO (%d chars) to %s", len(text), path)

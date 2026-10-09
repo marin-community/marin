@@ -7,20 +7,7 @@ import functools
 
 import jax
 import jax.numpy as jnp
-from einops import rearrange
 from jaxtyping import Array, Float
-
-
-def switchhead_weights(
-    x: Float[Array, "B S D"], gate: Float[Array, "D GE"], experts: int, topk: int
-) -> Float[Array, "B S G E"]:
-    """SwitchHead's non-competitive expert weights: ``sigmoid(x W_gate)`` on each head's top-k logits, else 0."""
-    logits = rearrange(jnp.einsum("bsd,dg->bsg", x, gate).astype(jnp.float32), "b s (g e) -> b s g e", e=experts)
-    weights = jax.nn.sigmoid(logits)
-    if topk >= experts:
-        return weights
-    threshold = jax.lax.top_k(logits, topk)[0][..., -1:]
-    return jnp.where(logits >= threshold, weights, 0.0)
 
 
 def mixture_weights(

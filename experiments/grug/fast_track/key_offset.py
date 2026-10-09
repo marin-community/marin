@@ -3,31 +3,12 @@
 
 """MLA token-shift features: the partial key offset, the appended shared match score and the value lookahead."""
 
-import math
-from enum import StrEnum
 
 import jax
 import jax.numpy as jnp
-from haliax.jax_utils import named_call
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int
-
-# The attention kernel's head-dim granule.
-_KERNEL_HEAD_DIM_GRANULE = 32
-
-
-class MatchAppend(StrEnum):
-    """How ``mla_shared_match_dim`` enters the MLA scores."""
-
-    OFF = "off"
-    """``m`` is every head's shifted half, for the key (shifted) and query (unshifted), with ``mla_key_offset``:
-    per head a learned scale (M = half the head) or a ``match_head`` map (M > half)."""
-    SCALE = "scale"
-    """Appended to full un-shifted heads: each head adds ``g_h <m_i, m_{j-1}> / sqrt(M)``, ``g_h`` a learned scalar."""
-    TOKEN = "token"
-    """As ``SCALE`` with ``g_h(x_i) = g_h * 2 sigmoid(x_i . w_h)`` (``w`` zero-init): each query sets how much it
-    matches."""
 
 
 def shifted_channels(heads: int, head_dim: int, counts: tuple[int, ...]) -> jax.Array:
@@ -55,72 +36,6 @@ def partial_key_offset(
     return reshard(jnp.where(shifted, previous_token(k, segment_ids).astype(k.dtype), k), spec)
 
 
-@named_call
-def append_shared_match(
-    q: Float[Array, "B S N H"],
-    k: Float[Array, "B S N H"],
-    v: Float[Array, "B S N H"],
-    match: Float[Array, "B S M"],
-    gate: jax.Array,
-    segment_ids: Int[Array, "B S"] | None,
-    head_spec: P,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Extend every head by the ``M`` match channels so the kernel's ``q'.k' / sqrt(H + M)`` is
-    ``q.k / sqrt(H) + gate <match_i, match_{j-1}> / sqrt(M)``; ``v`` is zero-padded (slice the output to ``H``).
-
-    ``gate`` is ``[N]`` or ``[B, S, N]``; ``head_spec`` is the ``[B, S, N, *]`` spec of the extended arrays."""
-    head_dim, match_dim = q.shape[-1], match.shape[-1]
-    padded = head_dim + match_dim
-    if padded % _KERNEL_HEAD_DIM_GRANULE:
-        raise ValueError(f"head_dim + mla_shared_match_dim must be a multiple of {_KERNEL_HEAD_DIM_GRANULE}")
-    heads = q.shape[2]
-    q_tail = gate[..., :, None].astype(jnp.float32) * match[..., None, :].astype(jnp.float32)
-    q_tail = reshard(jnp.broadcast_to(q_tail * math.sqrt(padded / match_dim), (*q.shape[:-1], match_dim)), head_spec)
-    prev = previous_token(match, segment_ids)
-    k_tail = reshard(jnp.broadcast_to(prev[..., None, :], (*k.shape[:2], heads, match_dim)), head_spec)
-    q = jnp.concatenate([reshard(q * math.sqrt(padded / head_dim), head_spec), q_tail.astype(q.dtype)], axis=-1)
-    k = jnp.concatenate([reshard(k, head_spec), k_tail.astype(k.dtype)], axis=-1)
-    return q, k, reshard(jnp.pad(v, ((0, 0), (0, 0), (0, 0), (0, match_dim))), head_spec)
-
-
-def next_token(x: jax.Array, segment_ids: Int[Array, "B S"] | None) -> jax.Array:
-    """``x`` shifted one token earlier along axis 1, zero at document ends."""
-    nxt = jnp.pad(x[:, 1:], ((0, 0), (0, 1)) + ((0, 0),) * (x.ndim - 2))
-    if segment_ids is None:
-        return nxt
-    ends = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (0, 1)), constant_values=True)
-    return jnp.where(ends.reshape(ends.shape + (1,) * (x.ndim - 2)), 0, nxt)
-
-
-@named_call
-def value_lookahead(
-    k: Float[Array, "B S N D"],
-    v: Float[Array, "B S N E"],
-    ahead: Float[Array, "N E"],
-    segment_ids: Int[Array, "B S"] | None,
-    k_null: Float[Array, "N D"] | None = None,
-    own_weight: Float[Array, "N E"] | None = None,
-) -> tuple[jax.Array, jax.Array]:
-    """Each key token's value also reads the next token's, ``v'_t = own_weight * v_t + ahead * v_{t+1}``
-    (``own_weight`` 1 if None); keys and values then
-    move one slot later (zero at document starts), so under the causal mask query ``i`` sees tokens ``t <= i - 1``
-    (never itself, so ``v_{t+1}`` never leaks the future) and every document's first slot is an empty sink: zero
-    value, and key ``k_null`` (zero if None)."""
-    spec_k, spec_v = jax.typeof(k).sharding.spec, jax.typeof(v).sharding.spec
-    own = v if own_weight is None else own_weight.astype(v.dtype) * v
-    mixed = own + ahead.astype(v.dtype) * next_token(v, segment_ids)
-    shifted_k = previous_token(k, segment_ids)
-    if k_null is not None:
-        first = jnp.zeros(k.shape[:2], bool).at[:, 0].set(True)
-        if segment_ids is not None:
-            first = first | jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)))
-        shifted_k = jnp.where(first[..., None, None], k_null.astype(k.dtype), shifted_k)
-    return (
-        reshard(shifted_k, spec_k),
-        reshard(previous_token(mixed, segment_ids).astype(v.dtype), spec_v),
-    )
-
-
 def shift_tokens(x: jax.Array, segment_ids: Int[Array, "B S"] | None, n: int) -> jax.Array:
     """``x`` moved ``n`` tokens later along axis 1 (``n < 0``: earlier), zero where the source token is outside the
     sequence or in another document."""
@@ -135,35 +50,6 @@ def shift_tokens(x: jax.Array, segment_ids: Int[Array, "B S"] | None, n: int) ->
         moved = jnp.pad(segment_ids[:, :-n] if n > 0 else segment_ids[:, -n:], pad, constant_values=-1)
         valid = valid & (moved == segment_ids)
     return jnp.where(valid.reshape(valid.shape + (1,) * (x.ndim - 2)), out, 0)
-
-
-@named_call
-def future_heads(
-    qf: Float[Array, "B S F D"],
-    k: Float[Array, "B S N D"],
-    v: Float[Array, "B S N E"],
-    segment_ids: Int[Array, "B S"] | None,
-    window: int,
-) -> tuple[jax.Array, jax.Array]:
-    """The last ``F`` heads remember each token's future: token ``t`` attends over its own document's next ``window``
-    tokens with query ``qf_t`` (the head's keys / values, plus a zero null slot) to ``f_t``; those heads store
-    ``v_t + f_t`` and their keys / values move ``window`` slots later, so query ``i`` reads only tokens
-    ``t <= i - window`` there (``f_t`` covers tokens ``<= i``: no leakage)."""
-    spec_k, spec_v = jax.typeof(k).sharding.spec, jax.typeof(v).sharding.spec
-    heads = qf.shape[2]
-    kf, vf = k[:, :, -heads:].astype(jnp.float32), v[:, :, -heads:].astype(jnp.float32)
-    qf = qf.astype(jnp.float32) / math.sqrt(qf.shape[-1])
-    ahead_k = [shift_tokens(kf, segment_ids, -o) for o in range(1, window + 1)]
-    ahead_v = [shift_tokens(vf, segment_ids, -o) for o in range(1, window + 1)]
-    valid = [shift_tokens(jnp.ones(k.shape[:2], bool), segment_ids, -o) for o in range(1, window + 1)]
-    scores = [jnp.where(m[..., None], jnp.sum(qf * ko, axis=-1), -jnp.inf) for ko, m in zip(ahead_k, valid, strict=True)]
-    logits = jnp.stack([*scores, jnp.zeros_like(scores[0])], axis=-1)  # [B, S, F, window + 1]; last: the null slot
-    probs = jax.nn.softmax(logits, axis=-1)
-    future = sum(probs[..., o, None] * vo for o, vo in enumerate(ahead_v))
-    k_out = jnp.concatenate([k[:, :, :-heads], shift_tokens(k[:, :, -heads:], segment_ids, window)], axis=2)
-    v_mem = (vf + future).astype(v.dtype)
-    v_out = jnp.concatenate([v[:, :, :-heads], shift_tokens(v_mem, segment_ids, window)], axis=2)
-    return reshard(k_out, spec_k), reshard(v_out, spec_v)
 
 
 def parse_lag_groups(spec: tuple[str, ...], head_dim: int) -> tuple[tuple[int, int, int], ...]:

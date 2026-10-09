@@ -56,26 +56,17 @@ from levanter.grug.grug_moe import (
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.mxfp8 import mx_dense
 from levanter.grug.sharding import unshard
-from levanter.kernels.pallas.relu2_mlp import fused_relu2
 from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.fast_track import attention_rows_probe, router_soft_select, trace_capture
-from experiments.grug.fast_track.activations import polynorm, polynorm_over_input
-from experiments.grug.fast_track.expert_write_mask import expert_write_block_ids, expert_write_mask
-from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights, switchhead_weights
-from experiments.grug.fast_track.head_loss import prototype_target_logits, reduce_token_loss
+from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights
 from experiments.grug.fast_track.key_offset import (
-    MatchAppend,
-    append_shared_match,
     apply_lag_groups,
-    future_heads,
     parse_lag_groups,
     partial_key_offset,
-    previous_token,
     shifted_channels,
-    value_lookahead,
 )
 from experiments.grug.fast_track.qb_balancing import qb_beta_hist
 from experiments.grug.fast_track.router_metrics import (
@@ -84,17 +75,7 @@ from experiments.grug.fast_track.router_metrics import (
     summarize_router_metrics,
 )
 from experiments.grug.fast_track.sparse_attention import (
-    Dcmha,
-    DcmhaPaper,
-    Gauss,
-    SparseIndex,
-    TapKind,
-    _document_starts,
-    attention_with_lse,
-    gauss_attention_fast,
     mla_sparse_attention,
-    mla_sparse_params,
-    parallax_attention,
 )
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
@@ -102,20 +83,14 @@ from experiments.grug.moe.kda_state_pallas import StateGrads
 
 _GATED_NORM_RANK = 128
 _QB_HIST_BINS = 10_000
-# Tokens (split evenly over the batch shards) whose top-K sets ``qb_bias_damping``'s churn metric re-routes.
-_QB_CHURN_TOKENS = 1024
 _CE_TOKENS_PER_RANK = 65_536
 # A vocab tile of 8192 in the fused lm_head + cross-entropy loop measured ~3% faster than 4096 at d512.
 _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=8192)
 # Axes the non-expert params FSDP-shard over.
 _FSDP_AXES: tuple[str, ...] = ("data", "expert")
 _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
-# Tokens of the first sequence whose output-bigram logit term is logged (a [64, V] matmul).
-_OUTPUT_BIGRAM_STAT_TOKENS = 64
 # Extra hidden columns carrying ``lm_head_bias`` into the fused CE (two used, padded to a multiple of 8).
 _LM_HEAD_BIAS_COLS = 8
-# Input channels the per-token MoE output gate reads (cfg.moe_out_gate).
-_MOE_OUT_GATE_DIMS = 12
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -124,19 +99,14 @@ _TABLE_REPLICA_AXES = tuple(axis for axis in _BATCH_AXES if axis not in _FSDP_AX
 # ``newton_muon``: the per-layer expert-input second moment ``Z^T Z / N`` ([L, n, n], layer order) the
 # forward returns to the trainer, and the per-shard partial sums it is reduced from.
 NEWTON_GRAM_KEY = "_newton_gram"
-NEWTON_GRAM_LOCAL_KEY = "newton_gram_local"
 # Per-layer detached router distributions [B, S, E] for ``router_history``; popped by the layer loop, never summarized.
 ROUTER_PROBS_KEY = "router_probs"
 # Metrics-dict key that carries the auxiliary-loss residual stream from the forward to the loss.
 _AUX_HIDDEN = "aux_lm_hidden"
-# Folded into the per-step route key for the ERC proxy-token noise, so it is independent of the Gumbel noise.
-_ERC_KEY_SALT = 0xE2C
 _NITP_TARGET = "nitp_target"
 _LM_HEAD_EXTRA = "lm_head_extra"
 # Metrics-dict key that carries the raw (pre-norm) token embeddings from the forward to the MTP loss.
 _MTP_EMBED = "mtp_embed"
-# Folded into the per-step route key for the MTP position subsample (``mtp_position_frac``).
-_MTP_KEY_SALT = 0x3F7
 # Per-layer product-key memory diagnostics, lifted out of the layer stats into ``train/attn_res/knob_mem_*``.
 # Per-layer stats with this prefix returned by a layer are exported as ``<name>_L<layer>``.
 _LAYER_KNOB_PREFIX = "attn_res_knob_"
@@ -200,7 +170,6 @@ _DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA)
 _COMPRESS_PREFIX = "compress/"
 # Per-layer branch-output max |x| and RMS (``layer_output_stats``), stacked over layers like the router stats.
 _OUTSTAT_PREFIX = "outstat/"
-_SHADOW_SALT = 0x5AD0
 _SHARED_PRE = "shared_pre"
 ROUTED_INPUT_KEY = "routed_input_per_layer"
 SHARED_PRE_KEY = "shared_pre_per_layer"
@@ -219,57 +188,6 @@ KDA_CHUNK_TILES: dict[int, int | None] = {16: None, 32: 32, 64: 32}
 # kda_dd_rope: per-pair base angular frequencies (rad/token) are log-spaced over this range, periods ~6 to
 # ~800 tokens, spanning the KDA decay's memory lengths (|g| init in kda_dt_range).
 _KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
-# KDA per-layer activation diagnostics, lifted out of the layer stats into ``train/attn_res/knob_kda_*``.
-_KDA_STAT_PREFIX = "attn_res_knob_kda_"
-# Folded off the root key for the KV side stream (kv_stream_dim), so it leaves every other init unchanged.
-_KV_STREAM_KEY_SALT = 0x4B5
-_ROUTER_HIST_KEY_SALT = 0x4E60
-
-
-class MtpMode(StrEnum):
-    """Multi-token-prediction objective (training only; evals score the plain next-token loss)."""
-
-    OFF = "off"
-    DEEPSEEK = "deepseek"
-    """DeepSeek-V3 depth-1 MTP (arXiv 2412.19437 sec. 2.2) with an attention-free block (``MtpHead``)."""
-
-
-class FutureAux(StrEnum):
-    """Cheap multi-token prediction (training only): an extra head on the final hidden that predicts the future
-    beyond the next token, without a second vocabulary softmax or an extra block."""
-
-    NONE = "none"
-    HASH_T2 = "hash_t2"
-    """Softmax over ``future_aux_buckets`` hash buckets of the token at t+2."""
-    HASH_BIGRAM = "hash_bigram"
-    """Hash bucket of the (t+1, t+2) bigram."""
-    HASH_TRIGRAM = "hash_trigram"
-    """Hash bucket of the (t+1, t+2, t+3) trigram."""
-    LOWDIM_T2 = "lowdim_t2"
-    """The t+2 hash bucket through a ``future_aux_lowdim``-wide SiLU bottleneck (a little head capacity)."""
-    EMBED = "embed"
-    """Cosine regression onto the mean (stop-gradient) input embedding of the tokens at t+2 and t+3."""
-
-
-_FUTURE_OFFSETS = {
-    FutureAux.HASH_T2: (2,),
-    FutureAux.HASH_BIGRAM: (1, 2),
-    FutureAux.HASH_TRIGRAM: (1, 2, 3),
-    FutureAux.LOWDIM_T2: (2,),
-    FutureAux.EMBED: (2, 3),
-}
-_FUTURE_HASH_MULTS = (0x9E3779B1, 0x85EBCA77, 0xC2B2AE3D)
-
-
-class NgramStatMode(StrEnum):
-    """Where the n-gram statistic reader's output enters the model."""
-
-    SOURCE = "source"
-    """Its own AttnRes source (RMS-normed, content-gated). It takes a softmax share at every gate from step 0, while
-    the table is still empty; at d512 this cost +0.010 to +0.012 Paloma macro loss at equal steps."""
-    BIGRAM = "bigram"
-    """Added to the trained bigram table's source through a zero-initialized reader output, so step 0 is exactly the
-    model without it and no gate's softmax is diluted (needs ``second_embed_bigram``)."""
 
 
 class LocalMixer(StrEnum):
@@ -290,20 +208,6 @@ class AttnResLayerBackward(StrEnum):
     SAVE = "save"
     """Plain autodiff: the forward keeps the layer's residuals, so backward runs no forward again.
     Same math as RECOMPUTE; needs the memory to hold every layer's residuals."""
-
-
-class KdaHeadPairing(StrEnum):
-    """Cross-head KDA (modded-nanogpt's paired-head attention, record 58, carried to the delta rule): heads
-    ``2j`` and ``2j+1`` run as one head over the interleaved sequence ``A_0 B_0 A_1 B_1 ...``, so each pair shares
-    one ``h x h`` state that both heads write to and read from. Head A's token-t query sees B's writes up to
-    token t-1, B's sees A's up to token t. Flops match unpaired KDA; the state per layer halves."""
-
-    NONE = "none"
-    HALF_DECAY = "half_decay"
-    """Each sub-step applies half its head's log-decay, so the pair's state decays per token at about one
-    head's rate (exact at init, where both heads' decays are equal)."""
-    FULL_DECAY = "full_decay"
-    """Each sub-step applies its head's full log-decay: the pair's state decays twice per token."""
 
 
 class ContentGateActivation(StrEnum):
@@ -332,25 +236,6 @@ class Fp8Recipe(StrEnum):
     MXFP8_SIM = "mxfp8_sim"
     """Simulated MXFP8 (``levanter.grug.mxfp8``): e4m3 operands with a just-in-time power-of-two scale per 32
     elements along each GEMM's contraction axis, gradients included. Numerics only; GEMMs still run in bf16."""
-
-
-class MoeCompress(StrEnum):
-    """Auxiliary pressure that moves what the shared expert can express out of the routed experts
-    (``moe_compress``; ``s`` = shared output, ``r`` = routed output, ``y = s + r``, ``sg`` = stop-gradient)."""
-
-    NONE = "none"
-    TRANSFER = "transfer"
-    """``||s - sg(s + r)||^2 / sg(mean ||y||^2)``: pushes the shared expert along the routed output until the
-    routed side holds nothing the shared expert can express; the LM loss then sheds the overshoot from ``r``."""
-    TRANSFER_NORMED = "transfer_normed"
-    """``||s / |s| - sg(y / |y|)||^2`` per token, i.e. ``2 - 2 cos(s, y)``: the transfer direction without its
-    unbounded stretch. The plain transfer gradient ``-2 r`` pushes ``s`` along ``r`` at any length of ``s``."""
-    GAP = "gap"
-    """``||s - sg(r)||^2 / sg(mean ||y||^2)``: pulls the shared expert toward the routed output. It is zero at
-    ``s = r``, where the two paths duplicate each other."""
-    ROUTED_PENALTY = "routed_penalty"
-    """``||r||^2 / sg(mean ||y||^2)``: routed output is costly, so the LM gradient moves onto the shared expert
-    whatever it can express."""
 
 
 class NormGainFn(StrEnum):
@@ -396,16 +281,6 @@ def apply_gain_fn(fn: NormGainFn, w: jax.Array) -> jax.Array:
     raise ValueError(f"unknown NormGainFn {fn!r}")
 
 
-class ExpertVisitBias(StrEnum):
-    """Whether, and how, each routed expert a token visits writes its own learned vector into the residual."""
-
-    NONE = "none"
-    SUM = "sum"
-    """The routed output gains ``sum_{e in selected} bias[e]``: an unweighted record of which experts ran."""
-    WEIGHTED = "weighted"
-    """The same, each row scaled by the expert's combine weight (so the router gets gradient through it)."""
-
-
 class RouterCombine(StrEnum):
     """How the MoE combine weights of the K selected experts are formed from their unbiased logits."""
 
@@ -421,16 +296,6 @@ class RouterCombine(StrEnum):
     SQRT_SOFTPLUS_RAW = "sqrt_softplus_raw"
     """``sqrt(softplus(logit))`` times a constant (``routing_renorm_sum / (K sqrt(log 2))``, so the sum matches at
     init), no renormalization: a token's total expert weight can vary."""
-
-
-class AttnResTokenQuery(StrEnum):
-    """A per-token AttnRes query: each gate scores source ``n`` with ``(q_g + q_e[token]) . rms_norm(source_n)``."""
-
-    NONE = "none"
-    SHARED = "shared"
-    """One ``[V, D]`` table (zero-init) shared by every gate."""
-    PER_GATE = "per_gate"
-    """One ``[V, D]`` table per gate, as each gate has its own static query."""
 
 
 class ValueEmbeds(StrEnum):
@@ -473,16 +338,6 @@ class KvMixMode(StrEnum):
 
 
 LATENT_MIX_SITES = ("q", "k", "v", "o", "kv", "moe_in", "moe_out")
-
-
-class SwitchHeadSites(StrEnum):
-    """Which GQA projections SwitchHead (arXiv 2312.07987) turns into per-head mixtures of experts."""
-
-    V = "v"
-    """Value experts per KV head, gated by the source token."""
-    O = "o"
-    """Output experts per query head, gated by the destination token."""
-    VO = "vo"
 
 
 def _ve_lambda_init(mode: "ValueEmbeds") -> jax.Array | None:
@@ -561,18 +416,6 @@ def _embedding_gather_bwd(residuals, g: jax.Array):
 
 
 _embedding_gather.defvjp(_embedding_gather_fwd, _embedding_gather_bwd)
-
-
-def _embedding_gather_autodiff(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
-    """``_embedding_gather`` with JAX's default transpose: the backward scatter-adds straight into the
-    (bf16) table (``embed_grad_fp32=False``, the pre-fix behavior)."""
-    token_ids = reshard(token_ids, P(_BATCH_AXES, None))
-    return shard_map(
-        _local_gather,
-        mesh=get_abstract_mesh(),
-        in_specs=(P(None, None), P(_BATCH_AXES, None)),
-        out_specs=P(_BATCH_AXES, None, None),
-    )(token_embed, token_ids)
 
 
 def _fsdp_group_size() -> int:
@@ -663,16 +506,10 @@ def _row_sharded_embedding_gather_bwd(residuals, g: jax.Array):
 _row_sharded_embedding_gather.defvjp(_row_sharded_embedding_gather_fwd, _row_sharded_embedding_gather_bwd)
 
 
-def _replicated_autodiff_gather(table: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
-    return _embedding_gather_autodiff(reshard(table, P(None, None)), token_ids)
-
-
 def _table2_gather(cfg: "GrugModelConfig"):
     """Lookup for the tables stored like the second one (``embed2_fsdp``, ``embed2_grad_fp32``)."""
     if not cfg.embed2_fsdp:
-        return _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
-    if not cfg.embed2_grad_fp32:
-        return _replicated_autodiff_gather
+        return _embedding_gather
     if cfg.embed2_row_sharded_gather:
         return _row_sharded_embedding_gather
     return _replicated_fp32_gather
@@ -691,9 +528,6 @@ _MURMUR_C1 = 0x85EBCA6B
 _MURMUR_C2 = 0xC2B2AE35
 # Per-head salt step for the multi-head n-gram hash (salt 0 is the single-head hash).
 _HASH_SALT_STEP = 0x27D4EB2D
-# Hash salt of the statistic table (distinct from the trained bigram table's salt 0) and its code's seed.
-_NGRAM_STAT_SALT = 7
-_NGRAM_STAT_CODE_SEED = 20260927
 
 
 def _bigram_hash_ids(
@@ -718,39 +552,6 @@ def _bigram_hash_ids(
     x = (x ^ (x >> 13)) * jnp.uint32(_MURMUR_C2)
     x = x ^ (x >> 16)
     return (x % jnp.uint32(num_buckets)).astype(jnp.int32)
-
-
-# Sign-hash multipliers of modded-nanogpt record #360 (``bigram_kernels.py``), per n-gram order, ordered
-# (current token, lag 1, lag 2); the sign-pool seed.
-_SIGN_HASH_MULTIPLIERS = {2: (48271, 30011), 3: (58699, 39779, 26801)}
-_EMBED2_SIGN_SEED = 20260928
-
-
-def _ngram_sign_ids(
-    token_ids: Int[Array, "B S"],
-    segment_ids: Int[Array, "B S"] | None,
-    sentinel: int,
-    ngram: int,
-    pool_rows: int,
-    salt: int = 0,
-) -> Int[Array, "B S"]:
-    """Sign-pool row of each n-gram (``embed2_sign_trick``): the record's ``(c0 x_t) ^ (c1 x_{t-1}) ^ ...``
-    masked to the power-of-two ``pool_rows``, independent of ``_bigram_hash_ids``'s murmur hash of the same key.
-    A previous token missing (position 0 or an earlier document) is the table hash's ``sentinel``, so those keys
-    stay distinct per current token (the record instead sends every history-less n-gram to row 0; its table
-    also collapses them into one row). ``salt`` xors a per-head constant in (salt 0 is the record's hash)."""
-    if ngram not in _SIGN_HASH_MULTIPLIERS:
-        raise ValueError(f"embed2_sign_trick supports n-gram orders {sorted(_SIGN_HASH_MULTIPLIERS)}, got {ngram}")
-    multipliers = _SIGN_HASH_MULTIPLIERS[ngram]
-    x = token_ids.astype(jnp.uint32) * jnp.uint32(multipliers[0])
-    for lag in range(1, ngram):
-        prev = jnp.pad(token_ids[:, :-lag], ((0, 0), (lag, 0)), constant_values=sentinel)
-        if segment_ids is not None:
-            other_doc = jnp.pad(segment_ids[:, lag:] != segment_ids[:, :-lag], ((0, 0), (lag, 0)), constant_values=True)
-            prev = jnp.where(other_doc, sentinel, prev)
-        x = x ^ (prev.astype(jnp.uint32) * jnp.uint32(multipliers[lag]))
-    x = x ^ jnp.uint32((salt * _HASH_SALT_STEP) & 0xFFFFFFFF)
-    return (x & jnp.uint32(pool_rows - 1)).astype(jnp.int32)
 
 
 def _padded_spec(x: jax.Array) -> tuple:
@@ -785,34 +586,10 @@ class GrugModelConfig:
     # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
     latent_dim: int | None = 256
     latent_out_dim: int | None = None
-    body_latent_out_dim: int | None = None
-    """Non-tail layers' routed write width."""
-    """Width the routed experts write (``w_down``'s output dim); None: their input width (``latent_dim``, or
-    ``hidden_dim`` without a latent). ``w_latent_up`` maps it to ``hidden_dim`` and is dropped when it equals
-    ``hidden_dim`` (the experts write the stream directly). Splits LatentMoE's read and write compression."""
-    global_local_window: int | None = None
-    """Give every global (softmax) layer a short sliding-window softmax attention branch of this window, added to
-    its global attention output (``LocalWindowAttention``): the hybrid's KDA layers left no local softmax attention.
-    None: off."""
-    global_local_heads: int = 4
-    global_local_head_dim: int = 64
     latent_out_full_layers: tuple[int, ...] = ()
     """Layers whose routed experts write the full residual stream (``latent_out_dim = hidden_dim``, no
     ``w_latent_up``) while the others keep the latent write. These layers live in their own stacks
     (``Transformer.stacked_blocks_tail`` / ``kda_blocks_tail``); needs Block AttnRes, whose loop runs layer by layer."""
-    latent_free_layers: tuple[int, ...] = ()
-    """Layers with no MoE latent at all: the routed experts read and write the full stream (no ``w_latent_down`` or
-    ``w_latent_up``) at half the expert width, so the expert parameters and FLOPs match the latent layers'. Like
-    ``latent_out_full_layers`` these layers live in the tail stacks; the two cannot be combined."""
-    wide_expert_layers: tuple[int, ...] = ()
-    """Layers whose routed experts are ``wide_expert_intermediate_dim`` wide (the latent read and write unchanged):
-    extra expert capacity in chosen layers only. Tail stacks again; exclusive with the other tail modes."""
-    wide_expert_intermediate_dim: int | None = None
-    topk_layers: tuple[int, ...] = ()
-    """Layers that activate ``topk_layer_k`` routed experts per token instead of ``num_experts_per_token``: more
-    active expert compute in chosen layers at the same parameters. Tail stacks again; exclusive with the other
-    tail modes."""
-    topk_layer_k: int | None = None
     num_layers: int = 6
     num_heads: int = 4
     mla_num_heads: int | None = None
@@ -826,8 +603,6 @@ class GrugModelConfig:
     max_seq_len: int = 4096
     sliding_window: int = 2048
     global_every: int = 4
-    global_layers: tuple[int, ...] | None = None
-    """Explicit 0-indexed global (softmax / MLA) layers, overriding ``global_every``."""
     capacity_factor: float = 1.15
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
@@ -855,15 +630,6 @@ class GrugModelConfig:
     # full rank. No decoupled RoPE (requires ``inkling_relpos``); heads are ``head_dim`` wide.
     mla: bool = False
     mla_kv_latent_dim: int = 512
-    kv_stream_dim: int = 0
-    """KV side stream width ``w`` (0: off). A second residual stream, seeded by its own ``[vocab, w]`` token
-    embedding and advanced by one small pre-norm block (causal document-masked softmax attention + ReLU^2
-    MLP, see ``KvStreamBlock``) per main layer, is the only source of keys and values. Needs ``attn_res``."""
-    kv_stream_heads: int = 1
-    """Attention heads of the side-stream blocks (head dim ``kv_stream_dim / kv_stream_heads``; keep it 128
-    for the FA4 kernel)."""
-    kv_stream_mlp_mult: int = 4
-    """Side-stream MLP width as a multiple of ``kv_stream_dim``."""
     local_mixer: LocalMixer = LocalMixer.SLIDING_WINDOW
     kda_dt_range: tuple[float, float] = (0.02, 0.5)
     """KDA ``dt_bias`` init: the per-token log-decay ``|g|`` at zero gate input is log-uniform in this range."""
@@ -885,483 +651,51 @@ class GrugModelConfig:
     attn_res: bool = False
     attn_res_num_blocks: int = 8
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
-    latent_orthogonal_init: bool = False
-    router_history: bool = False
-    expert_router_orthogonal: str = "off"
-    """``full`` / ``learned``: project expert reads off the router direction; ``off``: neither."""
-    router_mlp_hidden: int = 0
-    """A tiny MLP router added to the linear one: ``logits += silu(x @ W_a) @ W_b`` with this many hidden neurons
-    (``W_b`` zero-init, so it starts as the linear router). 0: off."""
-    """HERO-MoE (arXiv 2609.32581): each router adds ``(rho * H) @ W_R`` to its logits, where ``H`` holds the earlier
-    layers' detached router softmax distributions and ``W_R`` (``Transformer.router_hist_w``) is learned. ``rho``
-    RMS-matches ``H`` to the (normed) router input and scales by ``sqrt(n_prev / (L - 1))``. Needs ``attn_res`` (the
-    unrolled layer loop carries the history)."""
-    """Initialize the LatentMoE projections semi-orthogonal (``_latent_proj_init``); pairs with the optimizer's
-    ``latent_proj_update`` of ``frozen`` or ``stiefel``."""
     attn_res_remat_attention: bool = False
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
     the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
     attention forward per layer; needed for memory at d1280."""
     value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
-    kda_value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
-    """``value_embeds`` for the KDA layers: each gets its own ``[V, N*h]`` table mixed into its delta-rule values,
-    ``v = lambda1 * v + w * value_embed[token]`` (same modes as the MLA layers' ``value_embeds``)."""
-    """Per-MLA-layer value-embedding table added to v (see ``ValueEmbeds``)."""
-    sublayer_scales: bool = False
-    """A learnable scalar (1 at init) on every attention and MLP sublayer output, before it enters the
-    AttnRes history."""
-    sublayer_scale_fn: "NormGainFn" = dataclasses.field(default_factory=lambda: NormGainFn.LINEAR)
-    """How ``sublayer_scales`` reads each scalar from its parameter (``sigmoid2``: ``2 sigmoid(w)``, in (0, 2))."""
-    norm_gain_fn: "NormGainFn" = dataclasses.field(default_factory=lambda: NormGainFn.LINEAR)
-    norm_gain_overrides: tuple[str, ...] = ()
-    """``role:fn`` entries giving one norm (``NORM_GAIN_ROLES``) its own ``NormGainFn`` instead of ``norm_gain_fn``,
-    e.g. ``final:exp`` or ``embed:sigmoid``."""
-    """How every learned RMSNorm gain is read from its parameter (``exp``: ``e^w``, ...); 1 at init in every case."""
     router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
     routing_renorm_sum: float = 2.5
     """Total combine weight of a token's K routed experts (``RouterCombine``)."""
-    routing_sum_learnable: bool = False
-    """Make ``routing_renorm_sum`` a learned scalar per MoE layer (init ``routing_renorm_sum``, Adam), logged as
-    ``train/attn_res/knob_routing_sum_L*``."""
-    latent_select_pattern: str = "first"
-    """Which ``latent_dim`` hidden channels ``latent_select`` reads: ``first`` (channels ``[0, latent_dim)`` in
-    every layer), ``random`` (a fixed random subset per layer), or ``rotating`` (a contiguous window offset by
-    ``hidden_dim / num_layers`` per layer, wrapping around)."""
-    latent_select: bool = False
-    """With a MoE latent, form the expert input by selecting the first ``latent_dim`` channels of the hidden
-    state (then the learnable ``latent_norm``) instead of projecting with ``w_latent_down``. The output side
-    keeps ``w_latent_up``."""
-    latent_select_layers: str = "all"
-    """Layers whose MoE uses ``latent_select``: ``all``, ``kda`` (the KDA layers; the global layers project) or
-    ``global`` (the global attention layers; the KDA layers project)."""
-    latent_select_plus_proj: bool = False
-    """In the selecting layers, add a learned ``w_latent_down`` projection to the selected channels before
-    ``latent_norm`` (projection on top of selection)."""
-    expert_read_subset: int = 0
-    """Each routed expert reads only a subset of its input channels (see ``expert_read_groups``)."""
-    expert_read_subset_pattern: str = "blocks"
-    """``blocks``: expert ``e`` reads contiguous block ``e mod (in_dim / expert_read_subset)``; ``random``: a fixed
-    random subset per expert; ``shared``: every expert reads channels ``[0, expert_read_subset)`` (the control that
-    isolates the per-expert split from the masking itself)."""
-    expert_read_groups: int = 0
-    """If > 0 (G), routed expert ``e`` reads only channel group ``e mod G`` of its input (the MoE latent when
-    ``latent_dim`` is set, so the G slices are G separate latent down-projections, "multi-head LatentMoE"; else the
-    MLP-pre-normed stream), each slice with its own RMSNorm; needs an explicit ``latent_out_dim``."""
-    expert_write_groups: int = 0
-    """G > 0: each routed expert's neurons split into G groups, group g writing only output block g."""
-    tail_expert_write_groups: int = 0
-    """``expert_write_groups`` for the ``latent_out_full_layers`` tail layers only."""
-    expert_write_blocks: int = 0
-    """B > 0: the expert output splits into B equal blocks and each neuron writes a fixed random
-    ``expert_write_keep``-subset of them. ``w_down`` is stored compact (``keep / B`` of the output width per
-    neuron) and scattered to the full width in the forward, so the pattern is exact under any optimizer."""
-    expert_write_keep: int = 0
-    expert_write_masked: bool = False
-    """With ``expert_write_blocks``: store ``w_down`` at full width with the block pattern as a 0/1 mask instead of
-    compact, so Muon orthogonalizes the real operator (the optimizer masks the direction before the hyperball
-    step; the launcher passes it the pattern)."""
-    tail_expert_write_blocks: int = 0
-    """``expert_write_blocks`` for the ``latent_out_full_layers`` tail layers only (same ``expert_write_keep``)."""
-    lm_head_extra_dim: int = 0
-    """W > 0: the lm_head reads ``hidden_dim + W``; the final layer's experts write the extra W, RMS-normed."""
-    final_shared_only: bool = False
-    """The final layer runs only its shared expert (``final_shared_intermediate_dim`` wide); routed weights frozen."""
-    final_shared_intermediate_dim: int = 0
-    final_intermediate_dim: int = 0
-    final_experts_per_token: int = 0
-    """> 0: the final layer's routed top-k (it must be the only layer of the softmax tail stack)."""
-    mla_key_offset_channels: tuple[int, ...] = ()
-    """Per MLA head, how many leading key channels come from the previous token (``mla_key_offset``). Empty: half."""
-    mla_shared_match_dim: int = 0
-    mla_match_append: MatchAppend = MatchAppend.OFF
-    mla_value_lookahead: bool = False
-    mla_lookahead_self: bool = False
-    """With ``mla_value_lookahead``: a learned per-channel weight ``v_self`` on ``v_t`` too (init 1)."""
-    mla_future_heads: int = 0
-    mla_future_window: int = 0
-    mla_lag_groups: tuple[str, ...] = ()
-    mla_sparse_window: int = 0
-    mla_sparse_topk: int = 0
-    mla_sparse_index_dim: int = 32
-    mla_sparse_index: SparseIndex = SparseIndex.FOLLOW
-    mla_sparse_index_heads: int = 4
-    mla_sparse_kl_weight: float = 1.0
-    mla_sparse_dsa_topk: int = 0
-    mla_sparse_index_per_head: bool = False
-    mla_sparse_select_match: bool = False
-    mla_sparse_compress: bool = False
-    mla_sparse_block: int = 32
-    mla_sparse_taps: tuple[int, ...] = ()
-    mla_sparse_taps_per_channel: bool = False
-    mla_sparse_untied: bool = False
-    mla_sparse_anchor_match: bool = False
-    mla_sparse_lookback: int = 0
-    mla_sparse_score_only: bool = False
-    mla_prev_gate: bool = False
-    mla_logit_compose: bool = False
-    mla_logit_compose_dynamic: bool = False
-    mla_dcmha: bool = False
-    mla_dcmha_rank: int = 2
-    mla_dcmha_hidden: int = 64
-    mla_dcmha_parts: tuple[str, ...] = ("pre", "post", "dynamic")
-    mla_shared_kv: bool = False
-    mla_shared_kv_tied: bool = False
-    mla_kv_direct: bool = False
-    mla_prev_key_concat: bool = False
-    mla_far_key_half: str = ""
-    mla_far_key_window: int = 128
-    mla_value_norm: str = "none"
-    """With ``mla_shared_kv``: the one cached vector is both key and value."""
-    """MLA keys and values are one head each (MQA), broadcast to every query head."""
-    mla_dcmha_paper: bool = False
-    mla_dcmha_static: str = "none"
-    mla_gauss: bool = False
-    mla_gauss_mu_init: tuple[float, ...] = ()
-    mla_gauss_sigma_init: float = 0.5
-    mla_gauss_reach: int = 16
-    mla_gauss_tied: bool = False
-    mla_gauss_components: int = 1
-    mla_gauss_fast: bool = False
-    mla_gauss_taps: TapKind = TapKind.NONE
-    mla_parallax: bool = False
-    mla_parallax_form: str = "scaled"
-    """``scaled``: s = gain * rms(r).k / head_dim, gain zero-init; ``paper``: the raw s = (W_R x).k."""
-    """MLA layers use Parallax (``sparse_attention.parallax_attention``, dense emulation)."""
-    mla_copy_gate: str = "none"
-    """MLA output gate also reads the head's match strength (lse), its output, or both."""
-    mla_sparse_tail: bool = True
-    mla_lookahead_sink: bool = False
-    mla_tie_prev_qk: bool = False
-    final_num_experts: int = 0
-    """> 0: the final layer's routed expert count (same top-k and width; it must be the only layer of the softmax tail
-    stack). Per-expert router stats and the QB biases are padded to the widest layer (``stats_num_experts``)."""
-    stats_num_experts: int = 0
-    """Internal: the per-expert stats width (the widest layer's expert count, null experts included); 0: this layer's."""
-    final_routing_renorm_sum: float = 0.0
-    """> 0: the final layer's ``routing_renorm_sum`` (e.g. scaled by sqrt(k / 8) with ``final_experts_per_token``)."""
-    """> 0: the final layer's routed experts use this ``intermediate_dim`` (it must be the only layer of the softmax
-    tail stack, ``latent_out_full_layers``)."""
-    routed_off: bool = False
-    """Internal: set on the final layer's config by ``final_shared_only``."""
-    lm_head_extra_source: str = "routed"
-    """Which part of the final MLP writes the ``lm_head_extra_dim`` slice: ``routed`` (the routed experts, which
-    widens their write and its all-to-all return) or ``shared`` (the shared expert only: no dispatch cost)."""
-    final_write_extra: int = 0
-    """Internal: set on the final layer's config by ``lm_head_extra_dim``."""
-    lm_head_prototypes: int = 1
-    """K > 1: each vocabulary token has K lm_head vectors (``output_proj`` is ``[D, K V]``, token v's k-th at column
-    ``k V + v``) and ``p(v) ∝ sum_k exp(logit_{v,k})``: a softmax over K V sub-tokens summed per token, which
-    lifts the rank-D softmax bottleneck. Training and evals use it; ``logits`` returns the per-token logsumexp."""
-    expert_private_dim: int = 0
-    """r > 0: each (token, expert) assignment also carries a private ``r``-wide slice ``RMSNorm(x P_g)`` of the MLP
-    input, ``g = expert mod expert_private_groups`` (one ``[D, r]`` projection per group), appended to the expert's
-    shared input; costs ``K r`` extra dispatched dims per token."""
-    expert_private_groups: int = 64
-    latent_matryoshka_blocks: int = 0
-    """B > 0: Matryoshka MoE latent. A gate on the router input picks, per token, how many of the latent's B
-    equal leading blocks to keep (the rest are zeroed); a sign-SGD selection bias (``latent_width_bias``) keeps
-    the B widths equally used, so the mean kept width is (B + 1) / 2B of the latent."""
-    latent_write_select: bool = False
-    """With a MoE latent, drop ``w_latent_up``: the combined routed output is written into the first ``latent_dim``
-    hidden channels (the rest get zero), scaled by ``initializer_std * sqrt(latent_dim)``, the gain of the
-    replaced matrix at init (MuonH holds that matrix's norm fixed)."""
-    latent_out_norm: bool = False
-    """Kimi K3 normalized LatentMoE: a learnable RMSNorm on the combined routed output before ``W_latent_up``."""
-    proj_biases: tuple[str, ...] = ()
-    """Zero-init learnable biases at these sites: ``qkv`` (KDA q/k/v and MLA q / KV-latent projections),
-    ``attn_out`` (the attention sublayer output) and ``mlp_out`` (the MoE sublayer output)."""
-    qb_freeze_step: int | None = None
-    """Stop updating the QB router biases from this step on (they keep their last value)."""
-    qb_bias_damping: float | None = None
-    """Damped QB bias update ``b <- (1 - gamma) b + gamma (-beta)`` (also logs the top-K churn). None: undamped."""
-    router_logit_scale: bool = False
-    """A learnable scalar per MoE layer (init 1, Adam) multiplying the router logits before QB and the combine.
-    Selection is scale-invariant under QB (a positive scale is monotone and QB re-thresholds), so it sets only
-    the combine temperature, which a norm-pinned router (``router_group=muonh``) cannot change otherwise."""
-    expert_output_gain: bool = False
-    """A learnable gain per expert (init 1, Adam) on each routed expert's output, folded into the combine weight
-    of every (token, slot) as ``w * gain[expert]`` (so every MoE backend runs it unchanged)."""
-    expert_visit_bias: ExpertVisitBias = ExpertVisitBias.NONE
-    """A per-layer ``[E, D]`` table (init 0, Adam) whose rows for the token's selected experts are added to the
-    routed output, so later layers can condition on which experts a token visited."""
-    moe_ungated_activation: UngatedExpertActivation = UngatedExpertActivation.RELU2
-    """Activation of the ungated routed experts (``moe_ungated_relu2``)."""
-    shared_ungated_activation: UngatedExpertActivation = UngatedExpertActivation.RELU2
-    """Activation of the ungated shared experts (``shared_ungated_relu2``)."""
-    router_stats_stride: int = 1
-    """Score the logging-only router metrics (expert counts, mean probabilities, router z) on every n-th token
-    of each shard (``local_routing_stats``). Training is unaffected; QB's thresholds use every token."""
-    simbal_loss_weight: float = 0.0
-    """SimBal (arXiv 2506.14038): adds ``weight * sum_l ||R_l^T R_l - I||_1`` over the real-expert router
-    columns ``R_l`` [D, E] to the training loss (unnormalized, as in the paper; it uses 0.1). 0: off."""
-    newton_muon: bool = False
-    """Newton-Muon (arXiv 2604.01472) right-preconditioning of the routed-expert gate/up gradients by an EMA of the
-    expert-input second moment ``K`` (one ``[latent, latent]`` per layer)."""
-    newton_muon_beta: float = 0.95
-    """EMA decay of ``K`` per refresh (the paper's short-track record: 0.95)."""
-    newton_muon_eps: float = 0.2
-    """Ridge ``gamma``: the damping added to ``K`` is ``gamma * tr(K) / n`` (the paper: 0.2)."""
-    newton_muon_every: int = 32
-    """Refresh ``K`` and its inverse every this many steps (the paper: 32); the first step initializes ``K``."""
     embed_gated_norm: bool = True
     """GatedNorm after the embedding RMSNorm (else the RMSNorm alone)."""
     final_gated_norm: bool = True
     """GatedNorm after the final RMSNorm, before the lm_head (else the RMSNorm alone)."""
-    future_aux: FutureAux = FutureAux.NONE
-    """Cheap multi-token prediction head (``FutureAux``); its weight comes from ``future_aux_weight``."""
-    future_aux_buckets: int = 16384
-    future_aux_weight: float = 0.05
-    future_aux_decay_frac: float | None = None
-    """Linear decay of the ``future_aux`` weight to 0 at this fraction of training (None: constant)."""
-    future_aux_lowdim: int = 128
-    mtp_mode: MtpMode = MtpMode.OFF
-    """Depth-1 multi-token prediction (``MtpMode``): position t also predicts token t+2 of its document from
-    ``W_proj [rms(h_t); rms(Emb(x_{t+1}))]`` through one extra block and the shared embedding and lm_head."""
-    mtp_weight: float = 0.3
-    """Weight of the MTP loss (DeepSeek-V3: 0.3 for the first 10T tokens, then 0.1)."""
-    mtp_mlp_mult: int = 4
-    """Hidden width of the MTP block's ReLU^2 MLP, as a multiple of ``hidden_dim``."""
-    mtp_position_frac: float = 1.0
-    """Fraction of positions (a fresh random subset each step, shared by the batch rows) that the MTP block and
-    its lm_head pass run on; 0.5 halves the MTP cost. Needs the per-step route key."""
-    nitp_weight: float = 0.0
-    """Next Implicit Token Prediction (arXiv 2605.24956; 0 disables it): an MLP head ``P = W_2 gelu(W_1 h_t)``
-    on the final hidden state predicts the stop-gradient residual stream of token t+1 after layer ``nitp_layer``,
-    with loss ``1 - cos(P(h_t), z_{t+1})`` (pairs crossing a packed-document boundary are masked). Training-only."""
-    nitp_layer: int = 1
-    """0-indexed layer whose output stream (the plain sum of the AttnRes sources) is the NITP target (~20% depth)."""
-    kda_push_buckets: int = 0
-    kda_push_mode: str = "pure"
-    kda_push_weights: str = "softmax"
-    kda_push_decay_range: tuple[float, float] = (0.02, 0.5)
-    kda_no_decay_layers: tuple[int, ...] = ()
-    """KDA layers (0-indexed model layers) run without decay (g = 0: the state never forgets)."""
-    kda_no_beta_layers: tuple[int, ...] = ()
-    """KDA layers run without a learned write strength (beta = 1)."""
-    kda_decay_conv: bool = False
-    """A causal ShortConv over KDA's rank-128 decay input (``x W_a↓``), so each position's decay sees a few
-    preceding tokens instead of only its own (still computed before the recurrence, so chunking holds)."""
-    kda_decay_per_head: bool = False
-    """Gated-DeltaNet-style decay: one log-decay per head (broadcast over its channels) instead of KDA's
-    per-channel decay. ``W_a↑`` and ``dt_bias`` shrink to one column per head."""
-    kda_beta_rank: int | None = None
-    """KDA write strength through a low-rank MLP of this hidden width,
-    ``beta = sigmoid(SiLU(x W_beta_down) W_beta_up)``, instead of the linear ``sigmoid(x W_beta)``."""
-    kda_beta_up_zero_init: bool = False
-    """Zero-init ``W_β↑`` (β = 0.5 everywhere at init)."""
-    kda_gate_per_head: bool = False
-    """KDA output gate ``sigmoid(x W_g)`` with one value per head instead of one per channel."""
-    kda_dd_rope: bool = False
-    """Data-dependent rotation of the KDA state (Mamba-3 complex transitions via the RoPE trick); zero-init."""
-    kda_dd_rope_rank: int = 16
-    """Hidden width of the low-rank angle projection ``W_rot_down W_rot_up`` (``kda_dd_rope``)."""
-    kda_out_correction: bool = False
-    """Comba output correction (arXiv 2506.02475, eq. 5): KDA reads its state with ``q - d_h k`` (q and k
-    L2-normalized first; the kernel re-normalizes the corrected query, as in the FLA Comba reference) with a
-    learnable per-head scalar ``d_h`` (Adam), init ``kda_out_correction_init``."""
-    kda_out_correction_init: float = 0.02
-    """Initial ``d_h`` of ``kda_out_correction`` (the paper: 0.02 for its small models, 1 from 1.3B)."""
-    loop_passes: int = 1
-    """Apply the whole layer stack this many times per forward (tied weights). Every pass keeps
-    extending the AttnRes history and has its own gate queries; each extra pass starts its running
-    partial from ``loop_inject_scale * embedding`` (input injection)."""
-    loop_grow_step: int | None = None
-    """Run one pass before this step and ``loop_passes`` from it on (looped growth); None: always loop."""
-    attn_res_logit_bias: bool = False
-    """A learnable zero-init bias per (gate, source) on the AttnRes logits (Adam at the query LR)."""
-    attn_res_z_loss: float = 0.0
-    """Weight of a z-loss (mean squared logsumexp) on every AttnRes gate's logits; needs layer backward SAVE."""
-    attn_res_pull: bool = False
-    """'Pull' AttnRes: each source has a static learned key (zero-init; the partial has its own), and the
-    query is the gate's current residual stream (the RMS-normed plain sum of its visible sources)."""
-    attn_res_pull_embed: bool = False
-    """Hybrid: standard (push) AttnRes, but the embedding source's logit is a learned linear projection of
-    the gate's current residual stream (one zero-init vector per gate)."""
-    attn_res_mask_attn_for: tuple[int, ...] = ()
-    """Full AttnRes only: layers whose attention gate cannot read any earlier attention output."""
-    attn_res_final_mode: str = "attn"
-    """Final AttnRes gate: ``attn`` (learned query), ``uniform`` (query fixed at 0: a plain average of all
-    sources) or ``sum`` (a straight sum of all sources, like a standard residual stream)."""
-    attn_res_sum_inputs: tuple[str, ...] = ()
-    """Full AttnRes only: components that read the straight sum of the visible sources instead of their
-    AttnRes mix: any of ``q``, ``k``, ``v`` (those attention projections), ``mlp`` (the whole MoE input),
-    ``mlp_shared`` (the shared experts only), ``mlp_routed`` (router + latent-down) or ``mlp_router``."""
-    attn_res_heads: int = 1
-    """Multi-head AttnRes (RMT-style retrieval heads): each gate's pseudo-query is split into this many
-    D/H chunks, and chunk h scores and mixes the sources on its own channel slice with its own softmax."""
-    attn_res_v_gate: bool = False
-    """A separate AttnRes pseudo-query per layer for the value projections (V reads its own mix). With
-    ``attn_res_full`` it applies to the KDA layers only (an MLA layer's K and V share one latent)."""
-    attn_res_additive: bool = False
-    """Delta AttnRes (arXiv 2605.18855) additive routing: each gate's input is the plain sum of its
-    sources (the standard residual stream) plus its softmax mix, instead of the mix alone."""
-    attn_res_stream_source: bool = False
-    """Every AttnRes gate also scores the plain sum of its visible sources (the standard residual
-    stream) as one extra source, so "take the plain residual" is a selectable option (logged as ``_p``)."""
-    attn_res_source_delta: bool = False
-    """Full AttnRes over output deltas: source n becomes ``x_n - x_{n-1}`` for the gate's source sequence
-    ``[embedding, sublayer outputs...]`` (source 0 stays the embedding); logits are scored on the deltas."""
-    attn_res_head_sub: str = "none"
-    """Hierarchical multi-head AttnRes: a full-width query plus a zero-init per-head sub-query (``slice``: D/H
-    wide on its slice; ``full``: D wide). ``none``: plain multi-head."""
-    attn_res_temperature: bool = False
-    """A learnable logit multiplier per gate (and per head with ``attn_res_heads``), init 1."""
-    attn_res_head_norm: bool = False
-    """Multi-head AttnRes: RMS-normalize each head's channel slice of a source for its logits, instead
-    of one RMS over all channels."""
-    attn_res_key_rank: int | None = None
-    """LR-AttnRes (arXiv 2607.09694): routing keys are ``rms_norm(source[..., -r:])``, queries ``r``-wide."""
-    embed_norm_mode: str = "rms"
-    """Token-embedding norm before it enters the stack (AttnRes mixes it raw against the layer outputs):
-    ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``raw`` (the table row as is)."""
-    embed_scale: float = 1.0
-    """Constant multiplier on the (normed) token embedding: its weight in the AttnRes mixes."""
-    router_share_block: int = 1
-    """PathMoE (arXiv 2603.18297): consecutive layers of each block stack share one router matrix, in groups of
-    this many stack entries (the first layer of each group owns it). Per-layer QB biases stay separate. 1: off."""
-    sublayer_out_norm: bool = False
-    """Peri-LN (arXiv 2502.02732): RMSNorm with a gain (init 1) on each attention and MLP sublayer output
-    before it becomes an AttnRes source, so the source mix combines unit-RMS values."""
-    dyt_norm: bool = False
-    """Dynamic Tanh (arXiv 2503.10622): the attention and MLP pre-norms become ``gamma * tanh(alpha * x) + beta``
-    (learnable scalar ``alpha``, per-channel ``gamma``/``beta`` init 1/0). The embedding, final and internal
-    q/k/latent norms stay RMSNorm."""
-    dyt_alpha_attn: float = 0.8
-    """``alpha`` init of the attention-input DyT (the paper's LLaMA-7B value: attention inputs get a larger one)."""
-    dyt_alpha_mlp: float = 0.2
-    """``alpha`` init of the MLP-input DyT (the paper's LLaMA-7B non-attention value)."""
-    laurel_rank: int = 0
-    """LAuReL-LR (arXiv 2411.07501): each sublayer input becomes ``h + (h A) B`` with a rank-r ``A``
-    (random init) and ``B`` (zero init), both trained with Adam (0: off)."""
     mla_k_norm: bool = False
     """Weightless per-head RMSNorm on the MLA keys only, no query norm (DeepSeek-V4.1's setup)."""
     mla_q_norm: bool = False
     """Weightless per-head RMSNorm on the MLA queries (composes with ``mla_k_norm``). Queries are recomputed per
     token, so under MLA absorption this adds nothing to the cache."""
-    mla_k_norm_shared: bool = False
-    """With ``mla_k_norm``, normalize the keys by one RMS over all heads per token instead of per head. Under MLA
-    absorption this caches 1 scalar per token instead of ``num_heads``."""
-    mla_k_norm_split: bool = False
-    """With ``mla_k_norm``, RMS-normalize the two key halves separately, i.e. the previous-token half from
-    ``mla_key_offset`` and the current-token half, so neither dominates the logit by magnitude."""
-    mla_v_filter: bool = False
-    """Noise-filtering value gate (arXiv 2609.22005, projection gate) on the MLA layers: every value read is
-    scaled by ``sigmoid(w_h . v_j + b_h)`` per head (``w`` [N, H] zero-init, ``b`` [N] init
-    ``mla_v_filter_bias_init``; both Adam). Applied to the final values (after value embeds / residual)."""
-    mla_v_filter_bias_init: float = 4.0
-    """Initial ``b_h`` of ``mla_v_filter`` (the paper's +4: every gate starts at ~0.982)."""
-    mla_forget_gate: bool = False
-    """FoX forget gate (arXiv 2503.02130) on the MLA layers: per head ``f_t = sigmoid(w_h . x_t + b_h)`` adds
-    ``c_i - c_j`` (``c`` the per-document cumsum of ``log f``) to logit (i, j); ``-c_j`` rides in extra q/k
-    channels (``_fox_augment``, head_dim 128 -> 160)."""
-    mla_forget_gate_bias_init: float = 0.0
-    """Initial ``b_h`` of ``mla_forget_gate`` (paper: 0, f = 0.5)."""
-    zero_centered_gains: bool = False
-    """Zero-centered norm gains (Qwen3-Next; arXiv 2608.30320 sec. 2.1.1): every learned-gain RMSNorm scales by
-    ``1 + gamma`` with ``gamma`` zero-init (identical at init), so the optimizer's ``gain_weight_decay`` pulls
-    gains toward 1 rather than 0. DyT gains are unchanged."""
-    mla_ssmax: bool = False
-    """Scalable-softmax (SSMax, arXiv 2501.19399) on the MLA layers: each query is scaled by
-    ``1 + s_h * log(n)``, with ``n`` the number of keys it can see in its document and ``s_h`` a
-    zero-init per-head parameter, so the softmax can stay sharp as the context grows."""
     mla_key_offset: bool = False
     """modded-nanogpt partial key offset (record #49): on the MLA layers, the first half of each head's key
     channels come from the previous token (within documents), enabling one-layer induction."""
-    mla_grouped_diff: int = 0
-    """Grouped differential attention on the MLA layers: this many shared noise maps (``w_qn`` / ``w_ukn``)."""
-    mla_gdla_noise_heads: int = 0
-    """GDLA (arXiv 2608.09119) on the MLA layers: this many of the query heads are noise heads, one per group of
-    signal heads sharing a value head; output ``H_signal - lambda * H_noise``. 0: off."""
-    mla_diff_attn: bool = False
-    """Differential attention (DIFF Transformer, arXiv 2410.05258) on the MLA layers:
-    ``(softmax(q1 k1^T) - lambda softmax(q2 k2^T)) v`` with a second q projection and key up-projection."""
-    attn_res_final_signed: bool = False
-    """Backout-style signed correction on the final AttnRes gate: ``final = mix + sum_n c_n * source_n`` with
-    learned ``c`` (zero-init), so the lm_head input can subtract a source (softmax weights can't)."""
-    smear: bool = False
-    """modded-nanogpt Smear (record #34): ``x_t += lambda * sigmoid(x_t[:12] @ w) * x_{t-1}`` on the embedding,
-    within documents (``lambda`` learned, init 0)."""
-    mla_head_mix: bool = False
-    """Post-attention rank-1 dynamic cross-head mix on MLA (a post-kernel stand-in for DCMHA's query-wise
-    post-softmax composition): ``y_h += w2_h(t) * sum_g w1_g(t) y_g`` with ``[w1, w2] = x @ W`` (``W2`` zero-init)."""
-    attn_res_dynamic_rank: int = 0
-    """MUDD-style dynamic AttnRes: each gate adds a per-token logit delta ``GELU(rms_norm(stream) @ W1) @ W2``
-    over its sources (this hidden width, ``W2`` zero-init) to the static-query logits. 0: off."""
-    attn_res_token_query: AttnResTokenQuery = AttnResTokenQuery.NONE
-    """Token-embedding AttnRes queries (``AttnResTokenQuery``): between the data-independent query and a full
-    hidden-state projection (the AttnRes paper's Table 4, arXiv 2603.15031). Single-head AttnRes only."""
-    xsa_mode: str = "fixed"
-    """XSA strength: ``fixed`` (1), ``learned`` (per head), ``gated`` (per token and head) or ``tanh``."""
     logit_soft_cap: float | None = None
     """Tanh soft-cap on the lm_head logits, ``c * tanh(z / c)`` (Gemma 2); None: off."""
-    logit_soft_cap_asym: tuple[float, ...] = ()
-    """Asymmetric logit cap ``A * sigmoid((z + B) / C)`` as ``(A, B, C)`` (modded-nanogpt record #54);
-    overrides ``logit_soft_cap`` when set."""
-    output_bigram_rank: int = 0
-    """Output-side low-rank bigram logit prior ``rms(U[x_t]) @ W`` (``W`` zero-init) inside the soft cap; 0: off."""
-    lm_head_unigram_bias: bool = False
-    """A learnable ``[V]`` output bias (Adam) added to the logits inside the soft-cap. The trainer sets it to the
-    log unigram frequencies of the first training batches before step 0 (``lm_head_unigram_batches``); a model
-    built without the trainer starts at zero."""
     init_std_mult_gates: float = 1.0
     """Init-std multiplier of the MuonH-trained sigmoid gate matrices (KDA ``w_g`` / ``w_beta``, MoE gates)."""
-    init_std_mult_experts: float = 1.0
-    """Init-std multiplier of the routed experts' ``w_up`` / ``w_down`` (see ``init_std_mult_gates``)."""
-    init_std_mult_attn_out: float = 1.0
-    """Init-std multiplier of the attention output projections ``w_o`` (MLA / GQA and KDA; see
-    ``init_std_mult_gates``)."""
     kda_write_gate: bool = False
     """Gated DeltaNet-2 (arXiv 2605.22791) write gate: each KDA value channel is scaled by ``2 sigmoid(x W_w)``
     before the delta-rule update, a channel-wise write strength next to KDA's per-head beta. Runs through the
     existing kernel."""
     kda_erase_gate: bool = False
     """Gated DeltaNet-2 erase gate on the KDA delta rule (zero-init)."""
-    kda_head_pairing: KdaHeadPairing = KdaHeadPairing.NONE
-    """Share one KDA state between adjacent heads (``KdaHeadPairing``); every KDA layer."""
     init_std_mult_beta: float | None = None
     """Init-std multiplier of the KDA write-strength projection ``w_beta`` alone (None: ``init_std_mult_gates``).
     Under MuonH it fixes ``w_beta``'s norm for the whole run."""
-    kda_beta_scale: bool = False
-    """A learned per-head scale (Adam, init 1) on the KDA beta logits, so the write-strength logit scale can grow
-    when ``w_beta``'s norm is pinned by the hyperball."""
-    kda_beta_negative: bool = False
-    """KDA write strength ``beta = 2 * sigmoid(logit - log 3)`` in (0, 2), so the transition ``I - beta k k^T``
-    can have negative eigenvalues (Grazzi et al. 2025); the shift keeps the mean beta at init at 1/2."""
-    shared_expert_gate: bool = False
-    """Qwen-MoE shared-expert gate: the shared experts' output is scaled per token by ``2 * sigmoid(x @ w)``,
-    with ``w`` zero-init so the gate starts at 1."""
     shared_ungated_relu2: bool = False
     """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
     GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
-    moe_shadow_width: int = 0
-    """Width of a detached per-layer ReLU^2 MLP trained on ``sg(shared input) -> sg(routed output)`` (0: off).
-    Its gradient reaches only its own weights, so training is unchanged; its explained variance of the routed
-    output (``train/aux/compress/shadow_r2_L*``) measures how much of it a shared-sized expert could absorb."""
-    moe_compress: MoeCompress = MoeCompress.NONE
-    moe_compress_weight: float = 0.0
-    """Per-MoE-layer weight of the ``moe_compress`` term (summed over layers)."""
-    moe_compress_norm_weight: float = 0.0
-    """With ``moe_compress=transfer``: also add ``weight * mean_t (|s_t|^2 / sg(mean |y|^2))^(power / 2)``, a counter
-    force on the shared output's length (``moe_compress_norm_power`` 2 for a smooth pull, 4+ for a soft cap)."""
-    moe_compress_norm_power: int = 2
-    layer_output_stats: bool = False
-    """Log each layer's attention and MLP branch output max |x| and RMS (``train/aux/outstat/*``); AttnRes only."""
     moe_expert_waves: int = 1
     """Static dispatch waves in the pooled-wave EP backend. Waves are independent, so the scheduler can overlap
     one wave's all-to-all with another's expert compute (the all-to-all was ~13% exposed at d512)."""
-    moe_shared_overlap: bool = False
-    """Run the shared experts inside the pooled-wave EP shard under the first wave's dispatch all-to-all
-    (forward) and its reverse (backward), pinned there by optimization barriers; same math. Their gate/up
-    GEMM leaves the fused router/latent projection. Without EP (one expert shard) they just run in place."""
     moe_expert_remat: bool = True
     """Recompute the pooled-wave expert MLP and combine all-to-all in the backward. Off trades activation
     memory for one fewer expert forward and combine all-to-all per wave."""
     fp8_recipe: Fp8Recipe = Fp8Recipe.NONE
     """Low-precision recipe for attention/KDA projections, the fused router-latent-shared projection (router
     columns excluded), the latent up-projection, the shared expert and the routed experts; see ``Fp8Recipe``."""
-    moe_fp8_dispatch: bool = False
-    """DeepSeek-V3 FP8 dispatch: the EP dispatch all-to-all sends activations as e4m3 with one fp32 scale per
-    128-channel block (~0.52x the bf16 bytes); combine and every backward collective stay bf16 (STE)."""
     moe_ragged_chunks: int = 2
     moe_serial_pair: bool = False  # ragged experts: neuron halves in series, y1 + mlp_b(x + y1)
     """Sequential local-expert chunks of the ``ragged_all_to_all`` backend (each a dispatch, expert MLP and
@@ -1370,39 +704,9 @@ class GrugModelConfig:
     """Expert-parallel transport, one of ``MOE_IMPLEMENTATIONS``. ``ragged_all_to_all`` ignores the pooled-wave
     knobs (``pooled_transport_capacity_factor``, ``moe_expert_waves``, ``moe_expert_remat``) and sizes its receiver
     buffers by ``capacity_factor``; its XLA transport kernel is ``GrugRunConfig.ragged_transport``."""
-    moe_bank2_experts: int = 0
-    """A second expert bank of this many experts (``_bank2``); 0: off."""
-    moe_null_experts: int = 0
-    """Null experts: zero-output routing targets added to the router."""
-    moe_copy_experts: int = 0
-    """MoE++ copy experts (zero-computation): output = the expert input (the latent-space token)."""
-    moe_const_experts: int = 0
-    """MoE++ constant experts (zero-computation): output = ``a1 * x + a2 * v`` with a learned vector ``v`` and
-    ``[a1, a2] = softmax(x @ W_c)`` per constant expert (``v``, ``W_c`` zero-init, Adam)."""
-    moe_null_target_frac: float | None = None
-    """QB treatment of the null experts. None: free (bias 0); a float: QB sends this fraction of slots to them."""
-    moe_bank2_topk: int = 0
-    moe_bank2_intermediate_dim: int = 0
-    moe_bank2_scale: bool = False
-    """A learnable output scale per expert bank (init 1, Adam): MuonH pins each bank's weight norm, so without it
-    the banks' relative output magnitudes are fixed by their activations and widths."""
-    moe_bank2_activation: str = "relu2"
-    """``relu2`` (ungated, like ``moe_ungated_relu2``) or ``swiglu``."""
-    expert_leaky_slope: float = 0.0
-    """Ungated ReLU^2 experts (routed and shared) use ``leaky_relu(u, slope)^2`` instead (Parameter Golf #493 /
-    #549: 0.5; #1948: 0.3). 0: plain ReLU^2."""
-    moe_out_gate: bool = False
-    """Parameter Golf #1941: per-token gate ``sigmoid(x[:, :12] w + b)`` (w = 0, b = +5, about 0.993 at init) on each
-    block's whole MoE output (routed + shared)."""
-    moe_fused_relu2: bool = False
-    """With ``moe_ungated_kernel``, run the ungated ReLU^2 expert MLP through the fused-epilogue kernels
-    (``levanter.kernels.pallas.relu2_mlp`` for pooled-wave, ``relu2_ragged_mlp`` for ragged all-to-all): ``pre``
-    and ``d post`` never reach HBM."""
     moe_ungated_kernel: bool = False
     """With ``moe_ungated_relu2``, run the EP (pooled-wave or ragged) experts truly ungated (one ``W_up`` GEMM)
     instead of tying the gate to ``W_up``. Same math; skips the duplicated GEMM."""
-    moe_dense_router_grad: bool = False
-    """Default MoE (Panda et al. 2025): the router also gets a gradient for unpicked experts."""
     moe_ungated_relu2: bool = False
     """Routed experts are ``relu(x @ W_up)^2 @ W_down`` (no gate projection). Run through the gated kernels
     as ``relu(g) * u`` with the gate tied to ``W_up`` (``relu(u) * u = relu(u)^2``), so every MoE backend
@@ -1411,203 +715,20 @@ class GrugModelConfig:
     expert_activation: str = "silu"
     """Gate activation of the routed and shared GLU experts (an ``ActivationFunctionEnum`` value, e.g.
     ``relu2`` for ReLU^2-GLU as in Primer / ReMoE)."""
-    moe_hash_layers: tuple[int, ...] = ()
-    """Physical layers whose routed experts are picked by a fixed token-id hash (Hash Layers, Roller et
-    al. 2021): each vocab id maps to K distinct random experts; combine weights still come from the router."""
     moe_drop_renorm: bool = False
     """Renormalize each token's combine weights over the slots that survived the capacity-limited EP dispatch
     (one extra int8 all-to-all per expert wave). Without it a dropped assignment just loses its weight."""
-    router_token_bias_rank: int = 0
-    """Rank ``r`` of a learned token-identity bias on the router logits, ``A[token_id] @ B_l``: ``A`` is one
-    shared ``[vocab, r]`` table (random, like an embedding) and ``B_l`` a zero-init ``[r, E]`` per layer, so
-    the model is unchanged at init. Added before QB, which then balances it. 0: off."""
-    sublayer_dropout: float = 0.0
-    """Element-wise dropout (survivors scaled by ``1 / (1 - p)``) on every attention and MLP output before it enters
-    the AttnRes history, the analogue of MAI-Thinking-1's dropout on each layer's output before the residual add.
-    Training only (evals pass no route key). AttnRes only."""
-    dual_attn_prev: bool = False
-    """Dual attention reading the previous layer's stream (closed experiment)."""
-    router_on_embed: bool = False
-    """Every MoE router reads only the token's input embedding (RMS-normed, the first AttnRes source) instead of
-    the layer's MLP input: routing by learned token identity, one router per layer. AttnRes only."""
-    router_on_latent: bool = False
-    """The router reads the expert input (the RMS-normed MoE latent, ``latent_dim`` wide) instead of the full
-    MLP input ``x``: its weight is ``[latent_dim, E]`` and routing gradients reach the latent projection."""
-    router_embed_tie: tuple[str, ...] = ()
-    """Router-embedding ties ``"L:E:V"`` (``*`` for every layer): router column ``E`` is ``alpha * token_embed[V]``
-    (``V1|V2|...``: their centroid); parsed by ``_router_ties``."""
-    router_embed_tie_release_step: int | None = None
-    """Release the ``router_embed_tie`` ties at this step: the router columns take their tied value (so the
-    function is continuous) and then train freely; the tied program runs only before it. None: tied throughout."""
-    router_bias_seed: tuple[str, ...] = ()
-    """Fixed router logit priors ``"L:E:V:b"`` (``L`` a layer index or ``*``): add ``b`` to expert ``E``'s
-    router logit (before QB and the combine) wherever the current token is ``V``. Needs attn_res."""
-    router_logit_soft_cap: float | None = None
-    """Tanh soft-cap ``c * tanh(z / c)`` on the router logits (after ``router_token_bias_rank``), before the
-    QB-biased top-K selection and the combine weights; QB estimates its thresholds on the capped logits.
-    None: off."""
-    attn_res_logit_soft_cap: float | None = None
-    """Tanh soft-cap ``c * tanh(z / c)`` on every AttnRes gate's source logits (after the ``_gate_extras``
-    biases, before the softmax and the z term); the ``attn_res_dual_query`` second mix is not capped.
-    None: off."""
-    moe_gumbel_tau: float = 0.0
-    """Training-only Gumbel noise (scale tau) added to the biased router logits before top-K: samples K
-    experts without replacement from softmax(logits / tau) instead of taking the top K. Evals use top-K."""
-    embed_grad_fp32: bool = True
-    """Accumulate the token-embedding gradient in float32 (``_embedding_gather``); False restores JAX's
-    default gather transpose, which scatter-adds into the bf16 table."""
-    attn_res_dual_query: bool = False
-    """Two pseudo-queries per AttnRes gate: each mixes the sources with its own softmax, and the two mixes
-    are merged per token by ``s = sigmoid(rms_norm(stream) . w + b)`` (``w``, ``b`` zero-init, so s = 1/2),
-    where the stream is the plain sum of the gate's sources. The second query is ``N(0, dual_init_std)``."""
-    attn_res_dual_init_std: float = 0.005
-    attn_res_blend: str = "none"
-    """Blend each AttnRes gate's mix with the uniform average of its sources (the standard residual
-    direction): ``input = l1 * mix + l2 * mean(sources)``. ``static``: learned scalars per gate, init 1;
-    ``dynamic``: plus ``rms_norm(stream) . w_k`` per token (``w`` zero-init)."""
-    mlp_in_center: bool = False
-    """Subtract the batch mean (over all tokens, stop-gradient) from every MoE input."""
-    mlp_in_whiten_power: float = 0.0
-    """Whiten every MoE input by ``C^(-p/2)``, ``C`` its batch covariance (after centering, stop-gradient,
-    eigenvalues trace-normalized and shrunk by ``mlp_in_whiten_eps``); 0 is off, 1 is full ZCA whitening."""
-    mlp_in_whiten_eps: float = 1e-3
-    router_rank: int | None = None
-    """Low-rank router: logits = f(x W_r_down) W_r_up with this inner width (None: the linear x W_r)."""
-    router_rank_act: str = "none"
-    """Activation on the low-rank router features: ``none``, ``norm`` (learnable RMSNorm) or ``silu``."""
-    attn_res_full: bool = False
-    """Full (not Block) AttnRes: every attention and MoE sublayer output is its own source. Needs
-    attn_res_layer_backward=SAVE."""
-    moe_shortcut: bool = False
-    """Shortcut-connected MoE (ScMoE): layer ``l``'s MoE gate excludes layer ``l``'s attention output."""
-    mla_share_kv_latent: bool = False
-    """Every MLA layer after the first reuses the first MLA layer's normed KV latent (own W_uk / W_uv, so
-    absorption still works), halving the MLA KV cache at d512. Needs attn_res_layer_backward=SAVE."""
-    value_residual_layers: tuple[int, ...] = ()
-    """ResFormer value residual: these layers mix layer 0's values in, ``v <- l1 v + l2 v_first``."""
-    value_residual_init: tuple[float, float] = (0.5, 0.5)
-    """Initial ``(l1, l2)`` of ``value_residual_layers`` (modded-nanogpt's learnable 0.5 / 0.5)."""
     learnable_qk_mult: bool = False
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
-    attn_gate_elementwise: bool = False
-    """Gated attention (arXiv 2505.06708, its best variant G1): the output gate is per channel,
-    ``2 sigmoid(x W_g)`` with ``W_g`` [D, N*H] zero-init, instead of one scalar per head."""
-    attn_gate_rank: int = 0
-    """Low-rank per-channel output gate in the GatedNorm form: ``2 sigmoid(silu(x W_down) W_up)``, ``W_down``
-    [D, r] (stored as ``attn_gate``) and zero-init ``W_up`` [r, N*H] (``attn_gate_up``), so it starts at 1. 0: off."""
-    switchhead_experts: int = 0
-    """SwitchHead (arXiv 2312.07987) on the GQA layers: each head's V and/or O projection (``switchhead_sites``)
-    becomes ``switchhead_experts`` experts mixed by ``sigmoid(x W_gate)`` over the ``switchhead_topk`` largest
-    logits (non-competitive, no load balancing). Computed densely over all experts. 0: off."""
-    switchhead_topk: int = 2
-    switchhead_sites: SwitchHeadSites = SwitchHeadSites.VO
-    attn_latent_q: int = 0
-    """GQA layers: factor ``w_q`` through a learnable-RMSNormed latent of this width (``LatentProj``). 0: full rank."""
-    attn_latent_k: int = 0
-    attn_latent_v: int = 0
-    attn_latent_o: int = 0
-    latent_mix_sites: tuple[str, ...] = ()
-    """Mixture of latents at these sites (of ``LATENT_MIX_SITES``): the site's latent splits into
-    ``latent_mix_experts`` blocks, each RMS-normed and weighted by SwitchHead's sigmoid top-k gate."""
-    latent_up_count: int = 1
-    """MoE output projections: ``w_latent_up`` plus ``latent_up_count - 1`` more (``w_latent_up_extra``), each
-    weighted per token by its own ``sigmoid(x W_g)`` (``x`` the router's input, ``W_g`` [D, count] zero-init so
-    all start at 1/2) and summed. 1: the single ungated ``w_latent_up``."""
-    latent_up_gate_on_latent: bool = False
-    """With ``latent_up_count > 1``, the output-projection gate reads the combined expert output (the latent the
-    projections map, ``expert_out_dim`` wide) instead of the router's input."""
-    latent_up_renorm: bool = False
-    """With ``latent_up_count > 1``, divide each token's kept gate weights by their sum (they add to 1)."""
-    latent_up_topk: int = 0
-    """With ``latent_up_count > 1``, keep only each token's ``latent_up_topk`` largest gate logits (SwitchHead's
-    output experts); ``W_g`` is then random-init so the top-k is not a tie. 0: sum every projection."""
-    latent_mix_experts: int = 4
-    latent_mix_topk: int = 2
-    latent_mix_balance: "LatentMixBalance" = dataclasses.field(default_factory=lambda: LatentMixBalance.NONE)
-    """Load balancing of the MLA KV-latent mixture's block selection (``kv`` in ``latent_mix_sites``)."""
-    latent_mix_entropy_weight: float = 0.01
-    latent_mix_renorm: bool = False
-    latent_mix_kv_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
-    kv_shared_latent_dim: int = 0
-    """With the MLA KV-latent mixture: an always-on shared down-projection of this width (summed or concatenated)."""
-    latent_mix_moe_in_mode: "KvMixMode" = dataclasses.field(default_factory=lambda: KvMixMode.CONCAT)
-    """``moe_in`` mixture: ``concat`` gates blocks of the latent; ``sum`` makes ``W_down`` a token-conditioned mixture
-    of ``latent_mix_experts`` full-width basis projections, ``latent = norm(sum_j a_j(x) x W_j)``."""
-    """How the MLA KV-latent mixture combines its chosen experts (see ``KvMixMode``)."""
-    """MLA KV-latent mixture: divide the chosen blocks' sigmoid weights by their sum (each token's sum to 1)."""
-    """``LatentMixBalance.ENTROPY``: weight of the regularizer ``-H(mean over tokens of softmax(gate logits))``."""
-    qk_mult_per_head: bool = False
-    """With ``learnable_qk_mult``, one logit scale per head instead of per layer, so each head picks its own
-    softmax temperature (with q and k normalized, qk_mult is the whole temperature)."""
-    aux_lm_layer: int | None = None
-    """Early auxiliary LM loss: the residual stream after this layer (the plain sum of the AttnRes
-    sources) goes through a parameter-free RMS norm and the shared lm_head. None disables it."""
-    aux_lm_weight: float = 1.0
-    """Weight of the auxiliary loss at step 0; annealed linearly to 0 at ``aux_lm_steps``."""
-    aux_lm_steps: int = 500
     second_embed: bool = False
     embed2_rows: int = 0
-    ple_dim: int = 0
-    """Per-layer embeddings (Gemma 3n PLE): a ``[vocab, num_layers * ple_dim]`` token table whose layer-``l`` slice
-    (RMS-normed) is added to layer ``l``'s attention input as ``h + (gelu(rms(h) W_gate) * ple_l) W_up``, ``W_up``
-    zero-init. Stored and sharded like the second table (``embed2_fsdp``, ``embed2_grad_fp32``). 0: off."""
-    memory_layers: tuple[int, ...] = ()
-    """Product-key memory layers (arXiv 1907.05242; memory+ of arXiv 2412.09764): each listed 0-indexed layer
-    adds ``(bag(V, topk(rms(x W_q) . rms(K))) * silu(x W_gate)) W_out`` to its MoE output, ``x`` the RMS-normed
-    MoE input; heads share one ``[memory_keys^2, hidden_dim]`` value table per layer (``memory`` Adam group)."""
-    memory_keys: int = 512
-    memory_topk: int = 32
-    memory_heads: int = 4
-    memory_key_dim: int = 256
-    """Query / key width per memory head (both halves together)."""
-    byte_aux_bytes: int = 0
-    """Byte-level auxiliary loss: a separate head predicts the first ``byte_aux_bytes`` UTF-8 bytes of the
-    next token (256-way each, positions past the token's end masked), weighted by a schedule the trainer
-    passes (``byte_aux_weight``, decayed to 0 by ``byte_aux_decay_frac`` of training). 0: off."""
-    byte_aux_weight: float = 0.1
-    byte_aux_mid_layer: bool = False
-    """Feed the byte head the RMS-normed mid-network AttnRes stream (the embedding plus the first half of the
-    completed blocks) instead of the final hidden, so the byte objective shapes mid-network features rather than
-    the lm_head input."""
-    byte_aux_decay_frac: float = 0.5
-    erc_loss_weight: float = 0.0
-    """Expert-router coupling loss (arXiv 2512.23447): each real expert's router column, perturbed by
-    ``U(1 +- eps_i)`` noise (``eps_i`` = half the distance to the nearest other router column over its norm),
-    is a proxy token through every expert's first projection; the loss penalizes ``M_ij > alpha M_ii``. 0: off."""
-    erc_alpha: float = 1.0
-    """ERC coupling margin ``alpha`` in [0, 1]; smaller is stricter (the paper's n=256 optimum is 0.5)."""
-    window_embed_dim: int = 0
-    """Width of the windowed-embedding extra AttnRes source; 0: off."""
-    window_embed_mode: str = "source"
-    """``source``: the token window is its own AttnRes source. ``add_embed``: it is added to the token-embedding
-    source. As its own source, the gates gave it ~0.001-0.01 weight by step 350, which starved its gradient."""
-    embed3_rows: int = 0
-    """Rows of a hashed *trigram* table that is its own AttnRes source next to the bigram table, so each
-    gate weighs the bigram and trigram views separately (0: off; needs ``second_embed_bigram``)."""
     bigram_gate: bool = False
     """Engram-style content gate on the bigram source: ``g_t = sigmoid(sum_d w_d rms(e_t)_d rms(b_t)_d + c)`` scales
     each token's bigram row by how its token embedding and bigram row interact, which the static AttnRes queries
     can't express (w = 0 and c = +2 at init)."""
-    embed2_hash_heads: int = 1
-    """Hash heads of the second (hashed n-gram) embedding table."""
-    embed2_head_orders: tuple[int, ...] = ()
-    """With ``embed2_hash_heads``, the n-gram order of each head (e.g. ``(2, 2, 3, 3)``: two bigram and two trigram
-    slices in the same table and gather). Empty: every head uses ``embed2_ngram``."""
-    embed2_sign_trick: bool = False
-    """Second-embedding sign trick: each hashed row is read with a per-token sign."""
-    embed2_sign_pool: int = 8192
-    """Rows of the +-1 sign pool (a power of two, like the record's)."""
-    trigram_gate: bool = False
-    """The ``bigram_gate`` content gate (same rank) on the trigram source (``embed3_rows``), with its own parameters."""
     bigram_gate_rank: int = 0
     """With ``bigram_gate``, a per-channel gate instead of a scalar: ``g_t = sigmoid(rms(e_t) * rms(b_t) @ A @ B + c)``
     with rank-r ``A`` (random) and ``B`` (zero), so each token keeps some bigram features and drops others."""
-    bigram_gate_act: ContentGateActivation = ContentGateActivation.NONE
-    """The rank-``bigram_gate_rank`` gate's middle nonlinearity: ``sigmoid(act(i @ A) @ B + c)`` (also the trigram
-    gate's), as in GatedNorm. With ``B`` zero-init the gate still starts at ``sigmoid(c)``."""
-    bigram_gate_logit_scale: float = 1.0
-    """Scale on the content gates' learned logits, ``sigmoid(s * f(i) + c)``; the bias is unscaled, so the initial
-    gate is unchanged. Under Adam, ``s`` < 1 slows how fast the logits move."""
     embed2_fsdp: bool = False
     """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes. The lookup either
     all-gathers it (default) or reads rows in place (``embed2_row_sharded_gather``). Same math."""
@@ -1615,24 +736,6 @@ class GrugModelConfig:
     """With ``embed2_fsdp``, look rows up where they live (all-gather the ids, reduce-scatter the rows; backward
     scatter-adds into each shard) instead of all-gathering the table and all-reducing a dense full-size gradient.
     Needed at d1024+ (the dense path's ~12 GiB of temporaries OOMs there); slower at d512 (+6.5% step)."""
-    ngram_stat_rows: int = 0
-    """Rows per n-gram order of a fixed-encoder *statistic* table, its own AttnRes source (0: off). Row h holds
-    ``[sum of code(y), count]`` of the next tokens y after n-grams hashing to h, filled by ``write_ngram_stats``."""
-    ngram_stat_dim: int = 64
-    """Width of the fixed next-token code of the statistic table (the table stores this plus a count column)."""
-    ngram_stat_orders: tuple[int, ...] = (2,)
-    """n-gram orders of the statistic table, ``ngram_stat_rows`` rows each (2: the (previous, current) bigram)."""
-    ngram_stat_mlp_dim: int = 0
-    """Width of a GELU layer in the statistic reader (0: a linear reader straight to ``hidden_dim``)."""
-    ngram_stat_gate: bool = True
-    """Scalar Engram content gate on the statistic source (w = 0, c = +2 at init), like ``bigram_gate`` (``SOURCE``
-    mode only)."""
-    ngram_stat_mode: NgramStatMode = NgramStatMode.SOURCE
-    """Where the reader's output enters: its own AttnRes source, or added into the bigram source (``NgramStatMode``)."""
-    embed2_grad_fp32: bool = True
-    """Second table's backward through the fp32 local scatter + psum (True), or JAX's default bf16
-    scatter-add (False). Hashed rows see few adds each, so the bf16 path's atomic contention and rounding
-    matter less than for the token table."""
     embed2_ngram: int = 2
     """With ``second_embed_bigram``, the n-gram length hashed into the table (2: bigram, 3: trigram)."""
     embed2_dim: int | None = None
@@ -1641,10 +744,6 @@ class GrugModelConfig:
     optimizer work by ``hidden_dim / embed2_dim``."""
     """Rows of the second embedding table (0: ``vocab_size``). With ``second_embed_bigram`` the (previous,
     current) hash spreads over these rows, so a table much larger than the vocab keeps bigrams apart."""
-    second_embed_mode: str = "source"
-    """``source``: the second embedding is one more AttnRes source. ``input`` (modded-nanogpt style): it
-    is RMS-normalized and added to every sublayer's AttnRes input as ``h + lambda_g * rms(h) * e2``, with
-    a learned ``lambda_g`` per gate initialized to ``embed2_lambda_init``."""
     embed2_lambda_init: float = 0.1
     second_embed_bigram: bool = False
     """Index the second table by a hash of (previous token, token) instead of the token: a bigram
@@ -1652,82 +751,20 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
-        if unknown := set(self.latent_mix_sites) - set(LATENT_MIX_SITES):
+        if unknown := set(()) - set(LATENT_MIX_SITES):
             raise ValueError(f"latent_mix_sites: unknown sites {sorted(unknown)}")
         attn_latents = {
-            "q": self.attn_latent_q,
-            "k": self.attn_latent_k,
-            "v": self.attn_latent_v,
-            "o": self.attn_latent_o,
+            "q": 0,
+            "k": 0,
+            "v": 0,
+            "o": 0,
         }
-        if any(attn_latents.values()) and (self.mla or self.switchhead_experts):
+        if any(attn_latents.values()) and (self.mla or (0)):
             raise ValueError("attn_latent_* is implemented for plain GQA layers only")
-        for site in self.latent_mix_sites:
-            width = {
-                **attn_latents,
-                "kv": (
-                    (
-                        self.mla_kv_latent_dim * self.latent_mix_experts
-                        if self.latent_mix_kv_mode == KvMixMode.SUM
-                        else self.mla_kv_latent_dim
-                    )
-                    if self.mla
-                    else 0
-                ),
-                "moe_in": (
-                    (self.latent_dim or 0)
-                    * (self.latent_mix_experts if self.latent_mix_moe_in_mode == KvMixMode.SUM else 1)
-                ),
-                "moe_out": self.expert_out_dim,
-            }[site]
-            if not width or width % self.latent_mix_experts:
-                raise ValueError(f"latent_mix site {site} needs a latent divisible by latent_mix_experts, got {width}")
-        if self.latent_mix_sites and not 1 <= self.latent_mix_topk <= self.latent_mix_experts:
-            raise ValueError("latent_mix_topk must be in [1, latent_mix_experts]")
-        LatentMixBalance(self.latent_mix_balance)
-        KvMixMode(self.latent_mix_kv_mode)
-        if (self.latent_mix_balance != LatentMixBalance.NONE or self.latent_mix_renorm) and self.latent_mix_sites != (
-            "kv",
-        ):
-            raise ValueError("latent_mix_balance / latent_mix_renorm are implemented for latent_mix_sites=('kv',) only")
-        if self.kv_shared_latent_dim and "kv" not in self.latent_mix_sites:
-            raise ValueError("kv_shared_latent_dim needs the MLA KV-latent mixture (kv in latent_mix_sites)")
-        if (
-            self.kv_shared_latent_dim
-            and self.latent_mix_kv_mode == KvMixMode.SUM
-            and self.kv_shared_latent_dim != self.mla_kv_latent_dim
-        ):
-            raise ValueError(
-                "with latent_mix_kv_mode=sum the shared KV latent is summed in: it must be mla_kv_latent_dim"
-            )
-        if "kv" in self.latent_mix_sites and (self.mla_share_kv_latent or self.attn_res_sum_inputs):
-            raise ValueError(
-                "latent_mix site kv needs one KV latent per layer (no mla_share_kv_latent/attn_res_sum_inputs)"
-            )
-        if "moe_in" in self.latent_mix_sites and (self.router_on_latent or self.latent_select):
-            raise ValueError("latent_mix site moe_in needs a plain projected latent (no router_on_latent/latent_select)")
-        if self.latent_up_topk and not 1 <= self.latent_up_topk <= self.latent_up_count:
-            raise ValueError("latent_up_topk must be in [1, latent_up_count]")
-        if self.latent_up_count > 1 and (
-            not self.has_latent_up or "moe_out" in self.latent_mix_sites or self.router_on_latent
-        ):
-            raise ValueError(
-                "latent_up_count > 1 needs w_latent_up, the full-input router and no moe_out latent mixture"
-            )
-        if "moe_out" in self.latent_mix_sites and not self.has_latent_up:
-            raise ValueError("latent_mix site moe_out needs w_latent_up")
-        if self.switchhead_experts:
-            if self.mla:
-                raise ValueError("switchhead_experts is implemented for the GQA layers only")
-            if not 1 <= self.switchhead_topk <= self.switchhead_experts:
-                raise ValueError("switchhead_topk must be in [1, switchhead_experts]")
-            SwitchHeadSites(self.switchhead_sites)
+        LatentMixBalance(LatentMixBalance.NONE)
+        KvMixMode(KvMixMode.CONCAT)
         if self.moe_implementation not in MOE_IMPLEMENTATIONS:
             raise ValueError(f"moe_implementation must be one of {MOE_IMPLEMENTATIONS}, got {self.moe_implementation!r}")
-        if self.fp8_recipe != Fp8Recipe.NONE and self.moe_shared_overlap:
-            raise ValueError("fp8_recipe does not cover the moe_shared_overlap shared-expert path")
-        if self.moe_fp8_dispatch and self.moe_implementation != "fixed_pooled_wave_all_to_all":
-            raise ValueError("moe_fp8_dispatch requires moe_implementation=fixed_pooled_wave_all_to_all")
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
@@ -1736,217 +773,15 @@ class GrugModelConfig:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
-        if self.kda_onchip_decay_gate and (
-            self.kda_decay_per_head
-            or self.kda_dd_rope
-            or self.kda_push_buckets
-            or self.kda_head_pairing != KdaHeadPairing.NONE
-        ):
-            raise ValueError(
-                "kda_onchip_decay_gate needs the plain per-channel decay (no per-head/pair-tied/push/pairing)"
-            )
-        if self.attn_res_key_rank is not None:
-            if not self.attn_res or not 0 < self.attn_res_key_rank < self.hidden_dim:
-                raise ValueError("attn_res_key_rank needs attn_res and 0 < attn_res_key_rank < hidden_dim")
-            if self.attn_res_heads > 1 or self.attn_res_pull or self.attn_res_pull_embed or self.attn_res_dual_query:
-                raise ValueError("attn_res_key_rank needs single-head push AttnRes without attn_res_dual_query")
-        if self.kda_dd_rope:
-            if self.local_mixer != LocalMixer.KDA:
-                raise ValueError("kda_dd_rope requires local_mixer=kda")
-            if self.inferred_head_dim % 2:
-                raise ValueError("kda_dd_rope rotates channel pairs and needs an even head_dim")
-            if self.kda_push_buckets:
-                raise ValueError("kda_dd_rope needs pair-tied decays; kda_push_buckets' per-channel decays are not")
-        if self.mla_grouped_diff:
-            if self.mla_diff_attn or self.num_heads % self.mla_grouped_diff:
-                raise ValueError("mla_grouped_diff needs num_heads divisible by it and no mla_diff_attn")
-        if self.mla_gdla_noise_heads:
-            mla_heads = self.mla_num_heads or self.num_heads
-            noise = self.mla_gdla_noise_heads
-            if not self.mla or mla_heads <= noise or (mla_heads - noise) % noise:
-                raise ValueError("mla_gdla_noise_heads needs mla and (MLA heads - noise heads) divisible by it")
-            if (
-                self.mla_diff_attn
-                or self.mla_grouped_diff
-                or self.mla_head_mix
-                or self.mla_v_filter
-                or self.value_residual_layers
-                or self.xsa_mode in ("learned", "tanh", "gated")
-            ):
-                raise ValueError(
-                    "mla_gdla_noise_heads does not combine with mla_diff_attn, mla_grouped_diff, mla_head_mix, "
-                    "mla_v_filter, value_residual_layers or per-head XSA parameters"
-                )
-        poly = UngatedExpertActivation.POLYNORM
-        if self.moe_ungated_activation == poly and (
-            not self.moe_ungated_relu2 or self.expert_leaky_slope or self.moe_fused_relu2
-        ):
-            raise ValueError("moe_ungated_activation=polynorm needs moe_ungated_relu2, no leaky slope, no fused ReLU^2")
-        if self.shared_ungated_activation == poly and (not self.shared_ungated_relu2 or self.expert_leaky_slope):
-            raise ValueError("shared_ungated_activation=polynorm needs shared_ungated_relu2 and no leaky slope")
-        if self.kda_head_pairing != KdaHeadPairing.NONE:
-            if self.local_mixer != LocalMixer.KDA or self.num_heads % 2:
-                raise ValueError("kda_head_pairing needs local_mixer=kda and an even num_heads")
-            if self.kda_dd_rope or self.kda_push_buckets:
-                raise ValueError("kda_head_pairing does not support kda_dd_rope or kda_push_buckets")
         if self.moe_drop_renorm and self.moe_implementation != "fixed_pooled_wave_all_to_all":
             raise ValueError("moe_drop_renorm needs moe_implementation=fixed_pooled_wave_all_to_all")
-        if self.router_token_bias_rank and not self.attn_res:
-            raise ValueError("router_token_bias_rank needs attn_res (the scanned stack has no router extras)")
-        if self.router_embed_tie or self.router_bias_seed:
-            if self.dense_mlp or self.router_rank:
-                raise ValueError("router_embed_tie / router_bias_seed need MoE layers with the full-rank router")
-            if self.router_bias_seed and not self.attn_res:
-                raise ValueError("router_bias_seed needs attn_res (the scanned stack has no router extras)")
-            ties = _router_ties(self)
-            if len({(t.layer, t.expert) for t in ties}) != len(ties):
-                raise ValueError(f"router_embed_tie ties one (layer, expert) twice: {self.router_embed_tie}")
-            specs = [(t, t.tokens) for t in ties] + [(s, (s.token,)) for s in _router_seeds(self)]
-            for spec, tokens in specs:
-                if not (0 <= spec.expert < self.num_experts and all(0 <= v < self.vocab_size for v in tokens)):
-                    raise ValueError(f"router tie/seed out of range (experts {self.num_experts}): {spec}")
-        if self.router_embed_tie_release_step is not None:
-            if not self.router_embed_tie:
-                raise ValueError("router_embed_tie_release_step needs router_embed_tie")
-            if self.router_embed_tie_release_step <= 0:
-                raise ValueError(f"router_embed_tie_release_step must be positive: {self.router_embed_tie_release_step}")
-        for name in ("router_logit_soft_cap", "attn_res_logit_soft_cap"):
-            cap = getattr(self, name)
-            if cap is not None and cap <= 0:
-                raise ValueError(f"{name} must be positive, got {cap}")
         if self.num_null_experts:
-            if self.moe_bank2_experts or self.moe_hash_layers or self.moe_dense_router_grad:
-                raise ValueError("zero-computation experts do not support moe_bank2, hash layers or dense router grad")
-            if self.moe_null_target_frac is not None and not 0.0 < self.moe_null_target_frac < 1.0:
-                raise ValueError(f"moe_null_target_frac must be in (0, 1), got {self.moe_null_target_frac}")
-
-        if self.embed2_sign_trick and not (self.second_embed and self.second_embed_bigram):
-            raise ValueError("embed2_sign_trick needs second_embed and second_embed_bigram")
-        if self.embed2_sign_trick and (
-            self.embed2_sign_pool <= 0 or self.embed2_sign_pool & (self.embed2_sign_pool - 1)
-        ):
-            raise ValueError(f"embed2_sign_pool must be a power of two, got {self.embed2_sign_pool}")
-
-        if self.latent_select_pattern not in ("first", "random", "rotating"):
-            raise ValueError(
-                f"latent_select_pattern must be first, random or rotating, got {self.latent_select_pattern!r}"
-            )
-        if self.expert_read_subset_pattern not in ("blocks", "random", "shared"):
-            raise ValueError(
-                f"expert_read_subset_pattern must be blocks, random or shared, got {self.expert_read_subset_pattern!r}"
-            )
-        if self.expert_read_subset and (
-            self.expert_in_dim % self.expert_read_subset or self.moe_bank2_experts or self.moe_const_experts
-        ):
-            raise ValueError("expert_read_subset must divide the expert input width, without moe_bank2 or const experts")
-        if self.latent_matryoshka_blocks and (
-            self.latent_dim is None or self.latent_dim % self.latent_matryoshka_blocks or self.latent_mix_sites
-        ):
-            raise ValueError("latent_matryoshka_blocks must divide latent_dim, without latent_mix_sites")
-        if self.lm_head_prototypes > 1 and (
-            self.mtp_mode != MtpMode.OFF
-            or self.aux_lm_layer is not None
-            or self.output_bigram_rank
-            or self.lm_head_unigram_bias
-        ):
-            raise ValueError("lm_head_prototypes needs no MTP, aux LM layer, output bigram prior or lm_head bias")
-        if (
-            self.final_intermediate_dim
-            or self.final_experts_per_token
-            or self.final_routing_renorm_sum
-            or self.final_num_experts
-        ) and (not self.attn_res or _tail_stack_layer_indices(self)[0] != (self.num_layers - 1,)):
-            raise ValueError(
-                "final_intermediate_dim / final_experts_per_token need attn_res and the final layer alone in the "
-                "softmax tail stack"
-            )
-        appended = self.mla_match_append != MatchAppend.OFF
-        if self.mla_lag_groups and (self.mla_key_offset or not self.mla):
-            raise ValueError("mla_lag_groups needs mla and replaces mla_key_offset")
-        if appended and (not self.mla_shared_match_dim or self.mla_key_offset or not self.mla):
-            raise ValueError("mla_match_append needs mla, mla_shared_match_dim, no mla_key_offset")
-        if (self.mla_key_offset_channels or self.mla_shared_match_dim) and not (
-            self.mla and (self.mla_key_offset or appended)
-        ):
-            raise ValueError("mla_key_offset_channels / mla_shared_match_dim need mla and mla_key_offset")
-        if (
-            self.mla_shared_match_dim
-            and not appended
-            and (self.mla_key_offset_channels or self.mla_shared_match_dim < self.inferred_head_dim // 2)
-        ):
-            raise ValueError("mla_shared_match_dim needs the default half-head offset and M >= half the head")
-        if self.mla_tie_prev_qk and not (self.mla and self.mla_key_offset):
-            raise ValueError("mla_tie_prev_qk needs mla and mla_key_offset")
-        if self.final_shared_only and (
-            not self.attn_res
-            or _tail_stack_layer_indices(self)[0] != (self.num_layers - 1,)
-            or self.num_shared_experts != 1
-            or self.final_shared_intermediate_dim <= 0
-            or self.loop_passes != 1
-        ):
-            raise ValueError(
-                "final_shared_only needs attn_res, the final layer alone in the softmax tail stack, one shared expert "
-                "and final_shared_intermediate_dim > 0"
-            )
-        if self.lm_head_extra_source not in ("routed", "shared"):
-            raise ValueError(f"lm_head_extra_source must be routed or shared, got {self.lm_head_extra_source!r}")
-        if self.lm_head_extra_dim and (
-            not self.attn_res
-            or self.num_layers - 1 not in self.latent_out_full_layers
-            or _tail_stack_layer_indices(self)[0] != (self.num_layers - 1,)
-            or self.mtp_mode != MtpMode.OFF
-            or self.aux_lm_layer is not None
-            or self.loop_passes != 1
-        ):
-            raise ValueError(
-                "lm_head_extra_dim needs attn_res, the final layer alone in the softmax tail stack "
-                "(latent_out_full_layers), and no MTP, aux LM layer or loop passes"
-            )
-        if self.expert_write_masked and not (self.expert_write_blocks or self.tail_expert_write_blocks):
-            raise ValueError("expert_write_masked needs expert_write_blocks or tail_expert_write_blocks")
-        if self.expert_write_blocks and (
-            not 0 < self.expert_write_keep < self.expert_write_blocks or self.expert_out_dim % self.expert_write_blocks
-        ):
-            raise ValueError("expert_write_blocks must divide the expert output, with 0 < expert_write_keep < blocks")
-        if self.expert_write_groups and (
-            self.intermediate_dim % self.expert_write_groups or self.expert_out_dim % self.expert_write_groups
-        ):
-            raise ValueError("expert_write_groups must divide intermediate_dim and the expert output width")
-        if self.expert_private_dim and (self.moe_bank2_experts or self.num_null_experts or self.expert_read_subset):
-            raise ValueError("expert_private_dim needs one expert bank and no null experts or expert_read_subset")
-        if self.expert_read_groups and (
-            (self.latent_dim or self.hidden_dim) % self.expert_read_groups
-            or self.latent_select
-            or self.latent_out_dim is None
-            or self.expert_read_subset
-            or self.moe_bank2_experts
-            or self.moe_const_experts
-            or self.num_null_experts
-            or self.moe_dense_router_grad
-            or self.newton_muon
-            or self.erc_loss_weight > 0
-        ):
-            raise ValueError(
-                "expert_read_groups must divide the expert input and needs an explicit latent_out_dim, one "
-                "expert bank and no expert_read_subset, null/const experts, dense router grad, Newton-Muon or ERC"
-            )
-        if self.latent_select_layers not in ("all", "kda", "global"):
-            raise ValueError(f"latent_select_layers must be all, kda or global, got {self.latent_select_layers!r}")
-        if self.latent_select_layers != "all" and self.local_mixer != LocalMixer.KDA:
-            raise ValueError("latent_select_layers kda/global needs local_mixer=KDA")
-        if self.global_local_window is not None and (self.local_mixer != LocalMixer.KDA or self.global_local_window < 1):
-            raise ValueError(
-                "global_local_window needs local_mixer=KDA (the local layers are KDA) and a positive window"
-            )
-        tail_modes = (self.latent_out_full_layers, self.latent_free_layers, self.wide_expert_layers, self.topk_layers)
+            pass
+        tail_modes = (self.latent_out_full_layers, (), (), ())
         if sum(bool(x) for x in tail_modes) > 1:
             raise ValueError(
                 "latent_out_full_layers, latent_free_layers, wide_expert_layers and topk_layers share the tail stacks"
             )
-        if bool(self.topk_layers) != (self.topk_layer_k is not None):
-            raise ValueError("topk_layers and topk_layer_k go together")
-        if bool(self.wide_expert_layers) != (self.wide_expert_intermediate_dim is not None):
-            raise ValueError("wide_expert_layers and wide_expert_intermediate_dim go together")
         tail = _tail_layers(self)
         if tail:
             if not self.attn_res or self.latent_dim is None or self.latent_out_dim is not None or self.dense_mlp:
@@ -1956,140 +791,51 @@ class GrugModelConfig:
                 )
             if len(set(tail)) != len(tail) or not all(0 <= i < self.num_layers for i in tail):
                 raise ValueError(f"tail layers must be distinct layer indices, got {tail}")
-            if self.latent_free_layers and self.intermediate_dim % 2:
-                raise ValueError("latent_free_layers halves intermediate_dim, which must be even")
-        if self.latent_write_select and (self.latent_dim is None or self.latent_dim > self.hidden_dim):
-            raise ValueError("latent_write_select needs latent_dim <= hidden_dim")
-        if self.latent_select and (
-            self.latent_dim is None or self.latent_dim > self.hidden_dim or self.erc_loss_weight > 0
-        ):
-            raise ValueError(
-                "latent_select needs latent_dim <= hidden_dim and no ERC loss (ERC maps router rows via w_latent_down)"
-            )
-        if self.qb_bias_damping is not None and not 0.0 < self.qb_bias_damping <= 1.0:
-            raise ValueError(f"qb_bias_damping must be in (0, 1], got {self.qb_bias_damping}")
-        if self.simbal_loss_weight > 0 and (self.dense_mlp or self.router_rank):
-            raise ValueError("simbal_loss_weight needs a MoE with a full-rank router")
-        if self.latent_out_dim is not None and (
-            self.dense_mlp or self.latent_write_select or self.moe_bank2_experts or self.num_null_experts
-        ):
+        if self.latent_out_dim is not None and (self.dense_mlp or (0) or self.num_null_experts):
             raise ValueError(
                 "latent_out_dim needs routed experts and no latent_write_select, moe_bank2 or zero-computation experts"
             )
-        if (self.moe_shadow_width or self.moe_compress != MoeCompress.NONE) and (
-            self.dense_mlp or self.shared_expert_intermediate_dim <= 0 or self.moe_shared_overlap
-        ):
-            raise ValueError("moe_shadow_width / moe_compress need a MoE with shared experts and no moe_shared_overlap")
-        if (self.moe_compress != MoeCompress.NONE) != (self.moe_compress_weight > 0):
-            raise ValueError("moe_compress and moe_compress_weight > 0 go together")
         overrides = _norm_gain_overrides(self)
         if overrides.keys() - set(NORM_GAIN_ROLES):
             raise ValueError(f"norm_gain_overrides: unknown norms {sorted(overrides.keys() - set(NORM_GAIN_ROLES))}")
-        if self.moe_compress_norm_weight > 0 and self.moe_compress != MoeCompress.TRANSFER:
-            raise ValueError("moe_compress_norm_weight is the counter force for moe_compress=transfer")
-        if not 0.0 <= self.sublayer_dropout < 1.0 or (self.sublayer_dropout and not self.attn_res):
-            raise ValueError("sublayer_dropout must be in [0, 1) and needs AttnRes")
-        if self.dual_attn_prev and (not self.attn_res or not self.mla):
-            raise ValueError("dual_attn_prev needs AttnRes and MLA attention")
-        if self.router_on_embed and (
-            self.router_on_latent
-            or self.dense_mlp
-            or not self.attn_res
-            or self.router_rank
-            or self.expert_router_orthogonal != "off"
-            or self.erc_loss_weight > 0
-            or self.router_embed_tie
-            or self.attn_res_sum_inputs
-            or self.moe_hash_layers
-        ):
-            raise ValueError(
-                "router_on_embed needs AttnRes and a plain full-rank router: no router_on_latent, router_rank, "
-                "expert_router_orthogonal, erc_loss_weight, router_embed_tie, attn_res_sum_inputs or moe_hash_layers"
-            )
-        if self.router_on_latent and (
-            self.dense_mlp
-            or self.latent_dim is None
-            or self.router_rank
-            or self.latent_select
-            or self.expert_router_orthogonal != "off"
-            or self.erc_loss_weight > 0
-            or self.router_embed_tie
-            or self.attn_res_sum_inputs
-        ):
-            raise ValueError(
-                "router_on_latent needs a MoE latent (latent_dim, no latent_select) and a plain full-rank router: "
-                "no router_rank, expert_router_orthogonal, erc_loss_weight, router_embed_tie or attn_res_sum_inputs"
-            )
-        if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
-            raise ValueError("erc_loss_weight needs a MoE with a full-rank router and one expert bank")
-
-        if self.newton_muon and (self.dense_mlp or self.newton_muon_every < 1):
-            raise ValueError("newton_muon needs routed experts (dense_mlp=False) and newton_muon_every >= 1")
-
-        if self.kv_stream_dim:
-            if not self.attn_res or self.kv_stream_dim % self.kv_stream_heads:
-                raise ValueError("kv_stream_dim needs attn_res and a multiple of kv_stream_heads")
-            if (
-                self.mla_share_kv_latent
-                or self.attn_res_v_gate
-                or self.attn_res_source_delta
-                or self.mla_forget_gate
-                or {"k", "v"} & set(self.attn_res_sum_inputs)
-            ):
-                raise ValueError(
-                    "kv_stream_dim does not combine with mla_share_kv_latent, attn_res_v_gate, attn_res_source_delta, "
-                    "mla_forget_gate (a key-side main-stream bias) or k/v attn_res_sum_inputs"
-                )
-        if self.moe_shortcut and not self.attn_res:
-            raise ValueError("moe_shortcut requires attn_res (the MoE shortcut is an AttnRes gate)")
-        if self.memory_layers:
-            if not self.attn_res:
-                raise ValueError("memory_layers requires attn_res (the memory runs in the AttnRes loop)")
-            layers = set(self.memory_layers)
-            if not layers <= set(range(self.num_layers)) or len(layers) != len(self.memory_layers):
-                raise ValueError(f"memory_layers must be distinct layers in 0..{self.num_layers - 1}")
-            if self.memory_key_dim % 2 or self.memory_topk > self.memory_keys:
-                raise ValueError("memory_key_dim must be even and memory_topk <= memory_keys")
 
     @property
     def expert_in_dim(self) -> int:
         """Width the routed experts read (one ``expert_read_groups`` slice when set, plus ``expert_private_dim``)."""
         shared = self.latent_dim if self.latent_dim is not None else self.hidden_dim
-        if self.expert_read_groups:
-            shared //= self.expert_read_groups
-        return shared + self.expert_private_dim
+        return shared + (0)
 
     @property
     def expert_out_dim(self) -> int:
         """Width the routed experts write (``latent_out_dim``)."""
-        return self.latent_out_dim if self.latent_out_dim is not None else self.expert_in_dim - self.expert_private_dim
+        return self.latent_out_dim if self.latent_out_dim is not None else self.expert_in_dim - (0)
 
     @property
     def qb_num_experts(self) -> int:
         """Width of the per-layer QB betas: the widest layer's expert count, null experts included."""
-        return max(self.num_experts, self.final_num_experts) + self.num_null_experts
+        return max(self.num_experts, (0)) + self.num_null_experts
 
     @property
     def routed_write_extra(self) -> int:
         """The lm_head-only slice the routed experts write (``final_write_extra`` with the routed source)."""
-        return self.final_write_extra if self.lm_head_extra_source == "routed" else 0
+        return 0
 
     @property
     def has_latent_up(self) -> bool:
         """The MoE maps the experts' output to ``hidden_dim`` with ``w_latent_up``."""
         if self.latent_out_dim is not None:
             return self.latent_out_dim != self.hidden_dim + self.routed_write_extra
-        return self.latent_dim is not None and not self.latent_write_select
+        return self.latent_dim is not None
 
     @property
     def kv_in_dim(self) -> int:
         """Input width of the attention K/V projections: the side stream (``kv_stream_dim``) or the main stream."""
-        return self.kv_stream_dim or self.hidden_dim
+        return self.hidden_dim
 
     @property
     def num_null_experts(self) -> int:
         """Zero-computation (zero + copy + constant) experts, the router columns past ``num_experts``."""
-        return self.moe_null_experts + self.moe_copy_experts + self.moe_const_experts
+        return 0
 
     @property
     def Embed(self) -> Axis:
@@ -2200,17 +946,6 @@ class InklingRelPos(eqx.Module):
         )
 
 
-def _switchhead_stats(site: str, weights: Float[Array, "B S G E"]) -> dict[str, jax.Array]:
-    """Mean selected weight and expert-load imbalance (busiest expert's share over the even share)."""
-    weights = jax.lax.stop_gradient(weights)
-    selected = (weights > 0).astype(jnp.float32)
-    load = jnp.mean(selected, axis=(0, 1))
-    return {
-        f"{_LAYER_KNOB_PREFIX}switch_{site}_weight_mean": jnp.sum(weights) / jnp.maximum(jnp.sum(selected), 1.0),
-        f"{_LAYER_KNOB_PREFIX}switch_{site}_load_max_ratio": jnp.max(load / jnp.mean(load, axis=-1, keepdims=True)),
-    }
-
-
 class LatentProj(eqx.Module):
     """``x -> RMSNorm(x W_down) W_up`` with a learnable gain on the latent, so the factored map keeps a free
     scale under the hyperball's fixed matrix norms. As a mixture of latents (``mix_gate`` set) the latent is
@@ -2227,7 +962,7 @@ class LatentProj(eqx.Module):
         cfg: GrugModelConfig, key: PRNGKeyArray, in_dim: int, width: int, out_dim: int, mix: bool, out_std: float
     ) -> "LatentProj":
         k_down, k_up, k_gate = random.split(key, 3)
-        blocks = cfg.latent_mix_experts if mix else 1
+        blocks = (4) if mix else 1
         return LatentProj(
             down=reshard(_init_weight(k_down, (in_dim, width), cfg.initializer_std), P(None, None)),
             up=reshard(_init_weight(k_up, (width, out_dim), out_std), P(None, None)),
@@ -2235,7 +970,7 @@ class LatentProj(eqx.Module):
             mix_gate=(
                 reshard(_init_weight(k_gate, (in_dim, blocks), cfg.initializer_std), P(None, None)) if mix else None
             ),
-            topk=cfg.latent_mix_topk if mix else 1,
+            topk=(2) if mix else 1,
         )
 
     def __call__(self, cfg: GrugModelConfig, x: Float[Array, "... I"]) -> Float[Array, "... O"]:
@@ -2248,17 +983,6 @@ class LatentProj(eqx.Module):
         return _proj(cfg, rearrange(latent, "... e r -> ... (e r)"), self.up)
 
 
-def _mixture_load_stats(weights: Float[Array, "... E"]) -> dict[str, jax.Array]:
-    """Busiest and idlest block's selection share over the even share (1 = balanced)."""
-    chosen = jax.lax.stop_gradient(weights > 0).astype(jnp.float32)
-    load = jnp.mean(chosen, axis=tuple(range(chosen.ndim - 1)))
-    ratio = load / jnp.maximum(jnp.mean(load), 1e-9)
-    return {
-        f"{_LAYER_KNOB_PREFIX}kv_mix_load_max_ratio": jnp.max(ratio),
-        f"{_LAYER_KNOB_PREFIX}kv_mix_load_min_ratio": jnp.min(ratio),
-    }
-
-
 class CausalSelfAttention(eqx.Module):
     """Softmax attention: GQA (``w_q``/``w_k``/``w_v``), or MLA with a compressed KV latent
     (``w_q``/``w_dkv``/``w_uk``/``w_uv``); either with half-RoPE or the Inkling bias."""
@@ -2268,7 +992,6 @@ class CausalSelfAttention(eqx.Module):
     w_v: Float[Array, "D MH"] | None
     w_o: Float[Array, "NH D"] | None  # None: factored (latent_o)
     attn_gate: Float[Array, "D G"]  # G = N heads, N*H channels (attn_gate_elementwise) or the rank (attn_gate_rank)
-    attn_gate_up: Float[Array, "R G"] | None  # attn_gate_rank's zero-init up-projection to N*H channels
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
     sconv_q: "ShortConv | None"  # MLA only: SConv after the q projection ("q" in cfg.sconv_sites)
     rel_pos: "InklingRelPos | None"  # Inkling relative-position bias (replaces RoPE when set)
@@ -2280,59 +1003,6 @@ class CausalSelfAttention(eqx.Module):
     ve_lambda: Float[Array, " 2"] | None  # (lambda1 on v, lambda2 on the value embedding)
     ve_gate: Float[Array, "D N"] | None
     qk_mult: Float[Array, "..."] | None  # learnable logit scale, [] or [N] per head (cfg.learnable_qk_mult)
-    xsa_scale: Float[Array, " N"] | None  # per-head XSA strength (cfg.xsa_mode == "learned")
-    xsa_gate: Float[Array, "D N"] | None  # per-token XSA gate weights (cfg.xsa_mode == "gated")
-    head_mix: Float[Array, "D 2N"] | None  # [w1 | w2] projections of cfg.mla_head_mix (w2 half zero-init)
-    ssmax_scale: Float[Array, " N"] | None  # per-head SSMax log-length query scale (cfg.mla_ssmax)
-    w_q2: Float[Array, "D NH"] | None  # second query projection (cfg.mla_diff_attn)
-    w_uk2: Float[Array, "L NH"] | None  # second key up-projection from the KV latent (cfg.mla_diff_attn)
-    diff_lambda: Float[Array, "4 H"] | None  # [lq1, lk1, lq2, lk2] of the DIFF lambda reparameterization
-    diff_lambda_init: Float[Array, ""] | None  # constant lambda_init of this layer (never trained)
-    w_qn: Float[Array, "D MH"] | None  # noise-map query projection, M = N / g heads (cfg.mla_grouped_diff)
-    w_ukn: Float[Array, "L MH"] | None  # noise-map key up-projection from the KV latent (cfg.mla_grouped_diff)
-    # token-dependent lambda logits per signal head (cfg.mla_grouped_diff / cfg.mla_gdla_noise_heads)
-    gda_lambda: Float[Array, "D N"] | None
-    vres_lambda: Float[Array, " 2"] | None  # (l1 on v, l2 on the first layer's v): cfg.value_residual_layers
-    bias_q: Float[Array, " NH"] | None
-    bias_dkv: Float[Array, " L"] | None
-    v_filter_w: Float[Array, "N H"] | None  # noise-filter value gate direction (cfg.mla_v_filter), zero-init
-    v_filter_b: Float[Array, " N"] | None  # noise-filter value gate bias (cfg.mla_v_filter)
-    forget_gate_w: Float[Array, "D N"] | None  # FoX forget gate direction (cfg.mla_forget_gate), zero-init
-    forget_gate_b: Float[Array, " N"] | None  # FoX forget gate bias (cfg.mla_forget_gate)
-    switch_v_gate: Float[Array, "W ME"] | None  # SwitchHead value-expert gate, from the source token
-    switch_o_gate: Float[Array, "D NE"] | None  # SwitchHead output-expert gate, from the destination token
-    kv_mix_gate: Float[Array, "W E"] | None  # mixture of latents on the MLA KV latent ("kv" in cfg.latent_mix_sites)
-    match_up: Float[Array, "L M"] | None  # cfg.mla_shared_match_dim: the shared match space from the KV latent
-    match_scale: Float[Array, " N"] | None  # per-head weight on the shared match (M == half the head)
-    match_head: Float[Array, "M NC"] | None  # per-head map of the shared match to the shifted half (M > half)
-    match_gate: Float[Array, "D N"] | None  # MatchAppend.TOKEN
-    v_ahead: Float[Array, "N D"] | None  # mla_value_lookahead
-    v_self: Float[Array, "N D"] | None  # mla_lookahead_self
-    k_null: Float[Array, "N D"] | None  # mla_lookahead_sink
-    w_qf: Float[Array, "D FC"] | None  # mla_future_heads: each future head's look-ahead query
-    w_sidx: Float[Array, "D R"] | None  # mla_sparse_topk: the tied sparse index projection
-    sparse_lam: Float[Array, " N"] | None  # per-head weight on the index score of selected keys
-    w_lq: Float[Array, "D GR"] | None  # SparseIndex.LIGHTNING: indexer queries, key and head weights
-    w_lk: Float[Array, "D R"] | None
-    w_lw: Float[Array, "D G"] | None
-    sparse_taps: jax.Array | None  # mla_sparse_taps: [N, T] or [N, T, D] value-tap weights
-    prev_gate: Float[Array, "D N"] | None  # mla_prev_gate
-    logit_mix: Float[Array, "N N2"] | None  # mla_logit_compose: [N, 2N] mix of the offset / current scores
-    logit_mix_u: Float[Array, "D N"] | None  # mla_logit_compose_dynamic: rank-1 query-wise mix
-    logit_mix_w: Float[Array, "D N2"] | None
-    dcmha: Dcmha | DcmhaPaper | None
-    gauss: Gauss | None
-    copy_gate_lse: Float[Array, " N"] | None  # mla_copy_gate
-    copy_gate_out: Float[Array, "N H"] | None  # mla_copy_gate
-    parallax_w: Float[Array, "D NH"] | None  # mla_parallax: the probe projection W_R
-    parallax_gain: Float[Array, " N"] | None  # mla_parallax: per-head probe scale, zero-init
-    v_norm: "LearnedRMSNorm | None"
-    kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
-    kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
-    latent_q: LatentProj | None  # factored projections (cfg.attn_latent_*): replace w_q / w_k / w_v / w_o
-    latent_k: LatentProj | None
-    latent_v: LatentProj | None
-    latent_o: LatentProj | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -2340,52 +1010,25 @@ class CausalSelfAttention(eqx.Module):
         """``layer_index`` (0-indexed, may be traced under the stacked init) sets the DIFF ``lambda_init``."""
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         std = cfg.initializer_std
-        attn_gate_up = None
-        if cfg.attn_gate_rank:
-            if cfg.attn_gate_elementwise:
-                raise ValueError("attn_gate_rank and attn_gate_elementwise are alternative gates")
-            attn_gate = reshard(_init_weight(random.fold_in(key, 7), (d, cfg.attn_gate_rank), std), P(None, None))
-            attn_gate_up = reshard(jnp.zeros((cfg.attn_gate_rank, n * h)), P(None, "model"))
-        elif cfg.attn_gate_elementwise:
-            attn_gate = reshard(jnp.zeros((d, n * h)), P(None, "model"))
-        else:
-            attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
+        attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
         if cfg.mla:
             k_q, k_dkv, k_uk, k_uv, k_o, k_rel, k_ve = random.split(key, 7)
             # A separate key stream, so turning mla_diff_attn on leaves every other initial weight unchanged.
-            k_q2, k_uk2, k_lam = random.split(random.fold_in(key, 1), 3)
-            kv_mix = "kv" in cfg.latent_mix_sites
-            match_dim = cfg.mla_shared_match_dim
-            appended = cfg.mla_match_append != MatchAppend.OFF
-            kv_sum = kv_mix and cfg.latent_mix_kv_mode == KvMixMode.SUM
-            shared_kvl = cfg.kv_shared_latent_dim
-            kvl = cfg.kv_in_dim if cfg.mla_kv_direct else cfg.mla_kv_latent_dim + (0 if kv_sum else shared_kvl)
+            _k_q2, _k_uk2, _k_lam = random.split(random.fold_in(key, 1), 3)
+            kvl = cfg.mla_kv_latent_dim + (0)
             use_ve = cfg.value_embeds != ValueEmbeds.NONE
-            diff = cfg.mla_diff_attn
-            group = cfg.mla_grouped_diff
-            k_qn, k_ukn = random.split(random.fold_in(key, 2))
+            _k_qn, _k_ukn = random.split(random.fold_in(key, 2))
             # GDLA: one value head per group and only the signal heads reach the output.
-            n_v = 1 if cfg.mla_shared_kv else (cfg.mla_gdla_noise_heads or n)
-            n_out = n - cfg.mla_gdla_noise_heads
-            if cfg.mla_gdla_noise_heads:
-                attn_gate = (
-                    reshard(jnp.zeros((d, n_out * h)), P(None, "model"))
-                    if cfg.attn_gate_elementwise
-                    else reshard(jnp.zeros((d, n_out)), P(None, None))
-                )
-                if attn_gate_up is not None:
-                    raise ValueError("mla_gdla_noise_heads does not combine with attn_gate_rank")
+            n_v = n
+            n_out = n - (0)
             return CausalSelfAttention(
-                w_q=reshard(
-                    _init_weight(k_q, (d, n * h * (2 if cfg.mla_prev_key_concat else 1)), std), P(_FSDP_AXES, "model")
-                ),
+                w_q=reshard(_init_weight(k_q, (d, n * h * 1), std), P(_FSDP_AXES, "model")),
                 w_k=None,
                 w_v=None,
-                w_o=reshard(_init_weight(k_o, (n_out * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
+                w_o=reshard(_init_weight(k_o, (n_out * h, d), std * (1.0)), P("model", _FSDP_AXES)),
                 attn_gate=attn_gate,
-                attn_gate_up=attn_gate_up,
                 sconv_k=(
-                    ShortConv.init((1 if cfg.mla_shared_kv else n) * h, cfg.sconv_kernel, cfg.sconv_impl)
+                    ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl)
                     if cfg.sconv and "k" in cfg.sconv_sites
                     else None
                 ),
@@ -2396,81 +1039,20 @@ class CausalSelfAttention(eqx.Module):
                 ),
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
-                w_dkv=(
-                    None
-                    if cfg.mla_kv_direct
-                    else reshard(
-                        _init_weight(
-                            k_dkv,
-                            (
-                                cfg.kv_in_dim,
-                                shared_kvl + cfg.mla_kv_latent_dim * (cfg.latent_mix_experts if kv_sum else 1),
-                            ),
-                            std,
+                w_dkv=reshard(
+                    _init_weight(
+                        k_dkv,
+                        (
+                            cfg.kv_in_dim,
+                            cfg.mla_kv_latent_dim,
                         ),
-                        P(_FSDP_AXES, None),
-                    )
+                        std,
+                    ),
+                    P(_FSDP_AXES, None),
                 ),
-                kv_latent_norm=(
-                    None
-                    if cfg.mla_kv_direct
-                    else (
-                        _grouped_rms_norm(cfg, cfg.latent_mix_experts, cfg.mla_kv_latent_dim // cfg.latent_mix_experts)
-                        if kv_mix and not kv_sum
-                        else _learned_rms_norm(cfg, cfg.mla_kv_latent_dim, cfg.layer_norm_eps, role="kv_latent")
-                    )
-                ),
-                kv_shared_norm=(
-                    _learned_rms_norm(cfg, shared_kvl, cfg.layer_norm_eps) if shared_kvl and not kv_sum else None
-                ),
-                kv_mix_bias=(
-                    jnp.zeros((cfg.latent_mix_experts,), jnp.float32)
-                    if kv_mix and cfg.latent_mix_balance == LatentMixBalance.BIAS
-                    else None
-                ),
-                kv_mix_gate=(
-                    reshard(
-                        _init_weight(random.fold_in(k_dkv, 1), (cfg.kv_in_dim, cfg.latent_mix_experts), std),
-                        P(None, None),
-                    )
-                    if kv_mix
-                    else None
-                ),
-                w_uk=reshard(_init_weight(k_uk, (kvl, (1 if cfg.mla_shared_kv else n) * h), std), P(None, "model")),
-                match_up=(
-                    reshard(_init_weight(random.fold_in(k_uk, 7), (kvl, match_dim), std), P(None, None))
-                    if match_dim
-                    else None
-                ),
-                match_scale=(
-                    jnp.full((n,), cfg.qk_mult if appended else 1.0, jnp.float32)
-                    if appended or (match_dim == h // 2 and match_dim)
-                    else None
-                ),
-                match_gate=jnp.zeros((d, n), jnp.float32) if cfg.mla_match_append == MatchAppend.TOKEN else None,
-                v_ahead=jnp.zeros((n, h), jnp.float32) if cfg.mla_value_lookahead else None,
-                v_self=jnp.ones((n, h), jnp.float32) if cfg.mla_lookahead_self else None,
-                k_null=jnp.zeros((n, h), jnp.float32) if cfg.mla_lookahead_sink else None,
-                w_qf=(
-                    reshard(_init_weight(random.fold_in(k_q, 9), (d, cfg.mla_future_heads * h), std), P(None, None))
-                    if cfg.mla_future_heads
-                    else None
-                ),
-                **mla_sparse_params(cfg, d, n, h, random.fold_in(k_q, 10), std, _init_weight),
-                v_norm=_learned_rms_norm(cfg, h, cfg.layer_norm_eps) if cfg.mla_value_norm == "learned" else None,
-                match_head=(
-                    reshard(
-                        _init_weight(random.fold_in(k_uk, 8), (match_dim, n * (h // 2)), 1.0 / math.sqrt(match_dim)),
-                        P(None, None),
-                    )
-                    if match_dim > h // 2 and not appended
-                    else None
-                ),
-                w_uv=(
-                    None
-                    if cfg.mla_shared_kv_tied
-                    else reshard(_init_weight(k_uv, (kvl, n_v * h), std), P(None, "model"))
-                ),
+                kv_latent_norm=_learned_rms_norm(cfg, cfg.mla_kv_latent_dim, cfg.layer_norm_eps, role="kv_latent"),
+                w_uk=reshard(_init_weight(k_uk, (kvl, n * h), std), P(None, "model")),
+                w_uv=reshard(_init_weight(k_uv, (kvl, n_v * h), std), P(None, "model")),
                 value_embed=(
                     reshard(_init_weight(k_ve, (cfg.vocab_size, n_v * h), std), P(None, None)) if use_ve else None
                 ),
@@ -2479,83 +1061,24 @@ class CausalSelfAttention(eqx.Module):
                     reshard(jnp.zeros((d, n_v)), P(None, None)) if cfg.value_embeds in _GATED_VALUE_EMBEDS else None
                 ),
                 qk_mult=_qk_mult_init(cfg, n),
-                xsa_scale=(
-                    jnp.full((n,), 1.0 if cfg.xsa_mode == "learned" else 0.0, jnp.float32)
-                    if cfg.xsa_mode in ("learned", "tanh")
-                    else None
-                ),
-                xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
-                head_mix=(reshard(jnp.zeros((d, 2 * n)), P(None, None)) if cfg.mla_head_mix else None),
-                ssmax_scale=jnp.zeros((n,), jnp.float32) if cfg.mla_ssmax else None,
-                w_q2=reshard(_init_weight(k_q2, (d, n * h), std), P(_FSDP_AXES, "model")) if diff else None,
-                w_uk2=reshard(_init_weight(k_uk2, (kvl, n * h), std), P(None, "model")) if diff else None,
-                diff_lambda=0.1 * random.normal(k_lam, (4, h), jnp.float32) if diff else None,
-                diff_lambda_init=((0.8 - 0.6 * jnp.exp(-0.3 * jnp.asarray(layer_index, jnp.float32))) if diff else None),
-                w_qn=(reshard(_init_weight(k_qn, (d, n // group * h), std), P(_FSDP_AXES, None)) if group else None),
-                w_ukn=reshard(_init_weight(k_ukn, (kvl, n // group * h), std), P(None, None)) if group else None,
-                gda_lambda=(
-                    reshard(jnp.zeros((d, n_out if cfg.mla_gdla_noise_heads else n)), P(None, None))
-                    if group or cfg.mla_gdla_noise_heads
-                    else None
-                ),
-                vres_lambda=_vres_lambda_init(cfg),
-                bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
-                bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
-                v_filter_w=jnp.zeros((n, h), jnp.float32) if cfg.mla_v_filter else None,
-                v_filter_b=jnp.full((n,), cfg.mla_v_filter_bias_init, jnp.float32) if cfg.mla_v_filter else None,
-                forget_gate_w=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.mla_forget_gate else None,
-                forget_gate_b=(
-                    jnp.full((n,), cfg.mla_forget_gate_bias_init, jnp.float32) if cfg.mla_forget_gate else None
-                ),
-                latent_q=None,
-                latent_k=None,
-                latent_v=None,
-                latent_o=None,
-                switch_v_gate=None,
-                switch_o_gate=None,
                 cfg=cfg,
             )
-        if "qkv" in cfg.proj_biases:
-            raise ValueError("proj_biases 'qkv' is implemented for MLA and KDA only")
-        if cfg.mla_diff_attn or cfg.mla_grouped_diff:
-            raise ValueError("mla_diff_attn and mla_grouped_diff need mla")
-        if cfg.value_residual_layers:
-            raise ValueError("value_residual_layers is implemented for MLA and KDA only")
-        if cfg.mla_v_filter:
-            raise ValueError("mla_v_filter needs mla")
-        if cfg.mla_forget_gate:
-            raise ValueError("mla_forget_gate needs mla")
-        k_q, k_k, k_v, k_o, k_rel, k_sv, k_so, k_lat = random.split(key, 8)
+        k_q, k_k, k_v, k_o, k_rel, _k_sv, _k_so, k_lat = random.split(key, 8)
         lat_keys = dict(zip("qkvo", random.split(k_lat, 4), strict=True))
-        o_std = std * cfg.init_std_mult_attn_out
+        o_std = std * (1.0)
 
         def _latent(site: str, width: int, in_dim: int, out_dim: int, out_std: float) -> LatentProj | None:
             if not width:
                 return None
-            mix = site in cfg.latent_mix_sites
+            mix = site in ()
             return LatentProj.init(cfg, lat_keys[site], in_dim, width, out_dim, mix, out_std)
 
-        switch_v = cfg.switchhead_experts if cfg.switchhead_sites in (SwitchHeadSites.V, SwitchHeadSites.VO) else 0
-        switch_o = cfg.switchhead_experts if cfg.switchhead_sites in (SwitchHeadSites.O, SwitchHeadSites.VO) else 0
         return CausalSelfAttention(
-            w_q=None if cfg.attn_latent_q else reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
-            w_k=(
-                None
-                if cfg.attn_latent_k
-                else reshard(_init_weight(k_k, (cfg.kv_in_dim, m * h), std), P(_FSDP_AXES, "model"))
-            ),
-            w_v=(
-                None
-                if cfg.attn_latent_v
-                else reshard(_init_weight(k_v, (cfg.kv_in_dim, m * max(switch_v, 1) * h), std), P(_FSDP_AXES, "model"))
-            ),
-            w_o=(
-                None
-                if cfg.attn_latent_o
-                else reshard(_init_weight(k_o, (n * max(switch_o, 1) * h, d), o_std), P("model", _FSDP_AXES))
-            ),
+            w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
+            w_k=reshard(_init_weight(k_k, (cfg.kv_in_dim, m * h), std), P(_FSDP_AXES, "model")),
+            w_v=reshard(_init_weight(k_v, (cfg.kv_in_dim, m * 1 * h), std), P(_FSDP_AXES, "model")),
+            w_o=reshard(_init_weight(k_o, (n * 1 * h, d), o_std), P("model", _FSDP_AXES)),
             attn_gate=attn_gate,
-            attn_gate_up=attn_gate_up,
             sconv_k=(
                 ShortConv.init(m * h, cfg.sconv_kernel, cfg.sconv_impl) if cfg.sconv and "k" in cfg.sconv_sites else None
             ),
@@ -2569,79 +1092,7 @@ class CausalSelfAttention(eqx.Module):
             ve_lambda=None,
             ve_gate=None,
             qk_mult=_qk_mult_init(cfg, n),
-            xsa_scale=(
-                jnp.full((n,), 1.0 if cfg.xsa_mode == "learned" else 0.0, jnp.float32)
-                if cfg.xsa_mode in ("learned", "tanh")
-                else None
-            ),
-            xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
-            head_mix=None,
-            ssmax_scale=None,
-            w_q2=None,
-            w_uk2=None,
-            diff_lambda=None,
-            diff_lambda_init=None,
-            w_qn=None,
-            w_ukn=None,
-            gda_lambda=None,
-            vres_lambda=None,
-            bias_q=None,
-            bias_dkv=None,
-            v_filter_w=None,
-            v_filter_b=None,
-            forget_gate_w=None,
-            forget_gate_b=None,
-            switch_v_gate=(
-                reshard(_init_weight(k_sv, (cfg.kv_in_dim, m * switch_v), std), P(None, None)) if switch_v else None
-            ),
-            switch_o_gate=reshard(_init_weight(k_so, (d, n * switch_o), std), P(None, None)) if switch_o else None,
-            kv_mix_gate=None,
-            match_up=None,
-            match_scale=None,
-            match_head=None,
-            match_gate=None,
-            v_ahead=None,
-            v_self=None,
-            k_null=None,
-            w_qf=None,
-            w_sidx=None,
-            sparse_lam=None,
-            w_lq=None,
-            w_lk=None,
-            w_lw=None,
-            sparse_taps=None,
-            prev_gate=None,
-            logit_mix=None,
-            logit_mix_u=None,
-            logit_mix_w=None,
-            dcmha=None,
-            gauss=None,
-            copy_gate_lse=None,
-            copy_gate_out=None,
-            parallax_w=None,
-            parallax_gain=None,
-            v_norm=None,
-            kv_mix_bias=None,
-            kv_shared_norm=None,
-            latent_q=_latent("q", cfg.attn_latent_q, d, n * h, std),
-            latent_k=_latent("k", cfg.attn_latent_k, cfg.kv_in_dim, m * h, std),
-            latent_v=_latent("v", cfg.attn_latent_v, cfg.kv_in_dim, m * h, std),
-            latent_o=_latent("o", cfg.attn_latent_o, n * h, d, o_std),
             cfg=cfg,
-        )
-
-    def _kv_mix_weights(self, kv_in: Float[Array, "B S W"]) -> Float[Array, "B S E"]:
-        assert self.kv_mix_gate is not None
-        cfg = self.cfg
-        entropy = cfg.latent_mix_entropy_weight if cfg.latent_mix_balance == LatentMixBalance.ENTROPY else 0.0
-        return mixture_weights(
-            kv_in,
-            self.kv_mix_gate,
-            cfg.latent_mix_experts,
-            cfg.latent_mix_topk,
-            self.kv_mix_bias,
-            entropy,
-            cfg.latent_mix_renorm,
         )
 
     def _mla_qkv(
@@ -2665,43 +1116,19 @@ class CausalSelfAttention(eqx.Module):
         latent = x if kv_input is None else kv_input
         if not direct:
             latent = _proj(self.cfg, latent, self.w_dkv)
-        if self.bias_dkv is not None:
-            latent = latent + unshard(self.bias_dkv).astype(x.dtype)
 
         def project_q(w_q: jax.Array) -> jax.Array:
             q_flat = _proj(self.cfg, q_in, w_q)
-            if self.bias_q is not None:
-                q_flat = q_flat + unshard(self.bias_q).astype(x.dtype)
             if self.sconv_q is not None:
                 q_flat = self.sconv_q(q_flat, sconv_segment_ids)
-            return rearrange(q_flat, "... (n d) -> ... n d", d=head_dim * (2 if self.cfg.mla_prev_key_concat else 1))
+            return rearrange(q_flat, "... (n d) -> ... n d", d=head_dim * 1)
 
         assert self.w_q is not None
         q = project_q(self.w_q)
-        share_latent = kv_share is not None and self.cfg.mla_share_kv_latent
         if direct:
             kv_latent = latent
-        elif share_latent and "latent" in kv_share:
-            kv_latent = kv_share["latent"]
         else:
-            if self.kv_mix_gate is None:
-                kv_latent = self.kv_latent_norm(latent)
-            else:
-                blocks = self.cfg.latent_mix_experts
-                weights = self._kv_mix_weights(x if kv_input is None else kv_input)
-                shared_kvl = self.cfg.kv_shared_latent_dim
-                shared, latent = latent[..., :shared_kvl], latent[..., shared_kvl:]
-                experts = rearrange(latent, "... (e r) -> ... e r", e=blocks)
-                if self.cfg.latent_mix_kv_mode == KvMixMode.SUM:
-                    mixed = jnp.einsum("...er,...e->...r", experts, weights.astype(experts.dtype))
-                    kv_latent = self.kv_latent_norm(mixed + shared if shared_kvl else mixed)
-                else:
-                    normed = self.kv_latent_norm(experts)
-                    kv_latent = rearrange(normed * weights[..., None].astype(normed.dtype), "... e r -> ... (e r)")
-                if self.kv_shared_norm is not None:
-                    kv_latent = jnp.concatenate([self.kv_shared_norm(shared), kv_latent], axis=-1)
-            if share_latent:
-                kv_share["latent"] = kv_latent
+            kv_latent = self.kv_latent_norm(latent)
 
         # k / v may read a different stream than the shared latent (attn_res_sum_inputs); each then gets its
         # own latent from that stream (same W_dkv and latent norm).
@@ -2722,42 +1149,8 @@ class CausalSelfAttention(eqx.Module):
             return rearrange(k_flat, "... (n d) -> ... n d", d=head_dim)
 
         k = project_k(self.w_uk)
-        match = None
-        if self.match_up is not None and self.cfg.mla_match_append != MatchAppend.OFF:
-            match = rms_norm(_proj(self.cfg, k_latent, self.match_up.astype(k_latent.dtype)))
-        elif self.match_up is not None:
-            # The shared match space replaces every head's shifted half, for the key and (unshifted) the query.
-            half = head_dim // 2
-            m = _proj(self.cfg, k_latent, self.match_up.astype(k_latent.dtype))
-            if self.match_head is not None:
-                mk = rearrange(_proj(self.cfg, m, self.match_head.astype(m.dtype)), "... (n d) -> ... n d", d=half)
-                mq = mk
-            else:
-                assert self.match_scale is not None
-                mk = jnp.broadcast_to(m[..., None, :], (*m.shape[:-1], k.shape[2], half))
-                mq = mk * self.match_scale.astype(m.dtype)[:, None]
-            spec = _partition_spec_of(k)
-            k = jnp.concatenate([reshard(mk.astype(k.dtype), spec), k[..., half:]], axis=-1)
-            q = jnp.concatenate([reshard(mq.astype(q.dtype), _partition_spec_of(q)), q[..., half:]], axis=-1)
-        second_qk = None
-        if self.w_q2 is not None and self.w_uk2 is not None:
-            second_qk = (project_q(self.w_q2), project_k(self.w_uk2))
-        if self.w_qn is not None and self.w_ukn is not None:
-            # Each noise map's projection columns repeated for its g signal heads, so the per-head transforms
-            # (SConvs, norms, qk_mult) apply unchanged.
-            group = self.cfg.mla_grouped_diff
-
-            def tiled(w: jax.Array) -> jax.Array:
-                w = rearrange(w, "i (m d) -> i m d", d=head_dim)
-                return rearrange(jnp.repeat(w, group, axis=1), "i n d -> i (n d)")
-
-            second_qk = (project_q(tiled(self.w_qn)), project_k(tiled(self.w_ukn)))
         if self.w_uv is None:  # mla_shared_kv_tied: the value is the cached key vector itself
             v = k
-            if self.cfg.mla_value_norm == "rms":
-                v = rms_norm(v)
-            elif self.v_norm is not None:
-                v = self.v_norm(v)
         else:
             v = rearrange(_proj(self.cfg, v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
         if self.value_embed is not None:
@@ -2767,10 +1160,7 @@ class CausalSelfAttention(eqx.Module):
             lam = self.ve_lambda.astype(x.dtype)
             ve_weight = _value_embed_weight(self.cfg.value_embeds, x, self.ve_gate, lam)
             v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
-        if self.cfg.mla_shared_kv:  # one K / V head for every query head
-            spec = _partition_spec_of(q)
-            k, v = (reshard(jnp.broadcast_to(t, (*t.shape[:2], q.shape[2], t.shape[3])), spec) for t in (k, v))
-        return q, k, v, second_qk, match
+        return q, k, v, (None), (None)
 
     def _gqa_qkv(
         self,
@@ -2788,21 +1178,15 @@ class CausalSelfAttention(eqx.Module):
             assert w is not None
             return _proj(self.cfg, inp, w)
 
-        q_flat = _project(x, self.w_q, self.latent_q)
-        k_flat = _project(kv_in, self.w_k, self.latent_k)
-        v_flat = _project(kv_in, self.w_v, self.latent_v)
+        q_flat = _project(x, self.w_q, None)
+        k_flat = _project(kv_in, self.w_k, None)
+        v_flat = _project(kv_in, self.w_v, None)
         # SConv: depthwise causal conv after the K projection.
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
-        if self.switch_v_gate is None:
-            v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
-        else:
-            experts = self.cfg.switchhead_experts
-            weights = switchhead_weights(kv_in, self.switch_v_gate, experts, self.cfg.switchhead_topk)
-            v_experts = rearrange(v_flat, "... (m e d) -> ... m e d", e=experts, d=head_dim)
-            v = jnp.einsum("bsmed,bsme->bsmd", v_experts, weights.astype(v_experts.dtype))
+        v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
 
         if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None:
             stored_kv_heads = self.cfg.stored_kv_heads
@@ -2856,46 +1240,15 @@ class CausalSelfAttention(eqx.Module):
         # segment_ids (packed-document boundaries) come from the mask so the SConv never mixes across a
         # document boundary.
         sconv_segment_ids = _sconv_segment_ids(mask)
-        second_qk = match = None
+        second_qk = None
         if self.cfg.mla:
-            q, k, v, second_qk, match = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs, kv_input)
-            if self.cfg.mla_tie_prev_qk:
-                shifted = shifted_channels(q.shape[2], q.shape[3], self.cfg.mla_key_offset_channels)
-                q = jnp.where(shifted, reshard(k.astype(q.dtype), _partition_spec_of(q)), q)
-            if self.kv_mix_gate is not None:
-                kv_stats = _mixture_load_stats(self._kv_mix_weights(x if kv_input is None else kv_input))
-            if self.vres_lambda is not None:
-                assert kv_share is not None
-                v = _value_residual(v, self.vres_lambda, kv_share, value_residual)
+            q, k, v, second_qk, _match = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs, kv_input)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global, kv_input)
         stats: dict[str, jax.Array] = {}
-        if self.kv_mix_gate is not None:
-            stats.update(kv_stats)
-        if self.v_filter_w is not None and self.v_filter_b is not None:
-            # Noise filter: each value read is kept by sigmoid(w_h . v_j + b_h).
-            head_axis = _padded_spec(v)[2]
-            w = reshard(self.v_filter_w, P(head_axis, None))
-            gate_logits = jnp.einsum("bsnd,nd->bsn", v.astype(jnp.float32), w) + reshard(self.v_filter_b, P(head_axis))
-            v_gate = jax.nn.sigmoid(gate_logits)
-            v = v * v_gate[..., None].astype(v.dtype)
-            v_gate = jax.lax.stop_gradient(v_gate)
-            stats[f"{_LAYER_KNOB_PREFIX}vfilter_gate_mean"] = jnp.mean(v_gate)
-            stats[f"{_LAYER_KNOB_PREFIX}vfilter_frac_lt0p1"] = jnp.mean((v_gate < 0.1).astype(jnp.float32))
         fox_key_bias = None
         # The FoX key channels reach the kernel's 1/sqrt(padded head_dim) scale; q is rescaled to keep q.k exact.
         fox_q_scale = 1.0
-        if self.forget_gate_w is not None and self.forget_gate_b is not None:
-            # FoX: logit (i, j) += c_i - c_j, c the per-document cumsum of log f; only -c_j survives the softmax
-            # (the kernel applies no soft-cap or other nonlinearity to the logits).
-            gate_logits = jnp.einsum("bsd,dn->bsn", x.astype(jnp.float32), self.forget_gate_w.astype(jnp.float32))
-            log_forget = jax.nn.log_sigmoid(gate_logits + self.forget_gate_b)
-            fox_key_bias = -_segment_cumsum(log_forget, sconv_segment_ids)
-            fox_q_scale = math.sqrt(_fox_head_dim(head_dim) / head_dim)
-            log_forget = jax.lax.stop_gradient(log_forget)
-            stats[f"{_LAYER_KNOB_PREFIX}fox_gate_mean"] = jnp.mean(jnp.exp(log_forget))
-            stats[f"{_LAYER_KNOB_PREFIX}fox_neg_log_gate_mean"] = -jnp.mean(log_forget)
-            stats[f"{_LAYER_KNOB_PREFIX}fox_gate_min_head"] = jnp.min(jnp.mean(jnp.exp(log_forget), axis=(0, 1)))
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -2910,30 +1263,17 @@ class CausalSelfAttention(eqx.Module):
 
         def _transform_qk(q: jax.Array, k: jax.Array) -> tuple[jax.Array, jax.Array]:
             """Key offset, q/k norms, RoPE, qk_mult and SSMax: everything between the projections and the kernel."""
-            if self.cfg.mla and self.cfg.mla_lag_groups:
-                q, k = apply_lag_groups(q, k, sconv_segment_ids, parse_lag_groups(self.cfg.mla_lag_groups, head_dim))
+            if self.cfg.mla and ():
+                q, k = apply_lag_groups(q, k, sconv_segment_ids, parse_lag_groups((), head_dim))
             if self.cfg.mla and self.cfg.mla_key_offset:
-                if k.shape[2] < len(self.cfg.mla_key_offset_channels):  # shared KV: per-query-head offsets
+                if k.shape[2] < 0:  # shared KV: per-query-head offsets
                     k = reshard(jnp.broadcast_to(k, q.shape[:3] + k.shape[3:]), _partition_spec_of(q))
-                k = partial_key_offset(k, sconv_segment_ids, _partition_spec_of(k), self.cfg.mla_key_offset_channels)
+                k = partial_key_offset(k, sconv_segment_ids, _partition_spec_of(k), ())
             if self.cfg.qk_norm:
                 q = rms_norm(q)
                 k = rms_norm(k)
             elif self.cfg.mla_k_norm and self.cfg.mla:
-                # DeepSeek-V4.1: weightless per-head RMSNorm on the keys only; queries keep their scale.
-                if self.cfg.mla_k_norm_shared:
-                    # One RMS over all heads' keys per token: 1 cached scalar per token under MLA absorption
-                    # instead of one per head.
-                    k32 = k.astype(jnp.float32)
-                    k = (k32 * jax.lax.rsqrt(jnp.mean(jnp.square(k32), axis=(-2, -1), keepdims=True) + 1e-6)).astype(
-                        k.dtype
-                    )
-                elif self.cfg.mla_k_norm_split:
-                    # With the partial key offset, normalize the previous-token and current-token halves separately.
-                    half = k.shape[-1] // 2
-                    k = jnp.concatenate([rms_norm(k[..., :half]), rms_norm(k[..., half:])], axis=-1)
-                else:
-                    k = rms_norm(k)
+                k = rms_norm(k)
             if self.cfg.mla_q_norm and self.cfg.mla and not self.cfg.qk_norm:
                 q = rms_norm(q)
             # The Inkling bias replaces RoPE (no rotation).
@@ -2951,21 +1291,11 @@ class CausalSelfAttention(eqx.Module):
             else:
                 qk_mult = (self.qk_mult * fox_q_scale).astype(q.dtype)
                 q = q * (qk_mult[:, None] if qk_mult.ndim else qk_mult)
-            if self.ssmax_scale is not None:
-                log_keys = jnp.log1p(_positions_in_document(sconv_segment_ids, seq_len).astype(jnp.float32))
-                q = q * (1.0 + self.ssmax_scale[:, None] * log_keys[..., None, None]).astype(q.dtype)
             return q, k
 
         # The Inkling bias: a per-head content-dependent bias (from x) on the pre-softmax logits.
         rel_bias = self.rel_pos(x) if self.rel_pos is not None else None
         q, k = _transform_qk(q, k)
-        if self.cfg.mla and self.cfg.mla_prev_key_concat:  # key j = [k_j ; k_{j-1}] against 2x-wide queries
-            k = reshard(jnp.concatenate([k, previous_token(k, sconv_segment_ids)], axis=-1), _partition_spec_of(k))
-        if self.prev_gate is not None:
-            # Per head and token, how much the query relies on its previous-token match: 2 sigmoid(x . w), 1 at init.
-            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.prev_gate).astype(jnp.float32))
-            shifted = shifted_channels(q.shape[2], q.shape[3], self.cfg.mla_key_offset_channels)
-            q = jnp.where(shifted, q * gate[..., None].astype(q.dtype), q)
         head_probe_attn = _head_attention_stats(q, k, mask, rel_bias, sconv_segment_ids) if _HEAD_PROBE else None
         if _HEAD_PROBE:
             stats[HEAD_QCOS_STAT] = _query_head_cosines(q, sconv_segment_ids)
@@ -2975,8 +1305,8 @@ class CausalSelfAttention(eqx.Module):
             stats[ATTN_PROBE_STAT] = _probe_attention(q, k, mask, rel_bias, _FORWARD_PROBE.attn_queries)
         if trace_capture.TRACE and self.cfg.mla:
             seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
-            offset = self.cfg.mla_key_offset and not self.cfg.mla_lag_groups
-            shifted = shifted_channels(q.shape[2], q.shape[3], self.cfg.mla_key_offset_channels) if offset else 0.0
+            offset = self.cfg.mla_key_offset
+            shifted = shifted_channels(q.shape[2], q.shape[3], ()) if offset else 0.0
             top_i, top_f = trace_capture.attention_topk(q, k, rel_bias, seg, shifted, _BATCH_AXES)
             stats[f"{_LAYER_KNOB_PREFIX}trace_topk_idx"] = top_i
             stats[f"{_LAYER_KNOB_PREFIX}trace_topk_fields"] = top_f
@@ -2987,11 +1317,9 @@ class CausalSelfAttention(eqx.Module):
                 stats[RELPOS_ROWS_STAT] = attention_rows_probe.relpos_rows(rel_bias, rows, positions)
         # GPU-only kernels; auto-select off-GPU so the model still lowers on CPU.
         attn_impl = self.cfg.gpu_attention if jax.default_backend() == "gpu" else None
-
-        gdla_noise = self.cfg.mla_gdla_noise_heads if self.cfg.mla else 0
         # GDLA: query heads are laid out group by group ([g signal heads, 1 noise head] per group), so each
         # group's value head expands to its g + 1 query heads.
-        kernel_v = align_kv_heads(v, num_q_heads=q.shape[2]) if gdla_noise else v
+        kernel_v = v
 
         def _attend(qh: jax.Array, kh: jax.Array) -> jax.Array:
             if fox_key_bias is None:
@@ -2999,75 +1327,10 @@ class CausalSelfAttention(eqx.Module):
             qh, kh, vh = _fox_augment(qh, kh, kernel_v, fox_key_bias)
             return attention(qh, kh, vh, mask, implementation=attn_impl, rel_bias=rel_bias)[..., :head_dim]
 
-        if match is not None:
-            assert self.match_scale is not None
-            gate = self.match_scale
-            if self.match_gate is not None:
-                gate = gate * 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.match_gate).astype(jnp.float32))
-            head_spec = P(*_padded_spec(q)[:3], None)
-            q, k, kernel_v = append_shared_match(q, k, kernel_v, match, gate, sconv_segment_ids, head_spec)
-        if self.v_ahead is not None:
-            k, kernel_v = value_lookahead(k, kernel_v, self.v_ahead, sconv_segment_ids, self.k_null, self.v_self)
-        if self.w_qf is not None:
-            qf = rearrange(jnp.einsum("bsd,dc->bsc", x, self.w_qf.astype(x.dtype)), "... (f c) -> ... f c", c=head_dim)
-            window = self.cfg.mla_future_window
-            k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
-        if self.parallax_w is not None:
-            seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
-            r = rearrange(
-                jnp.einsum("bsd,dc->bsc", x, self.parallax_w.astype(x.dtype)), "... (n d) -> ... n d", d=head_dim
-            )
-            if self.parallax_gain is not None:
-                # Divided by the head dim: q and k are normed (|r.k| up to ~head_dim), so s = gain * mean_c r_c k_c.
-                r = rms_norm(r.astype(jnp.float32)) * self.parallax_gain.astype(jnp.float32)[:, None] / head_dim
-            attn_out = parallax_attention(q, k, kernel_v, r, rel_bias, seg)
-        elif self.gauss is not None and self.cfg.mla_gauss_fast:
-            seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
-            reach = self.cfg.mla_gauss_reach
-            attn_out = gauss_attention_fast(q, k, kernel_v, rel_bias, seg, self.gauss, reach, attention_with_lse)
-        elif self.cfg.mla and self.cfg.mla_sparse_window:
+        if self.cfg.mla and (0):
             attn_out = mla_sparse_attention(self, x, q, k, kernel_v, rel_bias, sconv_segment_ids, rms_norm, _proj)
-        elif self.copy_gate_lse is not None:
-            # Match strength: the kernel's log-sum-exp relative to uniform.
-            if mask.fa4_bounds is not None:
-                lower, valid = mask.fa4_bounds
-            else:
-                seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
-                lower, valid = _document_starts(seg), jnp.ones(q.shape[:2], jnp.bool_)
-            attn_out, lse = attention_with_lse(q, k, kernel_v, lower, valid, rel_bias)
-            keys = jnp.maximum(jnp.arange(q.shape[1])[None, :] - lower + 1, 1).astype(jnp.float32)
-            strength = jnp.swapaxes(lse.astype(jnp.float32), 1, 2) - jnp.log(keys)[..., None]  # [B, S, N]
-            copy_strength = jnp.where(valid[..., None] & jnp.isfinite(strength), strength, 0.0)
-            stats[f"{_LAYER_KNOB_PREFIX}copy_strength_mean"] = jax.lax.stop_gradient(jnp.mean(copy_strength))
         else:
             attn_out = _attend(q, k)[..., :head_dim]
-        if gdla_noise:
-            assert self.gda_lambda is not None
-            grouped = rearrange(attn_out.astype(jnp.float32), "b s (m j) d -> b s m j d", m=gdla_noise)
-            signal, noise = grouped[..., :-1, :], grouped[..., -1:, :]
-            lam = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.gda_lambda).astype(jnp.float32))
-            lam = rearrange(lam, "b s (m g) -> b s m g", m=gdla_noise)[..., None]
-            attn_out = rearrange(signal - lam * noise, "b s m g d -> b s (m g) d").astype(attn_out.dtype)
-            attn_out = reshard(attn_out, _partition_spec_of(q) or P(_BATCH_AXES, None, "model", None))
-            stats[f"{_LAYER_KNOB_PREFIX}gdla_lambda_mean"] = jax.lax.stop_gradient(jnp.mean(lam))
-            stats[f"{_LAYER_KNOB_PREFIX}gdla_noise_rms_ratio"] = jax.lax.stop_gradient(
-                jnp.sqrt(jnp.mean(jnp.square(noise)) / (jnp.mean(jnp.square(signal)) + 1e-12))
-            )
-        elif second_qk is not None and self.gda_lambda is not None:
-            # Grouped differential attention: the shared noise map's read, scaled per token and head.
-            attn_noise = _attend(*_transform_qk(*second_qk))
-            lam = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.gda_lambda).astype(jnp.float32))[..., None]
-            attn_out = (attn_out.astype(jnp.float32) - lam * attn_noise.astype(jnp.float32)).astype(attn_out.dtype)
-        elif second_qk is not None:
-            # Differential attention: subtract lambda times a second softmax map over the same values, then
-            # RMS-normalize each head and scale by (1 - lambda_init).
-            assert self.diff_lambda is not None and self.diff_lambda_init is not None
-            attn_out2 = _attend(*_transform_qk(*second_qk))
-            lq1, lk1, lq2, lk2 = self.diff_lambda
-            lambda_init = jax.lax.stop_gradient(self.diff_lambda_init)
-            lam = jnp.exp(jnp.sum(lq1 * lk1)) - jnp.exp(jnp.sum(lq2 * lk2)) + lambda_init
-            diff_out = attn_out.astype(jnp.float32) - lam * attn_out2.astype(jnp.float32)
-            attn_out = (rms_norm(diff_out) * (1.0 - lambda_init)).astype(attn_out.dtype)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -3077,64 +1340,21 @@ class CausalSelfAttention(eqx.Module):
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         xsa = (dot / (v_norm_sq + 1e-6)) * aligned_v
-        if self.xsa_scale is not None:
-            scale = jnp.tanh(self.xsa_scale) if self.cfg.xsa_mode == "tanh" else self.xsa_scale
-            xsa = xsa * scale.astype(xsa.dtype)[:, None]
-        elif self.xsa_gate is not None:
-            xsa = xsa * (2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.xsa_gate)))[..., None].astype(xsa.dtype)
         attn_out = attn_out - xsa
-        if self.head_mix is not None:
-            n_heads = attn_out.shape[2]
-            w = jnp.einsum("bsd,dm->bsm", x, self.head_mix).astype(jnp.float32)
-            # w1 = 1 + x @ W_1 (a head-average at init), w2 = x @ W_2 (zero at init: no mixing yet).
-            w1, w2 = 1.0 + w[..., :n_heads], w[..., n_heads:]
-            mixed = jnp.einsum("bsg,bsgd->bsd", w1 / n_heads, attn_out.astype(jnp.float32))
-            attn_out = attn_out + (w2[..., None] * mixed[:, :, None, :]).astype(attn_out.dtype)
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head (or per channel).
-        if self.attn_gate_up is not None:
-            hidden = jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.attn_gate))
-            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsr,rn->bsn", hidden, self.attn_gate_up))
-        else:
-            gate_logit = jnp.einsum("bsd,dn->bsn", x, self.attn_gate).astype(jnp.float32)
-            if self.copy_gate_lse is not None:
-                gate_logit = gate_logit + self.copy_gate_lse.astype(jnp.float32) * copy_strength
-            if self.copy_gate_out is not None:
-                normed_out = reshard(rms_norm(attn_out.astype(jnp.float32)), P(_BATCH_AXES, None, None, None))
-                read = unshard(self.copy_gate_out).astype(jnp.float32)
-                gate_logit = gate_logit + jnp.einsum("bsnh,nh->bsn", normed_out, read)
-            gate = (2 * jax.nn.sigmoid(gate_logit)).astype(attn_out.dtype)
-        per_channel = self.cfg.attn_gate_elementwise or self.attn_gate_up is not None
-        gate = rearrange(gate, "... (n d) -> ... n d", d=head_dim) if per_channel else gate[..., None]
+        gate_logit = jnp.einsum("bsd,dn->bsn", x, self.attn_gate).astype(jnp.float32)
+        gate = (2 * jax.nn.sigmoid(gate_logit)).astype(attn_out.dtype)
+        gate = gate[..., None]
         attn_out = gate * attn_out
         if head_probe_attn is not None:
-            if self.cfg.switchhead_experts or self.w_o is None:
+            if self.w_o is None:
                 raise ValueError("head_probe does not support switchhead_experts or attn_latent_o")
             stats[HEAD_PROBE_STAT] = _head_output_stats(head_probe_attn, gate, attn_out, self.w_o)
-        if self.switch_v_gate is not None:
-            stats.update(
-                _switchhead_stats(
-                    "v",
-                    switchhead_weights(
-                        x if kv_input is None else kv_input,
-                        self.switch_v_gate,
-                        self.cfg.switchhead_experts,
-                        self.cfg.switchhead_topk,
-                    ),
-                )
-            )
-        if self.switch_o_gate is not None:
-            # Each head's read is copied to its experts, weighted, and contracted with the (n e h) rows of w_o.
-            weights = switchhead_weights(x, self.switch_o_gate, self.cfg.switchhead_experts, self.cfg.switchhead_topk)
-            stats.update(_switchhead_stats("o", weights))
-            attn_out = attn_out[:, :, :, None, :] * weights[..., None].astype(attn_out.dtype)
         # Merge heads (and SwitchHead experts) into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
             attn_out,
             (*attn_out.shape[:2], math.prod(attn_out.shape[2:])),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
-        if self.latent_o is not None:
-            return reshard(self.latent_o(self.cfg, attn_out), batch_spec), stats
         assert self.w_o is not None
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec), stats
 
@@ -3178,26 +1398,10 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
     """Values of the small learned knobs of layer ``i`` (value residual mix, DIFF lambda, DyT alpha, PLE
     up-projection norm), exported as ``train/attn_res/knob_*`` to diagnose how each feature is used."""
     stats = {}
-    if isinstance(layer.mlp, MoEMLP) and layer.mlp.routing_sum is not None:
-        stats[f"attn_res_knob_routing_sum_L{i}"] = jax.lax.stop_gradient(layer.mlp.routing_sum).astype(jnp.float32)
-    if layer.attn.cfg.attn_res_key_rank is not None:
-        # LR-AttnRes: norms of this layer's r-wide pseudo-queries (0 at init = uniform routing).
-        for name, query in (("attn", layer.attn_res_query_attn), ("mlp", layer.attn_res_query_mlp)):
-            stats[f"attn_res_knob_lrkey_qnorm_{name}_L{i}"] = jnp.linalg.norm(jax.lax.stop_gradient(query))
-    if layer.attn.cfg.kv_stream_dim:
-        # The main layer's K/V projections, which read the KV side stream.
-        names = ("w_dkv",) if isinstance(layer.attn, CausalSelfAttention) and layer.attn.cfg.mla else ("w_k", "w_v")
-        for name in names:
-            weight = jax.lax.stop_gradient(getattr(layer.attn, name)).astype(jnp.float32)
-            stats[f"attn_res_knob_kv_proj_{name}_norm_L{i}"] = jnp.linalg.norm(weight)
     if isinstance(layer.attn, KimiDeltaAttention) and layer.attn.w_beta is not None:
         # The write-strength projection's magnitude: pinned under MuonH, free under Adam.
         w_beta = jax.lax.stop_gradient(layer.attn.w_beta).astype(jnp.float32)
         stats[f"attn_res_knob_kda_w_beta_norm_L{i}"] = jnp.linalg.norm(w_beta)
-        if layer.attn.beta_scale is not None:
-            scale = jax.lax.stop_gradient(layer.attn.beta_scale).astype(jnp.float32)
-            stats[f"attn_res_knob_kda_beta_scale_mean_L{i}"] = jnp.mean(scale)
-            stats[f"attn_res_knob_kda_beta_scale_max_L{i}"] = jnp.max(scale)
     gauss = getattr(layer.attn, "gauss", None)
     if gauss is not None:  # per-head shift and width of the value kernel
         sigma = jax.nn.softplus(gauss.rho.astype(jnp.float32)) + 0.05
@@ -3216,22 +1420,10 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
     vres = getattr(layer.attn, "vres_lambda", None)
     if vres is not None:
         stats[f"attn_res_knob_vres_l1_L{i}"], stats[f"attn_res_knob_vres_l2_L{i}"] = jax.lax.stop_gradient(vres)
-    if isinstance(layer.attn, CausalSelfAttention) and layer.attn.diff_lambda is not None:
-        lq1, lk1, lq2, lk2 = jax.lax.stop_gradient(layer.attn.diff_lambda)
-        stats[f"attn_res_knob_diff_lambda_L{i}"] = (
-            jnp.exp(jnp.dot(lq1, lk1)) - jnp.exp(jnp.dot(lq2, lk2)) + layer.attn.diff_lambda_init
-        )
     for name in ("rms_attn", "rms_mlp"):
         norm = getattr(layer, name)
         if isinstance(norm, DyT):
             stats[f"attn_res_knob_dyt_alpha_{name.removeprefix('rms_')}_L{i}"] = jax.lax.stop_gradient(norm.dyt_alpha)
-    if isinstance(layer.attn, CausalSelfAttention) and layer.attn.forget_gate_b is not None:
-        stats[f"attn_res_knob_fox_bias_gate_mean_L{i}"] = jnp.mean(
-            jax.nn.sigmoid(jax.lax.stop_gradient(layer.attn.forget_gate_b))
-        )
-        stats[f"attn_res_knob_fox_w_norm_L{i}"] = jnp.linalg.norm(
-            jax.lax.stop_gradient(layer.attn.forget_gate_w).astype(jnp.float32)
-        )
     rot_scale = getattr(layer.attn, "rot_scale", None)
     if rot_scale is not None:
         freq = jnp.abs(jax.lax.stop_gradient(rot_scale).astype(jnp.float32)) * _kda_rot_omega(2 * rot_scale.shape[-1])
@@ -3239,32 +1431,17 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         stats[f"attn_res_knob_kda_rot_freq_max_L{i}"] = jnp.max(freq)
     if isinstance(layer.mlp, MoEMLP):
         stats.update(_router_knob_stats(layer.mlp, i))
-    if layer.ple_up is not None:
-        stats[f"attn_res_knob_ple_up_norm_L{i}"] = jnp.linalg.norm(
-            jax.lax.stop_gradient(layer.ple_up).astype(jnp.float32)
-        )
-    if isinstance(layer.attn, KimiDeltaAttention) and layer.attn.comba_d is not None:
-        comba_d = jax.lax.stop_gradient(layer.attn.comba_d)
-        stats[f"attn_res_knob_comba_d_L{i}"] = jnp.mean(comba_d)
-        stats[f"attn_res_knob_comba_d_min_L{i}"] = jnp.min(comba_d)
-        stats[f"attn_res_knob_comba_d_max_L{i}"] = jnp.max(comba_d)
     if isinstance(layer.mlp, MoEMLP) and layer.mlp.cfg.latent_out_dim is not None:
         em = layer.mlp.expert_mlp
         read = [em.w_up] if em.w_gate is None else [em.w_gate, em.w_up]
         stats[f"attn_res_knob_expert_read_pr_L{i}"] = _participation_ratio(read, "eri,esi->rs")
         stats[f"attn_res_knob_expert_write_pr_L{i}"] = _participation_ratio([em.w_down], "eir,eis->rs")
-    if isinstance(layer.mlp, MoEMLP) and layer.mlp.expert_read_norm is not None:
-        norm = layer.mlp.expert_read_norm
-        gain = norm.gain() if isinstance(norm, RMSNorm) else 1.0 + norm.gamma
-        gain = jnp.abs(jax.lax.stop_gradient(gain).astype(jnp.float32))
-        for g in range(gain.shape[0]):
-            stats[f"attn_res_knob_expert_read_gain_g{g}_L{i}"] = jnp.mean(gain[g])
     # Mean |gamma| of the zero-centered gains: the attention / MLP pre-norms, and every norm inside the mixer
     # and MoE (KV latent, KDA output, latent / router norms) plus the Peri-LN output norms.
     groups = {
         "attn": [layer.rms_attn],
         "mlp": [layer.rms_mlp],
-        "inner": [layer.attn, layer.mlp, layer.out_norm_attn, layer.out_norm_mlp],
+        "inner": [layer.attn, layer.mlp, None, None],
     }
     for name, modules in groups.items():
         gammas = [g for m in modules for g in _zero_centered_gammas(m)]
@@ -3277,24 +1454,7 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
 def _router_knob_stats(mlp: "MoEMLP", i: int) -> dict[str, jax.Array]:
     """Router logit scale, per-expert output gains and, with SimBal or the logit scale, the router's Frobenius
     norm and mean |cosine| between its real-expert columns."""
-    sg = jax.lax.stop_gradient
-    cfg = mlp.cfg
     stats = {}
-    if mlp.router_logit_scale is not None:
-        stats[f"attn_res_knob_router_logit_scale_L{i}"] = sg(mlp.router_logit_scale)
-    if mlp.expert_output_gain is not None:
-        gain = sg(mlp.expert_output_gain[: cfg.num_experts]).astype(jnp.float32)
-        stats[f"attn_res_knob_expert_gain_mean_L{i}"] = jnp.mean(gain)
-        stats[f"attn_res_knob_expert_gain_std_L{i}"] = jnp.std(gain)
-        stats[f"attn_res_knob_expert_gain_min_L{i}"] = jnp.min(gain)
-        stats[f"attn_res_knob_expert_gain_max_L{i}"] = jnp.max(gain)
-    if mlp.router is not None and (cfg.simbal_loss_weight > 0 or cfg.router_logit_scale):
-        r = reshard(sg(mlp.router[:, : cfg.num_experts]).astype(jnp.float32), P(None, None))
-        norms = jnp.sqrt(jnp.sum(jnp.square(r), axis=0))
-        cos = jnp.einsum("de,df->ef", r / norms, r / norms, out_sharding=P(None, None))
-        n = cfg.num_experts
-        stats[f"attn_res_knob_router_norm_L{i}"] = jnp.sqrt(jnp.sum(jnp.square(norms)))
-        stats[f"attn_res_knob_router_col_cos_abs_L{i}"] = (jnp.sum(jnp.abs(cos)) - n) / (n * (n - 1))
     return stats
 
 
@@ -3311,44 +1471,10 @@ def _participation_ratio(weights: list[jax.Array], gram_spec: str) -> jax.Array:
     return jnp.trace(gram) ** 2 / jnp.sum(jnp.square(gram))
 
 
-_LATENT_SELECT_SALT = 0x5E1EC7
-
-
-def _latent_select_mask(cfg: GrugModelConfig, layer_index: jax.Array | int) -> jax.Array | None:
-    """Per-layer 0/1 hidden-channel mask for ``latent_select`` with a random or rotating pattern."""
-    if not cfg.latent_select or cfg.latent_select_pattern == "first":
-        return None
-    assert cfg.latent_dim is not None
-    d, latent = cfg.hidden_dim, cfg.latent_dim
-    if cfg.latent_select_pattern == "random":
-        key = random.fold_in(random.PRNGKey(_LATENT_SELECT_SALT), layer_index)
-        idx = random.permutation(key, d)[:latent]
-    else:
-        idx = (jnp.arange(latent) + jnp.asarray(layer_index) * (d // cfg.num_layers)) % d
-    return reshard(jnp.zeros((d,), jnp.float32).at[idx].set(1.0), P(None))
-
-
 def _qk_mult_init(cfg: GrugModelConfig, num_heads: int) -> jax.Array | None:
     if not cfg.learnable_qk_mult:
         return None
-    return jnp.full((num_heads,) if cfg.qk_mult_per_head else (), cfg.qk_mult, jnp.float32)
-
-
-def _vres_lambda_init(cfg: GrugModelConfig) -> jax.Array | None:
-    return jnp.asarray(cfg.value_residual_init, jnp.float32) if cfg.value_residual_layers else None
-
-
-def _value_residual(v: jax.Array, lam: jax.Array, kv_share: dict[str, jax.Array], mix: bool) -> jax.Array:
-    """ResFormer value residual: the first layer to run stores its ``v`` in ``kv_share``; a ``mix`` layer
-    returns ``l1 * v + l2 * v_first``."""
-    if "v_first" not in kv_share:
-        kv_share["v_first"] = v
-        return v
-    if not mix:
-        return v
-    lam = lam.astype(v.dtype)
-    v_first = reshard(kv_share["v_first"], _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
-    return lam[0] * v + lam[1] * v_first
+    return jnp.full((), cfg.qk_mult, jnp.float32)
 
 
 def _kda_dt_bias_init(cfg: GrugModelConfig, key: PRNGKeyArray, shape: tuple[int, int]) -> jax.Array:
@@ -3357,14 +1483,6 @@ def _kda_dt_bias_init(cfg: GrugModelConfig, key: PRNGKeyArray, shape: tuple[int,
     lo, hi = cfg.kda_dt_range
     decay = jnp.exp(random.uniform(key, shape, minval=math.log(lo), maxval=math.log(hi)))
     return jax.scipy.special.logit(decay / KDA_MIN_LOG_DECAY)
-
-
-def _kda_push_decay_init(cfg: GrugModelConfig, num_heads: int, head_dim: int) -> jax.Array:
-    """Push-bucket decay logits: bucket m's |g| is log-spaced across ``kda_push_decay_range`` (slow first)."""
-    lo, hi = cfg.kda_push_decay_range
-    mags = jnp.exp(jnp.linspace(math.log(lo), math.log(hi), cfg.kda_push_buckets))
-    logits = jax.scipy.special.logit(mags / KDA_MIN_LOG_DECAY)
-    return jnp.broadcast_to(logits[:, None, None], (cfg.kda_push_buckets, num_heads, head_dim)).astype(jnp.float32)
 
 
 def _kda_rot_omega(head_dim: int) -> jax.Array:
@@ -3456,35 +1574,6 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaK
     return jnp.swapaxes(out, 1, 2)
 
 
-def _pair_heads(t: jax.Array) -> jax.Array:
-    """``[B, S, N, ...] -> [B, 2S, N/2, ...]``: head ``2j`` at position ``2s``, head ``2j+1`` at ``2s+1``."""
-    b, s, n, *rest = t.shape
-    t = jnp.moveaxis(t.reshape(b, s, n // 2, 2, *rest), 3, 2)
-    return t.reshape(b, 2 * s, n // 2, *rest)
-
-
-def _unpair_heads(t: jax.Array) -> jax.Array:
-    """Inverse of ``_pair_heads``."""
-    b, s2, half, *rest = t.shape
-    t = jnp.moveaxis(t.reshape(b, s2 // 2, 2, half, *rest), 2, 3)
-    return t.reshape(b, s2 // 2, 2 * half, *rest)
-
-
-def _kda_kernel_paired(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaKernelOptions):
-    """``_kda_kernel`` with adjacent (shard-local) heads sharing one state (``KdaHeadPairing``)."""
-    if q.shape[2] % 2:
-        raise ValueError(f"kda_head_pairing needs an even number of heads per shard, got {q.shape[2]}")
-    paired_extras = {}
-    if "segment_ids" in extras:
-        paired_extras["segment_ids"] = jnp.repeat(extras["segment_ids"], 2, axis=1)
-    for name in ("erase", "erase_logits"):
-        if name in extras:
-            paired_extras[name] = _pair_heads(extras[name])
-    paired = (_pair_heads(t) for t in (q, k, v, g, beta))
-    out = _kda_kernel(*paired, paired_extras, options=options)
-    return _unpair_heads(out)
-
-
 class KimiDeltaAttention(eqx.Module):
     """KDA linear-attention token mixer for the local layers, following Kimi K3's KDA layer.
 
@@ -3510,27 +1599,10 @@ class KimiDeltaAttention(eqx.Module):
     a_log: Float[Array, " N"]
     dt_bias: Float[Array, "N H"]
     w_beta: Float[Array, "D N"] | None
-    w_beta_down: Float[Array, "D R"] | None
-    w_beta_up: Float[Array, "R N"] | None
-    beta_scale: Float[Array, " N"] | None  # cfg.kda_beta_scale
     o_norm: "LearnedRMSNorm"
-    bias_qkv: Float[Array, "3 NH"] | None
     sconv_q: ShortConv
     sconv_k: ShortConv
     sconv_v: ShortConv
-    sconv_a: ShortConv | None
-    vres_lambda: Float[Array, " 2"] | None  # (l1 on v, l2 on the first layer's v): cfg.value_residual_layers
-    push_decay: Float[Array, "M N H"] | None
-    """Per-bucket, per-channel log-decay logits of the push buckets (``kda_push_buckets``)."""
-    w_push: Float[Array, "D NM"] | None
-    """Writer's bucket weights, zero-init (uniform split)."""
-    w_rot_down: Float[Array, "D R"] | None
-    w_rot_up: Float[Array, "R NP"] | None
-    rot_scale: Float[Array, "N P"] | None
-    """``kda_dd_rope`` per-pair angle amplitude ``gamma`` (zero-init: no rotation at init)."""
-    comba_d: Float[Array, " N"] | None
-    """Per-head Comba output-correction scalar ``d`` (``kda_out_correction``)."""
-    value_embed: Float[Array, "V NH"] | None
     ve_lambda: Float[Array, " 2"] | None
     ve_gate: Float[Array, "D N"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
@@ -3540,16 +1612,15 @@ class KimiDeltaAttention(eqx.Module):
         k_q, k_k, k_v, k_o, k_g, k_ad, k_au, k_b, k_dt = random.split(key, 9)
         d, n, h, r, std = cfg.hidden_dim, cfg.num_heads, cfg.inferred_head_dim, _KDA_GATE_RANK, cfg.initializer_std
         # kda_dd_rope ties the decay across each rotated channel pair: h/2 decay columns per head.
-        decay_cols = 1 if cfg.kda_decay_per_head else (h // 2 if cfg.kda_dd_rope else h)
-        rot_rank = cfg.kda_dd_rope_rank
+        decay_cols = h
         return KimiDeltaAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_k=reshard(_init_weight(k_k, (cfg.kv_in_dim, n * h), std), P(_FSDP_AXES, "model")),
             w_v=reshard(_init_weight(k_v, (cfg.kv_in_dim, n * h), std), P(_FSDP_AXES, "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
+            w_o=reshard(_init_weight(k_o, (n * h, d), std * (1.0)), P("model", _FSDP_AXES)),
             w_g=reshard(
-                _init_weight(k_g, (d, n if cfg.kda_gate_per_head else n * h), std * cfg.init_std_mult_gates),
-                P(None, None) if cfg.kda_gate_per_head else P(_FSDP_AXES, "model"),
+                _init_weight(k_g, (d, (n * h)), std * cfg.init_std_mult_gates),
+                P(_FSDP_AXES, "model"),
             ),
             w_write=(
                 reshard(_init_weight(random.fold_in(k_v, 7), (d, n * h), std), P(_FSDP_AXES, "model"))
@@ -3560,71 +1631,24 @@ class KimiDeltaAttention(eqx.Module):
             w_a_down=reshard(_init_weight(k_ad, (d, r), std), P(_FSDP_AXES, None)),
             w_a_up=reshard(
                 _init_weight(k_au, (r, n * decay_cols), std),
-                P(None, None) if cfg.kda_decay_per_head else P(None, "model"),
+                P(None, "model"),
             ),
             a_log=jnp.zeros((n,)),
             dt_bias=_kda_dt_bias_init(cfg, k_dt, (n, decay_cols)),
-            w_beta=(
-                None
-                if cfg.kda_beta_rank
-                else reshard(
-                    _init_weight(
-                        k_b,
-                        (d, n),
-                        std * (cfg.init_std_mult_gates if cfg.init_std_mult_beta is None else cfg.init_std_mult_beta),
-                    ),
-                    P(None, None),
-                )
-            ),
-            beta_scale=jnp.ones((n,)) if cfg.kda_beta_scale else None,
-            w_beta_down=(
-                reshard(_init_weight(k_b, (d, cfg.kda_beta_rank), std), P(None, None)) if cfg.kda_beta_rank else None
-            ),
-            w_beta_up=(
-                None
-                if not cfg.kda_beta_rank
-                else reshard(
-                    (
-                        jnp.zeros((cfg.kda_beta_rank, n))
-                        if cfg.kda_beta_up_zero_init
-                        else _init_weight(
-                            random.fold_in(k_b, 1), (cfg.kda_beta_rank, n), 1.0 / math.sqrt(cfg.kda_beta_rank)
-                        )
-                    ),
-                    P(None, None),
-                )
+            w_beta=reshard(
+                _init_weight(
+                    k_b,
+                    (d, n),
+                    std * (cfg.init_std_mult_gates if cfg.init_std_mult_beta is None else cfg.init_std_mult_beta),
+                ),
+                P(None, None),
             ),
             o_norm=_learned_rms_norm(cfg, h, 1e-6, role="kda_o_norm"),
-            bias_qkv=jnp.zeros((3, n * h)) if "qkv" in cfg.proj_biases else None,
             sconv_q=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
             sconv_k=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
             sconv_v=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
-            sconv_a=ShortConv.init(r, cfg.sconv_kernel, cfg.sconv_impl) if cfg.kda_decay_conv else None,
-            vres_lambda=_vres_lambda_init(cfg),
-            push_decay=_kda_push_decay_init(cfg, n, h) if cfg.kda_push_buckets else None,
-            w_push=(reshard(jnp.zeros((d, n * cfg.kda_push_buckets)), P(None, None)) if cfg.kda_push_buckets else None),
-            w_rot_down=(
-                reshard(_init_weight(random.fold_in(k_ad, 1), (d, rot_rank), std), P(_FSDP_AXES, None))
-                if cfg.kda_dd_rope
-                else None
-            ),
-            w_rot_up=(
-                reshard(
-                    _init_weight(random.fold_in(k_au, 1), (rot_rank, n * (h // 2)), 1.0 / math.sqrt(rot_rank)),
-                    P(None, "model"),
-                )
-                if cfg.kda_dd_rope
-                else None
-            ),
-            rot_scale=jnp.zeros((n, h // 2)) if cfg.kda_dd_rope else None,
-            comba_d=jnp.full((n,), cfg.kda_out_correction_init, jnp.float32) if cfg.kda_out_correction else None,
-            value_embed=(
-                reshard(_init_weight(random.fold_in(k_v, 11), (cfg.vocab_size, n * h), std), P(None, None))
-                if cfg.kda_value_embeds != ValueEmbeds.NONE
-                else None
-            ),
-            ve_lambda=_ve_lambda_init(cfg.kda_value_embeds),
-            ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.kda_value_embeds in _GATED_VALUE_EMBEDS else None),
+            ve_lambda=_ve_lambda_init(ValueEmbeds.NONE),
+            ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if (ValueEmbeds.NONE) in _GATED_VALUE_EMBEDS else None),
             cfg=cfg,
         )
 
@@ -3656,40 +1680,18 @@ class KimiDeltaAttention(eqx.Module):
         def project(w: jax.Array, conv: ShortConv, bias_row: int, name: str) -> jax.Array:
             source = kv_input if kv_input is not None and name in ("k", "v") else proj_inputs.get(name, x)
             y = _proj(cfg, source, w)
-            if self.bias_qkv is not None:
-                y = y + unshard(self.bias_qkv[bias_row]).astype(x.dtype)
             y = jax.nn.silu(conv(y, segment_ids))
             return rearrange(y, "... (n d) -> ... n d", d=head_dim)
 
         q = project(self.w_q, self.sconv_q, 0, "q")
         k = project(self.w_k, self.sconv_k, 1, "k")
         v = project(self.w_v, self.sconv_v, 2, "v")
-        if self.value_embed is not None:
-            # As in the MLA layers: the token's own value-embedding row, per-head gated, added to the values.
-            assert self.ve_lambda is not None and token_ids is not None
-            ve = rearrange(
-                _embedding_gather(self.value_embed.astype(x.dtype), token_ids), "... (n d) -> ... n d", d=head_dim
-            )
-            lam = self.ve_lambda.astype(x.dtype)
-            ve_weight = _value_embed_weight(cfg.kda_value_embeds, x, self.ve_gate, lam)
-            v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
-        if self.comba_d is not None:
-            # Comba output correction on the L2-normalized q / k; the kernel re-normalizes q - d k.
-            def unit(t: jax.Array) -> jax.Array:
-                return rms_norm(t.astype(jnp.float32)) * head_dim**-0.5
-
-            q = (unit(q) - self.comba_d[:, None] * unit(k)).astype(q.dtype)
-        if self.vres_lambda is not None:
-            assert kv_share is not None
-            v = _value_residual(v, self.vres_lambda, kv_share, value_residual)
         if self.w_write is not None:
             write = _proj(cfg, proj_inputs.get("v", x), self.w_write)
             v = v * rearrange(
                 2.0 * jax.nn.sigmoid(write.astype(jnp.float32)), "... (n d) -> ... n d", d=head_dim
             ).astype(v.dtype)
         a_low = jnp.einsum("bsd,dr->bsr", x, self.w_a_down)
-        if self.sconv_a is not None:
-            a_low = self.sconv_a(a_low, segment_ids)
         a = jnp.einsum("bsr,re->bse", a_low, self.w_a_up)
         a = rearrange(a, "... (n d) -> ... n d", d=self.dt_bias.shape[-1])
         scale = jnp.exp(self.a_log.astype(jnp.float32))[:, None]
@@ -3698,28 +1700,13 @@ class KimiDeltaAttention(eqx.Module):
             g = a
         else:
             g = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(scale * (a.astype(jnp.float32) + self.dt_bias.astype(jnp.float32)))
-        if cfg.kda_decay_per_head:
-            g = jnp.broadcast_to(g, (*g.shape[:-1], head_dim))
-        elif cfg.kda_dd_rope:
-            g = jnp.concatenate([g, g], axis=-1)  # channels j and j + h/2 form one rotated pair
-        if self.w_beta_down is not None and self.w_beta_up is not None:
-            beta_hidden = jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.w_beta_down))
-            beta_logits = jnp.einsum("bsr,rn->bsn", beta_hidden, self.w_beta_up.astype(beta_hidden.dtype))
-        else:
-            assert self.w_beta is not None
-            beta_logits = jnp.einsum("bsd,dn->bsn", x, self.w_beta)
-        if self.beta_scale is not None:
-            beta_logits = beta_logits * unshard(self.beta_scale).astype(beta_logits.dtype)
-        if cfg.kda_beta_negative:
-            beta = 2.0 * jax.nn.sigmoid(beta_logits.astype(jnp.float32) - math.log(3.0))
-        else:
-            beta = jax.nn.sigmoid(beta_logits.astype(jnp.float32))
+        assert self.w_beta is not None
+        beta_logits = jnp.einsum("bsd,dn->bsn", x, self.w_beta)
+        beta = jax.nn.sigmoid(beta_logits.astype(jnp.float32))
         if no_decay:
             g = jnp.zeros_like(g)
         if no_beta:
             beta = jnp.ones_like(beta)
-        if cfg.kda_head_pairing == KdaHeadPairing.HALF_DECAY:
-            g = 0.5 * g
 
         stats: dict[str, jax.Array] = {}
         spec4 = P(_BATCH_AXES, None, "model", None)
@@ -3746,23 +1733,11 @@ class KimiDeltaAttention(eqx.Module):
             entropy = -(p_erase * jax.nn.log_sigmoid(erase_logits) + (1 - p_erase) * jax.nn.log_sigmoid(-erase_logits))
             stats[f"{_KDA_ERASE_STAT_PREFIX}mean"] = jax.lax.stop_gradient(jnp.mean(2.0 * p_erase))
             stats[f"{_KDA_ERASE_STAT_PREFIX}entropy"] = jax.lax.stop_gradient(jnp.mean(entropy))
-        if self.w_rot_down is not None and self.w_rot_up is not None and self.rot_scale is not None:
-            rot = jnp.einsum("bsr,re->bse", jnp.einsum("bsd,dr->bsr", x, self.w_rot_down), self.w_rot_up)
-            rot = rearrange(rot, "... (n p) -> ... n p", p=head_dim // 2).astype(jnp.float32)
-            freq = self.rot_scale.astype(jnp.float32) * _kda_rot_omega(head_dim)
-            rate = reshard(jax.nn.softplus(rot) * freq, spec4)  # rad/token per channel pair
-            rate_sg = jax.lax.stop_gradient(rate)
-            stats[f"{_KDA_STAT_PREFIX}rot_rate_abs_mean"] = jnp.mean(jnp.abs(rate_sg))
-            stats[f"{_KDA_STAT_PREFIX}rot_rate_std"] = jnp.std(rate_sg)
-            stats[f"{_KDA_STAT_PREFIX}rot_rate_pair_abs_max"] = jnp.max(jnp.mean(jnp.abs(rate_sg), axis=(0, 1)))
-            extras["rot_rate"], extra_specs["rot_rate"] = rate, spec4
         if segment_ids is not None:
             extras["segment_ids"] = reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None))
             extra_specs["segment_ids"] = P(_BATCH_AXES, None)
         if "rot_rate" in extras:
             kernel_fn = _kda_kernel_rotating
-        elif cfg.kda_head_pairing != KdaHeadPairing.NONE:
-            kernel_fn = _kda_kernel_paired
         else:
             kernel_fn = _kda_kernel
         options = KdaKernelOptions(cfg.kda_chunk_size, cfg.kda_save_chunk_states, cfg.kda_state_grads)
@@ -3771,31 +1746,10 @@ class KimiDeltaAttention(eqx.Module):
         in_specs = (spec4,) * 4 + (spec3, extra_specs)
         # The Pallas custom VJPs are not vma-annotated, so skip the varying-axes check.
         kernel = jax.shard_map(run, mesh=get_abstract_mesh(), in_specs=in_specs, out_specs=spec4, check_vma=False)
-        if self.push_decay is None or self.w_push is None:
-            o = kernel(*args)
-        else:
-            # Push decay: bucket m is a delta-rule state with its own static decay; the writer's pi_m scales
-            # its write strength into that bucket. The read sums the buckets.
-            num_buckets = cfg.kda_push_buckets
-            pi_logits = rearrange(
-                jnp.einsum("bsd,de->bse", x, self.w_push).astype(jnp.float32), "b s (n m) -> b s n m", m=num_buckets
-            )
-            pi = jax.nn.softmax(pi_logits, axis=-1) if cfg.kda_push_weights == "softmax" else jax.nn.sigmoid(pi_logits)
-            o = None
-            for m in range(num_buckets):
-                g_m = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(self.push_decay[m].astype(jnp.float32))
-                g_m = jnp.broadcast_to(g_m, g.shape)
-                if cfg.kda_push_mode == "hybrid":
-                    # Keep the per-token floor the chunked kernels assume (see KDA_CHUNK_SIZE).
-                    g_m = jnp.maximum(g_m + g, -KDA_MIN_LOG_DECAY)
-                bucket_args = (q, k, v, reshard(g_m, spec4), reshard(beta * pi[..., m], spec3), extras)
-                o_m = kernel(*bucket_args)
-                o = o_m if o is None else o + o_m
+        o = kernel(*args)
         o = self.o_norm(o.astype(x.dtype))
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
         gate = jax.nn.sigmoid(_proj(cfg, x, self.w_g))
-        if cfg.kda_gate_per_head:
-            gate = jnp.repeat(gate, head_dim, axis=-1, total_repeat_length=cfg.num_heads * head_dim)
         o = o * gate
         out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec())
         return out, stats
@@ -3849,21 +1803,12 @@ LearnedRMSNorm = RMSNorm | ZeroCenteredRMSNorm
 
 def _learned_rms_norm(cfg: GrugModelConfig, dim: int, eps: float, role: str | None = None) -> LearnedRMSNorm:
     """A learned-gain RMSNorm, zero-centered under ``cfg.zero_centered_gains``."""
-    if cfg.zero_centered_gains:
-        if cfg.norm_gain_fn != NormGainFn.LINEAR:
-            raise ValueError("zero_centered_gains already reparameterizes the gain (1 + gamma); use norm_gain_fn=linear")
-        return ZeroCenteredRMSNorm.init(dim, eps)
-    return RMSNorm.init(dim, eps, _norm_gain_overrides(cfg).get(role, cfg.norm_gain_fn))
+    return RMSNorm.init(dim, eps, _norm_gain_overrides(cfg).get(role, (NormGainFn.LINEAR)))
 
 
 def _norm_gain_overrides(cfg: "GrugModelConfig") -> dict[str, NormGainFn]:
     """``norm_gain_overrides`` as ``{role: NormGainFn}``; raises on a malformed entry or an unknown function."""
     out = {}
-    for entry in cfg.norm_gain_overrides:
-        role, sep, fn = entry.partition(":")
-        if not sep:
-            raise ValueError(f"norm_gain_overrides entries are role:fn, got {entry!r}")
-        out[role] = NormGainFn(fn)
     return out
 
 
@@ -3918,45 +1863,6 @@ class GatedNorm(eqx.Module):
         return x * gate.astype(x.dtype)
 
 
-class MtpHead(eqx.Module):
-    """Depth-1 DeepSeek-V3 MTP module (arXiv 2412.19437 sec. 2.2): ``x = W_proj [rms(h_t); rms(Emb(x_{t+1}))]``,
-    one block ``x + W_down relu(W_up rms(x))^2``, then its own learned RMSNorm into the shared lm_head.
-
-    DeepSeek's block is a full transformer layer. This one is attention-free: ``h_t`` already carries the causal
-    context, so the block only has to combine it with the next token's embedding, and at vocab 16k and d512 the
-    extra lm_head pass, not the block, is the cost. Being per-position, the whole module runs on just the
-    ``mtp_position_frac`` subset of positions. Matrices are random-init (MuonH)."""
-
-    w_proj: Float[Array, "C D"]
-    w_up: Float[Array, "D M"]
-    w_down: Float[Array, "M D"]
-    out_norm: LearnedRMSNorm
-
-    @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MtpHead":
-        k_proj, k_up, k_down = random.split(key, 3)
-        d, m, std = cfg.hidden_dim, cfg.mtp_mlp_mult * cfg.hidden_dim, cfg.initializer_std
-        return MtpHead(
-            w_proj=reshard(_init_weight(k_proj, (2 * d, d), std), P(_FSDP_AXES, None)),
-            w_up=reshard(_init_weight(k_up, (d, m), std), P(_FSDP_AXES, "model")),
-            w_down=reshard(_init_weight(k_down, (m, d), std), P("model", _FSDP_AXES)),
-            out_norm=_learned_rms_norm(cfg, d, cfg.layer_norm_eps),
-        )
-
-    @named_call
-    def __call__(self, hidden: Float[Array, "B S D"], next_embed: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
-        b, s, _ = hidden.shape
-        x = jnp.concatenate([rms_norm(hidden), rms_norm(next_embed.astype(hidden.dtype))], axis=-1)
-        x_flat = jnp.einsum(
-            "tc,cd->td", rearrange(x, "b s c -> (b s) c"), self.w_proj.astype(hidden.dtype), out_sharding=_batch_spec()
-        )
-        up = jnp.einsum("td,dm->tm", rms_norm(x_flat), self.w_up.astype(hidden.dtype))
-        x_flat = x_flat + jnp.einsum(
-            "tm,md->td", jnp.square(jax.nn.relu(up)), self.w_down.astype(hidden.dtype), out_sharding=_batch_spec()
-        )
-        return self.out_norm(_batch_reshard(rearrange(x_flat, "(b s) d -> b s d", b=b, s=s)))
-
-
 class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
@@ -4001,50 +1907,15 @@ class DenseMLP(eqx.Module):
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
-def _local_input_gram(z: Float[Array, "T L"]) -> Float[Array, "shards L L"]:
-    """Per-shard ``Z^T Z`` of the expert input (fp32 accumulation, no gradient) for ``newton_muon``.
-
-    Like the router partials, the cross-device sum is deferred to one reduction after the layer scan.
-    """
-
-    def _local(x: jax.Array) -> jax.Array:
-        return jnp.einsum("tl,tm->lm", x, x, preferred_element_type=jnp.float32)[None]
-
-    return shard_map(
-        _local, mesh=get_abstract_mesh(), in_specs=P(_BATCH_AXES, None), out_specs=P(_BATCH_AXES, None, None)
-    )(reshard(jax.lax.stop_gradient(z), P(_BATCH_AXES, None)))
-
-
 class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
     router: jax.Array | None
-    router_down: jax.Array | None
-    router_up: jax.Array | None
-    router_norm: "LearnedRMSNorm | None"
     router_bias: jax.Array
-    router_tok_b: Float[Array, "r E"] | None
-    """Per-layer zero-init up-projection of the shared token-identity router bias (``router_token_bias_rank``)."""
     expert_mlp: MoEExpertMlp
-    expert_mlp_b: MoEExpertMlp | None
-    bank_scale: Float[Array, " 2"] | None
-    router_logit_scale: Float[Array, ""] | None
-    expert_output_gain: Float[Array, " E"] | None
-    expert_visit_bias: Float[Array, "E D"] | None
-    null_const_v: Float[Array, "C L"] | None
-    null_const_w: Float[Array, "C L 2"] | None
     w_latent_down: jax.Array | None
-    routing_sum: Float[Array, ""] | None
-    """Learned total combine weight (``routing_sum_learnable``); None: the fixed ``routing_renorm_sum``."""
-    router_mlp_a: jax.Array | None
-    router_mlp_b: jax.Array | None
-    expert_router_alpha: jax.Array | None
     latent_norm: LearnedRMSNorm | None
     w_latent_up: jax.Array | None
-    # The other cfg.latent_up_count - 1 output projections: separate [O, D] leaves, so each is its own MuonH matrix
-    # (a stacked [C, O, D] leaf would read as an expert bank and shard C over the expert axis).
-    w_latent_up_extra: tuple[jax.Array, ...] | None
-    latent_up_gate: Float[Array, "D C"] | None  # per-token sigmoid weights of the output projections
     latent_out_norm: LearnedRMSNorm | None
     latent_mix_in_gate: Float[Array, "D E"] | None  # mixture of latents on the input latent (latent_mix_sites)
     expert_private_proj: Float[Array, "D GR"] | None  # cfg.expert_private_dim: one [D, r] projection per group
@@ -4052,11 +1923,6 @@ class MoEMLP(eqx.Module):
     latent_width_gate: Float[Array, "D B"] | None  # cfg.latent_matryoshka_blocks: per-token latent width gate
     latent_width_bias: Float[Array, " B"] | None  # sign-SGD selection bias balancing the widths
     latent_mix_out_gate: Float[Array, "D E"] | None  # mixture of latents on the experts' output latent
-    expert_read_norm: LearnedRMSNorm | None
-    """Per-group ``[G, W]`` learnable RMSNorm of the ``expert_read_groups`` input slices."""
-    latent_select_mask: Float[Array, " D"] | None
-    """0/1 mask of the hidden channels read by ``latent_select`` (``latent_select_pattern`` random/rotating),
-    frozen for the optimizer. A mask rather than indices because it stays exact under the bf16 compute cast."""
     cfg: GrugModelConfig = eqx.field(static=True)
     latent_selects: bool = eqx.field(static=True, default=False)
     """This layer forms its expert input by ``latent_select`` (see ``latent_select_layers``)."""
@@ -4065,13 +1931,8 @@ class MoEMLP(eqx.Module):
         self, latent: Float[Array, "T R"], x_flat: Float[Array, "T D"], norm: LearnedRMSNorm, gate: jax.Array
     ) -> Float[Array, "T R"]:
         """Mixture of latents: norm each of the ``E`` latent blocks and weight it by its top-k gate from ``x``."""
-        blocks = self.cfg.latent_mix_experts
-        weights = mixture_weights(x_flat, gate, blocks, self.cfg.latent_mix_topk)
-        if gate is self.latent_mix_in_gate and self.cfg.latent_mix_moe_in_mode == KvMixMode.SUM:
-            # Token-conditioned W_down: the latent is a weighted sum of the basis projections, then one norm.
-            bases = rearrange(latent, "t (e r) -> t e r", e=blocks)
-            return norm(jnp.einsum("ter,te->tr", bases, weights.astype(bases.dtype)))
-        normed = norm(rearrange(latent, "t (e r) -> t e r", e=blocks))
+        weights = mixture_weights(x_flat, gate, (4), (2))
+        normed = norm(rearrange(latent, "t (e r) -> t e r", e=(4)))
         return rearrange(normed * weights[..., None].astype(normed.dtype), "t e r -> t (e r)")
 
     def _private_rows(self, x_flat: Float[Array, "T D"], selected: Int[Array, "T K"]) -> jax.Array | None:
@@ -4079,7 +1940,7 @@ class MoEMLP(eqx.Module):
         if self.expert_private_proj is None:
             return None
         assert self.expert_private_norm is not None
-        groups, r = self.cfg.expert_private_groups, self.cfg.expert_private_dim
+        groups, r = (64), (0)
         proj = jnp.einsum("td,dr->tr", x_flat, self.expert_private_proj.astype(x_flat.dtype))
         proj = jnp.reshape(proj, (proj.shape[0], groups, r), out_sharding=P(_BATCH_AXES, None, None))
         rows = jnp.take_along_axis(proj, (selected % groups)[:, :, None], axis=1)
@@ -4092,15 +1953,14 @@ class MoEMLP(eqx.Module):
         ``exp(log_sigmoid(l) - stop_gradient(log_sigmoid(l)))`` (value 1), so the gate learns from the loss without
         rescaling the latent and without the 0/0 a saturated sigmoid would give."""
         assert self.latent_width_gate is not None and self.latent_width_bias is not None
-        blocks = self.cfg.latent_matryoshka_blocks
         logits = jnp.einsum("td,db->tb", x_flat, self.latent_width_gate).astype(jnp.float32)
         width = jnp.argmax(logits + jax.lax.stop_gradient(self.latent_width_bias), axis=-1)  # keep blocks 0..width
-        chosen = jax.nn.one_hot(width, blocks, dtype=jnp.float32)
+        chosen = jax.nn.one_hot(width, (0), dtype=jnp.float32)
         bias = _load_error_grad(self.latent_width_bias, jax.lax.stop_gradient(jnp.mean(chosen, axis=0)))
         log_w = jnp.sum(jax.nn.log_sigmoid(logits) * chosen, axis=-1, keepdims=True) + 0.0 * jnp.sum(bias)
         scale = jnp.exp(log_w - jax.lax.stop_gradient(log_w)).astype(latent.dtype)
-        kept = (jnp.arange(blocks)[None, :] <= width[:, None]).astype(latent.dtype)
-        mask = jnp.repeat(kept, latent.shape[-1] // blocks, axis=-1)
+        kept = (jnp.arange(0)[None, :] <= width[:, None]).astype(latent.dtype)
+        mask = jnp.repeat(kept, latent.shape[-1] // (0), axis=-1)
         stats[f"{_LAYER_KNOB_PREFIX}latent_kept_frac"] = jax.lax.stop_gradient(jnp.mean(kept.astype(jnp.float32)))
         return latent * mask * scale
 
@@ -4120,71 +1980,26 @@ class MoEMLP(eqx.Module):
         # own projection keeps `hidden_dim`.
         expert_width, out_width = cfg.expert_in_dim, cfg.expert_out_dim
         latent = cfg.latent_dim
-        mix_e = cfg.latent_mix_experts
-        gate_in = out_width if cfg.latent_up_gate_on_latent else d
-        mix_in, mix_out = "moe_in" in cfg.latent_mix_sites, "moe_out" in cfg.latent_mix_sites
-        mix_in_sum = mix_in and cfg.latent_mix_moe_in_mode == KvMixMode.SUM
+        mix_in, mix_out = False, False
         k_priv, k_width = random.split(random.fold_in(key, 11))
-        r_priv, g_priv, b_width = cfg.expert_private_dim, cfg.expert_private_groups, cfg.latent_matryoshka_blocks
-        selects = cfg.latent_select and (
-            cfg.latent_select_layers == "all" or (cfg.latent_select_layers == "kda") == use_kda
-        )
+        r_priv, g_priv, b_width = (0), (64), (0)
         return MoEMLP(
-            router=(
-                None
-                if cfg.router_rank
-                else reshard(
-                    _init_weight(k_router, (latent if cfg.router_on_latent else d, e), cfg.initializer_std),
-                    P(None, None),
-                )
-            ),
-            router_down=(
-                reshard(_init_weight(k_router, (d, cfg.router_rank), cfg.initializer_std), P(None, None))
-                if cfg.router_rank
-                else None
-            ),
-            router_up=(
-                reshard(
-                    _init_weight(random.fold_in(k_router, 1), (cfg.router_rank, e), 1.0 / math.sqrt(cfg.router_rank)),
-                    P(None, None),
-                )
-                if cfg.router_rank
-                else None
-            ),
-            router_norm=(
-                _learned_rms_norm(cfg, cfg.router_rank, cfg.layer_norm_eps)
-                if cfg.router_rank and cfg.router_rank_act == "norm"
-                else None
+            router=reshard(
+                _init_weight(k_router, (d, e), cfg.initializer_std),
+                P(None, None),
             ),
             router_bias=jnp.zeros((e,)),
-            router_tok_b=jnp.zeros((cfg.router_token_bias_rank, e)) if cfg.router_token_bias_rank else None,
-            router_mlp_a=(
-                reshard(_init_weight(random.fold_in(k_router, 1), (d, cfg.router_mlp_hidden), cfg.initializer_std), P())
-                if cfg.router_mlp_hidden
-                else None
-            ),
-            router_mlp_b=(
-                reshard(jnp.zeros((cfg.router_mlp_hidden, e), jnp.float32), P()) if cfg.router_mlp_hidden else None
-            ),
-            expert_router_alpha=(
-                reshard(jnp.zeros((cfg.num_experts,), jnp.float32), P())
-                if cfg.expert_router_orthogonal == "learned"
-                else None
-            ),
-            routing_sum=jnp.full((), cfg.routing_renorm_sum, jnp.float32) if cfg.routing_sum_learnable else None,
             w_latent_down=(
                 None
-                if latent is None or (selects and not cfg.latent_select_plus_proj)
-                else reshard(
-                    _latent_proj_init(cfg, k_down, (d, latent * (mix_e if mix_in_sum else 1))), P(_FSDP_AXES, "model")
-                )
+                if latent is None
+                else reshard(_latent_proj_init(cfg, k_down, (d, latent * 1)), P(_FSDP_AXES, "model"))
             ),
             latent_norm=(
                 None
                 if latent is None
                 else (
-                    _grouped_rms_norm(cfg, mix_e, latent // mix_e)
-                    if mix_in and not mix_in_sum
+                    _grouped_rms_norm(cfg, (4), latent // (4))
+                    if mix_in
                     else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps, role="moe_latent")
                 )
             ),
@@ -4193,35 +2008,7 @@ class MoEMLP(eqx.Module):
                 if cfg.has_latent_up
                 else None
             ),
-            w_latent_up_extra=(
-                tuple(
-                    reshard(_latent_proj_init(cfg, random.fold_in(k_up, 2 + i), (out_width, d)), P("model", _FSDP_AXES))
-                    for i in range(cfg.latent_up_count - 1)
-                )
-                if cfg.latent_up_count > 1
-                else None
-            ),
-            latent_up_gate=(
-                reshard(
-                    (
-                        _init_weight(random.fold_in(k_up, 1), (gate_in, cfg.latent_up_count), cfg.initializer_std)
-                        if cfg.latent_up_topk
-                        else jnp.zeros((gate_in, cfg.latent_up_count))
-                    ),
-                    P(None, None),
-                )
-                if cfg.latent_up_count > 1
-                else None
-            ),
-            latent_out_norm=(
-                _grouped_rms_norm(cfg, mix_e, out_width // mix_e)
-                if mix_out
-                else (
-                    _learned_rms_norm(cfg, out_width, cfg.layer_norm_eps)
-                    if cfg.latent_out_norm and (latent is not None or cfg.latent_out_dim is not None)
-                    else None
-                )
-            ),
+            latent_out_norm=(_grouped_rms_norm(cfg, (4), out_width // (4)) if mix_out else None),
             expert_private_proj=(
                 reshard(_init_weight(k_priv, (d, g_priv * r_priv), 1.0 / math.sqrt(d)), P(None, None))
                 if r_priv
@@ -4233,60 +2020,32 @@ class MoEMLP(eqx.Module):
             ),
             latent_width_bias=jnp.zeros((b_width,), jnp.float32) if b_width else None,
             latent_mix_in_gate=(
-                reshard(_init_weight(random.fold_in(k_down, 1), (d, mix_e), cfg.initializer_std), P(None, None))
+                reshard(_init_weight(random.fold_in(k_down, 1), (d, (4)), cfg.initializer_std), P(None, None))
                 if mix_in
                 else None
             ),
             latent_mix_out_gate=(
-                reshard(_init_weight(random.fold_in(k_up, 1), (d, mix_e), cfg.initializer_std), P(None, None))
+                reshard(_init_weight(random.fold_in(k_up, 1), (d, (4)), cfg.initializer_std), P(None, None))
                 if mix_out
                 else None
             ),
-            expert_read_norm=(
-                _grouped_rms_norm(cfg, cfg.expert_read_groups, expert_width - cfg.expert_private_dim)
-                if cfg.expert_read_groups
-                else None
-            ),
-            latent_select_mask=_latent_select_mask(cfg, layer_index) if selects else None,
             expert_mlp=_expert_mlp_init(
                 _bank_config(cfg, 1),
                 expert_width,
-                (
-                    out_width * cfg.expert_write_keep // cfg.expert_write_blocks
-                    if cfg.expert_write_blocks and not cfg.expert_write_masked
-                    else out_width
-                ),
+                out_width,
                 k_expert,
             ),
-            expert_mlp_b=(
-                _expert_mlp_init(_bank_config(cfg, 2), expert_width, out_width, random.fold_in(k_expert, 2))
-                if cfg.moe_bank2_experts
-                else None
-            ),
-            bank_scale=jnp.ones((2,), jnp.float32) if cfg.moe_bank2_experts and cfg.moe_bank2_scale else None,
-            router_logit_scale=jnp.ones((), jnp.float32) if cfg.router_logit_scale else None,
-            expert_output_gain=jnp.ones((e,), jnp.float32) if cfg.expert_output_gain else None,
-            expert_visit_bias=(
-                jnp.zeros((e, cfg.hidden_dim), jnp.float32) if cfg.expert_visit_bias != ExpertVisitBias.NONE else None
-            ),
-            null_const_v=(
-                jnp.zeros((cfg.moe_const_experts, expert_width), jnp.float32) if cfg.moe_const_experts else None
-            ),
-            null_const_w=(
-                jnp.zeros((cfg.moe_const_experts, expert_width, 2), jnp.float32) if cfg.moe_const_experts else None
-            ),
             cfg=cfg,
-            latent_selects=selects,
+            latent_selects=(False),
         )
 
     def input_projection_weights(self, dtype: jnp.dtype) -> list[jax.Array]:
         """The ``[D, *]`` projections this MLP applies to its input: the router (unless ``router_on_latent``), then
         the latent down."""
         weights = []
-        if not (self.cfg.router_on_latent or self.cfg.router_on_embed):
-            router_in = self.router if self.router is not None else self.router_down
-            assert router_in is not None
-            weights.append(reshard(router_in, P(None, None)))
+        router_in = self.router if self.router is not None else None
+        assert router_in is not None
+        weights.append(reshard(router_in, P(None, None)))
         if self.w_latent_down is not None:
             weights.append(reshard(self.w_latent_down.astype(dtype), P(None, None)))
         return weights
@@ -4297,46 +2056,6 @@ class MoEMLP(eqx.Module):
         r = reshard(self.router[:, : self.cfg.num_experts].astype(jnp.float32), P(None, None))
         gram = jnp.einsum("de,df->ef", r, r, out_sharding=P(None, None))
         return jnp.sum(jnp.abs(gram - jnp.eye(self.cfg.num_experts, dtype=jnp.float32)))
-
-    def _qb_churn_stats(
-        self,
-        router_logits: Float[Array, "T E"],
-        beta: Float[Array, " E"],
-        banks: list[tuple[int, int, int]],
-        mesh: jax.sharding.AbstractMesh,
-    ) -> dict[str, jax.Array]:
-        """Bias-induced routing churn (``qb_bias_damping``): the first ``_QB_CHURN_TOKENS`` tokens are routed
-        with this step's bias and with the next step's (damped) bias on the same logits; returns the fraction
-        of their top-K sets and of their slots that differ."""
-        gamma = self.cfg.qb_bias_damping
-        assert gamma is not None
-        bias_now = jax.lax.stop_gradient(self.router_bias).astype(jnp.float32)
-        beta = jax.lax.stop_gradient(beta).astype(jnp.float32)
-        bias_next = (1.0 - gamma) * bias_now - gamma * (beta - jnp.mean(beta))
-        shards = math.prod(_mesh_axis_size(mesh, axis) for axis in _BATCH_AXES)
-        per_shard = max(1, _QB_CHURN_TOKENS // shards)
-
-        def _local(logits: jax.Array, now: jax.Array, nxt: jax.Array) -> tuple[jax.Array, jax.Array]:
-            logits = jax.lax.stop_gradient(logits[:per_shard])
-
-            def route(bias: jax.Array) -> jax.Array:
-                biased = logits + bias
-                picks = [jax.lax.top_k(biased[:, st : st + size], bank_k)[1] + st for st, size, bank_k in banks]
-                return jnp.concatenate(picks, axis=-1)
-
-            sel_now, sel_next = route(now), route(nxt)
-            kept = jnp.any(sel_next[:, :, None] == sel_now[:, None, :], axis=-1)
-            set_churn = jnp.mean(jnp.any(~kept, axis=-1).astype(jnp.float32))
-            slot_churn = jnp.mean((~kept).astype(jnp.float32))
-            return jax.lax.pmean(set_churn, _BATCH_AXES), jax.lax.pmean(slot_churn, _BATCH_AXES)
-
-        set_churn, slot_churn = shard_map(
-            _local, mesh=mesh, in_specs=(P(_BATCH_AXES, None), P(), P()), out_specs=(P(), P())
-        )(reshard(router_logits, P(_BATCH_AXES, None)), reshard(bias_now, P()), reshard(bias_next, P()))
-        return {
-            f"{_LAYER_KNOB_PREFIX}router_qb_churn": set_churn,
-            f"{_LAYER_KNOB_PREFIX}router_qb_slot_churn": slot_churn,
-        }
 
     def erc_loss(self, key: PRNGKeyArray) -> tuple[jax.Array, jax.Array]:
         """Expert-router coupling loss (``erc_loss_weight``) and ``mean diag(M) / mean offdiag(M)``.
@@ -4367,8 +2086,7 @@ class MoEMLP(eqx.Module):
         m = reshard(jnp.sqrt(jnp.sum(jnp.square(act), axis=-1)), P(None, None))
         diag = jnp.diagonal(m)
         off = 1.0 - jnp.eye(n, dtype=jnp.float32)
-        alpha = cfg.erc_alpha
-        loss = jnp.mean((jax.nn.relu(m - alpha * diag[:, None]) + jax.nn.relu(m - alpha * diag[None, :])) * off)
+        loss = jnp.mean((jax.nn.relu(m - (1.0) * diag[:, None]) + jax.nn.relu(m - (1.0) * diag[None, :])) * off)
         ratio = sg(jnp.mean(diag) / (jnp.sum(m * off) / (n * (n - 1))))
         return loss, ratio
 
@@ -4419,21 +2137,7 @@ class MoEMLP(eqx.Module):
         removed so QB never moves the real-vs-null split.
         """
         num_real, num_null = self.cfg.num_experts, self.cfg.num_null_experts
-        k = self.cfg.num_experts_per_token
         margins = reshard(margins, P(_BATCH_AXES, None))
-        frac = self.cfg.moe_null_target_frac
-        if frac is not None:
-            share = jnp.concatenate(
-                [jnp.full((num_real,), k * (1.0 - frac) / num_real), jnp.full((num_null,), k * frac / num_null)]
-            )
-            return qb_beta_hist(
-                margins,
-                mesh,
-                target_share=share,
-                num_experts=num_real + num_null,
-                n_bins=_QB_HIST_BINS,
-                batch_axes=_BATCH_AXES,
-            )
         real_slots = jax.lax.stop_gradient(jnp.mean(jnp.sum(selected_experts < num_real, axis=-1, dtype=jnp.float32)))
         beta, lo, hi = qb_beta_hist(
             margins[:, :num_real],
@@ -4445,26 +2149,6 @@ class MoEMLP(eqx.Module):
         )
         beta = jnp.concatenate([beta - jnp.mean(beta), jnp.zeros((num_null,), beta.dtype)])
         return beta, lo, hi
-
-    def _visit_bias(self, selected: jax.Array, combine_weights: jax.Array, dtype) -> jax.Array:
-        """``[T, D]`` sum of ``expert_visit_bias`` rows over each token's selected experts (``ExpertVisitBias``);
-        ids past the table (null experts) add nothing."""
-        assert self.expert_visit_bias is not None
-        if self.cfg.expert_visit_bias == ExpertVisitBias.WEIGHTED:
-            weights = combine_weights.astype(dtype)
-        else:
-            weights = jnp.ones(selected.shape, dtype)
-        counts = _visit_counts(
-            reshard(selected, P(_BATCH_AXES, None)),
-            reshard(weights, P(_BATCH_AXES, None)),
-            self.expert_visit_bias.shape[0],
-        )
-        return jnp.einsum(
-            "te,ed->td",
-            counts,
-            reshard(self.expert_visit_bias, P(None, None)).astype(dtype),
-            out_sharding=_batch_spec(),
-        )
 
     def _split_null_slots(
         self,
@@ -4480,8 +2164,8 @@ class MoEMLP(eqx.Module):
         """
         cfg = self.cfg
         num_real = cfg.num_experts
-        copy_start = num_real + cfg.moe_null_experts
-        const_start = copy_start + cfg.moe_copy_experts
+        copy_start = num_real + (0)
+        const_start = copy_start + (0)
         is_null = selected_experts >= num_real
         t, k = selected_experts.shape
         slot_ids = jax.lax.broadcasted_iota(jnp.int32, (t, k), 0) * k + jax.lax.broadcasted_iota(jnp.int32, (t, k), 1)
@@ -4490,21 +2174,11 @@ class MoEMLP(eqx.Module):
         weights = jnp.where(is_null, jnp.zeros_like(combine_weights), combine_weights)
 
         w = combine_weights.astype(jnp.float32)
-        in_spec = _partition_spec_of(routed_input)
+        _partition_spec_of(routed_input)
         x = routed_input.astype(jnp.float32)
         is_copy = (selected_experts >= copy_start) & (selected_experts < const_start)
         x_scale = jnp.sum(jnp.where(is_copy, w, 0.0), axis=-1)
         null_out = jnp.zeros_like(x)
-        if self.null_const_v is not None and self.null_const_w is not None:
-            # [T, C]: each constant expert's summed combine weight (0 where it was not picked).
-            const_w = jnp.einsum(
-                "tk,tkc->tc",
-                w,
-                jax.nn.one_hot(selected_experts - const_start, cfg.moe_const_experts, dtype=jnp.float32),
-            )
-            mix = jax.nn.softmax(jnp.einsum("tl,clm->tcm", x, self.null_const_w), axis=-1)
-            x_scale = x_scale + jnp.sum(const_w * mix[..., 0], axis=-1)
-            null_out = jnp.einsum("tc,cl->tl", const_w * mix[..., 1], self.null_const_v, out_sharding=in_spec)
         return selected, weights, null_out + x_scale[:, None] * x
 
     @named_call
@@ -4531,67 +2205,10 @@ class MoEMLP(eqx.Module):
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
             projected = [jnp.einsum("td,de->te", x_flat, w) for w in self.input_projection_weights(x_flat.dtype)]
-        latent_input = None
-        embed_logits = None
-        if self.cfg.router_on_embed:
-            assert router_embed is not None and self.router is not None
-            # The router reads the token embedding; the latent projection is the only fused projection here.
-            e = rms_norm(rearrange(router_embed, "b s d -> (b s) d").astype(jnp.float32), self.cfg.layer_norm_eps)
-            embed_logits = jnp.einsum(
-                "td,de->te", e, reshard(self.router, P(None, None)).astype(jnp.float32), out_sharding=_batch_spec()
-            )
-            projected = [None, *projected]
-        if self.cfg.router_on_latent:
-            # The router reads the expert input: the latent projection is the only fused projection here.
-            assert self.latent_norm is not None and self.router is not None
-            latent_input = self.latent_norm(reshard(projected[0], _batch_spec()))
-            projected = [None, projected[0]]
-        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        if embed_logits is not None:
-            router_logits = embed_logits
-        elif latent_input is not None:
-            router_logits = jnp.einsum(
-                "tl,le->te",
-                latent_input.astype(jnp.float32),
-                reshard(self.router, P(None, None)).astype(jnp.float32),
-                out_sharding=_batch_spec(),
-            )
-        elif self.router_up is not None:
-            z = projected[0]
-            if self.router_norm is not None:
-                z = self.router_norm(z)
-            elif self.cfg.router_rank_act == "silu":
-                z = jax.nn.silu(z)
-            router_logits = jnp.einsum("tr,re->te", z.astype(jnp.float32), self.router_up.astype(jnp.float32))
-        else:
-            router_logits = projected[0].astype(jnp.float32)
-        if self.router_mlp_a is not None and self.router_mlp_b is not None:
-            hidden = jax.nn.silu(
-                jnp.einsum("td,dh->th", x_flat.astype(jnp.float32), self.router_mlp_a.astype(jnp.float32))
-            )
-            router_logits = router_logits + jnp.einsum(
-                "th,he->te",
-                hidden,
-                self.router_mlp_b.astype(jnp.float32),
-                out_sharding=_partition_spec_of(router_logits),
-            )
-        if self.router_logit_scale is not None:
-            router_logits = router_logits * self.router_logit_scale.astype(jnp.float32)
-        if self.router_tok_b is not None:
-            assert router_tok_rows is not None
-            rows = rearrange(router_tok_rows, "b s r -> (b s) r").astype(jnp.float32)
-            router_logits = router_logits + jnp.einsum(
-                "tr,re->te",
-                reshard(rows, _partition_spec_of(router_logits)),
-                self.router_tok_b.astype(jnp.float32),
-                out_sharding=_partition_spec_of(router_logits),
-            )
+        router_logits = projected[0].astype(jnp.float32)
         if router_seed_bias is not None:
             seed_bias = rearrange(router_seed_bias, "b s e -> (b s) e")
             router_logits = router_logits + reshard(seed_bias, _partition_spec_of(router_logits))
-        cap = self.cfg.router_logit_soft_cap
-        if cap is not None:
-            router_logits = cap * jnp.tanh(router_logits / cap)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         k = self.cfg.num_experts_per_token
         banks = _expert_banks(self.cfg)
@@ -4606,13 +2223,8 @@ class MoEMLP(eqx.Module):
             bank_alpha.append(topk_logits[:, -1:])
             bank_selected.append(sel[:, :-1] + start)
         selected_experts = jnp.concatenate(bank_selected, axis=-1) if len(banks) > 1 else bank_selected[0]
-        if len(banks) > 1 and (
-            self.cfg.moe_gumbel_tau > 0 or hash_token_ids is not None or self.cfg.moe_dense_router_grad
-        ):
+        if len(banks) > 1 and (hash_token_ids is not None):
             raise ValueError("moe_bank2_experts does not support Gumbel routing, hash routing or the dense router grad")
-        if noise_key is not None and self.cfg.moe_gumbel_tau > 0:
-            noisy = biased_logits + self.cfg.moe_gumbel_tau * _gumbel_noise(noise_key, biased_logits.shape)
-            _, selected_experts = _small_top_k(noisy, k)
         if hash_token_ids is not None:
             table = reshard(jnp.asarray(_hash_expert_table(self.cfg.vocab_size, self.cfg.num_experts, k)), P(None, None))
             flat_ids = reshard(rearrange(hash_token_ids, "b s -> (b s)"), P(_BATCH_AXES))
@@ -4624,7 +2236,7 @@ class MoEMLP(eqx.Module):
             )(table, flat_ids)
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        renorm_sum = self.cfg.routing_renorm_sum if self.routing_sum is None else self.routing_sum.astype(jnp.float32)
+        renorm_sum = self.cfg.routing_renorm_sum
         if self.cfg.router_combine == RouterCombine.SOFTMAX_RENORM:
             combine_weights_f = renorm_sum * jax.nn.softmax(unbiased_topk, axis=-1)
         elif self.cfg.router_combine == RouterCombine.SIGMOID_RAW:
@@ -4643,18 +2255,6 @@ class MoEMLP(eqx.Module):
         if router_soft_select.SOFT_SELECT is not None:
             biased_sel = jnp.take_along_axis(router_logits + self.router_bias, selected_experts, axis=-1)
             combine_weights_f = router_soft_select.soft_combine(combine_weights_f, biased_sel)
-        if self.expert_output_gain is not None:
-            # Scaling expert e's output by g_e is scaling its combine weight in every (token, slot) that picked it.
-            gain = shard_map(
-                _local_gather,
-                mesh=get_abstract_mesh(),
-                in_specs=(P(None), P(_BATCH_AXES, None)),
-                out_specs=P(_BATCH_AXES, None),
-            )(
-                reshard(self.expert_output_gain.astype(jnp.float32), P(None)),
-                reshard(selected_experts, P(_BATCH_AXES, None)),
-            )
-            combine_weights_f = combine_weights_f * reshard(gain, _partition_spec_of(combine_weights_f))
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()
         # Per-token assignments for the routing dump (``Transformer.routing_assignments``); unused (and so
@@ -4667,7 +2267,7 @@ class MoEMLP(eqx.Module):
             mesh,
             num_experts=num_real + self.cfg.num_null_experts,
             batch_axes=_BATCH_AXES,
-            token_stride=self.cfg.router_stats_stride,
+            token_stride=(1),
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha` by binning
         # them into fixed bins over the live global range and reading the (1-K/E) quantile.
@@ -4689,32 +2289,13 @@ class MoEMLP(eqx.Module):
         margin_min = functools.reduce(jnp.minimum, [lo for _, lo, _ in bank_stats])
         margin_max = functools.reduce(jnp.maximum, [hi for _, _, hi in bank_stats])
         router_stats["qb_beta"] = beta
-        if self.cfg.stats_num_experts:
-            # Pad the per-expert stats to the widest layer so every layer's stats stack (the extra columns read 0).
-            pad = self.cfg.stats_num_experts - beta.shape[-1]
-            for key in ("qb_beta", "routing_counts_local", "router_prob_sum_local"):
-                widths = [(0, 0)] * (router_stats[key].ndim - 1) + [(0, pad)]
-                router_stats[key] = jnp.pad(router_stats[key], widths)
-        if self.cfg.router_history:
-            router_stats[ROUTER_PROBS_KEY] = jax.lax.stop_gradient(
-                jax.nn.softmax(router_logits, axis=-1).reshape(b, s, -1)
-            ).astype(jnp.bfloat16)
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
-        if self.cfg.qb_bias_damping is not None:
-            router_stats.update(self._qb_churn_stats(router_logits, beta, banks, mesh))
 
         routed_input = x_flat
-        if latent_input is not None:
-            routed_input = latent_input
-        elif self.latent_selects:
+        if self.latent_selects:
             assert self.cfg.latent_dim is not None and self.latent_norm is not None
-            if self.latent_select_mask is None:
-                selected = x_flat[..., : self.cfg.latent_dim]
-            else:
-                mask = jax.lax.stop_gradient(self.latent_select_mask) > 0.5
-                (idx,) = jnp.nonzero(mask, size=self.cfg.latent_dim)
-                selected = jnp.take(x_flat, idx, axis=-1)
+            selected = x_flat[..., : self.cfg.latent_dim]
             if self.w_latent_down is not None:
                 selected = selected + reshard(projected[1], _batch_spec())
             routed_input = self.latent_norm(selected)
@@ -4727,21 +2308,7 @@ class MoEMLP(eqx.Module):
                 routed_input = self._mix_latent(routed_input, x_flat, self.latent_norm, self.latent_mix_in_gate)
         if self.latent_width_gate is not None:
             routed_input = self._matryoshka_latent(routed_input, x_flat, router_stats)
-        if self.cfg.newton_muon:
-            router_stats[NEWTON_GRAM_LOCAL_KEY] = _local_input_gram(routed_input)
-        bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
-        if self.cfg.expert_read_subset:
-            bank_mlps = [_mask_expert_reads(em, self.cfg) for em in bank_mlps]
-        if self.cfg.expert_write_groups:
-            bank_mlps = [_mask_expert_writes(em, self.cfg) for em in bank_mlps]
-        if self.cfg.expert_write_blocks:
-            write = _masked_block_writes if self.cfg.expert_write_masked else _scatter_expert_writes
-            bank_mlps = [write(em, self.cfg) for em in bank_mlps]
-        if self.cfg.expert_router_orthogonal != "off":
-            assert self.router is not None and self.w_latent_down is not None and len(bank_mlps) == 1
-            bank_mlps = [
-                _orthogonalize_expert_reads(bank_mlps[0], self.router, self.w_latent_down, self.expert_router_alpha)
-            ]
+        bank_mlps = [self.expert_mlp]
         real_selected, real_weights, null_out = selected_experts, combine_weights, None
         if self.cfg.num_null_experts:
             real_selected, real_weights, null_out = self._split_null_slots(
@@ -4751,13 +2318,11 @@ class MoEMLP(eqx.Module):
         overlap_out = None
         for (start, _, bank_k), em, bank_index in zip(banks, bank_mlps, (1, 2), strict=False):
             bank_selected = (real_selected[:, col : col + bank_k] - start).astype(jnp.int32)
-            if self.expert_read_norm is not None or self.expert_private_proj is not None:
-                if self.expert_read_norm is not None:
-                    router_stats.update(_expert_read_group_shares(bank_selected, self.cfg.expert_read_groups))
+            if self.expert_private_proj is not None:
                 out, overflow, *bank_overlap_out = _run_grouped_read_bank(
                     em,
                     _bank_config(self.cfg, bank_index),
-                    self.expert_read_norm,
+                    None,
                     routed_input,
                     bank_selected,
                     real_weights[:, col : col + bank_k],
@@ -4778,8 +2343,6 @@ class MoEMLP(eqx.Module):
             if overflow.assignment_keep is not None:
                 bank_keeps.append(overflow.assignment_keep)
                 overflow = overflow._replace(assignment_keep=None)
-            if self.bank_scale is not None:
-                out = out * self.bank_scale[bank_index - 1].astype(out.dtype)
             outputs.append(out)
             overflows.append(overflow)
             col += bank_k
@@ -4796,10 +2359,6 @@ class MoEMLP(eqx.Module):
         capacity_overflow = overflows[0]
         if len(overflows) > 1:
             capacity_overflow = jax.tree.map(lambda *xs: functools.reduce(jnp.add, xs), *overflows)
-        if self.cfg.moe_dense_router_grad:
-            routed_flat = routed_flat + self._default_expert_term(
-                routed_input, router_logits, selected_experts, unbiased_topk
-            ).astype(routed_flat.dtype)
         dropped_assignments = capacity_overflow.dropped
         sender_dropped_assignments = capacity_overflow.sender_dropped
         receiver_dropped_assignments = capacity_overflow.receiver_dropped
@@ -4819,47 +2378,16 @@ class MoEMLP(eqx.Module):
             routed_flat = self._mix_latent(routed_flat, x_flat, self.latent_out_norm, self.latent_mix_out_gate)
         elif self.latent_out_norm is not None:
             routed_flat = self.latent_out_norm(routed_flat)
-        if self.w_latent_up_extra is not None and self.w_latent_up is not None and self.latent_up_gate is not None:
-            count = len(self.w_latent_up_extra) + 1
-            gate_input = routed_flat if self.cfg.latent_up_gate_on_latent else x_flat
-            up_gate = mixture_weights(
-                gate_input,
-                self.latent_up_gate,
-                count,
-                self.cfg.latent_up_topk or count,
-                renorm=self.cfg.latent_up_renorm,
-            )
-            projections = [self.w_latent_up, *self.w_latent_up_extra]
-            up_out = 0
-            for i, w in enumerate(projections):
-                proj = _proj(self.cfg, routed_flat, w.astype(routed_flat.dtype), out_sharding=_batch_spec())
-                up_out = up_out + proj * up_gate[:, i : i + 1].astype(proj.dtype)
-                router_stats[f"{_LAYER_KNOB_PREFIX}latent_up_gate_mean_{i}"] = jax.lax.stop_gradient(
-                    jnp.mean(up_gate[:, i])
-                )
-            routed_flat = up_out
-        elif self.w_latent_up is not None:
+        if self.w_latent_up is not None:
             routed_flat = _proj(
                 self.cfg, routed_flat, self.w_latent_up.astype(routed_flat.dtype), out_sharding=_batch_spec()
             )
-        elif self.cfg.latent_write_select:
-            assert self.cfg.latent_dim is not None
-            gain = self.cfg.initializer_std * math.sqrt(self.cfg.latent_dim)
-            pad = self.cfg.hidden_dim - self.cfg.latent_dim
-            routed_flat = jnp.pad(routed_flat * gain, ((0, 0), (0, pad)))
         if overlap_out is not None:
             routed_flat = routed_flat + reshard(overlap_out, _batch_spec()).astype(routed_flat.dtype)
-        if self.expert_visit_bias is not None:
-            routed_flat = routed_flat + self._visit_bias(selected_experts, combine_weights_f, routed_flat.dtype)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, {**router_stats, **assignments, _ROUTED_INPUT: routed_input}
-
-
-def _visit_counts(selected: jax.Array, weights: jax.Array, num_experts: int) -> jax.Array:
-    """``[T, E]`` with each token's weight on each of its selected experts (0 elsewhere)."""
-    return jnp.sum(jax.nn.one_hot(selected, num_experts, dtype=weights.dtype) * weights[..., None], axis=1)
 
 
 def _shared_experts_tail(
@@ -4878,40 +2406,13 @@ def _shared_experts_tail(
         act = ActivationFunctionEnum(cfg.expert_activation).to_jax_fn()
         hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
     else:
-        slope = cfg.expert_leaky_slope
-        if cfg.shared_ungated_activation == UngatedExpertActivation.POLYNORM:
-            hidden = jnp.concatenate([polynorm(u) for u in ups], axis=1)
-        else:
-            hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
+        slope = 0.0
+        hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
     shared_out = _proj(cfg, hidden, w_down, out_sharding=out_sharding)
     if shared_gate is not None:
         gate_logit = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), shared_gate)
         shared_out = shared_out * (2.0 * jax.nn.sigmoid(gate_logit))[:, None].astype(shared_out.dtype)
     return shared_out
-
-
-def _shared_experts_local(
-    tokens: tuple[jax.Array, jax.Array],
-    params: tuple[jax.Array, jax.Array, jax.Array | None],
-    *,
-    cfg: "GrugModelConfig",
-    widths: tuple[int, ...],
-    gated: bool,
-) -> jax.Array:
-    """The shared experts on one EP shard's tokens (``moe_shared_overlap``): ``tokens`` is (shared-expert input,
-    MoE input), ``params`` the concatenated gate/up weights, the concatenated down weights and the gate."""
-    shared_in, x_flat = tokens
-    w_gate_up, w_down, shared_gate = params
-    proj = jnp.einsum("td,de->te", shared_in, w_gate_up)
-    parts = jnp.split(proj, list(itertools.accumulate(widths[:-1])), axis=1)
-    num_shared = len(widths) // 2 if gated else len(widths)
-    return _shared_experts_tail(cfg, parts, num_shared, gated, w_down, x_flat, shared_gate, None)
-
-
-def _zeros_like_abstract(a: jax.ShapeDtypeStruct) -> jax.Array:
-    """Zeros with ``a``'s shape, dtype and (named) sharding."""
-    spec = a.sharding.spec if isinstance(a.sharding, NamedSharding) else None
-    return jnp.zeros(a.shape, a.dtype, out_sharding=spec)
 
 
 def moe_and_shared_fused(
@@ -4948,20 +2449,8 @@ def moe_and_shared_fused(
     gate = None if shared_gate is None else unshard(shared_gate)
     overlap = None
     weights = moe_weights
-    if mlp.cfg.moe_shared_overlap:
-        shared_in = x_flat
-        if part_inputs and "shared" in part_inputs:
-            shared_in = rearrange(part_inputs["shared"], "b s d -> (b s) d")
-        overlap = MoeOverlapWork(
-            functools.partial(
-                _shared_experts_local, cfg=mlp.cfg, widths=tuple(w.shape[1] for w in shared_weights), gated=gated
-            ),
-            (shared_in, x_flat),
-            (jnp.concatenate(shared_weights, axis=1), w_down, gate),
-        )
-    else:
-        weights = moe_weights + shared_weights
-    router_in_fused = not (mlp.cfg.router_on_latent or mlp.cfg.router_on_embed) and bool(moe_weights)
+    weights = moe_weights + shared_weights
+    router_in_fused = bool(moe_weights)
     if not part_inputs and mlp.cfg.fp8_recipe != Fp8Recipe.NONE:
         # The router stays in high precision; the rest of the fused projection takes the low-precision recipe.
         low = weights[1:] if router_in_fused else weights
@@ -4975,7 +2464,7 @@ def moe_and_shared_fused(
         parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1)
     else:
         # Some projections read another stream (attn_res_sum_inputs): one GEMM per projection.
-        moe_names = ["latent"] if (mlp.cfg.router_on_latent or mlp.cfg.router_on_embed) else ["router", "latent"]
+        moe_names = ["router", "latent"]
         names = moe_names[: len(moe_weights)] + ["shared"] * (len(weights) - len(moe_weights))
         flats = {k: rearrange(v, "b s d -> (b s) d") for k, v in part_inputs.items()}
         parts = [
@@ -4995,11 +2484,7 @@ def moe_and_shared_fused(
             router_embed=router_embed,
         )
 
-    if mlp.cfg.routed_off:
-        # No routing or dispatch: zeros shaped like the routed output and stats (traced abstractly, never run).
-        routed, stats = jax.tree.map(_zeros_like_abstract, jax.eval_shape(routed_mlp))
-    else:
-        routed, stats = routed_mlp()
+    routed, stats = routed_mlp()
     if overlap is not None:
         return routed, stats
     if not gated:
@@ -5009,12 +2494,7 @@ def moe_and_shared_fused(
         mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, x_flat, gate, _batch_spec()
     )
     shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
-    if mlp.cfg.final_write_extra and mlp.cfg.lm_head_extra_source == "shared":
-        # The shared expert's lm_head-only slice never enters the residual stream.
-        hidden_dim = mlp.cfg.hidden_dim
-        stats = {**stats, _LM_HEAD_EXTRA: shared_out[..., hidden_dim:]}
-        shared_out = shared_out[..., :hidden_dim]
-    if shadow is not None or mlp.cfg.moe_compress != MoeCompress.NONE:
+    if shadow is not None:
         shared_in = part_inputs["shared"] if part_inputs and "shared" in part_inputs else x
         # The transfer and gap terms read the shared expert on a stop-gradient input so they move only it.
         detached = rearrange(jax.lax.stop_gradient(shared_in), "b s d -> (b s) d")
@@ -5044,25 +2524,6 @@ def _compress_terms(
     sr = jnp.mean(jnp.sum(s32 * r32, axis=-1))
     s_energy = jnp.mean(jnp.sum(s32**2, axis=-1))
     loss = jnp.zeros((), jnp.float32)
-    if cfg.moe_compress == MoeCompress.TRANSFER:
-        # ||s - sg(s + r)||^2 has the gradient of -2 <s, sg(r)> in s, and that is the form computed.
-        detached = shared_detached.astype(jnp.float32)
-        loss = -2.0 * jnp.mean(jnp.sum(detached * jax.lax.stop_gradient(r32), axis=-1)) / y_energy
-        loss = cfg.moe_compress_weight * loss
-        if cfg.moe_compress_norm_weight > 0:
-            length = jnp.sum(detached**2, axis=-1) / y_energy
-            loss = loss + cfg.moe_compress_norm_weight * jnp.mean(length ** (cfg.moe_compress_norm_power / 2))
-    elif cfg.moe_compress == MoeCompress.TRANSFER_NORMED:
-        detached = shared_detached.astype(jnp.float32)
-        s_hat = detached / jnp.sqrt(jnp.maximum(jnp.sum(detached**2, axis=-1, keepdims=True), 1e-12))
-        y = jax.lax.stop_gradient(s32 + r32)
-        y_hat = y / jnp.sqrt(jnp.maximum(jnp.sum(y**2, axis=-1, keepdims=True), 1e-12))
-        loss = cfg.moe_compress_weight * jnp.mean(jnp.sum((s_hat - y_hat) ** 2, axis=-1))
-    elif cfg.moe_compress == MoeCompress.GAP:
-        gap = shared_detached.astype(jnp.float32) - jax.lax.stop_gradient(r32)
-        loss = cfg.moe_compress_weight * jnp.mean(jnp.sum(gap**2, axis=-1)) / y_energy
-    elif cfg.moe_compress == MoeCompress.ROUTED_PENALTY:
-        loss = cfg.moe_compress_weight * r_energy / y_energy
     terms = {
         _COMPRESS_LOSS: loss,
         "r_share": jax.lax.stop_gradient(r_energy / y_energy),
@@ -5083,38 +2544,12 @@ def _compress_terms(
     return {f"{_COMPRESS_PREFIX}{k}" if k != _COMPRESS_LOSS else k: v for k, v in terms.items()}
 
 
-def _branch_output_stats(attn_out: jax.Array, mlp_out: jax.Array) -> dict[str, jax.Array]:
-    """Largest |element| and element RMS of one layer's attention and MLP branch outputs (``layer_output_stats``)."""
-    out = {}
-    for name, x in (("attn", attn_out), ("mlp", mlp_out)):
-        x = jax.lax.stop_gradient(x).astype(jnp.float32)
-        out[f"{_OUTSTAT_PREFIX}{name}_max"] = jnp.max(jnp.abs(x))
-        out[f"{_OUTSTAT_PREFIX}{name}_rms"] = jnp.sqrt(jnp.mean(x * x))
-    return out
-
-
 _ATTN_DROPOUT_SALT, _MLP_DROPOUT_SALT = 0xD1, 0xD2
 
 
 def _sublayer_dropout(cfg: "GrugModelConfig", x: jax.Array, noise_key: jax.Array | None, salt: int) -> jax.Array:
     """``sublayer_dropout`` on one sublayer output; identity in evaluation (no key) or at p = 0."""
-    p = cfg.sublayer_dropout
-    if not p or noise_key is None:
-        return x
-    keep = jax.random.bernoulli(jax.random.fold_in(noise_key, salt), 1.0 - p, x.shape, out_sharding=_batch_spec())
-    return jnp.where(keep, x / (1.0 - p), jnp.zeros_like(x)).astype(x.dtype)
-
-
-def refresh_attn_prev(new: "Transformer", old: "Transformer") -> "Transformer":
-    """``new`` with every ``Block.attn_prev`` set to ``old``'s current attention weights (``dual_attn_prev``)."""
-    is_block = lambda x: isinstance(x, Block)  # noqa: E731
-
-    def refresh(nb, ob):
-        if not is_block(nb) or nb.attn_prev is None:
-            return nb
-        return eqx.tree_at(lambda blk: blk.attn_prev, nb, jax.tree.map(jax.lax.stop_gradient, ob.attn))
-
-    return jax.tree.map(refresh, new, old, is_leaf=is_block)
+    return x
 
 
 def _sconv_segment_ids(mask: AttentionMask | jax.Array) -> jax.Array | None:
@@ -5123,35 +2558,12 @@ def _sconv_segment_ids(mask: AttentionMask | jax.Array) -> jax.Array | None:
     return segment_ids[0] if segment_ids is not None else None
 
 
-def _laurel_a(cfg: "GrugModelConfig", key: PRNGKeyArray) -> jax.Array | None:
-    if not cfg.laurel_rank:
-        return None
-    return reshard(_init_weight(key, (cfg.hidden_dim, cfg.laurel_rank), 1.0 / math.sqrt(cfg.hidden_dim)), P(None, None))
-
-
-def _laurel_b(cfg: "GrugModelConfig") -> jax.Array | None:
-    if not cfg.laurel_rank:
-        return None
-    return reshard(jnp.zeros((cfg.laurel_rank, cfg.hidden_dim), jnp.float32), P(None, None))
-
-
 def _laurel(h: Float[Array, "B S D"], a: jax.Array | None, b: jax.Array | None) -> Float[Array, "B S D"]:
     """``h + (h A) B`` (LAuReL-LR), or ``h`` when off."""
     if a is None or b is None:
         return h
     low = jnp.einsum("bsd,dr->bsr", h, a.astype(h.dtype), out_sharding=_batch_spec())
     return h + jnp.einsum("bsr,rd->bsd", low, b.astype(h.dtype), out_sharding=_batch_spec())
-
-
-def _ple_inject(layer: "Block", h: Float[Array, "B S D"], extras: dict[str, jax.Array | None] | None) -> jax.Array:
-    """``h + (gelu(rms(h) W_gate) * ple) W_up`` with this layer's normed PLE rows ``extras["ple"]``, or ``h``."""
-    rows = None if extras is None else extras.get("ple")
-    if rows is None:
-        return h
-    assert layer.ple_gate is not None and layer.ple_up is not None
-    gate = jnp.einsum("bsd,dp->bsp", rms_norm(h), layer.ple_gate.astype(h.dtype), out_sharding=_batch_spec())
-    low = jax.nn.gelu(gate) * rows.astype(h.dtype)
-    return h + jnp.einsum("bsp,pd->bsd", low, layer.ple_up.astype(h.dtype), out_sharding=_batch_spec())
 
 
 def _memory_bag_chunks(x: jax.Array, rows_per_token: int, dim: int) -> jax.Array:
@@ -5340,17 +2752,17 @@ class ProductKeyMemory(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "ProductKeyMemory":
         q_key, k_key, v_key, g_key = random.split(key, 4)
-        d, n, heads = cfg.hidden_dim, cfg.memory_keys, cfg.memory_heads
+        d, n, heads = cfg.hidden_dim, (512), (4)
         return ProductKeyMemory(
-            w_q=reshard(_init_weight(q_key, (d, heads * cfg.memory_key_dim), cfg.initializer_std), P(None, None)),
-            keys=reshard(random.normal(k_key, (heads, 2, n, cfg.memory_key_dim // 2), jnp.float32), P()),
+            w_q=reshard(_init_weight(q_key, (d, heads * (256)), cfg.initializer_std), P(None, None)),
+            keys=reshard(random.normal(k_key, (heads, 2, n, (256) // 2), jnp.float32), P()),
             values=reshard(
                 _init_weight(v_key, (n * n, d), 1.0 / math.sqrt(d)),
                 P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
             ),
             w_gate=reshard(_init_weight(g_key, (d, d), cfg.initializer_std), P(None, None)),
             w_out=reshard(jnp.zeros((d, d), jnp.float32), P(None, None)),
-            topk=cfg.memory_topk,
+            topk=(32),
             fsdp=cfg.embed2_fsdp,
         )
 
@@ -5391,95 +2803,20 @@ def _memory_branch(
     return memory(rms_norm(h))
 
 
-class LocalWindowAttention(eqx.Module):
-    """A short sliding-window softmax attention branch for the global layers (``global_local_window``): its own
-    q/k/v projections of the layer's normed attention input, weightless per-head QK RMSNorm, full RoPE, the same
-    document boundaries, and a per-head output gate. The gate starts at zero (on Adam), so the branch starts as a
-    no-op; the matrices are random-init so MuonH can move them."""
-
-    w_q: Float[Array, "D E"]
-    w_k: Float[Array, "D E"]
-    w_v: Float[Array, "D E"]
-    w_o: Float[Array, "E D"]
-    out_gate: Float[Array, " H"]
-    cfg: GrugModelConfig = eqx.field(static=True)
-
-    @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "LocalWindowAttention":
-        d, width, std = cfg.hidden_dim, cfg.global_local_heads * cfg.global_local_head_dim, cfg.initializer_std
-        k_q, k_k, k_v, k_o = random.split(key, 4)
-        return LocalWindowAttention(
-            w_q=reshard(_init_weight(k_q, (d, width), std), P(_FSDP_AXES, None)),
-            w_k=reshard(_init_weight(k_k, (d, width), std), P(_FSDP_AXES, None)),
-            w_v=reshard(_init_weight(k_v, (d, width), std), P(_FSDP_AXES, None)),
-            w_o=reshard(_init_weight(k_o, (width, d), std), P(None, _FSDP_AXES)),
-            out_gate=reshard(jnp.zeros((cfg.global_local_heads,), jnp.float32), P(None)),
-            cfg=cfg,
-        )
-
-    @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
-        cfg = self.cfg
-        window, head_dim = cfg.global_local_window, cfg.global_local_head_dim
-        assert window is not None
-        batch_size, seq_len = x.shape[0], x.shape[1]
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        local_mask = AttentionMask(is_causal=True, sliding_window=window, segment_ids=segment_ids)
-        lower_bounds, valid = fa4_cute_segment_bounds(
-            local_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=window
-        )
-        local_mask = local_mask.with_fa4_bounds(_batch_reshard(lower_bounds), _batch_reshard(valid))
-
-        def heads(w: jax.Array) -> jax.Array:
-            return rearrange(jnp.einsum("bsd,de->bse", x, w.astype(x.dtype)), "... (n h) -> ... n h", h=head_dim)
-
-        q, k = apply_rotary_embedding(
-            rms_norm(heads(self.w_q)), rms_norm(heads(self.w_k)), seq_len=seq_len, head_dim=head_dim, rope=cfg.rope
-        )
-        attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
-        o = attention(q, k, heads(self.w_v), local_mask, implementation=attn_impl)
-        o = o * unshard(self.out_gate).astype(o.dtype)[:, None]
-        o = jnp.reshape(o, (*o.shape[:-2], o.shape[-2] * o.shape[-1]), out_sharding=P(_BATCH_AXES, None, None))
-        return jnp.einsum("bse,ed->bsd", o, self.w_o.astype(o.dtype), out_sharding=_batch_spec())
-
-
 class Block(eqx.Module):
     rms_attn: LearnedRMSNorm | DyT
     attn_gated_norm: GatedNorm
     attn: CausalSelfAttention | KimiDeltaAttention
-    attn_prev: "CausalSelfAttention | None"
-    """The previous step's MLA attention weights (``dual_attn_prev``), frozen to the optimizer."""
     rms_mlp: LearnedRMSNorm | DyT
     mlp_gated_norm: GatedNorm
     mlp: "MoEMLP | DenseMLP"
     shared: tuple[DenseMLP, ...] | None
-    shadow: DenseMLP | None  # cfg.moe_shadow_width
     sconv_attn: "ShortConv | None"
     sconv_mlp: "ShortConv | None"
     sconv_mlp_in: "ShortConv | None"  # Canon-C conv on the normed MLP input ("mlp_in" in cfg.sconv_sites)
-    shared_gate: Float[Array, " D"] | None  # cfg.shared_expert_gate
-    moe_out_gate_w: Float[Array, " G"] | None  # cfg.moe_out_gate
-    moe_out_gate_b: Float[Array, ""] | None
     # Block AttnRes pseudo-queries of the attention and MLP sublayers (None without cfg.attn_res).
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
-    attn_res_query_v: Float[Array, " D"] | None  # value-projection gate (cfg.attn_res_v_gate)
-    # Learnable sublayer output scalars (None without cfg.sublayer_scales).
-    attn_out_scale: Float[Array, ""] | None
-    mlp_out_scale: Float[Array, ""] | None
-    out_norm_attn: "LearnedRMSNorm | None"
-    out_norm_mlp: "LearnedRMSNorm | None"
-    laurel_a_attn: Float[Array, "D R"] | None
-    laurel_b_attn: Float[Array, "R D"] | None
-    local_attn: "LocalWindowAttention | None"
-    """The global layers' short sliding-window branch (``global_local_window``)."""
-    laurel_a_mlp: Float[Array, "D R"] | None
-    laurel_b_mlp: Float[Array, "R D"] | None
-    bias_attn_out: Float[Array, " D"] | None
-    bias_mlp_out: Float[Array, " D"] | None
-    # Per-layer-embedding gate and zero-init up-projection (cfg.ple_dim).
-    ple_gate: Float[Array, "D P"] | None
-    ple_up: Float[Array, "P D"] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
@@ -5513,44 +2850,20 @@ class Block(eqx.Module):
                 )
                 if cfg.shared_ungated_relu2:
                     shared = tuple(eqx.tree_at(lambda m: m.w_gate, e, None, is_leaf=lambda x: x is None) for e in shared)
-                if cfg.final_write_extra and cfg.lm_head_extra_source == "shared":
-                    extra_key = random.fold_in(shared_key, _LM_HEAD_EXTRA_SALT)
-                    shared = tuple(
-                        _widen_shared_down(e, cfg, random.fold_in(extra_key, i)) for i, e in enumerate(shared)
-                    )
-        shadow = None
-        if cfg.moe_shadow_width:
-            shadow = DenseMLP.init(
-                cfg.hidden_dim, cfg.moe_shadow_width, cfg.initializer_std, key=random.fold_in(shared_key, _SHADOW_SALT)
-            )
-            shadow = eqx.tree_at(lambda m: m.w_gate, shadow, None, is_leaf=lambda x: x is None)
         return Block(
-            rms_attn=(
-                DyT.init(cfg.hidden_dim, cfg.dyt_alpha_attn)
-                if cfg.dyt_norm
-                else _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="rms_attn")
-            ),
+            rms_attn=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="rms_attn"),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=attn,
-            attn_prev=attn if cfg.dual_attn_prev and not use_kda else None,
-            rms_mlp=(
-                DyT.init(cfg.hidden_dim, cfg.dyt_alpha_mlp)
-                if cfg.dyt_norm
-                else _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="rms_mlp")
-            ),
+            rms_mlp=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="rms_mlp"),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=mlp,
             shared=shared,
-            shadow=shadow,
             sconv_attn=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl) if use_attn_sconv else None),
             sconv_mlp=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl)
                 if cfg.sconv and "mlp" in cfg.sconv_sites
                 else None
             ),
-            shared_gate=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.shared_expert_gate else None,
-            moe_out_gate_w=jnp.zeros((_MOE_OUT_GATE_DIMS,), jnp.float32) if cfg.moe_out_gate else None,
-            moe_out_gate_b=jnp.full((), 5.0, jnp.float32) if cfg.moe_out_gate else None,
             sconv_mlp_in=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl)
                 if cfg.sconv and "mlp_in" in cfg.sconv_sites
@@ -5558,33 +2871,6 @@ class Block(eqx.Module):
             ),
             attn_res_query_attn=attn_res_query,
             attn_res_query_mlp=attn_res_query,
-            attn_res_query_v=attn_res_query if cfg.attn_res_v_gate else None,
-            attn_out_scale=jnp.full((), _GAIN_INIT[cfg.sublayer_scale_fn], jnp.float32) if cfg.sublayer_scales else None,
-            mlp_out_scale=jnp.full((), _GAIN_INIT[cfg.sublayer_scale_fn], jnp.float32) if cfg.sublayer_scales else None,
-            out_norm_attn=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
-            out_norm_mlp=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
-            laurel_a_attn=_laurel_a(cfg, random.fold_in(key, 91)),
-            laurel_b_attn=_laurel_b(cfg),
-            local_attn=(
-                LocalWindowAttention.init(cfg, key=random.fold_in(key, 97))
-                if cfg.global_local_window is not None and not use_kda
-                else None
-            ),
-            laurel_a_mlp=_laurel_a(cfg, random.fold_in(key, 92)),
-            laurel_b_mlp=_laurel_b(cfg),
-            bias_attn_out=jnp.zeros((cfg.hidden_dim,)) if "attn_out" in cfg.proj_biases else None,
-            bias_mlp_out=jnp.zeros((cfg.hidden_dim,)) if "mlp_out" in cfg.proj_biases else None,
-            ple_gate=(
-                reshard(
-                    _init_weight(random.fold_in(key, 93), (cfg.hidden_dim, cfg.ple_dim), cfg.initializer_std),
-                    P(None, None),
-                )
-                if cfg.ple_dim
-                else None
-            ),
-            ple_up=(
-                reshard(jnp.zeros((cfg.ple_dim, cfg.hidden_dim), jnp.float32), P(None, None)) if cfg.ple_dim else None
-            ),
         )
 
     def attn_branch(
@@ -5605,7 +2891,7 @@ class Block(eqx.Module):
         stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``; ``kv_input``
         (``kv_stream_dim``) is the normed KV side stream the K/V projections read. Returns the branch output
         and the mixer's logging stats."""
-        attn_in = self.attn_gated_norm(self.rms_attn(_laurel(h, self.laurel_a_attn, self.laurel_b_attn)))
+        attn_in = self.attn_gated_norm(self.rms_attn(_laurel(h, None, None)))
         proj_inputs = None
         attn_components = tuple(c for c in sum_components if c in ("q", "k", "v"))
         if attn_components:
@@ -5638,16 +2924,8 @@ class Block(eqx.Module):
                 value_residual=value_residual,
                 kv_input=kv_input,
             )
-            if self.local_attn is not None:
-                out = out + self.local_attn(attn_in, mask).astype(out.dtype)
-        if self.bias_attn_out is not None:
-            out = out + unshard(self.bias_attn_out).astype(out.dtype)
         if self.sconv_attn is not None:
             out = self.sconv_attn(out, _sconv_segment_ids(mask))
-        if self.out_norm_attn is not None:
-            out = self.out_norm_attn(out)
-        if self.attn_out_scale is not None:
-            out = out * apply_gain_fn(self.attn.cfg.sublayer_scale_fn, self.attn_out_scale).astype(out.dtype)
         return out, stats
 
     def mlp_branch(
@@ -5665,7 +2943,7 @@ class Block(eqx.Module):
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
         (``moe_hash_layers``, ``moe_gumbel_tau``, ``router_token_bias_rank``, ``router_bias_seed``)."""
-        normed = self.mlp_gated_norm(self.rms_mlp(_laurel(h, self.laurel_a_mlp, self.laurel_b_mlp)))
+        normed = self.mlp_gated_norm(self.rms_mlp(_laurel(h, None, None)))
         if self.sconv_mlp_in is not None:
             normed = self.sconv_mlp_in(normed, _sconv_segment_ids(mask))
         mlp_in = _spread_mlp_input(normed, self.attn.cfg)
@@ -5685,10 +2963,10 @@ class Block(eqx.Module):
                 part_inputs,
                 hash_token_ids,
                 noise_key,
-                self.shared_gate,
+                None,
                 router_tok_rows,
                 router_seed_bias,
-                self.shadow,
+                None,
                 router_embed,
             )
         else:
@@ -5700,19 +2978,8 @@ class Block(eqx.Module):
                 router_seed_bias=router_seed_bias,
                 router_embed=router_embed,
             )
-        if self.moe_out_gate_w is not None and self.moe_out_gate_b is not None:
-            gate_logit = jnp.einsum(
-                "bsg,g->bs", normed[..., :_MOE_OUT_GATE_DIMS].astype(jnp.float32), self.moe_out_gate_w
-            )
-            out = out * jax.nn.sigmoid(gate_logit + self.moe_out_gate_b)[..., None].astype(out.dtype)
-        if self.bias_mlp_out is not None:
-            out = out + unshard(self.bias_mlp_out).astype(out.dtype)
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
-        if self.out_norm_mlp is not None:
-            out = self.out_norm_mlp(out)
-        if self.mlp_out_scale is not None:
-            out = out * apply_gain_fn(self.attn.cfg.sublayer_scale_fn, self.mlp_out_scale).astype(out.dtype)
         return out, stats
 
     @named_call
@@ -5732,212 +2999,11 @@ class Block(eqx.Module):
         return x + mlp_out, router_stats
 
 
-class RouterTie(NamedTuple):
-    """One ``router_embed_tie`` entry: layer ``layer``'s router column ``expert`` is tied to the mean of
-    ``token_embed[tokens]`` (a single row for one token)."""
-
-    layer: int
-    expert: int
-    tokens: tuple[int, ...]
-
-    @property
-    def tag(self) -> str:
-        """Metric-name suffix: ``L{layer}_e{expert}_v{token}``, or ``..._c{n}`` for an ``n``-token centroid."""
-        target = f"v{self.tokens[0]}" if len(self.tokens) == 1 else f"c{len(self.tokens)}"
-        return f"L{self.layer}_e{self.expert}_{target}"
-
-
-class RouterSeed(NamedTuple):
-    """One ``router_bias_seed`` entry: ``bias`` on expert ``expert``'s logit in layer ``layer`` at token ``token``."""
-
-    layer: int
-    expert: int
-    token: int
-    bias: float
-
-
-def _spec_layers(text: str, num_layers: int) -> list[int]:
-    if text == "*":
-        return list(range(num_layers))
-    layer = int(text)
-    if not 0 <= layer < num_layers:
-        raise ValueError(f"router tie/seed layer must be '*' or in 0..{num_layers - 1}, got {text!r}")
-    return [layer]
-
-
-def _router_ties(cfg: "GrugModelConfig") -> tuple[RouterTie, ...]:
-    """``cfg.router_embed_tie`` parsed, ``*`` expanded to every layer, in spec order."""
-    return _parse_router_ties(cfg.router_embed_tie, cfg.num_layers)
-
-
-@functools.lru_cache(maxsize=16)
-def _parse_router_ties(specs: tuple[str, ...], num_layers: int) -> tuple[RouterTie, ...]:
-    ties = []
-    for spec in specs:
-        parts = spec.split(":")
-        if len(parts) != 3:
-            raise ValueError(f"router_embed_tie entries are 'L:E:V' or 'L:E:V1|V2|...', got {spec!r}")
-        try:
-            expert = int(parts[1])
-            tokens = tuple(int(v) for v in parts[2].split("|"))
-        except ValueError as e:
-            raise ValueError(f"router_embed_tie expert and token ids must be integers, got {spec!r}") from e
-        if len(set(tokens)) != len(tokens):
-            raise ValueError(f"router_embed_tie token ids repeat in {spec!r}")
-        ties += [RouterTie(layer, expert, tokens) for layer in _spec_layers(parts[0], num_layers)]
-    return tuple(ties)
-
-
-def _router_seeds(cfg: "GrugModelConfig") -> tuple[RouterSeed, ...]:
-    """``cfg.router_bias_seed`` parsed, ``*`` expanded to every layer."""
-    seeds = []
-    for spec in cfg.router_bias_seed:
-        parts = spec.split(":")
-        if len(parts) != 4:
-            raise ValueError(f"router_bias_seed entries are 'L:E:V:b', got {spec!r}")
-        seeds += [
-            RouterSeed(layer, int(parts[1]), int(parts[2]), float(parts[3]))
-            for layer in _spec_layers(parts[0], cfg.num_layers)
-        ]
-    return tuple(seeds)
-
-
-def _router_seed_bias(cfg: "GrugModelConfig", physical_layer: int, token_ids: Int[Array, "B S"]) -> jax.Array | None:
-    """``[B, S, E]`` router logit bias of this layer's ``router_bias_seed`` entries (None when it has none)."""
-    seeds = [s for s in _router_seeds(cfg) if s.layer == physical_layer]
-    if not seeds:
-        return None
-    table = np.zeros((len(seeds), cfg.num_experts + cfg.num_null_experts), np.float32)
-    for j, s in enumerate(seeds):
-        table[j, s.expert] = s.bias
-    hits = (token_ids[..., None] == jnp.asarray([s.token for s in seeds], dtype=token_ids.dtype)).astype(jnp.float32)
-    return jnp.einsum("bsn,ne->bse", hits, jnp.asarray(table), out_sharding=_batch_spec())
-
-
-def _router_tie_directions(model: "Transformer") -> Float[Array, "N D"]:
-    """Per tie, the mean of its current ``token_embed`` rows (each distinct token set gathered once)."""
-    ties = _router_ties(model.config)
-    means = {
-        tokens: jnp.mean(model.token_embed[np.asarray(tokens)], axis=0)
-        for tokens in dict.fromkeys(t.tokens for t in ties)
-    }
-    return jnp.stack([means[t.tokens] for t in ties])
-
-
-def _router_tie_alpha_init(model: "Transformer") -> Float[Array, " N"]:
-    """Per tie ``||router[:, E]|| / ||direction||`` at init, so a tied column starts at its untied scale."""
-    ties = _router_ties(model.config)
-    rows = jnp.linalg.norm(_router_tie_directions(model).astype(jnp.float32), axis=-1)
-    routers = _routers_by_layer(model)
-    cols = jnp.stack([jnp.linalg.norm(routers[t.layer][:, t.expert].astype(jnp.float32)) for t in ties])
-    return reshard(cols / rows, P(None))
-
-
-def _routers_by_layer(model: "Transformer") -> dict[int, jax.Array]:
-    """Each layer's ``[D, E]`` router, by layer index."""
-    routers = {}
-    for stack, indices in zip(model.layer_stacks(), model.stack_layer_indices(), strict=True):
-        router = stack.stacked.mlp.router
-        assert router is not None
-        routers.update({layer: router[j] for j, layer in enumerate(indices)})
-    return routers
-
-
-def tie_routers(model: "Transformer") -> "Transformer":
-    """Replace each ``router_embed_tie`` column by ``alpha * mean(token_embed[V...])`` (gradients reach the
-    embedding). Applied to the parameters it is the ``router_embed_tie_release_step`` rewrite: the untied
-    forward of the result equals the tied forward of ``model``."""
-    ties = _router_ties(model.config)
-    assert model.router_tie_alpha is not None
-    rows = _router_tie_directions(model)
-    cols = rows * model.router_tie_alpha[:, None].astype(rows.dtype)
-    tied = []
-    for stack, indices in zip(model.layer_stacks(), model.stack_layer_indices(), strict=True):
-        router = stack.stacked.mlp.router
-        assert router is not None
-        spec = _partition_spec_of(router)
-        for j, t in enumerate(ties):
-            if t.layer in indices:
-                router = router.at[indices.index(t.layer), :, t.expert].set(cols[j].astype(router.dtype))
-        tied.append(reshard(router, spec))
-    return eqx.tree_at(lambda t: [s.stacked.mlp.router for s in t.layer_stacks()], model, tied)
-
-
 @functools.lru_cache(maxsize=4)
 def _hash_expert_table(vocab_size: int, num_experts: int, k: int) -> np.ndarray:
     """``[vocab, k]`` distinct random experts per token id (fixed seed), for ``moe_hash_layers``."""
     rng = np.random.default_rng(0)
     return np.argsort(rng.random((vocab_size, num_experts)), axis=1)[:, :k].astype(np.int32)
-
-
-def _gumbel_noise(key: jax.Array, shape: tuple[int, int]) -> jax.Array:
-    """Batch-sharded ``[T, E]`` standard Gumbel noise, drawn locally per shard (no global array)."""
-
-    def local(key_data):
-        shard_key = jax.random.fold_in(key_data[0], jax.lax.axis_index(_BATCH_AXES))
-        return jax.random.gumbel(shard_key, (shape[0] // _batch_shards(), shape[1]), jnp.float32)
-
-    return shard_map(local, mesh=get_abstract_mesh(), in_specs=(P(None),), out_specs=P(_BATCH_AXES, None))(key[None])
-
-
-def _batch_shards() -> int:
-    mesh = get_abstract_mesh()
-    axes = _BATCH_AXES if isinstance(_BATCH_AXES, tuple) else (_BATCH_AXES,)
-    return math.prod(mesh.shape[a] for a in axes)
-
-
-_EXPERT_READ_SUBSET_SALT = 0x5B5E7
-
-
-def _expert_read_mask(cfg: "GrugModelConfig", num_experts: int, in_dim: int) -> jax.Array:
-    """``[E, in_dim, 1]`` 0/1 mask of the input channels each routed expert reads (``expert_read_subset``)."""
-    width = cfg.expert_read_subset
-    if cfg.expert_read_subset_pattern in ("blocks", "shared"):
-        groups = 1 if cfg.expert_read_subset_pattern == "shared" else in_dim // width
-        start = (jnp.arange(num_experts) % groups) * width
-        channel = jnp.arange(in_dim)
-        mask = (channel[None, :] >= start[:, None]) & (channel[None, :] < start[:, None] + width)
-    else:
-        keys = random.split(random.PRNGKey(_EXPERT_READ_SUBSET_SALT), num_experts)
-        ranks = jax.vmap(lambda k: jnp.argsort(random.permutation(k, in_dim)))(keys)
-        mask = ranks < width
-    return mask.astype(jnp.float32)[:, :, None]
-
-
-def _orthogonalize_expert_reads(
-    em: MoEExpertMlp, router: jax.Array, w_latent_down: jax.Array, alpha: jax.Array | None = None
-) -> MoEExpertMlp:
-    """Project each expert's input rows off its router direction's latent image (``expert_router_orthogonal``):
-    ``W_e <- (I - alpha_e u_e u_e^T) W_e`` with ``u_e = normalize(router[:, e] @ w_latent_down)`` (stop-gradient) and
-    ``alpha_e = 1`` unless a learned ``alpha`` is given."""
-    directions = jnp.einsum(
-        "de,dl->el", router.astype(jnp.float32), w_latent_down.astype(jnp.float32), out_sharding=P(None, None)
-    )
-    directions = directions / (jnp.linalg.norm(directions, axis=-1, keepdims=True) + 1e-9)
-    directions = jax.lax.stop_gradient(directions[: em.w_up.shape[0]])
-
-    def project(w: jax.Array) -> jax.Array:
-        spec = _padded_spec(w)
-        u = reshard(directions, P(spec[0], spec[1]))
-        along = jnp.einsum("el,elo->eo", u, w.astype(jnp.float32), out_sharding=P(spec[0], spec[2]))
-        if alpha is not None:
-            along = along * reshard(alpha[: w.shape[0]], P(spec[0]))[:, None]
-        return (w.astype(jnp.float32) - u[:, :, None] * along[:, None, :]).astype(w.dtype)
-
-    em = eqx.tree_at(lambda m: m.w_up, em, project(em.w_up))
-    if em.w_gate is not None:
-        em = eqx.tree_at(lambda m: m.w_gate, em, project(em.w_gate))
-    return em
-
-
-def _mask_expert_reads(em: MoEExpertMlp, cfg: "GrugModelConfig") -> MoEExpertMlp:
-    """Zero the input rows of ``w_up`` (and ``w_gate``) outside each expert's ``expert_read_subset`` slice."""
-    mask = _expert_read_mask(cfg, em.w_up.shape[0], em.w_up.shape[1])
-    mask = reshard(mask, P(*_padded_spec(em.w_up)[:2], None))
-    em = eqx.tree_at(lambda m: m.w_up, em, em.w_up * mask.astype(em.w_up.dtype))
-    if em.w_gate is not None:
-        em = eqx.tree_at(lambda m: m.w_gate, em, em.w_gate * mask.astype(em.w_gate.dtype))
-    return em
 
 
 def _expert_mlp_init(cfg: "GrugModelConfig", in_width: int, out_width: int, key: PRNGKeyArray) -> MoEExpertMlp:
@@ -5957,57 +3023,12 @@ def _expert_mlp_init(cfg: "GrugModelConfig", in_width: int, out_width: int, key:
         pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
         expert_chunks=1,
         num_expert_waves=cfg.moe_expert_waves,
-        fp8_dispatch=cfg.moe_fp8_dispatch,
+        fp8_dispatch=(False),
         expert_remat=cfg.moe_expert_remat,
     )
-    if cfg.init_std_mult_experts != 1.0:
-        mult = cfg.init_std_mult_experts
-        mlp = eqx.tree_at(lambda m: (m.w_up, m.w_down), mlp, (mlp.w_up * mult, mlp.w_down * mult))
     if cfg.moe_ungated_relu2:
         mlp = eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None)
-    # Masked input rows start at zero, so they stay zero (no gradient) and take no share of the MuonH norm.
-    if cfg.expert_write_groups:
-        mlp = _mask_expert_writes(mlp, cfg)
-    if cfg.expert_write_blocks and cfg.expert_write_masked:
-        mlp = _masked_block_writes(mlp, cfg)
-    return _mask_expert_reads(mlp, cfg) if cfg.expert_read_subset else mlp
-
-
-def _expert_write_block_ids(cfg: "GrugModelConfig", neurons: int) -> jax.Array:
-    return expert_write_block_ids(neurons, cfg.expert_write_blocks, cfg.expert_write_keep)
-
-
-def _masked_block_writes(em: MoEExpertMlp, cfg: "GrugModelConfig") -> MoEExpertMlp:
-    """``expert_write_masked``: zero the full-width ``w_down`` outside each neuron's output blocks."""
-    neurons, out = em.w_down.shape[-2:]
-    mask = expert_write_mask(neurons, out, cfg.expert_write_blocks, cfg.expert_write_keep)
-    mask = reshard(mask.astype(em.w_down.dtype)[None], P(None, *_padded_spec(em.w_down)[1:]))
-    return eqx.tree_at(lambda m: m.w_down, em, em.w_down * mask)
-
-
-def _scatter_expert_writes(em: MoEExpertMlp, cfg: "GrugModelConfig") -> MoEExpertMlp:
-    """Expand the compact ``[E, I, keep * w]`` ``w_down`` to ``[E, I, B * w]``: neuron i's k-th block of w goes to
-    output block ``ids[i, k]``, every other block is zero."""
-    blocks, keep = cfg.expert_write_blocks, cfg.expert_write_keep
-    neurons = em.w_down.shape[-2]
-    width = em.w_down.shape[-1] // keep
-    spec = _padded_spec(em.w_down)
-    place = jax.nn.one_hot(_expert_write_block_ids(cfg, neurons), blocks, dtype=em.w_down.dtype)  # [I, keep, B]
-    place = reshard(place, P(spec[1], None, None))
-    compact = reshard(rearrange(em.w_down, "e i (k w) -> e i k w", k=keep), P(spec[0], spec[1], None, None))
-    full = jnp.einsum("eikw,ikb->eibw", compact, place, out_sharding=P(spec[0], spec[1], None, None))
-    full = reshard(rearrange(full, "e i b w -> e i (b w)", w=width), P(spec[0], spec[1], None))
-    return eqx.tree_at(lambda m: m.w_down, em, full)
-
-
-def _mask_expert_writes(em: MoEExpertMlp, cfg: "GrugModelConfig") -> MoEExpertMlp:
-    """Zero ``w_down`` outside the block-diagonal ``expert_write_groups`` pattern: neuron group g writes output
-    block g. Block-diagonal gradients orthogonalize block by block, so MuonH keeps the zeros."""
-    groups = cfg.expert_write_groups
-    neurons, out = em.w_down.shape[-2:]
-    mask = (jnp.arange(neurons)[:, None] * groups // neurons) == (jnp.arange(out)[None, :] * groups // out)
-    mask = reshard(mask.astype(em.w_down.dtype)[None], P(None, *_padded_spec(em.w_down)[1:]))
-    return eqx.tree_at(lambda m: m.w_down, em, em.w_down * mask)
+    return mlp
 
 
 @contextmanager
@@ -6110,47 +3131,14 @@ def _positions_in_document(segment_ids: Int[Array, "B S"] | None, seq_len: int) 
     return idx - jax.lax.cummax(jnp.where(starts, idx, 0), axis=1)
 
 
-def _smear(
-    hidden: Float[Array, "B S D"], w: jax.Array, lam: jax.Array, segment_ids: Int[Array, "B S"] | None
-) -> Float[Array, "B S D"]:
-    """modded-nanogpt Smear: ``x_t + lam * sigmoid(x_t[:12] @ w) * x_{t-1}``, zeroed at document starts."""
-    prev = jnp.pad(hidden[:, :-1], ((0, 0), (1, 0), (0, 0)))
-    if segment_ids is not None:
-        starts = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=True)
-        prev = jnp.where(starts[..., None], 0, prev)
-    gate = jax.nn.sigmoid(jnp.einsum("bsk,k->bs", hidden[..., :12].astype(jnp.float32), w))[..., None]
-    return (hidden.astype(jnp.float32) + lam * gate * prev.astype(jnp.float32)).astype(hidden.dtype)
-
-
 def _expert_banks(cfg: "GrugModelConfig") -> list[tuple[int, int, int]]:
     """``(first expert, number of experts, experts per token)`` for each expert bank."""
-    if not cfg.moe_bank2_experts:
-        return [(0, cfg.num_experts, cfg.num_experts_per_token)]
-    size_a = cfg.num_experts - cfg.moe_bank2_experts
-    k_a = cfg.num_experts_per_token - cfg.moe_bank2_topk
-    if size_a <= k_a or cfg.moe_bank2_experts <= cfg.moe_bank2_topk or k_a < 1 or cfg.moe_bank2_topk < 1:
-        raise ValueError("each expert bank needs 1 <= top-k < its expert count (QB selects top-(k+1))")
-    return [(0, size_a, k_a), (size_a, cfg.moe_bank2_experts, cfg.moe_bank2_topk)]
+    return [(0, cfg.num_experts, cfg.num_experts_per_token)]
 
 
 def _bank_config(cfg: "GrugModelConfig", bank: int) -> "GrugModelConfig":
     """The per-bank view of ``cfg`` used to build and run that bank's experts."""
-    if not cfg.moe_bank2_experts:
-        return cfg
-    _, size, bank_k = _expert_banks(cfg)[bank - 1]
-    if bank == 1:
-        return dataclasses.replace(cfg, num_experts=size, num_experts_per_token=bank_k)
-    if cfg.moe_bank2_activation not in ("relu2", "swiglu"):
-        raise ValueError(f"moe_bank2_activation must be relu2 or swiglu, got {cfg.moe_bank2_activation!r}")
-    return dataclasses.replace(
-        cfg,
-        num_experts=size,
-        num_experts_per_token=bank_k,
-        intermediate_dim=cfg.moe_bank2_intermediate_dim or cfg.intermediate_dim,
-        moe_ungated_relu2=cfg.moe_bank2_activation == "relu2",
-        expert_activation="silu",
-        expert_leaky_slope=cfg.expert_leaky_slope if cfg.moe_bank2_activation == "relu2" else 0.0,
-    )
+    return cfg
 
 
 def _run_expert_bank(
@@ -6173,7 +3161,7 @@ def _run_expert_bank(
             combine_weights,
             em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1),
             em.w_down,
-            activation=_ungated_expert_activation(cfg) if ungated else _tied_expert_activation(cfg, em),
+            activation=(ActivationFunctionEnum.relu2) if ungated else _tied_expert_activation(cfg, em),
             implementation=em.implementation,
             mesh=get_abstract_mesh(),
             capacity_factor=em.capacity_factor,
@@ -6208,15 +3196,6 @@ def _grouped_rms_norm(cfg: "GrugModelConfig", groups: int, width: int) -> Learne
     return jax.tree.map(lambda g: jnp.broadcast_to(g, (groups, width)), norm)
 
 
-def _expert_read_group_shares(selected: Int[Array, "T K"], groups: int) -> dict[str, jax.Array]:
-    """Fraction of the routed assignments that go to each ``expert_read_groups`` channel group."""
-    group = (selected % groups).reshape(-1)
-    return {
-        f"{_LAYER_KNOB_PREFIX}expert_read_share_g{g}": jax.lax.stop_gradient(jnp.mean((group == g).astype(jnp.float32)))
-        for g in range(groups)
-    }
-
-
 def _run_grouped_read_bank(
     em: MoEExpertMlp,
     cfg: "GrugModelConfig",
@@ -6239,10 +3218,9 @@ def _run_grouped_read_bank(
     if read_norm is None:
         slot_rows = jnp.broadcast_to(x_flat[:, None, :], (t, k, x_flat.shape[-1]))
     else:
-        groups = cfg.expert_read_groups
-        slices = jnp.reshape(x_flat, (t, groups, x_flat.shape[-1] // groups), out_sharding=P(_BATCH_AXES, None, None))
+        slices = jnp.reshape(x_flat, (t, (0), x_flat.shape[-1] // (0)), out_sharding=P(_BATCH_AXES, None, None))
         slices = read_norm(slices)
-        slot_rows = jnp.take_along_axis(slices, (selected % groups)[:, :, None], axis=1)
+        slot_rows = jnp.take_along_axis(slices, (selected % (0))[:, :, None], axis=1)
     if private_rows is not None:
         slot_rows = jnp.concatenate([slot_rows, private_rows.astype(slot_rows.dtype)], axis=-1)
     flat_rows = jnp.reshape(slot_rows, (t * k, slot_rows.shape[-1]), out_sharding=P(_BATCH_AXES, None))
@@ -6282,32 +3260,15 @@ def _drop_renorm_factor(
     return factor, stats
 
 
-def _ungated_expert_activation(cfg: "GrugModelConfig"):
-    """Activation of the ungated experts: ``leaky_relu(u, slope)^2`` (plain ReLU^2 at slope 0), or PolyNorm."""
-    if cfg.moe_ungated_activation == UngatedExpertActivation.POLYNORM:
-        return polynorm
-    if cfg.expert_leaky_slope:
-        if cfg.moe_fused_relu2:
-            raise ValueError("moe_fused_relu2 implements plain ReLU^2 only; set expert_leaky_slope=0")
-        slope = cfg.expert_leaky_slope
-        return lambda u: jnp.square(jax.nn.leaky_relu(u, slope))
-    return fused_relu2 if cfg.moe_fused_relu2 else ActivationFunctionEnum.relu2
-
-
 def _tied_expert_activation(cfg: "GrugModelConfig", em: MoEExpertMlp):
     """``act`` with ``act(u) * u == leaky_relu(u, slope)^2`` for backends that take the gate tied to ``W_up``."""
-    if cfg.moe_ungated_relu2 and cfg.moe_ungated_activation == UngatedExpertActivation.POLYNORM:
-        return polynorm_over_input
-    if cfg.moe_ungated_relu2 and cfg.expert_leaky_slope:
-        slope_sq = cfg.expert_leaky_slope**2
+    if cfg.moe_ungated_relu2 and (0.0):
+        slope_sq = (0.0) ** 2
         return lambda u: jax.nn.leaky_relu(u, slope_sq)
     return em.activation
 
 
 def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | None:
-    if cfg.logit_soft_cap_asym:
-        a, b, c = cfg.logit_soft_cap_asym
-        return (float(a), float(b), float(c))
     return cfg.logit_soft_cap
 
 
@@ -6401,23 +3362,12 @@ def _spread_mlp_input(x: Float[Array, "B S D"], cfg: GrugModelConfig) -> Float[A
     """Center and/or whiten an MoE input with its batch statistics (``mlp_in_center``,
     ``mlp_in_whiten_power``). The statistics are stop-gradient, so the transform acts as a fixed
     per-step reparameterization of the input projections."""
-    if not cfg.mlp_in_center and cfg.mlp_in_whiten_power == 0:
-        return x
-    flat = rearrange(x.astype(jnp.float32), "b s d -> (b s) d")
-    mean = jax.lax.stop_gradient(jnp.mean(flat, axis=0))
-    flat = flat - mean
-    if cfg.mlp_in_whiten_power > 0:
-        cov = jnp.einsum("td,te->de", flat, flat, out_sharding=P(None, None)) / flat.shape[0]
-        evals, evecs = jnp.linalg.eigh(jax.lax.stop_gradient(cov))
-        evals = jnp.maximum(evals, 0) / jnp.mean(evals) + cfg.mlp_in_whiten_eps
-        whiten = (evecs * evals ** (-cfg.mlp_in_whiten_power / 2)) @ evecs.T
-        flat = jnp.einsum("td,de->te", flat, jax.lax.stop_gradient(whiten), out_sharding=_batch_spec())
-    return reshard(rearrange(flat, "(b s) d -> b s d", b=x.shape[0]).astype(x.dtype), _batch_spec())
+    return x
 
 
 def _attn_res_key_dim(cfg: GrugModelConfig) -> int:
     """Width of every AttnRes pseudo-query: ``attn_res_key_rank`` if set, else ``hidden_dim``."""
-    return cfg.hidden_dim if cfg.attn_res_key_rank is None else cfg.attn_res_key_rank
+    return cfg.hidden_dim
 
 
 @named_call
@@ -6677,26 +3627,20 @@ def _attn_res_layer(
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
     cfg = layer.attn.cfg
     opts = {
-        "head_norm": cfg.attn_res_head_norm,
-        "additive": cfg.attn_res_additive,
-        "stream_source": cfg.attn_res_stream_source,
-        "source_delta": cfg.attn_res_source_delta,
-        "soft_cap": cfg.attn_res_logit_soft_cap,
+        "head_norm": False,
+        "additive": False,
+        "stream_source": False,
+        "source_delta": False,
+        "soft_cap": None,
     }
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias, **opts)
-    h = _ple_inject(layer, h, logit_bias)
     attn_in = h
     attn_branch = type(layer).attn_branch
     if cfg.attn_res_remat_attention:
         attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
     physical = layer_index % cfg.num_layers
-    kda_ablation = (physical in cfg.kda_no_decay_layers, physical in cfg.kda_no_beta_layers)
-    v_stream = None
+    kda_ablation = (physical in (), physical in ())
     v_stats: dict[str, jax.Array] = {}
-    if cfg.attn_res_v_gate:
-        v_gate = 2 * cfg.num_layers + layer_index
-        v_stream, _, w_v = _attn_res_mix(blocks, block_logits, partial, queries, v_gate, eps, logit_bias, **opts)
-        v_stats[_ATTN_RES_W_V] = w_v
     attn_out, attn_stats = attn_branch(
         layer,
         h,
@@ -6705,44 +3649,15 @@ def _attn_res_layer(
         use_long,
         token_ids,
         kv_share,
-        v_stream,
-        ("v",) if v_stream is not None else (),
+        (None),
+        (),
         kda_ablation,
-        physical in cfg.value_residual_layers,
+        physical in (),
         _kv_stream_input(logit_bias),
     )
-    # The MLP re-attends over the history including this layer's attention write, or without it
-    # (moe_shortcut) so the MoE does not wait on the attention.
-    if layer.attn_prev is not None and noise_key is not None:
-        # dual_attn_prev (training only: evals pass no route key): odd rows run attention at the previous step's
-        # weights. Their value is the old weights, their gradient goes to the current ones (identity Jacobian).
-        old_attn = jax.tree.map(
-            lambda prev, cur: (
-                jax.lax.stop_gradient(prev) + (cur - jax.lax.stop_gradient(cur)) if eqx.is_inexact_array(cur) else cur
-            ),
-            layer.attn_prev,
-            layer.attn,
-        )
-        old_out, _ = attn_branch(
-            eqx.tree_at(lambda blk: blk.attn, layer, old_attn),
-            h,
-            mask,
-            use_long,
-            use_long,
-            token_ids,
-            kv_share,
-            v_stream,
-            ("v",) if v_stream is not None else (),
-            kda_ablation,
-            physical in cfg.value_residual_layers,
-            _kv_stream_input(logit_bias),
-        )
-        odd = reshard((jnp.arange(attn_out.shape[0]) % 2 == 1)[:, None, None], P(_BATCH_AXES, None, None))
-        attn_out = jnp.where(odd, old_out, attn_out)
     attn_out = _sublayer_dropout(cfg, attn_out, noise_key, _ATTN_DROPOUT_SALT)
-    shortcut_partial = partial
     partial = attn_out if partial is None else partial + attn_out
-    mlp_partial = shortcut_partial if cfg.moe_shortcut else partial
+    mlp_partial = partial
     h, z_mlp, w_mlp = _attn_res_mix(
         blocks, block_logits, mlp_partial, queries, 2 * layer_index + 1, eps, logit_bias, **opts
     )
@@ -6751,8 +3666,6 @@ def _attn_res_layer(
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
     mlp_out = _sublayer_dropout(cfg, mlp_out, noise_key, _MLP_DROPOUT_SALT)
-    if cfg.layer_output_stats:
-        router_stats = {**router_stats, **_branch_output_stats(attn_out, mlp_out)}
     if trace_capture.TRACE:
         router_stats = {
             **router_stats,
@@ -6780,93 +3693,6 @@ def _attn_res_layer(
     }
 
 
-def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key=None, kv_share=None):
-    """One full-AttnRes layer: the attention output becomes its own source before the MoE gate, and the
-    MoE output is returned as the partial, which the next layer rolls into its own source. Returns
-    ``(partial, blocks, block_logits, router_stats)`` like ``_attn_res_layer_passthrough``."""
-    layer, blocks, block_logits, partial, queries, logit_bias = diff_args
-    assert partial is None, "full AttnRes rolls every sublayer output into its own source"
-    cfg = layer.attn.cfg
-    opts = {
-        "head_norm": cfg.attn_res_head_norm,
-        "additive": cfg.attn_res_additive,
-        "stream_source": cfg.attn_res_stream_source,
-        "source_delta": cfg.attn_res_source_delta,
-        "soft_cap": cfg.attn_res_logit_soft_cap,
-    }
-    sum_components = cfg.attn_res_sum_inputs
-    h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index, eps, logit_bias, **opts)
-    h = _ple_inject(layer, h, logit_bias)
-    attn_side_stream = _stream_sum(blocks)
-    v_stats: dict[str, jax.Array] = {}
-    # V gate on KDA layers only: an MLA layer's K and V share one KV latent.
-    if cfg.attn_res_v_gate and isinstance(layer.attn, KimiDeltaAttention):
-        if sum_components:
-            raise ValueError("attn_res_v_gate with attn_res_full does not combine with attn_res_sum_inputs")
-        v_gate = 2 * cfg.num_layers + layer_index
-        attn_side_stream, _, v_stats[_ATTN_RES_W_V] = _attn_res_mix(
-            blocks, block_logits, None, queries, v_gate, eps, logit_bias, **opts
-        )
-        sum_components = ("v",)
-    attn_out, attn_stats = type(layer).attn_branch(
-        layer,
-        h,
-        mask,
-        use_long,
-        use_long,
-        token_ids,
-        kv_share,
-        attn_side_stream,
-        sum_components,
-        value_residual=layer_index % cfg.num_layers in cfg.value_residual_layers,
-        kv_input=_kv_stream_input(logit_bias),
-    )
-    sum_components = cfg.attn_res_sum_inputs
-    # moe_shortcut: the MoE gate reads the history before this layer's attention write.
-    shortcut_history = (blocks, block_logits)
-    first_reader = 2 * layer_index + 1 + int(cfg.moe_shortcut)
-    blocks = (*blocks, attn_out)
-    block_logits = (
-        *block_logits,
-        _logit_rows(_attn_res_source_logits(attn_out, queries[first_reader:], eps, cfg.attn_res_head_norm)),
-    )
-    mlp_blocks, mlp_block_logits = shortcut_history if cfg.moe_shortcut else (blocks, block_logits)
-    h, z_mlp, w_mlp = _attn_res_mix(
-        mlp_blocks, mlp_block_logits, None, queries, 2 * layer_index + 1, eps, logit_bias, **opts
-    )
-    if "mlp" in sum_components:
-        h = _stream_sum(mlp_blocks)
-    sum_parts: tuple[str, ...] = ()
-    if "mlp_shared" in sum_components:
-        sum_parts += ("shared",)
-    if "mlp_routed" in sum_components:
-        sum_parts += ("router", "latent")
-    if "mlp_router" in sum_components:
-        sum_parts += ("router",)
-    sum_parts = tuple(dict.fromkeys(sum_parts))
-    mlp_out, router_stats = layer.mlp_branch(
-        h,
-        mask,
-        _stream_sum(mlp_blocks) if sum_parts else None,
-        sum_parts,
-        **_route_kwargs(cfg, layer_index % cfg.num_layers, token_ids, noise_key, logit_bias),
-    )
-    mem_out, mem_stats = _memory_branch(h, logit_bias)
-    if mem_out is not None:
-        mlp_out = mlp_out + mem_out
-    stats = {
-        **router_stats,
-        **attn_stats,
-        **v_stats,
-        **mem_stats,
-        **attn_stats,
-        _ATTN_RES_Z: z_attn + z_mlp,
-        _ATTN_RES_W_ATTN: w_attn,
-        _ATTN_RES_W_MLP: w_mlp,
-    }
-    return mlp_out, blocks, block_logits, stats
-
-
 def _kv_stream_input(extras: dict[str, jax.Array | None] | None) -> jax.Array | None:
     """This layer's normed KV side-stream state ``extras["kv_stream"]`` (``kv_stream_dim``), or None."""
     return None if extras is None else extras.get("kv_stream")
@@ -6882,12 +3708,12 @@ def _route_kwargs(
     """Router extras for one layer: token ids on ``moe_hash_layers``, the per-layer noise key otherwise, the
     tokens' ``router_token_bias_rank`` rows (``extras["router_tok"]``) and the ``router_bias_seed`` bias."""
     return {
-        "hash_token_ids": token_ids if physical_layer in cfg.moe_hash_layers else None,
+        "hash_token_ids": token_ids if physical_layer in () else None,
         "noise_key": noise_key,
         "router_tok_rows": None if extras is None else extras.get("router_tok"),
         "router_embed": None if extras is None else extras.get("router_embed"),
         "router_seed_bias": _merged_router_bias(
-            _router_seed_bias(cfg, physical_layer, token_ids) if cfg.router_bias_seed else None,
+            None,
             None if extras is None else extras.get("router_hist"),
         ),
     }
@@ -6897,21 +3723,6 @@ def _merged_router_bias(seed: jax.Array | None, history: jax.Array | None) -> ja
     if seed is None or history is None:
         return seed if history is None else history
     return seed + history
-
-
-def _router_history_bias(w: jax.Array, probs: list[jax.Array], num_layers: int) -> jax.Array | None:
-    """HERO-MoE's residual router logits for one layer: ``rho * H @ W_R`` over the earlier layers' distributions
-    ``probs`` (``GrugModelConfig.router_history``). ``w`` is this layer's ``[(L - 1) * E, E]`` slice."""
-    if not probs:
-        return None
-    e = probs[0].shape[-1]
-    bias = sum(
-        jnp.einsum("bse,ef->bsf", p.astype(jnp.float32), w[j * e : (j + 1) * e].astype(jnp.float32))
-        for j, p in enumerate(probs)
-    )
-    rms = jnp.sqrt(sum(jnp.mean(jnp.square(p.astype(jnp.float32))) for p in probs) / len(probs))
-    rho = jax.lax.stop_gradient(jnp.sqrt(len(probs) / max(num_layers - 1, 1)) / (rms + 1e-9))
-    return rho * bias
 
 
 def _stream_sum(sources: tuple[jax.Array, ...]) -> jax.Array:
@@ -7015,9 +3826,7 @@ def _kda_layer_indices(cfg: GrugModelConfig) -> tuple[int, ...]:
     """Layers whose mixer is KDA: the local layers when ``local_mixer`` is KDA, else none."""
     if cfg.local_mixer != LocalMixer.KDA:
         return ()
-    return tuple(
-        i for i in range(cfg.num_layers) if not _is_long_layer(i, cfg.num_layers, cfg.global_every, cfg.global_layers)
-    )
+    return tuple(i for i in range(cfg.num_layers) if not _is_long_layer(i, cfg.num_layers, cfg.global_every, (None)))
 
 
 def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
@@ -7026,107 +3835,6 @@ def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
     leaves, treedef = jax.tree.flatten(stacked.stacked)
     split_leaves = [jax.lax.split(leaf, (1,) * num_layers, axis=0) for leaf in leaves]
     return [treedef.unflatten([parts[i][0] for parts in split_leaves]) for i in range(num_layers)]
-
-
-class KvStreamBlock(eqx.Module):
-    """One pre-norm block of the KV side stream (``kv_stream_dim`` = ``w``): ``s += attn(rms(s))`` then
-    ``s += mlp(rms(s))``. The attention is plain causal softmax attention within the side stream, masked
-    by the main model's full-causal document mask, with weightless per-head QK RMSNorm and full RoPE
-    (``cfg.rope``); the MLP is ungated ReLU^2 of width ``kv_stream_mlp_mult * w``. ``kv_norm`` is the learned
-    RMSNorm of the block's output that the paired main layer's K/V projections read. All matrices are
-    random-init at ``cfg.initializer_std`` (MuonH)."""
-
-    rms_attn: LearnedRMSNorm
-    w_q: Float[Array, "W W"]
-    w_k: Float[Array, "W W"]
-    w_v: Float[Array, "W W"]
-    w_o: Float[Array, "W W"]
-    rms_mlp: LearnedRMSNorm
-    w_up: Float[Array, "W M"]
-    w_down: Float[Array, "M W"]
-    kv_norm: LearnedRMSNorm
-    cfg: GrugModelConfig = eqx.field(static=True)
-
-    @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "KvStreamBlock":
-        w, std, eps = cfg.kv_stream_dim, cfg.initializer_std, cfg.layer_norm_eps
-        m = cfg.kv_stream_mlp_mult * w
-        k_q, k_k, k_v, k_o, k_up, k_down = random.split(key, 6)
-        return KvStreamBlock(
-            rms_attn=_learned_rms_norm(cfg, w, eps),
-            w_q=reshard(_init_weight(k_q, (w, w), std), P(_FSDP_AXES, None)),
-            w_k=reshard(_init_weight(k_k, (w, w), std), P(_FSDP_AXES, None)),
-            w_v=reshard(_init_weight(k_v, (w, w), std), P(_FSDP_AXES, None)),
-            w_o=reshard(_init_weight(k_o, (w, w), std), P(None, _FSDP_AXES)),
-            rms_mlp=_learned_rms_norm(cfg, w, eps),
-            w_up=reshard(_init_weight(k_up, (w, m), std), P(_FSDP_AXES, None)),
-            w_down=reshard(_init_weight(k_down, (m, w), std), P(None, _FSDP_AXES)),
-            kv_norm=_learned_rms_norm(cfg, w, eps),
-            cfg=cfg,
-        )
-
-    @named_call
-    def __call__(self, s: Float[Array, "B S W"], mask: AttentionMask) -> Float[Array, "B S W"]:
-        head_dim = self.cfg.kv_stream_dim // self.cfg.kv_stream_heads
-        x = self.rms_attn(s)
-
-        def heads(w: jax.Array) -> jax.Array:
-            return rearrange(jnp.einsum("bsw,wd->bsd", x, w), "... (n d) -> ... n d", d=head_dim)
-
-        q, k = apply_rotary_embedding(
-            rms_norm(heads(self.w_q)),
-            rms_norm(heads(self.w_k)),
-            seq_len=s.shape[1],
-            head_dim=head_dim,
-            rope=self.cfg.rope,
-        )
-        attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
-        o = attention(q, k, heads(self.w_v), mask, implementation=attn_impl)
-        o = jnp.reshape(o, (*o.shape[:-2], o.shape[-2] * o.shape[-1]), out_sharding=P(_BATCH_AXES, None, None))
-        s = s + jnp.einsum("bsd,dw->bsw", o, self.w_o, out_sharding=_batch_spec())
-        hidden = jnp.square(jax.nn.relu(jnp.einsum("bsw,wm->bsm", self.rms_mlp(s), self.w_up)))
-        return s + jnp.einsum("bsm,mw->bsw", hidden, self.w_down, out_sharding=_batch_spec())
-
-
-class KvStream(eqx.Module):
-    """The KV side stream of ``kv_stream_dim``: its own token embedding (RMS-normed, no gain) advanced by
-    one ``KvStreamBlock`` per main layer. It reads only the token ids, so it runs once before the main
-    layers; main layer ``l`` reads ``blocks[l].kv_norm`` of the state leaving side block ``l`` (so layer 0's
-    K/V already had one side block). Under ``AttnResLayerBackward.RECOMPUTE`` each side block is
-    rematerialized in the backward (only its input is saved), like the main layers."""
-
-    token_embed: Float[Array, "V W"]
-    blocks: ArrayStacked[KvStreamBlock]
-
-    @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "KvStream":
-        k_embed, k_blocks = random.split(key)
-        return KvStream(
-            token_embed=reshard(
-                _init_weight(k_embed, (cfg.vocab_size, cfg.kv_stream_dim), cfg.initializer_std), P(None, None)
-            ),
-            blocks=ArrayStacked.init(cfg.num_layers, KvStreamBlock)(cfg, key=random.split(k_blocks, cfg.num_layers)),
-        )
-
-    def __call__(
-        self, token_ids: Int[Array, "B S"], mask: AttentionMask, gather
-    ) -> tuple[list[Float[Array, "B S W"]], dict[str, jax.Array]]:
-        """Per main layer, the normed side-stream state it reads; and each state's RMS for logging."""
-        s = rms_norm(gather(self.token_embed, token_ids))
-        kv_inputs, stats = [], {}
-        for i, block in enumerate(_unstack_layers(self.blocks)):
-            recompute = block.cfg.attn_res_layer_backward == AttnResLayerBackward.RECOMPUTE
-            s = (eqx.filter_checkpoint(block, policy=None) if recompute else block)(s, mask)
-            kv_inputs.append(block.kv_norm(s))
-            stats[f"{_LAYER_KNOB_PREFIX}kv_stream_rms_L{i}"] = jnp.sqrt(
-                jnp.mean(jnp.square(jax.lax.stop_gradient(s).astype(jnp.float32)))
-            )
-            for name in ("w_q", "w_k", "w_v", "w_o", "w_up", "w_down"):
-                weight = jax.lax.stop_gradient(getattr(block, name)).astype(jnp.float32)
-                stats[f"{_LAYER_KNOB_PREFIX}kv_stream_{name}_norm_L{i}"] = jnp.linalg.norm(weight)
-            gain = jnp.concatenate([jax.lax.stop_gradient(g).reshape(-1) for g in jax.tree.leaves(block.kv_norm)])
-            stats[f"{_LAYER_KNOB_PREFIX}kv_stream_kv_norm_gain_mean_L{i}"] = jnp.mean(gain)
-        return kv_inputs, stats
 
 
 class Transformer(eqx.Module):
@@ -7144,96 +3852,16 @@ class Transformer(eqx.Module):
     kda_blocks_tail: ArrayStacked[Block] | None
     """KDA layers of ``latent_out_full_layers``."""
     final_norm: LearnedRMSNorm
-    lm_head_extra_norm: LearnedRMSNorm | None
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
-    embed2_sign_table: jax.Array | None
-    """``[embed2_sign_pool, row width]`` fixed +-1 bf16 sign pool (``embed2_sign_trick``); frozen for the optimizer."""
     embed2_norm: LearnedRMSNorm | None
     bigram_gate_w: Float[Array, " D"] | None
     bigram_gate_b: Float[Array, ""] | None
     bigram_gate_a_lr: Float[Array, "D R"] | None
     bigram_gate_b_lr: Float[Array, "R D"] | None
-    trigram_gate_w: Float[Array, " D"] | None
-    trigram_gate_b: Float[Array, ""] | None
-    trigram_gate_a_lr: Float[Array, "D R"] | None
-    trigram_gate_b_lr: Float[Array, "R D"] | None
-    token_embed3: jax.Array | None
-    embed3_norm: LearnedRMSNorm | None
-    ngram_stat_table: jax.Array | None
-    """``[len(ngram_stat_orders) * ngram_stat_rows, ngram_stat_dim + 1]`` fp32 sums and counts, one block of rows
-    per order; frozen for the optimizer."""
-    ngram_stat_code: jax.Array | None
-    """``[vocab, ngram_stat_dim]`` fixed random next-token code; frozen for the optimizer."""
-    ngram_stat_hidden: jax.Array | None
-    ngram_stat_up: jax.Array | None
-    ngram_stat_norm: RMSNorm | None
-    ngram_stat_gate_w: Float[Array, " D"] | None
-    ngram_stat_gate_b: Float[Array, ""] | None
-    token_embed_window: jax.Array | None
-    byte_head: jax.Array | None
-    future_head: jax.Array | None
-    """``future_aux``: ``[D or lowdim, buckets]`` hash head, or ``[D, D]`` embedding predictor."""
-    future_down: jax.Array | None
-    """``future_aux=lowdim_t2``: ``[D, lowdim]`` bottleneck."""
-    window_proj: jax.Array | None
-    window_norm: LearnedRMSNorm | None
     embed2_up: jax.Array | None
-    token_embed_ple: jax.Array | None
-    """Per-layer-embedding table ``[vocab, num_layers * ple_dim]`` (``ple_dim``)."""
-    router_tok_a: Float[Array, "V r"] | None
-    """Shared token table of the router token-identity bias (``router_token_bias_rank``), ``N(0, 1/r)``."""
-    router_tie_alpha: Float[Array, " N"] | None
-    """Per-tie scale of the ``router_embed_tie`` router columns ``alpha * token_embed[V]``."""
-    memory: tuple[ProductKeyMemory, ...] | None
-    """Product-key memories of ``memory_layers``, in that order."""
-    embed2_lambda: Float[Array, " G"] | None
-    """Per-gate weight of the second embedding on each sublayer input (``second_embed_mode="input"``)."""
-    attn_res_query_bias: Float[Array, "G N"] | None
-    """AttnRes logit bias per (gate, source); the last column is the running partial."""
-    attn_res_query_pull: Float[Array, "N D"] | None
-    """Pull-AttnRes source keys (``attn_res_pull``); the last row is the partial's."""
-    attn_res_query_embed: Float[Array, "G D"] | None
-    """Per-gate pull projection for the embedding logit (``attn_res_pull_embed``)."""
-    attn_res_query_dyn1: Float[Array, "G D R"] | None
-    attn_res_query_dyn2: Float[Array, "G R N"] | None
-    attn_res_query_token: Float[Array, "T V D"] | None
-    """Token-embedding queries (``attn_res_token_query``): one table, or one per gate."""
-    """``attn_res_dynamic_rank`` MLP per gate, in query-stack order (``dyn2`` zero-init)."""
-    attn_res_query_backout: Float[Array, " N"] | None
-    """Signed per-source correction of the final AttnRes gate (``attn_res_final_signed``), zero-init."""
-    smear_w: Float[Array, " 12"] | None
-    smear_lambda: Float[Array, ""] | None
-    attn_res_query_sub: Float[Array, "G H S"] | None
-    """Hierarchical multi-head AttnRes sub-queries (``attn_res_head_sub``), zero-init, in query-stack order."""
-    attn_res_query_temp: Float[Array, "G H"] | None
-    """Per-gate (and per-head) logit multiplier (``attn_res_temperature``), init 1."""
-    attn_res_query_dual: Float[Array, "G D"] | None
-    """Second pseudo-query per gate (``attn_res_dual_query``)."""
-    attn_res_query_dual_sel: Float[Array, "G D"] | None
-    attn_res_query_dual_sel_bias: Float[Array, " G"] | None
-    attn_res_query_blend: Float[Array, "G 2"] | None
-    """Per-gate ``(l1, l2)`` of ``attn_res_blend``."""
-    attn_res_query_blend_proj: Float[Array, "G 2 D"] | None
-    mtp: "MtpHead | None"
-    """The DeepSeek-V3 MTP module (``mtp_mode``)."""
-    nitp_w1: Float[Array, "D D"] | None
-    nitp_w2: Float[Array, "D D"] | None
-    """The NITP predictor head's two matrices (``nitp_weight``), random init (MuonH)."""
-    attn_res_query_loop: Float[Array, "P G D"] | None
-    """AttnRes pseudo-queries of the extra loop passes (``loop_passes - 1`` of them), zero-init."""
-    loop_inject_scale: Float[Array, " P"] | None
-    """Input-injection scale per extra loop pass, init 1."""
-    output_bigram_u: Float[Array, "V R"] | None
-    output_bigram_w: Float[Array, "R V"] | None
-    """Output bigram prior (``output_bigram_rank``): current-token code table ``U`` and zero-init read-out ``W``."""
-    lm_head_bias: Float[Array, " V"] | None
-    """Output logit bias (``lm_head_unigram_bias``), float32 even in the compute copy."""
-    kv_stream: KvStream | None
-    router_hist_w: Float[Array, "L HE E"] | None  # HERO-MoE residual router weights (cfg.router_history)
-    """The KV side stream (``kv_stream_dim``), the only source of the layers' keys and values."""
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -7266,14 +3894,14 @@ class Transformer(eqx.Module):
         output_proj = reshard(
             _init_weight(
                 out_key,
-                (cfg.hidden_dim + cfg.lm_head_extra_dim, cfg.vocab_size * cfg.lm_head_prototypes),
+                (cfg.hidden_dim + (0), cfg.vocab_size * (1)),
                 cfg.initializer_std,
             ),
             _LM_HEAD_PARTITION_SPEC,
         )
 
         # With a wider final layer every layer pads its per-expert stats to the widest layer's expert count.
-        layer_base = dataclasses.replace(cfg, stats_num_experts=cfg.qb_num_experts) if cfg.final_num_experts else cfg
+        layer_base = cfg
 
         def stack(
             layers: tuple[int, ...], use_kda: bool, layer_cfg: GrugModelConfig = layer_base
@@ -7288,10 +3916,6 @@ class Transformer(eqx.Module):
         # (and dense models could not even build one).
         tail_cfg = _tail_layer_config(layer_base) if softmax_tail or kda_tail else layer_base
         body_cfg = layer_base
-        if cfg.body_latent_out_dim is not None:
-            if not (softmax_tail or kda_tail):
-                raise ValueError("body_latent_out_dim needs latent_out_full_layers")
-            body_cfg = dataclasses.replace(layer_base, latent_out_dim=cfg.body_latent_out_dim, latent_out_full_layers=())
         model = Transformer(
             token_embed=token_embed,
             embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="embed"),
@@ -7306,9 +3930,6 @@ class Transformer(eqx.Module):
             ),
             kda_blocks_tail=stack(kda_tail, True, tail_cfg) if kda_tail else None,
             final_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="final"),
-            lm_head_extra_norm=(
-                _learned_rms_norm(cfg, cfg.lm_head_extra_dim, cfg.layer_norm_eps) if cfg.lm_head_extra_dim else None
-            ),
             final_gated_norm=(
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.final_gated_norm else None
             ),
@@ -7320,8 +3941,8 @@ class Transformer(eqx.Module):
                     _init_weight(
                         embed2_key,
                         (
-                            (cfg.embed2_rows or cfg.vocab_size) * cfg.embed2_hash_heads,
-                            (cfg.embed2_dim or cfg.hidden_dim) // cfg.embed2_hash_heads,
+                            (cfg.embed2_rows or cfg.vocab_size) * (1),
+                            (cfg.embed2_dim or cfg.hidden_dim) // (1),
                         ),
                         cfg.initializer_std,
                     ),
@@ -7330,81 +3951,11 @@ class Transformer(eqx.Module):
                 if cfg.second_embed
                 else None
             ),
-            embed2_sign_table=(
-                reshard(
-                    jnp.sign(
-                        random.normal(
-                            random.PRNGKey(_EMBED2_SIGN_SEED),
-                            (cfg.embed2_sign_pool, (cfg.embed2_dim or cfg.hidden_dim) // cfg.embed2_hash_heads),
-                        )
-                    ).astype(jnp.bfloat16),
-                    P(None, None),
-                )
-                if cfg.embed2_sign_trick
-                else None
-            ),
-            token_embed_ple=(
-                reshard(
-                    _init_weight(
-                        random.fold_in(embed2_key, 17),
-                        (cfg.vocab_size, cfg.num_layers * cfg.ple_dim),
-                        cfg.initializer_std,
-                    ),
-                    P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
-                )
-                if cfg.ple_dim
-                else None
-            ),
-            router_tok_a=(
-                reshard(
-                    _init_weight(
-                        random.fold_in(embed2_key, 19),
-                        (cfg.vocab_size, cfg.router_token_bias_rank),
-                        1.0 / math.sqrt(cfg.router_token_bias_rank),
-                    ),
-                    P(None, None),
-                )
-                if cfg.router_token_bias_rank
-                else None
-            ),
-            memory=(
-                tuple(
-                    ProductKeyMemory.init(cfg, key=random.fold_in(embed2_key, 1000 + layer))
-                    for layer in cfg.memory_layers
-                )
-                if cfg.memory_layers
-                else None
-            ),
-            embed2_lambda=(
-                jnp.full(
-                    (_attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate),),
-                    cfg.embed2_lambda_init,
-                    jnp.float32,
-                )
-                if cfg.second_embed and cfg.second_embed_mode == "input"
-                else None
-            ),
             embed2_norm=(
                 _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="embed2") if cfg.second_embed else None
             ),
             bigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.bigram_gate else None,
             bigram_gate_b=jnp.full((), 2.0, jnp.float32) if cfg.bigram_gate else None,
-            trigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.trigram_gate else None,
-            trigram_gate_b=jnp.full((), 2.0, jnp.float32) if cfg.trigram_gate else None,
-            trigram_gate_a_lr=(
-                _init_weight(
-                    random.fold_in(embed2_key, 13),
-                    (cfg.hidden_dim, cfg.bigram_gate_rank),
-                    1.0 / math.sqrt(cfg.hidden_dim),
-                )
-                if cfg.trigram_gate and cfg.bigram_gate_rank
-                else None
-            ),
-            trigram_gate_b_lr=(
-                jnp.zeros((cfg.bigram_gate_rank, cfg.hidden_dim), jnp.float32)
-                if cfg.trigram_gate and cfg.bigram_gate_rank
-                else None
-            ),
             bigram_gate_a_lr=(
                 _init_weight(
                     random.fold_in(embed2_key, 9),
@@ -7419,108 +3970,6 @@ class Transformer(eqx.Module):
                 if cfg.bigram_gate and cfg.bigram_gate_rank
                 else None
             ),
-            token_embed3=(
-                reshard(
-                    _init_weight(random.fold_in(embed2_key, 3), (cfg.embed3_rows, cfg.hidden_dim), cfg.initializer_std),
-                    P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
-                )
-                if cfg.embed3_rows
-                else None
-            ),
-            embed3_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.embed3_rows else None,
-            ngram_stat_table=(
-                reshard(
-                    jnp.zeros((len(cfg.ngram_stat_orders) * cfg.ngram_stat_rows, cfg.ngram_stat_dim + 1), jnp.float32),
-                    P(None, None),
-                )
-                if cfg.ngram_stat_rows
-                else None
-            ),
-            ngram_stat_code=(
-                reshard(
-                    random.normal(
-                        random.PRNGKey(_NGRAM_STAT_CODE_SEED), (cfg.vocab_size, cfg.ngram_stat_dim), jnp.float32
-                    )
-                    / math.sqrt(cfg.ngram_stat_dim),
-                    P(None, None),
-                )
-                if cfg.ngram_stat_rows
-                else None
-            ),
-            ngram_stat_hidden=(
-                reshard(
-                    _init_weight(
-                        random.fold_in(embed2_key, 22),
-                        (_ngram_stat_feature_dim(cfg), cfg.ngram_stat_mlp_dim),
-                        1.0 / math.sqrt(_ngram_stat_feature_dim(cfg)),
-                    ),
-                    P(None, None),
-                )
-                if cfg.ngram_stat_rows and cfg.ngram_stat_mlp_dim
-                else None
-            ),
-            ngram_stat_up=(
-                reshard(
-                    _init_weight(
-                        random.fold_in(embed2_key, 21),
-                        (cfg.ngram_stat_mlp_dim or _ngram_stat_feature_dim(cfg), cfg.hidden_dim),
-                        1.0 / math.sqrt(cfg.ngram_stat_mlp_dim or _ngram_stat_feature_dim(cfg)),
-                    )
-                    * (cfg.ngram_stat_mode is NgramStatMode.SOURCE),  # zero-init (no-harm) in BIGRAM mode
-                    P(None, None),
-                )
-                if cfg.ngram_stat_rows
-                else None
-            ),
-            ngram_stat_norm=(RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if _ngram_stat_source_mode(cfg) else None),
-            ngram_stat_gate_w=(
-                jnp.zeros((cfg.hidden_dim,), jnp.float32)
-                if _ngram_stat_source_mode(cfg) and cfg.ngram_stat_gate
-                else None
-            ),
-            ngram_stat_gate_b=(
-                jnp.full((), 2.0, jnp.float32) if _ngram_stat_source_mode(cfg) and cfg.ngram_stat_gate else None
-            ),
-            token_embed_window=(
-                reshard(
-                    _init_weight(random.fold_in(embed2_key, 5), (cfg.vocab_size, cfg.window_embed_dim), 1.0),
-                    P(None, None),
-                )
-                if cfg.window_embed_dim
-                else None
-            ),
-            window_proj=(
-                reshard(
-                    _init_weight(random.fold_in(embed2_key, 6), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
-                    P(_FSDP_AXES, "model"),
-                )
-                if cfg.window_embed_dim
-                else None
-            ),
-            window_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.window_embed_dim else None,
-            byte_head=(
-                reshard(
-                    _init_weight(
-                        random.fold_in(out_key, 11),
-                        (cfg.hidden_dim, cfg.byte_aux_bytes * _BYTE_CLASSES),
-                        cfg.initializer_std,
-                    ),
-                    P(None, None),
-                )
-                if cfg.byte_aux_bytes
-                else None
-            ),
-            future_head=_future_head_init(cfg, random.fold_in(out_key, 12)),
-            future_down=(
-                reshard(
-                    _init_weight(
-                        random.fold_in(out_key, 13), (cfg.hidden_dim, cfg.future_aux_lowdim), cfg.initializer_std
-                    ),
-                    P(None, None),
-                )
-                if cfg.future_aux == FutureAux.LOWDIM_T2
-                else None
-            ),
             embed2_up=(
                 reshard(
                     _init_weight(
@@ -7533,151 +3982,8 @@ class Transformer(eqx.Module):
                 if cfg.second_embed and cfg.embed2_dim
                 else None
             ),
-            attn_res_query_bias=(
-                jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, _attn_res_num_sources(cfg)), jnp.float32)
-                if cfg.attn_res_logit_bias
-                else None
-            ),
-            attn_res_query_pull=(
-                jnp.zeros((_attn_res_num_sources(cfg), cfg.hidden_dim), jnp.float32) if cfg.attn_res_pull else None
-            ),
-            attn_res_query_embed=(
-                jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, cfg.hidden_dim), jnp.float32)
-                if cfg.attn_res_pull_embed
-                else None
-            ),
-            attn_res_query_dyn1=(
-                (1.0 / math.sqrt(cfg.hidden_dim))
-                * random.normal(
-                    random.fold_in(key, 13),
-                    (
-                        _attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate),
-                        cfg.hidden_dim,
-                        cfg.attn_res_dynamic_rank,
-                    ),
-                    jnp.float32,
-                )
-                if cfg.attn_res_dynamic_rank > 0
-                else None
-            ),
-            attn_res_query_token=(
-                jnp.zeros(
-                    (
-                        (
-                            _attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate)
-                            if cfg.attn_res_token_query == AttnResTokenQuery.PER_GATE
-                            else 1
-                        ),
-                        cfg.vocab_size,
-                        cfg.hidden_dim,
-                    ),
-                    jnp.float32,
-                )
-                if cfg.attn_res_token_query != AttnResTokenQuery.NONE
-                else None
-            ),
-            attn_res_query_dyn2=(
-                jnp.zeros(
-                    (
-                        _attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate),
-                        cfg.attn_res_dynamic_rank,
-                        _attn_res_num_sources(cfg),
-                    ),
-                    jnp.float32,
-                )
-                if cfg.attn_res_dynamic_rank > 0
-                else None
-            ),
-            attn_res_query_backout=(
-                jnp.zeros((_attn_res_num_sources(cfg),), jnp.float32) if cfg.attn_res_final_signed else None
-            ),
-            smear_w=jnp.zeros((12,), jnp.float32) if cfg.smear else None,
-            smear_lambda=jnp.zeros((), jnp.float32) if cfg.smear else None,
-            attn_res_query_sub=(
-                jnp.zeros(
-                    (
-                        _attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate),
-                        cfg.attn_res_heads,
-                        cfg.hidden_dim if cfg.attn_res_head_sub == "full" else cfg.hidden_dim // cfg.attn_res_heads,
-                    ),
-                    jnp.float32,
-                )
-                if cfg.attn_res_head_sub != "none"
-                else None
-            ),
-            attn_res_query_temp=(
-                jnp.ones((_attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate), cfg.attn_res_heads))
-                if cfg.attn_res_temperature
-                else None
-            ),
-            attn_res_query_dual=(
-                cfg.attn_res_dual_init_std
-                * random.normal(random.fold_in(key, 11), (_attn_res_num_gates(cfg), cfg.hidden_dim), jnp.float32)
-                if cfg.attn_res_dual_query
-                else None
-            ),
-            attn_res_query_dual_sel=(
-                jnp.zeros((_attn_res_num_gates(cfg), cfg.hidden_dim), jnp.float32) if cfg.attn_res_dual_query else None
-            ),
-            attn_res_query_dual_sel_bias=(
-                jnp.zeros((_attn_res_num_gates(cfg),), jnp.float32) if cfg.attn_res_dual_query else None
-            ),
-            attn_res_query_blend=(
-                jnp.ones((_attn_res_num_gates(cfg), 2), jnp.float32) if cfg.attn_res_blend != "none" else None
-            ),
-            attn_res_query_blend_proj=(
-                jnp.zeros((_attn_res_num_gates(cfg), 2, cfg.hidden_dim), jnp.float32)
-                if cfg.attn_res_blend == "dynamic"
-                else None
-            ),
-            mtp=MtpHead.init(cfg, key=random.fold_in(key, 3)) if cfg.mtp_mode == MtpMode.DEEPSEEK else None,
-            nitp_w1=(
-                reshard(
-                    _init_weight(random.fold_in(key, 4), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
-                    P(_FSDP_AXES, None),
-                )
-                if cfg.nitp_weight > 0
-                else None
-            ),
-            nitp_w2=(
-                reshard(
-                    _init_weight(random.fold_in(key, 5), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
-                    P(_FSDP_AXES, None),
-                )
-                if cfg.nitp_weight > 0
-                else None
-            ),
-            attn_res_query_loop=(
-                reshard(jnp.zeros((cfg.loop_passes - 1, 2 * cfg.num_layers, _attn_res_key_dim(cfg)), jnp.float32), P())
-                if cfg.loop_passes > 1
-                else None
-            ),
-            loop_inject_scale=jnp.ones((cfg.loop_passes - 1,), jnp.float32) if cfg.loop_passes > 1 else None,
-            output_bigram_u=(
-                reshard(
-                    _init_weight(random.fold_in(key, 17), (cfg.vocab_size, cfg.output_bigram_rank), cfg.initializer_std),
-                    P(None, None),
-                )
-                if cfg.output_bigram_rank
-                else None
-            ),
-            output_bigram_w=(
-                reshard(jnp.zeros((cfg.output_bigram_rank, cfg.vocab_size), jnp.float32), P(None, "model"))
-                if cfg.output_bigram_rank
-                else None
-            ),
-            lm_head_bias=(
-                reshard(jnp.zeros((cfg.vocab_size,), jnp.float32), P(None)) if cfg.lm_head_unigram_bias else None
-            ),
-            kv_stream=KvStream.init(cfg, key=random.fold_in(key, _KV_STREAM_KEY_SALT)) if cfg.kv_stream_dim else None,
-            router_hist_w=(
-                _router_hist_init(cfg, random.fold_in(key, _ROUTER_HIST_KEY_SALT)) if cfg.router_history else None
-            ),
-            router_tie_alpha=None,
             config=cfg,
         )
-        if cfg.router_embed_tie:
-            model = eqx.tree_at(lambda m: m.router_tie_alpha, model, _router_tie_alpha_init(model), is_leaf=_is_none)
         return model
 
     def layer_stacks(self) -> list[ArrayStacked[Block]]:
@@ -7721,22 +4027,9 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         cfg = self.config
-        if cfg.router_share_block > 1:
-            self = _share_routers(self, cfg.router_share_block)
-        if cfg.router_embed_tie and (
-            cfg.router_embed_tie_release_step is None if router_tie_active is None else router_tie_active
-        ):
-            self = tie_routers(self)
-        gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
-        hidden = raw_embed = gather(self.token_embed, token_ids)
-        if cfg.embed_norm_mode == "rms":
-            hidden = self.embed_norm(hidden)
-        elif cfg.embed_norm_mode == "rms_nogain":
-            hidden = rms_norm(hidden.astype(jnp.float32), cfg.layer_norm_eps).astype(hidden.dtype)
-        elif cfg.embed_norm_mode != "raw":
-            raise ValueError(f"embed_norm_mode must be rms, rms_nogain or raw, got {cfg.embed_norm_mode!r}")
-        if cfg.embed_scale != 1.0:
-            hidden = (hidden * cfg.embed_scale).astype(hidden.dtype)
+        gather = _embedding_gather
+        hidden = gather(self.token_embed, token_ids)
+        hidden = self.embed_norm(hidden)
         if self.embed_gated_norm is not None:
             hidden = self.embed_gated_norm(hidden)
 
@@ -7747,9 +4040,6 @@ class Transformer(eqx.Module):
             q_segment_ids, _ = mask.segment_ids
             q_segment_ids = _batch_reshard(q_segment_ids)
             segment_ids = (q_segment_ids, q_segment_ids)
-        if self.smear_w is not None and self.smear_lambda is not None:
-            seg = None if segment_ids is None else segment_ids[0]
-            hidden = _smear(hidden, self.smear_w, self.smear_lambda, seg)
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
@@ -7767,65 +4057,19 @@ class Transformer(eqx.Module):
 
         final_gate_stats: dict[str, jax.Array] = {}
         bigram_gate_stats: dict[str, jax.Array] = {}
-        if (cfg.second_embed or cfg.ple_dim) and not cfg.attn_res:
+        if (cfg.second_embed or (0)) and not cfg.attn_res:
             raise ValueError("second_embed and ple_dim require attn_res")
-        if cfg.value_residual_layers and not cfg.attn_res:
-            raise ValueError("value_residual_layers requires attn_res")
         if cfg.attn_res:
             extra_sources = ()
-            input_embed2 = None
-            if cfg.second_embed_mode not in ("source", "input"):
-                raise ValueError(f"second_embed_mode must be source or input, got {cfg.second_embed_mode!r}")
             if self.token_embed2 is not None:
                 assert self.embed2_norm is not None
                 ids2 = token_ids
                 gather2 = _table2_gather(cfg)
                 table2 = self.token_embed2
-                if cfg.second_embed_bigram and cfg.embed2_hash_heads > 1:
+                if cfg.second_embed_bigram:
                     doc_start = None if segment_ids is None else segment_ids[0]
-                    rows_per_head = cfg.embed2_rows or cfg.vocab_size
-                    heads = cfg.embed2_hash_heads
-                    if cfg.embed2_head_orders and len(cfg.embed2_head_orders) != heads:
-                        raise ValueError(f"embed2_head_orders needs {heads} entries, got {cfg.embed2_head_orders}")
-                    head_ids = jnp.stack(
-                        [
-                            _bigram_hash_ids(token_ids, doc_start, rows_per_head, order, salt=h) + h * rows_per_head
-                            for h, order in enumerate(cfg.embed2_head_orders or (cfg.embed2_ngram,) * heads)
-                        ],
-                        axis=-1,
-                    )
-                    b_, s_ = token_ids.shape
-                    flat_ids = jax.lax.reshape(head_ids, (b_, s_ * heads), out_sharding=P(_BATCH_AXES, None))
-                    head_rows = gather2(table2, flat_ids)
-                    if self.embed2_sign_table is not None:
-                        head_signs = jnp.stack(
-                            [
-                                _ngram_sign_ids(token_ids, doc_start, rows_per_head, order, cfg.embed2_sign_pool, salt=h)
-                                for h, order in enumerate(cfg.embed2_head_orders or (cfg.embed2_ngram,) * heads)
-                            ],
-                            axis=-1,
-                        )
-                        flat_signs = jax.lax.reshape(head_signs, (b_, s_ * heads), out_sharding=P(_BATCH_AXES, None))
-                        head_rows = head_rows * self._embed2_signs(flat_signs, head_rows.dtype)
-                    rows2 = jax.lax.reshape(
-                        head_rows, (b_, s_, head_rows.shape[-1] * heads), out_sharding=P(_BATCH_AXES, None, None)
-                    )
-                else:
-                    if cfg.second_embed_bigram:
-                        doc_start = None if segment_ids is None else segment_ids[0]
-                        ids2 = _bigram_hash_ids(
-                            token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size, cfg.embed2_ngram
-                        )
-                    rows2 = gather2(table2, ids2)
-                    if self.embed2_sign_table is not None:
-                        sign_ids = _ngram_sign_ids(
-                            token_ids,
-                            doc_start,
-                            cfg.embed2_rows or cfg.vocab_size,
-                            cfg.embed2_ngram,
-                            cfg.embed2_sign_pool,
-                        )
-                        rows2 = rows2 * self._embed2_signs(sign_ids, rows2.dtype)
+                    ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size, cfg.embed2_ngram)
+                rows2 = gather2(table2, ids2)
                 if self.embed2_up is not None:
                     rows2 = jnp.einsum(
                         "bsr,rd->bsd", rows2, self.embed2_up.astype(rows2.dtype), out_sharding=_batch_spec()
@@ -7839,61 +4083,14 @@ class Transformer(eqx.Module):
                         self.bigram_gate_b,
                         self.bigram_gate_a_lr,
                         self.bigram_gate_b_lr,
-                        act=cfg.bigram_gate_act,
-                        logit_scale=cfg.bigram_gate_logit_scale,
+                        act=(ContentGateActivation.NONE),
+                        logit_scale=(1.0),
                     )
                     bigram_gate_stats = {
                         "attn_res_bigram_gate_mean": jax.lax.stop_gradient(jnp.mean(gate)),
                         "attn_res_bigram_gate_std": jax.lax.stop_gradient(jnp.std(gate)),
                     }
-                if self.ngram_stat_table is not None and cfg.ngram_stat_mode is NgramStatMode.BIGRAM:
-                    if not cfg.second_embed_bigram:
-                        raise ValueError("ngram_stat_mode=bigram needs second_embed_bigram")
-                    doc_start = None if segment_ids is None else segment_ids[0]
-                    embed2 = embed2 + self._ngram_stat_read(hidden, token_ids, doc_start)
-                if cfg.second_embed_mode == "input":
-                    input_embed2 = embed2
-                else:
-                    extra_sources = (embed2,)
-            if self.token_embed_window is not None:
-                assert self.window_proj is not None and self.window_norm is not None
-                doc_start = None if segment_ids is None else segment_ids[0]
-                window = _token_window(gather(self.token_embed_window, token_ids), doc_start, cfg.hidden_dim)
-                projected = jnp.einsum(
-                    "bsd,de->bse", window, self.window_proj.astype(window.dtype), out_sharding=_batch_spec()
-                )
-                if cfg.window_embed_mode == "add_embed":
-                    # Summed into the token-embedding source, so it can't be gated away before it is useful.
-                    hidden = (hidden + self.window_norm(projected)).astype(hidden.dtype)
-                elif cfg.window_embed_mode == "source":
-                    extra_sources = (*extra_sources, self.window_norm(projected))
-                else:
-                    raise ValueError(f"window_embed_mode must be source or add_embed, got {cfg.window_embed_mode!r}")
-            if self.token_embed3 is not None:
-                assert self.embed3_norm is not None and cfg.second_embed_bigram and cfg.second_embed_mode == "source"
-                doc_start = None if segment_ids is None else segment_ids[0]
-                ids3 = _bigram_hash_ids(token_ids, doc_start, cfg.embed3_rows, 3)
-                embed3 = self.embed3_norm(_table2_gather(cfg)(self.token_embed3, ids3))
-                if self.trigram_gate_w is not None and self.trigram_gate_b is not None:
-                    embed3, gate3 = _content_gate(
-                        hidden,
-                        embed3,
-                        self.trigram_gate_w,
-                        self.trigram_gate_b,
-                        self.trigram_gate_a_lr,
-                        self.trigram_gate_b_lr,
-                        act=cfg.bigram_gate_act,
-                        logit_scale=cfg.bigram_gate_logit_scale,
-                    )
-                    bigram_gate_stats["attn_res_trigram_gate_mean"] = jax.lax.stop_gradient(jnp.mean(gate3))
-                    bigram_gate_stats["attn_res_trigram_gate_std"] = jax.lax.stop_gradient(jnp.std(gate3))
-                extra_sources = (*extra_sources, embed3)
-            if self.ngram_stat_table is not None and cfg.ngram_stat_mode is NgramStatMode.SOURCE:
-                doc_start = None if segment_ids is None else segment_ids[0]
-                extra_sources = (*extra_sources, self._ngram_stat_source(hidden, token_ids, doc_start))
-            ple_rows = None
-            if self.token_embed_ple is not None:
-                ple_rows = _table2_gather(cfg)(self.token_embed_ple, token_ids)
+                extra_sources = (embed2,)
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
                 token_ids,
@@ -7902,19 +4099,13 @@ class Transformer(eqx.Module):
                 long_mask.with_fa4_bounds(long_lower_bounds, valid),
                 long_mask.with_fa4_bounds(short_lower_bounds, valid),
                 route_key,
-                input_embed2,
-                ple_rows,
+                (None),
+                (None),
             )
         else:
-            if cfg.nitp_weight > 0:
-                raise ValueError("nitp_weight needs attn_res (the NITP target is read from the AttnRes sources)")
-            if cfg.moe_hash_layers or cfg.moe_gumbel_tau > 0:
-                raise ValueError(
-                    "moe_hash_layers / moe_gumbel_tau need attn_res (the scanned stack has no router extras)"
-                )
             # One compiled Block body scanned over the stacked layers; per-layer short/long is a
             # Bool[num_layers] scan input, and the FA4 metadata is selected per layer with jnp.where.
-            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every, cfg.global_layers)
+            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every, (None))
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
@@ -7970,28 +4161,17 @@ class Transformer(eqx.Module):
                 if key in stacked_router_stats:
                     router_metrics[key] = stacked_router_stats[key]  # [L, B, S, H, F] / [L, 2, H, H]
             if return_routing:
-                if cfg.loop_passes != 1:
-                    raise ValueError("return_routing needs loop_passes=1 (passes merge the per-layer stats)")
                 router_metrics[ROUTING_SELECTED_KEY] = stacked_router_stats[_ROUTING_SELECTED]
                 router_metrics[ROUTING_WEIGHTS_KEY] = stacked_router_stats[_ROUTING_WEIGHTS]
                 router_metrics[ROUTED_INPUT_KEY] = stacked_router_stats[_ROUTED_INPUT]
                 if _SHARED_PRE in stacked_router_stats:
                     router_metrics[SHARED_PRE_KEY] = stacked_router_stats[_SHARED_PRE]
-            if cfg.newton_muon:
-                gram_sum = jnp.sum(stacked_router_stats[NEWTON_GRAM_LOCAL_KEY], axis=1)
-                router_metrics[NEWTON_GRAM_KEY] = reshard(gram_sum / (batch_size * seq_len), P(None, None, None))
         router_metrics.update(final_gate_stats)
         router_metrics.update(bigram_gate_stats)
-        lm_head_extra = router_metrics.pop(_LM_HEAD_EXTRA, None)
+        router_metrics.pop(_LM_HEAD_EXTRA, None)
         hidden = self.final_norm(hidden)
         if self.final_gated_norm is not None:
             hidden = self.final_gated_norm(hidden)
-        if self.lm_head_extra_norm is not None:
-            assert lm_head_extra is not None
-            extra = reshard(self.lm_head_extra_norm(lm_head_extra).astype(hidden.dtype), _batch_spec())
-            hidden = jnp.concatenate([hidden, extra], axis=-1)
-        if self.mtp is not None:
-            router_metrics[_MTP_EMBED] = raw_embed
         return hidden, router_metrics
 
     def _attn_res_layers(
@@ -8025,95 +4205,29 @@ class Transformer(eqx.Module):
         cfg = self.config
         assert self.attn_res_query_final is not None
         eps = cfg.layer_norm_eps
-        num_layers, passes = cfg.num_layers, cfg.loop_passes
+        num_layers, passes = cfg.num_layers, (1)
         seg_size = max(1, num_layers // cfg.attn_res_num_blocks)
         block_cap = cfg.attn_res_num_blocks * passes
         layers = self.layers()
-        embedding = hidden
         # Every query in gate order [pass 0: attn_0, mlp_0, ..., mlp_{L-1}; pass 1: ...; final].
         gate_queries = []
         for layer in layers:
             assert layer.attn_res_query_attn is not None and layer.attn_res_query_mlp is not None
             gate_queries += [layer.attn_res_query_attn, layer.attn_res_query_mlp]
-        loop_queries = [] if self.attn_res_query_loop is None else list(self.attn_res_query_loop)
+        loop_queries = []
         # V-gate queries sit between the per-layer gates and the final gate, so every block's precomputed
         # logits (scored against queries[2i:]) cover them; V gate of layer i is row 2 * L * passes + i.
         v_queries = []
-        if cfg.attn_res_v_gate:
-            if passes != 1:
-                raise ValueError("attn_res_v_gate supports loop_passes=1 only")
-            v_queries = [jnp.stack([layer.attn_res_query_v for layer in layers])]
         queries_flat = jnp.concatenate(
             [jnp.stack(gate_queries), *loop_queries, *v_queries, self.attn_res_query_final[None]]
         )
         queries = queries_flat
-        if cfg.attn_res_heads > 1:
-            if cfg.hidden_dim % cfg.attn_res_heads:
-                raise ValueError("attn_res_heads must divide hidden_dim")
-            if cfg.attn_res_pull or cfg.attn_res_pull_embed:
-                raise ValueError("attn_res_heads > 1 is not implemented for pull AttnRes")
-            if cfg.attn_res_head_sub == "none":
-                queries = queries_flat.reshape(queries_flat.shape[0], cfg.attn_res_heads, -1)
-            else:
-                assert self.attn_res_query_sub is not None
-                queries = queries_flat[:, None, :] + _full_width_sub_queries(self.attn_res_query_sub, cfg)
         logit_bias = _gate_extras(self, queries.shape[0])
-        if self.attn_res_query_token is not None:
-            if cfg.attn_res_heads > 1:
-                raise ValueError("attn_res_token_query needs single-head AttnRes (attn_res_heads=1)")
-            logit_bias = {**(logit_bias or {}), "token_ids": token_ids}
-        if cfg.router_on_embed:
-            # router_on_embed: every MoE router reads the token embedding (the first AttnRes source).
-            logit_bias = {**(logit_bias or {}), "router_embed": hidden}
-        if self.router_tok_a is not None:
-            # router_token_bias_rank: every MoE layer reads the tokens' rows of the shared table.
-            logit_bias = {**(logit_bias or {}), "router_tok": _embedding_gather(self.router_tok_a, token_ids)}
-        if input_embed2 is not None:
-            assert self.embed2_lambda is not None
-            logit_bias = {**(logit_bias or {}), "embed2": input_embed2, "embed2_lambda": self.embed2_lambda}
-        if cfg.attn_res_head_sub not in ("none", "slice", "full"):
-            raise ValueError(f"attn_res_head_sub must be none, slice or full, got {cfg.attn_res_head_sub!r}")
-        if cfg.attn_res_head_sub != "none" and (cfg.attn_res_heads < 2 or cfg.attn_res_head_norm):
-            raise ValueError("attn_res_head_sub needs attn_res_heads > 1 and no attn_res_head_norm")
-        if cfg.attn_res_source_delta and not cfg.attn_res_full:
-            raise ValueError("attn_res_source_delta needs attn_res_full")
-        if cfg.attn_res_final_mode not in ("attn", "uniform", "sum"):
-            raise ValueError(f"attn_res_final_mode must be attn, uniform or sum, got {cfg.attn_res_final_mode!r}")
-        if cfg.attn_res_blend not in ("none", "static", "dynamic"):
-            raise ValueError(f"attn_res_blend must be none, static or dynamic, got {cfg.attn_res_blend!r}")
-        if (cfg.attn_res_dual_query or cfg.attn_res_blend != "none") and (
-            cfg.attn_res_v_gate or cfg.attn_res_heads > 1 or cfg.attn_res_pull or cfg.attn_res_pull_embed
-        ):
-            raise ValueError("attn_res_dual_query / attn_res_blend need single-head push AttnRes without V gates")
-        if cfg.attn_res_stream_source and not cfg.attn_res_full:
-            raise ValueError("attn_res_stream_source needs attn_res_full (the last column is logged as the stream)")
-        if cfg.attn_res_stream_source and logit_bias is not None:
-            raise ValueError("attn_res_stream_source does not combine with per-source logit extras")
-        if cfg.attn_res_sum_inputs and not cfg.attn_res_full:
-            raise ValueError("attn_res_sum_inputs needs attn_res_full")
         allowed = {"q", "k", "v", "mlp", "mlp_shared", "mlp_routed", "mlp_router"}
-        if set(cfg.attn_res_sum_inputs) - allowed:
-            raise ValueError(f"attn_res_sum_inputs must be a subset of {sorted(allowed)}, got {cfg.attn_res_sum_inputs}")
-        if cfg.expert_router_orthogonal not in ("off", "full", "learned"):
-            raise ValueError(
-                f"expert_router_orthogonal must be off, full or learned, got {cfg.expert_router_orthogonal!r}"
-            )
-        if cfg.expert_router_orthogonal != "off" and (
-            cfg.router_rank or cfg.latent_dim is None or cfg.moe_bank2_experts
-        ):
-            raise ValueError("expert_router_orthogonal needs a full-rank linear router, a LatentMoE and one expert bank")
-        if cfg.router_history and (not cfg.attn_res or cfg.loop_grow_step is not None or cfg.dense_mlp):
-            raise ValueError("router_history needs attn_res, a MoE and no looped growth")
-        if cfg.attn_res_full and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
-            raise ValueError("attn_res_full needs attn_res_layer_backward=SAVE")
-        if cfg.mla_share_kv_latent and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
-            raise ValueError("mla_share_kv_latent needs attn_res_layer_backward=SAVE (the latent crosses layers)")
-        if cfg.value_residual_layers and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
-            raise ValueError("value_residual_layers needs attn_res_layer_backward=SAVE (the values cross layers)")
-        if not set(cfg.value_residual_layers) <= set(range(1, num_layers)):
-            raise ValueError(f"value_residual_layers must be in 1..{num_layers - 1}, got {cfg.value_residual_layers}")
-        if cfg.attn_res_z_loss > 0 and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
-            raise ValueError("attn_res_z_loss needs attn_res_layer_backward=SAVE (the remat VJP drops stat cotangents)")
+        if set(()) - allowed:
+            raise ValueError(f"attn_res_sum_inputs must be a subset of {sorted(allowed)}, got {()}")
+        if not set(()) <= set(range(1, num_layers)):
+            raise ValueError(f"value_residual_layers must be in 1..{num_layers - 1}, got {()}")
         layer_fn = (
             _attn_res_layer_remat
             if cfg.attn_res_layer_backward == AttnResLayerBackward.RECOMPUTE
@@ -8124,13 +4238,7 @@ class Transformer(eqx.Module):
         layer_logs: dict[str, jax.Array] = {}
         probe_logs: dict[str, jax.Array] = {}
         kv_inputs = None
-        if self.kv_stream is not None:
-            gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
-            kv_inputs, kv_stream_logs = self.kv_stream(token_ids, long_layer_mask, gather)
-            layer_logs.update(kv_stream_logs)
         nitp_logs: dict[str, jax.Array] = {}
-        if cfg.nitp_weight > 0 and not 0 <= cfg.nitp_layer < num_layers:
-            raise ValueError(f"nitp_layer must be in 0..{num_layers - 1}, got {cfg.nitp_layer}")
 
         def run_pass(state, pass_index):
             """One pass over the physical layers, extending the history; returns the new state, the
@@ -8138,39 +4246,26 @@ class Transformer(eqx.Module):
             blocks, block_logits, partial = state
             stats_out, z_out = [], []
             hist_probs: list[jax.Array] = []
-            kv_share: dict[str, jax.Array] | None = {} if cfg.mla_share_kv_latent or cfg.value_residual_layers else None
+            kv_share: dict[str, jax.Array] | None = None
             for i, layer in enumerate(layers):
                 eff = pass_index * num_layers + i
-                if cfg.attn_res_full or (eff % seg_size == 0 and eff // seg_size < block_cap):
+                if eff % seg_size == 0 and eff // seg_size < block_cap:
                     assert partial is not None
                     blocks = (*blocks, partial)
                     # Score the new block only against the gates that can read it (this layer's onwards).
                     block_logits = (
                         *block_logits,
-                        _logit_rows(_attn_res_source_logits(partial, queries[2 * eff :], eps, cfg.attn_res_head_norm)),
+                        _logit_rows(_attn_res_source_logits(partial, queries[2 * eff :], eps, (False))),
                     )
                     partial = None
-                if pass_index > 0 and i == 0:
-                    assert self.loop_inject_scale is not None
-                    # Input injection: the extra pass's running partial starts from the embedding.
-                    scale = self.loop_inject_scale[pass_index - 1]
-                    inject = (scale * embedding.astype(jnp.float32)).astype(embedding.dtype)
-                    partial = inject if partial is None else partial + inject
-                use_long = _is_long_layer(i, num_layers, cfg.global_every, cfg.global_layers)
+                use_long = _is_long_layer(i, num_layers, cfg.global_every, (None))
                 partial_before = partial
                 layer_extras = logit_bias
                 if ple_rows is not None:
-                    ple_i = rms_norm(ple_rows[..., i * cfg.ple_dim : (i + 1) * cfg.ple_dim], eps)
+                    ple_i = rms_norm(ple_rows[..., i * (0) : (i + 1) * (0)], eps)
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
                 if kv_inputs is not None:
                     layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
-                if self.router_hist_w is not None:
-                    hist_bias = _router_history_bias(self.router_hist_w[i], hist_probs, num_layers)
-                    if hist_bias is not None:
-                        layer_extras = {**(layer_extras or {}), "router_hist": hist_bias}
-                if i in cfg.memory_layers:
-                    assert self.memory is not None
-                    layer_extras = {**(layer_extras or {}), "memory": self.memory[cfg.memory_layers.index(i)]}
                 layer_args = (
                     (layer, blocks, block_logits, partial, queries, layer_extras),
                     long_layer_mask if use_long else short_layer_mask,
@@ -8180,9 +4275,7 @@ class Transformer(eqx.Module):
                     eps,
                     None if route_key is None else jax.random.fold_in(route_key, eff),
                 )
-                if cfg.attn_res_full:
-                    partial, blocks, block_logits, stats = _attn_res_layer_full(*layer_args, kv_share)
-                elif kv_share is None:
+                if kv_share is None:
                     partial, blocks, block_logits, stats = layer_fn(*layer_args)
                 else:
                     partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
@@ -8190,18 +4283,13 @@ class Transformer(eqx.Module):
                 layer_probs = stats.pop(ROUTER_PROBS_KEY, None)
                 if layer_probs is not None:
                     hist_probs.append(layer_probs)
-                if cfg.nitp_weight > 0 and pass_index == 0 and i == cfg.nitp_layer:
-                    # The plain residual stream after this layer: embedding plus every sublayer output so far.
-                    nitp_logs[_NITP_TARGET] = _stream_sum((*blocks[len(extra_sources) :], partial))
                 if _LM_HEAD_EXTRA in stats:
                     nitp_logs[_LM_HEAD_EXTRA] = stats.pop(_LM_HEAD_EXTRA)
                 for name in [k for k in stats if k.startswith(_LAYER_KNOB_PREFIX)]:
                     layer_logs[f"{name}_L{eff}"] = stats.pop(name)
                 has_partial_attn = partial_before is not None
-                stream_col = cfg.attn_res_stream_source
-                weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn or stream_col)
-                has_partial_mlp = has_partial_attn if cfg.moe_shortcut else not cfg.attn_res_full
-                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), has_partial_mlp or stream_col)
+                weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn)
+                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), True)
                 if _ATTN_RES_W_V in stats:
                     # V-gate query rows follow the per-layer gates (loop_passes == 1).
                     weight_logs[2 * num_layers + i] = (stats.pop(_ATTN_RES_W_V), has_partial_attn)
@@ -8212,11 +4300,9 @@ class Transformer(eqx.Module):
             blocks, block_logits, partial = state
             final_index = queries.shape[0] - 1
             logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
-            logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps, cfg.attn_res_head_norm)[0])
+            logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps, (False))[0])
             logits = _bias_gate_logits(logits, logit_bias, final_index, [*blocks, partial], eps, has_partial=True)
-            if cfg.attn_res_final_mode == "uniform":
-                logits = [jnp.zeros_like(logit) for logit in logits]
-            logits = _soft_cap_logits(logits, cfg.attn_res_logit_soft_cap)
+            logits = _soft_cap_logits(logits, (None))
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
             spot = _probe_spot()
             if spot is not None:
@@ -8224,17 +4310,7 @@ class Transformer(eqx.Module):
                 probe_logs[f"{PROBE_STAT}final_gate_logits"] = jnp.stack([_at_spot(lg, spot) for lg in logits])
                 probe_logs[f"{PROBE_STAT}final_gate_weights"] = jnp.stack([_at_spot(w, spot) for w in weights])
                 probe_logs[f"{PROBE_STAT}final_query"] = jax.lax.stop_gradient(queries[final_index])
-            if cfg.attn_res_final_mode == "attn":
-                mixed = _gate_variants(mixed, [*blocks, partial], logit_bias, final_index, eps, has_partial=True)
-            if cfg.attn_res_final_mode == "sum":
-                mixed = _stream_sum((*blocks, partial)).astype(jnp.float32)
-            elif cfg.attn_res_additive:
-                mixed = mixed + _stream_sum((*blocks, partial)).astype(jnp.float32)
-            if self.attn_res_query_backout is not None:
-                srcs = [*blocks, partial]
-                cols = [*range(len(blocks)), -1]
-                for src, c in zip(srcs, cols, strict=True):
-                    mixed = mixed + self.attn_res_query_backout[c] * src.astype(jnp.float32)
+            mixed = _gate_variants(mixed, [*blocks, partial], logit_bias, final_index, eps, has_partial=True)
             weight_logs[final_index] = (
                 jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim)))),
                 True,
@@ -8265,17 +4341,10 @@ class Transformer(eqx.Module):
 
         state = (
             extra_sources,
-            tuple(_attn_res_source_logits(src, queries, eps, cfg.attn_res_head_norm) for src in extra_sources),
+            tuple(_attn_res_source_logits(src, queries, eps, (False)) for src in extra_sources),
             hidden,
         )
         state, pass0_stats, pass0_z = run_pass(state, 0)
-        aux_hidden = None
-        if cfg.aux_lm_layer is not None:
-            raise ValueError("aux_lm_layer is not supported by this AttnRes loop")
-        if cfg.byte_aux_mid_layer:
-            # Mid-network stream for the byte head: the embedding plus the first half of the completed blocks.
-            stream = state[0][len(extra_sources) :]
-            aux_hidden = functools.reduce(jnp.add, stream[: max(1, len(stream) // 2)])
 
         def all_passes(state):
             per_pass, z_terms = [pass0_stats], list(pass0_z)
@@ -8289,8 +4358,7 @@ class Transformer(eqx.Module):
             # Same structure as all_passes: the pass-0 stats stand in for every pass.
             return finish(state, [pass0_stats] * passes, list(pass0_z))
 
-        run_all = passes == 1 or cfg.loop_grow_step is None or loop_active is None or loop_active
-        mixed, layer_stats, z_total, max_weight, entropy = all_passes(state) if run_all else one_pass(state)
+        mixed, layer_stats, z_total, max_weight, entropy = all_passes(state)
         final_stats = {"attn_res_final_max_weight": max_weight, "attn_res_final_entropy": entropy}
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
@@ -8306,60 +4374,24 @@ class Transformer(eqx.Module):
                 if qk_mult.ndim:
                     final_stats[f"attn_res_qk_mult_min_L{i}"] = jnp.min(qk_mult)
                     final_stats[f"attn_res_qk_mult_max_L{i}"] = jnp.max(qk_mult)
-            if layer.attn_out_scale is not None and layer.mlp_out_scale is not None:
-                fn = cfg.sublayer_scale_fn
-                final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(apply_gain_fn(fn, layer.attn_out_scale))
-                final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(apply_gain_fn(fn, layer.mlp_out_scale))
             final_stats.update(_learned_knob_stats(layer, i))
         final_stats.update(layer_logs)
         final_stats.update(probe_logs)
-        if self.router_tok_a is not None:
-            final_stats["attn_res_knob_router_tok_a_rms"] = jnp.sqrt(
-                jnp.mean(jnp.square(jax.lax.stop_gradient(self.router_tok_a).astype(jnp.float32)))
-            )
-        if self.router_tie_alpha is not None:
-            alpha = jax.lax.stop_gradient(self.router_tie_alpha).astype(jnp.float32)
-            directions = jax.lax.stop_gradient(_router_tie_directions(self)).astype(jnp.float32)
-            routers = _routers_by_layer(self)
-            for j, tie in enumerate(_router_ties(cfg)):
-                final_stats[f"attn_res_knob_router_tie_alpha_{tie.tag}"] = alpha[j]
-                # 1 while tied; after the release, how far the freed column has turned from the tie direction.
-                column = jax.lax.stop_gradient(routers[tie.layer][:, tie.expert]).astype(jnp.float32)
-                final_stats[f"attn_res_knob_router_tie_cos_{tie.tag}"] = jnp.dot(column, directions[j]) / (
-                    jnp.linalg.norm(column) * jnp.linalg.norm(directions[j])
-                )
-        if cfg.attn_res_key_rank is not None:
-            final_stats["attn_res_knob_lrkey_qnorm_final"] = jnp.linalg.norm(
-                jax.lax.stop_gradient(self.attn_res_query_final)
-            )
-        if self.lm_head_bias is not None:
-            bias = jax.lax.stop_gradient(self.lm_head_bias).astype(jnp.float32)
-            final_stats["attn_res_knob_lm_head_bias_mean"] = jnp.mean(bias)
-            final_stats["attn_res_knob_lm_head_bias_std"] = jnp.std(bias)
-            final_stats["attn_res_knob_lm_head_bias_max"] = jnp.max(bias)
         for name, norm in (("embed", self.embed_norm), ("final", self.final_norm)):
             if isinstance(norm, ZeroCenteredRMSNorm):
                 final_stats[f"attn_res_knob_gain_abs_{name}"] = jnp.mean(jnp.abs(jax.lax.stop_gradient(norm.gamma)))
-        for i, memory in zip(cfg.memory_layers, self.memory or (), strict=True):
+        for i, memory in zip((), (), strict=True):
             w_out = jax.lax.stop_gradient(memory.w_out).astype(jnp.float32)
             final_stats[f"{_MEMORY_STAT_PREFIX}out_norm_L{i}"] = jnp.linalg.norm(w_out)
         hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
-        if aux_hidden is not None:
-            final_stats[_AUX_HIDDEN] = aux_hidden
         final_stats.update(nitp_logs)
         final_stats["attn_res_z"] = jax.lax.stop_gradient(z_total)
-        if cfg.attn_res_z_loss > 0:
-            final_stats[_ATTN_RES_Z] = z_total
         query_norms = jax.lax.stop_gradient(jnp.sqrt(jnp.sum(jnp.square(queries_flat.astype(jnp.float32)), axis=-1)))
         final_stats["attn_res_query_norm_mean"] = jnp.mean(query_norms)
         final_stats["attn_res_query_norm_max"] = jnp.max(query_norms)
         for g in range(queries.shape[0]):
             final_stats[f"attn_res_query_norm_g{g:02d}"] = query_norms[g]
-        final_stats.update(
-            {f"attn_res_loop_inject_p{p + 1}": jax.lax.stop_gradient(v) for p, v in enumerate(self.loop_inject_scale)}
-            if self.loop_inject_scale is not None
-            else {}
-        )
+        final_stats.update({})
         # Stats whose shape differs by layer (the routed input under ``latent_free_layers``, the top-K assignments under
         # ``topk_layers``) stay per-layer tuples.
         widths = {
@@ -8410,7 +4442,7 @@ class Transformer(eqx.Module):
         cfg = self.config
         return tuple(
             ("kda" if isinstance(layer.attn, KimiDeltaAttention) else "mla" if cfg.mla else "gqa")
-            + ("_global" if _is_long_layer(i, cfg.num_layers, cfg.global_every, cfg.global_layers) else "_local")
+            + ("_global" if _is_long_layer(i, cfg.num_layers, cfg.global_every, (None)) else "_local")
             for i, layer in enumerate(self.layers())
         )
 
@@ -8424,10 +4456,7 @@ class Transformer(eqx.Module):
         hidden, _ = self(token_ids, mask=mask)
         hidden, lm_head = self._lm_head_operands(hidden, token_ids)
         logits = jnp.einsum("bsh,hd->bsd", hidden, lm_head, out_sharding=batch_spec)
-        if self.config.lm_head_prototypes == 1:
-            return logits
-        per_proto = rearrange(logits, "b s (k v) -> b s k v", k=self.config.lm_head_prototypes)
-        return jax.nn.logsumexp(per_proto, axis=2)
+        return logits
 
     def position_predictions(
         self,
@@ -8462,55 +4491,6 @@ class Transformer(eqx.Module):
         top_logp, top_ids = jax.lax.top_k(logp, k)
         return loss, top_ids, jnp.exp(top_logp), probe
 
-    def _output_bigram_features(self, token_ids: Int[Array, "B S"], dtype: jnp.dtype) -> Float[Array, "B S R"]:
-        assert self.output_bigram_u is not None
-        return rms_norm(_embedding_gather(self.output_bigram_u, token_ids)).astype(dtype)
-
-    def _future_aux_loss(
-        self,
-        hidden: Float[Array, "B S D"],
-        token_ids: Int[Array, "B S"],
-        loss_weight: Float[Array, "B S"],
-        segment_ids: Int[Array, "B S"] | None,
-        loss_dtype: jnp.dtype,
-    ) -> jax.Array:
-        """The ``future_aux`` objective (``FutureAux``) on the final hidden, mean over valid positions."""
-        cfg = self.config
-        assert self.future_head is not None
-        futures, weight, buckets = _future_targets(
-            cfg.future_aux, token_ids, loss_weight, segment_ids, cfg.future_aux_buckets
-        )
-        if cfg.future_aux == FutureAux.EMBED:
-            if self.token_embed.shape[-1] != hidden.shape[-1]:
-                raise ValueError("future_aux=embed needs the token embedding as wide as the hidden")
-            table = self.token_embed.astype(hidden.dtype)
-            target = jax.lax.stop_gradient(sum(_embedding_gather(table, f).astype(jnp.float32) for f in futures))
-            pred = jnp.einsum(
-                "bsd,de->bse", hidden, self.future_head.astype(hidden.dtype), out_sharding=_batch_spec()
-            ).astype(jnp.float32)
-            cos = jnp.sum(pred * target, axis=-1) * jax.lax.rsqrt(
-                jnp.sum(jnp.square(pred), axis=-1) * jnp.sum(jnp.square(target), axis=-1) + 1e-12
-            )
-            w = weight.astype(jnp.float32)
-            return (jnp.sum((1.0 - cos) * w) / jnp.maximum(jnp.sum(w), 1.0)).astype(loss_dtype)
-        head_in = hidden
-        if cfg.future_aux == FutureAux.LOWDIM_T2:
-            assert self.future_down is not None
-            low = jnp.einsum("bsd,dr->bsr", hidden, self.future_down.astype(hidden.dtype), out_sharding=_batch_spec())
-            head_in = rms_norm(jax.nn.silu(low)).astype(hidden.dtype)
-        return fused_linear_softmax_cross_entropy_loss(
-            head_in,
-            self.future_head,
-            buckets,
-            weight=weight,
-            reduction="mean",
-            logsumexp_weight=None,
-            dtype=loss_dtype,
-            implementation="xla_fast_bwd",
-            block_sizes=_CE_BLOCK_SIZES,
-            logit_soft_cap=None,
-        )
-
     def _lm_head_operands(
         self, hidden: Float[Array, "... D"], bigram_ids: Int[Array, "..."] | None
     ) -> tuple[Float[Array, "... E"], Float[Array, "E V"]]:
@@ -8522,81 +4502,7 @@ class Transformer(eqx.Module):
           soft-cap. The float32 bias is split into a compute-dtype high part and its residual (two rows), padded
           to ``_LM_HEAD_BIAS_COLS`` columns.
         """
-        use_bigram = self.output_bigram_w is not None and bigram_ids is not None
-        if not use_bigram and self.lm_head_bias is None:
-            return hidden, self.output_proj
-        dtype = self.output_proj.dtype
-        # The CE kernel replicates the head anyway; gathering it here keeps the concatenation's operands alike.
-        head_rows = [reshard(self.output_proj, P(None, None))]
-        hidden_cols = [hidden]
-        if use_bigram:
-            assert self.output_bigram_w is not None and bigram_ids is not None
-            hidden_cols.append(self._output_bigram_features(bigram_ids, hidden.dtype))
-            head_rows.append(reshard(self.output_bigram_w.astype(dtype), P(None, None)))
-        if self.lm_head_bias is not None:
-            high = self.lm_head_bias.astype(dtype)
-            low = (self.lm_head_bias - high.astype(jnp.float32)).astype(dtype)
-            pad = _LM_HEAD_BIAS_COLS - 2
-            rows = jnp.concatenate([high[None], low[None], jnp.zeros((pad, high.shape[0]), dtype)], axis=0)
-            head_rows.append(reshard(rows, P(None, None)))
-            # Sliced from ``hidden`` so the constant columns inherit its batch sharding.
-            hidden_cols.extend([jnp.ones_like(hidden[..., :2]), jnp.zeros_like(hidden[..., :pad])])
-        hidden = jnp.concatenate(hidden_cols, axis=-1)
-        if use_bigram:
-            hidden = reshard(hidden, _batch_spec())
-        return hidden, jnp.concatenate(head_rows, axis=0)
-
-    def _output_bigram_stats(self) -> dict[str, jax.Array]:
-        """Norms of ``U`` and ``W`` and the RMS of the prior's logit term over a fixed, evenly spaced set of probe
-        token ids (a slice of the batch-sharded tokens can't be taken under explicit sharding)."""
-        assert self.output_bigram_u is not None and self.output_bigram_w is not None
-        u = jax.lax.stop_gradient(self.output_bigram_u).astype(jnp.float32)
-        w = jax.lax.stop_gradient(self.output_bigram_w).astype(jnp.float32)
-        probe = jnp.arange(_OUTPUT_BIGRAM_STAT_TOKENS) * (u.shape[0] // _OUTPUT_BIGRAM_STAT_TOKENS)
-        sample = rms_norm(u[probe])
-        return {
-            "train/attn_res/knob_output_bigram_u_norm": jnp.linalg.norm(u),
-            "train/attn_res/knob_output_bigram_w_norm": jnp.linalg.norm(w),
-            "train/attn_res/knob_output_bigram_logit_rms": jnp.sqrt(jnp.mean(jnp.square(sample @ w))),
-        }
-
-    def _embed2_signs(self, sign_ids: Int[Array, "B S"], dtype) -> jax.Array:
-        """The +-1 sign rows of ``sign_ids`` (``embed2_sign_trick``); the pool is a constant."""
-        assert self.embed2_sign_table is not None
-        return _embedding_gather_autodiff(jax.lax.stop_gradient(self.embed2_sign_table), sign_ids).astype(dtype)
-
-    def _ngram_stat_read(
-        self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None
-    ) -> Float[Array, "B S D"]:
-        """Gather each position's row of every order (no gradient into the table) and read ``[mean code, log count]``
-        of all orders through the reader to ``hidden_dim``."""
-        cfg = self.config
-        assert self.ngram_stat_table is not None and self.ngram_stat_up is not None
-        ids = _ngram_stat_ids(cfg, token_ids, segment_ids)
-        b, s, k = ids.shape
-        flat_ids = jax.lax.reshape(ids, (b, s * k), out_sharding=P(_BATCH_AXES, None))
-        rows = _embedding_gather_autodiff(jax.lax.stop_gradient(self.ngram_stat_table), flat_ids).astype(jnp.float32)
-        features = _ngram_stat_features(rows)
-        features = jax.lax.reshape(
-            features, (b, s, k * features.shape[-1]), out_sharding=P(_BATCH_AXES, None, None)
-        ).astype(hidden.dtype)
-        if self.ngram_stat_hidden is not None:
-            features = jax.nn.gelu(
-                jnp.einsum(
-                    "bsf,fm->bsm", features, self.ngram_stat_hidden.astype(hidden.dtype), out_sharding=_batch_spec()
-                )
-            )
-        return jnp.einsum("bsf,fd->bsd", features, self.ngram_stat_up.astype(hidden.dtype), out_sharding=_batch_spec())
-
-    def _ngram_stat_source(
-        self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None
-    ) -> Float[Array, "B S D"]:
-        """``NgramStatMode.SOURCE``: the reader's output, RMS-normed and content-gated, as its own AttnRes source."""
-        assert self.ngram_stat_norm is not None
-        source = self.ngram_stat_norm(self._ngram_stat_read(hidden, token_ids, segment_ids))
-        if self.ngram_stat_gate_w is not None and self.ngram_stat_gate_b is not None:
-            source, _ = _content_gate(hidden, source, self.ngram_stat_gate_w, self.ngram_stat_gate_b, None, None)
-        return source
+        return hidden, self.output_proj
 
     def next_token_loss(
         self,
@@ -8625,21 +4531,18 @@ class Transformer(eqx.Module):
             token_ids, mask=mask, loop_active=loop_active, route_key=route_key, router_tie_active=router_tie_active
         )
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
-        nitp_target = router_metrics.pop(_NITP_TARGET, None)
+        router_metrics.pop(_NITP_TARGET, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
-        mtp_embed = router_metrics.pop(_MTP_EMBED, None)
+        router_metrics.pop(_MTP_EMBED, None)
         compress_loss = router_metrics.pop(_COMPRESS_LOSS, None)
         compress_stats = {
             k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith((_COMPRESS_PREFIX, _OUTSTAT_PREFIX))
         }
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
-        if head_replay is not None and self.output_bigram_w is not None:
-            raise ValueError("head_replay stores the final hidden only; it cannot replay output_bigram_rank's prior")
 
         def lm_loss(h: jax.Array) -> jax.Array:
             head_in, lm_head = self._lm_head_operands(h, token_ids)
-            prototypes = self.config.lm_head_prototypes
             ce = functools.partial(
                 fused_linear_softmax_cross_entropy_loss,
                 head_in,
@@ -8651,20 +4554,7 @@ class Transformer(eqx.Module):
                 block_sizes=_CE_BLOCK_SIZES,
                 logit_soft_cap=_logit_cap(self.config),
             )
-            if prototypes == 1:
-                return ce(weight=loss_weight, reduction=reduction)
-            # The kernel gives lse(all K V) - logit(v, 0); add logit(v, 0) - lse_k logit(v, k) for the summed target.
-            target = prototype_target_logits(
-                head_in,
-                lm_head,
-                labels,
-                vocab_size=self.config.vocab_size,
-                prototypes=prototypes,
-                cap=_logit_cap(self.config),
-                batch_axes=_BATCH_AXES,
-            )  # [B, S, K]
-            per_token = ce(weight=None, reduction="none") + target[..., 0] - jax.nn.logsumexp(target, axis=-1)
-            return reduce_token_loss(per_token.astype(loss_dtype), reduction, loss_weight)
+            return ce(weight=loss_weight, reduction=reduction)
 
         cross_entropy_loss = lm_loss(hidden)
         replay_loss = None
@@ -8701,97 +4591,17 @@ class Transformer(eqx.Module):
         if compress_loss is not None and train_terms:
             loss = loss + jnp.sum(compress_loss).astype(loss_dtype)
         if attn_res_z is not None and train_terms:
-            loss = loss + self.config.attn_res_z_loss * attn_res_z.astype(loss_dtype)
-        mtp_loss = None
-        if self.mtp is not None and mtp_embed is not None and train_terms:
-            mtp_key = None if route_key is None else jax.random.fold_in(route_key, _MTP_KEY_SALT)
-            mtp_hidden, mtp_labels, mtp_weight = _mtp_inputs(
-                self.config,
-                self.mtp,
-                hidden,
-                mtp_embed,
-                token_ids,
-                loss_weight,
-                _sconv_segment_ids(mask),
-                mtp_key,
-            )
-            mtp_hidden, mtp_head = self._lm_head_operands(mtp_hidden, None)
-            mtp_loss = fused_linear_softmax_cross_entropy_loss(
-                mtp_hidden,
-                mtp_head,
-                mtp_labels,
-                weight=mtp_weight,
-                reduction=reduction,
-                # The final-logit z-loss regularizes the shared lm_head once, through the main head.
-                logsumexp_weight=None,
-                dtype=loss_dtype,
-                implementation="xla_fast_bwd",
-                block_sizes=_CE_BLOCK_SIZES,
-                logit_soft_cap=_logit_cap(self.config),
-            )
-            loss = loss + self.config.mtp_weight * mtp_loss
+            loss = loss + (0.0) * attn_res_z.astype(loss_dtype)
         nitp_loss = nitp_cos = None
-        if self.nitp_w1 is not None and self.nitp_w2 is not None and nitp_target is not None and train_terms:
-            nitp_loss, nitp_cos = _nitp_loss(
-                hidden, nitp_target, self.nitp_w1, self.nitp_w2, loss_weight, _sconv_segment_ids(mask)
-            )
-            loss = loss + self.config.nitp_weight * nitp_loss.astype(loss_dtype)
         if replay_loss is not None and head_replay is not None:
             loss = loss + head_replay.scale.astype(loss_dtype) * replay_loss
-        byte_loss = None
-        if self.byte_head is not None and byte_table is not None and byte_aux_weight is not None and train_terms:
-            targets = shard_map(
-                _local_gather,
-                mesh=get_abstract_mesh(),
-                in_specs=(P(None, None), P(_BATCH_AXES, None)),
-                out_specs=P(_BATCH_AXES, None, None),
-            )(byte_table, reshard(labels, P(_BATCH_AXES, None)))
-            head = self.byte_head
-            byte_in = hidden
-            if self.config.byte_aux_mid_layer:
-                if aux_hidden is None:
-                    raise ValueError("byte_aux_mid_layer needs the AttnRes mid-network stream (attn_res=True)")
-                byte_in = reshard(rms_norm(aux_hidden.astype(hidden.dtype)), _batch_spec())
-            byte_loss = jax.lax.cond(
-                byte_aux_weight > 0,
-                lambda h: _byte_aux_loss(h, head, targets, loss_weight),
-                lambda h: jnp.zeros((), jnp.float32),
-                byte_in,
-            )
-            loss = loss + byte_aux_weight.astype(loss_dtype) * byte_loss.astype(loss_dtype)
-        future_loss = None
-        if self.future_head is not None and future_aux_weight is not None and train_terms:
-            future_loss = self._future_aux_loss(hidden, token_ids, loss_weight, _sconv_segment_ids(mask), loss_dtype)
-            loss = loss + future_aux_weight.astype(loss_dtype) * future_loss
         erc_loss, erc_ratios = None, {}
-        if self.config.erc_loss_weight > 0 and train_terms:
-            if route_key is None:
-                raise ValueError("erc_loss_weight needs route_key (the per-step proxy-token noise)")
-            erc_key = jax.random.fold_in(route_key, _ERC_KEY_SALT)
-            erc_terms = []
-            for i, layer in enumerate(self.layers()):
-                if not isinstance(layer.mlp, MoEMLP):
-                    continue
-                layer_loss, erc_ratios[f"train/aux/erc_diag_offdiag_L{i}"] = layer.mlp.erc_loss(
-                    jax.random.fold_in(erc_key, i)
-                )
-                erc_terms.append(layer_loss)
-            erc_loss = functools.reduce(jnp.add, erc_terms)
-            loss = loss + self.config.erc_loss_weight * erc_loss.astype(loss_dtype)
-        simbal_loss = None
-        if self.config.simbal_loss_weight > 0 and train_terms:
-            simbal_loss = functools.reduce(
-                jnp.add, [layer.mlp.simbal_loss() for layer in self.layers() if isinstance(layer.mlp, MoEMLP)]
-            )
-            loss = loss + self.config.simbal_loss_weight * simbal_loss.astype(loss_dtype)
         if return_router_metrics:
             final_gate_metrics = {
                 f"train/attn_res/{name.removeprefix('attn_res_')}": router_metrics.pop(name)
                 for name in list(router_metrics)
                 if name.startswith("attn_res_")
             }
-            if self.output_bigram_w is not None:
-                final_gate_metrics.update(self._output_bigram_stats())
             if not router_metrics:
                 # Dense model: no router to summarize.
                 return loss, {"train/cross_entropy_loss": cross_entropy_loss, **final_gate_metrics}
@@ -8808,16 +4618,6 @@ class Transformer(eqx.Module):
                 summarized_metrics[FINAL_HIDDEN_KEY] = jax.lax.stop_gradient(hidden)
             if aux_loss is not None:
                 summarized_metrics["train/attn_res/aux_lm_loss"] = aux_loss
-            if mtp_loss is not None and self.mtp is not None:
-                summarized_metrics["train/aux/mtp_loss"] = mtp_loss
-                summarized_metrics.update(_mtp_knob_stats(self.mtp))
-            if byte_loss is not None:
-                summarized_metrics["train/aux/byte_loss"] = byte_loss
-            if future_loss is not None:
-                summarized_metrics["train/aux/future_loss"] = future_loss
-                summarized_metrics["train/aux/future_weight"] = future_aux_weight
-            if simbal_loss is not None:
-                summarized_metrics["train/aux/simbal_loss"] = simbal_loss
             if erc_loss is not None:
                 summarized_metrics["train/aux/erc_loss"] = erc_loss
                 summarized_metrics.update(erc_ratios)
@@ -8846,98 +4646,11 @@ class Transformer(eqx.Module):
 FINAL_HIDDEN_KEY = "_final_hidden"
 
 
-def _mtp_knob_stats(head: MtpHead) -> dict[str, jax.Array]:
-    """How the MTP projection splits between ``rms(h_t)`` and the next token's embedding (Frobenius norms of the
-    two halves of ``W_proj``; MuonH fixes only their sum of squares), and the MTP output-norm gain."""
-    w_proj = jax.lax.stop_gradient(head.w_proj).astype(jnp.float32)
-    d = w_proj.shape[1]
-    norm = head.out_norm
-    gain = norm.gain() if isinstance(norm, RMSNorm) else 1.0 + norm.gamma
-    return {
-        "train/attn_res/knob_mtp_proj_h_norm": jnp.linalg.norm(w_proj[:d]),
-        "train/attn_res/knob_mtp_proj_e_norm": jnp.linalg.norm(w_proj[d:]),
-        "train/attn_res/knob_mtp_out_gain": jnp.mean(jax.lax.stop_gradient(gain)),
-    }
-
-
-def _mtp_targets(
-    token_ids: Int[Array, "B S"], loss_weight: Float[Array, "B S"], segment_ids: Int[Array, "B S"] | None
-) -> tuple[Int[Array, "B S"], Float[Array, "B S"]]:
-    """Depth-1 MTP targets: position t predicts token t+2. Its weight is the main loss's weight on token t+2
-    (``loss_weight[t+1]``), zeroed at the last two positions and where token t+2 is in another packed document."""
-    seq_len = token_ids.shape[1]
-    labels = jnp.pad(token_ids[:, 2:], ((0, 0), (0, 2))).astype(jnp.int32)
-    valid = jnp.broadcast_to(jnp.arange(seq_len) < seq_len - 2, loss_weight.shape)
-    if segment_ids is not None:
-        valid = valid & jnp.pad(segment_ids[:, 2:] == segment_ids[:, :-2], ((0, 0), (0, 2)))
-    weight = jnp.pad(loss_weight[:, 1:], ((0, 0), (0, 1))) * valid.astype(loss_weight.dtype)
-    return labels, weight
-
-
-def _mtp_inputs(
-    cfg: GrugModelConfig,
-    head: MtpHead,
-    hidden: Float[Array, "B S D"],
-    embed: Float[Array, "B S D"],
-    token_ids: Int[Array, "B S"],
-    loss_weight: Float[Array, "B S"],
-    segment_ids: Int[Array, "B S"] | None,
-    key: jax.Array | None,
-) -> tuple[Float[Array, "B K D"], Int[Array, "B K"], Float[Array, "B K"]]:
-    """The MTP head's lm_head inputs, labels and weights on the ``mtp_position_frac`` position subset (K of S)."""
-    labels, weight = _mtp_targets(token_ids, loss_weight, segment_ids)
-    next_embed = jnp.pad(embed[:, 1:], ((0, 0), (0, 1), (0, 0)))
-    seq_len = token_ids.shape[1]
-    if not 0.0 < cfg.mtp_position_frac <= 1.0:
-        raise ValueError(f"mtp_position_frac must be in (0, 1], got {cfg.mtp_position_frac}")
-    if cfg.mtp_position_frac < 1.0:
-        if key is None:
-            raise ValueError("mtp_position_frac < 1 needs route_key (the per-step position subsample)")
-        num_kept = max(1, round(seq_len * cfg.mtp_position_frac))
-        positions = jax.random.permutation(key, seq_len)[:num_kept]
-        hidden = _batch_reshard(jnp.take(hidden, positions, axis=1))
-        next_embed = _batch_reshard(jnp.take(next_embed, positions, axis=1))
-        labels = jnp.take(labels, positions, axis=1)
-        weight = jnp.take(weight, positions, axis=1)
-    return reshard(head(hidden, next_embed), _batch_spec()), labels, weight
-
-
-def _nitp_loss(
-    hidden: Float[Array, "B S D"],
-    target: Float[Array, "B S D"],
-    w1: Float[Array, "D D"],
-    w2: Float[Array, "D D"],
-    loss_weight: Float[Array, "B S"],
-    segment_ids: Int[Array, "B S"] | None,
-) -> tuple[jax.Array, jax.Array]:
-    """NITP (arXiv 2605.24956): ``1 - cos(P(h_t), sg(z_{t+1}))`` averaged over positions whose next token is
-    trained and in the same document. Returns ``(loss, mean cos over the next-token pairs)``."""
-    pred = jnp.einsum(
-        "bsd,de->bse", jax.nn.gelu(jnp.einsum("bsd,de->bse", hidden, w1.astype(hidden.dtype))), w2.astype(hidden.dtype)
-    )
-    next_target = jax.lax.stop_gradient(jnp.pad(target[:, 1:], ((0, 0), (0, 1), (0, 0))))
-    next_target = reshard(next_target, _batch_spec())
-    pred32, next32 = pred.astype(jnp.float32), next_target.astype(jnp.float32)
-    eps = 1e-6
-    cos = jnp.sum(pred32 * next32, axis=-1) * jax.lax.rsqrt(
-        jnp.maximum(jnp.sum(jnp.square(pred32), axis=-1) * jnp.sum(jnp.square(next32), axis=-1), eps)
-    )
-    seq_len = hidden.shape[1]
-    valid = jnp.broadcast_to(jnp.arange(seq_len) < seq_len - 1, loss_weight.shape)
-    if segment_ids is not None:
-        valid = valid & jnp.pad(segment_ids[:, 1:] == segment_ids[:, :-1], ((0, 0), (0, 1)))
-    weight = loss_weight.astype(jnp.float32) * valid.astype(jnp.float32)
-    mean_cos = jnp.sum(cos * weight) / jnp.maximum(jnp.sum(weight), 1.0)
-    return 1.0 - mean_cos, mean_cos
-
-
 def _null_slot_metrics(cfg: GrugModelConfig, routing_counts: Float[Array, "L N"]) -> dict[str, jax.Array]:
     """Fraction of the top-K slots that went to the zero-computation experts: per layer, and per type."""
     counts = routing_counts.astype(jnp.float32)
     total = jnp.maximum(jnp.sum(counts, axis=-1), 1.0)
-    bounds = list(
-        itertools.accumulate((cfg.num_experts, cfg.moe_null_experts, cfg.moe_copy_experts, cfg.moe_const_experts))
-    )
+    bounds = list(itertools.accumulate((cfg.num_experts, (0), (0), (0))))
     null_frac = jnp.sum(counts[:, bounds[0] :], axis=-1) / total
     out = {"train/router/null_frac_mean": jnp.mean(null_frac)}
     for name, lo, hi in zip(("zero", "copy", "const"), bounds[:-1], bounds[1:], strict=True):
@@ -8972,82 +4685,19 @@ def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[i
 
 def _tail_layers(cfg: GrugModelConfig) -> tuple[int, ...]:
     """The layers held by the tail stacks (``latent_out_full_layers`` or ``latent_free_layers``)."""
-    return cfg.latent_out_full_layers or cfg.latent_free_layers or cfg.wide_expert_layers or cfg.topk_layers
-
-
-_LM_HEAD_EXTRA_SALT = 4419
-
-
-def _widen_shared_down(expert: "DenseMLP", cfg: GrugModelConfig, key: PRNGKeyArray) -> "DenseMLP":
-    """Append ``final_write_extra`` lm_head-only output columns to a shared expert's ``w_down``."""
-    spec = _partition_spec_of(expert.w_down)
-    extra = _init_weight(key, (expert.w_down.shape[0], cfg.final_write_extra), cfg.initializer_std)
-    extra = reshard(extra.astype(expert.w_down.dtype), spec)
-    w_down = jnp.concatenate([expert.w_down, extra], axis=-1)
-    return eqx.tree_at(lambda m: m.w_down, expert, reshard(w_down, spec))
+    return cfg.latent_out_full_layers or () or () or ()
 
 
 def _final_layer_config(cfg: GrugModelConfig, tail_cfg: GrugModelConfig) -> GrugModelConfig:
     """The softmax tail stack's config when it holds only the final layer: ``lm_head_extra_dim`` and
     ``final_shared_only`` apply to it."""
-    out = _final_extra_config(tail_cfg, cfg.lm_head_extra_dim) if cfg.lm_head_extra_dim else tail_cfg
-    if cfg.final_intermediate_dim:
-        out = dataclasses.replace(out, intermediate_dim=cfg.final_intermediate_dim)
-    if cfg.final_experts_per_token:
-        out = dataclasses.replace(out, num_experts_per_token=cfg.final_experts_per_token)
-    if cfg.final_num_experts:
-        out = dataclasses.replace(out, num_experts=cfg.final_num_experts)
-    if cfg.final_routing_renorm_sum:
-        out = dataclasses.replace(out, routing_renorm_sum=cfg.final_routing_renorm_sum)
-    if cfg.final_shared_only:
-        out = dataclasses.replace(out, routed_off=True, shared_expert_intermediate_dim=cfg.final_shared_intermediate_dim)
+    out = tail_cfg
     return out
-
-
-def _final_extra_config(tail_cfg: GrugModelConfig, extra: int) -> GrugModelConfig:
-    """The final layer's config under ``lm_head_extra_dim``: its routed or shared experts also write the
-    lm_head-only slice."""
-    routed = tail_cfg.lm_head_extra_source == "routed"
-    return dataclasses.replace(
-        tail_cfg, latent_out_dim=tail_cfg.hidden_dim + (extra if routed else 0), final_write_extra=extra
-    )
 
 
 def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
     """The tail stacks' layer config: a full-width expert write, or no latent at half the expert width."""
-    if cfg.topk_layers:
-        assert cfg.topk_layer_k is not None
-        return dataclasses.replace(cfg, num_experts_per_token=cfg.topk_layer_k, topk_layers=(), topk_layer_k=None)
-    if cfg.wide_expert_layers:
-        assert cfg.wide_expert_intermediate_dim is not None
-        return dataclasses.replace(
-            cfg,
-            intermediate_dim=cfg.wide_expert_intermediate_dim,
-            wide_expert_layers=(),
-            wide_expert_intermediate_dim=None,
-        )
-    if cfg.latent_free_layers:
-        return dataclasses.replace(
-            cfg, latent_dim=None, intermediate_dim=cfg.intermediate_dim // 2, latent_free_layers=()
-        )
-    return dataclasses.replace(
-        cfg,
-        latent_out_dim=cfg.hidden_dim,
-        latent_out_full_layers=(),
-        lm_head_extra_dim=0,  # model-level: only the final layer's config writes the slice (final_write_extra)
-        final_shared_only=False,  # model-level: the final layer's config carries routed_off
-        final_intermediate_dim=0,
-        final_experts_per_token=0,
-        final_num_experts=0,
-        final_routing_renorm_sum=0.0,
-        mla_sparse_window=cfg.mla_sparse_window if cfg.mla_sparse_tail else 0,
-        mla_sparse_topk=cfg.mla_sparse_topk if cfg.mla_sparse_tail else 0,
-        mla_sparse_dsa_topk=cfg.mla_sparse_dsa_topk if cfg.mla_sparse_tail else 0,
-        expert_write_groups=cfg.tail_expert_write_groups or cfg.expert_write_groups,
-        tail_expert_write_groups=0,
-        expert_write_blocks=cfg.tail_expert_write_blocks or cfg.expert_write_blocks,
-        tail_expert_write_blocks=0,
-    )
+    return dataclasses.replace(cfg, latent_out_dim=cfg.hidden_dim, latent_out_full_layers=())
 
 
 def _tail_stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[int, ...]]:
@@ -9065,144 +4715,22 @@ def upper_softmax_slice_mask(cfg: GrugModelConfig) -> tuple[bool, ...]:
 
 def _gate_extras(model: "Transformer", num_gates: int) -> dict[str, jax.Array | None] | None:
     """The per-gate logit extras of ``_bias_gate_logits``, or None when the model uses none of them."""
-    cfg = model.config
-    if cfg.attn_res_pull_embed and cfg.second_embed:
-        raise ValueError("attn_res_pull_embed assumes the embedding is source 0 (no second_embed)")
-    mask = None
-    if cfg.attn_res_mask_attn_for:
-        if not cfg.attn_res_full:
-            raise ValueError("attn_res_mask_attn_for needs attn_res_full")
-        mask = np.zeros((num_gates, _attn_res_num_sources(cfg)), np.float32)
-        offset = _num_extra_embeds(cfg)
-        for layer in cfg.attn_res_mask_attn_for:
-            # Full AttnRes sources: embedding(s), then layer j's attention output at 1 + 2j, MoE at 2 + 2j.
-            for j in range(layer):
-                mask[2 * layer, offset + 1 + 2 * j] = -1e9
-        mask = jnp.asarray(mask)
     extras = {
-        "bias": model.attn_res_query_bias,
-        "pull_keys": model.attn_res_query_pull,
-        "embed_query": model.attn_res_query_embed,
-        "mask": mask,
-        "dual": model.attn_res_query_dual,
-        "dual_sel": model.attn_res_query_dual_sel,
-        "dual_sel_bias": model.attn_res_query_dual_sel_bias,
-        "blend": model.attn_res_query_blend,
-        "blend_proj": model.attn_res_query_blend_proj,
-        "temperature": _temperature_rows(model),
-        "dyn_w1": model.attn_res_query_dyn1,
-        "dyn_w2": model.attn_res_query_dyn2,
-        "token_query": model.attn_res_query_token,
+        "bias": None,
+        "pull_keys": None,
+        "embed_query": None,
+        "mask": None,
+        "dual": None,
+        "dual_sel": None,
+        "dual_sel_bias": None,
+        "blend": None,
+        "blend_proj": None,
+        "temperature": None,
+        "dyn_w1": None,
+        "dyn_w2": None,
+        "token_query": None,
     }
     return extras if any(v is not None for v in extras.values()) else None
-
-
-def _full_width_sub_queries(sub: jax.Array, cfg: GrugModelConfig) -> jax.Array:
-    """Per-head sub-query corrections as full-width [G, H, D] rows: a ``slice`` sub-query [G, H, D/H]
-    lands in its own channel slice (zeros elsewhere); a ``full`` one is already [G, H, D]."""
-    if cfg.attn_res_head_sub == "full":
-        return sub
-    heads = cfg.attn_res_heads
-    placed = jnp.eye(heads, dtype=sub.dtype)[None, :, :, None] * sub[:, :, None, :]
-    return placed.reshape(sub.shape[0], heads, heads * sub.shape[-1])
-
-
-def _temperature_rows(model: "Transformer") -> jax.Array | None:
-    """``attn_res_query_temp`` in the query stack's row order: per-layer gates, V gates, then the final
-    gate (the parameter stores the final gate's row before the V gates). Single-head rows are [G, 1]."""
-    temp = model.attn_res_query_temp
-    if temp is None:
-        return None
-    cfg = model.config
-    gates = _attn_res_num_gates(cfg)
-    rows = jnp.concatenate([temp[: gates - 1], temp[gates:], temp[gates - 1 : gates]])
-    return rows if cfg.attn_res_heads > 1 else rows[:, 0:1]
-
-
-def _attn_res_num_gates(cfg: GrugModelConfig) -> int:
-    """AttnRes gates without V gates: two per layer per pass, plus the final gate."""
-    return 2 * cfg.num_layers * cfg.loop_passes + 1
-
-
-def _attn_res_num_sources(cfg: GrugModelConfig) -> int:
-    """Most sources any AttnRes gate reads: every completed block (extra embeddings included) + the partial."""
-    seg_size = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
-    cap = cfg.attn_res_num_blocks * cfg.loop_passes
-    if cfg.attn_res_full:
-        return 2 * cfg.num_layers * cfg.loop_passes + _num_extra_embeds(cfg) + 1
-    rolled = sum(1 for i in range(cfg.num_layers * cfg.loop_passes) if i % seg_size == 0 and i // seg_size < cap)
-    return rolled + _num_extra_embeds(cfg) + 1
-
-
-def _share_routers(model: "Transformer", block: int) -> "Transformer":
-    """Replace each stack's per-layer router with its group leader's (``block`` consecutive entries per group)."""
-    stacks = model.layer_stacks()
-    shared = []
-    for stack in stacks:
-        router = stack.stacked.mlp.router
-        if router is None:
-            raise ValueError("router_share_block needs the full-rank router (router_rank=None)")
-        leaders = (jnp.arange(router.shape[0]) // block) * block
-        shared.append(reshard(jnp.take(router, leaders, axis=0), _partition_spec_of(router)))
-    return eqx.tree_at(lambda t: [s.stacked.mlp.router for s in t.layer_stacks()], model, shared)
-
-
-_BYTE_CLASSES = 256
-
-
-def _future_head_init(cfg: GrugModelConfig, key: PRNGKeyArray) -> jax.Array | None:
-    if cfg.future_aux == FutureAux.NONE:
-        return None
-    if cfg.future_aux == FutureAux.EMBED:
-        shape = (cfg.hidden_dim, cfg.hidden_dim)
-    else:
-        rows = cfg.future_aux_lowdim if cfg.future_aux == FutureAux.LOWDIM_T2 else cfg.hidden_dim
-        shape = (rows, cfg.future_aux_buckets)
-    return reshard(_init_weight(key, shape, cfg.initializer_std), P(None, None))
-
-
-def _future_targets(
-    mode: FutureAux,
-    token_ids: Int[Array, "B S"],
-    loss_weight: Float[Array, "B S"],
-    segment_ids: Int[Array, "B S"] | None,
-    buckets: int,
-) -> tuple[list[jax.Array], jax.Array, jax.Array | None]:
-    """The future tokens at ``_FUTURE_OFFSETS[mode]``, their hash bucket (None for ``EMBED``) and the weight that
-    drops positions whose future runs past the sequence or into the next document."""
-    offsets = _FUTURE_OFFSETS[mode]
-    seq = token_ids.shape[1]
-    position = jnp.arange(seq)[None, :]
-
-    def shifted(x: jax.Array, offset: int) -> jax.Array:
-        return jnp.pad(x[:, offset:], ((0, 0), (0, offset)))
-
-    futures = [shifted(token_ids, o) for o in offsets]
-    valid = position < seq - max(offsets)
-    if segment_ids is not None:
-        for o in offsets:
-            valid = valid & (shifted(segment_ids, o) == segment_ids)
-    weight = loss_weight * valid.astype(loss_weight.dtype)
-    if mode == FutureAux.EMBED:
-        return futures, weight, None
-    h = jnp.zeros(token_ids.shape, jnp.uint32)
-    for future, mult in zip(futures, _FUTURE_HASH_MULTS, strict=False):
-        h = (h ^ future.astype(jnp.uint32)) * jnp.uint32(mult)
-        h = h ^ (h >> 15)
-    return futures, weight, (h % jnp.uint32(buckets)).astype(jnp.int32)
-
-
-def _byte_aux_loss(
-    hidden: Float[Array, "B S D"], head: jax.Array, targets: Int[Array, "B S N"], loss_weight: Float[Array, "B S"]
-) -> jax.Array:
-    """Mean 256-way cross-entropy over the target token's first N bytes (``targets`` is -1 past its end)."""
-    b, s, n = targets.shape
-    logits = jnp.einsum("bsd,dk->bsk", hidden, head.astype(hidden.dtype), out_sharding=_batch_spec())
-    logits = logits.reshape(b, s, n, _BYTE_CLASSES).astype(jnp.float32)
-    lse = jax.nn.logsumexp(logits, axis=-1)
-    picked = jnp.take_along_axis(logits, jnp.maximum(targets, 0)[..., None], axis=-1)[..., 0]
-    valid = (targets >= 0).astype(jnp.float32) * loss_weight[..., None].astype(jnp.float32)
-    return jnp.sum((lse - picked) * valid) / jnp.maximum(jnp.sum(valid), 1.0)
 
 
 def _content_gate(
@@ -9237,122 +4765,8 @@ def _content_gate(
     return source * gate[..., None], gate
 
 
-def _ngram_stat_source_mode(cfg: GrugModelConfig) -> bool:
-    return cfg.ngram_stat_rows > 0 and cfg.ngram_stat_mode is NgramStatMode.SOURCE
-
-
-def _ngram_stat_feature_dim(cfg: GrugModelConfig) -> int:
-    return len(cfg.ngram_stat_orders) * (cfg.ngram_stat_dim + 1)
-
-
-def _ngram_stat_ids(
-    cfg: GrugModelConfig, token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None
-) -> Int[Array, "B S K"]:
-    """Each position's statistic-table row for every order k, offset into that order's block of rows."""
-    rows = cfg.ngram_stat_rows
-    return jnp.stack(
-        [
-            _bigram_hash_ids(token_ids, segment_ids, rows, order, salt=_NGRAM_STAT_SALT + k) + k * rows
-            for k, order in enumerate(cfg.ngram_stat_orders)
-        ],
-        axis=-1,
-    )
-
-
-def _ngram_stat_features(rows: jax.Array) -> jax.Array:
-    """``[sum, count]`` rows to the reader's input ``[sum / max(count, 1), log1p(count) / 4]``."""
-    sums, counts = rows[..., :-1], rows[..., -1:]
-    return jnp.concatenate([sums / jnp.maximum(counts, 1.0), jnp.log1p(counts) / 4.0], axis=-1)
-
-
-def write_ngram_stats(
-    model: "Transformer",
-    token_ids: Int[Array, "B S"],
-    loss_weight: Float[Array, "B S"],
-    segment_ids: Int[Array, "B S"] | None,
-) -> "Transformer":
-    """Add a batch to the fixed-encoder statistic table: each position's n-gram row gains ``[code(next), 1]``
-    times its loss weight (0 on the last position and on masked targets). Every device all-gathers the batch's
-    row ids, next tokens and weights (a few MB) and scatter-adds the whole batch into its replicated table, so
-    no table-sized collective runs. Called after the optimizer step, so a batch never reads its own targets."""
-    assert model.ngram_stat_table is not None and model.ngram_stat_code is not None
-    table = ngram_stat_table_add(
-        model.config, model.ngram_stat_table, model.ngram_stat_code, token_ids, loss_weight, segment_ids
-    )
-    return eqx.tree_at(lambda m: m.ngram_stat_table, model, table)
-
-
-def ngram_stat_table_add(
-    cfg: GrugModelConfig,
-    table: jax.Array,
-    code: jax.Array,
-    token_ids: Int[Array, "B S"],
-    loss_weight: Float[Array, "B S"],
-    segment_ids: Int[Array, "B S"] | None,
-) -> jax.Array:
-    """``write_ngram_stats`` on the bare table (the pre-fill jits this alone, donating only the table)."""
-    ids = _ngram_stat_ids(cfg, token_ids, segment_ids)
-    next_ids = jnp.roll(token_ids, -1, axis=1)
-    orders = len(cfg.ngram_stat_orders)
-
-    def _local_write(table, code, ids, next_ids, weight):
-        ids, next_ids, weight = (jax.lax.all_gather(x, _BATCH_AXES, tiled=True) for x in (ids, next_ids, weight))
-        weight = weight.astype(jnp.float32).reshape(-1, 1)
-        values = jnp.concatenate([code[next_ids.reshape(-1)] * weight, weight], axis=-1)
-        # Every order's row of a position gets the same value.
-        values = jnp.broadcast_to(values[:, None, :], (values.shape[0], orders, values.shape[1]))
-        return table.at[ids.reshape(-1)].add(values.reshape(-1, values.shape[-1]))
-
-    # The gathered batch is identical on every device, so the written table is replicated (check_vma can't see it).
-    return jax.shard_map(
-        _local_write,
-        mesh=get_abstract_mesh(),
-        in_specs=(P(None, None), P(None, None), P(_BATCH_AXES, None, None), P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
-        out_specs=P(None, None),
-        check_vma=False,
-    )(
-        table,
-        code,
-        reshard(ids, P(_BATCH_AXES, None, None)),
-        reshard(next_ids, P(_BATCH_AXES, None)),
-        reshard(loss_weight, P(_BATCH_AXES, None)),
-    )
-
-
-def _num_extra_embeds(cfg: GrugModelConfig) -> int:
-    """Extra embedding tables ahead of the token embedding in the AttnRes source list."""
-    window_source = cfg.window_embed_dim > 0 and cfg.window_embed_mode == "source"
-    return int(cfg.second_embed) + int(cfg.embed3_rows > 0) + int(window_source) + int(_ngram_stat_source_mode(cfg))
-
-
-def _token_window(
-    emb: Float[Array, "B S N"], segment_ids: Int[Array, "B S"] | None, width: int
-) -> Float[Array, "B S W"]:
-    """Concatenate each position's last ``width // N`` token embeddings (slot j = token t - j), zeroing slots that
-    reach before position 0 or into an earlier document."""
-    n = emb.shape[-1]
-    if width % n:
-        raise ValueError(f"window_embed_dim={n} must divide hidden_dim={width}")
-    slots = []
-    for lag in range(width // n):
-        shifted = jnp.pad(emb[:, : emb.shape[1] - lag], ((0, 0), (lag, 0), (0, 0))) if lag else emb
-        if segment_ids is not None and lag:
-            same_doc = jnp.pad(segment_ids[:, lag:] == segment_ids[:, :-lag], ((0, 0), (lag, 0)))
-            shifted = jnp.where(same_doc[..., None], shifted, 0)
-        slots.append(shifted)
-    return reshard(jnp.concatenate(slots, axis=-1), _batch_spec())
-
-
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
     return std * random.truncated_normal(key, -3, 3, shape)
-
-
-def _router_hist_init(cfg: "GrugModelConfig", key: PRNGKeyArray) -> jax.Array:
-    """HERO-MoE's ``W_R`` for every layer, uniform in +-1 / sqrt(D + (L - 1) E) (the paper's bound at full history)."""
-    n, e = cfg.num_layers, cfg.num_experts
-    bound = 1.0 / float(np.sqrt(cfg.hidden_dim + (n - 1) * e))
-    w = random.uniform(key, (n, (n - 1) * e, e), jnp.float32, -bound, bound)
-    return reshard(w, P(None, None, None))
 
 
 def _latent_proj_init(cfg: "GrugModelConfig", key: PRNGKeyArray, shape: tuple[int, int]) -> Float[Array, "..."]:
@@ -9360,12 +4774,7 @@ def _latent_proj_init(cfg: "GrugModelConfig", key: PRNGKeyArray, shape: tuple[in
     columns, or rows when wide) with every singular value ``std * sqrt(max(shape))``, which matches the normal
     init's Frobenius norm."""
     std = cfg.initializer_std
-    if not cfg.latent_orthogonal_init:
-        return _init_weight(key, shape, std)
-    tall = random.normal(key, (max(shape), min(shape)), jnp.float32)
-    q, r = jnp.linalg.qr(tall)
-    q = q * jnp.sign(jnp.diagonal(r))  # Haar-uniform: fix QR's sign ambiguity
-    return std * float(np.sqrt(max(shape))) * (q if shape[0] >= shape[1] else q.T)
+    return _init_weight(key, shape, std)
 
 
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:

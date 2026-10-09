@@ -395,10 +395,9 @@ def build_h100_ladder_run(
         model = dataclasses.replace(model, embed2_rows=_embed2_rows_for_fraction(model, embed2_rows_frac))
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
-    replica_axis_size = 1
-    if rung.global_device_count % (expert_axis_size * replica_axis_size) != 0:
+    if rung.global_device_count % (expert_axis_size * (1)) != 0:
         raise ValueError(
-            f"expert_axis ({expert_axis_size}) * replica_axis ({replica_axis_size}) must divide "
+            f"expert_axis ({expert_axis_size}) * replica_axis ({(1)}) must divide "
             f"global_device_count ({rung.global_device_count})"
         )
 
@@ -446,17 +445,6 @@ def build_h100_ladder_run(
         seq_len=SEQ_LEN,
     )
     optimizer = _apply_settings(optimizer, optimizer_settings or {})
-    if model.final_shared_only:
-        # The final layer's routed path never runs: keep its weights out of the optimizer.
-        optimizer = dataclasses.replace(optimizer, frozen_paths=r"(?:^|\.)stacked_blocks_tail\.stacked\.mlp\.")
-    if model.expert_write_masked:
-        blocks = model.expert_write_blocks or model.tail_expert_write_blocks
-        paths = (
-            r"\.mlp\.expert_mlp\.w_down$" if model.expert_write_blocks else r"_tail\.stacked\.mlp\.expert_mlp\.w_down$"
-        )
-        optimizer = dataclasses.replace(
-            optimizer, write_mask_blocks=blocks, write_mask_keep=model.expert_write_keep, write_mask_paths=paths
-        )
     if optimizer.upper_qk_lr_mult != 1.0:
         optimizer = dataclasses.replace(optimizer, upper_qk_slice_mask=upper_softmax_slice_mask(model))
     grug_trainer = GrugTrainerConfig(
@@ -466,7 +454,7 @@ def build_h100_ladder_run(
         watch_mode=WatchMode.INLINE,
         save_checkpoints=save_checkpoints,
         expert_axis_size=expert_axis_size,
-        replica_axis_size=replica_axis_size,
+        replica_axis_size=(1),
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
         grad_accum_microbatches=grad_accum_microbatches,
