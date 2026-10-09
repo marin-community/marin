@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import gzip
 import io
 import json
 import sqlite3
@@ -247,3 +248,15 @@ def test_file_map_snapshot_matches_actual_export_archives_and_wire_record():
         "solution_binary",
     ]
     assert pa.Table.from_pylist([wire], schema=TASKS_SCHEMA).to_pylist() == [wire]
+
+
+def test_snapshot_preserves_task_and_oracle_content_across_gzip_levels():
+    task = archive_bytes({"instruction.md": b"question\n", "tests/test.sh": b"check\n" * 100}, {"tests/test.sh": "0755"})
+    oracle = archive_bytes({"solution/solve.sh": b"answer\n" * 100}, {"solution/solve.sh": "0700"})
+    slow_task, slow_oracle = [gzip.compress(gzip.decompress(blob), compresslevel=9, mtime=0) for blob in (task, oracle)]
+    assert (task, oracle) != (slow_task, slow_oracle)
+    fast = task_snapshot("source", "path", "converted", task_binary=task, solution_binary=oracle)
+    slow = task_snapshot("source", "path", "converted", task_binary=slow_task, solution_binary=slow_oracle)
+    assert fast == slow
+    assert fast.files["task/tests/test.sh"].mode == 0o755
+    assert fast.files["oracle/solution/solve.sh"].mode == 0o700

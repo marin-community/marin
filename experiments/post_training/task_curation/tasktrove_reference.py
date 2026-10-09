@@ -4,16 +4,20 @@
 """Isolated frozen-converter worker; emits archive snapshots, never executes graders."""
 
 import argparse
+import gzip
 import importlib
 import importlib.util
 import json
 import sys
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
+
+REFERENCE_COMPRESSION_LEVEL = 1
 
 
 def main() -> None:
@@ -23,6 +27,7 @@ def main() -> None:
     parser.add_argument("--source", required=True)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--revision", required=True)
+    parser.add_argument("--archive-compression", type=int, choices=(1, 9), required=True)
     parser.add_argument("--path")
     parser.add_argument("--payload-root", type=Path)
     args = parser.parse_args()
@@ -53,6 +58,12 @@ def main() -> None:
             filename = module.__file__
             if filename is not None and not Path(filename).resolve().is_relative_to(checkout):
                 raise RuntimeError(f"Frozen reference imported host code: {name} from {filename}")
+    # Keep the frozen file writer and its tar headers unchanged. Compression is outside
+    # the snapshot contract, and level 9 wastes CPU on archives discarded immediately.
+    taskbinary.gzip = SimpleNamespace(
+        compress=partial(gzip.compress, compresslevel=args.archive_compression),
+        decompress=gzip.decompress,
+    )
     index, info = registry.converter_index(), dataset.load_source_verdicts()[args.source]
     batches = (
         pq.ParquetFile(args.input).iter_batches(batch_size=16)

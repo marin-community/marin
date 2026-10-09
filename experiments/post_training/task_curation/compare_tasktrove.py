@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
+from experiments.post_training.task_curation.tasktrove_reference import REFERENCE_COMPRESSION_LEVEL
 
 FROZEN_PATHS = (
     "experiments/post_training/tasktrove",
@@ -160,6 +161,7 @@ def compare_source(
         "source": source.name,
         "original_source": config,
         "baseline_revision": revision,
+        "reference_archive_compression": REFERENCE_COMPRESSION_LEVEL,
         "baseline_layer": "convert_one plus pure check_spec/check_dockerfile/check_gold_leak/check_shape",
         "not_executed": ["grading", "model_review", "deduplication", "release_cap"],
         "candidate_layer": "normalized TaskSpec followed by current Harbor export",
@@ -187,6 +189,8 @@ def compare_source(
         str(raw_file),
         "--revision",
         revision,
+        "--archive-compression",
+        str(REFERENCE_COMPRESSION_LEVEL),
     ]
     with tempfile.TemporaryDirectory(prefix="index-", dir=output) as temporary:
         payloads = Path(temporary)
@@ -310,6 +314,7 @@ def main(
     trees = frozen_checkout(baseline_repository, baseline_revision, output_root / "reference")
     run = {
         "baseline_revision": baseline_revision,
+        "reference_archive_compression": REFERENCE_COMPRESSION_LEVEL,
         "frozen_trees": trees,
         "candidate_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "candidate_diff_sha256": (

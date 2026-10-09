@@ -441,7 +441,9 @@ requires inputs for every retained TaskTrove source, including the OpenQA source
 The output directory must be new.
 
 The reference process loads the pinned TaskTrove pipeline, TaskCompendium and
-Verifyit code from Git. It runs `convert_one`, then the legacy spec, Dockerfile,
+Verifyit code from Git. Its file writer uses gzip level 1 instead of level 9;
+this recorded serialization setting preserves every member's contents and modes.
+It runs `convert_one`, then the legacy spec, Dockerfile,
 gold-leak and shape checks. It records static rejections separately from conversion
 outcomes and still compares the converted payload. It does not run graders,
 reviews, deduplication or release caps. Release counts can therefore differ.
