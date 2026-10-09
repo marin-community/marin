@@ -106,15 +106,6 @@ def structured_row(schema: dict, schema_type: str, instruction: str = STRUCTURED
     )
 
 
-def repository_row() -> dict:
-    config = {"repo": "octo/widgets", "FAIL_TO_PASS": ["tests/test_spin.py::test_spin"], "PASS_TO_PASS": []}
-    return archive(
-        "Fix the spin bug in octo/widgets.\n\n```\n"
-        "git clone https://github.com/octo/widgets.git . && git checkout 1a2b3c4\n```\n",
-        {"tests/config.json": json.dumps(config).encode(), SOLVE_SH: b"#!/bin/bash\ngit apply /solution/fix.patch\n"},
-    )
-
-
 ROWS: dict[str, dict] = {
     "tasktrove-code_contests": archive(SUM_PROMPT, {"tests/test_data.json": json.dumps(SUM_CASES).encode()}),
     "tasktrove-codeforces": {"path": "codenet", "task_binary": CODENET},
@@ -134,7 +125,10 @@ ROWS: dict[str, dict] = {
     "tasktrove-unitsyn_large": python_row(),
     "tasktrove-stack_pytest": python_row(),
     "tasktrove-structured_outputs": structured_row(NAME_SCHEMA, "json"),
-    "tasktrove-swe_rebench": repository_row(),
+    "tasktrove-swe_rebench": {
+        "path": "swe-rebench-fixture",
+        "task_binary": (Path(__file__).parent / "fixtures/swe_rebench_python.tar.gz").read_bytes(),
+    },
     "tasktrove-swesmith": {
         "path": "swesmith-fixture",
         "task_binary": (Path(__file__).parent / "fixtures/swesmith.tar.gz").read_bytes(),
@@ -159,13 +153,13 @@ EXPECTED = {
     "tasktrove-unitsyn_large": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
     "tasktrove-stack_pytest": ("pytest", PYTHON_FILE, python_tests.STACK_PYTEST_AGENT_IMAGE),
     "tasktrove-structured_outputs": ("json-schema", (), None),
-    "tasktrove-swe_rebench": ("none", (), None),
+    "tasktrove-swe_rebench": ("script", (), None),
     "tasktrove-swesmith": ("script", (), None),
 }
-"""Each declaration's grader mode (``none`` for an ungraded task), captured files and agent image.
+"""Each declaration's grader mode, captured files and agent image.
 
-A task with an agent image is graded in a fresh machine of the grader image. SWE-smith instead
-carries an unresolved build recipe; the others are graded in process or not at all.
+A task with an agent image is graded in a fresh machine of the grader image. The SWE sources instead
+carry unresolved build recipes; the others are graded in process.
 """
 
 
@@ -363,6 +357,7 @@ def test_structured_outputs_ask_for_the_answer_in_the_reply():
     )
     assert isinstance(result, NormalizedTask)
     prompt = result.task.context.events[-1].content
+    assert isinstance(prompt, str)
     assert prompt.endswith("Return your final JSON in the assistant response.")
     assert "/app/answer.txt" not in prompt
     assert [change.field for change in result.changes] == ["instruction"]
@@ -387,19 +382,3 @@ def test_structured_outputs_controls_grade_as_expected(schema_type, control):
     assert pipeline.controls is not None
     report = run_controls(task, controls=pipeline.controls, machines=None)
     assert {check.check: check.status for check in report.checks} == {control: CheckStatus.PASS}
-
-
-def test_repository_tasks_keep_source_grading_terms():
-    task = converted_task(PIPELINES["tasktrove-swe_rebench"], ROWS["tasktrove-swe_rebench"])
-    contract = task.grader.model_dump()["contract"]["contract"]
-    assert (contract["repository"], contract["source_ref"], contract["workspace"]) == (
-        "octo/widgets",
-        "1a2b3c4",
-        "/testbed",
-    )
-    assert set(resource_map(task.resources.verifier)) == {
-        "taskcompendium/archive-provenance.json",
-        "config.json",
-        "test.sh",
-    }
-    assert set(resource_map(task.resources.oracle)) == {"instruction.md", "environment/Dockerfile", SOLVE_SH}

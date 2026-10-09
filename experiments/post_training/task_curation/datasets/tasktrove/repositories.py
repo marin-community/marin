@@ -3,8 +3,8 @@
 
 """Repository repair tasks with source build recipes and private trusted tests.
 
-SWE-smith's grader is mechanically recoverable without building its environment. SWE-rebench
-retains its source contract until patched and non-Python grader migration is complete.
+SWE-smith and SWE-rebench keep public setup as unresolved image recipes and grade
+private copies of the repository with restored trusted tests.
 """
 
 import json
@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
     repository_test_ids,
     trusted_pytest,
 )
+from experiments.post_training.task_curation.datasets.tasktrove.swe_rebench import convert_swe_rebench_task
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -134,8 +135,9 @@ def sources() -> list[RlDataSource]:
             "swe_rebench",
             "DCAgent__swe_rebench_v2_patched_oracle-v2",
             SWE_REBENCH_RUBRIC,
-            convert=convert_repository_task,
-            version="1",
+            convert=convert_swe_rebench_task,
+            version="2",
+            ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
                 title="DCAgent/swe_rebench_v2_patched_oracle-v2",
@@ -163,8 +165,8 @@ def sources() -> list[RlDataSource]:
                 ),
                 count=18319,
                 notes=(
-                    "Real repos, hidden FAIL_TO_PASS, git gate, trusted-test restore. Bake the verify-"
-                    "time installs into the image."
+                    "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
+                    "retained non-Python sources keep their parser with exit-code credit disabled."
                 ),
             ),
         ),

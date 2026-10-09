@@ -208,7 +208,7 @@ fingerprints and grader execution. It records declared grader images or local
 dependency locks without building environments. Its parquet output is
 unreviewed and unverified, with no admitted `final/` view.
 
-SWE-smith repository tasks carry an unresolved `DockerBuildContext` in both
+SWE-smith and SWE-rebench repository tasks carry an unresolved `DockerBuildContext` in both
 actor and verifier requirements. The context preserves source files and adds
 the public dependency setup and bundled verifier package. Conversion does not
 build the image or claim that mutable upstream tags are reproducible. Runtime
@@ -216,8 +216,13 @@ entry points reject unresolved contexts before selecting a machine; execution
 requires a later resolver to replace each recipe with a real image digest.
 The repository submission is the complete `/testbed` directory, with trusted
 tests restored privately before grading. Original configuration patches and
-solution scripts remain oracle resources. Native Harbor export of these
-repository tasks remains unsupported.
+solution scripts remain oracle resources.
+
+SWE-rebench preserves its private trusted-test installers and applies the hidden
+test patch before grading. Python tasks use pytest; retained non-Python tasks
+use the source parser with exit-code-only credit removed. Package installation
+moves into the deferred image build. The source's JavaScript/TypeScript exclusions
+and unsupported Python test contracts remain explicit conversion rejections.
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' \

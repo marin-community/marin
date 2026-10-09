@@ -29,6 +29,7 @@ VERIFYIT_PACKAGE = Path(__file__).resolve().parents[5] / "lib/verifyit"
 VERIFYIT_CONTEXT = "taskcompendium-verifyit"
 PUBLIC_SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
 REPOSITORY_SETUP = "taskcompendium-repository-setup.sh"
+GRADER_SETUP = "taskcompendium-grader-setup.sh"
 VERIFYIT_INSTALL = f"""
 COPY {VERIFYIT_CONTEXT}/ /opt/taskcompendium-verifyit/
 RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --python 3.12 /opt/taskcompendium-verifyit
@@ -57,6 +58,7 @@ def repository_build_task(
     verifier: tuple[TaskResource, ...],
     tags: tuple[str, ...],
     changes: tuple[NormalizationChange, ...] = (),
+    grader_setup: str = "",
 ) -> NormalizedTask | ImportRejection:
     """Carry public setup into an unresolved image and grade a private copy of the workspace."""
     instruction = files.text("instruction.md")
@@ -73,6 +75,8 @@ def repository_build_task(
         f"COPY {REPOSITORY_SETUP} /opt/{REPOSITORY_SETUP}\n"
         f"RUN bash -e /opt/{REPOSITORY_SETUP} && rm -rf {WORKSPACE} && mkdir -p {WORKSPACE}\n"
     )
+    if grader_setup:
+        dockerfile += f"COPY {GRADER_SETUP} /opt/{GRADER_SETUP}\nRUN bash -e /opt/{GRADER_SETUP}\n"
     # Original environment bytes stay with provenance; the edited recipe is an environment input.
     context_files = tuple(
         resource.model_copy(
@@ -89,7 +93,7 @@ def repository_build_task(
         if resource.path.startswith("environment/")
     )
     if any(
-        resource.path.startswith((VERIFYIT_CONTEXT, "taskcompendium-public", REPOSITORY_SETUP))
+        resource.path.startswith((VERIFYIT_CONTEXT, "taskcompendium-public", REPOSITORY_SETUP, GRADER_SETUP))
         for resource in context_files
     ):
         return unsupported("build_context_collision", "Source context occupies the bundled verifier path")
@@ -104,6 +108,7 @@ def repository_build_task(
                 *verifyit_build_files(),
                 *public_context,
                 inline_resource(REPOSITORY_SETUP, setup.encode()),
+                *((inline_resource(GRADER_SETUP, grader_setup.encode()),) if grader_setup else ()),
             )
         )
     )
