@@ -55,6 +55,7 @@ ARMS = ("transformer", "parallax")
 SEQ_LEN = 4096
 BATCH_SIZE = 960  # 3.93M tokens
 GRAD_ACCUM_MICROBATCHES = 15  # 8 sequences per H100 per microbatch
+PAPER_LR = 5e-3
 WANDB_PROJECT = "marin_moe"
 MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 TRAIN_RESOURCES = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="600g", disk="900g", replicas=1)
@@ -75,10 +76,10 @@ def qwen3_0p6b(arm: str) -> GrugModelConfig:
     )
 
 
-def paper_muon() -> GrugMuonConfig:
-    """The paper's Table 2b Muon + WSD recipe."""
+def paper_muon(learning_rate: float = PAPER_LR) -> GrugMuonConfig:
+    """The paper's Table 2b Muon + WSD recipe (the embedding/norm Adam lrs scale with ``learning_rate``)."""
     return GrugMuonConfig(
-        learning_rate=5e-3,
+        learning_rate=learning_rate,
         weight_decay=0.1,
         momentum=0.95,
         nesterov=True,
@@ -153,8 +154,23 @@ def _run(launch: ParallaxLaunchConfig) -> None:
     run_grug(run_grug_config(launch))
 
 
-def build(arm: str, steps: int) -> ArtifactStep[LevanterCheckpoint]:
-    run_id = f"plx-grug-{arm}-{steps}"
+def run_name(arm: str, steps: int, batch_size: int, learning_rate: float, microbatches: int) -> str:
+    """``plx-grug-<arm>-<steps>``, plus ``-b<batch>-lr<lr>-mb<n>`` when the run departs from the paper's batch."""
+    name = f"plx-grug-{arm}-{steps}"
+    if (batch_size, learning_rate, microbatches) != (BATCH_SIZE, PAPER_LR, GRAD_ACCUM_MICROBATCHES):
+        name += f"-b{batch_size}-lr{learning_rate:g}-mb{microbatches}"
+    return name
+
+
+def build(
+    arm: str,
+    steps: int,
+    *,
+    batch_size: int = BATCH_SIZE,
+    learning_rate: float = PAPER_LR,
+    microbatches: int = GRAD_ACCUM_MICROBATCHES,
+) -> ArtifactStep[LevanterCheckpoint]:
+    run_id = run_name(arm, steps, batch_size, learning_rate, microbatches)
     validation = [
         *uncheatable_datasets(tokenizer=V16384_TOKENIZER, tag=V16384_TOKENIZER).values(),
         *paloma_datasets(
@@ -165,7 +181,7 @@ def build(arm: str, steps: int) -> ArtifactStep[LevanterCheckpoint]:
     def build_config(ctx: StepContext) -> ParallaxLaunchConfig:
         return ParallaxLaunchConfig(
             model=qwen3_0p6b(arm),
-            optimizer=paper_muon(),
+            optimizer=paper_muon(learning_rate),
             data=_flat_cache_data_config(
                 ctx=ctx, validation=validation, tokenizer=V16384_TOKENIZER, train_cache_dir=V16384_CACHE_DIR
             ),
@@ -173,8 +189,8 @@ def build(arm: str, steps: int) -> ArtifactStep[LevanterCheckpoint]:
             run_id=run_id,
             resources=ctx.runtime_arg("train_resources"),
             steps=steps,
-            batch_size=BATCH_SIZE,
-            grad_accum_microbatches=GRAD_ACCUM_MICROBATCHES,
+            batch_size=batch_size,
+            grad_accum_microbatches=microbatches,
         )
 
     return ArtifactStep(
@@ -194,9 +210,23 @@ def build(arm: str, steps: int) -> ArtifactStep[LevanterCheckpoint]:
 @click.option("--submit", is_flag=True, help="Re-exec this launcher as an Iris coordinator job.")
 @click.option("--target-cluster", default="cw-rno2a", show_default=True)
 @click.option("--priority", default="interactive", show_default=True)
-def main(arm: str, steps: int, submit: bool, target_cluster: str, priority: str) -> None:
+@click.option("--batch-size", type=int, default=BATCH_SIZE, show_default=True, help="Sequences per step.")
+@click.option("--lr", "learning_rate", type=float, default=PAPER_LR, show_default=True, help="Peak Muon lr.")
+@click.option("--microbatches", type=int, default=GRAD_ACCUM_MICROBATCHES, show_default=True)
+def main(
+    arm: str,
+    steps: int,
+    submit: bool,
+    target_cluster: str,
+    priority: str,
+    batch_size: int,
+    learning_rate: float,
+    microbatches: int,
+) -> None:
     if not submit:
-        StepRunner().run([build(arm, steps).lower()])
+        StepRunner().run(
+            [build(arm, steps, batch_size=batch_size, learning_rate=learning_rate, microbatches=microbatches).lower()]
+        )
         return
     wandb_key = os.environ.get("WANDB_API_KEY")
     if not wandb_key:
@@ -205,7 +235,7 @@ def main(arm: str, steps: int, submit: bool, target_cluster: str, priority: str)
     cmd = [
         "uv", "run", "iris", "--cluster", "marin", "job", "run", "--no-wait", "--enable-extra-resources",
         "--target-cluster", target_cluster, "--priority", priority,
-        "--job-name", f"plx-grug-{arm}-{steps}-coord",
+        "--job-name", f"{run_name(arm, steps, batch_size, learning_rate, microbatches)}-coord",
         "-e", "WANDB_API_KEY", wandb_key, "-e", "WANDB_PROJECT", WANDB_PROJECT,
         "--", "python", "-m", "experiments.grug.parallax.launch", *args,
     ]  # fmt: skip
