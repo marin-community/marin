@@ -679,6 +679,8 @@ def mla_sparse_params(cfg, d: int, n: int, h: int, key: jax.Array, std: float, i
         logit_mix_w=matrix(4, 2 * n) if cfg.mla_logit_compose_dynamic else None,
         gauss=_gauss_init(cfg, n, h, d) if cfg.mla_gauss else None,
         copy_gate_lse=jnp.zeros((n,), jnp.float32) if _copy_gate_parts(cfg)[0] else None,
+        parallax_w=matrix(7, n * h) if cfg.mla_parallax else None,
+        parallax_gain=jnp.zeros((n,), jnp.float32) if cfg.mla_parallax else None,
         copy_gate_out=jnp.zeros((n, h), jnp.float32) if _copy_gate_parts(cfg)[1] else None,
         dcmha=(
             (
@@ -878,6 +880,58 @@ def dense_attention_with_lse(q, k, v, lower_bounds, valid, rel_bias):
     lse = jax.nn.logsumexp(scores, axis=-1)
     p = jnp.where(vis[:, None], jnp.exp(scores - jnp.where(jnp.isfinite(lse), lse, 0.0)[..., None]), 0.0)
     return jnp.einsum("bhqk,bkhd->bqhd", p, v.astype(jnp.float32)).astype(v.dtype), lse
+
+
+PARALLAX_QUERY_BLOCK = 256
+
+
+def parallax_attention(q, k, v, r, rel_bias, segment_ids):
+    """Parallax (arXiv 2605.29157, ``parallax/reference.py``): softmax attention minus the attention-weighted
+    key-value covariance probed by ``r``, ``o_i - Cov_{p_i}(v, k) r_i = sum_j p_ij v_j (1 + E_p[s_i]) - sum_j p_ij
+    s_ij v_j`` with ``s_ij = r_i . k_j``. Dense emulation over query blocks (equal-step loss only, not speed): causal,
+    in-document, with the banded Inkling bias on the softmax scores."""
+    out_sharding = named_sharding_of(q)
+
+    def compute(q, k, v, r, rel_bias, segment_ids):
+        b, seq, h, d = q.shape
+        k = jnp.broadcast_to(k, (b, seq, h, k.shape[-1])).astype(jnp.float32)
+        v = jnp.broadcast_to(v, (b, seq, h, v.shape[-1])).astype(jnp.float32)
+        starts = _document_starts(segment_ids)
+        keys = jnp.arange(seq)
+        block = min(PARALLAX_QUERY_BLOCK, seq)
+
+        @jax.checkpoint
+        def one(i):
+            rows = i * block + jnp.arange(block)
+            qb = jax.lax.dynamic_slice_in_dim(q, i * block, block, axis=1).astype(jnp.float32)
+            rb = jax.lax.dynamic_slice_in_dim(r, i * block, block, axis=1).astype(jnp.float32)
+            s1 = jnp.einsum("bqhd,bkhd->bhqk", qb, k) / math.sqrt(d)
+            if rel_bias is not None:
+                band = jax.lax.dynamic_slice_in_dim(rel_bias, i * block, block, axis=2).astype(jnp.float32)
+                column = (
+                    keys[None, :] - (rows[:, None] // REL_BIAS_BLOCK) * REL_BIAS_BLOCK + rel_extent_of_band(rel_bias)
+                )
+                in_band = (column >= 0) & (column < band.shape[-1])
+                idx = jnp.broadcast_to(jnp.clip(column, 0, band.shape[-1] - 1), (b, h, block, seq))
+                s1 = s1 + jnp.where(in_band, jnp.take_along_axis(band, idx, axis=-1), 0.0)
+            start = jax.lax.dynamic_slice_in_dim(starts, i * block, block, axis=1)  # [B, Q]
+            ok = (keys[None, None, :] <= rows[None, :, None]) & (keys[None, None, :] >= start[:, :, None])
+            p = jax.nn.softmax(jnp.where(ok[:, None], s1, -jnp.inf), axis=-1)
+            p = jnp.where(ok[:, None], p, 0.0)
+            ps = p * jnp.einsum("bqhd,bkhd->bhqk", rb, k)
+            o1 = jnp.einsum("bhqk,bkhd->bqhd", p, v)
+            o2 = jnp.einsum("bhqk,bkhd->bqhd", ps, v)
+            mean_s = jnp.sum(ps, axis=-1).transpose(0, 2, 1)[..., None]  # [B, Q, H, 1]
+            return o1 * (1.0 + mean_s) - o2
+
+        out = jax.lax.map(one, jnp.arange(seq // block))  # [N, B, Q, H, E]
+        return jnp.moveaxis(out, 0, 1).reshape(b, seq, h, -1).astype(v.dtype)
+
+    if out_sharding is None:
+        return compute(q, k, v, r, rel_bias, segment_ids)
+    # pyrefly: ignore[bad-assignment]
+    wrapped: Callable[..., jax.Array] = auto_axes(compute, out_sharding=out_sharding)
+    return wrapped(q, k, v, r, rel_bias, segment_ids)
 
 
 def attention_with_lse(q, k, v, lower_bounds, valid, rel_bias):

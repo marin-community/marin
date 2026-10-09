@@ -94,6 +94,7 @@ from experiments.grug.fast_track.sparse_attention import (
     gauss_attention_fast,
     mla_sparse_attention,
     mla_sparse_params,
+    parallax_attention,
 )
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
@@ -1022,6 +1023,8 @@ class GrugModelConfig:
     mla_gauss_components: int = 1
     mla_gauss_fast: bool = False
     mla_gauss_taps: TapKind = TapKind.NONE
+    mla_parallax: bool = False
+    """MLA layers use Parallax (``sparse_attention.parallax_attention``, dense emulation)."""
     mla_copy_gate: str = "none"
     """MLA output gate also reads the head's match strength (lse), its output, or both."""
     mla_sparse_tail: bool = True
@@ -2318,6 +2321,8 @@ class CausalSelfAttention(eqx.Module):
     gauss: Gauss | None
     copy_gate_lse: Float[Array, " N"] | None  # mla_copy_gate
     copy_gate_out: Float[Array, "N H"] | None  # mla_copy_gate
+    parallax_w: Float[Array, "D NH"] | None  # mla_parallax: the probe projection W_R
+    parallax_gain: Float[Array, " N"] | None  # mla_parallax: per-head probe scale, zero-init
     v_norm: "LearnedRMSNorm | None"
     kv_mix_bias: Float[Array, " E"] | None  # LatentMixBalance.BIAS selection bias (sign-SGD on the load error)
     kv_shared_norm: "LearnedRMSNorm | None"  # norm of the always-on shared KV latent (cfg.kv_shared_latent_dim)
@@ -2610,6 +2615,8 @@ class CausalSelfAttention(eqx.Module):
             gauss=None,
             copy_gate_lse=None,
             copy_gate_out=None,
+            parallax_w=None,
+            parallax_gain=None,
             v_norm=None,
             kv_mix_bias=None,
             kv_shared_norm=None,
@@ -3003,7 +3010,14 @@ class CausalSelfAttention(eqx.Module):
             qf = rearrange(jnp.einsum("bsd,dc->bsc", x, self.w_qf.astype(x.dtype)), "... (f c) -> ... f c", c=head_dim)
             window = self.cfg.mla_future_window
             k, kernel_v = future_heads(qf * self.cfg.qk_mult, k, kernel_v, sconv_segment_ids, window)
-        if self.gauss is not None and self.cfg.mla_gauss_fast:
+        if self.parallax_w is not None and self.parallax_gain is not None:
+            seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
+            r = rearrange(
+                jnp.einsum("bsd,dc->bsc", x, self.parallax_w.astype(x.dtype)), "... (n d) -> ... n d", d=head_dim
+            )
+            r = rms_norm(r.astype(jnp.float32)) * self.parallax_gain.astype(jnp.float32)[:, None]
+            attn_out = parallax_attention(q, k, kernel_v, r, rel_bias, seg)
+        elif self.gauss is not None and self.cfg.mla_gauss_fast:
             seg = sconv_segment_ids if sconv_segment_ids is not None else jnp.zeros(q.shape[:2], jnp.int32)
             reach = self.cfg.mla_gauss_reach
             attn_out = gauss_attention_fast(q, k, kernel_v, rel_bias, seg, self.gauss, reach, attention_with_lse)
