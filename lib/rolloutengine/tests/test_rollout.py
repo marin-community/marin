@@ -51,6 +51,7 @@ from rolloutengine.contracts import (
     RolloutInterrupted,
     RolloutOperation,
     SessionStart,
+    TokenContract,
     Transition,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
@@ -189,8 +190,77 @@ def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) ->
     )
 
 
-def engine(model, factories=None, *, sessions=None) -> ShellboxRolloutEngine:
-    return ShellboxRolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
+def engine(model, factories=None, *, sessions=None, token_contract=TokenContract.EXACT) -> ShellboxRolloutEngine:
+    return ShellboxRolloutEngine(
+        model.complete,
+        {} if factories is None else factories,
+        sessions=sessions,
+        token_contract=token_contract,
+    )
+
+
+@dataclass
+class RetokenizingModel:
+    """A chat endpoint that re-encodes the previous response with a different token."""
+
+    messages: list[dict]
+    requests: list[ModelRequest] = field(default_factory=list)
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        self.requests.append(request)
+        index = len(self.requests) - 1
+        prompt = (10, 11, 99, 90, 91) if request.prefix_token_ids else (10, 11)
+        return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), "stop")
+
+
+async def test_text_contract_grades_retokenized_turns_without_training_tokens():
+    model = RetokenizingModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
+
+    result = await engine(model, {"local": FixtureImageFactory()}, token_contract=TokenContract.TEXT).run(
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
+    assert result.metrics["token_contract"] == "text"
+    assert [(step.turn.prompt_token_ids, step.turn.response_token_ids) for step in result.steps] == [
+        ((10, 11), (20,)),
+        ((10, 11, 99, 90, 91), (21,)),
+    ]
+    assert result.response_token_ids == (99, 90, 91, 21)
+    assert result.loss_mask == (0, 0, 0, 0)
+    assert result.logprobs is None
+
+
+@pytest.mark.parametrize("failure", ["length", "total_turn_timeout"])
+async def test_text_contract_marks_a_record_without_a_response(failure):
+    class Model:
+        async def complete(self, _request):
+            if failure == "length":
+                raise GenerationLimitReached((90, 91))
+            await asyncio.Future()
+
+    result = await engine(Model(), token_contract=TokenContract.TEXT).run(
+        lowered(arithmetic_task(), total_turn_timeout=0.05)
+    )
+
+    assert result.stop_reason == failure
+    assert (result.grade.status, result.grade.reward) == (Outcome.UNAVAILABLE, None)
+    assert result.metrics["token_contract"] == "text"
+    assert result.response_token_ids == result.loss_mask == ()
+    assert result.logprobs is None
+
+
+async def test_text_contract_marks_an_interrupted_record_without_a_response():
+    class Model:
+        async def complete(self, _request):
+            await asyncio.Future()
+
+    with pytest.raises(RolloutInterrupted) as interrupted:
+        await engine(Model(), token_contract=TokenContract.TEXT).run(lowered(arithmetic_task(), attempt_timeout=0.05))
+
+    assert interrupted.value.operation == RolloutOperation.ATTEMPT
+    assert interrupted.value.rollout.metrics["token_contract"] == "text"
+    assert interrupted.value.rollout.logprobs is None
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])

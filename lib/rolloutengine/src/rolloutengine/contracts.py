@@ -32,7 +32,11 @@ class SessionStart:
 
 @dataclass(frozen=True)
 class ModelTurn:
-    """Exact tokens and the parsed message from one inference request."""
+    """The parsed message and the token IDs a model reported for one inference request.
+
+    Under `TokenContract.EXACT` the IDs are the served training sequence; under
+    `TokenContract.TEXT` they are informational.
+    """
 
     message: dict[str, Any]
     prompt_token_ids: tuple[int, ...]
@@ -74,6 +78,17 @@ class RolloutData:
     failure: RolloutFailure | None = None
 
 
+class TokenContract(StrEnum):
+    """How the engine treats the token IDs that a model reports for each turn.
+
+    `EXACT` requires each prompt to preserve the served prefix and produces training evidence.
+    `TEXT` accepts endpoints that re-tokenize the conversation; its token IDs are informational.
+    """
+
+    EXACT = "exact"
+    TEXT = "text"
+
+
 class RolloutOperation(StrEnum):
     ATTEMPT = "attempt"
     START = "start"
@@ -94,7 +109,12 @@ class RolloutInterrupted(RuntimeError):
 
 
 class RolloutContractError(ValueError):
-    """Rollout evidence violates the exact-token contract."""
+    """Rollout evidence violates the selected token contract.
+
+    Both contracts reject misaligned log probabilities, responses without tokens,
+    and per-token rewards or credit that do not align with the response. `EXACT`
+    also rejects a served prompt that does not extend the earlier token prefix.
+    """
 
 
 @dataclass(frozen=True)

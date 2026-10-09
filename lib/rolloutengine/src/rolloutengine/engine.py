@@ -27,6 +27,7 @@ from rolloutengine.contracts import (
     RolloutOperation,
     RolloutStep,
     TaskSession,
+    TokenContract,
     Transition,
 )
 from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
@@ -49,7 +50,7 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
 
 
 class ShellboxRolloutEngine:
-    """Generate exact-token rollouts from lowered single-stage tasks."""
+    """Generate rollouts under a token contract from lowered single-stage tasks."""
 
     def __init__(
         self,
@@ -57,10 +58,18 @@ class ShellboxRolloutEngine:
         factories: Mapping[str, MachineFactory],
         *,
         sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
+        token_contract: TokenContract = TokenContract.EXACT,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
+        self.token_contract = token_contract
+
+    def _contract_record(self, record: RolloutData) -> RolloutData:
+        """Mark every TEXT record, including empty and interrupted ones, as informational."""
+        if self.token_contract == TokenContract.EXACT:
+            return record
+        return replace(record, logprobs=None, metrics={**record.metrics, "token_contract": self.token_contract.value})
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
@@ -93,6 +102,7 @@ class ShellboxRolloutEngine:
                 ),
                 metrics={**record.metrics, "cleanup_error_count": float(len(cleanup.errors))},
             )
+        record = self._contract_record(record)
         if operation is not None:
             raise RolloutInterrupted(record, operation) from cause
         return record
@@ -179,15 +189,20 @@ class ShellboxRolloutEngine:
                     if assistant_index is None:
                         prompt = turn.prompt_token_ids
                         tokens = prompt
-                    if turn.prompt_token_ids[: len(tokens)] != tokens:
-                        raise RolloutContractError("Model transport changed the served token prefix")
-                    observation_count = len(turn.prompt_token_ids) - len(tokens)
-                    masks += (0,) * observation_count + (1,) * len(turn.response_token_ids)
-                    if logprobs is not None:
-                        logprobs = (
-                            None if turn.logprobs is None else logprobs + (0.0,) * observation_count + turn.logprobs
-                        )
+                    if self.token_contract == TokenContract.EXACT:
+                        if turn.prompt_token_ids[: len(tokens)] != tokens:
+                            raise RolloutContractError("Model transport changed the served token prefix")
+                        observation_count = len(turn.prompt_token_ids) - len(tokens)
+                        masks += (0,) * observation_count + (1,) * len(turn.response_token_ids)
+                        if logprobs is not None:
+                            logprobs = (
+                                None if turn.logprobs is None else logprobs + (0.0,) * observation_count + turn.logprobs
+                            )
                     tokens = turn.prompt_token_ids + turn.response_token_ids
+                    if self.token_contract == TokenContract.TEXT:
+                        # Re-tokenized prompts do not extend the earlier sequence, so no position is trainable.
+                        masks = (0,) * (len(tokens) - len(prompt))
+                        logprobs = None
                     assistant_index = len(messages)
                     messages.append(turn.message)
                     pending = RolloutStep(

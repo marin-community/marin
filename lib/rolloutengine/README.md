@@ -1,7 +1,9 @@
 # Rollout engine
 
 `marin-rolloutengine` executes one TaskCompendium task through Shellbox and returns
-`RolloutData`: the conversation, exact tokens, loss mask, optional log probabilities, grade, and per-turn records.
+`RolloutData`: the conversation, served token IDs, loss mask, optional log probabilities, grade, and per-turn records.
+Under the default `TokenContract.EXACT`, the token IDs are the exact training sequence.
+Under `TokenContract.TEXT`, the endpoint re-tokenizes each request, so the IDs are informational and the loss mask is all zeros.
 
 Callers supply a model callable, machine factories, and optional `TaskSession`
 factories for task actions and grading.
@@ -20,7 +22,7 @@ A `SessionGrader` requires a registered task session. A `NoGrader` task receives
 The Harbor importer accepts only separate verifier environments.
 An unset verifier mode without a separate environment selects shared mode and causes rejection.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
-for the session lifecycle, exact-token contract, failure handling, and backend configuration.
+for the session lifecycle, token contracts, failure handling, and backend configuration.
 
 From the Marin repository root:
 

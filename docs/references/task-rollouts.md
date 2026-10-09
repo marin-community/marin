@@ -78,7 +78,7 @@ It calls these session methods:
 3. `grade(messages)` returns the final `GradeResult`.
 4. `close()` releases session resources before machine cleanup.
 
-The engine owns model calls, conversation accumulation, and exact-token accounting.
+The engine owns model calls, conversation accumulation, and token accounting.
 Each model request returns one turn, then `advance` executes that turn's operations.
 Completion, a generation limit, the turn limit, or the cumulative turn deadline starts final grading.
 A session does not call the model.
@@ -193,19 +193,29 @@ Shellbox's generic image-builder API remains available outside this task path.
 SWE tasks require prebuilt images and initialize `refs/taskcompendium/base` before inference.
 Patch collection compares the final index with that revision, including agent commits and new files.
 
-## Exact-token contract
+## Token contracts
 
-The model callable accepts `ModelRequest` and returns `ModelTurn` with a parsed assistant message and exact served token IDs.
-`ModelRequest.messages` contains public messages. `prefix_token_ids` contains the earlier served tokens that the next request must preserve.
-`ModelTurn.prompt_token_ids` contains the exact prompt sent to inference. `response_token_ids` contains the sampled response.
-Optional log probabilities align with response tokens.
-A continuation prompt preserves the full served prefix, including earlier response tokens.
-The engine rejects changed prefixes, empty response evidence, and misaligned log probabilities or token credit.
+The model callable accepts `ModelRequest` and returns `ModelTurn` with a parsed assistant message and the prompt and response token IDs that the model reported.
+`ModelRequest.messages` contains public messages. `prefix_token_ids` contains the earlier served tokens.
+`ModelTurn.prompt_token_ids` contains the prompt sent to inference. `response_token_ids` contains the sampled response.
+Under both token contracts, the engine rejects empty response evidence and misaligned log probabilities or token credit.
+
+The `token_contract` argument of `ShellboxRolloutEngine` selects `TokenContract.EXACT` or `TokenContract.TEXT`.
+`EXACT` is the default, and training requires it.
+Under `EXACT`, the token IDs are the exact served tokens, and a continuation prompt preserves the full served prefix, including earlier response tokens.
+The engine rejects changed prefixes.
+
+An OpenAI-compatible chat endpoint re-tokenizes the conversation text on each request, so its prompts can differ from the previous served tokens.
+`TEXT` accepts that endpoint for evaluation, task validation, and data collection.
+The engine does not compare prefixes. Each step retains the prompt token IDs, response token IDs, and stop reason that the model reported.
+Every record, including an empty or interrupted record, sets `metrics["token_contract"]` to `"text"` and has `None` log probabilities.
+Every loss mask value is `0`, and the mask length equals the response token count.
+The other checks, turn-deadline grading, and the `GenerationLimitReached` behavior are unchanged.
 
 `RolloutData` contains the conversation, token IDs, loss mask, optional log probabilities, grade, and per-step records.
 `prompt_token_ids` contains the initial prompt. `response_token_ids` contains subsequent model responses and intervening observation tokens.
 The loss mask and log probabilities align with `response_token_ids`, which excludes the initial prompt.
-Model tokens have loss mask 1. Observation tokens have mask 0 and log probability 0.
+Under `EXACT`, model tokens have loss mask 1. Observation tokens have mask 0 and log probability 0.
 The caller applies its training and failure policies when it projects the record.
 A conversation reset discards earlier turns from the training record when another turn is available.
 The session supplies new public messages in `Transition.reset_conversation`.
