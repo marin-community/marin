@@ -7,7 +7,8 @@ A candidate is one expert turn: the conversation up to it in ``prompt``, the sou
 ``extra_info.nemotron_ultra.request_json``, and the expert action in ``record_json``. SWE and Terminal
 candidates share this layout and differ only in how a reply is graded. Requests mirror MarinSkyRL's
 chat path (``model_clients.DirectModelClient._chat_options``) so pass rates are measured on the
-distribution training samples from.
+distribution training samples from. OpenHands candidates reuse the row identity, order, and message
+cleanup here.
 """
 
 import json

@@ -18,23 +18,53 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
 from marin.experiment.cli import build_options
+from marin.experiment.data import hf_download
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.openhands_pivot import TOOLS_FILENAME, TRAJECTORIES_FILENAME, prepare_openhands_candidates
 from marin.rl.pass_rates import measure_pass_rates
 
 from experiments.datasets.nemotron_pivot import nemotron_pivot_datasets
 from experiments.post_training.pivotrl.runs import (
     RUNS,
     NemotronPivotCandidates,
+    OpenHandsCandidates,
     PivotRLRun,
 )
 from experiments.post_training.pivotrl.selection import head_rows, select_pivots
 
 
+def full_candidate_step(
+    candidates: NemotronPivotCandidates | OpenHandsCandidates,
+) -> ArtifactStep[Artifact]:
+    """The candidate set prepared from a pinned trajectory release."""
+    match candidates:
+        case NemotronPivotCandidates():
+            return nemotron_pivot_datasets()[candidates.dataset]
+        case OpenHandsCandidates():
+            raw = hf_download(
+                candidates.raw_name,
+                hf_id=candidates.hf_id,
+                revision=candidates.revision,
+                version=candidates.raw_version,
+                urls_glob=(TRAJECTORIES_FILENAME, TOOLS_FILENAME),
+            )
+            return apply(
+                user_owned_name(f"pivotrl/{candidates.dataset}/candidates"),
+                remote(prepare_openhands_candidates, resources=ResourceConfig.with_cpu(cpu=8, ram="64g")),
+                dataset_path=raw,
+                output_path=OUT,
+                trajectories=candidates.trajectories,
+                validation_trajectories=candidates.validation_trajectories,
+                seed=candidates.seed,
+                max_prompt_chars=candidates.max_prompt_chars,
+            )
+
+
 def candidate_step(
-    candidates: NemotronPivotCandidates,
+    candidates: NemotronPivotCandidates | OpenHandsCandidates,
 ) -> ArtifactStep[Artifact]:
     """The full candidate set, or its first ``limit`` rows."""
-    full = nemotron_pivot_datasets()[candidates.dataset]
+    full = full_candidate_step(candidates)
     if candidates.limit is None:
         return full
     return apply(
