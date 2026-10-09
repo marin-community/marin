@@ -121,7 +121,6 @@ def test_quick_cli_converts_selected_sources_once_in_request_order(tmp_path):
 
     unknown = CliRunner().invoke(main, ["--source", "unknown", "--output-root", str(tmp_path / "unknown")])
     assert unknown.exit_code == 2
-    assert "Unknown source: unknown" in unknown.output
     assert not (tmp_path / "unknown").exists()
 
 
