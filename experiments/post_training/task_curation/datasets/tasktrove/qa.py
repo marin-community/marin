@@ -140,8 +140,8 @@ def mcqa_option_labels(problem: str) -> tuple[str, ...]:
     return tuple(match.group(1) for match in matches[start:])
 
 
-def mcqa_question(instruction: str) -> tuple[str, int]:
-    """The question and option count, with source delivery wrappers removed."""
+def mcqa_question(instruction: str) -> tuple[str, tuple[str, ...]]:
+    """The question and its choice labels, with source delivery wrappers removed."""
     _, separator, problem = instruction.partition(MCQA_SEPARATOR)
     if not separator:
         raise ValueError("Unrecognized MCQA delivery wrapper")
@@ -154,15 +154,15 @@ def mcqa_question(instruction: str) -> tuple[str, int]:
     labels = mcqa_option_labels(problem)
     options = max((ord(label) - 64 for label in labels), default=0)
     letters = tuple(chr(65 + index) for index in range(options))
-    if not labels or set(labels) != set(letters):
-        raise ValueError("Options must be a contiguous labeled sequence beginning at A")
+    if not labels or len(set(labels)) != len(labels):
+        raise ValueError("Options must have distinct labels beginning at A")
     first, separator, rest = problem.partition("\n\n")
     if first.startswith(MCQA_FORMAT_PREFIX):
-        option_lists = {"/".join(letters)}
+        option_lists = {"/".join(labels)}
         listed = LISTED_OPTIONS.search(first)
         # The source's generated wrapper also captures premise labels, and misses choices
         # after escaped newlines. Recognize it while deriving choices from the question.
-        if listed is not None and set(listed.group(1).split("/")) in (set(letters), set(original_labels)):
+        if listed is not None and set(listed.group(1).split("/")) in (set(labels), set(original_labels)):
             option_lists.add(listed.group(1))
         valid_formats = {
             f"{MCQA_FORMAT_PREFIX}'Answer: {wrapper.format(listed_options)}' "
@@ -174,7 +174,8 @@ def mcqa_question(instruction: str) -> tuple[str, int]:
         if first not in valid_formats or not separator or not rest.strip():
             raise ValueError("Unsupported MCQA format wrapper")
         problem = rest
-    return f"{problem.strip()}\n\nReturn one option letter from A through {chr(64 + options)}.", options
+    choices = f"A through {chr(64 + options)}" if labels == letters else ", ".join(labels)
+    return f"{problem.strip()}\n\nReturn one option letter from {choices}.", labels
 
 
 def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
@@ -184,10 +185,13 @@ def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec
     if data.get("output_regex") not in MCQA_EXTRACTIONS:
         return unsupported("unsupported_answer_contract", "Unsupported source MCQA extraction regex")
     try:
-        question, options = mcqa_question(instruction)
+        question, labels = mcqa_question(instruction)
     except ValueError as error:
         return unsupported("unsupported_answer_contract", str(error))
-    task = mcq_task(row, prompt=question, answer=data.get("expected_answer"), options=options)
+    answer = data.get("expected_answer")
+    if not isinstance(answer, str) or answer.strip().upper() not in labels:
+        return source_defect("invalid_reference", f"The key must name a listed option: {answer!r}")
+    task = mcq_task(row, prompt=question, answer=answer, options=max(ord(label) - 64 for label in labels))
     if isinstance(task, ImportRejection):
         return task
     return rewritten_task(task, original=instruction, reason=MCQA_REWRITE_REASON)
@@ -262,7 +266,7 @@ def sources() -> list[RlDataSource]:
                 name="tasktrove-knowledge_mcqa",
                 source=tasktrove_source("laion__nemotron-gym-knowledge-mcqa-v2"),
                 convert=TaskTroveConverter("laion__nemotron-gym-knowledge-mcqa-v2", convert_knowledge_mcqa),
-                version="2",
+                version="3",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=KNOWLEDGE_MCQA_RUBRIC,

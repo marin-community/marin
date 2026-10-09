@@ -527,6 +527,22 @@ def test_mcqa_rejects_unknown_answer_extraction():
     assert rejection.reason == "unsupported_answer_contract"
 
 
+def test_mcqa_accepts_gaps_in_choice_labels_without_accepting_absent_references():
+    # The archived e8af3381bfc8 task omits I, but its reference E is a listed choice.
+    labels = "ABCDEFGHJ"
+    question = "Which option holds?\n" + "\n".join(f"{label}: Choice {label}" for label in labels)
+    row = mcqa_row(question=question, listed_options="/".join(labels), expected_answer="E")
+    task = task_of("tasktrove-knowledge_mcqa", row)
+    assert prompt_of(task).endswith("Return one option letter from A, B, C, D, E, F, G, H, J.")
+    assert isinstance(task.grader, VerifyitGrader)
+    assert verifyit_spec(task.grader) == McqSpec("E", options=10)
+    assert grade_reply(task, answer_reply(task, "E")) == 1.0
+    assert grade_reply(task, answer_reply(task, "I")) == 0.0
+    assert grade_reply(task, answer_reply(task, "J")) == 0.0
+    absent = mcqa_row(question=question, listed_options="/".join(labels), expected_answer="I")
+    assert rejection_of("tasktrove-knowledge_mcqa", absent).reason == "invalid_reference"
+
+
 @pytest.mark.parametrize("wrapper", ["{}", "\\boxed{{{}}}"])
 def test_mcqa_recovers_escaped_option_separators_without_decoding_question_escapes(wrapper):
     # The source wrapper lists only A when B-D are separated by literal backslash-n.
