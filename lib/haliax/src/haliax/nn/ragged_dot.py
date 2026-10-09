@@ -5,7 +5,6 @@
 import dataclasses
 import functools
 import logging
-import math
 import os
 import warnings
 from enum import StrEnum
@@ -35,14 +34,26 @@ try:
 except (ImportError, ModuleNotFoundError):
     pass
 
-# Two families of Pallas-Triton kernels, chosen per GPU family by _triton_kernel_family:
+# Guard jax-triton import; unavailable on TPU/CPU installs. On ROCm it needs jaxlib 0.11.1 or newer,
+# and importing it under jaxlib 0.11.0 raises ImportError.
+try:
+    import jax_triton as jt
+    import triton
+    import triton.language as tl
+except ImportError:
+    jt = None
+    triton = None
+    tl = None
+
+# Two families of Triton kernels, chosen per GPU family by _triton_kernel_family:
 #
-# - Group grid, adapted from openxla/tokamax@ad75b704:
+# - Group grid, in Pallas-Triton, adapted from openxla/tokamax@ad75b704:
 #   tokamax/_src/ops/ragged_dot/pallas_triton.py. In particular:
 #   _ragged_dot_kernel/_ragged_dot for the default layout,
 #   _ragged_contracting_dim_dot_kernel/_ragged_contracting_dim_dot for drhs, and
 #   PallasTritonRaggedDot._fwd for the VJP layout dispatch.
-# - Tile map: forward and dlhs launch one program per (group, row tile, column tile) from a
+# - Tile map, in Triton launched through jax-triton, since JAX 0.11 deprecates the Pallas-Triton
+#   backend: forward and dlhs launch one program per (group, row tile, column tile) from a
 #   device-side tile map, as megablox's make_group_metadata, instead of a full row grid per group;
 #   dlhs reads the weights transposed in place, and drhs uses one flat grid over all groups.
 Implementation: TypeAlias = Literal["auto", "megablox", "triton", "xla"]
@@ -350,10 +361,18 @@ class TritonBlockConfig:
         """Shrink each block to the problem; Triton's dot needs every tile dim to be at least 16."""
         return dataclasses.replace(
             self,
-            block_m=min(self.block_m, max(16, int(pl.next_power_of_2(m)))),
-            block_n=min(self.block_n, max(16, int(pl.next_power_of_2(n)))),
-            block_k=min(self.block_k, max(16, int(pl.next_power_of_2(k)))),
+            block_m=min(self.block_m, max(16, _next_power_of_2(m))),
+            block_n=min(self.block_n, max(16, _next_power_of_2(n))),
+            block_k=min(self.block_k, max(16, _next_power_of_2(k))),
         )
+
+
+def _next_power_of_2(value: int) -> int:
+    return 1 << (value - 1).bit_length()
+
+
+def _cdiv(a: int, b: int) -> int:
+    return -(-a // b)
 
 
 class _GpuFamily(StrEnum):
@@ -393,7 +412,7 @@ _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
             block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=4
         ),
         RaggedLayout.DRHS: TritonBlockConfig(
-            block_m=256, block_n=128, block_k=64, num_warps=4, num_stages=1, num_xcds=8, group_m=8
+            block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=1
         ),
     },
     _GpuFamily.NVIDIA_BLACKWELL: {
@@ -407,57 +426,6 @@ def _tile_map_block_config(layout: RaggedLayout, m: int, k: int, n: int) -> Trit
     """Device-dependent block config for one layout, fitted to ``m x k x n`` (rows x contraction x columns)."""
     config = _TILE_MAP_CONFIGS.get(_gpu_family(), {}).get(layout, _TILE_MAP_GENERIC_CONFIG)
     return config.fit(m, k, n)
-
-
-def _matmul_cost(m: int, k: int, n: int, *arrays: jax.ShapeDtypeStruct) -> "pl.CostEstimate":
-    return pl.CostEstimate(
-        flops=2 * m * k * n,
-        transcendentals=0,
-        bytes_accessed=sum(math.prod(a.shape) * jnp.dtype(a.dtype).itemsize for a in arrays),
-    )
-
-
-def _and_masks(*masks: jax.Array | None) -> jax.Array | None:
-    present = [mask for mask in masks if mask is not None]
-    if not present:
-        return None
-    return functools.reduce(jnp.logical_and, present)
-
-
-def _masked_load(ref, mask: jax.Array | None) -> jax.Array:
-    if mask is None:
-        return plgpu.load(ref)
-    return plgpu.load(ref, mask=mask, other=0.0)
-
-
-def _program_index(num_programs: int, num_xcds: int) -> tuple[jax.Array, jax.Array | bool]:
-    """This program's logical index and whether it has one.
-
-    The launch grid is padded to a multiple of ``num_xcds``. Launch index ``i`` runs on chiplet
-    ``i % num_xcds``; it is mapped to logical index ``(i % num_xcds) * per_xcd + i // num_xcds`` so
-    that each chiplet gets ``per_xcd`` consecutive logical programs.
-    """
-    pid = pl.program_id(0)
-    if num_xcds == 1:
-        return pid, True
-    per_xcd = pl.cdiv(num_programs, num_xcds)
-    pid = (pid % num_xcds) * per_xcd + pid // num_xcds
-    return pid, pid < num_programs
-
-
-def _tile_coordinates(pid: jax.Array, num_m: int, num_n: int, group_m: int) -> tuple[jax.Array, jax.Array]:
-    """Map a logical program index onto ``(tile_row, tile_col)`` of a ``num_m x num_n`` tile grid."""
-    if group_m == 1:
-        return pid // num_n, pid % num_n
-    per_band = group_m * num_n
-    first_row = (pid // per_band) * group_m
-    band_rows = jnp.minimum(num_m - first_row, group_m)
-    within = pid % per_band
-    return first_row + within % band_rows, within // band_rows
-
-
-def _launch_grid(num_programs: int, num_xcds: int) -> tuple[int]:
-    return (pl.cdiv(num_programs, num_xcds) * num_xcds,)
 
 
 def _row_tile_metadata(group_sizes: jax.Array, m: int, block_m: int) -> jax.Array:
@@ -480,7 +448,7 @@ def _row_tile_metadata(group_sizes: jax.Array, m: int, block_m: int) -> jax.Arra
     tiles_per_group = jnp.where(sizes > 0, (ends - 1) // block_m - first_tile + 1, 0)
     tile_ends = jnp.cumsum(tiles_per_group)
 
-    tile = jnp.arange(pl.cdiv(m, block_m) + num_groups, dtype=jnp.int32)
+    tile = jnp.arange(_cdiv(m, block_m) + num_groups, dtype=jnp.int32)
     # compare_all is one fused kernel; the default scan method launches several and cost ~0.1 ms per call.
     raw_group = jnp.searchsorted(tile_ends, tile, side="right", method="compare_all").astype(jnp.int32)
     group = jnp.minimum(raw_group, num_groups)
@@ -491,207 +459,262 @@ def _row_tile_metadata(group_sizes: jax.Array, m: int, block_m: int) -> jax.Arra
     return jnp.stack([group, row_tile, lo, hi]).astype(jnp.int32)
 
 
-def _tile_map_row_kernel(
-    a_ref,
-    b_ref,
-    tiles_ref,
-    out_ref,
-    *,
-    config: TritonBlockConfig,
-    m: int,
-    k: int,
-    n: int,
-    num_groups: int,
-    num_tiles: int,
-    transpose_rhs: bool,
-):
-    """One ``block_m x block_n`` output tile of a row-ragged grouped matmul (FWD and DLHS)."""
-    block_m, block_n, block_k = config.block_m, config.block_n, config.block_k
-    num_n_tiles = pl.cdiv(n, block_n)
-    pid, has_work = _program_index(num_tiles * num_n_tiles, config.num_xcds)
-    tile, n_tile = _tile_coordinates(pid, num_tiles, num_n_tiles, config.group_m)
-    tile = jnp.minimum(tile, num_tiles - 1)
-    start_n = n_tile * block_n
-    group = tiles_ref[0, tile]
-    start_m = tiles_ref[1, tile] * block_m
-    lo = tiles_ref[2, tile]
-    hi = jnp.where(has_work, tiles_ref[3, tile], lo)
+if triton is not None and tl is not None:
 
-    rows = start_m + jnp.arange(block_m)
-    row_span = pl.ds(start_m, block_m)
-    col_span = pl.ds(start_n, block_n)
-    row_mask = (rows < m)[:, None] if m % block_m else None
-    col_mask = start_n + jnp.arange(block_n) < n if n % block_n else None
-    store_mask = _and_masks(((rows >= lo) & (rows < hi))[:, None], None if col_mask is None else col_mask[None, :])
+    @triton.jit
+    def _program_index(num_programs: tl.constexpr, num_xcds: tl.constexpr):
+        """This program's logical index and whether it has one.
 
-    @pl.when((lo < hi) & (group == num_groups))
-    def _zero_fill():
-        zeros = jnp.zeros((block_m, block_n), out_ref.dtype)
-        plgpu.store(out_ref.at[row_span, col_span], zeros, mask=store_mask)
+        The launch grid is padded to a multiple of ``num_xcds``. Launch index ``i`` runs on chiplet
+        ``i % num_xcds``; it is mapped to logical index ``(i % num_xcds) * per_xcd + i // num_xcds`` so
+        that each chiplet gets ``per_xcd`` consecutive logical programs.
+        """
+        pid = tl.program_id(0)
+        if num_xcds > 1:
+            per_xcd = (num_programs + num_xcds - 1) // num_xcds
+            pid = (pid % num_xcds) * per_xcd + pid // num_xcds
+        return pid, pid < num_programs
 
-    @pl.when((lo < hi) & (group < num_groups))
-    def _compute():
-        def body(i, acc):
-            start_k = i * block_k
-            k_span = pl.ds(start_k, block_k)
-            k_mask = start_k + jnp.arange(block_k) < k if k % block_k else None
-            a = _masked_load(
-                a_ref.at[row_span, k_span], _and_masks(row_mask, None if k_mask is None else k_mask[None, :])
-            )
-            if transpose_rhs:
-                b_mask = _and_masks(
-                    None if col_mask is None else col_mask[:, None], None if k_mask is None else k_mask[None, :]
+    @triton.jit
+    def _tile_coordinates(pid, num_m: tl.constexpr, num_n: tl.constexpr, group_m: tl.constexpr):
+        """Map a logical program index onto ``(tile_row, tile_col)`` of a ``num_m x num_n`` tile grid."""
+        if group_m == 1:
+            tile_row = pid // num_n
+            tile_col = pid % num_n
+        else:
+            per_band = group_m * num_n
+            first_row = (pid // per_band) * group_m
+            band_rows = tl.minimum(num_m - first_row, group_m)
+            within = pid % per_band
+            tile_row = first_row + within % band_rows
+            tile_col = within // band_rows
+        return tile_row, tile_col
+
+    @triton.jit
+    def _load_tile(ptrs, row_ok, col_ok, mask_rows: tl.constexpr, mask_cols: tl.constexpr):
+        """Load a 2-D tile, reading zeros where the masked rows or columns are out of range."""
+        if mask_rows:
+            if mask_cols:
+                tile = tl.load(ptrs, mask=row_ok[:, None] & col_ok[None, :], other=0.0)
+            else:
+                tile = tl.load(ptrs, mask=row_ok[:, None], other=0.0)
+        elif mask_cols:
+            tile = tl.load(ptrs, mask=col_ok[None, :], other=0.0)
+        else:
+            tile = tl.load(ptrs)
+        return tile
+
+    @triton.jit
+    def _store_tile(ptrs, value, row_ok, col_ok, mask_rows: tl.constexpr, mask_cols: tl.constexpr):
+        if mask_rows:
+            if mask_cols:
+                tl.store(ptrs, value, mask=row_ok[:, None] & col_ok[None, :])
+            else:
+                tl.store(ptrs, value, mask=row_ok[:, None])
+        elif mask_cols:
+            tl.store(ptrs, value, mask=col_ok[None, :])
+        else:
+            tl.store(ptrs, value)
+
+    @triton.jit
+    def _tile_map_row_kernel(
+        a_ptr,  # [m, k]
+        b_ptr,  # FWD: [num_groups, k, n]; DLHS: [num_groups, n, k]
+        tiles_ptr,  # int32[4, num_tiles] from _row_tile_metadata
+        out_ptr,  # [m, n]
+        m: tl.constexpr,
+        k: tl.constexpr,
+        n: tl.constexpr,
+        num_groups: tl.constexpr,
+        num_tiles: tl.constexpr,
+        transpose_rhs: tl.constexpr,
+        block_m: tl.constexpr,
+        block_n: tl.constexpr,
+        block_k: tl.constexpr,
+        num_xcds: tl.constexpr,
+        group_m: tl.constexpr,
+    ):
+        """One ``block_m x block_n`` output tile of a row-ragged grouped matmul (FWD and DLHS)."""
+        num_n_tiles = (n + block_n - 1) // block_n
+        pid, has_work = _program_index(num_tiles * num_n_tiles, num_xcds)
+        tile, n_tile = _tile_coordinates(pid, num_tiles, num_n_tiles, group_m)
+        tile = tl.minimum(tile, num_tiles - 1)
+        group = tl.load(tiles_ptr + tile)
+        start_m = tl.load(tiles_ptr + num_tiles + tile) * block_m
+        lo = tl.load(tiles_ptr + 2 * num_tiles + tile)
+        hi = tl.where(has_work, tl.load(tiles_ptr + 3 * num_tiles + tile), lo)
+
+        rows = tl.arange(0, block_m)
+        cols = n_tile * block_n + tl.arange(0, block_n)
+        in_group = (start_m + rows >= lo) & (start_m + rows < hi)
+        col_ok = cols < n
+        # Offsets of a tile's first row are int64, so arrays past 2**31 elements stay addressable.
+        out_ptrs = out_ptr + start_m.to(tl.int64) * n + rows[:, None] * n + cols[None, :]
+
+        if (lo < hi) & (group == num_groups):
+            zeros = tl.zeros((block_m, block_n), out_ptr.dtype.element_ty)
+            _store_tile(out_ptrs, zeros, in_group, col_ok, True, n % block_n != 0)
+
+        if (lo < hi) & (group < num_groups):
+            a_rows = a_ptr + start_m.to(tl.int64) * k
+            b_group = b_ptr + group.to(tl.int64) * (k * n)
+            row_ok = start_m + rows < m
+            acc = tl.zeros((block_m, block_n), tl.float32)
+            for i in range((k + block_k - 1) // block_k):
+                ks = i * block_k + tl.arange(0, block_k)
+                k_ok = ks < k
+                a = _load_tile(
+                    a_rows + rows[:, None] * k + ks[None, :], row_ok, k_ok, m % block_m != 0, k % block_k != 0
                 )
-                b = _masked_load(b_ref.at[group, col_span, k_span], b_mask)
-                return acc + pl.dot(a, b, trans_b=True)
-            b_mask = _and_masks(
-                None if k_mask is None else k_mask[:, None], None if col_mask is None else col_mask[None, :]
-            )
-            b = _masked_load(b_ref.at[group, k_span, col_span], b_mask)
-            return acc + pl.dot(a, b)
+                if transpose_rhs:
+                    b = _load_tile(
+                        b_group + cols[:, None] * k + ks[None, :], col_ok, k_ok, n % block_n != 0, k % block_k != 0
+                    )
+                    acc = tl.dot(a, tl.trans(b), acc)
+                else:
+                    b = _load_tile(
+                        b_group + ks[:, None] * n + cols[None, :], k_ok, col_ok, k % block_k != 0, n % block_n != 0
+                    )
+                    acc = tl.dot(a, b, acc)
+            _store_tile(out_ptrs, acc.to(out_ptr.dtype.element_ty), in_group, col_ok, True, n % block_n != 0)
 
-        acc = jax.lax.fori_loop(0, pl.cdiv(k, block_k), body, jnp.zeros((block_m, block_n), jnp.float32))
-        plgpu.store(out_ref.at[row_span, col_span], acc.astype(out_ref.dtype), mask=store_mask)
+    @triton.jit
+    def _tile_map_contracting_kernel(
+        a_ptr,  # [rows, m]
+        b_ptr,  # [rows, n]
+        bounds_ptr,  # int32[num_groups + 1]: each group's first row, then the total
+        out_ptr,  # [num_groups, m, n]
+        m: tl.constexpr,
+        n: tl.constexpr,
+        num_groups: tl.constexpr,
+        block_m: tl.constexpr,
+        block_n: tl.constexpr,
+        block_k: tl.constexpr,
+        num_xcds: tl.constexpr,
+        group_m: tl.constexpr,
+    ):
+        """One ``block_m x block_n`` tile of one group's ``a[lo:hi].T @ b[lo:hi]`` (DRHS)."""
+        num_m_tiles = (m + block_m - 1) // block_m
+        num_n_tiles = (n + block_n - 1) // block_n
+        tiles_per_group = num_m_tiles * num_n_tiles
+        pid, has_work = _program_index(num_groups * tiles_per_group, num_xcds)
+        pid = tl.minimum(pid, num_groups * tiles_per_group - 1)
+        group = pid // tiles_per_group
+        m_tile, n_tile = _tile_coordinates(pid % tiles_per_group, num_m_tiles, num_n_tiles, group_m)
+        ms = m_tile * block_m + tl.arange(0, block_m)
+        ns = n_tile * block_n + tl.arange(0, block_n)
+        m_ok = ms < m
+        n_ok = ns < n
+        lo = tl.load(bounds_ptr + group)
+        hi = tl.where(has_work, tl.load(bounds_ptr + group + 1), lo)
+        rs = tl.arange(0, block_k)
+        # The a tile is read transposed, as [block_m, block_k]. On MI350X that ran 15% faster than loading
+        # [block_k, block_m] and transposing it with tl.trans.
+        a_offsets = ms[:, None] + rs[None, :] * m
+        b_offsets = rs[:, None] * n + ns[None, :]
+
+        # Every row block but the last is full. An empty group runs one fully masked block and stores zeros.
+        num_r_blocks = tl.maximum(tl.cdiv(hi - lo, block_k), 1)
+        acc = tl.zeros((block_m, block_n), tl.float32)
+        for i in range(num_r_blocks - 1):
+            # Offsets of a block's first row are int64, so arrays past 2**31 elements stay addressable.
+            start_r = (lo + i * block_k).to(tl.int64)
+            a = _load_tile(a_ptr + start_r * m + a_offsets, m_ok, rs, m % block_m != 0, False)
+            b = _load_tile(b_ptr + start_r * n + b_offsets, rs, n_ok, False, n % block_n != 0)
+            acc = tl.dot(a, b, acc)
+        start_r = lo + (num_r_blocks - 1) * block_k
+        r_ok = start_r + rs < hi
+        start_r = start_r.to(tl.int64)
+        a = _load_tile(a_ptr + start_r * m + a_offsets, m_ok, r_ok, m % block_m != 0, True)
+        b = _load_tile(b_ptr + start_r * n + b_offsets, r_ok, n_ok, True, n % block_n != 0)
+        acc = tl.dot(a, b, acc)
+
+        if has_work:
+            out_ptrs = out_ptr + group.to(tl.int64) * (m * n) + ms[:, None] * n + ns[None, :]
+            _store_tile(out_ptrs, acc.to(out_ptr.dtype.element_ty), m_ok, n_ok, m % block_m != 0, n % block_n != 0)
+
+else:
+    _tile_map_row_kernel = None
+    _tile_map_contracting_kernel = None
 
 
-@functools.lru_cache(maxsize=None)
-def _tile_map_row_matmul(
-    m: int, k: int, n: int, num_groups: int, dtype, layout: RaggedLayout, config: TritonBlockConfig
-) -> Callable[..., jax.Array]:
-    """Build the FWD or DLHS kernel for one static shape.
-
-    ``pl.pallas_call`` returns a fresh ``jax.jit`` wrapper per call and JAX's tracing cache is
-    keyed on function identity, so building it inline re-traces the kernel at every call site.
-    The grid is flat: ``cdiv(m, block_m) + num_groups`` row tiles, each split into column tiles.
-    """
-    num_tiles = pl.cdiv(m, config.block_m) + num_groups
-    rhs_shape = (num_groups, k, n) if layout == RaggedLayout.FWD else (num_groups, n, k)
-    return pl.pallas_call(
-        functools.partial(
-            _tile_map_row_kernel,
-            config=config,
-            m=m,
-            k=k,
-            n=n,
-            num_groups=num_groups,
-            num_tiles=num_tiles,
-            transpose_rhs=layout == RaggedLayout.DLHS,
-        ),
-        out_shape=jax.ShapeDtypeStruct((m, n), dtype),
-        in_specs=[pl.no_block_spec, pl.no_block_spec, pl.no_block_spec],
-        out_specs=pl.no_block_spec,
-        grid=_launch_grid(num_tiles * pl.cdiv(n, config.block_n), config.num_xcds),
-        compiler_params=plgpu.CompilerParams(num_warps=config.num_warps, num_stages=config.num_stages),
-        cost_estimate=_matmul_cost(
-            m,
-            k,
-            n,
-            jax.ShapeDtypeStruct((m, k), dtype),
-            jax.ShapeDtypeStruct(rhs_shape, dtype),
-            jax.ShapeDtypeStruct((m, n), dtype),
-        ),
-        interpret=jax.default_backend() == "cpu",
-    )
-
-
-def _tile_map_contracting_kernel(
-    a_ref,
-    b_ref,
-    bounds_ref,
-    out_ref,
-    *,
+def _launch_tile_map_kernel(
+    kernel,
+    *args: jax.Array,
+    out_shape: jax.ShapeDtypeStruct,
+    num_programs: int,
     config: TritonBlockConfig,
-    m: int,
-    n: int,
-    num_groups: int,
-):
-    """One ``block_m x block_n`` tile of one group's ``a[lo:hi].T @ b[lo:hi]`` (DRHS)."""
-    block_m, block_n, block_k = config.block_m, config.block_n, config.block_k
-    num_m_tiles = pl.cdiv(m, block_m)
-    num_n_tiles = pl.cdiv(n, block_n)
-    pid, has_work = _program_index(num_groups * num_m_tiles * num_n_tiles, config.num_xcds)
-    pid = jnp.minimum(pid, num_groups * num_m_tiles * num_n_tiles - 1)
-    group = pid // (num_m_tiles * num_n_tiles)
-    m_tile, n_tile = _tile_coordinates(pid % (num_m_tiles * num_n_tiles), num_m_tiles, num_n_tiles, config.group_m)
-    start_m = m_tile * block_m
-    start_n = n_tile * block_n
-    lo = bounds_ref[group]
-    hi = jnp.where(has_work, bounds_ref[group + 1], lo)
-
-    m_span = pl.ds(start_m, block_m)
-    n_span = pl.ds(start_n, block_n)
-    m_mask = start_m + jnp.arange(block_m) < m if m % block_m else None
-    n_mask = start_n + jnp.arange(block_n) < n if n % block_n else None
-
-    def body(i, acc, mask_rows=False):
-        start_r = lo + i * block_k
-        r_span = pl.ds(start_r, block_k)
-        r_mask = (start_r + jnp.arange(block_k) < hi)[:, None] if mask_rows else None
-        a = _masked_load(a_ref.at[r_span, m_span], _and_masks(r_mask, None if m_mask is None else m_mask[None, :]))
-        b = _masked_load(b_ref.at[r_span, n_span], _and_masks(r_mask, None if n_mask is None else n_mask[None, :]))
-        return acc + pl.dot(a, b, trans_a=True)
-
-    # Every row block but the last is full. An empty group runs one fully masked block and stores zeros.
-    num_r_blocks = jnp.maximum(pl.cdiv(hi - lo, block_k), 1)
-    acc = jax.lax.fori_loop(0, num_r_blocks - 1, body, jnp.zeros((block_m, block_n), jnp.float32))
-    acc = body(num_r_blocks - 1, acc, mask_rows=True)
-    store_mask = _and_masks(None if m_mask is None else m_mask[:, None], None if n_mask is None else n_mask[None, :])
-
-    @pl.when(has_work)
-    def _store():
-        plgpu.store(out_ref.at[group, m_span, n_span], acc.astype(out_ref.dtype), mask=store_mask)
-
-
-@functools.lru_cache(maxsize=None)
-def _tile_map_contracting_matmul(
-    rows: int, m: int, n: int, num_groups: int, dtype, config: TritonBlockConfig
-) -> Callable[..., jax.Array]:
-    """Build the DRHS kernel for one static shape: one program per (group, output tile)."""
-    return pl.pallas_call(
-        functools.partial(_tile_map_contracting_kernel, config=config, m=m, n=n, num_groups=num_groups),
-        out_shape=jax.ShapeDtypeStruct((num_groups, m, n), dtype),
-        in_specs=[pl.no_block_spec, pl.no_block_spec, pl.no_block_spec],
-        out_specs=pl.no_block_spec,
-        grid=_launch_grid(num_groups * pl.cdiv(m, config.block_m) * pl.cdiv(n, config.block_n), config.num_xcds),
-        compiler_params=plgpu.CompilerParams(num_warps=config.num_warps, num_stages=config.num_stages),
-        cost_estimate=_matmul_cost(
-            m,
-            rows,
-            n,
-            jax.ShapeDtypeStruct((rows, m), dtype),
-            jax.ShapeDtypeStruct((rows, n), dtype),
-            jax.ShapeDtypeStruct((num_groups, m, n), dtype),
-        ),
-        interpret=jax.default_backend() == "cpu",
+    **metaparams: int | bool,
+) -> jax.Array:
+    """Launch ``num_programs`` output tiles, padding the grid to a multiple of ``config.num_xcds``."""
+    return jt.triton_call(
+        *args,
+        kernel=kernel,
+        out_shape=out_shape,
+        grid=(_cdiv(num_programs, config.num_xcds) * config.num_xcds,),
+        num_warps=config.num_warps,
+        num_stages=config.num_stages,
+        block_m=config.block_m,
+        block_n=config.block_n,
+        block_k=config.block_k,
+        num_xcds=config.num_xcds,
+        group_m=config.group_m,
+        **metaparams,
     )
 
 
-def _tile_map_pallas_call(
+def _tile_map_triton_call(
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
     layout: RaggedLayout,
     config: TritonBlockConfig | None = None,
 ) -> jax.Array:
-    """Tile-map kernels. ``config`` overrides the device-dependent block config; benchmarks use it to sweep tiles."""
+    """Tile-map kernels. ``config``, when given, replaces the device-dependent block config."""
     if layout == RaggedLayout.DRHS:
         rows, m = lhs.shape
         n = rhs.shape[1]
         num_groups = group_sizes.shape[0]
         config = (config or _tile_map_block_config(layout, m, rows, n)).fit(m, rows, n)
         bounds = jnp.cumulative_sum(group_sizes.astype(jnp.int32), include_initial=True)
-        return _tile_map_contracting_matmul(rows, m, n, num_groups, lhs.dtype, config)(lhs, rhs, bounds)
+        return _launch_tile_map_kernel(
+            _tile_map_contracting_kernel,
+            lhs,
+            rhs,
+            bounds,
+            out_shape=jax.ShapeDtypeStruct((num_groups, m, n), lhs.dtype),
+            num_programs=num_groups * _cdiv(m, config.block_m) * _cdiv(n, config.block_n),
+            config=config,
+            m=m,
+            n=n,
+            num_groups=num_groups,
+        )
 
     m, k = lhs.shape
     num_groups = rhs.shape[0]
     n = rhs.shape[2] if layout == RaggedLayout.FWD else rhs.shape[1]
     config = (config or _tile_map_block_config(layout, m, k, n)).fit(m, k, n)
     tiles = _row_tile_metadata(group_sizes, m, config.block_m)
-    return _tile_map_row_matmul(m, k, n, num_groups, lhs.dtype, layout, config)(lhs, rhs, tiles)
+    num_tiles = tiles.shape[1]
+    return _launch_tile_map_kernel(
+        _tile_map_row_kernel,
+        lhs,
+        rhs,
+        tiles,
+        out_shape=jax.ShapeDtypeStruct((m, n), lhs.dtype),
+        num_programs=num_tiles * _cdiv(n, config.block_n),
+        config=config,
+        m=m,
+        k=k,
+        n=n,
+        num_groups=num_groups,
+        num_tiles=num_tiles,
+        transpose_rhs=layout == RaggedLayout.DLHS,
+    )
 
 
 class TritonKernelFamily(StrEnum):
-    """The two Pallas-Triton kernel families behind ``implementation="triton"``."""
+    """The two Triton kernel families behind ``implementation="triton"``."""
 
     GROUP_GRID = "group_grid"
     TILE_MAP = "tile_map"
@@ -699,14 +722,15 @@ class TritonKernelFamily(StrEnum):
 
 _TRITON_KERNELS: dict[TritonKernelFamily, Callable[[jax.Array, jax.Array, jax.Array, RaggedLayout], jax.Array]] = {
     TritonKernelFamily.GROUP_GRID: _group_grid_pallas_call,
-    TritonKernelFamily.TILE_MAP: _tile_map_pallas_call,
+    TritonKernelFamily.TILE_MAP: _tile_map_triton_call,
 }
-# GPU families that run the tile-map kernels; every other GPU, NVIDIA included, runs the group-grid kernels.
+# GPU families that run the tile-map kernels when jax-triton is installed; every other GPU, NVIDIA included,
+# runs the group-grid kernels.
 _TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT})
 
 
 def _triton_kernel_family() -> TritonKernelFamily:
-    if _gpu_family() in _TILE_MAP_GPU_FAMILIES:
+    if jt is not None and _gpu_family() in _TILE_MAP_GPU_FAMILIES:
         return TritonKernelFamily.TILE_MAP
     return TritonKernelFamily.GROUP_GRID
 
@@ -740,13 +764,13 @@ _LAYOUT_DIM_NUMS: dict[RaggedLayout, jax.lax.RaggedDotDimensionNumbers] = {
 }
 
 
-def _triton_pallas_call(
+def _triton_kernel_call(
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
     ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
 ) -> jax.Array:
-    """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts, with this GPU's kernel family."""
+    """Raw Triton grouped matmul for supported ragged-dot layouts, with this GPU's kernel family."""
     for layout, dim_nums in _LAYOUT_DIM_NUMS.items():
         if ragged_dot_dimension_numbers == dim_nums:
             return _TRITON_KERNELS[_triton_kernel_family()](lhs, rhs, group_sizes, layout)
@@ -755,19 +779,20 @@ def _triton_pallas_call(
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=())
 def _ragged_dot_triton_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
-    """Pallas-Triton grouped matmul with explicit backward pass.
+    """Triton grouped matmul with explicit backward pass.
 
-    Uses custom_vjp so JAX never tries to autodiff directly through pallas_call.
-    Direct autodiff still fails for this kernel on JAX 0.9.2, while the explicit
-    VJP can use the Triton kernels for each ragged-dot contraction layout.
+    Uses custom_vjp so JAX never tries to autodiff directly through pallas_call or
+    triton_call. Direct autodiff fails for the Pallas kernels on JAX 0.9.2, and
+    triton_call has no differentiation rule, while the explicit VJP can use the
+    Triton kernels for each ragged-dot contraction layout.
     """
     if not _has_pallas_triton:
         raise NotImplementedError("Pallas Triton backend is not available")
-    return _triton_pallas_call(lhs, rhs, group_sizes)
+    return _triton_kernel_call(lhs, rhs, group_sizes)
 
 
 def _ragged_dot_triton_fwd(lhs, rhs, group_sizes):
-    out = _triton_pallas_call(lhs, rhs, group_sizes)
+    out = _triton_kernel_call(lhs, rhs, group_sizes)
     return out, (lhs, rhs, group_sizes)
 
 
@@ -775,10 +800,10 @@ def _ragged_dot_triton_bwd(residuals, dout):
     lhs, rhs, group_sizes = residuals
 
     # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T
-    dlhs = _triton_pallas_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
+    dlhs = _triton_kernel_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
 
     # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N]
-    drhs = _triton_pallas_call(lhs, dout, group_sizes, _DRHS_DIM_NUMS)
+    drhs = _triton_kernel_call(lhs, dout, group_sizes, _DRHS_DIM_NUMS)
 
     return dlhs, drhs, None  # None for group_sizes (integer, no gradient)
 
