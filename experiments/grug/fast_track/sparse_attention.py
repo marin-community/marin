@@ -894,6 +894,7 @@ def parallax_attention(q, k, v, r, rel_bias, segment_ids):
 
     def compute(q, k, v, r, rel_bias, segment_ids):
         b, seq, h, d = q.shape
+        out_dtype = v.dtype
         k = jnp.broadcast_to(k, (b, seq, h, k.shape[-1])).astype(jnp.float32)
         v = jnp.broadcast_to(v, (b, seq, h, v.shape[-1])).astype(jnp.float32)
         starts = _document_starts(segment_ids)
@@ -925,7 +926,7 @@ def parallax_attention(q, k, v, r, rel_bias, segment_ids):
             return o1 * (1.0 + mean_s) - o2
 
         out = jax.lax.map(one, jnp.arange(seq // block))  # [N, B, Q, H, E]
-        return jnp.moveaxis(out, 0, 1).reshape(b, seq, h, -1).astype(v.dtype)
+        return jnp.moveaxis(out, 0, 1).reshape(b, seq, h, -1).astype(out_dtype)
 
     if out_sharding is None:
         return compute(q, k, v, r, rel_bias, segment_ids)
