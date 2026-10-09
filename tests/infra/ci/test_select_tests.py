@@ -3,12 +3,14 @@
 
 """Tests for the import-driven test selector (infra/ci/select_tests.py)."""
 
+import re
 import subprocess
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
 
 from infra.ci.select_tests import (
     SCOPES,
@@ -269,7 +271,18 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
             ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
         ),
         ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "taskforge-unit"]),
-        ("lib/shellbox/src/shellbox/machine.py", ["rolloutengine-unit", "taskforge-unit"]),
+        (
+            "lib/shellbox/src/shellbox/machine.py",
+            ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        (
+            "lib/shellbox/tests/test_docker_machine.py",
+            ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        (
+            "lib/shellbox/pyproject.toml",
+            ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
         (
             "lib/verifyit/src/verifyit/grading.py",
             ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
@@ -294,11 +307,32 @@ def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Pat
     assert "taskforge-unit" in selection.suites
 
 
+@pytest.mark.parametrize(
+    "shellbox_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
+)
+def test_required_unit_check_propagates_shellbox_result(shellbox_result: str, expected_exit: int) -> None:
+    workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
+    aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]
+    results = dict.fromkeys(aggregate["needs"], "success")
+    if "shellbox" in results:
+        results["shellbox"] = shellbox_result
+    script = re.sub(
+        r"\$\{\{ needs\.(\w+)\.result \}\}",
+        lambda match: results.get(match.group(1), ""),
+        aggregate["steps"][0]["run"],
+    )
+
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+
+    assert result.returncode == expected_exit
+
+
 @pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
-def test_shared_dependency_change_selects_taskcompendium_harbor_suite(tmp_path: Path, changed_file: str) -> None:
+def test_shared_dependency_change_selects_taskcompendium_and_shellbox_suites(tmp_path: Path, changed_file: str) -> None:
     selection = select_changed_tests([changed_file], tmp_path)
 
     assert "taskcompendium-unit" in selection.suites
+    assert "shellbox-unit" in selection.suites
 
 
 def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Path) -> None:
@@ -478,6 +512,7 @@ def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
     selection = select_all_tests(tmp_path)
 
     assert selection.reason == "run-all-tests"
+    assert "shellbox-unit" in selection.suites
     assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
 
 

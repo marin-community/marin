@@ -329,6 +329,24 @@ jobs:
                 [ "\$status" -eq 5 ] && exit 0; \
                 exit "\$status" )"
 
+  shellbox:
+    name: shellbox-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'shellbox-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      # TaskCompendium supplies the locked Shellbox base package. Backend extras
+      # remain optional; tests skip the SDK-dependent adapters when absent.
+      - name: Test Shellbox
+        run: uv run --package taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
+
   taskcompendium:
     name: taskcompendium-unit
     needs: select
@@ -366,13 +384,15 @@ jobs:
         run: >-
           uv run --project lib/rolloutengine --frozen --group test pytest
           -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
-          lib/shellbox/tests/test_docker_machine.py -q
+          lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py -q
 
-      - name: Test Docker command interruption and artifact permissions
+      - name: Test Docker and Daytona guest execution
         run: |
           docker pull busybox:1.36
+          docker pull ubuntu:24.04
           uv run --project lib/rolloutengine --frozen --group test pytest \
             -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py \
+            lib/shellbox/tests/test_daytona_machine.py \
             lib/rolloutengine/tests/test_rollout.py -m docker -q
 
       - name: Type-check RolloutEngine
@@ -457,7 +477,7 @@ jobs:
 
   unit_tests:
     name: unit-tests
-    needs: [select, unit, levanter_torch, levanter_tpu, taskcompendium, rolloutengine, taskforge, iris_e2e_smoke]
+    needs: [select, unit, levanter_torch, levanter_tpu, shellbox, taskcompendium, rolloutengine, taskforge, iris_e2e_smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -467,6 +487,7 @@ jobs:
             "${{ needs.unit.result }}" \
             "${{ needs.levanter_torch.result }}" \
             "${{ needs.levanter_tpu.result }}" \
+            "${{ needs.shellbox.result }}" \
             "${{ needs.taskcompendium.result }}" \
             "${{ needs.rolloutengine.result }}" \
             "${{ needs.taskforge.result }}" \

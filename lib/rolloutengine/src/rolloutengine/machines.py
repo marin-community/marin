@@ -145,6 +145,12 @@ async def _prepare_machine(
                 raise TimeoutError("Environment setup command timed out")
             if result.exit_code != 0:
                 raise RuntimeError(f"Environment setup command failed: {result.reason}, exit={result.exit_code}")
+        if runtime.user is not None:
+            result = await machine.run(Command(("true",), timeout=runtime.startup_timeout))
+            if result.reason == ExitReason.TIMED_OUT:
+                raise TimeoutError("Execution user startup probe timed out")
+            if result.exit_code != 0:
+                raise RuntimeError(f"Execution user startup probe failed: {result.reason}, exit={result.exit_code}")
     return machine
 
 
