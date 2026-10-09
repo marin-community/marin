@@ -3,6 +3,7 @@
 
 import io
 import json
+import shlex
 import tarfile
 from dataclasses import asdict
 from pathlib import Path
@@ -12,7 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
-from taskcompendium.models import NoGrader
+from taskcompendium.models import NoGrader, VerifyitGrader
 from taskcompendium.pipeline.models import NormalizedTask
 
 from experiments.post_training.task_curation.compare_harbor import compare_harbor
@@ -66,6 +67,13 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     assert config.verifier.environment.docker_image == GRADER_IMAGE
     assert not any(path.startswith("solution/") for path in files)
     assert not any(path.startswith(("environment/files/tests/", "environment/files/solution/")) for path in files)
+    if isinstance(converted.task.grader, VerifyitGrader):
+        # Harbor bypasses test.sh when this reserved filename exists. The wrapper
+        # must run to load our bundled verifyit and install public grader inputs.
+        assert "tests/verifier.toml" not in files
+        command = shlex.split(files["tests/test.sh"].decode().splitlines()[-1])
+        assert command[:2] == ["exec", "python3"]
+        assert command[-1].removeprefix("/") in files
     for resource in converted.task.resources.verifier:
         assert "tests/" + resource.path in files
     if converted.task.answer_type == "text":
