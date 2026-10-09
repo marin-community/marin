@@ -1,43 +1,152 @@
-# Task curation experiments
+# RL data curation
 
-This experiment turns pinned dataset sources into audited tasks and filtered
-Parquet outputs. It chooses sources, download revisions, inference clients and
-execution resources; reusable conversion policies live in
-[TaskCompendium](../../../lib/taskcompendium/src/taskcompendium/pipeline/README.md).
-GLM is the model used for rubric-based quality review. Filtering writes a new
-artifact with a complete audit view containing final decisions and a separate
-accepted-task view.
+This experiment turns pinned RL datasets into TaskSpec parquet files. Every
+dataset is declared once, in [datasets/](datasets/README.md), and listed in the
+catalog [sources.py](sources.py):
 
-```mermaid
-flowchart TD
-    A[Download pinned source files] --> B[Read selected component and limit records]
-    B --> C[Normalize, check and review with GLM]
-    C --> D[Audit Parquet: every selected record and its evidence]
-    D --> E[Filter: final keep or reject]
-    E --> F[Merge sources into canonical output views]
-    E --> G[Optional rewrite of selected tasks]
-    G --> H[Check, review and filter candidates]
-    H --> F
+```python
+from experiments.post_training.task_curation.sources import all_pipelines
+
+pipelines = all_pipelines()  # name -> RlDataPipeline
 ```
 
-Start with the graph in [pipeline.py](pipeline.py). Source bindings pair a
-library `TaskPipeline` (normalization, checks and rubric) with pinned inputs and
-intended use in a `DatasetRecipe`. [nemotron.py](nemotron.py) demonstrates several
-sources sharing family policies; [direct_sources.py](direct_sources.py) covers
-individual datasets. Group sources that share a conversion contract.
+## Declaring a dataset
 
-For a new source, inspect its schema, reuse or extend a family policy, and add its
-binding. Exercise it through the same graph with `--limit 10`; inspect both
-accepted and rejected audit rows before increasing the run size. Downloads happen
-before the limit, which uses `reshard(1).take_per_shard(N).reshard(64)`.
+A declaration is an `RlDataPipeline` ([pipeline.py](pipeline.py)):
 
-From the repository root, print a ten-record plan:
+```python
+RlDataPipeline(
+    name="math500",                      # catalog key and artifact name
+    source=HfSource("HuggingFaceH4/MATH-500", "6e4ed1a2...", ("test.jsonl",), SourceFormat.JSONL),
+    convert=convert_math500,             # (RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection
+    version="1",                         # bump when conversion changes outside the hashed files
+    environment=ShellSim(),              # or Environment(image="repo@sha256:...") for agentic tasks
+    intended_use=IntendedUse.EVAL,
+    rubric=MATH500_RUBRIC,               # optional model review; one criterion per paragraph
+    controls=MATH_CONTROLS,              # optional grader verification
+    atlas_id="MarinSkyRL:math500",       # join key into atlas_catalog.json
+    grader=None,                         # GRADER_PACKAGES, or another Environment, when a grade script needs packages
+    ships=(),                            # directories whose files the converter packages into tasks
+    resource_budget_bytes=1_000_000,     # tasks carrying more resource bytes are deferred
+)
+```
+
+- **Source.** `HfSource(repo, revision, files, format)` or
+  `UrlSource(url, sha256, filename, format)`. `select` drops rows, `decode`
+  rewrites a row before conversion (for example, unpacking a TaskTrove archive),
+  and `read` replaces the format reader. `parts` replaces it for a file that
+  several workers read in parts, each yielding its rows with their indices in
+  the whole file. Parts report the file's row count, so a sample produces only
+  its sampled rows; the Reasoning Gym generator runs this way. `inputs` names
+  auxiliary pinned sources. Each callable receives a `ConversionContext`, whose `inputs` holds
+  the staged auxiliary sources by name.
+- **Converter.** A module-level function `convert(row, context)` that builds the
+  task and fixes its grader. `context.grader_environment` is the grader
+  environment when the declaration sets `grader`, else `None`;
+  `required_grader_environment(context)` returns it or raises. Shared
+  techniques live in
+  [`taskcompendium.convert`](../../../lib/taskcompendium/src/taskcompendium/convert/):
+  `math_answer_task`, `numeric_answer_task`, `mcq_task`, `exact_answer_task`,
+  `ifeval_task` and `json_schema_task` build conversation tasks graded in
+  process by verifyit; `script_grader` packages a grade script with the row's
+  `config.json` and the vendored scorer files it imports; the TaskTrove
+  helpers unpack archives.
+- **Graders.** A task's grader is one of:
+  - a `VerifyitGrader` with no environment, graded in process;
+  - a `ScriptGrader` or `VerifyitGrader` with
+    `environment=required_grader_environment(context)`, graded in a fresh
+    machine of the grader's environment. A dataset-specific script is a `<name>_grade.py`
+    file next to the declaration, and vendored upstream scorers live under
+    `datasets/<family>/scorers/` and are listed in `ships`. The converter ships
+    the script as `/tests/grade.py`, the row's hidden data as
+    `/tests/config.json` and the scorer files at their package paths under
+    `/tests`; the script prints its reward as the last nonempty stdout line
+    (`StdoutReward`) and exits nonzero when it cannot score;
+  - `NoGrader`, when no runnable grader exists. Such rows never reach `final/`.
+- **Environment.** `ShellSim()` for conversation tasks; `Environment(image=...)`
+  pinned by digest when the agent works in a container. The grader's
+  environment is separate: an `Environment` stating packages, which
+  [images/](images/README.md) builds.
+- **Resource budget.** A task whose decoded resources exceed
+  `resource_budget_bytes` is deferred with reason `resources_over_budget`, and
+  the manifest counts it.
+- **Rubric.** Optional. Without one, rows skip model review and are kept as
+  `unreviewed`.
+- **Controls.** `Controls(golden)` grades one submission per sampled task: the
+  known-correct `golden(task)`, which must score 1, or an empty submission,
+  which must score 0, when the task has no golden. Graders that run in a
+  machine grade the empty submission in a fresh machine of their environment,
+  so it also shows the grader runs. Without controls, verification is skipped
+  and rows those graders grade stay out of `final/`. Rows
+  graded by an LLM judge are never sampled and reach `final/` without controls.
+
+To add a dataset, copy the closest declaration, set its source, converter,
+environment and rubric, add a fixture row to the family test's `ROWS`, and add
+the module's `pipelines()` to [sources.py](sources.py).
+
+## Outputs
+
+Each declaration becomes one cached artifact, `data/rl/<name>-<hash>`. The hash
+covers the source pins, auxiliary inputs, `version`, every `*.py` file in the
+converter module's directory, every file below `ships`, the grader's built
+environment, the agent image, the resource budget, the rubric, the controls
+code, and the review and verification settings. A declaration whose `grader`
+names no image needs that environment's artifact first; building its source
+without one raises `MissingEnvironmentArtifact` with the build command (see
+[images/](images/README.md)). Downloads are
+shared artifacts, `task-curation/download/<hash>`, keyed by the pinned files.
+
+```
+download/   normalize/   review/   verify/   final/   manifest.json   telemetry.json
+```
+
+`final/` holds rows that passed filtering and have a ready grader: an in-process
+verifyit grader, a verifyit judge, or a sandbox grader whose source verification
+passed. `manifest.json` records counts, the quality and verification reports,
+and the source's `admission` (`admitted` or `none`). The [pipeline contract](../../../lib/taskcompendium/src/taskcompendium/pipeline/README.md)
+describes each stage.
+
+## Running a campaign
+
+Run [driver.py](driver.py) inside one Iris driver job whose `EnvironmentSpec`
+includes `pip_packages=["./lib/taskcompendium[pipeline]"]`. The campaign keeps
+one Zephyr worker pool across all sources; `--concurrent-sources` (at least 10)
+limits how many sources run at once. Plan first:
 
 ```bash
-uv run --with './lib/taskcompendium[pipeline]' python -m \
-  experiments.post_training.task_curation.pipeline \
-  --source math500 --limit 10 --model-revision YOUR_GLM_REVISION
+uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
+  experiments.post_training.task_curation.driver \
+  --review-mode chat --model-revision YOUR_GLM_REVISION \
+  --review-cache CACHE_PREFIX --max-workers 64 --coordinator-memory 16g \
+  --concurrent-sources 10 --normalized-shards 32 \
+  --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \
+  --mode sample --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
-This is a dry run. See the [task curation reference](../../../docs/references/task-curation.md)
-for execution flags, credentials, output views and cache behavior.
+A declaration's `grader` states what its scripts need, and the pipeline places
+it ([environment.py](environment.py)). A digest-pinned `image` runs in a sandbox
+of that image. `apt` packages that the worker image lacks (`WORKER_IMAGE_APT`)
+run in a sandbox of an image built for the environment. Every other environment,
+including `GRADER_PACKAGES`, runs in a bubblewrap sandbox on the Zephyr
+worker (which needs the privileged container profile, `--container-profile`),
+in a self-contained Python environment (a uv-managed CPython and a venv) the
+worker builds once from the environment's lock and mounts read-only
+([environment_runtime.py](environment_runtime.py)).
+`--verification-backend` selects how sandbox graders run. `iris`, the default,
+schedules each grader machine as an Iris task; inside an Iris job the driver uses
+the job's controller, and elsewhere it requires `--controller-url`. `gvisor` runs
+the image on the worker's Docker daemon. The artifact identity records the
+backend and whether a controller is present, not the controller's address. Add `--run` to
+execute, with `GLM_BULK_TOKEN` set; the driver resolves the review endpoint
+from the Iris GLM relay job (`--relay-job`, default
+`DEFAULT_GLM_RELAY_JOB` in `experiments/post_training/glm.py`) unless `--base-url` is given.
+The default, `--mode sample`, is a test run that converts and gates only each
+source's panel. For a full run, pass `--mode full` and a new `--report-path`.
+A full run processes each source on its own: it makes its own panel quality
+decision, converts every row of an accepted source, draws its control sample
+from all kept rows, and ends `gated` when its quality or verification gate
+rejects the source. Repeat `--source NAME` to run a subset.
+
+Keep `--review-cache` stable across campaigns: reviews are cached by the
+complete request and the declared model revision, so a changed artifact can be
+rebuilt without repeating identical inference.

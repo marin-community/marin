@@ -1,63 +1,43 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bridge TaskCompendium submissions to verifyit's pure candidate graders.
+"""Grade an attempt in process with the task's verifyit mode.
 
-This module checks task/convention compatibility, extracts one typed submission,
-adapts it to verifyit inputs, and maps rewards and submission failures to
-GradeResult. verifyit owns verifier-spec validation, numeric parsing, comparison
-policies, and score calculation. Submission conventions own evidence extraction;
-execution runtimes own provider decoding and workspace lifecycle.
+The task's answer format extracts one typed submission; this module adapts it to a verifyit
+candidate and maps the verifyit reward to a ``GradeResult``. verifyit owns specification
+validation and scoring.
 """
 
 import json
 import math
 
-from pydantic import JsonValue
-from verifyit.candidate import grade_candidate
-from verifyit.grade import Reward, Status, scored
-from verifyit.json_comparison import NumericTypePolicy
-from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
-from verifyit.modes.grade_structured_exact import grade_structured_exact_candidate
-from verifyit.numeric import NumericCandidateError
-from verifyit.spec import (
-    ExactSpec,
-    McqSpec,
-    NumericSpec,
-    PredictedActionSpec,
-    Spec,
-    StructuredExactSpec,
-)
+from verifyit.candidate import Candidate, grade_candidate
+from verifyit.grade import Reward, Status
+from verifyit.spec import ExactSpec, NumericSpec, PredictedActionSpec, Spec, StructuredExactSpec
 from verifyit.spec import FunctionCall as CandidateCall
 
-from taskcompendium.grader import grader_package
-from taskcompendium.grading_contract import (
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import (
+    CONVERSATION_ANSWERS,
     ActionSubmission,
+    AnswerType,
+    AssistantToolCalls,
     GradingAttempt,
     JsonSubmission,
     StateSubmission,
     Submission,
     SubmissionFailure,
-    TextSubmission,
-    resolve_verifier,
-    supports_candidate_mode,
-)
-from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import (
-    AssistantToolCalls,
-    EnvironmentRequirements,
     TaskSpec,
-    VerifierSpec,
+    TextSubmission,
+    VerifyitGrader,
+    verifyit_spec,
 )
-from taskcompendium.submission import SubmissionConvention, submission_compatibility
-
-
-def validate_verifier(specification: VerifierSpec) -> None:
-    resolve_verifier(specification)
+from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.submission import require_submission_compatibility
 
 
 def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
-    """Normalize VerifyIT outcomes independently of the verifier runtime."""
+    """Normalize verifyit outcomes independently of where the verifier ran."""
     if (
         not isinstance(verdict.status, Status)
         or not isinstance(verdict.detail, dict)
@@ -79,7 +59,7 @@ def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
 
 
 def parse_grade_result(verifier: Spec, data: bytes) -> GradeResult:
-    """Decode an isolated verifier verdict through the shared grading contract."""
+    """Decode a verdict file written by the verifyit command."""
     try:
         verdict = json.loads(data)
         if not isinstance(verdict, dict):
@@ -89,67 +69,50 @@ def parse_grade_result(verifier: Spec, data: bytes) -> GradeResult:
         return GradeResult(Outcome.INFRA_ERROR, None, "Invalid verifier verdict", failure=GradingFailure.INVALID_REWARD)
 
 
-def _grade_submission(verifier: Spec, submission: Submission) -> GradeResult:
+def answer_submission(task: TaskSpec, attempt: GradingAttempt) -> Submission:
+    """The submission the task's answer type and format select from an attempt.
+
+    Raises ``SubmissionFailure`` when the attempt carries no valid submission.
+    """
+    if task.answer_type in CONVERSATION_ANSWERS:
+        return task.answer_format.extract(attempt)
+    if task.answer_type == AnswerType.STATE:
+        if attempt.state is None:
+            raise SubmissionFailure("State submission requires captured state")
+        return attempt.state
+    raise TypeError(f"A {task.answer_type} answer is not extracted from the attempt")
+
+
+def _candidate(verifier: Spec, submission: Submission) -> Candidate:
     match verifier, submission:
         case StructuredExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
-            return grade_result(verifier, grade_structured_exact_candidate(verifier, value))
+            return value
         case PredictedActionSpec(), ActionSubmission(message=final):
-            calls = (
-                tuple(CandidateCall(call.name, call.arguments) for call in final.calls)
-                if isinstance(final, AssistantToolCalls)
-                else ()
-            )
-            return grade_result(verifier, grade_predicted_action_candidate(verifier, calls))
+            if not isinstance(final, AssistantToolCalls):
+                return ()
+            return tuple(CandidateCall(call.name, call.arguments) for call in final.calls)
         case ExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
             if not isinstance(value, str):
-                return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "Text verifier requires a string JSON value")
-            return grade_result(verifier, grade_candidate(verifier, value, {}))
-        case ExactSpec() | NumericSpec() | McqSpec(), TextSubmission(value=value):
-            return grade_result(verifier, grade_candidate(verifier, value, {}))
-        case StructuredExactSpec(), _:
-            raise TypeError("Structured exact verifier requires a JSON or state submission")
-        case PredictedActionSpec(), _:
-            raise TypeError("Predicted-action verifier requires an action submission")
-        case _:
-            raise TypeError("Text candidate verifier requires a text submission")
+                raise SubmissionFailure("Text verifier requires a string JSON value")
+            return value
+        case StructuredExactSpec() | PredictedActionSpec(), _:
+            raise TypeError(f"{type(verifier).__name__} cannot grade a {type(submission).__name__}")
+        case _, TextSubmission(value=value):
+            return value
+    raise TypeError(f"{type(verifier).__name__} cannot grade a {type(submission).__name__}")
 
 
-def grade_answer(specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt) -> GradeResult:
-    """Extract one submission and score it through the shared candidate contract."""
-    if specification.verifier.environment_requirements != EnvironmentRequirements():
-        raise NotImplementedError("Pure grading cannot satisfy private environment requirements")
-    if not supports_candidate_mode(specification.verifier.kind):
-        raise NotImplementedError("This verifier requires runtime grading")
-    verifier = resolve_verifier(specification.verifier)
-    compatibility = submission_compatibility(specification, convention)
-    if not compatibility.compatible:
-        raise ValueError(f"Submission convention is incompatible: {compatibility.reasons}")
+def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
+    """Extract the task's submission and score it with its in-process verifyit mode."""
+    grader = task.grader
+    if not isinstance(grader, VerifyitGrader) or grader.environment is not None:
+        raise TypeError(f"In-process grading requires a verifyit grader without an environment, not {grader.kind}")
+    verifier = verifyit_spec(grader)
+    if task.answer_type in CONVERSATION_ANSWERS:
+        require_submission_compatibility(task)
     try:
-        submission = convention.extract(attempt)
+        candidate = _candidate(verifier, answer_submission(task, attempt))
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
-    try:
-        return _grade_submission(verifier, submission)
-    except NumericCandidateError as error:
-        return grade_result(verifier, scored(0.0, reason="invalid_numeric_candidate", error=str(error)))
-
-
-def structured_exact(expected: JsonValue, *, numeric_types: NumericTypePolicy = NumericTypePolicy.VALUE) -> VerifierSpec:
-    return verifier_descriptor(StructuredExactSpec(expected=expected, numeric_types=numeric_types))
-
-
-def verifier_descriptor(spec: Spec) -> VerifierSpec:
-    """Store a conversion-selected shared verifier contract in the private task slot."""
-    descriptor = grader_package(spec).verifier
-    validate_verifier(descriptor)
-    return descriptor
-
-
-def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:
-    return verifier_descriptor(
-        ExactSpec(expected=(expected,), ignore_case=ignore_case, ignore_whitespace=collapse_whitespace)
-    )
-
-
-def numeric_answer(expected: str, *, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
-    return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))
+    resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
+    return grade_result(verifier, grade_candidate(verifier, candidate, resources))

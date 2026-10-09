@@ -1,344 +1,279 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise artifact caching and merged task views through local stage execution."""
+import hashlib
+import importlib.util
+import re
+import sys
+import threading
+from dataclasses import replace
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-import json
-import urllib.error
-import urllib.request
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
-from pathlib import Path
-from typing import Any
-
-import pyarrow.parquet as pq
 import pytest
-from click.testing import CliRunner
-from fray.current_client import set_current_client
-from fray.local_backend import LocalClient
-from fray.types import ResourceConfig
-from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, run
-from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
-from taskcompendium.pipeline.models import (
-    Confidence,
-    FilterPolicy,
-    HFSource,
-    Quality,
-    ReferenceStatus,
-    ReviewRecord,
-    ReviewRubric,
-    ReviewStatus,
-    ReviewVerdict,
+from marin.execution.lazy import run
+from rigging.filesystem.storage_path import StoragePath
+from shellbox.machine import Backend
+from taskcompendium.convert.environment import IMAGE_BACKENDS
+from taskcompendium.pipeline.controls import GradingMachines
+from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.models import FilterPolicy, ReviewRubric
+from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
+from taskcompendium.pipeline.source_quality import SourceQualityPolicy
+from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
+from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
+
+from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
+from experiments.post_training.task_curation.driver import VerificationBackend, campaign_machines
+from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.images.build import (
+    MissingEnvironmentArtifact,
+    built_environment,
+    environment_artifact,
 )
-from taskcompendium.pipeline.rewriting import BatchRewriter
-from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig
+from experiments.post_training.task_curation.pipeline import (
+    DownloadRequest,
+    UrlSource,
+    download_source,
+    download_step,
+    environment_requirements,
+    source_recipe,
+    source_step,
+)
+from experiments.post_training.task_curation.tests.image_builds import (
+    REPOSITORY,
+    install_fake_build_tools,
+    tracked_lock,
+)
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
-from experiments.post_training.task_curation.direct_sources import RECIPES
-from experiments.post_training.task_curation.pipeline import RewriteSelection, SourceBinding, build_workflow, main
+AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
 
-
-def offline_request(*args: Any, **kwargs: Any) -> None:
-    raise urllib.error.URLError("No HTTP service is available in the local graph tests")
-
-
-@pytest.fixture(autouse=True)
-def offline_http(monkeypatch):
-    monkeypatch.setattr(urllib.request, "urlopen", offline_request)
-
-
-@dataclass
-class FixtureReviewer:
-    reviewed_sources: list[str] = field(default_factory=list)
-    reviewed_parent_ids: list[str] = field(default_factory=list)
-    credential: str = "fixture-private-credential"
-
-    @property
-    def identity(self) -> dict[str, Any]:
-        return {"reviewer": "local-fixture", "revision": "1"}
-
-    def review(
-        self,
-        tasks: Sequence[TaskSpec],
-        rubric: ReviewRubric,
-        output_path: Path,
-        *,
-        originals: Mapping[str, TaskSpec] | None = None,
-    ) -> list[ReviewRecord]:
-        self.reviewed_sources.extend(task.source.dataset for task in tasks)
-        if originals is not None:
-            self.reviewed_parent_ids.extend(task.id for task in originals.values())
-        output_path.mkdir(parents=True, exist_ok=True)
-        (output_path / "observed.json").write_text(json.dumps([task.id for task in tasks]))
-        return [
-            ReviewRecord(
-                task_id=task.id,
-                status=ReviewStatus.REVIEWED,
-                verdict=ReviewVerdict(
-                    task_id=task.id,
-                    quality=Quality.GOOD,
-                    confidence=Confidence.MEDIUM,
-                    reference_status=ReferenceStatus.CONSISTENT,
-                    defects=[],
-                    evidence="The public arithmetic question agrees with its reference.",
-                ),
-                detail="",
-            )
-            for task in tasks
-        ]
+CONVERTER_MODULE = """
+from taskcompendium.convert.answers import exact_answer_task
 
 
-@dataclass(frozen=True)
-class RewriteSubmission:
-    file_id: str
-    batch_id: str
+def convert(row, _context):
+    return exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
+"""
 
 
-@dataclass(frozen=True)
-class RewriteOutput:
-    output: str
-    errors: str | None = None
+def math500():
+    return next(pipeline for pipeline in skyrl_math.pipelines() if pipeline.name == "math500")
 
 
-@dataclass
-class GraphRewriteService:
-    submissions: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-
-    def submit(self, requests, filename):
-        batch_id = f"batch-{len(self.submissions)}"
-        self.submissions[batch_id] = list(requests)
-        return RewriteSubmission("file-0", batch_id)
-
-    def wait(self, batch_id, poll_seconds):
-        return {"id": batch_id, "status": "completed"}
-
-    def output(self, batch):
-        responses = []
-        for request in self.submissions[batch["id"]]:
-            task_id = request["custom_id"]
-            responses.append(
-                {
-                    "custom_id": task_id,
-                    "response": {
-                        "status_code": 200,
-                        "body": {
-                            "choices": [
-                                {
-                                    "finish_reason": "stop",
-                                    "message": {
-                                        "role": "assistant",
-                                        "content": None,
-                                        "tool_calls": [
-                                            {
-                                                "id": "call-0",
-                                                "type": "function",
-                                                "function": {
-                                                    "name": "propose_rewrite",
-                                                    "arguments": json.dumps(
-                                                        {
-                                                            "task_id": task_id,
-                                                            "action": "rewrite",
-                                                            "edits": [
-                                                                {
-                                                                    "old_text": "How many apples?",
-                                                                    "replacement": "How many apples are there?",
-                                                                }
-                                                            ],
-                                                            "reason": (
-                                                                "Clarify the question without changing its answer."
-                                                            ),
-                                                        }
-                                                    ),
-                                                },
-                                            }
-                                        ],
-                                    },
-                                }
-                            ]
-                        },
-                    },
-                }
-            )
-        return RewriteOutput("".join(json.dumps(response) + "\n" for response in responses))
+def machines(backend: VerificationBackend) -> GradingMachines:
+    return campaign_machines(backend, "fixture-worker", "http://controller.invalid")
 
 
 @pytest.fixture
-def artifact_storage(tmp_path, monkeypatch):
-    prefix = tmp_path / "artifacts"
-    monkeypatch.setenv("MARIN_PREFIX", str(prefix))
-    client = LocalClient(max_threads=8)
-    with set_current_client(client):
-        yield prefix
-    client.shutdown()
+def config() -> SourcePipelineConfig:
+    return SourcePipelineConfig(
+        mode=SourceProcessingMode.SAMPLE,
+        quality_policy=SourceQualityPolicy(),
+        verification_policy=SourceVerificationPolicy(10, 0, 2, 0.9),
+        review=ReviewConfig("fixture-model", "fixture-revision", mode=ReviewMode.BATCH),
+        execution=AuditExecution(),
+        filter_policy=FilterPolicy(),
+        normalized_shards=2,
+        machines=machines(VerificationBackend.GVISOR),
+    )
+
+
+def step_name(pipeline, config) -> str:
+    return source_step(pipeline, config, CampaignRuntime()).name
+
+
+def test_step_is_named_for_the_declaration_and_stable(config):
+    first, second = step_name(math500(), config), step_name(math500(), config)
+    assert first == second
+    assert first.startswith("data/rl/math500-")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        partial(replace, version="2"),
+        partial(replace, rubric="Reject problems whose reference answer is wrong."),
+        partial(replace, controls=None),
+    ],
+)
+def test_declaration_changes_rename_the_artifact(config, change):
+    assert step_name(change(math500()), config) != step_name(math500(), config)
+
+
+def test_review_settings_enter_identity_only_with_a_rubric(config):
+    revised = replace(config, review=replace(config.review, model_revision="other-revision"))
+    assert step_name(math500(), revised) != step_name(math500(), config)
+    unreviewed = replace(math500(), rubric=None)
+    assert step_name(unreviewed, revised) == step_name(unreviewed, config)
+
+
+def test_verification_backend_enters_identity_only_with_controls(config):
+    iris = replace(config, machines=machines(VerificationBackend.IRIS))
+    assert step_name(math500(), iris) != step_name(math500(), config)
+    unchecked = replace(math500(), controls=None)
+    assert step_name(unchecked, iris) == step_name(unchecked, config)
 
 
 @pytest.fixture
-def bindings(tmp_path):
-    bindings = []
-    for name, rows in (
-        ("first", [{"Body": "Ada has 5 apples.", "Question": "How many apples?", "Answer": "5"}, {"Body": ""}]),
-        ("second", [{"Body": "Bo has 3 oranges.", "Question": "How many oranges?", "Answer": "3"}]),
+def fixture_converter(tmp_path, monkeypatch):
+    """A converter module in its own directory, so tests can change the files beside it."""
+    directory = tmp_path / "fixture_family"
+    directory.mkdir()
+    (directory / "fixture_source.py").write_text(CONVERTER_MODULE)
+    spec = importlib.util.spec_from_file_location("fixture_source", directory / "fixture_source.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # Identity finds the converter's files through sys.modules; each test registers its own module.
+    monkeypatch.setitem(sys.modules, "fixture_source", module)
+    spec.loader.exec_module(module)
+    return directory, module.convert
+
+
+def test_python_files_beside_the_converter_rename_the_artifact(fixture_converter, config):
+    directory, convert = fixture_converter
+    script = directory / "fixture_grade.py"
+    script.write_text("print(1)\n")
+    pipeline = replace(math500(), name="fixture", convert=convert)
+    original = step_name(pipeline, config)
+    script.write_text("print(0)\n")
+    assert step_name(pipeline, config) != original
+
+
+def test_shipped_scorer_bytes_rename_the_artifact(fixture_converter, config):
+    directory, convert = fixture_converter
+    scorer = directory / "scorers" / "upstream" / "score.py"
+    scorer.parent.mkdir(parents=True)
+    scorer.write_text("REWARD = 1\n")
+    pipeline = replace(math500(), name="fixture", convert=convert, ships=(directory / "scorers",))
+    original = step_name(pipeline, config)
+    scorer.write_text("REWARD = 0\n")
+    assert step_name(pipeline, config) != original
+    unshipped = replace(pipeline, ships=())
+    scorer.write_text("REWARD = 1\n")
+    assert step_name(unshipped, config) != original
+
+
+def test_declarations_ship_only_existing_directories(tmp_path):
+    with pytest.raises(ValueError, match="do not exist"):
+        replace(math500(), ships=(tmp_path / "missing",))
+
+
+@pytest.fixture
+def grader_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
+    install_fake_build_tools(tmp_path, monkeypatch)
+    return tracked_lock(tmp_path)
+
+
+def test_a_changed_grader_environment_renames_the_artifact(grader_lock, config):
+    grader = Environment(lock=grader_lock)
+    pipeline = replace(math500(), grader=grader)
+    run(environment_artifact(grader, REPOSITORY))
+    original = source_step(pipeline, config, CampaignRuntime())
+    assert environment_artifact(grader).name in [dep.name for dep in original.deps]
+    grader_lock.write_text("numpy==2.3.4\n")
+    run(environment_artifact(grader, REPOSITORY))
+    assert step_name(pipeline, config) != original.name
+
+
+def test_a_grader_environment_without_a_built_artifact_names_the_build_command(grader_lock, config):
+    pipeline = replace(math500(), grader=Environment(lock=grader_lock))
+    with pytest.raises(
+        MissingEnvironmentArtifact,
+        match=re.escape("run: uv run python -m experiments.post_training.task_curation.images --identity "),
     ):
-        directory = tmp_path / name
-        directory.mkdir()
-        snapshot = directory / "records.jsonl"
-        text = "".join(json.dumps(row) + "\n" for row in rows)
-        snapshot.write_text(text)
-        source = HFSource(f"fixture/{name}", "a" * 40, "default", "train")
-        recipe = replace(
-            RECIPES["svamp"],
-            name=name,
-            source=source,
-            inputs=RecipeInputs(SourceFiles(("*.jsonl",), SourceFormat.JSONL), ()),
-        )
-        bindings.append(
-            SourceBinding(
-                name,
-                "2026.10.01.1",
-                recipe,
-                ArtifactStep.adopt(name=f"fixture/{name}", version="2026.10.02.1", source=str(directory), kind=Artifact),
-                ReviewConfig("fixture", "model-v1"),
-                10,
-            )
-        )
-    return bindings
+        source_step(pipeline, config, CampaignRuntime())
 
 
-def read_view(path: str, view: str) -> list[dict[str, Any]]:
-    return [row for file in sorted(Path(path, view).glob("*.parquet")) for row in pq.read_table(file).to_pylist()]
+def test_an_environment_image_runs_as_declared_in_a_sandbox():
+    requirements = environment_requirements(Environment(image=AGENT_IMAGE))
+    assert (requirements.docker_image, requirements.compatible_backends) == (AGENT_IMAGE, IMAGE_BACKENDS)
+    assert requirements.packages_lock is None
 
 
-def test_graph_keeps_rejection_evidence_and_refilters_cached_reviews(artifact_storage, bindings):
-    reviewer = FixtureReviewer()
-    resources = ResourceConfig.with_cpu(cpu=2, ram="2g")
-    execution = AuditExecution(max_workers=2, review_batch_size=1, reviewer=reviewer)
-    workflow = build_workflow(bindings, execution=execution, resources=resources)
-    canonical = run(workflow.canonical, max_concurrent=2)[0]
-    audit = read_view(canonical.path, "audit")
-    accepted = read_view(canonical.path, "accepted")
-    assert len(audit) == 3
-    assert len(accepted) == 2
-    assert {row["source_dataset"] for row in accepted} == {"fixture/first", "fixture/second"}
-    rejected = [row for row in audit if row["filter_status"] == "reject"]
-    assert len(rejected) == 1
-    assert rejected[0]["normalization_reason"] == "missing_prompt"
-    assert "normalize:missing_prompt" in rejected[0]["filter_reasons"]
-    assert sorted(reviewer.reviewed_sources) == ["fixture/first", "fixture/second"]
-    assert list(artifact_storage.glob("**/evidence/**/review/observed.json"))
-    assert all(reviewer.credential not in file.read_text() for file in artifact_storage.glob("**/*.json"))
+def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_image(grader_lock):
+    environment = Environment(lock=grader_lock, apt=("build-essential", "jq"))
+    (built,) = run(environment_artifact(environment, REPOSITORY))
+    requirements = environment_requirements(environment, built_environment(environment))
+    assert built.image is not None and built.image.startswith(f"{REPOSITORY}@sha256:")
+    assert (requirements.docker_image, requirements.compatible_backends) == (built.image, IMAGE_BACKENDS)
+    assert requirements.packages_lock is None
 
-    stricter = build_workflow(
-        bindings,
-        execution=execution,
-        resources=resources,
-        policy=FilterPolicy(minimum_confidence=Confidence.HIGH),
+
+@pytest.mark.parametrize(
+    "declare",
+    [
+        pytest.param(lambda lock: Environment(lock=lock, apt=("build-essential", "git")), id="worker-image-apt"),
+        pytest.param(lambda lock: Environment(lock=lock), id="lock-only"),
+        pytest.param(lambda lock: Environment(pypi=("numpy==2.3.5",)), id="pypi-only"),
+    ],
+)
+def test_environments_the_worker_image_covers_run_in_the_worker_from_their_lock(grader_lock, declare):
+    environment = declare(grader_lock)
+    (built,) = run(environment_artifact(environment, REPOSITORY))
+    requirements = environment_requirements(environment, built_environment(environment))
+    assert requirements.compatible_backends == (Backend.LOCAL,)
+    assert requirements.docker_image is None
+    assert requirements.packages_lock == built.lock_url
+    assert hashlib.sha256(StoragePath(requirements.packages_lock).read_bytes()).hexdigest() == built.lock_sha256
+
+
+@pytest.mark.parametrize(
+    "declare",
+    [
+        pytest.param(lambda lock: Environment(pypi=("numpy==2.3.5",), lock=lock), id="pypi-and-lock"),
+        pytest.param(lambda lock: Environment(pypi=("numpy>=2",)), id="unpinned-pypi"),
+        pytest.param(lambda lock: Environment(image="ghcr.io/marin-community/iris-task:latest"), id="unpinned-image"),
+        pytest.param(lambda lock: Environment(image=AGENT_IMAGE, lock=lock), id="image-with-packages"),
+        pytest.param(lambda lock: Environment(lock=lock, data=("punkt_tab",)), id="data-without-a-downloader"),
+        pytest.param(lambda lock: Environment(lock=lock, apt=("jq; rm -rf /",)), id="apt-not-a-package-name"),
+    ],
+)
+def test_environment_declarations_reject_contradictory_or_unpinned_needs(grader_lock, declare):
+    with pytest.raises(ValueError):
+        declare(grader_lock)
+
+
+def test_an_agent_environment_must_name_its_image(grader_lock):
+    with pytest.raises(ValueError, match="agent environment's image"):
+        replace(math500(), environment=Environment(lock=grader_lock))
+
+
+def test_rubric_paragraphs_become_review_criteria():
+    pipeline = replace(math500(), rubric="\nFirst criterion\nspans two lines.\n\nSecond criterion.\n")
+    assert source_recipe(pipeline, {}, None).rubric == ReviewRubric(
+        id="math500", version="1", criteria=("First criterion spans two lines.", "Second criterion.")
     )
-    strict = run(stricter.canonical, max_concurrent=2)[0]
-    assert not read_view(strict.path, "accepted")
-    assert len(read_view(strict.path, "audit")) == 3
-    assert all(row["filter_status"] == "reject" for row in read_view(strict.path, "audit"))
-    assert sorted(reviewer.reviewed_sources) == ["fixture/first", "fixture/second"]
-    assert [source.downloaded.path() for source in stricter.sources] == [
-        source.downloaded.path() for source in workflow.sources
-    ]
-    assert [source.audited.path() for source in stricter.sources] == [
-        source.audited.path() for source in workflow.sources
-    ]
 
 
-def test_graph_changes_one_model_binding_without_reacquiring_sources(artifact_storage, bindings):
-    reviewer = FixtureReviewer()
-    execution = AuditExecution(max_workers=1, review_batch_size=2, reviewer=reviewer)
-    workflow = build_workflow(bindings, execution=execution, resources=ResourceConfig.with_cpu(cpu=1, ram="2g"))
-    run(workflow.canonical, max_concurrent=2)
-
-    moved_execution = replace(execution, max_workers=2, review_batch_size=1)
-    moved = build_workflow(bindings, execution=moved_execution, resources=ResourceConfig.with_cpu(cpu=2, ram="4g"))
-    run(moved.canonical, max_concurrent=2)
-    assert sorted(reviewer.reviewed_sources) == ["fixture/first", "fixture/second"]
-    assert [source.audited.fingerprint() for source in moved.sources] == [
-        source.audited.fingerprint() for source in workflow.sources
-    ]
-
-    changed = [replace(bindings[0], review=replace(bindings[0].review, model_revision="model-v2")), bindings[1]]
-    revised = build_workflow(changed, execution=moved_execution, resources=ResourceConfig.with_cpu(cpu=2, ram="4g"))
-    merged = run(revised.canonical, max_concurrent=2)[0]
-    assert len(read_view(merged.path, "accepted")) == 2
-    assert sorted(reviewer.reviewed_sources) == ["fixture/first", "fixture/first", "fixture/second"]
-    assert revised.sources[0].downloaded.path() == workflow.sources[0].downloaded.path()
-    assert revised.sources[0].audited.path() != workflow.sources[0].audited.path()
-    assert revised.sources[1].accepted.path() == workflow.sources[1].accepted.path()
+def test_declarations_with_the_same_pinned_files_share_one_download():
+    pipeline = math500()
+    selected = replace(pipeline.source, select=lambda row, context: True)
+    assert download_step(selected, CampaignRuntime()).name == download_step(pipeline.source, CampaignRuntime()).name
 
 
-@pytest.mark.parametrize("source", ["math500", "aime24", "svamp", "gpqa", "instruction_following", "structured_output"])
-def test_cli_plans_download_and_pipeline_without_credentials(tmp_path, monkeypatch, source):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
-    result = CliRunner().invoke(main, ["--source", source, "--limit", "10", "--model-revision", "fixture"])
-    assert result.exit_code == 0, result.output
-    assert "task-curation/canonical" in result.output
-    assert not (tmp_path / "artifacts").exists()
+@pytest.fixture
+def served(tmp_path):
+    root = tmp_path / "served"
+    root.mkdir()
+    (root / "rows.jsonl").write_bytes(b'{"prompt": "1 + 1", "answer": "2"}\n')
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(root)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}/rows.jsonl", (root / "rows.jsonl").read_bytes()
+    server.shutdown()
+    server.server_close()
 
 
-def test_graph_limit_spans_input_files_and_keeps_original_row_identity(artifact_storage, bindings, tmp_path):
-    binding = bindings[0]
-    # The first file contains a valid row and a malformed row; both consume input budget.
-    (tmp_path / "first" / "second.jsonl").write_text(
-        json.dumps({"Body": "Cy has 7 pears.", "Question": "How many pears?", "Answer": "7"}) + "\n"
-    )
-    reviewer = FixtureReviewer()
-    execution = AuditExecution(max_workers=2, review_batch_size=1, reviewer=reviewer)
-    resources = ResourceConfig.with_cpu(cpu=2, ram="2g")
-    small = build_workflow([replace(binding, limit=2)], execution=execution, resources=resources)
-    small_result = run(small.canonical, max_concurrent=2)[0]
-    small_rows = read_view(small_result.path, "audit")
-    assert len(small_rows) == 2
-    assert sum(row["filter_status"] == "reject" for row in small_rows) == 1
+def test_url_download_stages_the_file_only_when_its_digest_matches(tmp_path, served):
+    url, data = served
+    good = UrlSource(url, hashlib.sha256(data).hexdigest(), "rows.jsonl", SourceFormat.JSONL)
+    download_source(DownloadRequest(good, str(tmp_path / "good")), campaign=CampaignRuntime())
+    assert (tmp_path / "good" / "rows.jsonl").read_bytes() == data
 
-    larger = build_workflow([replace(binding, limit=10)], execution=execution, resources=resources)
-    large_result = run(larger.canonical, max_concurrent=2)[0]
-    large_rows = read_view(large_result.path, "audit")
-    assert len(large_rows) == 3
-    assert {row["task_id"] for row in small_rows} <= {row["task_id"] for row in large_rows}
-    assert small.sources[0].downloaded.path() == larger.sources[0].downloaded.path()
-
-
-def test_graph_rewrite_rechecks_candidate_and_changes_only_rewrite_artifact(artifact_storage, bindings):
-    binding = bindings[0]
-    reviewer = FixtureReviewer()
-    execution = AuditExecution(max_workers=1, review_batch_size=1, reviewer=reviewer)
-    resources = ResourceConfig.with_cpu(cpu=2, ram="2g")
-    base = build_workflow([binding], execution=execution, resources=resources)
-    run(base.canonical, max_concurrent=2)
-    original = read_view(base.sources[0].accepted.path(), "accepted")[0]
-    service = GraphRewriteService()
-    rewriter = BatchRewriter(service, "fixture", "model-v1")
-    selection = RewriteSelection(
-        (original["task_id"],),
-        ReviewRubric("arithmetic-instruction-repair", "1", ("Keep the arithmetic question and answer.",)),
-    )
-    rewritten = build_workflow(
-        [replace(binding, rewrite=selection)], execution=execution, resources=resources, rewriter=rewriter
-    )
-    canonical = run(rewritten.canonical, max_concurrent=2)[0]
-    audit = read_view(canonical.path, "audit")
-    candidate = next(row for row in audit if row["parent_id"] == original["task_id"])
-    assert candidate["task_id"] != original["task_id"]
-    assert candidate["filter_status"] == "keep"
-    assert "How many apples are there?" in candidate["task_json"]
-    assert json.loads(candidate["cleanup_lineage_json"])["original_audit"]["task_id"] == original["task_id"]
-    assert reviewer.reviewed_parent_ids == [original["task_id"]]
-    assert len(service.submissions) == 1
-    assert rewritten.sources[0].audited.path() == base.sources[0].audited.path()
-    assert rewritten.sources[0].accepted.path() != base.sources[0].accepted.path()
-
-    revised = build_workflow(
-        [replace(binding, rewrite=replace(selection, rubric=replace(selection.rubric, version="2")))],
-        execution=execution,
-        resources=resources,
-        rewriter=rewriter,
-    )
-    assert revised.sources[0].accepted.path() != rewritten.sources[0].accepted.path()
-    assert revised.sources[0].audited.path() == rewritten.sources[0].audited.path()
+    bad = replace(good, sha256="0" * 64)
+    with pytest.raises(ValueError, match="SHA-256"):
+        download_source(DownloadRequest(bad, str(tmp_path / "bad")), campaign=CampaignRuntime())
+    assert not (tmp_path / "bad" / "rows.jsonl").exists()

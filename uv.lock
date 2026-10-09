@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12, <3.14"
 resolution-markers = [
     "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu' and extra == 'group-10-marin-fray-fray-tpu-test' and extra == 'group-10-marin-iris-dev' and extra == 'group-10-marin-iris-test'",
@@ -7410,6 +7410,12 @@ dependencies = [
     { name = "httpx" },
 ]
 
+[package.optional-dependencies]
+shellsim = [
+    { name = "marin-rigging" },
+    { name = "shellsim" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "bubblewrap-bin", marker = "sys_platform == 'linux'", specifier = "==0.11.0" },
@@ -11482,6 +11488,7 @@ pipeline = [
 
 [package.dev-dependencies]
 test = [
+    { name = "marin-shellbox", extra = ["shellsim"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -11503,6 +11510,7 @@ provides-extras = ["pipeline"]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "marin-shellbox", extras = ["shellsim"], editable = "lib/shellbox" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },

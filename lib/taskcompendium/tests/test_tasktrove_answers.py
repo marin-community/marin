@@ -14,12 +14,19 @@ import pytest
 from verifyit.grade import grade as source_grade
 from verifyit.spec import McqSpec, Mode
 
-from taskcompendium.grading import Outcome, grade_answer
-from taskcompendium.grading_contract import GradingAttempt
+from taskcompendium.grading import grade_answer
+from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
-from taskcompendium.models import AnswerType, ConversationTrace, TextMessage
-from taskcompendium.submission import JsonAnswer, PlainText, render_instruction
+from taskcompendium.models import (
+    AnswerType,
+    ConversationTrace,
+    GradingAttempt,
+    JsonAnswer,
+    TextMessage,
+    VerifyitGrader,
+)
+from taskcompendium.submission import render_instruction
 
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
 TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
@@ -50,7 +57,7 @@ def test_import_removes_source_submission_instructions():
     assert "verifier" not in prompt.lower()
     assert "/app/answer.txt" not in prompt
     assert "theranostics clinical trials" in prompt
-    public = render_instruction(specification, PlainText(id="plain"))
+    public = render_instruction(specification)
     assert "verifier" not in public.lower()
     assert specification.environment_requirements.capabilities == ()
     assert specification.answer_type is AnswerType.TEXT
@@ -58,9 +65,9 @@ def test_import_removes_source_submission_instructions():
 
 def test_imported_mcqa_matches_source_grading(tmp_path):
     specification = import_task(_archive())
-    assert specification.verifier.kind == Mode.MCQ
+    assert isinstance(specification.grader, VerifyitGrader)
+    assert specification.grader.mode == Mode.MCQ
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
-    convention = PlainText(id="plain")
     for source_response, response, reward in (
         ("Answer: C", "C", 1.0),
         ("Answer: D", "D", 0.0),
@@ -70,7 +77,6 @@ def test_imported_mcqa_matches_source_grading(tmp_path):
         assert source_grade(source_contract, tmp_path, tmp_path).reward == reward
         result = grade_answer(
             specification,
-            convention,
             GradingAttempt(
                 ConversationTrace(
                     events=(*specification.context.events, TextMessage(role="assistant", content=response))
@@ -82,10 +88,8 @@ def test_imported_mcqa_matches_source_grading(tmp_path):
 
 def test_imported_mcqa_extracts_json_and_scores_unformatted_answers_zero():
     specification = import_task(_archive())
-    convention = PlainText(id="plain")
     json_result = grade_answer(
-        specification,
-        JsonAnswer(id="json"),
+        specification.model_copy(update={"answer_format": JsonAnswer()}),
         GradingAttempt(
             ConversationTrace(
                 events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"C"}'))
@@ -94,7 +98,6 @@ def test_imported_mcqa_extracts_json_and_scores_unformatted_answers_zero():
     )
     malformed = grade_answer(
         specification,
-        convention,
         GradingAttempt(
             ConversationTrace(
                 events=(*specification.context.events, TextMessage(role="assistant", content="Answer: C"))
@@ -159,11 +162,9 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     script = (
         "import json, sys; from pathlib import Path; "
         "from taskcompendium.grading import grade_answer; "
-        "from taskcompendium.grading_contract import GradingAttempt; "
-        "from taskcompendium.models import TaskSpec, ConversationTrace, TextMessage; "
-        "from taskcompendium.submission import PlainText; "
+        "from taskcompendium.models import GradingAttempt, TaskSpec, ConversationTrace, TextMessage; "
         "specification = TaskSpec.model_validate_json(Path(sys.argv[1]).read_text()); "
-        "result = grade_answer(specification, PlainText(id='plain'), "
+        "result = grade_answer(specification, "
         "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
         "TextMessage(role='assistant', content='C'))))); "
         "print(json.dumps({'status':result.status, 'reward':result.reward}))"

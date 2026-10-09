@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Machine creation, public resource installation, and bounded cleanup."""
+"""Machine creation, resource installation, and bounded cleanup."""
 
 import asyncio
 import os
@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 
 from harbor_config.env import resolve_env_vars
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, ShellSimBuiltins
+from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result, ShellSimBuiltins
 from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -39,7 +39,7 @@ class _UserMachine:
         await self.machine.close()
 
 
-async def _install_resources(machine: Machine, resources: tuple[TaskResource, ...], *, root: str = "/") -> None:
+async def _install_resources(machine: Machine, resources: tuple[TaskResource, ...]) -> None:
     with TemporaryDirectory(prefix="rollout-files-") as directory:
         for index, resource in enumerate(resources):
             source = Path(directory) / str(index)
@@ -47,7 +47,7 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             source.chmod(0o644 if resource.mode is None else int(resource.mode, 8))
             if resource.mtime_ns is not None:
                 os.utime(source, ns=(resource.mtime_ns, resource.mtime_ns))
-            await machine.upload(source, f"{root.rstrip('/')}/{resource.path}")
+            await machine.upload(source, f"/{resource.path}")
 
 
 def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
@@ -73,6 +73,27 @@ async def _discard_machine(creation: asyncio.Task[Machine], cleanup: _Cleanup) -
     await _Cleanup(cleanup.timeout).run("late_machine_close", machine.close)
 
 
+async def _acquire_machine(
+    runtime: MachineRuntimeSpec,
+    spec: MachineSpec,
+    factories: Mapping[str, MachineFactory],
+    cleanup: _Cleanup,
+    owned: AsyncExitStack,
+) -> Machine:
+    """Create a machine closed by ``owned``, retaining ownership if creation outlives cancellation."""
+    machine_cleanup = cleanup
+    if runtime.cleanup_timeout is not None:
+        machine_cleanup = _Cleanup(runtime.cleanup_timeout, cleanup.errors)
+    creation = asyncio.create_task(factories[runtime.backend].create(spec))
+    try:
+        machine = await asyncio.shield(creation)
+    except asyncio.CancelledError:
+        _retain_task(asyncio.create_task(_discard_machine(creation, machine_cleanup)))
+        raise
+    owned.push_async_callback(machine_cleanup.run, "machine_close", machine.close)
+    return machine if runtime.user is None else _UserMachine(machine, runtime.user)
+
+
 async def _prepare_machine(
     requirements: EnvironmentRequirements,
     runtime: MachineRuntimeSpec | None,
@@ -81,22 +102,11 @@ async def _prepare_machine(
     cleanup: _Cleanup,
     owned: AsyncExitStack,
 ) -> Machine | None:
-    """Prepare a machine and retain ownership if creation outlives cancellation."""
+    """Prepare a task machine with its resources and setup commands."""
     if runtime is None:
         return None
-    machine_cleanup = cleanup
-    if runtime.cleanup_timeout is not None:
-        machine_cleanup = _Cleanup(runtime.cleanup_timeout, cleanup.errors)
     async with asyncio.timeout(runtime.startup_timeout):
-        creation = asyncio.create_task(factories[runtime.backend].create(_machine_spec(requirements, runtime)))
-        try:
-            machine = await asyncio.shield(creation)
-        except asyncio.CancelledError:
-            _retain_task(asyncio.create_task(_discard_machine(creation, machine_cleanup)))
-            raise
-        owned.push_async_callback(machine_cleanup.run, "machine_close", machine.close)
-        if runtime.user is not None:
-            machine = _UserMachine(machine, runtime.user)
+        machine = await _acquire_machine(runtime, _machine_spec(requirements, runtime), factories, cleanup, owned)
         await _install_resources(machine, resources)
         for command in requirements.setup_commands:
             result = await machine.run(Command(("sh", "-c", command), timeout=runtime.startup_timeout, user="0"))
@@ -105,3 +115,41 @@ async def _prepare_machine(
             if result.exit_code != 0:
                 raise RuntimeError(f"Environment setup command failed: {result.reason}, exit={result.exit_code}")
     return machine
+
+
+@dataclass(frozen=True)
+class _OwnedMachine:
+    """A machine the attempt closes; closing it early would bypass bounded cleanup."""
+
+    machine: Machine
+
+    async def run(self, command: Command) -> Result:
+        return await self.machine.run(command)
+
+    async def upload(self, source: Path, target: str) -> None:
+        await self.machine.upload(source, target)
+
+    async def download(self, source: str, target: Path) -> None:
+        await self.machine.download(source, target)
+
+    async def close(self) -> None:
+        pass
+
+
+@dataclass(frozen=True)
+class _AttemptMachineFactory:
+    """Create grading machines under the attempt's startup deadline, user, and cleanup."""
+
+    runtime: MachineRuntimeSpec
+    factories: Mapping[str, MachineFactory]
+    cleanup: _Cleanup
+    owned: AsyncExitStack
+
+    @property
+    def backend(self) -> Backend:
+        return self.factories[self.runtime.backend].backend
+
+    async def create(self, spec: MachineSpec) -> Machine:
+        async with asyncio.timeout(self.runtime.startup_timeout):
+            machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
+        return _OwnedMachine(machine)

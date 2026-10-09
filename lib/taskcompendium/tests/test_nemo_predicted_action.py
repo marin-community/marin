@@ -11,17 +11,18 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.chat import assistant_message, chat_conversation
-from taskcompendium.grading import grade_answer, validate_verifier
-from taskcompendium.grading_contract import GradingAttempt
+from taskcompendium.grading import grade_answer
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationToolCall,
     ConversationTrace,
+    FinalAction,
+    GradingAttempt,
     TaskSpec,
 )
-from taskcompendium.submission import FinalAction, chat_request, render_instruction
+from taskcompendium.submission import chat_request, render_instruction
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
 
@@ -38,10 +39,8 @@ def test_pinned_nemo_row_keeps_expected_action_private():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     provenance = json.loads((FIXTURES / "predicted-action.provenance.json").read_text())
     assert canonical_sha256(row) == provenance["canonical_json_sha256"]
-    specification, convention = import_row(row, provenance["canonical_json_sha256"])
+    specification = import_row(row, provenance["canonical_json_sha256"])
     assert specification.answer_type == AnswerType.NATIVE_ACTION
-    assert convention.supports(AnswerType.NATIVE_ACTION)
-    assert not convention.supports(AnswerType.FILE)
     request = specification.context
     assert specification.source.dataset == provenance["dataset"]
     assert specification.source.revision == provenance["dataset_revision"]
@@ -51,9 +50,10 @@ def test_pinned_nemo_row_keeps_expected_action_private():
     saved_specification = json.loads(specification.model_dump_json())
     assert set(saved_specification["context"]) == {"events"}
     assert saved_specification["answer_type"] == "native_action"
+    assert saved_specification["answer_format"] == {"kind": "final_action", "require_call": False, "max_calls": 1}
     assert isinstance(saved_specification["final_tools"], list)
     assert saved_specification["final_tools"]
-    public = render_instruction(specification, convention) + convention.model_dump_json()
+    public = render_instruction(specification) + specification.answer_format.model_dump_json()
     assert row["expected_action"]["arguments"] not in public
     assert "Okay, let me figure out how to handle this user's query" not in public
     assert "authenticate_user" in {function.name for function in specification.final_tools}
@@ -63,20 +63,16 @@ def test_pinned_nemo_row_keeps_expected_action_private():
 
 def test_serialized_nemo_verifier_grades_in_fresh_process(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
+    specification = import_row(row, canonical_sha256(row))
     (tmp_path / "specification.json").write_text(specification.model_dump_json())
-    (tmp_path / "convention.json").write_text(convention.model_dump_json())
     script = (
         "import json, sys; from pathlib import Path; "
         "from taskcompendium.grading import grade_answer; "
-        "from taskcompendium.grading_contract import GradingAttempt; "
-        "from taskcompendium.submission import FinalAction; "
-        "from taskcompendium.models import TaskSpec, ConversationTrace; "
+        "from taskcompendium.models import GradingAttempt, TaskSpec, ConversationTrace; "
         "root = Path(sys.argv[1]); "
         "specification = TaskSpec.model_validate_json((root/'specification.json').read_text()); "
-        "convention = FinalAction.model_validate_json((root/'convention.json').read_text()); "
         "conversation = ConversationTrace.model_validate_json(sys.argv[2]); "
-        "result = grade_answer(specification, convention, GradingAttempt(conversation)); "
+        "result = grade_answer(specification, GradingAttempt(conversation)); "
         "print(json.dumps({'status':result.status, 'reward':result.reward}))"
     )
     response = assistant_message(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -146,22 +142,21 @@ def test_predicted_action_rejects_invalid_expected_arguments(arguments):
         {"expected_calls": [{"name": "lookup", "arguments": {"id": 1}}], "numeric_tolerance": 10**400},
     ],
 )
-def test_predicted_action_rejects_invalid_contract_on_private_read(parameters):
+def test_predicted_action_rejects_invalid_contract_on_load(parameters):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, _ = import_row(row, canonical_sha256(row))
+    specification = import_row(row, canonical_sha256(row))
     data = json.loads(specification.model_dump_json())
-    data["verifier"]["parameters_json"] = json.dumps(parameters)
-    restored = TaskSpec.model_validate_json(json.dumps(data))
+    data["grader"]["parameters"] = parameters
     with pytest.raises(ValueError):
-        validate_verifier(restored.verifier)
+        TaskSpec.model_validate_json(json.dumps(data))
 
 
 def test_predicted_action_task_roundtrip_preserves_source_context():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
+    specification = import_row(row, canonical_sha256(row))
     restored = TaskSpec.model_validate_json(specification.model_dump_json())
     assert restored.context == specification.context
-    assert chat_request(restored, convention) == chat_request(specification, convention)
+    assert chat_request(restored) == chat_request(specification)
 
 
 @pytest.mark.parametrize(
@@ -200,10 +195,10 @@ def test_predicted_action_task_roundtrip_preserves_source_context():
 )
 def test_predicted_action_chat_evidence_distinguishes_wrong_and_invalid_submission(response, reward, status):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
-    trace = chat_conversation([*chat_request(specification, convention)["messages"], response])
+    specification = import_row(row, canonical_sha256(row))
+    trace = chat_conversation([*chat_request(specification)["messages"], response])
     restored = ConversationTrace.model_validate_json(trace.model_dump_json())
-    result = grade_answer(specification, convention, GradingAttempt(restored))
+    result = grade_answer(specification, GradingAttempt(restored))
     assert (result.status, result.reward) == (status, reward)
 
 
@@ -218,8 +213,8 @@ def test_predicted_action_chat_request_preserves_source_history_and_tools():
         },
         {"type": "function_call_output", "call_id": "call-profile", "output": '{"verified":false}'},
     ]
-    specification, convention = import_row(row, canonical_sha256(row))
-    request = chat_request(specification, convention)
+    specification = import_row(row, canonical_sha256(row))
+    request = chat_request(specification)
     native_request = specification.final_tools
     assert [tool["function"]["name"] for tool in request["tools"]] == [function.name for function in native_request]
     assert [tool["function"]["parameters"] for tool in request["tools"]] == [
@@ -259,13 +254,13 @@ def test_predicted_action_chat_request_preserves_source_history_and_tools():
     trace = ConversationTrace.model_validate_json(trace.model_dump_json())
     assert trace.events[3].calls[0].arguments == {"user_id": "GROOM2024"}
     assert trace.events[4].content == '{"verified":false}'
-    result = grade_answer(specification, convention, GradingAttempt(trace))
+    result = grade_answer(specification, GradingAttempt(trace))
     assert (result.status, result.reward) == ("graded", 1.0)
 
 
 def test_predicted_action_grades_typed_evidence_from_any_harness():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
+    specification = import_row(row, canonical_sha256(row))
     final = AssistantToolCalls(
         calls=(
             ConversationToolCall(
@@ -277,7 +272,7 @@ def test_predicted_action_grades_typed_evidence_from_any_harness():
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
 
-    result = grade_answer(specification, convention, GradingAttempt(conversation))
+    result = grade_answer(specification, GradingAttempt(conversation))
 
     assert (result.status, result.reward) == ("graded", 1.0)
 
@@ -286,12 +281,12 @@ def test_predicted_action_grades_typed_evidence_from_any_harness():
 def test_imported_final_call_constraints_distinguish_invalid_submission(require_call):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["responses_create_params"]["tool_choice"] = "required" if require_call else "auto"
-    specification, convention = import_row(row, canonical_sha256(row))
+    specification = import_row(row, canonical_sha256(row))
     final = assistant_message({"role": "assistant", "content": "No action"})
     attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
-    result = grade_answer(specification, convention, attempt)
+    result = grade_answer(specification, attempt)
     assert (result.status, result.reward) == ("submission_failure" if require_call else "graded", 0.0)
-    request = chat_request(specification, convention)
+    request = chat_request(specification)
     assert request.get("tool_choice") == ("required" if require_call else None)
     assert request["parallel_tool_calls"] is False
 
@@ -301,13 +296,13 @@ def test_imported_parallel_actions_accept_multiple_final_calls():
     row["responses_create_params"]["parallel_tool_calls"] = True
     original_call = row["expected_action"]
     row["expected_action"] = {"type": "function_call_batch", "calls": [original_call, original_call]}
-    specification, convention = import_row(row, canonical_sha256(row))
+    specification = import_row(row, canonical_sha256(row))
     single = _action(original_call["name"], original_call["arguments"])["tool_calls"][0]
     final = assistant_message({"role": "assistant", "tool_calls": [single, {**single, "id": "second"}]})
     attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
-    result = grade_answer(specification, convention, attempt)
+    result = grade_answer(specification, attempt)
     assert (result.status, result.reward) == ("graded", 1.0)
-    assert "parallel_tool_calls" not in chat_request(specification, convention)
+    assert "parallel_tool_calls" not in chat_request(specification)
 
 
 @pytest.mark.parametrize("call_count,status,reward", [(2, "graded", 1.0), (3, "submission_failure", 0.0)])
@@ -316,7 +311,9 @@ def test_final_action_max_two_preserves_the_submission_limit_before_scoring(call
     row["responses_create_params"]["parallel_tool_calls"] = True
     expected = row["expected_action"]
     row["expected_action"] = {"type": "function_call_batch", "calls": [expected] * call_count}
-    specification, _ = import_row(row, canonical_sha256(row))
+    specification = import_row(row, canonical_sha256(row)).model_copy(
+        update={"answer_format": FinalAction(require_call=True, max_calls=2)}
+    )
     final = AssistantToolCalls(
         calls=tuple(
             ConversationToolCall(
@@ -326,5 +323,5 @@ def test_final_action_max_two_preserves_the_submission_limit_before_scoring(call
         )
     )
     attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
-    result = grade_answer(specification, FinalAction(id="max-two", require_call=True, max_calls=2), attempt)
+    result = grade_answer(specification, attempt)
     assert (result.status, result.reward) == (status, reward)

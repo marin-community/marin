@@ -8,21 +8,17 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
+from taskcompendium.convert.tasktrove_nemotron_structured_outputs import MISSING_VALUE
 from verifyit.grade import Status, grade
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlElementsSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
-from experiments.post_training.tasktrove.converters.nemotron_structured_outputs import MISSING_VALUE
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    TEST_SH,
-    read_task_binary,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import verify_task
 
 pytest_plugins = ["lib.verifyit.tests.test_judge"]

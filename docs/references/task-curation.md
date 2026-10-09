@@ -1,258 +1,279 @@
 # Task curation
 
-The task curation pipeline downloads pinned source files, normalizes their records,
-checks grading contracts, asks GLM for a source-specific quality assessment, and
-writes final decisions to Parquet. Every selected input remains in the audit,
-including rejected tasks and failed reviews.
+Task curation turns pinned RL datasets into TaskSpec parquet files. Each dataset
+is declared once as an `RlDataPipeline` under
+[`experiments/post_training/task_curation/datasets/`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/README.md),
+and the catalog
+[`sources.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py)
+lists every declaration:
 
-The artifact graph lives in
-[`experiments/post_training/task_curation/pipeline.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py).
-Reusable readers, normalizers, checks and review logic live under
-`lib/taskcompendium/src/taskcompendium/pipeline/`.
+```python
+from experiments.post_training.task_curation.sources import all_pipelines
 
-## Task contracts
+pipelines = all_pipelines()  # name -> RlDataPipeline
+```
 
-Tasks use the shared TaskSpec schema. Standard exact, numeric, multiple-choice and
-final-action contracts use VerifyIT candidate specs. Recipes emit standard VerifyIT specs or ordinary grading scripts with private fixtures; no TaskCompendium verifier registry is required. Unbound evaluators remain explicit in the audit. Resources use `all`, `worker`, `oracle` and `verifier` groups with
-relative paths. Executable prototypes bind named tool providers and retain their
-interaction-tool declarations and capture paths. Direct-chat export rejects those
-execution requirements.
+Building the catalog performs no downloads, inference or job submission.
 
-Artifact identity includes the TaskSpec schema version, so schema changes cannot
-reuse incompatible normalized Parquet. Exact-query review caching remains scoped
-to the query and model revision.
+## Package organization
 
-## Run a source
+| Package | Responsibility |
+|---|---|
+| `experiments/post_training/task_curation/datasets/` | Dataset declarations, converters, rubrics, controls, `*_grade.py` grader scripts and vendored `scorers/` |
+| `experiments/post_training/task_curation/environment.py` | `Environment`, what a machine must provide, and `placement`, which decides where it runs |
+| `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
+| `experiments/post_training/task_curation/environment_runtime.py` | The uv environments that local graders run in on the Zephyr worker |
+| `experiments/post_training/task_curation/sources.py` | The catalog, `all_pipelines()` |
+| `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
+| `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
+| `taskcompendium.convert` | Conversion techniques shared by declarations |
+| `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
+| `taskcompendium.runtime` | Grading in fresh Shellbox machines |
+| `verifyit` | Stock grading modes, in process or in a grader machine |
+| `shellbox` | Isolated machines and their backends |
 
-Plan a ten-record run without downloading data or contacting GLM:
+TaskCompendium does not import experiments, name datasets, or construct
+ArtifactSteps.
+
+## Declarations
+
+An `RlDataPipeline` has these fields:
+
+| Field | Meaning |
+|---|---|
+| `name` | Catalog key and artifact name. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
+| `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
+| `version` | Converter revision; bump it when conversion changes outside the hashed files. |
+| `environment` | `ShellSim()` for conversation tasks, or `Environment(image=...)` naming the digest-pinned image an agent works in. |
+| `intended_use` | `train` or `eval`. |
+| `rubric` | Optional review rubric string, one criterion per paragraph. |
+| `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
+| `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
+| `atlas_id` | Join key into `atlas_catalog.json`; metadata only. |
+| `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
+| `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
+| `resource_budget_bytes` | Decoded resource bytes a task may carry, default 1,000,000; larger tasks are deferred as `resources_over_budget`. |
+
+Families whose members differ only by data are tables: one module builds every
+declaration of the family in a loop.
+
+`convert`, `select`, `decode`, `read` and `parts` each receive a `ConversionContext` with
+two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, the
+`EnvironmentRequirements` of the declared `grader` as the pipeline placed it, or
+`None` when the declaration names no `grader`.
+`required_grader_environment(context)` returns the environment or raises.
+
+## Environments
+
+An `Environment` states what a machine must provide. A declaration never names
+a backend; the pipeline places each environment:
+
+| Field | Meaning |
+|---|---|
+| `pypi` | Exact `name==version` pins, compiled at build time with `uv pip compile --generate-hashes` for Python 3.12 on `x86_64-unknown-linux-gnu`. |
+| `lock` | A uv-compiled requirements lock with hashes, used verbatim. It excludes `pypi`. |
+| `apt` | Debian package names. |
+| `data` | Downloads; only `nltk:<package>` is supported. |
+| `image` | A digest-pinned image used as-is. It excludes every other field. |
+
+| Declaration | Placement | Recorded `EnvironmentRequirements` |
+|---|---|---|
+| `image` set | A sandbox of that image | `docker_image=image`, `compatible_backends=(gvisor, docker)` |
+| `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `docker_image=<built digest>`, `compatible_backends=(gvisor, docker)` |
+| Anything else | A bubblewrap sandbox on the Zephyr worker | `compatible_backends=(local,)`, `packages_lock=<lock URL>` |
+
+`WORKER_IMAGE_APT` in `environment.py` lists the Debian packages the `task`
+stage of `lib/iris/Dockerfile` installs, such as `build-essential` and `git`.
+An environment that needs only those runs in the worker. `GRADER_PACKAGES`, the
+lock every grade script in the catalog imports with the NLTK `punkt_tab` and
+`wordnet` data, runs in the worker. The TaskTrove competitive-programming
+sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
+C++ submissions; the worker image provides it, so they also run in the worker.
+An agent environment must name its image, because converters record the
+agent's requirements on each task.
+
+## Graders and controls
+
+A task's grader is one of four kinds:
+
+- `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
+  in process; with `environment=required_grader_environment(context)` it grades
+  in a fresh machine of the grader's environment.
+- `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
+  TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
+  to a file (`FileReward`).
+- `SessionGrader` marks a task graded by its registered interactive session.
+- `NoGrader` records a source evaluator this repository cannot run, with the
+  source contract. Its rows never reach `final/`.
+
+A source whose scorer is upstream code grades with a script. The script is a
+`<name>_grade.py` file next to the declaration, and the upstream scorer is
+vendored under `datasets/<family>/scorers/`, a directory listed in the
+declaration's `ships`. `taskcompendium.convert.script_grader` builds the
+package:
+
+- `grade_script` installs the script as `/tests/grade.py`, with the files it
+  imports; `shipped_files` places vendored scorer files at their package paths
+  under `/tests`, so the script imports them as upstream does;
+- `script_package` adds the row's hidden data as `/tests/config.json` (sorted
+  keys) and grades with `ScriptGrader(argv=("python3", "/tests/grade.py"),
+  cwd="/", reward=StdoutReward())` in the grader's environment.
+
+The script puts `/tests` on its import path, reads `config.json` and the reply
+at `/app/answer.txt` (or the conversation at `/tests/conversation.json`), and
+prints the reward, fractional when the scorer is, as its last nonempty stdout
+line. The runtime keeps the first 16 KiB of stdout, so the script keeps its
+output below that. It exits nonzero when it cannot import its scorer or a
+dependency, which the runtime reports as an infrastructure error, never a zero
+reward. The grader's environment supplies third-party dependencies only; scorer code
+always ships with the task.
+
+Conversion preserves the source's grading semantics. It does not repair
+comparators or rewrite tests to accept a reference.
+
+Controls check a grader before its tasks are admitted. For each sampled task the
+pipeline grades exactly one submission: `golden(task)`, which must score 1, or,
+when the declaration has no `golden` or it returns `None` because the task has no
+known answer, an empty submission, which shows that the grader runs. A grader that
+runs in a machine grades the empty submission in a fresh machine of its environment,
+staged as for a rollout whose agent replied with empty text and wrote nothing: an
+empty answer file where the grader reads one, a conversation ending in the empty
+reply, and an empty workspace. The empty control passes when the grader runs and
+scores 0 or rejects the submission. When the grader runs and gives the empty
+submission a positive reward, the task is defective: an empty reply satisfies it,
+as it satisfies an instruction-following constraint such as "use no commas". The
+control records `defect`, which rejects the row with reason `check:empty`; the
+trial still counts as checked and passed toward the source's pass fraction, and
+the verification report counts it under `defective`. A golden that does not score
+1 fails, which rejects the row and counts against the source. A grader that
+crashes or writes no reward is an infrastructure error. An in-process grader
+scores the empty reply directly. A golden is a `Reply`, `WorkspaceFiles`, or an
+`OracleCommand`, such as a TaskTrove `solution/solve.sh`,
+run with the task's worker and oracle files in a fresh machine of the task's agent
+image, whose tools and directories the oracle expects. A task without an agent
+image, such as a conversation task, runs its oracle in the grader's machine. The
+oracle's output is then graded like any other submission. In-process numeric,
+MCQ, exact and action graders are also checked per task during preparation.
+
+Sources graded by an LLM judge (verifyit's judge mode), such as the TaskTrove
+judged, open-QA and MultiChallenge sources, have no control path yet. When every
+task the panel converts is judge-graded, verification samples nothing and
+records `skipped` with reason `judge grader; no control path yet`, and kept rows
+are admitted like rows of in-process graders.
+
+## Source procedure
+
+1. Download the pinned files once per distinct pin
+   (`task-curation/download/<hash>`).
+2. Draw at most 100 raw rows with a seeded sample, convert them and run cheap
+   checks.
+3. With a rubric, send the panel in bounded batches to the GLM reviewer. More
+   than 50% known defects, over the whole panel, rejects the source; otherwise
+   it is accepted. Uncertain judgments, unsupported conversions and duplicate
+   rows are not defects. Rows outside the panel are never reviewed individually.
+   Without a rubric, rows are kept as `unreviewed`.
+4. In full mode, convert and audit every row of an accepted source.
+5. Filter rows into kept, rejected and deferred.
+6. With controls, verify a seeded sample of at most 20 kept rows
+   (`--verification-sample-size`): each task's one control runs once in a fresh
+   machine, rerun up to twice more after an infrastructure error, and the source
+   passes at a 95% pass fraction. Judge-graded sources skip this step.
+7. Admit rows and write the outputs.
+
+The campaign runs source procedures in threads over one Zephyr context and
+worker pool. `--concurrent-sources` limits whole-source admission and
+`--max-workers` the shared worker count. A failed source does not stop the
+others; the campaign report records it. Review requests are cached by the
+complete request and declared model revision, so rebuilt artifacts do not repeat
+identical inference.
+
+## Run a campaign
+
+Run the driver inside an Iris job whose `EnvironmentSpec` includes
+`pip_packages=["./lib/taskcompendium[pipeline]"]`. Plan first:
 
 ```bash
-uv run --with './lib/taskcompendium[pipeline]' python -m \
-  experiments.post_training.task_curation.pipeline \
-  --source math500 --limit 10 --model-revision YOUR_GLM_REVISION
+uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
+  experiments.post_training.task_curation.driver \
+  --review-mode chat --model-revision YOUR_GLM_REVISION \
+  --review-cache CACHE_PREFIX --mode sample \
+  --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
+  --normalized-shards 32 \
+  --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \
+  --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
-Add `--run`, `--base-url URL` and `--review-cache PATH` to execute. Set
-`GLM_BULK_TOKEN` in the execution environment. Artifact outputs use `MARIN_PREFIX`;
-set it to the desired S3 prefix or a local directory. The same graph runs in either
-location. Credentials are excluded from artifact configuration and fingerprints.
+Build the declared environments first, with the same `MARIN_PREFIX`:
 
-Repeat `--source` to select more sources. `--limit N` caps selected input records
-**per source**, including records later rejected. `--all-rows` removes that cap.
-Executable source controls also require `--image` with an immutable image digest.
-A missing runtime binding remains explicit; static GLM acceptance does not certify
-that a grader is executable.
-
-## Stages
-
-1. **Download.** Existing `hf_download`/`raw_download` artifact builders stage the
-   declared source files at their pinned revision. Related selections share the
-   download when they use the same files. Download identity is independent of N.
-2. **Read and limit.** Shared readers decode the staged format and select the
-   requested component. The audit uses
-   `reshard(1).take_per_shard(N).reshard(64)` before normalization. On one shard,
-   `take_per_shard` imposes the overall source limit. This deliberately simple
-   implementation can read and reshuffle the complete source before truncation.
-   A source with fewer than N records completes with those records.
-3. **Audit.** Normalization preserves the public/private boundary and records
-   edits or import failures. Duplicate and conflicting references are identified.
-   Checks and GLM findings are recorded independently.
-4. **Filter.** Policy produces a final keep/reject decision and reasons. Bad,
-   conflicting, invalid or unavailable reviews do not admit tasks. Confidence
-   thresholds are policy; they do not create a separate human-review queue.
-5. **Optional rewrite.** Explicitly selected tasks from the filtered audit receive
-   a separate repair rubric. Candidate instructions are checked and reviewed
-   again before a new filtering decision. Original evidence and candidate
-   lineage remain available.
-6. **Merge.** Cross-source canonicalization retains all audit rows, removes exact
-   duplicates from accepted views, cuts typed reference conflicts and excludes
-   training records that overlap evaluation tasks.
-
-Source provenance uses the pinned dataset, revision, component/split and original
-file/record locator. It does not depend on the position in a development sample.
-Decoded records that fail normalization get audit rejections. File decoding errors
-fail the stage with file context.
-
-## Source families
-
-Sources sharing conversion and review structure belong together. The library
-provides a `TaskPipeline`: a normalizer, review rubric and optional check suite.
-It describes conversion policy without selecting a dataset or constructing an
-artifact graph. Family factories expose meaningful schema and grading differences.
-
-The experiment binds that policy in a `DatasetRecipe`, which declares the name,
-version, source identity, intended train/eval use and `RecipeInputs`. The inputs
-specify staged file selection and pinned `HubDownload` or `UrlDownload`
-declarations, including auxiliary reference files.
-
-| Location | Responsibility |
-|---|---|
-| `lib/taskcompendium/.../pipeline/datasets/` | Family normalizers, review criteria, controls and grader packages |
-| `experiments/post_training/task_curation/nemotron.py` | Seventy-five Ultra selections, blend pins, membership and placeholder inputs |
-| `experiments/post_training/task_curation/direct_sources.py` | Direct math, QA, instruction, code, preference and generated-source bindings |
-| `experiments/post_training/task_curation/archive_sources.py` | TaskTrove component selections and bindings for archived task schemas |
-| `experiments/post_training/task_curation/source_bindings.py` | Catalog assembly and experiment-specific converter adapters |
-| `experiments/post_training/task_curation/pipeline.py` | Download, audit, optional rewrite, filter and merge artifact graph |
-| `lib/taskcompendium/.../pipeline/stages.py` | Reusable Zephyr execution of the bound conversion and review policy |
-
-For example, `nemotron_ultra/safety.py` supplies `safety.pipeline(...)`.
-The experiment selects that policy for the safety component in three Ultra
-blends. Math selections explicitly attach placeholder-reference downloads;
-repository selections attach the SWE-Gym membership input. Adding a selection
-uses the family policy without adding another converter module or a branch to
-the execution engine.
-
-```mermaid
-flowchart TD
-    B[Experiment source binding] --> D[Download artifact]
-    P[Library family TaskPipeline] --> A[Zephyr audit]
-    D --> A
-    A --> Q[Audit parquet: every task and reason]
-    Q --> R[Optional rewrite and re-review]
-    Q --> F[Final acceptance policy]
-    R --> F
-    F --> K[Accepted parquet]
-    K --> M[Merge selected sources]
+```bash
+uv run python -m experiments.post_training.task_curation.images --all
+uv run python -m experiments.post_training.task_curation.images --identity IDENTITY_PREFIX
 ```
 
-Existing TaskTrove conversion adapters are supplied by the experiment. Library
-policies compose them with normalization and preserve conversion edits. VerifyIT
-owns generic comparisons, format validation, execution and the structured verdict
-contract. Library conversion policies own source-specific scoring policy and package it as scripts
-when a standard specification is insufficient. `taskcompendium.grader` builds
-these packages; `taskcompendium.grading` extracts evidence and executes them.
-Environment capture and isolated execution live under `taskcompendium.runtime`.
-SQL and structured tool actions retain their distinct contracts.
+Each environment without an `image` becomes the artifact
+`images/env-<identity[:16]>`, which stores its hash lock as `requirements.lock`.
+The identity hashes the `pypi` pins or the lock's bytes, `apt`, `data`, Python
+3.12, the platform, the digest-pinned base image, the files of `verifyit`
+(which every built environment puts on the grader's import path) and the
+placement, so a rerun with an unchanged declaration does nothing. An
+environment placed in a built image also gets a generated Dockerfile: the
+pinned `iris-task` base, `apt-get install` of `apt`, `uv pip sync
+--require-hashes` of the lock, the NLTK data and `verifyit`. The build pushes it
+as `ghcr.io/marin-community/iris-task:task-curation-env-<identity[:16]>` and
+records the digest. An image build needs a `docker login` for ghcr.io; every
+build needs, for a CoreWeave `MARIN_PREFIX`, the `CW_KEY_ID` and
+`CW_KEY_SECRET` pair in the environment. Planning a source whose environment
+has no artifact raises `MissingEnvironmentArtifact` with the `--identity`
+command that builds it.
 
-### Grader packages
-
-`GraderPackage` pairs a standard VerifyIT descriptor with private files. Assign its descriptor to `task.verifier` and its files to `task.resources.verifier`. File paths are relative to the private tests directory. A math normalizer can emit a `MathSpec`; a schema normalizer emits `JsonSchemaSpec` and its schema. Neither requires a new registered kind.
-
-For custom policy, `script_package(script_bytes, config)` emits `ScriptSpec`, `grader.py` and `config.json`. The script reads `VERIFYIT_TESTS_DIR` and `VERIFYIT_WORKSPACE` and writes a structured verdict to `VERIFYIT_LOGS_DIR/verdict.json`. A script may import generic VerifyIT components or implement the comparison itself. Recipe templates live alongside the dataset families in `pipeline/datasets/grader_scripts/` and are embedded into the task; execution does not import the converter module.
-
-```mermaid
-flowchart LR
-    R[Recipe] --> P[Standard spec and private files]
-    R --> S[ScriptSpec and recipe-owned script]
-    P --> V[VerifyIT execution]
-    S --> V
-    A[Extracted answer or captured evidence] --> V
-    V --> O[Structured verdict]
-    O --> C[Grader controls and readiness]
-```
-
-Direct-chat evidence is written to `answer.txt`; captured state is written to `state.json`. Captured files under `/app` retain their relative paths; other paths appear below `captured/`. Private resources never become worker mounts. Coding tasks declare a pinned private grading image and run in a fresh network-disabled machine. This prototype does not prevent submitted programs from reading hidden tests within that grading machine.
-
-Unbound source evaluators preserve their private contract and emit infrastructure errors. Quality filtering can keep an understandable task while the executable view excludes it. Positive and negative controls exercise the same emitted package used for grading.
-
-The Python-test family shares conversion and privacy checks between `pymethods`
-and `pymethods_large`. Its rubric entries preserve their differences: scheduling
-and optimization for the former, public signatures and class state for the
-latter. Their selected TaskTrove components and revisions live in the experiment.
-
-To add a source:
-
-- Declare its immutable release, split/component, staged file selection and
-  intended use in the relevant experiment binding module. Reuse a format reader
-  and archive decoder where possible.
-- Bind a family `TaskPipeline`. Add a concrete extraction function in the library
-  when the row schema or grading contract differs. Keep private solutions and
-  tests private.
-- Specify family review criteria and executable controls in the library policy.
-  Apply experiment-specific rubric overrides at the binding when needed.
-- Run the ordinary artifact graph with a small limit. Inspect the audit rows,
-  final decisions and reasons.
-
-Keep distinct contracts explicit. HH pairs, binary KTO labels and generation-based
-GenRM prompts need different handling. Interactive calendar episodes differ from
-final-schedule JSON. Shared topic alone is not sufficient to share a normalizer.
-The Atlas catalog records coverage and exclusion reasons; it is not another
-executable source registry.
-
-## Cache identity and retries
-
-Download artifacts identify source bytes. Audit artifacts include source selection,
-limit, recipe/stage revisions, rubric and model settings. Filter artifacts include
-policy. Bump the relevant family or shared-stage revision when its behavior changes.
-Adding an unrelated source does not require hashing the whole package.
-
-Completed Zephyr shards are reused. FineStore stores schema-valid GLM completions
-with the expected request identity, keyed by the exact submitted query and model
-revision. Task provenance IDs are canonicalized out of cached review queries.
-Changing only catalog layout does not require GLM inference; changing a prompt,
-rubric, model or supplied environment inventory creates a different query.
-Each Zephyr review window probes its FineStore keys in one batch and submits only
-the missing queries. Cache hits and misses can share the same window.
-
-A failed mapper can submit its unfinished review batch again. The audit records
-the final result for each task. Earlier attempt files are debug logs; they do not
-create extra rejected rows after a successful retry.
-
-`pipeline/stages.py` runs audit, filtering, rewriting and merge datasets through
-Zephyr. Row normalization and duplicate policy live in `transforms.py`; the audit
-schema and column projection live in `audit_schema.py`. Manifests use a shared
-Zephyr reduction, and evidence files are copied with Rigging.
-
-Rewrite selection is validated before inference. Proposals and candidate review
-run inside Zephyr windows; completed audit shards skip both on retry. The rewriter
-returns candidates and lineage directly, while JSONL files retain their evidence.
-The rewrite prompt digest is part of artifact identity. Dataset decoders belong
-to their families, including TaskTrove archives and ASDiv XML.
-
-The provider protocol lives in `pipeline/review_transport.py`; it submits requests
-and saves responses without a separate local resume mechanism. Zephyr forms
-windows and writes JSONL and Parquet. FineStore retains exact-query completions.
+Local graders run in bubblewrap sandboxes on the Zephyr worker, each over a
+private root, so the worker pods need Iris's privileged container profile
+(`--container-profile CONTAINER_PROFILE_PRIVILEGED`). On first use, each worker downloads the environment's lock from its artifact and builds a
+self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
+`/tmp/task-curation-env-<identity>`, with the NLTK data and `verifyit`; the
+sandbox mounts only that directory and the system directories, and concurrent
+graders on one host build it once.
+`--verification-backend` is where sandbox graders run: `iris` (the default) or
+`gvisor`. Iris schedules each grader machine on the controller of the enclosing
+Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
+Docker daemon.
+Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
+the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
+`--base-url` overrides it. `--mode sample`, the default, is a test run that
+converts and gates only each source's panel. `--mode full` runs each source on
+its own: it makes its own panel quality decision, converts every row of an
+accepted source, draws its control sample from all kept rows, and ends `gated`
+when its quality or verification gate rejects the source. Repeat
+`--source NAME` to run a subset.
 
 ## Outputs
 
-Each source has audited and filtered artifacts. One canonical artifact contains:
+Each source artifact `data/rl/<name>-<hash>` contains:
 
-| Directory | Contents |
+| Relative path | Contents |
 |---|---|
-| `audit/` | Every selected input and its final decision |
-| `accepted/` | Kept tasks after cross-source policy |
-| `train/` | Accepted tasks intended for training |
-| `eval/` | Accepted tasks intended for evaluation |
-| `executable/` | Accepted tasks with ready graders, including evaluation tasks |
+| `download/locators/` | Row locators of the staged source files |
+| `normalize/part-*.parquet` | Every converted row: TaskSpec JSON or rejection, and normalization changes |
+| `review/part-*.parquet` | Review evidence and filter decisions |
+| `review/unprocessed-*.parquet` | Rows outside an unexpanded sample, with the gate's reason |
+| `review/report.json` | The source quality decision |
+| `verify/part-*.parquet` | Per-row checks, grader readiness and admission |
+| `verify/report.json` | Sampled controls, trials and the source verification decision |
+| `final/part-*.parquet` | Admitted rows only |
+| `manifest.json` | Status, counts, revisions, reports and the source admission |
+| `telemetry.json` | Zephyr execution IDs, counters and phase wall times |
 
-Training consumers must select training intent as well as any required grader
-readiness. Each output is sharded Parquet. The canonical artifact is exposed
-without copy-only export stages.
+Every row's `admission` is `admitted`, `rejected`, `deferred`, `no_grader` or
+`unverified`; `final/` holds the admitted rows. Sidecars
+join on `task_id`, `source_locator`, `raw_input_sha256` and decoded
+`raw_sha256`. The artifact name's hash covers the source pins, inputs, version,
+every `*.py` file in the converter module's directory, every file below `ships`,
+the grader's built environment (its identity and any built image digest), the agent image, the resource budget, rubric,
+controls and pipeline settings, so changing any of them produces a new artifact.
+The manifest counts rows deferred for `resources_over_budget` with the other
+normalization reasons.
 
-Audit columns include source provenance, `raw_json`, `task_json`, normalization
-changes, check results, GLM quality/reference/confidence findings, `filter_status`
-and `filter_reasons`. Rewrite columns retain the original task, edits, reason,
-parent identity and lineage. `grader_readiness` is separate from quality. Original
-source data and opaque evaluator contracts remain available for later binding.
-
-## Instruction repair
-
-Use `--rewrite-plan SOURCE plan.json` alongside the ordinary source selection.
-The plan selects task IDs from an earlier audit and supplies a repair rubric:
-
-```json
-{
-  "task_ids": ["TASK_ID_FROM_AUDIT"],
-  "rubric": {
-    "id": "structured-instruction-repair",
-    "version": "1",
-    "criteria": [
-      "Remove contradictory formatting boilerplate while preserving the public schema and supplied facts."
-    ]
-  }
-}
-```
-
-Repairs apply to a single user instruction. Tools, resources and verifier fields
-remain unchanged. A proposal that invents missing information or changes the task
-contract must be rejected. Accepted instruction edits receive new candidate IDs;
-checks, original-aware quality review and filtering run again. Invalid, unchanged
-or unavailable proposals retain the original task and its existing decision.
-
-## Environment evidence
-
-`--environment-inventory SOURCE inventory.json` adds scoped file evidence to that
-source's review rubric. `EnvironmentInventory` records the environment identity,
-origin, roots, paths and completeness. A declared file list and an observed live
-filesystem inventory support different claims; keep that distinction explicit.
-Neither establishes that a golden solution or source evaluator ran successfully.
+The
+[pipeline contract](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/README.md)
+describes each stage in detail.

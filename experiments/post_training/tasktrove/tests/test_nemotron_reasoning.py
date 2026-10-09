@@ -13,21 +13,17 @@ import json
 import tempfile
 from pathlib import Path
 
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.grade import grade
 from verifyit.spec import ExactSpec, ReasoningGymSpec, ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.nemotron_reasoning import CASES_FILE, TRANSFORM_SCRIPT
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    TEST_SH,
-    read_task_binary,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import verify_task
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
