@@ -63,6 +63,7 @@ class HarborRecord:
 
 TASKS_SCHEMA = arrow_schema(HarborRecord)
 IN_PROCESS_FILE_MODES = frozenset({"exact", "math", "json-schema", "mcq", "ifeval", "xml-elements", "csv-columns"})
+VERIFIER_SPEC_PATH = "tests/taskcompendium-verifier.toml"
 
 
 def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
@@ -114,13 +115,13 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         files.update(verifier_runtime())
         # Harbor reserves tests/verifier.toml for its image-installed verifyit command.
         # Keep the bundled runtime wrapper in control of grading and public-file staging.
-        files["tests/taskcompendium-verifier.toml"] = render_spec(spec).encode()
+        files[VERIFIER_SPEC_PATH] = render_spec(spec).encode()
         files["tests/test.sh"] = (
-            b"#!/bin/bash\nset -euo pipefail\n"
-            b"export PYTHONPATH=/tests/runtime\n"
-            b"exec python3 -c 'from verifyit.grade import main; raise SystemExit(main())' "
-            b"/tests/taskcompendium-verifier.toml\n"
-        )
+            "#!/bin/bash\nset -euo pipefail\n"
+            "export PYTHONPATH=/tests/runtime\n"
+            "exec python3 -c 'from verifyit.grade import main; raise SystemExit(main())' "
+            f"/{VERIFIER_SPEC_PATH}\n"
+        ).encode()
         mode = grader.mode
         timeout = float(grader.parameters.get("timeout", 600))
         grader_env = {}
@@ -148,7 +149,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         ).encode()
         files["tests/test.sh"] = (
             "#!/bin/bash\nset -euo pipefail\nexport PYTHONPATH=/tests/runtime\n"
-            "exec python3 /tests/grade_candidate.py /tests/taskcompendium-verifier.toml "
+            f"exec python3 /tests/grade_candidate.py /{VERIFIER_SPEC_PATH} "
             f"{shlex.quote(answer_path)}\n"
         ).encode()
     elif grader.environment.setup_commands:
