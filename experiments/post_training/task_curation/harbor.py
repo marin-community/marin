@@ -13,7 +13,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from functools import cache
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 import click
 import pyarrow as pa
@@ -77,6 +77,7 @@ TASKS_SCHEMA = arrow_schema(HarborRecord)
 IN_PROCESS_FILE_MODES = frozenset({"exact", "math", "json-schema", "mcq", "ifeval", "xml-elements", "csv-columns"})
 VERIFIER_SPEC_PATH = "tests/taskcompendium-verifier.toml"
 HARBOR_REWARD_PATH = "/logs/verifier/reward.txt"
+GRADER_STDOUT_PATH = "/logs/verifier/taskcompendium-stdout.txt"
 REPOSITORY_WORKSPACE = "/testbed"
 HARBOR_SCRIPT_ARGV = ("bash", "/tests/test.sh")
 
@@ -103,11 +104,18 @@ def verifier_runtime() -> dict[str, bytes]:
     }
 
 
-def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str) -> HarborRecord:
-    """Export supported file-delivery contracts with separate agent and verifier environments."""
-    if grader_image is not None and PINNED_IMAGE.fullmatch(grader_image) is None:
-        raise ValueError("The verifier image must be explicitly pinned by digest")
-    task = TaskSpec.model_validate_json(row["task_json"])
+@dataclass(frozen=True)
+class _VerifierProgram:
+    files: dict[str, bytes]
+    modes: dict[str, str]
+    answer_path: str | None
+    mode: str
+    timeout: float
+    env: dict[str, str]
+    cwd: str
+
+
+def _validate_harbor_task(task: TaskSpec) -> None:
     environment = task.environment_requirements
     grader = task.grader
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
@@ -152,6 +160,11 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         raise UnsupportedHarborTask("Agent setup commands and package locks require an environment build")
     if set(environment.tool_providers) - {"shell"}:
         raise UnsupportedHarborTask("Only shell tool providers have Harbor lowering")
+
+
+def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProgram:
+    grader = task.grader
+    repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
     files, modes = {}, {}
     if repository_state:
         assert isinstance(grader, ScriptGrader) and grader.environment.docker_build is not None
@@ -195,12 +208,12 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
             files["tests/test.sh"] = (
                 "#!/bin/bash\nset -euo pipefail\n"
                 f"mkdir -p /logs/verifier\nrm -f {HARBOR_REWARD_PATH}\n"
-                f"{shlex.join(grader.argv)} > /logs/verifier/taskcompendium-stdout.txt\n"
+                f"{shlex.join(grader.argv)} > {GRADER_STDOUT_PATH}\n"
                 "export PYTHONPATH=/tests/runtime\npython3 - <<'PY'\n"
                 "from pathlib import Path\n"
                 "from verifyit.modes.extract import last_line\n"
                 "from verifyit.modes.grade_script import parse_reward_number\n"
-                "with Path('/logs/verifier/taskcompendium-stdout.txt').open('rb') as stdout:\n"
+                f"with Path({GRADER_STDOUT_PATH!r}).open('rb') as stdout:\n"
                 f"    output = stdout.read({DIAGNOSTIC_OUTPUT_BYTES}).decode(errors='replace')\n"
                 "reward = parse_reward_number(last_line(output))\n"
                 f"Path({HARBOR_REWARD_PATH!r}).write_text(str(reward))\nPY\n"
@@ -233,7 +246,30 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         ).encode()
     elif grader.environment.setup_commands:
         raise UnsupportedHarborTask("Verifier setup commands require an environment build")
-    prompt = task.context.events[0].content
+    return _VerifierProgram(
+        files=files,
+        modes=modes,
+        answer_path=answer_path,
+        mode=mode,
+        timeout=timeout,
+        env=grader_env,
+        cwd=grader_cwd,
+    )
+
+
+def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str) -> HarborRecord:
+    """Export supported file-delivery contracts with separate agent and verifier environments."""
+    if grader_image is not None and PINNED_IMAGE.fullmatch(grader_image) is None:
+        raise ValueError("The verifier image must be explicitly pinned by digest")
+    task = TaskSpec.model_validate_json(row["task_json"])
+    _validate_harbor_task(task)
+    environment = task.environment_requirements
+    grader = task.grader
+    repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
+    verifier = _verifier_program(task, grader_image)
+    files, modes = verifier.files, verifier.modes
+    answer_path = verifier.answer_path
+    prompt = cast(TextMessage, task.context.events[0]).content
     if task.answer_type == AnswerType.TEXT:
         if answer_path is None:
             raise UnsupportedHarborTask("Text grader has no answer-file destination")
@@ -319,10 +355,10 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         "environment": {"env": environment.environment_variables},
         "verifier": {
             "environment_mode": "separate",
-            "timeout_sec": timeout,
-            "env": grader_env,
+            "timeout_sec": verifier.timeout,
+            "env": verifier.env,
             "environment": {
-                "workdir": grader_cwd,
+                "workdir": verifier.cwd,
                 "env": grader.environment.environment_variables if grader.environment is not None else {},
             },
         },
@@ -355,7 +391,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         family=family,
         template_id=template,
         converter="taskcompendium",
-        mode=mode,
+        mode=verifier.mode,
         dockerfile_id=hashlib.sha256(dockerfile.encode()).hexdigest()[:12],
         language="",
         tags=list(task.tags),
