@@ -20,7 +20,7 @@ the step emitted are replayed. Otherwise the step runs and its output is written
 name passed to ``invalidate`` is recomputed (and its record replaced) on every call in this run.
 
 Outputs must round-trip through a pydantic ``TypeAdapter`` of the return annotation: dataclasses,
-pydantic models (``TaskSpec``, ``VerifierSpec``), tuples, and primitives do. Large files belong in
+pydantic models (``TaskSpec``, ``LoweredTaskSpec``), tuples, and primitives do. Large files belong in
 the blob store as ``Blob`` references rather than inline in an output.
 """
 
