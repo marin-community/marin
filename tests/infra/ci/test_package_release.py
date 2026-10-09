@@ -135,6 +135,7 @@ def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["lib/iris/hatch_build.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/finestore/src/finestore/eval.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/shellbox/src/shellbox/machine.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/verifyit/README.md"]) == ["python-libs"]
     assert packages_for_changes(["scripts/ci/package_release.py"]) == [
         "dupekit",
         "finelog",

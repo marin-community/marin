@@ -151,6 +151,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 "lib/shellbox/README.md",
                 "lib/verifyit/src/**",
                 "lib/verifyit/pyproject.toml",
+                "lib/verifyit/README.md",
                 "lib/taskcompendium/src/**",
                 "lib/taskcompendium/pyproject.toml",
                 "lib/rolloutengine/src/**",
