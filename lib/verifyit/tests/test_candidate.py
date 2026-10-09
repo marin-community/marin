@@ -4,11 +4,11 @@
 """In-process candidate grading works without TaskCompendium or a filesystem harness."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import pytest
-from verifyit.candidate import IN_PROCESS_MODES, Candidate, candidate_spec, grade_candidate
-from verifyit.grade import InvalidTask, Status
+from verifyit.candidate import Candidate, candidate_spec, grade_candidate
+from verifyit.grade import InvalidTask, Status, run
 from verifyit.json_comparison import NumericTypePolicy
 from verifyit.spec import (
     ExactSpec,
@@ -59,14 +59,30 @@ DISPATCH_CASES = {
 }
 
 
-@pytest.mark.parametrize("mode", sorted(IN_PROCESS_MODES))
-def test_every_in_process_mode_grades_a_typed_candidate_from_a_json_configuration(mode):
+@pytest.mark.parametrize("mode", sorted(DISPATCH_CASES))
+def test_in_process_and_file_grading_from_json_and_toml_contracts(mode, tmp_path):
     case = DISPATCH_CASES[mode]
     spec = candidate_spec(mode, json.loads(json.dumps(case.parameters)))
     correct = grade_candidate(spec, case.correct, case.resources)
     wrong = grade_candidate(spec, case.wrong, case.resources)
     assert (correct.status, correct.reward) == (Status.SCORED, 1.0)
     assert (wrong.status, wrong.reward) == (Status.SCORED, 0.0)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    for name, data in case.resources.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    for candidate, expected in ((case.correct, 1.0), (case.wrong, 0.0)):
+        if isinstance(candidate, tuple):
+            text = json.dumps([asdict(call) for call in candidate])
+        elif isinstance(candidate, str):
+            text = candidate
+        else:
+            text = json.dumps(candidate)
+        (tmp_path / "answer.txt").write_text(text)
+        verdict = run(spec_path, tmp_path)
+        assert (verdict.status, verdict.reward) == (Status.SCORED, expected)
 
 
 @pytest.mark.parametrize(
@@ -84,6 +100,21 @@ def test_candidate_of_the_wrong_shape_is_a_caller_error(spec, candidate):
 def test_missing_schema_resource_makes_the_task_invalid():
     verdict = grade_candidate(JsonSchemaSpec(schema="schema.json"), '{"name": "Ada"}', {})
     assert verdict.status == Status.INVALID_TASK
+
+
+@pytest.mark.parametrize(
+    "candidate,resources,status,reason",
+    [
+        ("", {}, Status.INVALID_TASK, None),
+        ("", {"schema.json": b"\xff"}, Status.SCORED, "empty_output"),
+        ('{"name": "Ada"}', {"schema.json": b"\xff"}, Status.INVALID_TASK, None),
+    ],
+)
+def test_schema_resource_errors_and_empty_candidate_preserve_admission_order(candidate, resources, status, reason):
+    verdict = grade_candidate(JsonSchemaSpec(), candidate, resources)
+    assert (verdict.status, verdict.reward) == (status, 0.0)
+    if reason is not None:
+        assert verdict.detail["reason"] == reason
 
 
 @pytest.mark.parametrize("mode", [Mode.MCQ, Mode.XML_ELEMENTS, Mode.IFEVAL])
