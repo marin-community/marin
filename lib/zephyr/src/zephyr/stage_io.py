@@ -18,15 +18,18 @@ from typing import Protocol
 
 import cloudpickle
 import humanfriendly
+import pyarrow as pa
 from fray.types import ResourceConfig
 from rigging.filesystem.atomic import unique_temp_path
 from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import prefix_join
 
-from zephyr.plan import PhysicalOp, Scatter
+from zephyr.plan import ParquetOutput, PhysicalOp, Scatter
+from zephyr.readers import load_parquet_batch
 from zephyr.shuffle import ListShard, _write_scatter
 from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY, per_second
 from zephyr.worker_context import CounterEntry
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir, write_parquet_file
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +104,27 @@ class PickleDiskChunk:
 class TaskResult:
     """Result of a single worker task.
 
-    Always contains a ListShard. For non-scatter stages, refs are
-    PickleDiskChunks. For scatter stages, refs contain file paths
+    Always contains a ListShard. Map refs are pickle chunks or Parquet fragments
+    for a following Parquet writer. For scatter stages, refs contain file paths
     (the actual metadata lives in ``metadata.msgpack`` sidecar files
     read lazily by reducers).
     """
 
     shard: ListShard
+
+
+@dataclass(frozen=True)
+class ParquetDiskChunk:
+    """A fragment consumed as Arrow batches by its final Parquet writer."""
+
+    path: str
+    schema: pa.Schema
+
+    def __iter__(self) -> Iterator:
+        # Parquet canonicalizes nested field names (list item -> element).
+        # Restore the caller's Arrow schema before the final writer validates it.
+        for batch in load_parquet_batch(self.path):
+            yield batch.cast(self.schema)
 
 
 def _format_count(n: float) -> str:
@@ -219,6 +236,7 @@ def _write_stage_output(
     shard_idx: int,
     scatter_op: Scatter | None,
     total_shards: int,
+    parquet_output: ParquetOutput | None = None,
 ) -> TaskResult:
     """Write stage output to disk.
 
@@ -226,8 +244,8 @@ def _write_stage_output(
     wrapping and ``metadata.msgpack`` sidecars. Returns TaskResult with compact
     scatter metadata.
 
-    For non-scatter stages, batches items into pickle chunk files. Returns
-    TaskResult with a ListShard.
+    Other stages use pickle chunks, or Parquet fragments when the planner
+    supplies a schema for a following Parquet writer.
     """
     if scatter_op is not None:
         # Peek with islice, not ``next(stage_gen, None)``: a stage whose first
@@ -251,6 +269,11 @@ def _write_stage_output(
             combiner_fn=scatter_op.combiner_fn,
         )
         return TaskResult(shard=shard)
+
+    if parquet_output is not None:
+        path = unique_temp_path(prefix_join(stage_dir, f"shard-{shard_idx:04d}/fragment.parquet"))
+        write_parquet_file(stage_gen, path, schema=parquet_output.schema)
+        return TaskResult(shard=ListShard(refs=[ParquetDiskChunk(path, parquet_output.schema)]))
 
     def chunk_path_fn(idx: int) -> str:
         return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"

@@ -1323,18 +1323,19 @@ class ZephyrCoordinator:
                 return None
 
             last_worker_stage_idx = max(
-                (i for i, st in enumerate(plan.stages) if st.stage_type != StageType.RESHARD),
+                (i for i, st in enumerate(plan.stages) if st.stage_type.runs_on_worker),
                 default=-1,
             )
 
             with self._lock:
                 run.plan_stages = list(plan.stages)
 
+            fragment_layout = _FragmentLayout()
             for stage_idx, stage in enumerate(plan.stages):
                 node_id = stage_node_id(ROOT_PLAN_PREFIX, stage_idx)
-                if stage.stage_type == StageType.RESHARD:
+                if not stage.stage_type.runs_on_worker:
                     with self._track_plan_node(run, node_id):
-                        shards = _reshard_refs(shards, stage.output_shards or len(shards))
+                        shards = fragment_layout.apply(stage, shards)
                     continue
 
                 aux_per_shard = self._compute_join_aux(run, stage.operations, shards, stage_idx)
@@ -1545,12 +1546,13 @@ class ZephyrCoordinator:
                 continue
 
             right_refs = _build_source_shards(op.right_plan.source_items)
+            fragment_layout = _FragmentLayout()
             prefix = join_right_prefix(stage_node_id(ROOT_PLAN_PREFIX, parent_stage_idx), i)
 
             for stage_idx, right_stage in enumerate(op.right_plan.stages):
                 with self._track_plan_node(run, stage_node_id(prefix, stage_idx)):
-                    if right_stage.stage_type == StageType.RESHARD:
-                        right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
+                    if not right_stage.stage_type.runs_on_worker:
+                        right_refs = fragment_layout.apply(right_stage, right_refs)
                         continue
 
                     right_refs = self._run_worker_stage(
@@ -1743,6 +1745,34 @@ def _try_read_coordinator_result(result_path: str) -> Any:
         return None
 
 
+@dataclass
+class _FragmentLayout:
+    """Remember the parent layout while independent map tasks process its chunks."""
+
+    counts: list[int] | None = None
+
+    def apply(self, stage: PhysicalStage, shards: list[ListShard]) -> list[ListShard]:
+        if stage.stage_type == StageType.RESHARD:
+            assert self.counts is None, "Reshard requires concatenated input"
+            return _reshard_refs(shards, stage.output_shards or len(shards))
+        if stage.stage_type == StageType.SPLIT:
+            assert self.counts is None, "Nested Split is not supported"
+            self.counts = [max(1, len(shard.refs)) for shard in shards]
+            # Empty parents retain a task and therefore their original output slot.
+            return [ListShard(refs=[ref]) for shard in shards for ref in shard.refs or [MemChunk(items=[])]]
+        if stage.stage_type == StageType.CONCAT:
+            assert self.counts is not None, "Concat requires a preceding Split"
+            assert sum(self.counts) == len(shards), "Fragment count changed during map"
+            output = []
+            start = 0
+            for count in self.counts:
+                output.append(ListShard(refs=[ref for shard in shards[start : start + count] for ref in shard.refs]))
+                start += count
+            self.counts = None
+            return output
+        raise ValueError(f"Not a reference stage: {stage.stage_type}")
+
+
 def _reshard_refs(shards: list[ListShard], num_shards: int) -> list[ListShard]:
     """Reshard ListShard refs by output shard index without loading data."""
     output_by_shard: dict[int, list[Iterable]] = defaultdict(list)
@@ -1766,7 +1796,7 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[ListShard]:
     num_shards = max(items_by_shard.keys()) + 1 if items_by_shard else 0
     shards: list[ListShard] = []
     for i in range(num_shards):
-        shards.append(ListShard(refs=[MemChunk(items=items_by_shard.get(i, []))]))
+        shards.append(ListShard(refs=[MemChunk(items=[item]) for item in items_by_shard.get(i, [])]))
 
     return shards
 

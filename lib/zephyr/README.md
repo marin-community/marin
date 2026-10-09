@@ -32,6 +32,40 @@ ctx.execute(pipeline)
 
 Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_path_column` to use another name). Selecting only that column returns the source path for each matching row. Parquet path-only reads skip source data columns unless a filter needs them.
 
+For CPU-heavy local row transforms, enable intra-shard execution on the context:
+
+```python
+from zephyr.context import IntraShardExecution, ZephyrContext
+from zephyr.runners import SubprocessRunner
+
+ctx = ZephyrContext(
+    max_workers=4,
+    stage_runner_factory=SubprocessRunner,
+    intra_shard_execution=IntraShardExecution.AUTO,
+)
+```
+
+The planner inserts `Split → Map → Concat` around independent row operations.
+Use this option when row callbacks do not depend on per-shard mutable state.
+When there are fewer source shards than workers, Parquet file sources use the
+worker limit to divide existing shards into row ranges; later stages split at
+existing intermediate chunk boundaries.
+`Concat` restores each original shard's row order and ID before writes, joins,
+windows, `take_per_shard`, and `map_shard`. Output filenames and shard counts
+therefore stay the same. The default is `OFF`.
+
+This adds intermediate writes and reads, without a key shuffle. When an
+independent map chain ends in `write_parquet` with an explicit schema, fragments
+are written as Parquet and the final writer consumes Arrow batches. Other
+boundaries use the existing pickle chunks. Parquet workers
+still read overlapping row groups in full, so splitting a large row group
+increases read work and memory use. Batch-mode Parquet sources retain their
+original batch boundaries. Opaque loaders and `map_shard` callbacks are not
+subdivided internally; a source yielding a single item or chunk may still have
+only one runnable task.
+As with explicit resharding, materialized map stages run before a final writer
+can skip an existing output file.
+
 **Transformations:**
 - `.map(fn)` - transform each item
 - `.flat_map(fn)` - expand items (e.g., `load_jsonl`)

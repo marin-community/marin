@@ -180,18 +180,19 @@ def open_file(file_path: str, mode: str = "rb"):
         yield f
 
 
-def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int, int]]:
+def compute_parquet_splits(path: str, approx_shard_bytes: int | None) -> list[tuple[int, int]]:
     """Compute row-range split points from Parquet footer metadata.
 
     Reads only the file footer — no data is transferred. Splits are aligned to
     row-group boundaries, so actual shard sizes may exceed approx_shard_bytes when
-    a single row group is larger than the target. Files whose total compressed size
-    is below approx_shard_bytes return a single span.
+    a single row group is larger than the target. Without a byte target, returns
+    one span covering the entire file.
 
     Args:
         path: Path to the Parquet file (local or remote via fsspec).
-        approx_shard_bytes: Approximate target split size in bytes. Best-effort:
-            a row group will never be split, so individual shards may be larger.
+        approx_shard_bytes: Approximate target split size in uncompressed bytes.
+            A row group will never be split, so individual shards may be larger.
+            None returns a single span covering all rows.
 
     Returns:
         List of (row_start, row_end) tuples where row_end is exclusive.
@@ -210,7 +211,7 @@ def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int
         rg = metadata.row_group(i)
         rg_bytes = rg.total_byte_size
 
-        if split_bytes > 0 and split_bytes + rg_bytes > approx_shard_bytes:
+        if approx_shard_bytes is not None and split_bytes > 0 and split_bytes + rg_bytes > approx_shard_bytes:
             splits.append((split_start, cumulative_rows))
             split_start = cumulative_rows
             split_bytes = 0
