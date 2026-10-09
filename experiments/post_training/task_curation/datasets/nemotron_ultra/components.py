@@ -498,7 +498,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
                 ),
             ),
         ),
-        "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym": SourceInfo(
+        f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_GYM}": SourceInfo(
             id=(
                 "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_com"
                 "parison_agent/SWE-Gym/SWE-Gym"
@@ -517,7 +517,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
                 ),
             ),
         ),
-        ("agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-" "rebench-V2"): SourceInfo(
+        f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
             id=(
                 "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_com"
                 "parison_agent/nebius/SWE-rebench-V2"
