@@ -290,6 +290,27 @@ jobs:
             TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py"
             TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_gdn_layer.py"
           fi
+          # [stall-diag] Temporary instrumentation for the pre-uv stall; not for merge.
+          # GitHub timestamps every log line, so the markers carry no dates.
+          # The stall happens before pytest starts, so one short file keeps each
+          # diagnostic run cheap on the shared TPU runners.
+          TPU_TEST_PATHS="lib/levanter/tests/test_jax_utils.py"
+          echo "[stall-diag] runner=$RUNNER_NAME uptime: $(uptime)"
+          docker image inspect --format '[stall-diag] image {{.Id}} created {{.Created}}' "$DOCKER_IMAGE" \
+            || echo "[stall-diag] image $DOCKER_IMAGE is not on this VM"
+          df -h / "$UV_CACHE_HOST" | sed 's/^/[stall-diag] /'
+          # Sample host process state every 30 s until pytest starts.
+          (
+            while ! pgrep -f "bin/pytest -n 0" > /dev/null; do
+              sleep 30
+              echo "[stall-diag] sample loadavg: $(cut -d' ' -f1-3 /proc/loadavg)"
+              docker ps -a --no-trunc --format '[stall-diag] container {{.ID}} {{.Status}} {{.Image}}'
+              ps -eo pid,ppid,stat,etimes,pcpu,rss,wchan:24,args --sort=start_time \
+                | tail -n 20 | cut -c1-220 | sed 's/^/[stall-diag] /'
+            done
+          ) &
+          DIAG_SAMPLER=$!
+          trap 'kill "$DIAG_SAMPLER" 2>/dev/null || true' EXIT
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
@@ -319,11 +340,14 @@ jobs:
             -w /workspace \
             $DOCKER_IMAGE \
             bash -c "\
+              echo '[stall-diag] container started' && \
               rm -rf \"\$UV_PROJECT_ENVIRONMENT\" && \
+              echo '[stall-diag] venv removed' && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
+              echo '[stall-diag] workspace copied' && uv --version && \
               ( status=0; \
                 timeout --kill-after=5 --signal=TERM 2090 \
-                uv run --package marin-levanter --frozen --group test --extra tpu \
+                uv run -v --package marin-levanter --frozen --group test --extra tpu \
                 pytest -n 0 $TPU_TEST_PATHS \
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
                 [ "\$status" -eq 5 ] && exit 0; \
