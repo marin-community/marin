@@ -299,11 +299,26 @@ jobs:
           docker image inspect --format '[stall-diag] image {{.Id}} created {{.Created}}' "$DOCKER_IMAGE" \
             || echo "[stall-diag] image $DOCKER_IMAGE is not on this VM"
           df -h / "$UV_CACHE_HOST" | sed 's/^/[stall-diag] /'
+          # Disk state: unwritten page cache and cumulative per-disk I/O counters
+          # (fields after the name: reads, merged, sectors read, ms reading, writes,
+          # merged, sectors written, ms writing, in flight, ms doing I/O, ...).
+          diag_disk() {
+            grep -E "^(Dirty|Writeback):" /proc/meminfo | tr -s ' ' | tr '\n' ' ' | sed 's/^/[stall-diag] mem /'
+            echo
+            awk '$3 ~ /^([sv]d[a-z]|nvme[0-9]+n[0-9]+)$/' /proc/diskstats | sed 's/^ */[stall-diag] diskstats /'
+          }
+          diag_disk
+          # Raw disk throughput, bypassing the page cache.
+          probe="$RUNNER_TEMP/stall-diag-probe"
+          dd if=/dev/zero of="$probe" bs=1M count=256 oflag=direct 2>&1 | tail -n 1 | sed 's/^/[stall-diag] write probe: /'
+          dd if="$probe" of=/dev/null bs=1M iflag=direct 2>&1 | tail -n 1 | sed 's/^/[stall-diag] read probe: /'
+          rm -f "$probe"
           # Sample host process state every 30 s until pytest starts.
           (
             while ! pgrep -f "bin/pytest -n 0" > /dev/null; do
               sleep 30
               echo "[stall-diag] sample loadavg: $(cut -d' ' -f1-3 /proc/loadavg)"
+              diag_disk
               docker ps -a --no-trunc --format '[stall-diag] container {{.ID}} {{.Status}} {{.Image}}'
               ps -eo pid,ppid,stat,etimes,pcpu,rss,wchan:24,args --sort=start_time \
                 | tail -n 20 | cut -c1-220 | sed 's/^/[stall-diag] /'
