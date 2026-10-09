@@ -55,7 +55,7 @@ def main() -> None:
         if len(payload) != item["bytes"] or hashlib.sha256(payload).hexdigest() != item["sha256"]:
             raise ValueError(f"Checkpoint object differs from completion manifest: {item['name']}")
         operation = CommitOperationAdd(path_in_repo=item["name"], path_or_fileobj=payload)
-        api.preupload_lfs_files(args.repo_id, additions=[operation], repo_type="model", num_threads=1)
+        api.preupload_lfs_files(args.repo_id, additions=[operation], repo_type="model", num_threads=1, free_memory=True)
         logger.info("Preuploaded and hash-checked %s", item["name"])
         return operation
 

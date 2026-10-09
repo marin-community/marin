@@ -69,6 +69,10 @@ class CheckpointReader:
     def __init__(self, source: CheckpointSource):
         self.source = source
         self.fs, self.path = filesystem_for(source.path)
+        if self.fs.exists(prefix_join(self.path, "merge-recipe.json")) and not self.fs.exists(
+            prefix_join(self.path, MANIFEST_NAME)
+        ):
+            raise ValueError(f"Incomplete merged checkpoint: {source.path}")
         self.weight_map = json.loads(self.fs.cat_file(prefix_join(self.path, INDEX_NAME)))["weight_map"]
         self.shard_name = ""
         self.tensors: dict[str, torch.Tensor] = {}

@@ -116,6 +116,12 @@ def test_checkpoint_merge_handles_different_sharding_and_publishes_verified_mani
         tensor_coefficients=tensor_coefficients,
         row_overrides={},
     )
+    manifest_path = output / "merge-manifest.json"
+    completed_manifest = manifest_path.read_bytes()
+    manifest_path.unlink()
+    with pytest.raises(ValueError, match="Incomplete merged checkpoint"):
+        CheckpointReader(CheckpointSource(str(output), "interrupted-export"))
+    manifest_path.write_bytes(completed_manifest)
     reader = CheckpointReader(CheckpointSource(str(output), "merged"))
     torch.testing.assert_close(reader.tensor("a"), torch.tensor(expected_a), rtol=0, atol=0)
     torch.testing.assert_close(reader.tensor("b"), torch.tensor([[5.0]]), rtol=0, atol=0)
