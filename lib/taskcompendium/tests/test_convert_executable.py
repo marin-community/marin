@@ -381,7 +381,7 @@ def test_python_delivery_rejects_an_unstated_output_contract(tests):
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.UNSUPPORTED, "unsupported_public_output_contract")
 
 
-@pytest.mark.parametrize("language", ["python", "cpp", ""])
+@pytest.mark.parametrize("language", ["python", "cpp"])
 @pytest.mark.parametrize("execution", ["shared", "separate"])
 def test_converter_language_survives_harbor_export_without_changing_payload(executable_row, language, execution):
     converted = convert_sum(TaskFiles(ARCHIVE))

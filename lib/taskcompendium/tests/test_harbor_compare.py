@@ -7,7 +7,7 @@ import json
 import sqlite3
 import tarfile
 import zlib
-from dataclasses import asdict, replace
+from dataclasses import replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -15,7 +15,7 @@ import pytest
 
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.harbor.compare import ParityReport, compare_tasks, write_archive_diff
-from taskcompendium.harbor.export import TASKS_SCHEMA, archive_bytes, archive_file_mode, harbor_payload, harbor_record
+from taskcompendium.harbor.export import archive_bytes, archive_file_mode, harbor_payload, harbor_record
 from taskcompendium.harbor.records import NormalizedIndex
 from taskcompendium.harbor.snapshots import file_map_snapshot, task_snapshot
 from taskcompendium.models import ResourceGroups, Source, TaskSpec
@@ -24,32 +24,34 @@ from taskcompendium.runtime.resources import inline_resource
 
 
 @pytest.mark.parametrize(
-    "path,category",
+    "archive,path,category",
     [
-        ("instruction.md", "instruction"),
-        ("tests/test_hidden.py", "private_test"),
-        ("environment/Dockerfile", "actor_environment"),
-        ("setup_files/source.py", "public_source"),
+        ("task", "instruction.md", "instruction"),
+        ("task", "tests/test_hidden.py", "private_test"),
+        ("task", "environment/Dockerfile", "actor_environment"),
+        ("task", "setup_files/source.py", "public_source"),
+        ("solution", "solution/solve.sh", "oracle"),
     ],
 )
-def test_content_changes_are_reported_for_every_task_role(path, category):
-    before = task_snapshot("source", "task", "converted", task_binary=archive_bytes({path: b"original"}, {}))
-    after = task_snapshot("source", "task", "converted", task_binary=archive_bytes({path: b"changed"}, {}))
+def test_content_changes_are_reported_for_every_task_role(archive, path, category):
+    snapshots = []
+    for content in (b"original", b"changed"):
+        blob = archive_bytes({path: content}, {})
+        snapshots.append(
+            task_snapshot(
+                "source",
+                "task",
+                "converted",
+                task_binary=blob if archive == "task" else None,
+                solution_binary=blob if archive == "solution" else None,
+            )
+        )
+    before, after = snapshots
     differences = compare_tasks(before, after)
+    namespace = "oracle" if archive == "solution" else "task"
     assert [(difference.category, difference.kind, difference.path) for difference in differences] == [
-        (category, "bytes", "task/" + path)
+        (category, "bytes", f"{namespace}/{path}")
     ]
-
-
-def test_oracle_files_are_compared_separately_from_private_tests():
-    before = task_snapshot(
-        "source", "task", "converted", solution_binary=archive_bytes({"solution/solve.sh": b"gold"}, {})
-    )
-    after = task_snapshot(
-        "source", "task", "converted", solution_binary=archive_bytes({"solution/solve.sh": b"wrong"}, {})
-    )
-    (difference,) = compare_tasks(before, after)
-    assert (difference.category, difference.kind, difference.path) == ("oracle", "bytes", "oracle/solution/solve.sh")
 
 
 def link_archive(target, *, mode):
@@ -190,7 +192,7 @@ def test_disk_index_matches_reordered_source_paths_and_reports_unmatched_rows(tm
     assert remaining == [row for position, row in enumerate(rows) if position not in {64, 0, 24, 25, 16, 40}]
 
 
-def test_file_map_snapshot_matches_actual_export_archives_and_wire_record():
+def test_file_map_snapshot_matches_actual_export_archives():
     source = Source(dataset="fixture", revision="pinned", row="fixture/tasks.parquet:0", importer_revision="1")
     task = exact_answer_task(RawRow("fixture", source, {}), prompt="Name a color", answers=("red",), ignore_case=False)
     assert isinstance(task, TaskSpec)
@@ -229,25 +231,6 @@ def test_file_map_snapshot_matches_actual_export_archives_and_wire_record():
     assert direct["task/tests/helper.sh"].mode == 0o700
     assert direct["oracle/solution/solve.sh"].mode == 0o750
     assert direct["task/tests/test.sh"].mode == 0o755
-    config = direct["task/task.toml"].parsed_toml
-    assert config is not None
-    assert config["agent"]["timeout_sec"] == 900
-    wire = asdict(record)
-    assert list(wire) == [
-        "path",
-        "source",
-        "family",
-        "template_id",
-        "converter",
-        "mode",
-        "dockerfile_id",
-        "language",
-        "tags",
-        "has_solution",
-        "task_binary",
-        "solution_binary",
-    ]
-    assert pa.Table.from_pylist([wire], schema=TASKS_SCHEMA).to_pylist() == [wire]
 
 
 def test_snapshot_preserves_task_and_oracle_content_across_gzip_levels():

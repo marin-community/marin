@@ -35,45 +35,31 @@ def test_review_can_inspect_verifier_text_without_changing_task_bytes():
     assert resource_bytes(task.resources.verifier[0]) == resource_bytes(resource)
 
 
-def test_review_marks_omitted_fixture_content_and_retains_full_task():
+def test_review_bounds_private_and_build_files_without_changing_the_task():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     task = svamp_row_task(
         RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
     )
     assert isinstance(task, TaskSpec)
-    resource = inline_resource("tests/large.txt", b"a" * 100_000)
-    task = task.model_copy(update={"resources": ResourceGroups(verifier=(resource,))})
-    payload = json.loads(completion_body(task, SVAMP_RUBRIC, "reviewer", 100)["messages"][1]["content"])
-    preview = payload["resources"][0]
-    assert preview["truncated"] and preview["byte_count"] == 100_000
-    assert 0 < len(preview["text"]) < preview["byte_count"]
-    assert resource_bytes(task.resources.verifier[0]) == b"a" * 100_000
-
-
-def test_review_bounds_actor_and_grader_build_files_without_changing_the_recipe():
-    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = svamp_row_task(
-        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
-    )
-    build = DockerBuildContext(
-        files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"), inline_resource("large", b"x" * 100_000))
-    )
+    large = inline_resource("large", b"x" * 100_000)
+    build = DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"), large))
     environment = EnvironmentRequirements(docker_build=build)
     task = task.model_copy(
         update={
             "environment_requirements": environment,
             "grader": ScriptGrader(environment=environment, argv=("true",)),
+            "resources": ResourceGroups(verifier=(large,)),
         }
     )
     original = task.model_dump_json()
     payload = json.loads(completion_body(task, SVAMP_RUBRIC, "reviewer", 100)["messages"][1]["content"])
     assert "content_base64" not in json.dumps(payload)
-    assert {resource["role"] for resource in payload["resources"]} == {"actor_build", "grader_build"}
-    for resource in payload["resources"]:
-        if resource["path"] == "large":
-            assert resource["truncated"] and resource["byte_count"] == 100_000
-            assert len(resource["text"]) < resource["byte_count"]
-    assert payload["resource_manifest"]["total_count"] == 4
+    previews = {resource["role"]: resource for resource in payload["resources"] if resource["path"] == "large"}
+    assert previews.keys() == {"verifier", "actor_build", "grader_build"}
+    for preview in previews.values():
+        assert preview["truncated"] and preview["byte_count"] == 100_000
+        assert 0 < len(preview["text"]) < preview["byte_count"]
+    assert payload["resource_manifest"]["total_count"] == 5
     assert task.model_dump_json() == original
 
 
