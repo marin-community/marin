@@ -241,9 +241,15 @@ def test_mcq_source_ignores_unrelated_verifier_modes() -> None:
     assert python_grading_program(Modules(changed), route.roots, packages, route.bindings).digest != original.digest
 
 
-def test_grading_program_tracks_only_reachable_imported_graders() -> None:
+@pytest.mark.parametrize("import_source", ["from .compare import equal", "from . import compare"])
+def test_grading_program_tracks_only_reachable_imported_graders(import_source: str) -> None:
     modules = {
-        "grading.entry": "from .compare import equal\ndef grade(answer):\n return equal(answer)\n",
+        "grading.entry": (
+            import_source
+            + "\ndef grade(answer):\n return "
+            + ("compare.equal(answer)" if import_source == "from . import compare" else "equal(answer)")
+            + "\n"
+        ),
         "grading.compare": 'def equal(answer):\n return answer == "correct"\ndef unrelated():\n return 10\n',
     }
     roots = {"grading.entry": ["grade"]}
@@ -324,19 +330,6 @@ def test_verifyit_location_preserves_historical_package_provenance(subdirectory:
     repository = verifyit_repository(project)
     assert repository.repository == "org/repo" and repository.revision == revision
     assert repository.source_root == ("lib/verifyit/src" if subdirectory else "src")
-
-
-def test_grading_program_scopes_namespace_module_imports_to_called_helpers() -> None:
-    modules = {
-        "grading.entry": "from . import helpers\ndef grade(answer):\n return helpers.equal(answer)\n",
-        "grading.helpers": 'def equal(answer):\n return answer == "correct"\ndef unused():\n return 10\n',
-    }
-    roots = {"grading.entry": ["grade"]}
-    original = python_grading_program(Modules(modules), roots, ("grading",))
-    changed = {**modules, "grading.helpers": modules["grading.helpers"].replace("return 10", "return 20")}
-    assert python_grading_program(Modules(changed), roots, ("grading",)).digest == original.digest
-    changed["grading.helpers"] = modules["grading.helpers"].replace('== "correct"', '== "different"')
-    assert python_grading_program(Modules(changed), roots, ("grading",)).digest != original.digest
 
 
 @pytest.mark.parametrize(

@@ -13,7 +13,14 @@ from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
-from experiments.post_training.task_curation.source import GradingSelection, RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import (
+    HARBOR_GRADING_REVISION,
+    MARINSKYRL_GRADING_REVISION,
+    GradingSelection,
+    RlDataSource,
+    SourceInfo,
+    SourceReference,
+)
 
 MCQ_VERIFIER = SourceReference(
     "mcq",
@@ -22,9 +29,7 @@ MCQ_VERIFIER = SourceReference(
         "https://github.com/marin-community/MarinSkyRL/tree/"
         "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/mcq"
     ),
-    grading=GradingSelection(
-        "verifyit", (), "e44c4bfcb62c489286a1264094e6d9c883aaf0d2", "8abc63e3bdb37af1d345fcac123ef7d2122598f3"
-    ),
+    grading=GradingSelection("verifyit", (), MARINSKYRL_GRADING_REVISION, HARBOR_GRADING_REVISION),
 )
 
 GPQA_CHOICES = ("Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3")

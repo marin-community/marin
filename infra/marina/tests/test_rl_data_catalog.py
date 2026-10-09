@@ -13,10 +13,10 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 
 from infra.marina.applets.rl_data_catalog.server.app import (
+    active_sources_with_review_state,
     difficulty_summary,
     migrate,
     refresh_catalog,
-    reviewed_sources,
     save_snapshot,
     source_with_review,
 )
@@ -557,7 +557,7 @@ def test_grading_migration_preserves_legacy_reviews_then_tracks_only_selected_gr
             "review_source_revision='data1',review_verifier_revision='raw1'"
         )
     )
-    pending = reviewed_sources(connection)[0]
+    pending = active_sources_with_review_state(connection)[0]
     assert pending["quality"] == "good" and pending["grading_tracking"] == "legacy"
     claim = {
         "schema_version": 1,
@@ -583,15 +583,15 @@ def test_grading_migration_preserves_legacy_reviews_then_tracks_only_selected_gr
     )
     payload["verifier_revision"] = "unrelated-package-change"
     save_snapshot(connection, Snapshot("MarinSkyRL", "repo2", "2026-10-08", [payload]))
-    enrolled = reviewed_sources(connection)[0]
+    enrolled = active_sources_with_review_state(connection)[0]
     assert enrolled["quality"] == "good" and enrolled["grading_tracking"] == "source-specific"
     payload["verifier_revision"] = "raw1"
     payload["grading_revision"] = "grader2"
     save_snapshot(connection, Snapshot("MarinSkyRL", "repo3", "2026-10-08", [payload]))
-    changed = reviewed_sources(connection)[0]
+    changed = active_sources_with_review_state(connection)[0]
     assert changed["review_stale"] and changed["quality"] is None
     del payload["grading_revision"]
     save_snapshot(connection, Snapshot("MarinSkyRL", "repo4", "2026-10-08", [payload]))
-    missing = reviewed_sources(connection)[0]
+    missing = active_sources_with_review_state(connection)[0]
     assert missing["review_stale"] and missing["quality"] is None
     assert missing["review_id"] == "review1"

@@ -61,7 +61,14 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     tasktrove_source,
 )
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
-from experiments.post_training.task_curation.source import GradingSelection, RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import (
+    HARBOR_GRADING_REVISION,
+    MARINSKYRL_GRADING_REVISION,
+    GradingSelection,
+    RlDataSource,
+    SourceInfo,
+    SourceReference,
+)
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
@@ -366,8 +373,8 @@ def sources() -> list[RlDataSource]:
                     grading=GradingSelection(
                         "verifyit",
                         (),
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2",
-                        "8abc63e3bdb37af1d345fcac123ef7d2122598f3",
+                        MARINSKYRL_GRADING_REVISION,
+                        HARBOR_GRADING_REVISION,
                     ),
                 ),
             ),

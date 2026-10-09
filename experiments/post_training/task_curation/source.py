@@ -8,6 +8,9 @@ from typing import Literal
 
 from experiments.post_training.task_curation.pipeline import RlDataPipeline
 
+MARINSKYRL_GRADING_REVISION = "e44c4bfcb62c489286a1264094e6d9c883aaf0d2"
+HARBOR_GRADING_REVISION = "8abc63e3bdb37af1d345fcac123ef7d2122598f3"
+
 
 @dataclass(frozen=True)
 class GradingSelection:

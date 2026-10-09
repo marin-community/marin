@@ -364,7 +364,7 @@ def refresh_catalog(connection: Connection, catalog_path: Path = CATALOG_PATH, f
     return {"busy": False, "results": results}
 
 
-def reviewed_sources(connection: Connection) -> list[dict[str, Any]]:
+def active_sources_with_review_state(connection: Connection) -> list[dict[str, Any]]:
     """Read active sources with their review and grading applicability evidence."""
     return [
         source_with_review(dict(row))
@@ -407,7 +407,7 @@ def create_api(services: AppletServices) -> FastAPI:
     @api.get("/sources")
     def sources() -> dict[str, Any]:
         with engine.connect() as connection:
-            rows = reviewed_sources(connection)
+            rows = active_sources_with_review_state(connection)
             refreshes = [
                 dict(row)
                 for row in connection.execute(text("SELECT * FROM catalog_refreshes ORDER BY origin")).mappings()
