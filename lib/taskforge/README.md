@@ -16,14 +16,17 @@ src/taskforge/
   atomic_file.py   atomic file replacement
   llm/        GLM-5.3 transport, structured calls, call cache, agent loop, web tools, RolloutEngine model
   ledger/     timed spans to per-item JSONL and, on Iris, Finelog
-scripts/      ledger summary
+  spec/       TaskSpec assembly and fixed controls
+  sandbox/    MachineFactory selection per host, up-front task refusals, image builds
+scripts/      Iris image builder, shellbox Iris probe, ledger summary
+docker/       grader-base image build context
 ```
 
 Packages are totally ordered. A package imports only from packages to its left and from external
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> llm
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm
 ```
 
 ## Seams
@@ -39,6 +42,36 @@ content_hash -> atomic_file -> ledger -> llm
   `prefix` as the start of the assistant turn and returns a `Completion` whose `content` starts
   with it. Use it to force an output format such as proposal front matter.
   `llm.client.prefill_request_fields(policy, request_fields)` returns the request fields it sends.
+- `spec.draft.assemble(task_id, instruction, answer_type, answer_format, grader, source, *,
+  environment, files, output_paths, system, final_tools, tags) -> TaskSpec`: the semantic task.
+  `answer_format` (a TaskCompendium `AnswerFormat` such as `PlainText()` or `AnswerCall()`) says how
+  the final answer is requested and read. `environment` is `requirements(image=, setup=, workdir=,
+  env=)` or `None` for a task without a machine; `files` are agent-visible `file("workspace/x", ...)`
+  resources relative to the machine root; `grader` is a `GraderPackage` from `answer_grader(spec)`
+  (a verifyit mode graded in process, or in a verifier machine given `environment=`),
+  `python_grader(script, config, environment=, answer_path=, timeout=)` (`python3 /tests/grade.py`
+  in a verifier machine) or `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`.
+  `grader_environment(task_image)` is the verifier machine's environment: the task image, or
+  `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
+- `spec.draft.lower(task, *, host, task_machine, verifier_machine, session, factories) ->
+  LoweredTaskSpec`: the only place Taskforge builds a lowered spec. `machine(...)` gives each
+  machine's settings and `session(...)` the turn budget and deadlines; `lower` picks ShellSim for a
+  machine without an image or packages lock, the local backend for a lock alone, and the host's
+  container backend for an image, so a lowered spec is bound to its host. A grader with an
+  environment takes a verifier machine; no other grader does.
+- `spec.controls.Control`: one labeled candidate submission (`kind`, `category`, `concern`,
+  `author`, a `Transcript` or `Workspace` payload, an `Expectation`). `concern` is a required
+  `ControlConcern`: `reference`, `acceptance`, `extraction` or `shortcut`. A `Workspace` holds
+  files relative to the machine root and needs a task machine. `validate_controls(task, controls)`
+  checks a set against its task; `controls_json` and `parse_controls` round-trip it.
+- `sandbox.factories.machine_factories(where, controller_url, image_cache)`: the factories for
+  `ShellboxRolloutEngine`, keyed by shellbox `Backend` value as `MachineRuntimeSpec.backend` names
+  them: ShellSim plus Docker on a laptop, ShellSim plus gVisor on Iris (`container_backend(where)`),
+  plus the local backend for lock-only graders when bubblewrap works in the Iris task.
+  On Iris it takes the controller URL and no image cache; on a laptop it takes the directory where
+  the Docker factory keeps Skopeo-prepared images and no controller URL. The caller names that
+  directory. `task_refusals(lowered, factory_capabilities(where))` lists every typed reason a
+  lowered task cannot run on them.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -62,6 +95,25 @@ content-addressed cache and does not record to the ledger.
 
 ## Decisions
 
+Task specs are upstream's. A built task is a TaskCompendium `TaskSpec` and the `LoweredTaskSpec`
+that says how it runs. `spec.draft.assemble` builds the semantic task and `spec.draft.lower` alone
+builds the lowered record, so a move of either is a single-site change.
+Task-specific grading is the task's own code, private in `resources.verifier`, run by a
+`ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
+the task's image, or for a ShellSim task or a task without a machine from Taskforge's grader base
+(`docker/grader-base`: CPython 3.12, `sh`, `setsid`, root), and receives the captured
+`output_paths` at their own paths and the extracted answer at `/app/answer.txt`. Generic grader
+modes (exact, numeric, mcq, math, ifeval, JSON schema, structured answers, predicted actions and
+the rest of verifyit's in-process modes) grade in process without a machine and are preferred
+whenever a task fits one; they belong to `lib/verifyit`. A gap in either is fixed upstream.
+
+Every control names the part of the grader it exercises. Answer extraction is expected to move to
+a cheap model, so controls that only pin today's parser carry `concern = extraction` and can be
+found and retired together. A task's control set needs a `reference` control, an `acceptance`
+control and a `shortcut` control, so the required coverage never rests on extraction controls alone. The concern
+a control may carry follows its category (`spec.controls.CONCERNS`): `reference` only on
+known-correct controls, `shortcut` only on shortcut and reward-hack controls.
+
 Execution is RolloutEngine's. `ShellboxRolloutEngine.run` takes a `LoweredTaskSpec`: a
 TaskCompendium `TaskSpec` (schema 0.25, which carries the task's grader and answer format) with the
 `TaskRuntimeSpec` and `TaskSessionSpec` that say how it runs. Each attempt creates a shellbox
@@ -71,6 +123,7 @@ a verifyit grader without an environment, otherwise on the lowered verifier mach
 grades the state an agent left when the `total_turn_timeout` expires, and bounds every cleanup
 action by the lowered `cleanup_timeout`. Taskforge supplies the model callable
 (`llm.rollout_model.GlmRolloutModel`).
+Taskforge reaches a sandbox only through a `Machine` that the engine or a builder step created.
 
 The agent loop is Taskforge's own: `llm.agent.run_agent` over `GlmClient`, with the shell tool
 running through `Machine.run` and Parallel search and extract from `llm.web`. Builder agents run
@@ -136,6 +189,11 @@ Types and lint:
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check           # from lib/taskforge; checks src
 ./infra/pre-commit.py --fix --files lib/taskforge/<path>   # from the repository root
 ```
+
+The cluster scripts run on Iris and document their submit commands in their docstrings:
+`scripts/build_image_job.py` builds a `DockerBuild` context and pushes it to a registry digest
+through `scripts/push_image_task.py`, and `scripts/iris_machine_probe.py` probes the shellbox
+Iris backend.
 
 ## Evidence
 
