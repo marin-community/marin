@@ -26,7 +26,7 @@ from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.backends.local.python_environment import PythonEnvironment, build_python_environment
 from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, NetworkPolicy
 
-from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements
+from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements, require_resolved_environment
 
 RUNTIME_PACKAGES = (Path(verifyit.__file__).parent,)
 LOCK_FILE = "requirements.lock"
@@ -215,6 +215,7 @@ class LocalGraderMachines:
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         """A bubblewrap sandbox with the environment's packages; ``memory_mb`` is not enforced."""
+        require_resolved_environment(environment)
         if Backend.LOCAL not in environment.compatible_backends:
             raise ValueError("Only environments that declare the local backend use a local grader")
         assert environment.packages_lock is not None

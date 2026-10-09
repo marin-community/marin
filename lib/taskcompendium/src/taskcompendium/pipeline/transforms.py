@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import ScriptGrader, Source, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import (
@@ -51,11 +51,20 @@ def row_task_id(recipe: SourceRecipe, source: Source) -> str:
 
 
 def task_resource_bytes(task: TaskSpec) -> int:
-    """Decoded bytes of every resource the task carries, across all roles."""
+    """Decoded bytes across all roles and build contexts, counting each occurrence."""
     resources = task.resources
+    environments = [task.environment_requirements]
+    if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
+        environments.append(task.grader.environment)
+    build_files = tuple(
+        resource
+        for environment in environments
+        if environment.docker_build is not None
+        for resource in environment.docker_build.files
+    )
     return sum(
         len(resource_bytes(resource))
-        for resource in (*resources.all, *resources.worker, *resources.oracle, *resources.verifier)
+        for resource in (*resources.all, *resources.worker, *resources.oracle, *resources.verifier, *build_files)
     )
 
 

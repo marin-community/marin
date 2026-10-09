@@ -248,7 +248,7 @@ class InlineFile(BaseModel):
 
 
 class TaskResource(BaseModel):
-    """One inline file copied into a role's workspace."""
+    """One inline regular file in a workspace or build context."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -262,6 +262,25 @@ class TaskResource(BaseModel):
     def validate_path(cls, value: str) -> str:
         validate_relative_file_path(value)
         return value
+
+
+class DockerBuildContext(BaseModel):
+    """Unresolved Docker build inputs, preserved as data without executing the recipe.
+
+    Paths are relative to the context root, including ``Dockerfile``. Retaining the
+    recipe does not pin mutable base images or downloads made during a build.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    files: tuple[TaskResource, ...]
+
+    @model_validator(mode="after")
+    def validate_files(self) -> "DockerBuildContext":
+        validate_relative_file_paths(resource.path for resource in self.files)
+        if not any(resource.path == "Dockerfile" for resource in self.files):
+            raise ValueError("A Docker build context requires Dockerfile")
+        return self
 
 
 class ResourceGroups(BaseModel):
@@ -305,13 +324,14 @@ def validate_workspace_path(path: str) -> PurePosixPath:
 
 
 class EnvironmentRequirements(BaseModel):
-    """Operations, pinned initial workspace, and named tool-provider contracts."""
+    """Operations, initial workspace or unresolved recipe, and tool-provider contracts."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
     compatible_backends: tuple[Backend, ...] = ()
     docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
+    docker_build: DockerBuildContext | None = None
     working_directory: str | None = None
     setup_commands: tuple[str, ...] = ()
     environment_variables: dict[str, str] = Field(default_factory=dict)
@@ -320,6 +340,10 @@ class EnvironmentRequirements(BaseModel):
 
     @model_validator(mode="after")
     def validate_environment(self) -> "EnvironmentRequirements":
+        if sum(value is not None for value in (self.docker_image, self.docker_build, self.packages_lock)) > 1:
+            raise ValueError("Docker image, build context, and packages lock are mutually exclusive")
+        if self.docker_build is not None and {Backend.LOCAL, Backend.SHELLSIM}.intersection(self.compatible_backends):
+            raise ValueError("Local and ShellSim backends cannot satisfy a Docker build context")
         if len(set(self.compatible_backends)) != len(self.compatible_backends):
             raise ValueError("Compatible backends must be unique")
         if Backend.SHELLSIM in self.compatible_backends and self.docker_image is not None:
@@ -342,8 +366,15 @@ class EnvironmentRequirements(BaseModel):
         return self
 
 
+def require_resolved_environment(requirements: EnvironmentRequirements) -> None:
+    """Reject an unbuilt recipe before choosing or creating an execution environment."""
+    if requirements.docker_build is not None:
+        raise UnsupportedMachineSpec("Unresolved Docker build context must be built and pinned before execution")
+
+
 def require_compatible_backend(requirements: EnvironmentRequirements, backend: Backend) -> None:
     """Reject a runtime that the source has not declared semantically compatible."""
+    require_resolved_environment(requirements)
     if backend not in requirements.compatible_backends:
         raise UnsupportedMachineSpec(f"Backend {backend.value} is not declared compatible with this environment")
 
@@ -455,8 +486,10 @@ class FileReward(BaseModel):
 
 
 def _require_grader_environment(environment: EnvironmentRequirements) -> None:
-    if environment.docker_image is None and environment.packages_lock is None:
-        raise ValueError("A grading environment requires a digest-pinned image or a packages lock")
+    if environment.docker_image is None and environment.packages_lock is None and environment.docker_build is None:
+        raise ValueError(
+            "A grading environment requires a digest-pinned image, packages lock, or unresolved build context"
+        )
     if environment.tool_providers:
         raise ValueError("A grading environment cannot declare tool providers")
 
