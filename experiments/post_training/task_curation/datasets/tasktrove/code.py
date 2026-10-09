@@ -3,34 +3,44 @@
 
 """TaskTrove competitive-programming sources: stdin/stdout programs graded by verifyit ``stdio``.
 
-The agent writes a program in the executable image; the grader compiles it when it is C++ and runs it on
-the hidden cases with the grader packages and a C++ toolchain (``COMPILER_GRADER_PACKAGES``). Controls
-run the source's ``solution/solve.sh`` oracle when the archive ships one, and otherwise grade an empty
-submission.
+Code Contests and TACO retain their source image recipes for the actor and its independent grader.
+The remaining sources use the campaign executable image and compiler grader packages. Controls run
+an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an empty submission.
 """
 
 
+from pathlib import Path
+
 from taskcompendium.convert.executable import (
     SOLUTION_PATHS,
+    converted_workspace_task,
     solve_script,
     tasktrove_archive_task,
     tasktrove_python_task,
 )
-from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles, archive_resources
 from taskcompendium.convert.tasktrove_code_contests import convert_code_contests
 from taskcompendium.convert.tasktrove_codeforces import convert_codeforces
-from taskcompendium.convert.tasktrove_converted_task import ConvertedTask, ConvertFn, ConvertStatus, Rejected
+from taskcompendium.convert.tasktrove_converted_task import (
+    ConvertedTask,
+    ConvertFn,
+    ConvertStatus,
+    Rejected,
+    archive_conversion,
+)
 from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
 from taskcompendium.convert.tasktrove_stdio_cases import SOLUTION_COMMAND, case_files, hidden_case_rejection
 from taskcompendium.convert.tasktrove_taco import convert_taco
+from taskcompendium.convert.verifyit_build import verifyit_build_context
+from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import Compare, StdioSpec
 
-from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES
+from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES, VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, environment_requirements
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 AGENT_IMAGE = Environment(
@@ -105,8 +115,26 @@ def stdio_task(row: RawRow, context: ConversionContext, convert: ConvertFn) -> N
     )
 
 
+def source_stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | ImportRejection:
+    """Keep the source actor image and grade captured submissions in a fresh copy."""
+    converted = archive_conversion(row.data, convert)
+    if isinstance(converted, ImportRejection):
+        return converted
+    build = verifyit_build_context(converted.dockerfile, archive_resources(row.data).oracle, package=VERIFYIT_PACKAGE)
+    environment = EnvironmentRequirements(docker_build=build)
+    task = converted_workspace_task(
+        row,
+        converted,
+        instruction=converted.instruction,
+        environment=environment,
+        grader_environment=environment,
+        output_paths=SOLUTION_PATHS,
+    )
+    return NormalizedTask(task, ())
+
+
 def convert_code_contests_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    return stdio_task(row, context, convert_code_contests)
+    return source_stdio_task(row, convert_code_contests)
 
 
 def convert_codeforces_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
@@ -114,7 +142,7 @@ def convert_codeforces_task(row: RawRow, context: ConversionContext) -> Normaliz
 
 
 def convert_taco_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    return stdio_task(row, context, convert_taco)
+    return source_stdio_task(row, convert_taco)
 
 
 def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
@@ -149,19 +177,31 @@ def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> 
     )
 
 
-def stdio_source(name: str, config: str, convert: Converter, rubric: str, info: SourceInfo) -> RlDataSource:
+def stdio_source(
+    name: str,
+    config: str,
+    convert: Converter,
+    rubric: str,
+    info: SourceInfo,
+    *,
+    version: str = "1",
+    environment: Environment | ShellSim = AGENT_IMAGE,
+    grader: Environment | None = COMPILER_GRADER_PACKAGES,
+    ships: tuple[Path, ...] = (),
+) -> RlDataSource:
     return RlDataSource(
         info=info,
         pipeline=RlDataPipeline(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
             convert=TaskTroveConverter(config, convert),
-            version="1",
-            environment=AGENT_IMAGE,
+            version=version,
+            ships=ships,
+            environment=environment,
             intended_use=IntendedUse.TRAIN,
             rubric=rubric,
             controls=EXECUTABLE_CONTROLS,
-            grader=COMPILER_GRADER_PACKAGES,
+            grader=grader,
         ),
     )
 
@@ -173,6 +213,10 @@ def sources() -> list[RlDataSource]:
             "DCAgent__code-contests-noblock",
             convert_code_contests_task,
             CODE_CONTESTS_RUBRIC,
+            version="2",
+            environment=ShellSim(),
+            grader=None,
+            ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:DCAgent__code-contests-noblock",
                 title="DCAgent/code-contests-noblock",
@@ -221,6 +265,10 @@ def sources() -> list[RlDataSource]:
             "laion__exp_rpt_taco-v2",
             convert_taco_task,
             TACO_RUBRIC,
+            version="2",
+            environment=ShellSim(),
+            grader=None,
+            ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:laion__exp_rpt_taco-v2",
                 title="laion/exp_rpt_taco-v2",

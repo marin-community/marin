@@ -10,9 +10,11 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from harbor_config.models.task.config import TaskConfig
 from taskcompendium.convert.executable import SOLUTION_PATHS, solve_script
 from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH, archive_files, unpack_task_binary
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH
+from taskcompendium.harbor.export import harbor_record
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask
@@ -28,6 +30,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     structured_outputs,
 )
 from experiments.post_training.task_curation.tests.conversion import (
+    BASE_IMAGE,
     convert_row,
     converted_task,
     fixture_context,
@@ -137,10 +140,10 @@ ROWS: dict[str, dict] = {
 
 PYTHON_FILE = ("/app/solution.py",)
 EXPECTED = {
-    "tasktrove-code_contests": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
+    "tasktrove-code_contests": ("stdio", SOLUTION_PATHS, None),
     "tasktrove-codeforces": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
     "tasktrove-competitive_coding": ("stdio", PYTHON_FILE, code.AGENT_IMAGE),
-    "tasktrove-taco": ("stdio", SOLUTION_PATHS, code.AGENT_IMAGE),
+    "tasktrove-taco": ("stdio", SOLUTION_PATHS, None),
     "tasktrove-nl2bash": ("script", (OUTPUT_PATH,), nl2bash.AGENT_IMAGE),
     "tasktrove-curriculum_easy": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
     "tasktrove-curriculum_medium": ("pytest", PYTHON_FILE, python_tests.AGENT_IMAGE),
@@ -158,8 +161,8 @@ EXPECTED = {
 }
 """Each declaration's grader mode, captured files and agent image.
 
-A task with an agent image is graded in a fresh machine of the grader image. The SWE sources instead
-carry unresolved build recipes; the others are graded in process.
+A task with an agent image is graded in a fresh machine of the grader image. Repository tasks and
+source-image stdio tasks carry unresolved build recipes; structured tasks are graded in process.
 """
 
 
@@ -190,9 +193,10 @@ def test_row_converts_to_declared_grader(name):
     assert task.output_paths == output_paths
     assert task.environment_requirements.docker_image == (agent_image.image if agent_image is not None else None)
     grader_environment = task.grader.environment if isinstance(task.grader, VerifyitGrader) else None
-    assert grader_environment == (
-        fixture_context(PIPELINES[name]).grader_environment if agent_image is not None else None
-    )
+    if task.environment_requirements.docker_build is None:
+        assert grader_environment == (
+            fixture_context(PIPELINES[name]).grader_environment if agent_image is not None else None
+        )
     # Hidden tests and oracle files never reach the agent's machine.
     worker = {resource.path for resource in task.resources.worker}
     assert not any(path.startswith(("tests/", "solution/", "cases/")) for path in worker)
@@ -391,3 +395,58 @@ def test_structured_outputs_controls_grade_as_expected(schema_type, control):
     assert pipeline.controls is not None
     report = run_controls(task, controls=pipeline.controls, machines=None)
     assert {check.check: check.status for check in report.checks} == {control: CheckStatus.PASS}
+
+
+@pytest.mark.parametrize("name", ["code_contests", "taco"])
+def test_source_stdio_retains_legacy_actor_recipe_and_shared_grading(name):
+    fixtures = Path(__file__).parent / "fixtures"
+    row = {"path": f"{name}-0000", "task_binary": (fixtures / f"{name}.tar.gz").read_bytes()}
+    task = converted_task(PIPELINES[f"tasktrove-{name}"], row)
+    assert isinstance(task.grader, VerifyitGrader) and task.grader.environment is not None
+    build = task.environment_requirements.docker_build
+    assert build is not None and task.grader.environment.docker_build == build
+    record = harbor_record(
+        {"task_json": task.model_dump_json(), "original_path": row["path"], "source_row": f"{name}/tasks.parquet:0"},
+        grader_image=None,
+        fallback_actor_image=BASE_IMAGE,
+        family="competitive-programming",
+    )
+    files = archive_files(
+        unpack_task_binary(
+            {"path": row["path"], "task_binary": record.task_binary}, fixture_context(PIPELINES[f"tasktrove-{name}"])
+        )
+    ).files
+    # Frozen 61bb85cc conversion of these pinned source archives, before the verifier install.
+    expected = (fixtures / f"{name}_actor_61bb85cc.Dockerfile").read_text()
+    assert files["environment/Dockerfile"].decode().split("# --- verifyit ---")[0].rstrip("\n") == expected.rstrip("\n")
+    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    assert config.verifier.environment_mode == "shared" and config.verifier.environment is None
+    assert not config.artifacts and "tests/Dockerfile" not in files
+    assert config.environment.workdir is None
+    assert (config.agent.timeout_sec, config.verifier.timeout_sec) == (900, 600)
+    assert (record.mode, record.language) == ("stdio", "python")
+    assert not any(path.startswith(("environment/tests/", "environment/solution/", "solution/")) for path in files)
+
+
+@pytest.mark.parametrize("name", ["code_contests", "taco"])
+def test_source_stdio_single_hidden_case_grades_submission(name, tmp_path):
+    cases = {"inputs": ["3 4\n"], "outputs": ["7\n"]}
+    data = (
+        {"tests/test_data.json": json.dumps(cases).encode()}
+        if name == "code_contests"
+        else {
+            **stdio_dirs(cases["inputs"], cases["outputs"]),
+            "solution/solution.py": SUM_SOLUTION,
+        }
+    )
+    task = converted_task(PIPELINES[f"tasktrove-{name}"], archive(SUM_PROMPT, data))
+    tests = tmp_path / "tests"
+    write_verifier(task, tests)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    spec = local_stdio(task, workspace)
+    spec = replace(spec, command=spec.command.replace("/app/", str(workspace) + "/"))
+    (workspace / "solution.py").write_bytes(SUM_SOLUTION)
+    assert grade(spec, tests, workspace).reward == 1.0
+    (workspace / "solution.py").write_text("print('wrong')\n")
+    assert grade(spec, tests, workspace).reward == 0.0

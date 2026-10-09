@@ -19,7 +19,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tomlkit
 from finestore.schema import arrow_schema
-from harbor_config.models.task.config import TaskConfig
+from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import (
     DEFAULT_WORKSPACE,
@@ -113,7 +113,7 @@ VERIFIER_RESOURCES_PATH = "tests/taskcompendium-resources.json"
 HARBOR_REWARD_PATH = "/logs/verifier/reward.txt"
 GRADER_STDOUT_PATH = "/logs/verifier/taskcompendium-stdout.txt"
 REPOSITORY_WORKSPACE = "/testbed"
-LEGACY_REPOSITORY_AGENT_TIMEOUT = 900.0
+LEGACY_AGENT_TIMEOUT = 900.0
 HARBOR_SCRIPT_ARGV = ("bash", f"/{TEST_SH}")
 
 
@@ -150,7 +150,23 @@ class _VerifierProgram:
     cwd: str
 
 
-def _validate_harbor_task(task: TaskSpec) -> None:
+def _environment_mode(task: TaskSpec) -> VerifierEnvironmentMode:
+    if task.answer_type == AnswerType.WORKSPACE_STATE:
+        return VerifierEnvironmentMode.SHARED
+    grader = task.grader
+    if (
+        task.answer_type == AnswerType.FILE
+        and isinstance(grader, VerifyitGrader)
+        and grader.mode == "stdio"
+        and task.environment_requirements.docker_build is not None
+        and grader.environment is not None
+        and grader.environment.docker_build == task.environment_requirements.docker_build
+    ):
+        return VerifierEnvironmentMode.SHARED
+    return VerifierEnvironmentMode.SEPARATE
+
+
+def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentMode) -> None:
     environment = task.environment_requirements
     grader = task.grader
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
@@ -178,12 +194,15 @@ def _validate_harbor_task(task: TaskSpec) -> None:
             raise UnsupportedHarborTask(
                 "Only required full /testbed repository capture with declared builds is supported"
             )
-    elif environment.docker_build is not None or (
-        isinstance(grader, ScriptGrader | VerifyitGrader)
-        and grader.environment is not None
-        and grader.environment.docker_build is not None
+    elif environment_mode == VerifierEnvironmentMode.SEPARATE and (
+        environment.docker_build is not None
+        or (
+            isinstance(grader, ScriptGrader | VerifyitGrader)
+            and grader.environment is not None
+            and grader.environment.docker_build is not None
+        )
     ):
-        raise UnsupportedHarborTask("Docker build contexts require a supported repository state contract")
+        raise UnsupportedHarborTask("Docker build contexts require a supported shared execution contract")
     if len(task.context.events) != 1 or not isinstance(task.context.events[0], TextMessage):
         raise UnsupportedHarborTask("Only a single public text instruction is supported")
     if task.answer_type not in (AnswerType.TEXT, AnswerType.FILE, AnswerType.WORKSPACE_STATE):
@@ -198,11 +217,13 @@ def _validate_harbor_task(task: TaskSpec) -> None:
         raise UnsupportedHarborTask("Only shell tool providers have Harbor lowering")
 
 
-def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProgram:
+def _verifier_program(
+    task: TaskSpec, grader_image: str | None, environment_mode: VerifierEnvironmentMode
+) -> _VerifierProgram:
     grader = task.grader
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
     files, modes = {}, {}
-    if not repository_state:
+    if environment_mode == VerifierEnvironmentMode.SEPARATE:
         if grader_image is None:
             raise ValueError("This task requires an explicit digest-pinned verifier base image")
         # Separate Harbor verifiers own their tests; native execution skips uploading them.
@@ -211,16 +232,18 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
     if isinstance(grader, VerifyitGrader):
         spec = verifyit_spec(grader)
         answer_path = verifyit_answer_file(spec) if task.answer_type == AnswerType.TEXT else None
-        files.update(verifier_runtime())
-        # Harbor reserves tests/verifier.toml for its image-installed verifyit command.
-        # Keep the bundled runtime wrapper in control of grading and public-file staging.
+        # Harbor reserves tests/verifier.toml for its image-installed dispatch.
         files[VERIFIER_SPEC_PATH] = render_spec(spec).encode()
-        files[TEST_SH] = (
-            "#!/bin/bash\nset -euo pipefail\n"
-            "export PYTHONPATH=/tests/runtime\n"
-            "exec python3 -c 'from verifyit.grade import main; raise SystemExit(main())' "
-            f"/{VERIFIER_SPEC_PATH}\n"
-        ).encode()
+        if environment_mode == VerifierEnvironmentMode.SHARED:
+            files[TEST_SH] = (f"#!/bin/bash\nset -euo pipefail\nexec verifyit /{VERIFIER_SPEC_PATH}\n").encode()
+        else:
+            files.update(verifier_runtime())
+            files[TEST_SH] = (
+                "#!/bin/bash\nset -euo pipefail\n"
+                "export PYTHONPATH=/tests/runtime\n"
+                "exec python3 -c 'from verifyit.grade import main; raise SystemExit(main())' "
+                f"/{VERIFIER_SPEC_PATH}\n"
+            ).encode()
         mode = grader.mode
         timeout = spec.timeout if isinstance(spec, (GotestSpec, JunitSpec, PytestSpec, ScriptSpec)) else 600.0
         grader_env = {}
@@ -280,7 +303,7 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
     )
 
 
-def _validate_repository_dockerfile(files: dict[str, bytes]) -> None:
+def _validate_tasktrove_dockerfile(files: dict[str, bytes]) -> None:
     """Retain the old TaskTrove static environment exclusions without building an image."""
     dockerfile = files["environment/Dockerfile"].decode()
     if "# --- verifyit ---" not in dockerfile:
@@ -301,11 +324,12 @@ def harbor_record(
     if grader_image is not None and re.fullmatch(DOCKER_IMAGE_PATTERN, grader_image) is None:
         raise ValueError("The verifier image must be explicitly pinned by digest")
     task = TaskSpec.model_validate_json(row["task_json"])
-    _validate_harbor_task(task)
+    environment_mode = _environment_mode(task)
+    _validate_harbor_task(task, environment_mode)
     environment = task.environment_requirements
     grader = task.grader
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
-    verifier = _verifier_program(task, grader_image)
+    verifier = _verifier_program(task, grader_image, environment_mode)
     assert isinstance(grader, (ScriptGrader, VerifyitGrader))
     files, modes = verifier.files, verifier.modes
     answer_path = verifier.answer_path
@@ -318,11 +342,11 @@ def harbor_record(
             "The contents of this file are graded as your final response."
         )
     files["instruction.md"] = prompt.encode()
-    public = () if repository_state else (*task.resources.all, *task.resources.worker)
+    public = () if environment_mode == VerifierEnvironmentMode.SHARED else (*task.resources.all, *task.resources.worker)
     if environment.docker_build is not None:
         for resource in environment.docker_build.files:
             if (
-                repository_state
+                environment_mode == VerifierEnvironmentMode.SHARED
                 and resource.path != "Dockerfile"
                 and not resource.path.startswith("taskcompendium-verifyit/")
             ):
@@ -377,13 +401,20 @@ def harbor_record(
         # Shared Harbor execution retains the actor's installed dependencies and workspace.
         # This is the legacy TaskTrove execution policy, not ScriptGrader's fresh-machine policy.
         files[TEST_SH] = f"#!/bin/bash\nset -euo pipefail\ncd {shlex.quote(verifier.cwd)}\n".encode() + files[TEST_SH]
-        _validate_repository_dockerfile(files)
+    if environment_mode == VerifierEnvironmentMode.SHARED:
+        _validate_tasktrove_dockerfile(files)
+        if not repository_state:
+            language = "python"
     outputs = list(task.output_paths)
     if answer_path:
         outputs.append(answer_path)
     # Harbor uploads submissions before running test.sh. Do not restore initial
     # copies of files the agent edits, including when the agent deleted a file.
-    grader_public = [] if repository_state else [resource for resource in public if "/" + resource.path not in outputs]
+    grader_public = (
+        []
+        if environment_mode == VerifierEnvironmentMode.SHARED
+        else [resource for resource in public if "/" + resource.path not in outputs]
+    )
     if grader_public:
         for resource in grader_public:
             files["tests/public/" + resource.path] = resource_bytes(resource)
@@ -416,15 +447,14 @@ def harbor_record(
         },
         "artifacts": [{"source": path, "destination": path.removeprefix("/")} for path in dict.fromkeys(outputs)],
     }
-    if repository_state:
-        assert isinstance(grader, ScriptGrader)
+    if environment_mode == VerifierEnvironmentMode.SHARED:
         assert grader.environment is not None
         config["verifier"]["environment_mode"] = "shared"
         config["verifier"].pop("environment")
         config["artifacts"] = []
-        config["agent"] = {"timeout_sec": LEGACY_REPOSITORY_AGENT_TIMEOUT}
+        config["agent"] = {"timeout_sec": LEGACY_AGENT_TIMEOUT}
         config["verifier"]["env"] = {**grader.environment.environment_variables, **verifier.env}
-        metadata["execution_policy"] = "tasktrove_shared_repository"
+        metadata["execution_policy"] = "tasktrove_shared_repository" if repository_state else "tasktrove_shared_stdio"
     if environment.working_directory is not None:
         config["environment"]["workdir"] = environment.working_directory
     files["task.toml"] = tomlkit.dumps(config).encode()

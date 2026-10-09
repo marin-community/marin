@@ -24,9 +24,9 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.repository_build import (
-    VERIFYIT_PACKAGE,
     WORKSPACE,
     repository_build_task,
 )

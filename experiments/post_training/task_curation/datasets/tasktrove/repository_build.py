@@ -3,12 +3,9 @@
 
 """Deferred repository images and private workspace graders."""
 
-import re
-from functools import cache
-from pathlib import Path
-
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH_REWARD, UV_IMAGE, TaskFiles
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH_REWARD, TaskFiles
+from taskcompendium.convert.verifyit_build import VERIFYIT_CONTEXT, verifyit_build_context
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -21,38 +18,17 @@ from taskcompendium.models import (
     VerifierArtifact,
 )
 from taskcompendium.pipeline.models import ImportRejection, NormalizationChange, NormalizedTask
-from taskcompendium.runtime.local import context_paths
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import Spec, render_spec
 
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
+
 WORKSPACE = "/testbed"
-VERIFYIT_PACKAGE = Path(__file__).resolve().parents[5] / "lib/verifyit"
-VERIFYIT_CONTEXT = "taskcompendium-verifyit"
 PUBLIC_CONTEXT = "taskcompendium-public"
 PUBLIC_SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
 REPOSITORY_SETUP = "taskcompendium-repository-setup.sh"
-VERIFYIT_INSTALL = (
-    "# --- verifyit ---\n"
-    "RUN command -v git >/dev/null || (apt-get update && apt-get install -y --no-install-recommends git"
-    " && rm -rf /var/lib/apt/lists/*)\n"
-    f"""COPY --from={UV_IMAGE} /uv /usr/local/bin/uv
-COPY {VERIFYIT_CONTEXT}/ /opt/taskcompendium-verifyit/
-RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --python ">=3.11" /opt/taskcompendium-verifyit
-"""
-)
 VERIFIER_SPEC = "taskcompendium-verifier.toml"
 VERIFYIT_SCRIPT = f"#!/bin/bash\nset -euo pipefail\nexec verifyit /tests/{VERIFIER_SPEC}\n".encode()
-
-
-@cache
-def verifyit_build_files() -> tuple[TaskResource, ...]:
-    """Bundle the checked-out verifier package so the recipe names the code used in conversion."""
-    package = VERIFYIT_PACKAGE
-    paths = [package / "pyproject.toml", package / "README.md", *context_paths(package / "src/verifyit")]
-    return tuple(
-        inline_resource(f"{VERIFYIT_CONTEXT}/{path.relative_to(package).as_posix()}", path.read_bytes())
-        for path in paths
-    )
 
 
 def repository_build_task(
@@ -67,26 +43,16 @@ def repository_build_task(
 ) -> NormalizedTask | ImportRejection:
     """Keep the legacy actor recipe and declare a fresh workspace grading environment."""
     original_dockerfile = files.text(DOCKERFILE)
-    body = re.sub(r"\n{3,}", "\n\n", "\n".join(line.rstrip() for line in dockerfile.splitlines())).strip("\n")
-    dockerfile = body + "\n\n" + VERIFYIT_INSTALL
-    # Original environment bytes stay with provenance; the edited recipe is an environment input.
-    context_files = tuple(
-        resource.model_copy(
-            update={
-                "path": resource.path.removeprefix("environment/"),
-                **(
-                    {"source": inline_resource("Dockerfile", dockerfile.encode()).source}
-                    if resource.path == DOCKERFILE
-                    else {}
-                ),
-            }
-        )
+    if any(
+        resource.path.removeprefix("environment/").startswith((VERIFYIT_CONTEXT, PUBLIC_CONTEXT, REPOSITORY_SETUP))
         for resource in task.resources.oracle
         if resource.path.startswith("environment/")
-    )
-    if any(resource.path.startswith((VERIFYIT_CONTEXT, PUBLIC_CONTEXT, REPOSITORY_SETUP)) for resource in context_files):
+    ):
         return unsupported("build_context_collision", "Source context occupies the bundled verifier path")
-    actor_build = DockerBuildContext(files=(*context_files, *verifyit_build_files()))
+    actor_build = verifyit_build_context(dockerfile, task.resources.oracle, package=VERIFYIT_PACKAGE)
+    dockerfile = resource_bytes(
+        next(resource for resource in actor_build.files if resource.path == "Dockerfile")
+    ).decode()
     # Canonical ScriptGrader uses a fresh machine. Its dependencies must be prepared without
     # changing the actor recipe that the legacy shared-environment exporter consumes.
     instruction = files.text("instruction.md")
