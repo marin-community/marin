@@ -18,7 +18,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import equinox as eqx
 import jax
@@ -650,6 +650,14 @@ class GrugModelConfig:
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
     attn_res_num_blocks: int = 8
+    attn_res_shared_query: bool = False
+    """A third zero-init pseudo-query per layer whose AttnRes mix feeds the shared experts only; the router and
+    routed experts keep the MLP gate's mix."""
+    attn_res_partial_scale: bool = False
+    """Learned scalars ``(a_attn, a_mlp)`` per layer, init 1: each sublayer adds ``a * out`` to its block's partial,
+    so a block (and the MLP gate's in-layer partial) weights its attention and MLP outputs."""
+    sublayer_gated_norm: bool = True
+    """GatedNorm after the RMSNorm on every attention and MLP input (else the RMSNorm alone)."""
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
     attn_res_remat_attention: bool = False
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
@@ -2805,10 +2813,10 @@ def _memory_branch(
 
 class Block(eqx.Module):
     rms_attn: LearnedRMSNorm | DyT
-    attn_gated_norm: GatedNorm
+    attn_gated_norm: GatedNorm | None
     attn: CausalSelfAttention | KimiDeltaAttention
     rms_mlp: LearnedRMSNorm | DyT
-    mlp_gated_norm: GatedNorm
+    mlp_gated_norm: GatedNorm | None
     mlp: "MoEMLP | DenseMLP"
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"
@@ -2817,6 +2825,8 @@ class Block(eqx.Module):
     # Block AttnRes pseudo-queries of the attention and MLP sublayers (None without cfg.attn_res).
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
+    attn_res_query_shared: Float[Array, " D"] | None  # cfg.attn_res_shared_query
+    attn_res_partial_scale: Float[Array, " 2"] | None  # cfg.attn_res_partial_scale: (a_attn, a_mlp)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
@@ -2852,10 +2862,14 @@ class Block(eqx.Module):
                     shared = tuple(eqx.tree_at(lambda m: m.w_gate, e, None, is_leaf=lambda x: x is None) for e in shared)
         return Block(
             rms_attn=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="rms_attn"),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key) if cfg.sublayer_gated_norm else None
+            ),
             attn=attn,
             rms_mlp=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="rms_mlp"),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key) if cfg.sublayer_gated_norm else None
+            ),
             mlp=mlp,
             shared=shared,
             sconv_attn=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl) if use_attn_sconv else None),
@@ -2871,7 +2885,19 @@ class Block(eqx.Module):
             ),
             attn_res_query_attn=attn_res_query,
             attn_res_query_mlp=attn_res_query,
+            attn_res_query_shared=attn_res_query if cfg.attn_res_shared_query else None,
+            attn_res_partial_scale=(
+                reshard(jnp.ones((2,), jnp.float32), P(None)) if cfg.attn_res and cfg.attn_res_partial_scale else None
+            ),
         )
+
+    def _attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        x = self.rms_attn(x)
+        return x if self.attn_gated_norm is None else self.attn_gated_norm(x)
+
+    def _mlp_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        x = self.rms_mlp(x)
+        return x if self.mlp_gated_norm is None else self.mlp_gated_norm(x)
 
     def attn_branch(
         self,
@@ -2891,12 +2917,12 @@ class Block(eqx.Module):
         stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``; ``kv_input``
         (``kv_stream_dim``) is the normed KV side stream the K/V projections read. Returns the branch output
         and the mixer's logging stats."""
-        attn_in = self.attn_gated_norm(self.rms_attn(_laurel(h, None, None)))
+        attn_in = self._attn_input(_laurel(h, None, None))
         proj_inputs = None
         attn_components = tuple(c for c in sum_components if c in ("q", "k", "v"))
         if attn_components:
             assert sum_stream is not None
-            sum_in = self.attn_gated_norm(self.rms_attn(sum_stream))
+            sum_in = self._attn_input(sum_stream)
             proj_inputs = {c: sum_in for c in attn_components}
         stats: dict[str, jax.Array] = {}
         if isinstance(self.attn, KimiDeltaAttention):
@@ -2943,14 +2969,14 @@ class Block(eqx.Module):
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
         (``moe_hash_layers``, ``moe_gumbel_tau``, ``router_token_bias_rank``, ``router_bias_seed``)."""
-        normed = self.mlp_gated_norm(self.rms_mlp(_laurel(h, None, None)))
+        normed = self._mlp_input(_laurel(h, None, None))
         if self.sconv_mlp_in is not None:
             normed = self.sconv_mlp_in(normed, _sconv_segment_ids(mask))
         mlp_in = _spread_mlp_input(normed, self.attn.cfg)
         part_inputs = None
         if sum_parts:
             assert sum_stream is not None
-            sum_in = self.mlp_gated_norm(self.rms_mlp(sum_stream))
+            sum_in = self._mlp_input(sum_stream)
             part_inputs = {p: sum_in for p in sum_parts}
         stats: dict[str, jax.Array] = {}
         if isinstance(self.mlp, DenseMLP):
@@ -3656,12 +3682,26 @@ def _attn_res_layer(
         _kv_stream_input(logit_bias),
     )
     attn_out = _sublayer_dropout(cfg, attn_out, noise_key, _ATTN_DROPOUT_SALT)
-    partial = attn_out if partial is None else partial + attn_out
+    scale_attn = scale_mlp = None
+    if layer.attn_res_partial_scale is not None:
+        scale_attn, scale_mlp = (layer.attn_res_partial_scale[j].astype(attn_out.dtype) for j in range(2))
+    partial_attn = attn_out if scale_attn is None else scale_attn * attn_out
+    partial = partial_attn if partial is None else partial + partial_attn
     mlp_partial = partial
     h, z_mlp, w_mlp = _attn_res_mix(
         blocks, block_logits, mlp_partial, queries, 2 * layer_index + 1, eps, logit_bias, **opts
     )
-    mlp_out, router_stats = layer.mlp_branch(h, mask, **_route_kwargs(cfg, physical, token_ids, noise_key, logit_bias))
+    shared_kwargs: dict[str, Any] = {}
+    if layer.attn_res_query_shared is not None:
+        # Shared-gate rows follow the per-layer gates, ahead of the final gate.
+        h_shared, z_shared, _ = _attn_res_mix(
+            blocks, block_logits, mlp_partial, queries, 2 * cfg.num_layers + layer_index, eps, logit_bias, **opts
+        )
+        z_mlp = z_mlp + z_shared
+        shared_kwargs = {"sum_stream": h_shared, "sum_parts": ("shared",)}
+    mlp_out, router_stats = layer.mlp_branch(
+        h, mask, **shared_kwargs, **_route_kwargs(cfg, physical, token_ids, noise_key, logit_bias)
+    )
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
@@ -3681,7 +3721,7 @@ def _attn_res_layer(
             f"{PROBE_STAT}mlp_in": _at_spot(h, spot),
             f"{PROBE_STAT}mlp_out": _at_spot(mlp_out, spot),
         }
-    return partial + mlp_out, {
+    return partial + (mlp_out if scale_mlp is None else scale_mlp * mlp_out), {
         **router_stats,
         **attn_stats,
         **v_stats,
@@ -4218,6 +4258,8 @@ class Transformer(eqx.Module):
         # V-gate queries sit between the per-layer gates and the final gate, so every block's precomputed
         # logits (scored against queries[2i:]) cover them; V gate of layer i is row 2 * L * passes + i.
         v_queries = []
+        if cfg.attn_res_shared_query:
+            v_queries = [jnp.stack([layer.attn_res_query_shared for layer in layers])]
         queries_flat = jnp.concatenate(
             [jnp.stack(gate_queries), *loop_queries, *v_queries, self.attn_res_query_final[None]]
         )
