@@ -11,11 +11,17 @@ dependencies = [
     "pydantic>=2",
     "taskcompendium",
     "marin-shellbox",
-    "harbor-config>=0.1.0",
 ]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-shellbox[shellsim]"]
+test = [
+    "pytest>=8.3",
+    "pytest-asyncio",
+    "pytest-timeout",
+    "marin-shellbox[shellsim]",
+    # Only the Harbor task importer tests need its schema; published wheels do not.
+    "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
+]
 
 [tool.uv.workspace]
 

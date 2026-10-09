@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12, <3.14"
 
 [options]
@@ -1091,7 +1091,6 @@ name = "marin-rolloutengine"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "harbor-config" },
     { name = "marin-shellbox" },
     { name = "pydantic" },
     { name = "taskcompendium" },
@@ -1099,6 +1098,7 @@ dependencies = [
 
 [package.dev-dependencies]
 test = [
+    { name = "harbor-config" },
     { name = "marin-shellbox", extra = ["shellsim"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1107,7 +1107,6 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "harbor-config", git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" },
     { name = "marin-shellbox", editable = "../shellbox" },
     { name = "pydantic", specifier = ">=2" },
     { name = "taskcompendium", editable = "../taskcompendium" },
@@ -1115,6 +1114,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 test = [
+    { name = "harbor-config", git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" },
     { name = "marin-shellbox", extras = ["shellsim"], editable = "../shellbox" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
@@ -2024,6 +2024,7 @@ provides-extras = ["pipeline"]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "marin-shellbox", extras = ["shellsim"], editable = "../shellbox" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -2104,7 +2105,6 @@ name = "verifyit"
 version = "0.1.0"
 source = { editable = "../verifyit" }
 dependencies = [
-    { name = "harbor-config" },
     { name = "tomlkit" },
 ]
 
@@ -2126,7 +2126,6 @@ schema = [
 
 [package.metadata]
 requires-dist = [
-    { name = "harbor-config", git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" },
     { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
     { name = "math-verify", marker = "extra == 'answer'", specifier = ">=0.9" },
     { name = "openai", marker = "extra == 'judge'", specifier = ">=1.59.9" },

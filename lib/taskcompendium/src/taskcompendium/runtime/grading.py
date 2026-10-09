@@ -18,7 +18,6 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
-from harbor_config.env import resolve_env_vars
 from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.spec import Spec, render_spec
 
@@ -52,6 +51,7 @@ from taskcompendium.models import (
     verifyit_answer_file,
     verifyit_spec,
 )
+from taskcompendium.runtime.environment import resolve_env_vars
 from taskcompendium.runtime.output_capture import selected_directory_files, validate_output_directories
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import MISSING_CAPTURE_EXIT_CODE, require_environment_source

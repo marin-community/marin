@@ -322,7 +322,6 @@ def test_rl_release_keeps_registry_dependencies_and_pins_siblings() -> None:
         "pydantic>=2",
         f"taskcompendium=={version}",
         f"marin-shellbox=={version}",
-        "harbor-config>=0.1.0",
     ]
 
 

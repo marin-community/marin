@@ -56,8 +56,8 @@ Stable tags are `marin-libs-v<X.Y.Z>`, `dupekit-v<X.Y.Z>`,
 `finelog-v<X.Y.Z>`, and `iris-native-v<X.Y.Z>`.
 
 The twelve general libs always share one version per build, and each published
-wheel pins its sibling dependencies to that exact version. `verifyit` and
-`marin-rolloutengine` also require a published `harbor-config` release.
+wheel pins its sibling dependencies to that exact version. Harbor-specific
+imports stay in isolated evaluation jobs and optional task-import tests.
 
 Native implementation pull requests compile their changed Rust sources in
 `unified-unit` and in the package release workflow. The follow-up dependency
@@ -111,10 +111,11 @@ exists with at least two human admins. Every `marin-*` project is owned by it.
 
 Before adding the RL libraries to the release family, create `verifyit`,
 `taskcompendium`, and `marin-rolloutengine` under the Marin PyPI organization,
-and configure their trusted publishers. Harbor must first publish
-`harbor-config>=0.1.0` from
-[`marin-community/harbor`](https://github.com/marin-community/harbor/tree/main/packages/harbor-config).
-The next general-library release includes all three RL distributions.
+and configure their trusted publishers. The next general-library release
+includes all three RL distributions. Their published wheels do not depend on
+Harbor. The optional Harbor task-import tests install its schema from a pinned
+Git checkout; Marin evaluation installs the complete Harbor runtime from its
+external lock.
 
 ### 2. Clear the placeholder releases
 

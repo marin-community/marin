@@ -20,12 +20,10 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
-from harbor_config.errors import ErrorCategory
-
 from verifyit.execution.command import run_command
 from verifyit.file_ops.read import read_text
 from verifyit.file_ops.restore import restore
-from verifyit.grade import InvalidTask, Reward, scored
+from verifyit.grade import InvalidTask, PreparationCategory, Reward, scored
 from verifyit.modes.run import STDERR_TAIL, check_ids, run_setup, workdir
 from verifyit.spec import PytestSpec, TestIdMatching
 
@@ -180,7 +178,7 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                     candidate_failure = scored(
                         0.0,
                         reason="startup_error",
-                        category=ErrorCategory.AGENT,
+                        category=PreparationCategory.AGENT,
                         exit_code=result.returncode,
                         output=_tail(result.stderr or result.stdout),
                         files=files,
@@ -211,7 +209,7 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                 candidate_failure = scored(
                     0.0,
                     reason="collection_error",
-                    category=ErrorCategory.AGENT,
+                    category=PreparationCategory.AGENT,
                     exit_code=result.returncode,
                     output=_tail(result.stderr or result.stdout),
                     files=files,

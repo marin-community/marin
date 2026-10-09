@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from harbor_config.env import resolve_env_vars
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
@@ -26,6 +25,7 @@ from shellbox.machine import (
     ShellSimBuiltins,
 )
 from taskcompendium.models import EnvironmentRequirements, TaskResource
+from taskcompendium.runtime.environment import resolve_env_vars
 from taskcompendium.runtime.local import local_factory, local_runtime
 from taskcompendium.runtime.resources import resource_bytes
 
