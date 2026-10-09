@@ -15,6 +15,7 @@ from taskcompendium.models import (
     SessionGrader,
     TaskSpec,
     VerifyitGrader,
+    require_resolved_environment,
 )
 
 from rolloutengine.contracts import TaskSession
@@ -48,6 +49,9 @@ def validate_lowered_task(
     grader = task.grader
     verifier_machine = lowered.runtime.verifier_machine
     grader_environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) else None
+    require_resolved_environment(task.environment_requirements)
+    if grader_environment is not None:
+        require_resolved_environment(grader_environment)
     if grader_environment is not None and verifier_machine is None:
         raise ValueError("A grader with an environment requires a verifier machine")
     if grader_environment is None and verifier_machine is not None:

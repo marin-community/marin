@@ -25,7 +25,7 @@ from shellbox.machine import (
     Result,
     ShellSimBuiltins,
 )
-from taskcompendium.models import EnvironmentRequirements, TaskResource
+from taskcompendium.models import EnvironmentRequirements, TaskResource, require_resolved_environment
 from taskcompendium.runtime.local import local_factory, local_runtime
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -63,6 +63,7 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
 
 
 def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
+    require_resolved_environment(requirements)
     if requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
@@ -100,6 +101,7 @@ async def _acquire_machine(
     requirements: EnvironmentRequirements,
 ) -> Machine:
     """Create a machine closed by ``owned``, retaining ownership if creation outlives cancellation."""
+    require_resolved_environment(requirements)
     machine_cleanup = cleanup
     if runtime.cleanup_timeout is not None:
         machine_cleanup = _Cleanup(runtime.cleanup_timeout, cleanup.errors)
