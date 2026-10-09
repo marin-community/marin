@@ -332,7 +332,7 @@ def _grug_scale_with_muon(
             updates = jax.tree.map(
                 lambda o, m: _shrink_top_direction(o, m, top_shrink), updates, momentum_dirs, is_leaf=lambda x: x is None
             )
-        if post_blend:
+        if not (isinstance(post_blend, (int, float)) and post_blend == 0):  # a float, or a traced schedule value
             updates = jax.tree.map(
                 lambda o, m: _blend_back(o, m, post_blend), updates, momentum_dirs, is_leaf=lambda x: x is None
             )

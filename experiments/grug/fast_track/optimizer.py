@@ -1652,6 +1652,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     singular directions (``_truncate_bottom_directions``). None: no truncation."""
     muon_truncate_frac: float = 0.0
     muon_post_blend: float = 0.0
+    muon_post_blend_start_frac: float | None = None
+    """Ramp ``muon_post_blend`` linearly from 0 at this fraction of training to its value at the end (None: constant)."""
     muonh_radius_growth: float = 1.0
     """Final / initial Frobenius norm of the MuonH matrices matching ``muonh_radius_paths`` (geometric per step)."""
     muonh_radius_paths: str = (
@@ -1914,8 +1916,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             else None
         )
 
-        def optimizer(learning_rate, adam_lr, upper_qk_mult=None):
+        def optimizer(learning_rate, adam_lr, upper_qk_mult=None, post_blend=None):
             default_switch = int(self.bimaxwell_start_frac * num_train_steps) if self.muon_bimaxwell else None
+            scheduled_blend = post_blend  # the injected ``muon_post_blend_start_frac`` ramp, or None
 
             def muonh_transform_at(
                 lr,
@@ -1927,7 +1930,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 post_blend: float | None = None,
             ):
                 momentum = self.momentum if momentum is None else momentum
-                post_blend = self.muon_post_blend if post_blend is None else post_blend
+                post_blend = (
+                    (scheduled_blend if scheduled_blend is not None else self.muon_post_blend)
+                    if post_blend is None
+                    else post_blend
+                )
                 switch_step = default_switch if switch_step is None else switch_step
                 rails = self._base_rails() if rails is None else rails
                 components = []
@@ -2232,6 +2239,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 int(self.upper_qk_slow_frac * num_train_steps),
                 max(1, int(self.upper_qk_ramp_frac * num_train_steps)),
             )
+        if self.muon_post_blend_start_frac is not None:
+            start = int(self.muon_post_blend_start_frac * num_train_steps)
+            peak = self.muon_post_blend
+            span = max(1, num_train_steps - start)
+            schedules["post_blend"] = lambda step: peak * jnp.clip((step - start) / span, 0.0, 1.0)
         return optax.inject_hyperparams(optimizer)(**schedules)
 
     def _adam_category_beta1(self) -> dict[str, float]:
