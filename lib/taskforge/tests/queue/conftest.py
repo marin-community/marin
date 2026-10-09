@@ -3,8 +3,8 @@
 
 """A whole run on fakes at the I/O boundary: a fake proposal source and rubric, a scripted GLM server
 for the author and the adversary agent loops, a builder program without model calls that builds a
-ShellSim task with a host-run script grader, and a scripted solver rollout model and tokenizer for
-validation.
+ShellSim task with a Python grader run in a verifier machine on the ShellSim-backed fixture image
+factory, and a scripted solver rollout model and tokenizer for validation.
 
 The GLM server answers in the order replies are queued, so a test queues each item's author replies
 before its adversary turns: an item's adversary trials start only after its build.
