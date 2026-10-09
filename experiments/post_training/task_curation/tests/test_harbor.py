@@ -4,6 +4,7 @@
 import io
 import json
 import shlex
+import subprocess
 import tarfile
 from dataclasses import asdict
 from pathlib import Path
@@ -13,8 +14,9 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
-from taskcompendium.models import NoGrader, VerifyitGrader
+from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader, verifyit_answer_file, verifyit_spec
 from taskcompendium.pipeline.models import NormalizedTask
+from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.compare_harbor import compare_harbor
 from experiments.post_training.task_curation.datasets.tasktrove import calendar, math, python_tests
@@ -108,6 +110,45 @@ def test_harbor_comparison_reports_population_difference_without_claiming_runtim
     assert not report["golden_counts_match"]
     assert not report["runtime_verified"]
     assert report["harbor_configs_valid"] and report["oracle_solutions_separate"]
+
+
+def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path) -> None:
+    row, converted = normalized_row
+    task = converted.task
+    answer_path = task.grader.answer_path if isinstance(task.grader, ScriptGrader) else None
+    if isinstance(task.grader, VerifyitGrader) and task.answer_type == "text":
+        answer_path = verifyit_answer_file(verifyit_spec(task.grader))
+    output = (answer_path or task.output_paths[0]).removeprefix("/")
+    resources = task.resources.model_copy(
+        update={
+            "worker": (
+                *task.resources.worker,
+                inline_resource(output, b"initial contents"),
+                inline_resource("app/staging-input.txt", b"public input"),
+            )
+        }
+    )
+    edited = task.model_copy(update={"resources": resources})
+    record = harbor_record({**row, "task_json": edited.model_dump_json()}, grader_image=GRADER_IMAGE, family="fixture")
+    files = archive_files(record.task_binary)
+    workspace, public = tmp_path / "workspace", tmp_path / "public"
+    submitted = workspace / output
+    submitted.parent.mkdir(parents=True)
+    submitted.write_text("agent's edited contents")
+    for name, data in files.items():
+        if name.startswith("tests/public/"):
+            path = public / name.removeprefix("tests/public/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+    # Execute the emitted staging command against an isolated filesystem root.
+    command = shlex.split(files["tests/test.sh"].decode().splitlines()[2])
+    command[-2:] = [str(public) + "/.", str(workspace)]
+    subprocess.run(command, check=True)
+    assert submitted.read_text() == "agent's edited contents"
+    assert (workspace / "app/staging-input.txt").read_text() == "public input"
+    submitted.unlink()
+    subprocess.run(command, check=True)
+    assert not submitted.exists()
 
 
 def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(normalized_row, tmp_path) -> None:
