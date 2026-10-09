@@ -676,6 +676,10 @@ def skip_to_window_offsets(
     for phase in phases[1:]:
         if phase.start_step <= previous.start_step:
             raise ValueError("Context phases must start at increasing steps")
+        # The within-window order changes only with the sequence length; at the same length a source could continue
+        # in place, and skipping to the next window would discard up to a window per source.
+        if phase.seq_len == previous.seq_len:
+            raise ValueError(f"Adjacent context phases must differ in sequence length; both use {phase.seq_len}")
         for seq_len in (previous.seq_len, phase.seq_len):
             if window_tokens % seq_len:
                 raise ValueError(f"Sequence length {seq_len} must divide the {window_tokens}-token shuffle window")
