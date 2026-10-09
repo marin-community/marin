@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import time
+import venv
 from pathlib import Path
 
 import pytest
@@ -115,6 +117,57 @@ def test_pytest_empty_workspace_scores_zero_with_no_tests(tmp_path):
     assert reward.detail["reason"] == "no_tests"
 
 
+@pytest.mark.parametrize("configuration", ["conftest.py", "pytest.ini"])
+def test_pytest_candidate_startup_syntax_error_scores_zero(tmp_path, configuration):
+    workspace = _project(tmp_path, "def add(\n")
+    text = (
+        "from calc import add\n"
+        if configuration == "conftest.py"
+        else "[pytest]\nfilterwarnings = ignore::calc.CustomWarning\n"
+    )
+    (workspace / configuration).write_text(text)
+    reward = grade_pytest.grade(_spec(must_pass=(PASSING,)), tmp_path, workspace)
+    assert (reward.status, reward.reward) == (Status.SCORED, 0.0)
+    assert reward.detail["reason"] == "startup_error"
+    assert reward.detail["files"] == ["calc.py"]
+
+
+@pytest.mark.parametrize(
+    "implementation", ["def add(\n", "raise RuntimeError('broken trusted source')\n", "import missing_dependency\n"]
+)
+@pytest.mark.parametrize("phase", ["startup", "collection"])
+def test_pytest_restored_source_failure_stays_unscored(tmp_path, implementation, phase):
+    workspace = _project(tmp_path, FIXED)
+    if phase == "startup":
+        (workspace / "conftest.py").write_text("from calc import add\n")
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    (trusted / "calc.py").write_text(implementation)
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(_spec(restore=("calc.py",)), trusted, workspace)
+
+
+def test_pytest_candidate_missing_dependency_stays_unscored(tmp_path):
+    workspace = _project(tmp_path, "import missing_dependency\n")
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(_spec(), tmp_path, workspace)
+
+
+def test_pytest_setup_manifest_source_failure_stays_unscored(tmp_path):
+    workspace = _project(tmp_path, FIXED)
+    (workspace / "conftest.py").write_text("from calc import add\n")
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    (trusted / "calc.py").write_text("def add(\n")
+    (trusted / "protected-paths.txt").write_text("calc.py\n")
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(
+            _spec(protected_paths_files=("protected-paths.txt",), setup='cp "$VERIFYIT_TESTS_DIR/calc.py" calc.py'),
+            trusted,
+            workspace,
+        )
+
+
 def test_pytest_paths_limit_the_run(tmp_path):
     workspace = _project(tmp_path, FIXED)
     (workspace / "tests" / "test_other.py").write_text("def test_other():\n    assert False\n")
@@ -153,6 +206,61 @@ def test_pytest_missing_json_report_plugin_is_an_infra_error(tmp_path):
     stub.chmod(0o755)
     with pytest.raises(RuntimeError, match="json report"):
         grade_pytest.grade(_spec(python=str(stub)), tmp_path, workspace)
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    [
+        ("", 0.0),
+        ("raise RuntimeError('__negative_control__')\n", 0.0),
+        ("def split(s, posix=True):\n return ['candidate'] if s == 'task-token' else []\n", 1.0),
+    ],
+)
+def test_pytest_candidate_shlex_bootstrap_failures_are_task_errors(tmp_path, candidate, expected):
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "shlex.py").write_text(candidate)
+    tests = tmp_path / "private-tests"
+    tests.mkdir()
+    test = tests / "test_candidate.py"
+    # A cached stdlib shlex would return task-token and incorrectly hide the
+    # submitted module; the successful case must import the actual candidate.
+    test.write_text("import shlex\n\ndef test_candidate():\n assert shlex.split('task-token') == ['candidate']\n")
+    reward = grade_pytest.grade(_spec(paths=(str(test),)), tests, workspace)
+    assert reward.reward == expected
+    if not expected:
+        assert reward.detail["reason"] == "startup_error"
+        assert reward.detail["category"] == "agent"
+
+
+def test_pytest_trusted_shlex_bootstrap_failure_stays_unscored(tmp_path):
+    workspace = _project(tmp_path, FIXED)
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    (trusted / "shlex.py").write_text("")
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(_spec(restore=("shlex.py",)), trusted, workspace)
+
+
+def test_pytest_missing_interpreter_remains_infrastructure_failure(tmp_path):
+    workspace = _project(tmp_path, FIXED)
+    with pytest.raises(FileNotFoundError):
+        grade_pytest.grade(_spec(python=str(tmp_path / "missing-python")), tmp_path, workspace)
+
+
+def test_pytest_broken_installed_plugin_remains_infrastructure_failure(tmp_path):
+    environment = tmp_path / "python-environment"
+    venv.EnvBuilder(system_site_packages=True).create(environment)
+    packages = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    (packages / "test-dependencies.pth").write_text(str(Path(pytest.__file__).parent.parent) + "\n")
+    metadata = packages / "broken_plugin-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Name: broken-plugin\nVersion: 1.0\n")
+    (metadata / "entry_points.txt").write_text("[pytest11]\nbroken-image-plugin = broken_image_plugin\n")
+    (packages / "broken_image_plugin.py").write_text("raise ImportError('installed image plugin is broken')\n")
+    workspace = _project(tmp_path, FIXED)
+    with pytest.raises(RuntimeError, match="installed image plugin is broken"):
+        grade_pytest.grade(_spec(python=str(environment / "bin" / "python")), tmp_path, workspace)
 
 
 def test_setup_runs_in_the_workspace_before_the_tests(tmp_path):
@@ -221,8 +329,73 @@ def test_pytest_failclosed_collection_error_cannot_be_hidden_by_passing_required
         f'paths=["test_candidate.py", "test_bad.py"]\nbatch_size={batch_size}\n'
     )
     reward = run(tests / "verifier.toml", workspace)
-    assert reward.status == Status.INFRA_ERROR
+    assert reward.status == Status.SCORED
     assert reward.reward == 0
+    assert reward.detail["reason"] == "collection_error"
+    assert reward.detail["category"] == "agent"
+
+
+@pytest.mark.parametrize(
+    "implementation",
+    [
+        "def malformed(\n",
+        "raise RuntimeError('candidate import failed')\n",
+        "import os\nos.missing_method()\n",
+        "compile('def generated(', __file__, 'exec')\n",
+    ],
+)
+def test_candidate_collection_failure_scores_zero_but_golden_runs(tmp_path, implementation):
+    workspace = _project(tmp_path, implementation)
+    trusted = tmp_path / "trusted"
+    (trusted / "tests").mkdir(parents=True)
+    (trusted / "tests/test_calc.py").write_text(REAL_TESTS)
+    spec = _spec(must_pass=(PASSING,), restore=("tests",))
+    failure = grade_pytest.grade(spec, trusted, workspace)
+    assert (failure.status, failure.reward) == (Status.SCORED, 0.0)
+    assert failure.detail["reason"] == "collection_error"
+    assert failure.detail["files"] == ["calc.py"]
+    (workspace / "calc.py").write_text(FIXED)
+    assert grade_pytest.grade(spec, trusted, workspace).reward == 1.0
+
+
+def test_pytest_candidate_added_file_in_restored_directory_scores_zero(tmp_path):
+    workspace = _project(tmp_path, FIXED)
+    (workspace / "tests/test_new.py").write_text("def malformed(\n")
+    trusted = tmp_path / "trusted"
+    (trusted / "tests").mkdir(parents=True)
+    (trusted / "tests/test_calc.py").write_text(REAL_TESTS)
+    reward = grade_pytest.grade(_spec(restore=("tests",)), trusted, workspace)
+    assert (reward.status, reward.reward) == (Status.SCORED, 0.0)
+    assert reward.detail["files"] == ["tests/test_new.py"]
+
+
+@pytest.mark.parametrize("candidate_phase", ["startup", "collection", "no_tests"])
+def test_pytest_early_candidate_failure_cannot_hide_later_trusted_failure(tmp_path, candidate_phase):
+    workspace = _project(tmp_path, FIXED)
+    if candidate_phase == "startup":
+        (workspace / "early").mkdir()
+        (workspace / "early/conftest.py").write_text("raise RuntimeError('candidate startup failed')\n")
+        first = "early"
+    else:
+        (workspace / "test_bad.py").write_text("def malformed(\n" if candidate_phase == "collection" else "")
+        first = "test_bad.py"
+    trusted = tmp_path / "trusted"
+    (trusted / "tests").mkdir(parents=True)
+    (trusted / "tests/test_protected.py").write_text("import missing_task_dependency\n")
+    spec = _spec(paths=(first, "tests/test_protected.py"), batch_size=1, restore=("tests",))
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(spec, trusted, workspace)
+
+
+@pytest.mark.parametrize(
+    "interruption", ["raise KeyboardInterrupt\n", "def test_interrupt():\n raise KeyboardInterrupt\n"]
+)
+def test_pytest_interrupt_with_candidate_collection_error_stays_unscored(tmp_path, interruption):
+    workspace = _project(tmp_path, FIXED)
+    (workspace / "test_bad.py").write_text("def malformed(\n")
+    (workspace / "test_interrupt.py").write_text(interruption)
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(_spec(args=("--continue-on-collection-errors",)), tmp_path, workspace)
 
 
 def test_pytest_failclosed_summary_cannot_hide_a_missing_failed_record(tmp_path):
@@ -267,23 +440,32 @@ def test_repeat():
     assert verdict.detail["first_failure"] == test_id
 
 
-def test_setup_and_batches_share_one_deadline(tmp_path):
-    tests = """import time
-from pathlib import Path
+def test_setup_and_batches_share_one_deadline(tmp_path, monkeypatch):
+    tests = """from pathlib import Path
 
 def test_first():
     Path("first_finished").touch()
 
 def test_finish():
-    time.sleep(3)
     Path("finished").touch()
 """
     workspace = _project(tmp_path, FIXED, tests)
+
+    # Charge deterministic elapsed time after real subprocess milestones; CI
+    # scheduling must not decide which phase exhausts the shared deadline.
+    def elapsed_time():
+        if (workspace / "first_finished").exists():
+            return 300.0
+        if (workspace / "setup_finished").exists():
+            return 200.0
+        return 0.0
+
+    monkeypatch.setattr(time, "monotonic", elapsed_time)
     spec = _spec(
-        setup=f"{sys.executable} -c 'import time; time.sleep(1)'",
+        setup=f"{sys.executable} -c 'from pathlib import Path; Path(\"setup_finished\").touch()'",
         paths=("tests/test_calc.py::test_first", "tests/test_calc.py::test_finish"),
         batch_size=1,
-        timeout=3.0,
+        timeout=300.0,
     )
     verdict = grade_pytest.grade(spec, tmp_path, workspace)
     assert verdict.reward == 0.0

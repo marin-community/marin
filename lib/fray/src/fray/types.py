@@ -427,6 +427,10 @@ class ResourceConfig:
 
     `target_cluster` routes an Iris job to a named peer cluster. Other backends
     may ignore it.
+
+    `container_profile` names the Iris container security profile for the task,
+    such as `CONTAINER_PROFILE_PRIVILEGED` for tasks that build sandboxes of
+    their own. None keeps the cluster default. Other backends may ignore it.
     """
 
     cpu: float = 1
@@ -446,6 +450,7 @@ class ResourceConfig:
     replicas: int = 1
     device_alternatives: Sequence[str] | None = None
     image: str | None = None
+    container_profile: str | None = None
 
     def chip_count(self) -> int:
         """Total accelerator chips across all replicas."""

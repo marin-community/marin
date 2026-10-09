@@ -6,14 +6,16 @@
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.modes import grade_pytest
 from verifyit.spec import PytestSpec, ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove import verify
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.converters.swe_patched import TEST_PATCH, TRUSTED_PATCH_PATHS
 from experiments.post_training.tasktrove.converters.swe_repo import TRUSTED_TEST_PATHS, restore_setup
@@ -286,3 +288,28 @@ def test_setup_discards_agent_tampering_with_the_hidden_test(tmp_path):
     reward = grade_pytest.grade(_spec(base_sha), tests_dir, workspace)
     assert reward.reward == 1.0
     assert (workspace / "tests" / "test_calc.py").read_text() == _PATCHED_TEST_FILE
+
+
+def test_converted_hidden_test_collection_failure_stays_unscored(tmp_path):
+    workspace, tests_dir, base_sha = _repo_and_patch(tmp_path)
+    (workspace / "tests/test_calc.py").write_text(_PATCHED_TEST_FILE + "\ndef malformed(\n")
+    patch = subprocess.run(
+        ["git", "diff", "--", "tests/test_calc.py"], cwd=workspace, check=True, capture_output=True, text=True
+    ).stdout
+    task = read_task_binary(_fixture())
+    task.files["tests/config.json"] = json.dumps(
+        {"FAIL_TO_PASS": list(_MUST_PASS), "PASS_TO_PASS": list(_MUST_NOT_BREAK)}
+    ).encode()
+    task.files["tests/test.sh"] = f"install_trusted_test_patch.sh /testbed /tests/test_patch.diff {base_sha}\n".encode()
+    task.files[TEST_PATCH] = patch.encode()
+    for manifest in (TRUSTED_TEST_PATHS, TRUSTED_PATCH_PATHS):
+        task.files[manifest] = (tests_dir / Path(manifest).name).read_bytes()
+    converted = read_task_binary(_convert(write_task_binary(task)).task_binary)
+    for name, content in converted.files.items():
+        if name.startswith("tests/"):
+            destination = tests_dir / name.removeprefix("tests/")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
+    spec = replace(parse_spec(converted.text(VERIFIER_TOML)), python=sys.executable, workspace=str(workspace))
+    with pytest.raises(RuntimeError):
+        grade_pytest.grade(spec, tests_dir, workspace)

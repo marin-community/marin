@@ -1,0 +1,538 @@
+{
+  "provenance": {
+    "verifier_revision": "d8b6e8c163def3660e9d3072c1c174226a1709fa",
+    "comparator_sha256": "eb0f3d62b9ab32d51e860a52c68496f9d335e0917b11c6d30fae18c8af68bb54",
+    "scope": "terminal_action_prediction",
+    "projection": "Only original action comparator inputs and tool definitions are projected from retained R4 TaskSpecs. Public conversation in the behavior test is synthetic; complete source histories were separately preserved and graded in offline QEMU."
+  },
+  "records": [
+    {
+      "selection": "nebius",
+      "source": {
+        "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "row": "mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2:train:mopd.jsonl:11797",
+        "importer_revision": "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_nebius_swe_rebench_v2-v1"
+      },
+      "source_locator": "mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2:train:mopd.jsonl:11797",
+      "retained_task_file_sha256": "d68322774a92e4c4051109af19ef8b072436499b7c1ab08c959a59df8cbf4c99",
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "swe_pivot_single_step_tool_use_with_argument_comparison_agent"
+      },
+      "expected_action": {
+        "type": "function_call",
+        "name": "shell_command",
+        "arguments": "{\"command\": \"cd /workspace/tornadoweb__tornado__ && python -c \\\"\\nimport socket\\nimport time\\nimport threading\\nimport sys\\nsys.path.insert(0, '.')\\n\\nfrom tornado.ioloop import IOLoop\\nfrom tornado.web import Application, RequestHandler\\nfrom tornado.httpserver import HTTPServer\\nfrom tornado import gen\\nfrom tornado.http1connection import HTTP1Connection, HTTP1ServerConnection\\n\\n# Patch _parse_headers to add debug\\noriginal_parse = HTTP1Connection._parse_headers\\n\\ndef patched_parse(self, data):\\n    print(f'[DEBUG] _parse_headers called with data len={len(data)}, first 40 bytes: {data[:40]}')\\n    result = original_parse(self, data)\\n    print(f'[DEBUG] _parse_headers returning start_line: {result[0][:40] if result[0] else \\\\\\\"(empty)\\\\\\\"}')\\n    return result\\n\\nHTTP1Connection._parse_headers = patched_parse\\n\\n# Patch read_message to add debug\\noriginal_read = HTTP1Connection._read_message\\n\\n@gen.coroutine\\ndef patched_read(self, delegate):\\n    print(f'[DEBUG] _read_message starting')\\n    result = yield original_read(self, delegate)\\n    print(f'[DEBUG] _read_message returning {result}')\\n    return result\\n\\nHTTP1Connection._read_message = patched_read\\n\\nclass MainHandler(RequestHandler):\\n    def get(self):\\n        print('[DEBUG] Handler processing GET')\\n        self.write('Hello')\\n\\ndef run_server():\\n    app = Application([('/', MainHandler)])\\n    server = HTTPServer(app)\\n    server.listen(18901)\\n    IOLoop.current().start()\\n\\nserver_thread = threading.Thread(target=run_server, daemon=True)\\nserver_thread.start()\\ntime.sleep(1)\\n\\nprint('=== Sending first request with extra CRLFs ===')\\nsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\\nsock.settimeout(3)\\nsock.connect(('localhost', 18901))\\nsock.sendall(b'GET / HTTP/1.0\\\\r\\\\nConnection: keep-alive\\\\r\\\\n\\\\r\\\\n\\\\r\\\\n\\\\r\\\\n')\\nresp1 = sock.recv(1024)\\nprint(f'CLIENT: first response: {resp1[:40]}...')\\n\\ntime.sleep(0.5)\\n\\nprint('=== Sending second request ===')\\nsock.sendall(b'GET / HTTP/1.0\\\\r\\\\nConnection: keep-alive\\\\r\\\\n\\\\r\\\\n')\\nresp2 = sock.recv(1024)\\nprint(f'CLIENT: second response: {\\\\\\\"OK\\\\\\\" if resp2 else \\\\\\\"EMPTY\\\\\\\"}')\\nsock.close()\\n\\\" 2>&1 | head -40\", \"timeout_ms\": 30000, \"workdir\": \"/workspace/tornadoweb__tornado__\"}"
+      },
+      "final_tools": [
+        {
+          "name": "read_file",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "file_path"
+            ],
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "Absolute path to the file"
+              },
+              "offset": {
+                "type": "number",
+                "description": "The line number to start reading from. Must be 1 or greater."
+              },
+              "limit": {
+                "type": "number",
+                "description": "The maximum number of lines to return."
+              },
+              "mode": {
+                "type": "string",
+                "description": "Optional mode selector: \"slice\" for simple ranges (default) or \"indentation\" to expand around an anchor line."
+              },
+              "indentation": {
+                "type": "object",
+                "properties": {
+                  "anchor_line": {
+                    "type": "number",
+                    "description": "Anchor line to center the indentation lookup on (defaults to offset)."
+                  },
+                  "max_levels": {
+                    "type": "number",
+                    "description": "How many parent indentation levels (smaller indents) to include."
+                  },
+                  "include_siblings": {
+                    "type": "boolean",
+                    "description": "When true, include additional blocks that share the anchor indentation."
+                  },
+                  "include_header": {
+                    "type": "boolean",
+                    "description": "Include doc comments or attributes directly above the selected block."
+                  },
+                  "max_lines": {
+                    "type": "number",
+                    "description": "Hard cap on the number of lines returned when using indentation mode."
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Reads a local file with 1-indexed line numbers, supporting slice and indentation-aware block modes.",
+          "strict": true
+        },
+        {
+          "name": "list_dir",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "dir_path"
+            ],
+            "properties": {
+              "dir_path": {
+                "type": "string",
+                "description": "Absolute path to the directory to list."
+              },
+              "offset": {
+                "type": "number",
+                "description": "The entry number to start listing from. Must be 1 or greater."
+              },
+              "limit": {
+                "type": "number",
+                "description": "The maximum number of entries to return."
+              },
+              "depth": {
+                "type": "number",
+                "description": "The maximum directory depth to traverse. Must be 1 or greater."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Lists entries in a local directory with 1-indexed entry numbers and simple type labels.",
+          "strict": true
+        },
+        {
+          "name": "grep_files",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "pattern"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Regular expression pattern to search for."
+              },
+              "include": {
+                "type": "string",
+                "description": "Optional glob that limits which files are searched (e.g. \"*.rs\" or \"*.{ts,tsx}\")."
+              },
+              "path": {
+                "type": "string",
+                "description": "Directory or file path to search. Defaults to the session's working directory."
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of file paths to return (defaults to 100)."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Finds files whose contents match the pattern and lists them by modification time.",
+          "strict": true
+        },
+        {
+          "name": "apply_patch",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "type": "string",
+                "description": "The entire contents of the apply_patch command, including the *** Begin Patch and *** End Patch delimiters."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Use the apply_patch tool to edit files.\n\nIt should be used whenever you want to create, edit, or delete a file.\n\nIMPORTANT: NEVER, EVER use apply_patch to write tests, test files, or any code that verifies behavior. Only use it for production code, configurations, and documentation.\n\nThe patch format is a stripped-down, file-oriented diff format. The envelope is:\n\n*** Begin Patch\n[ one or more file operations ]\n*** End Patch\n\nEach operation starts with one of three headers:\n\n*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).\n*** Delete File: <path> - remove an existing file. Nothing follows.\n*** Update File: <path> - patch an existing file in place (optionally with a rename).\n\nUpdate File may be immediately followed by *** Move to: <new path> to rename.\nThen one or more \"hunks\", each introduced by @@ (optionally followed by a context anchor).\nWithin a hunk each line starts with:\n  \" \" (space) - context line (must match the original file)\n  \"-\" - line to remove\n  \"+\" - line to add\n\nContext guidelines:\n- Show 3 lines of code above and below each change for context.\n- If 3 lines is insufficient to uniquely identify the location, use @@ with a class or function name:\n  @@ class MyClass\n  @@ def my_method():\n\nThe full grammar:\nPatch := Begin { FileOp } End\nBegin := \"*** Begin Patch\" NEWLINE\nEnd := \"*** End Patch\" NEWLINE\nFileOp := AddFile | DeleteFile | UpdateFile\nAddFile := \"*** Add File: \" path NEWLINE { \"+\" line NEWLINE }\nDeleteFile := \"*** Delete File: \" path NEWLINE\nUpdateFile := \"*** Update File: \" path NEWLINE [ MoveTo ] { Hunk }\nMoveTo := \"*** Move to: \" newPath NEWLINE\nHunk := \"@@\" [ \" \" header ] NEWLINE { HunkLine } [ \"*** End of File\" NEWLINE ]\nHunkLine := (\" \" | \"-\" | \"+\") text NEWLINE\n\nA full example combining several operations:\n\n*** Begin Patch\n*** Add File: hello.txt\n+Hello world\n*** Update File: src/app.py\n*** Move to: src/main.py\n@@ def greet():\n-print(\"Hi\")\n+print(\"Hello, world!\")\n*** Delete File: obsolete.txt\n*** End Patch\n\nNotes:\n- You must include a header with your intended action (Add/Delete/Update).\n- You must prefix new lines with + even when creating a new file.\n- File paths must be relative, NEVER absolute.\n- Multiple hunks can be included for the same file by using multiple @@ anchors.\n",
+          "strict": true
+        },
+        {
+          "name": "update_plan",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "plan"
+            ],
+            "properties": {
+              "explanation": {
+                "type": "string",
+                "description": "Optional explanation for the plan update."
+              },
+              "plan": {
+                "type": "array",
+                "description": "The list of steps",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "step",
+                    "status"
+                  ],
+                  "properties": {
+                    "step": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "One of: pending, in_progress, completed"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.\n",
+          "strict": true
+        },
+        {
+          "name": "shell_command",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "The shell script to execute in the user's default shell"
+              },
+              "workdir": {
+                "type": "string",
+                "description": "The working directory to execute the command in"
+              },
+              "login": {
+                "type": "boolean",
+                "description": "Whether to run the shell with login shell semantics. Defaults to true."
+              },
+              "timeout_ms": {
+                "type": "number",
+                "description": "The timeout for the command in milliseconds"
+              },
+              "is_input": {
+                "type": "string",
+                "description": "If True, the command is an input to the running process. If False, the command is a bash command to be executed in the terminal. Default is False.",
+                "enum": [
+                  "true",
+                  "false"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Runs a shell command and returns its output.\n- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary.",
+          "strict": true
+        },
+        {
+          "name": "finish",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "A final summary message describing what was accomplished."
+              }
+            }
+          },
+          "description": "Use the finish tool to indicate that the task is complete.\nOnly call this when you are certain that you have completed the task and tested your work.\n",
+          "strict": true
+        }
+      ]
+    },
+    {
+      "selection": "swe_gym",
+      "source": {
+        "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+        "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+        "row": "mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym:train:mopd.jsonl:44203",
+        "importer_revision": "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_swe_gym_swe_gym-v1"
+      },
+      "source_locator": "mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym:train:mopd.jsonl:44203",
+      "retained_task_file_sha256": "ca3a78f86be8546cc65d482eb5f2fd08ec120f5739dea6a234f543e1e3491475",
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "swe_pivot_single_step_tool_use_with_argument_comparison_agent"
+      },
+      "expected_action": {
+        "type": "function_call",
+        "name": "finish",
+        "arguments": "{\"message\": \"Successfully implemented a fix for the bug where PyTorch Lightning crashes when using Hydra's `instantiate` with the `betas` parameter.\\n\\n**Root Cause:** When passing a generator (e.g., `model.parameters()`) to Hydra's `instantiate` via kwargs, the generator gets merged into the config. This causes ListConfig values like `betas` to have a parent reference pointing to a config containing the generator. When PyTorch Lightning tries to pickle the optimizer for checkpointing, it follows this parent chain and fails with \\\"cannot pickle 'generator' object\\\".\\n\\n**Fix:** Modified `_call_target` in `/workspace/facebookresearch__hydra__1.1/hydra/_internal/instantiate/_instantiate2.py` to:\\n1. Check if any kwargs values are generators\\n2. If so, convert ListConfig containers containing only primitive values to plain Python lists before passing to the target\\n\\nThis ensures pickling works while preserving backward compatibility for the default case (no generator in kwargs).\\n\\n**Changes made:**\\n- Added `_is_primitive()` helper function\\n- Modified `_call_target()` to handle the pickling issue only when needed\\n\\nAll 172 existing tests pass, and the specific bug from the GitHub issue is now fixed.\"}"
+      },
+      "final_tools": [
+        {
+          "name": "read",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "file_path"
+            ],
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "The absolute path to the file to read"
+              },
+              "offset": {
+                "type": "integer",
+                "description": "Line number to start reading from (0-based, default: 0)"
+              },
+              "limit": {
+                "type": "integer",
+                "description": "Number of lines to read (default: 2000)"
+              }
+            }
+          },
+          "description": "Reads a file from the local filesystem.\n\nUsage:\n- The file_path parameter must be an absolute path, not a relative path\n- By default, reads up to 2000 lines starting from the beginning of the file\n- You can optionally specify a line offset and limit (especially handy for long files)\n- Any lines longer than 2000 characters will be truncated\n- Results are returned with line numbers starting at 1\n- You can read multiple files in a single response by calling this tool multiple times\n- If you read a file that exists but has empty contents, a warning will be shown\n\nParameters:\n- file_path: The absolute path to the file to read\n- offset: Optional line number to start reading from (0-based, default: 0)\n- limit: Optional number of lines to read (default: 2000)\n\nExamples:\n- Read entire file: file_path=\"/workspace/src/main.py\"\n- Read from line 100: file_path=\"/workspace/src/main.py\", offset=100\n- Read 50 lines from line 200: file_path=\"/workspace/src/main.py\", offset=200, limit=50\n",
+          "strict": true
+        },
+        {
+          "name": "write",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "file_path",
+              "content"
+            ],
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "The absolute path to the file to write"
+              },
+              "content": {
+                "type": "string",
+                "description": "The content to write to the file"
+              }
+            }
+          },
+          "description": "Writes content to a file, creating it if it doesn't exist or overwriting if it does.\n\nUsage:\n- The file_path parameter must be an absolute path\n- Creates parent directories automatically if they don't exist\n- Use this tool to create new files or completely replace existing file contents\n- For partial edits to existing files, use the 'edit' tool instead\n\nParameters:\n- file_path: The absolute path to the file to write\n- content: The content to write to the file\n\nExamples:\n- Create new file: file_path=\"/workspace/src/new_file.py\", content=\"print('hello')\"\n- Overwrite file: file_path=\"/workspace/config.json\", content='{\"key\": \"value\"}'\n\nNote: This will overwrite existing files. Make sure to read the file first if you need to preserve any content.\n",
+          "strict": true
+        },
+        {
+          "name": "edit",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "file_path",
+              "old_string",
+              "new_string"
+            ],
+            "properties": {
+              "file_path": {
+                "type": "string",
+                "description": "The absolute path to the file to modify"
+              },
+              "old_string": {
+                "type": "string",
+                "description": "The exact text to replace (must match file content exactly)"
+              },
+              "new_string": {
+                "type": "string",
+                "description": "The text to replace it with (must be different from old_string)"
+              },
+              "replace_all": {
+                "type": "boolean",
+                "description": "Replace all occurrences (default: false)"
+              }
+            }
+          },
+          "description": "Performs string replacement editing on a file.\n\nUsage:\n- Replaces occurrences of old_string with new_string in the specified file\n- The old_string must match exactly (including whitespace and indentation)\n- By default, only replaces the first unique occurrence\n- Use replace_all=true to replace all occurrences\n\nCRITICAL REQUIREMENTS:\n1. EXACT MATCHING: old_string must match EXACTLY, including all whitespace and indentation\n2. UNIQUENESS: old_string should uniquely identify the location to edit\n   - Include 3-5 lines of context before and after the change point\n   - If old_string matches multiple locations, the edit will fail (unless using replace_all)\n3. DIFFERENCE: old_string and new_string must be different\n\nParameters:\n- file_path: The absolute path to the file to modify\n- old_string: The exact text to replace (must match file content exactly)\n- new_string: The text to replace it with (must be different from old_string)\n- replace_all: Optional boolean to replace all occurrences (default: false)\n\nExamples:\n- Simple replacement:\n  file_path=\"/workspace/main.py\"\n  old_string=\"def hello():\\n    print('hi')\"\n  new_string=\"def hello():\\n    print('hello world')\"\n\n- Replace all occurrences:\n  file_path=\"/workspace/config.py\"\n  old_string=\"DEBUG = True\"\n  new_string=\"DEBUG = False\"\n  replace_all=true\n",
+          "strict": true
+        },
+        {
+          "name": "glob",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "pattern"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "The glob pattern to match files against (e.g., \"**/*.py\", \"*.ts\", \"src/**/*.js\")"
+              },
+              "path": {
+                "type": "string",
+                "description": "Optional directory to search in. Defaults to workspace root if not specified."
+              }
+            }
+          },
+          "description": "Fast file pattern matching tool that works with any codebase size.\n\nUsage:\n- Supports glob patterns like \"**/*.js\", \"*.py\", \"src/**/*.ts\"\n- Returns matching file paths sorted by modification time (most recent first)\n- Use this tool when you need to find files by name patterns\n- Results are limited to 100 files; use more specific patterns for large codebases\n\nParameters:\n- pattern: The glob pattern to match files against (e.g., \"**/*.py\", \"*.ts\")\n- path: Optional directory to search in. Defaults to the workspace root.\n\nExamples:\n- Find all Python files: pattern=\"**/*.py\"\n- Find TypeScript files in src: pattern=\"*.ts\", path=\"/workspace/src\"\n- Find test files: pattern=\"**/*_test.py\" or pattern=\"**/test_*.py\"\n",
+          "strict": true
+        },
+        {
+          "name": "grep",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "pattern"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "The regex pattern to search for in file contents"
+              },
+              "path": {
+                "type": "string",
+                "description": "Optional directory to search in. Defaults to workspace root."
+              },
+              "include": {
+                "type": "string",
+                "description": "Optional file pattern to filter files (e.g., \"*.py\", \"*.{js,ts}\")"
+              }
+            }
+          },
+          "description": "Fast content search tool that works with any codebase size.\n\nUsage:\n- Searches file contents using regular expressions\n- Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\", \"import.*from\")\n- Filter files by pattern with the include parameter (e.g., \"*.js\", \"*.{ts,tsx}\")\n- Returns file paths and line numbers with matching content, sorted by modification time\n- Results are limited to 100 matches; use more specific patterns for large codebases\n\nParameters:\n- pattern: The regex pattern to search for in file contents\n- path: Optional directory to search in. Defaults to workspace root.\n- include: Optional file pattern to filter which files to search (e.g., \"*.py\", \"*.{js,ts}\")\n\nExamples:\n- Find TODO comments: pattern=\"TODO|FIXME\"\n- Find function definitions: pattern=\"def\\s+\\w+\\(\"\n- Find imports in Python files: pattern=\"^import|^from.*import\", include=\"*.py\"\n",
+          "strict": true
+        },
+        {
+          "name": "list_dir",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "The absolute path to the directory to list. Defaults to workspace root."
+              },
+              "ignore": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Optional list of glob patterns to ignore (e.g., [\"*.log\", \"temp/\"])"
+              }
+            }
+          },
+          "description": "Lists files and directories in a given path.\n\nUsage:\n- Lists files and directories with a tree-like structure\n- Automatically ignores common non-essential directories (node_modules, .git, __pycache__, etc.)\n- Results are limited to 100 entries; use more specific paths for large directories\n- Prefer the Glob and Grep tools if you know which files to search for\n\nParameters:\n- path: The absolute path to the directory to list. Defaults to workspace root if not specified.\n- ignore: Optional list of additional glob patterns to ignore (e.g., [\"*.log\", \"temp/\"])\n\nExamples:\n- List workspace root: (no parameters needed)\n- List specific directory: path=\"/workspace/src\"\n- List with custom ignores: path=\"/workspace\", ignore=[\"*.log\", \"build/\"]\n",
+          "strict": true
+        },
+        {
+          "name": "todo_read",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          },
+          "description": "Use this tool to read your current todo list.\n\nUsage:\n- Retrieve all current todos and their status\n- Check what tasks are pending, in progress, or completed\n- No parameters required\n\nReturns:\n- JSON array of todo items with their current status\n\nExamples:\n- Read todos: (no parameters needed)\n\nNote: Use this before writing todos to avoid overwriting existing tasks.",
+          "strict": true
+        },
+        {
+          "name": "todo_write",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "todos"
+            ],
+            "properties": {
+              "todos": {
+                "type": "array",
+                "description": "The updated todo list",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "title",
+                    "status"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Unique identifier for the todo"
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "Brief description of the task"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "in_progress",
+                        "completed",
+                        "cancelled"
+                      ],
+                      "description": "Task status"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Optional detailed description"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "description": "Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.\nIt also helps the user understand the progress of the task and overall progress of their requests.\n\n## When to Use This Tool\nUse this tool proactively in these scenarios:\n\n1. Complex multistep tasks - When a task requires 3 or more distinct steps or actions\n2. Non-trivial and complex tasks - Tasks that require careful planning or multiple operations\n3. User explicitly requests todo list - When the user directly asks you to use the todo list\n4. User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)\n5. After receiving new instructions - Immediately capture user requirements as todos\n6. After completing a task - Mark it complete and add any new follow-up tasks\n7. When you start working on a new task, mark the todo as in_progress\n\n## When NOT to Use This Tool\n\nSkip using this tool when:\n1. There is only a single, straightforward task\n2. The task is trivial and tracking it provides no organizational benefit\n3. The task can be completed in less than 3 trivial steps\n4. The task is purely conversational or informational\n\n## Task States and Management\n\n1. **Task States**: Use these states to track progress:\n   - pending: Task not yet started\n   - in_progress: Currently working on (limit to ONE task at a time)\n   - completed: Task finished successfully\n   - cancelled: Task no longer needed\n\n2. **Task Management**:\n   - Update task status in real-time as you work\n   - Mark tasks complete IMMEDIATELY after finishing\n   - Only have ONE task in_progress at any time\n   - Complete current tasks before starting new ones\n\nParameters:\n- todos: Array of todo objects, each containing:\n  - id: Unique identifier for the todo (required for updates)\n  - title: Brief description of the task\n  - status: Task status - \"pending\", \"in_progress\", \"completed\", or \"cancelled\"\n  - description: Optional detailed description\n\nExamples:\n- Create todos: todos=[{\"id\": \"1\", \"title\": \"Implement feature X\", \"status\": \"pending\"}, {\"id\": \"2\", \"title\": \"Write tests\", \"status\": \"pending\"}]\n- Update status: todos=[{\"id\": \"1\", \"title\": \"Implement feature X\", \"status\": \"completed\"}, {\"id\": \"2\", \"title\": \"Write tests\", \"status\": \"in_progress\"}]\n\nNote: When in doubt, use this tool. Being proactive with task management demonstrates attentiveness.",
+          "strict": true
+        },
+        {
+          "name": "bash",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "The bash command to execute. Can be empty string to view additional logs when previous exit code is `-1`. Can be `C-c` (Ctrl+C) to interrupt the currently running process. Note: You can only execute one bash command at a time. If you need to run multiple commands sequentially, you can use `&&` or `;` to chain them together."
+              },
+              "is_input": {
+                "type": "string",
+                "description": "If True, the command is an input to the running process. If False, the command is a bash command to be executed in the terminal. Default is False.",
+                "enum": [
+                  "true",
+                  "false"
+                ]
+              },
+              "timeout": {
+                "type": "number",
+                "description": "Optional. Sets a hard timeout in seconds for the command execution. If not provided, the command will use the default soft timeout behavior. Max timeout allowed is 300 seconds."
+              },
+              "security_risk": {
+                "type": "string",
+                "description": "The LLM's assessment of the safety risk of this action. See the SECURITY_RISK_ASSESSMENT section in the system prompt for risk level definitions.",
+                "enum": [
+                  "LOW",
+                  "MEDIUM",
+                  "HIGH"
+                ]
+              }
+            },
+            "required": [
+              "command",
+              "security_risk"
+            ]
+          },
+          "description": "Execute a bash command in the terminal within a persistent shell session.\n\n\n### Command Execution\n* One command at a time: You can only execute one bash command at a time. If you need to run multiple commands sequentially, use `&&` or `;` to chain them together.\n* Persistent session: Commands execute in a persistent shell session where environment variables, virtual environments, and working directory persist between commands.\n* Soft timeout: Commands have a soft timeout of 10 seconds, once that's reached, you have the option to continue or interrupt the command (see section below for details)\n* Shell options: Do NOT use `set -e`, `set -eu`, or `set -euo pipefail` in shell scripts or commands in this environment. The runtime may not support them and can cause unusable shell sessions. If you want to run multi-line bash commands, write the commands to a file and then run it, instead.\n\n### Long-running Commands\n* For commands that may run indefinitely, run them in the background and redirect output to a file, e.g. `python3 app.py > server.log 2>&1 &`.\n* For commands that may run for a long time (e.g. installation or testing commands), or commands that run for a fixed amount of time (e.g. sleep), you should set the \"timeout\" parameter of your function call to an appropriate value.\n* If a bash command returns exit code `-1`, this means the process hit the soft timeout and is not yet finished. By setting `is_input` to `true`, you can:\n  - Send empty `command` to retrieve additional logs\n  - Send text (set `command` to the text) to STDIN of the running process\n  - Send control commands like `C-c` (Ctrl+C), `C-d` (Ctrl+D), or `C-z` (Ctrl+Z) to interrupt the process\n  - If you do C-c, you can re-start the process with a longer \"timeout\" parameter to let it run to completion\n\n### Best Practices\n* Directory verification: Before creating new directories or files, first verify the parent directory exists and is the correct location.\n* Directory management: Try to maintain working directory by using absolute paths and avoiding excessive use of `cd`.\n\n### Output Handling\n* Output truncation: If the output exceeds a maximum length, it will be truncated before being returned.\n",
+          "strict": true
+        },
+        {
+          "name": "finish",
+          "parameters": {
+            "type": "object",
+            "required": [
+              "message"
+            ],
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "Final message to send to the user"
+              }
+            }
+          },
+          "description": "Signals the completion of the current task or conversation.\n\nUse this tool when:\n- You have successfully completed the user's requested task\n- You cannot proceed further due to technical limitations or missing information\n\nThe message should include:\n- A clear summary of actions taken and their results\n- Any next steps for the user\n- Explanation if you're unable to complete the task\n- Any follow-up questions if more information is needed\n",
+          "strict": true
+        }
+      ]
+    }
+  ]
+}

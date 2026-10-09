@@ -7,24 +7,25 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
+from taskcompendium.convert.tasktrove_nemotron_structured_outputs import MISSING_VALUE
 from verifyit.grade import Status, grade
 from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlElementsSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    TEST_SH,
-    read_task_binary,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import verify_task
+
+pytest_plugins = ["lib.verifyit.tests.test_judge"]
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 TOOL_REF = "0123abc"
+FORMAT_VERIFIER_TOML = "tests/format/verifier.toml"
 
 _VALID_CANDIDATE = {
     "dishName": "Grilled Salmon",
@@ -65,19 +66,19 @@ def _mutate_metadata(**overrides) -> bytes:
     return write_task_binary(task)
 
 
-def test_exemplar_converts_to_json_schema_spec_with_expected_tags():
+def test_exemplar_converts_to_grounded_script_with_json_schema_gate():
     record = _convert()
     assert record.status == ConvertStatus.CONVERTED
     assert record.converter == "nemotron_structured_outputs"
-    assert record.mode == "json-schema"
-    assert record.tags == ["structured-outputs", "json-schema", "nemotron", "json"]
+    assert record.mode == "script"
+    assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "json"]
 
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text(VERIFIER_TOML))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, JsonSchemaSpec)
     assert spec.schema == "schema.json"
-    assert "tests/schema.json" in task.files
-    schema = json.loads(task.text("tests/schema.json"))
+    assert "tests/format/schema.json" in task.files
+    schema = json.loads(task.text("tests/format/schema.json"))
     assert schema["required"] == [
         "dishName",
         "wineType",
@@ -108,11 +109,11 @@ def test_exemplar_schema_grades_valid_and_invalid_candidates():
     probe-less pass (json-schema has no built-in positive/negative candidate in verify.py)."""
     record = _convert()
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text(VERIFIER_TOML))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, JsonSchemaSpec)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        (tmp_path / spec.schema).write_bytes(task.files[f"tests/{spec.schema}"])
+        (tmp_path / spec.schema).write_bytes(task.files[f"tests/format/{spec.schema}"])
         workspace = tmp_path / "app"
         workspace.mkdir()
         answer = workspace / "answer.txt"
@@ -134,20 +135,20 @@ def test_yaml_schema_type_maps_to_yaml_format():
     record = _convert(_mutate_verifier_data(schema_type="yaml"))
     assert record.status == ConvertStatus.CONVERTED
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text(VERIFIER_TOML))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, JsonSchemaSpec)
     assert spec.format.value == "yaml"
-    assert record.tags == ["structured-outputs", "json-schema", "nemotron", "yaml"]
+    assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "yaml"]
 
 
 def test_xml_schema_type_grades_required_element_or_attribute_names():
     record = _convert(_mutate_verifier_data(schema_type="xml"))
     assert record.status == ConvertStatus.CONVERTED
-    assert record.mode == "xml-elements"
-    assert record.tags == ["structured-outputs", "xml-elements", "nemotron", "xml"]
+    assert record.mode == "script"
+    assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "xml"]
 
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text(VERIFIER_TOML))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, XmlElementsSpec)
     assert spec.required == tuple(_VALID_CANDIDATE)
 
@@ -163,22 +164,22 @@ def test_xml_schema_type_grades_required_element_or_attribute_names():
             "<acidityLevel>Medium</acidityLevel><tanninLevel>Low</tanninLevel>"
             "<servingTemperature>12</servingTemperature><isRecommended>true</isRecommended></pairing>"
         )
-        reward = grade(spec, root / "tests", workspace)
+        reward = grade(spec, root / "tests/format", workspace)
         assert reward.status == Status.SCORED and reward.reward == 1.0
 
         answer.write_text("<pairing><dishName>Grilled Salmon</dishName></pairing>")
-        reward = grade(spec, root / "tests", workspace)
+        reward = grade(spec, root / "tests/format", workspace)
         assert reward.status == Status.SCORED and reward.reward == 0.0
 
 
 def test_csv_schema_type_grades_required_scalar_columns():
     record = _convert(_mutate_verifier_data(schema_type="csv"))
     assert record.status == ConvertStatus.CONVERTED
-    assert record.mode == "csv-columns"
-    assert record.tags == ["structured-outputs", "csv-columns", "nemotron", "csv"]
+    assert record.mode == "script"
+    assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "csv"]
 
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text(VERIFIER_TOML))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, CsvColumnsSpec)
     assert spec.required == (
         "dishName",
@@ -200,25 +201,25 @@ def test_csv_schema_type_grades_required_scalar_columns():
             "dishName,wineType,acidityLevel,tanninLevel,servingTemperature,isRecommended\n"
             "Grilled Salmon,White,Medium,Low,12,true\n"
         )
-        reward = grade(spec, root / "tests", workspace)
+        reward = grade(spec, root / "tests/format", workspace)
         assert reward.status == Status.SCORED and reward.reward == 1.0
 
         answer.write_text("dishName,wineType\nGrilled Salmon,White\n")
-        reward = grade(spec, root / "tests", workspace)
+        reward = grade(spec, root / "tests/format", workspace)
         assert reward.status == Status.SCORED and reward.reward == 0.0
 
 
 def test_toml_schema_type_grades_parsed_document_against_json_schema():
     record = _convert(_mutate_verifier_data(schema_type="toml"))
     assert record.status == ConvertStatus.CONVERTED
-    assert record.mode == "json-schema"
-    assert record.tags == ["structured-outputs", "json-schema", "nemotron", "toml"]
+    assert record.mode == "script"
+    assert record.tags == ["structured-outputs", "grounded", "script", "nemotron", "toml"]
 
     task = read_task_binary(record.task_binary)
-    spec = parse_spec(task.text(VERIFIER_TOML))
+    spec = parse_spec(task.text(FORMAT_VERIFIER_TOML))
     assert isinstance(spec, JsonSchemaSpec)
     assert spec.format is SchemaFormat.TOML
-    assert "tests/schema.json" in task.files
+    assert "tests/format/schema.json" in task.files
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -232,11 +233,11 @@ def test_toml_schema_type_grades_parsed_document_against_json_schema():
             'tanninLevel = "Low"\nservingTemperature = 12\nisRecommended = true\n'
             '[flavorProfile]\nprimary = "citrus"\nsecondary = "green apple"\n'
         )
-        reward = grade(spec, root / "tests", workspace)
+        reward = grade(spec, root / "tests/format", workspace)
         assert reward.status == Status.SCORED and reward.reward == 1.0
 
         answer.write_text('dishName = "Grilled Salmon"\nwineType = 42\n')
-        reward = grade(spec, root / "tests", workspace)
+        reward = grade(spec, root / "tests/format", workspace)
         assert reward.status == Status.SCORED and reward.reward == 0.0
 
 
@@ -262,7 +263,7 @@ def test_grouped_required_dict_is_flattened_to_a_list():
     record = _convert(write_task_binary(task))
     assert record.status == ConvertStatus.CONVERTED
     converted_task = read_task_binary(record.task_binary)
-    converted_schema = json.loads(converted_task.text("tests/schema.json"))
+    converted_schema = json.loads(converted_task.text("tests/format/schema.json"))
     assert sorted(converted_schema["required"]) == sorted(schema["required"]["group"])
 
 
@@ -277,7 +278,7 @@ def test_string_additional_properties_is_coerced_to_bool():
     record = _convert(write_task_binary(task))
     assert record.status == ConvertStatus.CONVERTED
     converted_task = read_task_binary(record.task_binary)
-    converted_schema = json.loads(converted_task.text("tests/schema.json"))
+    converted_schema = json.loads(converted_task.text("tests/format/schema.json"))
     assert converted_schema["additionalProperties"] is False
 
 
@@ -294,3 +295,121 @@ def test_schema_failing_metaschema_check_is_rejected_as_unsupported_variant():
     broken_schema = {"type": "object", "properties": {"x": {"type": "string"}}, "exclusiveMinimum": True}
     record = _convert(_mutate_verifier_data(schema=broken_schema))
     assert record.status == ConvertStatus.UNSUPPORTED_VARIANT and record.task_binary is None
+
+
+GROUNDING_CANDIDATES = {
+    "json": ('{"fullName":"Enrique Lora","birth":"1970"}', '{"fullName":"fabricated","birth":"fabricated"}'),
+    "yaml": ('fullName: Enrique Lora\nbirth: "1970"\n', "fullName: fabricated\nbirth: fabricated\n"),
+    "toml": ('fullName = "Enrique Lora"\nbirth = "1970"\n', 'fullName = "fabricated"\nbirth = "fabricated"\n'),
+    "xml": (
+        "<profile><fullName>Enrique Lora</fullName><birth>1970</birth></profile>",
+        "<profile><fullName>fabricated</fullName><birth>fabricated</birth></profile>",
+    ),
+    "csv": ("fullName,birth\nEnrique Lora,1970\n", "fullName,birth\nfabricated,fabricated\n"),
+}
+
+
+def _grounded_task(tmp_path, schema_type, candidate):
+    task = read_task_binary(_fixture())
+    task.files["instruction.md"] = (
+        f"Extract fullName and birth as {schema_type} from this source document: "
+        "Enrique Lora was born in 1970. Write your answer to /app/answer.txt."
+    ).encode()
+    task.files["tests/verifier_data.json"] = json.dumps(
+        {
+            "schema_type": schema_type,
+            "schema": {
+                "type": "object",
+                "properties": {"fullName": {"type": "string"}, "birth": {"type": "string"}},
+                "required": ["fullName", "birth"],
+                "additionalProperties": False,
+            },
+        }
+    ).encode()
+    record = _convert(write_task_binary(task))
+    assert record.status == ConvertStatus.CONVERTED
+    converted = read_task_binary(record.task_binary)
+    converted.write_to(tmp_path)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "answer.txt").write_text(candidate)
+    return parse_spec(converted.text(VERIFIER_TOML)), workspace
+
+
+@pytest.mark.parametrize("schema_type", GROUNDING_CANDIDATES)
+@pytest.mark.parametrize("fabricated", [False, True])
+def test_grounded_composition_uses_content_verdict_after_format_passes(tmp_path, fake_judge, schema_type, fabricated):
+    candidate = GROUNDING_CANDIDATES[schema_type][int(fabricated)]
+    fake_judge.replies = ["FAIL" if fabricated else "PASS"]
+    spec, workspace = _grounded_task(tmp_path, schema_type, candidate)
+    verdict = grade(spec, tmp_path / "tests", workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 0.0 if fabricated else 1.0)
+    # The remote grading boundary must receive the source document, not just field names.
+    assert "Enrique Lora was born in 1970." in fake_judge.prompts[0]
+    assert candidate in fake_judge.prompts[0]
+
+
+def test_bad_format_scores_zero_without_consulting_the_content_judge(tmp_path, fake_judge):
+    spec, workspace = _grounded_task(tmp_path, "xml", "<broken")
+    verdict = grade(spec, tmp_path / "tests", workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 0.0)
+    assert fake_judge.requests == []
+
+
+def test_missing_content_judge_is_an_infrastructure_error(tmp_path, unconfigured_judge):
+    spec, workspace = _grounded_task(tmp_path, "csv", GROUNDING_CANDIDATES["csv"][0])
+    verdict = grade(spec, tmp_path / "tests", workspace)
+    assert (verdict.status, verdict.reward) == (Status.INFRA_ERROR, 0.0)
+
+
+@pytest.mark.parametrize("schema_type", ["json", "yaml", "toml"])
+def test_missing_fact_marker_passes_format_and_reaches_grounding_judge(tmp_path, fake_judge, schema_type):
+    task = read_task_binary(_fixture())
+    task.files["instruction.md"] = (
+        f"Extract name and servingTemperature as {schema_type} from this document: The drink is called Tea."
+    ).encode()
+    task.files["tests/verifier_data.json"] = json.dumps(
+        {
+            "schema_type": schema_type,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "servingTemperature": {"type": "number"},
+                },
+                "required": ["name", "servingTemperature"],
+                "additionalProperties": False,
+            },
+        }
+    ).encode()
+    record = _convert(write_task_binary(task))
+    assert record.status == ConvertStatus.CONVERTED
+    converted = read_task_binary(record.task_binary)
+    converted.write_to(tmp_path)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    candidates = {
+        "json": json.dumps({"name": "Tea", "servingTemperature": MISSING_VALUE}),
+        "yaml": f'name: Tea\nservingTemperature: "{MISSING_VALUE}"\n',
+        "toml": f'name = "Tea"\nservingTemperature = "{MISSING_VALUE}"\n',
+    }
+    (workspace / "answer.txt").write_text(candidates[schema_type])
+    fake_judge.replies = ["PASS"]
+    verdict = grade(parse_spec(converted.text(VERIFIER_TOML)), tmp_path / "tests", workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 1.0)
+    assert MISSING_VALUE in fake_judge.prompts[0]
+
+
+def test_original_exemplar_can_be_graded_without_inventing_required_values(tmp_path, fake_judge):
+    record = _convert()
+    assert record.status == ConvertStatus.CONVERTED
+    task = read_task_binary(record.task_binary)
+    task.write_to(tmp_path)
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    candidate = {**_VALID_CANDIDATE, "tanninLevel": MISSING_VALUE, "servingTemperature": MISSING_VALUE}
+    fake_judge.replies = ["PASS"]
+    (workspace / "answer.txt").write_text(json.dumps(candidate))
+    verdict = grade(parse_spec(task.text(VERIFIER_TOML)), tmp_path / "tests", workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 1.0)
+    assert "When pairing wine with grilled salmon" in fake_judge.prompts[0]

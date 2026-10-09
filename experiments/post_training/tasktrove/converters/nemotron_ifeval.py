@@ -10,18 +10,17 @@ old grader re-implemented the IFEval checks inline; the tool's own registry
 uses, so the task maps straight onto ``IfevalSpec.constraints``.
 """
 
-from verifyit.modes.ifeval import CONSTRAINTS
-from verifyit.spec import Constraint, IfevalSpec
-
-from experiments.post_training.tasktrove.converters.converted_task import (
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_converted_task import (
     ConvertedTask,
     Converter,
     ConverterKey,
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
-from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
+from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
+from verifyit.modes.ifeval import CONSTRAINTS
+from verifyit.spec import Constraint, IfevalSpec
 
 
 def convert_nemotron_ifeval(task: TaskFiles) -> ConvertedTask | Rejected:

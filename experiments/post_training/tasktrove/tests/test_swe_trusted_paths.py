@@ -4,21 +4,20 @@
 """Converter behaviour on the checked-in ``swe_trusted_paths`` exemplar."""
 
 import json
+import subprocess
+import uuid
 from pathlib import Path
 
+import pytest
+from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TEST_SH
+from taskcompendium.convert.tasktrove_converted_task import ConvertStatus
 from verifyit.spec import PytestSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
-from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
 from experiments.post_training.tasktrove.task_format import INSTALL_MARKER, VERIFIER_TOML, VERIFY_TEST_SH
-from experiments.post_training.tasktrove.taskbinary import (
-    DOCKERFILE,
-    TEST_SH,
-    read_task_binary,
-    write_task_binary,
-)
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 from experiments.post_training.tasktrove.verify import verify_task
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -181,3 +180,97 @@ def test_dockerfile_reuses_existing_pip_install_line_instead_of_adding_a_new_run
     body = dockerfile.split(INSTALL_MARKER)[0]
     assert body.count("pytest-json-report") == 1
     assert "RUN pip install --upgrade pip uv pytest pytest-json-report" in body
+
+
+@pytest.mark.docker
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("repository", ["john-kurkowski__tldextract.3d1bf184", "marshmallow-code__marshmallow.9716fc62"])
+def test_swesmith_built_image_collects_with_legacy_plugin_and_test_dependencies(repository, tmp_path):
+    task = read_task_binary(_fixture())
+    task.files[INSTRUCTION] = f"git clone https://github.com/swesmith/{repository} .\n".encode()
+    # Reproduce pytest 9 and the legacy plugin being installed before the repair.
+    task.files[DOCKERFILE] = (
+        b"FROM python:3.10-bookworm\n" b"RUN pip install pytest pytest-gitignore pytest-json-report\n"
+    )
+    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
+    dockerfile = read_task_binary(record.task_binary).text(DOCKERFILE).split(INSTALL_MARKER)[0]
+    probe = "import pytest\n\ndef test_compatible_collection():\n    assert pytest.version_tuple[0] < 9\n"
+    if repository.startswith("marshmallow-code__"):
+        probe += (
+            "\ndef test_declared_dependency():\n    import simplejson\n"
+            "    assert simplejson.loads(simplejson.dumps({'ok': True})) == {'ok': True}\n"
+        )
+    result = docker_pytest_result(dockerfile, probe, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def docker_pytest_result(dockerfile: str, probe: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    (tmp_path / "Dockerfile").write_text(dockerfile + "\nCOPY test_probe.py /probe/test_probe.py\nWORKDIR /probe\n")
+    (tmp_path / "test_probe.py").write_text(probe)
+    image = f"atlas-swesmith-regression:{uuid.uuid4().hex}"
+    try:
+        subprocess.run(["docker", "build", "-t", image, str(tmp_path)], check=True, capture_output=True, text=True)
+        return subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                image,
+                "python",
+                "-m",
+                "pytest",
+                "--json-report",
+                "--json-report-file=/probe/report.json",
+                "test_probe.py",
+            ],
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        subprocess.run(["docker", "image", "rm", image], check=True, capture_output=True)
+
+
+@pytest.mark.docker
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize(
+    "repository", ["seperman__deepdiff.ed252022", "conan-io__conan.86f29e13", "oauthlib__oauthlib.1fd52536"]
+)
+def test_swesmith_preserves_project_pytest_and_installs_test_dependencies(repository, tmp_path):
+    task = read_task_binary(_fixture())
+    task.files[INSTRUCTION] = f"git clone https://github.com/swesmith/{repository} .\n".encode()
+    task.files[DOCKERFILE] = b"FROM python:3.10-bookworm\nRUN pip install pytest pytest-json-report\n"
+    record = convert_one(_info(), "t.tar.gz", write_task_binary(task), converter_index(), TOOL_REF)
+    dockerfile = read_task_binary(record.task_binary).text(DOCKERFILE).split(INSTALL_MARKER)[0]
+    probe = "import pytest\n\ndef test_compatible_collection():\n    assert pytest.version_tuple[0] < 9\n"
+    if repository.startswith("seperman__"):
+        # The actual DeepDiff development requirements pin this version. The
+        # shared upper bound must allow that subsequent project installation.
+        dockerfile += "\nRUN python -m pip install pytest==8.3.4\n"
+        probe += "    assert pytest.__version__ == '8.3.4'\n"
+    elif repository.startswith("conan-io__"):
+        probe += (
+            "\ndef test_project_dependencies():\n"
+            "    import mock, webtest, jwt, bottle, parameterized\n"
+            "    assert jwt.decode(jwt.encode({'ok': True}, 'key', algorithm='HS256'), "
+            "'key', algorithms=['HS256']) == {'ok': True}\n"
+        )
+    else:
+        probe += (
+            "\ndef test_project_dependencies():\n"
+            "    import blinker, jwt\n"
+            "    from cryptography.hazmat.primitives.asymmetric import rsa\n"
+            "    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)\n"
+            "    token = jwt.encode({'ok': True}, key, algorithm='RS256')\n"
+            "    assert jwt.decode(token, key.public_key(), algorithms=['RS256']) == {'ok': True}\n"
+            "    seen = []\n"
+            "    def receiver(sender):\n"
+            "        seen.append(sender)\n"
+            "    signal = blinker.Signal()\n"
+            "    signal.connect(receiver)\n"
+            "    signal.send('scope')\n"
+            "    assert seen == ['scope']\n"
+        )
+    result = docker_pytest_result(dockerfile, probe, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr

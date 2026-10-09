@@ -5,7 +5,8 @@
 Open the coordinator task in the Iris dashboard. Select its endpoint link to
 open the Zephyr dashboard.
 
-The overview lists every pipeline still held by the coordinator. Each card
+The overview lists active pipelines and the latest 100 released executions in
+start-time order, with execution ID breaking ties. Each card
 shows a compact bar for its physical stages and phase. Select a card to see
 current-stage shard progress, exact per-shard status, and metrics. The focused
 stage cards show items-per-second sparklines when Finelog has at least two
@@ -15,8 +16,10 @@ through exact IDs.
 Earlier stages show their final state, since the coordinator retains shard-level
 progress only for the current stage. Select **All pipelines** to return to the
 fleet view. Counters belong to the selected pipeline; Workers shows the shared
-coordinator pool. Completed executions disappear after the driver reads the
-result and releases coordinator state.
+coordinator pool. The retained released executions expose a summary and Finelog
+metrics while the coordinator is alive. Task payloads, shard details, and counters are released. Refresh keeps
+the selected execution, scroll position, and shard input; a failed refresh leaves
+the last snapshot visible.
 
 See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and
 `dashboard-proxy` commands.

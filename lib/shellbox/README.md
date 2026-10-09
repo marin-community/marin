@@ -20,15 +20,16 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 ## Machine API
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`, and `LocalMachineFactory` only `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
-Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris}`. QEMU and ShellSim have Harbor environment adapters. The three new backends expose the machine contract; a Harbor environment adapter and persistent Bash support remain separate work.
+Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. QEMU and ShellSim have Harbor environment adapters. The other backends expose only the machine contract; a Harbor environment adapter and persistent Bash support remain separate work.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |
 | Local gVisor | Docker image, registry image, Dockerfile, prepared OCI image | allow or deny | Docker daemon with `runsc` registered; Skopeo for image preparation |
 | Daytona | Registry image reference or Docker build context | allow or deny | Daytona credentials and service access |
 | Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: no network. Neither reaches the cluster | Iris controller and workers with sandbox profile support; `ALLOW` needs a Kubernetes cluster |
+| Local | `HostImage()`: the host's own programs and files, in a bubblewrap sandbox | allow or deny | Trusted commands only; `bwrap` able to create namespaces (as root, `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, no AppArmor confinement); a root process to run commands as other users |
 
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker runtime on the host. The `daytona` extra pins the SDK used by the Harbor fork. Its OpenTelemetry dependencies include prereleases, so installing it needs `--prerelease allow`. The `iris` extra installs `marin-iris`; its current PyPI releases and related Marin dependencies also need `--prerelease allow`. A local checkout can supply Iris as a workspace dependency instead. Iris uses its `CONTAINER_PROFILE_SANDBOX` job profile, which runs the job under gVisor with no cluster environment, credentials, or workspace bundle, and the `ExecInContainer` RPC. It does not launch a nested `runsc` process or actor. `NetworkPolicy.ALLOW` submits the job with `EGRESS_POLICY_INTERNET`, which reaches public addresses but not private, carrier-grade NAT or link-local ones, so not the controller, other pods or the metadata server. On Docker worker clusters such as `marin` it needs the host egress filter that worker bootstrap installs. `NetworkPolicy.DENY` submits `EGRESS_POLICY_NONE`, which leaves only DNS on Kubernetes and no network on Docker workers. Iris file transfer requires the task image's `/bin/sh`, `base64`, `tar`, `head`, `tail`, and `wc` utilities. Daytona uses the sandbox filesystem API for file transfer and requires `/bin/sh`, `tar`, `head`, and `wc` for commands and directory transfer. Daytona sandboxes and Iris jobs have a default six-hour lifetime to limit leaks when the harness exits without closing them. The Iris controller scans for expired jobs about once a minute, so an Iris sandbox can outlive `job_ttl` by a minute or more. A command or transfer on an Iris sandbox that was killed, expired, or preempted raises `MachineTerminated`. When the controller's exec pool is full it refuses an exec with `RESOURCE_EXHAUSTED` before running it; the machine retries that refusal with backoff for up to Iris's 30-minute RPC retry budget. Other exec RPC errors are not retried, because the command may already have run.
 
@@ -93,8 +94,10 @@ memory settings. Backends reject resource overrides that they cannot apply.
 username or UID string. An omitted user retains the image's user. ShellSim and
 QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
 control process as root and uses `su` for other execution users. Numeric UIDs
-require `getent` and a matching guest account.
+require `getent` and a matching guest account. The local backend runs other users only from a root process.
 An empty Docker `MachineSpec.workdir` retains the image's working directory.
+Docker, gVisor, Iris and local machines create a nonempty `workdir` when the machine starts, so
+commands can run there even when the image lacks it.
 
 To prepare a registry image, use a standard image reference without `https://`:
 
@@ -145,6 +148,41 @@ The `firmware` directory must contain `bios-microvm.bin` from SeaBIOS. The `libr
 Re-stage bundles built with an earlier prototype when updating this package; the guest and host serial protocols must match.
 
 With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable at `bin/qemu-system-x86_64` and its libraries at `bin/lib`. Pass those paths as `--qemu` and `--libraries` when staging. The current quicksand-qemu wheel does not supply `bios-microvm.bin`; pass a firmware directory that does. Its QEMU modules are loaded from the staged `lib/qemu` directory.
+
+## Local backend
+
+`LocalMachineFactory` runs each command on the calling host in a [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) sandbox. It needs no container image or VM; the dependency `bubblewrap-bin` supplies a `bwrap` binary. Use it for trusted commands, such as vendored grader scripts on an ephemeral worker: commands share the host's kernel, and the sandbox is not a boundary against hostile code.
+
+```python
+from pathlib import Path
+from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.local.python_environment import build_python_environment
+from shellbox.machine import Command, HostImage, MachineSpec
+
+environment = build_python_environment(Path("/var/tmp/grader-env"), Path("grader.lock"), "3.12.13")
+factory = LocalMachineFactory(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))
+machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
+try:
+    result = await machine.run(Command(("python3", "/tests/grade.py")))
+finally:
+    await machine.close()
+```
+
+- Each machine has a root directory of its own, which `create` makes empty under the host's temporary directory and `close` removes. Commands see it as `/`, with the host's `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`, `/sys` and `/run/systemd/resolve` mounted read-only over it, together with each directory in `read_only` at its own host path. Every other path, including `/app`, `/tests`, `/tmp` and `HOME`, is the machine's own, so paths that the host process uses, such as an Iris task's `/app`, are never touched. No other host file is visible.
+- Machines are independent, so a process may run any number of them at once.
+- Files persist in the machine's root between commands. Each command gets new PID, IPC and UTS namespaces and a fresh `/proc`, `/dev` and `/dev/shm`; a command's processes end when it exits or times out. Under `NetworkPolicy.DENY` it also gets a network namespace with only loopback, which refuses TCP and UDP to the host and beyond; under `ALLOW` it uses the host network.
+- `upload` copies into the machine's root and rejects targets in the read-only directories. `download` reads the machine's root or the read-only host directories; a missing path raises `RuntimeError`, as the container backends do.
+- Commands never inherit the host environment, which can hold cluster credentials. Each command gets `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`.
+- `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. Output beyond `output_limit_bytes` is discarded while the command runs.
+- Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files, files of at most 1 GiB, and, for a command with a timeout, at most the timeout multiplied by the usable CPUs plus 5 seconds of CPU time per process. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
+- The backend enforces no memory limit, since an address-space limit breaks NumPy and SymPy allocations. `memory_mb`, CPU, storage, and GPU requests raise `UnsupportedMachineSpec`.
+- `Command.user` keeps the process's user when it is omitted or names that user. Another user requires a root process; the command then runs with that account's UID and primary group, no supplementary groups and no capabilities. A user without a host account raises `UnsupportedMachineSpec`.
+
+The factory mounts exactly the directories in `read_only` and infers nothing from `bin_dirs`, which only sets `PATH`. The caller must keep each `read_only` directory self-contained. A symlink whose target lies outside the mounted directories does not resolve in the sandbox. A uv venv, for example, links `python` to an interpreter elsewhere on the host, so mounting the venv alone leaves `python3` missing. The factory raises `ValueError` for a `read_only` path that is not an existing directory.
+
+`build_python_environment(root, lock, python_version)` builds such a directory for Python. It installs a uv-managed CPython of the given full version under `root/python`, creates a venv at `root/venv` from it, and runs `uv pip sync --require-hashes` with the lock, a requirements file with hashes such as `uv pip compile --generate-hashes` writes. Every file and symlink of the environment lies under `root`, and the venv refers to its interpreter by absolute path, so the root must stay where it was built. It returns a `PythonEnvironment` whose `root` goes in `read_only` and whose `bin_dir` goes in `bin_dirs`. Concurrent builders of one root on a host take an exclusive `flock` on a file beside it, so the environment is built once. A completion marker records a finished build; a root without one is a failed or interrupted build and is removed and rebuilt. A finished root built from another lock or Python version raises `ValueError`, and a failed uv command raises `UvError` with uv's error output. The builder needs `uv` on `PATH` and network access to download the interpreter and packages.
+
+The factory checks once, when it is created, that `bwrap` can build a sandbox, and raises `SandboxUnavailable` with each candidate's error when it cannot. It tries the bundled binary, then any `bwrap` on `PATH`, or only the `bwrap` path it is given. Run as root, `bwrap` creates its namespaces without a user namespace, which needs `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`, no AppArmor confinement, and a seccomp filter that allows `pivot_root`. Container runtimes withhold all three by default. On Kubernetes, the container's `securityContext` needs `capabilities.add: [SYS_ADMIN, NET_ADMIN]` and `appArmorProfile: {type: Unconfined}`, and no `RuntimeDefault` seccomp profile. Run as another user, `bwrap` needs unprivileged user namespaces; Ubuntu restricts them to programs whose AppArmor profile allows them, including `/usr/bin/bwrap`, so there the factory uses the system binary.
 
 ## ShellSim backend
 

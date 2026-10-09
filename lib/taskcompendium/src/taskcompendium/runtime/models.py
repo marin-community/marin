@@ -13,10 +13,14 @@ from pydantic import BaseModel, ConfigDict
 from taskcompendium.models import (
     AssistantMessage,
     ConversationEvent,
+    ConversationTrace,
     FunctionCall,
     FunctionDefinition,
+    GradingAttempt,
+    StateSubmission,
     TaskResource,
     TaskSpec,
+    decode_json_value,
 )
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -25,6 +29,11 @@ from taskcompendium.runtime.resources import resource_bytes
 class RuntimeEvidence:
     files: dict[str, bytes]
     state_json: str
+
+
+def grading_attempt(conversation: ConversationTrace, evidence: RuntimeEvidence) -> GradingAttempt:
+    """Pair a conversation with the files and decoded state an environment captured."""
+    return GradingAttempt(conversation, evidence.files, StateSubmission(decode_json_value(evidence.state_json)))
 
 
 class Termination(StrEnum):
