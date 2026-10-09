@@ -40,8 +40,11 @@ def test_accelerator_implementation_value_and_gradients_match_xla():
     def loss(lhs, rhs, implementation):
         return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation=implementation) ** 2)
 
-    actual_value, actual_gradients = jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs, implementation)
-    expected_value, expected_gradients = jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs, "xla")
+    # At default precision, ROCm may run f32 dots in reduced-precision xf32 on MI300X, and its choice can
+    # differ between the two paths and between processes, giving ~7e-4 relative error on either side.
+    with jax.default_matmul_precision("highest"):
+        actual_value, actual_gradients = jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs, implementation)
+        expected_value, expected_gradients = jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs, "xla")
 
     assert jnp.allclose(actual_value, expected_value, rtol=1e-5, atol=1e-5)
     assert jnp.allclose(actual_gradients[0], expected_gradients[0], rtol=1e-5, atol=1e-5)
