@@ -59,6 +59,7 @@ from verifyit.spec import ReasoningGymSpec
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
     ANSWER_FILE_DELIVERY,
+    TaskTroveConverter,
     tasktrove_source,
 )
 from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
@@ -399,8 +400,8 @@ def sources() -> list[RlDataSource]:
             pipeline=RlDataPipeline(
                 name="tasktrove-reasoning-gym",
                 source=tasktrove_source(TASKTROVE_CONFIG),
-                convert=convert_tasktrove,
-                version="1",
+                convert=TaskTroveConverter(TASKTROVE_CONFIG, convert_tasktrove),
+                version="2",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_RUBRIC,

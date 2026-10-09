@@ -4,6 +4,7 @@
 import io
 import json
 import os
+import re
 import shlex
 import subprocess
 import tarfile
@@ -37,8 +38,8 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
-from verifyit.grade import read_output
-from verifyit.spec import ExactSpec, JsonSchemaSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
+from verifyit.grade import grade, read_output
+from verifyit.spec import ExactSpec, JsonSchemaSpec, McqSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
 
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
@@ -129,6 +130,30 @@ def test_source_recipe_provenance_does_not_override_other_datasets(normalized_ro
     )
     expected_image = task.environment_requirements.docker_image or BASE_IMAGE
     assert archive_files(record.task_binary)["environment/Dockerfile"].decode().startswith(f"FROM {expected_image}\n")
+
+
+@pytest.mark.parametrize(("letter", "reward"), [("B", 1.0), ("A", 0.0)])
+def test_harbor_mcqa_file_format_matches_its_grader(normalized_row, tmp_path, letter, reward):
+    row, original = normalized_row
+    task = answer_task(
+        RawRow(original.id, original.source, {}),
+        prompt="Choose a fruit. A. Potato B. Apple\nReturn one option letter from A through B.",
+        spec=McqSpec(expected="B", options=2),
+    )
+    task = task.model_copy(update={"resources": original.resources})
+    files = archive_files(
+        harbor_record(
+            {**row, "task_json": task.model_dump_json()},
+            grader_image=None,
+            family="qa",
+            fallback_actor_image=BASE_IMAGE,
+            verifyit_package_root=VERIFYIT_PACKAGE,
+        ).task_binary
+    )
+    answer_format = re.findall(r"Use the format `([^`]+)`", files["instruction.md"].decode())[-1]
+    (tmp_path / "answer.txt").write_text(answer_format.replace("X", letter))
+    spec = parse_spec(files["tests/taskcompendium-verifier.toml"].decode())
+    assert grade(spec, tmp_path, tmp_path).reward == reward
 
 
 @pytest.mark.parametrize("role", ["actor", "grader"])

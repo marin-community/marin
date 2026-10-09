@@ -30,6 +30,7 @@ from verifyit.spec import (
     JudgeSpec,
     JunitSpec,
     MathSpec,
+    Mode,
     NumericSpec,
     PytestSpec,
     ScriptSpec,
@@ -392,10 +393,13 @@ def harbor_payload(
     if task.answer_type == AnswerType.TEXT:
         if answer_path is None:
             raise UnsupportedHarborTask("Text grader has no answer-file destination")
-        prompt += (
-            f"\n\nWrite your final answer to `{answer_path}`. "
-            "The contents of this file are graded as your final response."
+        file_format = (
+            " Use the format `Answer: X`, replacing X with your chosen option letter."
+            if verifier.mode == Mode.MCQ
+            else ""
         )
+        prompt += f"\n\nWrite your final answer to `{answer_path}`.{file_format} "
+        prompt += "The contents of this file are graded as your final response."
     if leak := _reference_leak(prompt, verifier.spec):
         raise UnsupportedHarborTask(f"gold_leak: {leak}")
     files["instruction.md"] = prompt.encode()

@@ -4,6 +4,7 @@
 """Reasoning Gym tasks are graded by their own task scorer, on regenerated entries where generated."""
 
 import json
+import tomllib
 import zipfile
 from fractions import Fraction
 
@@ -11,12 +12,14 @@ import pytest
 import reasoning_gym
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
+from taskcompendium.harbor.export import harbor_payload
 from taskcompendium.models import AnswerType, ScriptGrader, TaskSpec, TextMessage, verifyit_spec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.grade import Status, grade
 
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.reasoning_gym import generate
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as declarations
 from experiments.post_training.task_curation.tests.conversion import (
@@ -347,6 +350,28 @@ def test_tasktrove_reasoning_gym_preserves_fractional_reward(tmp_path):
     verdict = grade(verifyit_spec(task.grader), tests, workspace)
     assert (verdict.status, verdict.reward) == (Status.SCORED, 1 / 3)
     assert declarations.tasktrove_golden(task) == Reply(TextMessage(role="assistant", content="42"))
+
+
+def test_tasktrove_reasoning_gym_exports_its_source_environment():
+    task = converted_task(
+        PIPELINES["tasktrove-reasoning-gym"],
+        tasktrove_archive(**{"environment/Dockerfile": b"FROM python:3.11-slim\nWORKDIR /app\n"}),
+    )
+    payload = harbor_payload(
+        {
+            "task_json": task.model_dump_json(),
+            "source_row": declarations.TASKTROVE_CONFIG + "/fixture",
+            "original_path": "fixture",
+        },
+        grader_image=None,
+        family="reasoning-gym",
+        fallback_actor_image="unused",
+        verifyit_package_root=VERIFYIT_PACKAGE,
+    )
+    config = tomllib.loads(payload.files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert payload.files["environment/Dockerfile"].startswith(b"FROM python:3.11-slim\nWORKDIR /app\n")
+    assert "tests/Dockerfile" not in payload.files
 
 
 @pytest.mark.parametrize("dataset", ["arc_agi", "rearc"])
