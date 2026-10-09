@@ -21,17 +21,20 @@ import pyarrow.parquet as pq
 import tomlkit
 from finestore.schema import arrow_schema
 from harbor_config.models.task.config import TaskConfig
+from taskcompendium.convert.script_grader import GRADE_ARGV
 from taskcompendium.models import (
     AnswerType,
     FileReward,
     PlainText,
     ScriptGrader,
+    StdoutReward,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
     verifyit_answer_file,
     verifyit_spec,
 )
+from taskcompendium.runtime.grading import DIAGNOSTIC_OUTPUT_BYTES
 from taskcompendium.runtime.local import RUNTIME_PACKAGES, context_paths
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import render_spec
@@ -135,13 +138,31 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         grader_env = {}
         grader_cwd = "/"
     elif isinstance(grader, ScriptGrader):
-        if grader.argv != ("bash", "/tests/test.sh") or grader.collect or grader.artifacts:
-            raise UnsupportedHarborTask("Only archived test.sh script graders without collection hooks are supported")
-        if not isinstance(grader.reward, FileReward) or len(grader.reward.files) != 1:
-            raise UnsupportedHarborTask("Script graders must emit one Harbor reward file")
-        reward = grader.reward.files[0]
-        if reward.path != "/logs/verifier/reward.txt" or reward.format != "number":
-            raise UnsupportedHarborTask("Script graders must emit Harbor's numeric reward.txt")
+        if grader.collect or grader.artifacts:
+            raise UnsupportedHarborTask("Script collection hooks require dedicated Harbor lowering")
+        if grader.argv == GRADE_ARGV and isinstance(grader.reward, StdoutReward):
+            files.update(verifier_runtime())
+            files["tests/test.sh"] = (
+                "#!/bin/bash\nset -euo pipefail\n"
+                "mkdir -p /logs/verifier\nrm -f /logs/verifier/reward.txt\n"
+                f"{shlex.join(grader.argv)} > /logs/verifier/taskcompendium-stdout.txt\n"
+                "export PYTHONPATH=/tests/runtime\npython3 - <<'PY'\n"
+                "from pathlib import Path\n"
+                "from verifyit.modes.extract import last_line\n"
+                "from verifyit.modes.grade_script import parse_reward_number\n"
+                "with Path('/logs/verifier/taskcompendium-stdout.txt').open('rb') as stdout:\n"
+                f"    output = stdout.read({DIAGNOSTIC_OUTPUT_BYTES}).decode(errors='replace')\n"
+                "reward = parse_reward_number(last_line(output))\n"
+                "Path('/logs/verifier/reward.txt').write_text(str(reward))\nPY\n"
+            ).encode()
+        elif grader.argv == ("bash", "/tests/test.sh") and isinstance(grader.reward, FileReward):
+            if len(grader.reward.files) != 1:
+                raise UnsupportedHarborTask("Script graders must emit one Harbor reward file")
+            reward = grader.reward.files[0]
+            if reward.path != "/logs/verifier/reward.txt" or reward.format != "number":
+                raise UnsupportedHarborTask("Script graders must emit Harbor's numeric reward.txt")
+        else:
+            raise UnsupportedHarborTask("Unsupported script command or reward contract")
         answer_path = grader.answer_path
         mode, timeout, grader_env, grader_cwd = "script", grader.timeout, grader.env, grader.cwd
     else:

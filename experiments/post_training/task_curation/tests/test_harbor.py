@@ -29,6 +29,7 @@ from verifyit.grade import read_output
 from verifyit.spec import parse_spec
 
 from experiments.post_training.task_curation.compare_harbor import compare_harbor
+from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.tasktrove import (
     calendar,
     instruction_following,
@@ -41,7 +42,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
 from experiments.post_training.task_curation.harbor import TASKS_SCHEMA, UnsupportedHarborTask, harbor_record, main
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.sources import all_sources
-from experiments.post_training.task_curation.tests.conversion import convert_row, tasktrove_row
+from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 from experiments.post_training.tasktrove.publish import TASKS_SCHEMA as RELEASE_SCHEMA
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -357,3 +358,86 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(answer_path, tmp_
     # Exercise the judge's file-read boundary without calling any judge model.
     spec = parse_spec(files["tests/taskcompendium-verifier.toml"].decode())
     assert read_output(spec, workspace) == candidate
+
+
+@pytest.mark.parametrize("mode", ["inductive", "transductive"])
+def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp_path):
+    source = next(source for source in arc.sources() if source.name == f"tasktrove-arc_{mode}")
+    assert source.pipeline is not None
+    grid = [[0, 1], [2, 9]]
+    data = {"test_cases": [{"input": grid, "output": grid}]} if mode == "inductive" else {"expected_output": grid}
+    task = converted_task(
+        source.pipeline,
+        tasktrove_row(
+            {"instruction.md": b"Solve the grid puzzle.", "tests/verifier_data.json": json.dumps(data).encode()}
+        ),
+    )
+    record = harbor_record(
+        {"task_json": task.model_dump_json(), "original_path": "arc.tar.gz", "source_row": "arc/tasks.parquet:0"},
+        grader_image=GRADER_IMAGE,
+        family=source.info.family,
+    )
+    files = archive_files(record.task_binary)
+    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    assert tuple(artifact.source for artifact in config.artifacts) == task.output_paths
+    assert not any(path.startswith("environment/files/tests/") for path in files)
+    for path, content in files.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if path.endswith((".py", ".sh")):
+            content = (
+                content.decode()
+                .replace("/tests", str(tmp_path / "tests"))
+                .replace("/app/", str(tmp_path / "app") + "/")
+                .replace("/logs/", str(tmp_path / "logs") + "/")
+                .encode()
+            )
+        target.write_bytes(content)
+    (tmp_path / "app").mkdir()
+    answer_path = tmp_path / "app" / ("solution.py" if mode == "inductive" else "answer.txt")
+    positive = arc.literal_transform(grid) if mode == "inductive" else arc.grid_text(grid)
+    negative = "def transform(grid): return [[8]]" if mode == "inductive" else "8"
+    for candidate, expected in [(positive, 1), (negative, 0)]:
+        # Inductive grading removes hidden config before executing the candidate.
+        (tmp_path / "tests/config.json").write_bytes(files["tests/config.json"])
+        answer_path.write_text(candidate)
+        result = subprocess.run(["bash", str(tmp_path / "tests/test.sh")], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert float((tmp_path / "logs/verifier/reward.txt").read_text()) == expected
+
+
+@pytest.mark.parametrize(
+    "script", ["print('')", "print('log only')", "print('nan')", "print(1); raise RuntimeError('grader failed')"]
+)
+def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
+    source = next(source for source in arc.sources() if source.name == "tasktrove-arc_transductive")
+    assert source.pipeline is not None
+    task = converted_task(
+        source.pipeline,
+        tasktrove_row({"instruction.md": b"Solve.", "tests/verifier_data.json": b'{"expected_output":[[1]]}'}),
+    )
+    task = task.model_copy(
+        update={
+            "resources": task.resources.model_copy(update={"verifier": (inline_resource("grade.py", script.encode()),)})
+        }
+    )
+    files = archive_files(
+        harbor_record(
+            {"task_json": task.model_dump_json(), "original_path": "arc.tar.gz", "source_row": "arc/tasks.parquet:0"},
+            grader_image=GRADER_IMAGE,
+            family=source.info.family,
+        ).task_binary
+    )
+    for path, content in files.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    script = (
+        files["tests/test.sh"]
+        .decode()
+        .replace("/tests/", str(tmp_path / "tests") + "/")
+        .replace("/logs/", str(tmp_path / "logs") + "/")
+    )
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert not (tmp_path / "logs/verifier/reward.txt").exists()
