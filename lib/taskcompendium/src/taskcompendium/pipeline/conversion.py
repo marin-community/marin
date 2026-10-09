@@ -7,7 +7,7 @@ import json
 import time
 from collections import Counter
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import partial
 from typing import Any
 
@@ -15,11 +15,13 @@ import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo, format_shard_path
+from zephyr.readers import compute_parquet_splits
 from zephyr.writers import write_parquet_file
 
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, RawRow, SourceRecipe
-from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_file_rows
+from taskcompendium.pipeline.sources import SourceShard, conversion_context, source_shards, staged_file_rows
 from taskcompendium.pipeline.transforms import convert_row, row_source, row_task_id
 
 CONVERSION_COLUMNS = (
@@ -36,6 +38,28 @@ CONVERSION_COLUMNS = (
 CONVERSION_SCHEMA = pa.schema(
     [*(TASK_SCHEMA.field(name) for name in CONVERSION_COLUMNS), ("original_path", pa.string())]
 )
+PARQUET_SHARD_BYTES = 128 * 1024 * 1024
+
+
+def conversion_shards(
+    source_input: str, spec: SourceFiles, *, parquet_shard_bytes: int = PARQUET_SHARD_BYTES
+) -> tuple[SourceShard, ...]:
+    """Split native Parquet reads at row-group boundaries for mechanical conversion.
+
+    Row groups remain intact, so a single large group can exceed the byte target.
+    Custom readers and explicitly partitioned sources retain their own shard definitions.
+    """
+    shards = source_shards(source_input, spec)
+    if spec.format != SourceFormat.PARQUET or spec.read is not None or spec.parts is not None:
+        return shards
+    parts = []
+    for shard in shards:
+        ranges = compute_parquet_splits(str(StoragePath(source_input) / shard.file), parquet_shard_bytes)
+        parts.extend(
+            replace(shard, part=index, parts=len(ranges), row_start=start, row_end=end)
+            for index, (start, end) in enumerate(ranges)
+        )
+    return tuple(parts)
 
 
 @dataclass(frozen=True)
@@ -89,7 +113,12 @@ def _write_conversion(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, outpu
 
 
 def run_conversion(
-    recipe: SourceRecipe, context: ZephyrContext, source_input: str, output_path: str
+    recipe: SourceRecipe,
+    context: ZephyrContext,
+    source_input: str,
+    output_path: str,
+    *,
+    parquet_shard_bytes: int = PARQUET_SHARD_BYTES,
 ) -> ConversionResult:
     """Convert every selected staged row, retaining tasks and typed conversion rejections.
 
@@ -102,7 +131,7 @@ def run_conversion(
         raise FileExistsError(f"Conversion output already exists: {output_path}")
     started = time.monotonic()
     dataset = (
-        Dataset.from_list(list(source_shards(source_input, recipe.source)))
+        Dataset.from_list(list(conversion_shards(source_input, recipe.source, parquet_shard_bytes=parquet_shard_bytes)))
         .flat_map(partial(staged_file_rows, source_input, spec=recipe.source, context=conversion_context(recipe)))
         .map(partial(_conversion_row, recipe=recipe))
         .map_shard(partial(_write_conversion, output_path=str(output / "normalize")))

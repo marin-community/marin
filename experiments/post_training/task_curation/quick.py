@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -15,9 +16,11 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner
+from taskcompendium.pipeline.conversion import conversion_shards
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from zephyr.context import ZephyrContext
+from zephyr.runners import SubprocessRunner
 
 from experiments.post_training.task_curation.campaign import (
     CampaignFailed,
@@ -29,7 +32,7 @@ from experiments.post_training.task_curation.campaign import (
     error_chain,
 )
 from experiments.post_training.task_curation.conversions import convert_source
-from experiments.post_training.task_curation.pipeline import HfSource, UrlSource, download_step
+from experiments.post_training.task_curation.pipeline import HfSource, UrlSource, download_step, source_files
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
 
@@ -52,7 +55,7 @@ def run_local_sources(
     max_workers: int,
     download_cache: Path,
 ) -> tuple[SourceOutcome, ...]:
-    """Convert sources on one local pool, recording failures while continuing the remaining sources."""
+    """Convert sources locally, recording failures while continuing the remaining sources."""
     input_root = input_root.resolve() if input_root is not None else None
     output_root, download_cache = output_root.resolve(), download_cache.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -77,7 +80,9 @@ def run_local_sources(
             name="task-curation-quick",
         ) as context,
         campaign.activate(context),
+        ExitStack() as process_pools,
     ):
+        process_context: ZephyrContext | None = None
         for name, source in sources.items():
             outcomes[name] = SourceOutcome(name, str(output_root / name), OutcomeStatus.RUNNING)
             report(CampaignStatus.RUNNING)
@@ -95,10 +100,26 @@ def run_local_sources(
                     if key not in staged_inputs:
                         staged_inputs[key] = stage_local_source(auxiliary, download_cache, campaign)
                 logger.info("%s staging completed in %.2f seconds", name, time.monotonic() - started)
+                shards = conversion_shards(source_input, source_files(source.pipeline.source))
+                conversion_context = context
+                if max_workers > 1 and any(shard.row_end is not None and shard.parts > 1 for shard in shards):
+                    # Process startup dominates small conversions; reserve it for split Parquet files.
+                    if process_context is None:
+                        process_context = process_pools.enter_context(
+                            ZephyrContext(
+                                client=client,
+                                max_workers=max_workers,
+                                resources=context.resources,
+                                chunk_storage_prefix=str(output_root / ".zephyr-process"),
+                                name="task-curation-quick-process",
+                                stage_runner_factory=SubprocessRunner,
+                            )
+                        )
+                    conversion_context = process_context
                 result = convert_source(
                     source,
                     mode=SourceProcessingMode.QUICK,
-                    context=context,
+                    context=conversion_context,
                     source_input=source_input,
                     output_path=str(output_root / name),
                     inputs=staged_inputs,

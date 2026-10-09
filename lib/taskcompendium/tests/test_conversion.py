@@ -2,14 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from fray.local_backend import LocalClient
+from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from taskcompendium.convert.answers import exact_answer_task, source_defect
-from taskcompendium.models import ResourceGroups, TaskSpec
+from taskcompendium.models import ResourceGroups, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.conversion import run_conversion
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
@@ -26,6 +30,66 @@ def convert_answer(row: RawRow, _context: ConversionContext) -> TaskSpec | Impor
     return task.model_copy(
         update={"resources": ResourceGroups(worker=(inline_resource("context.txt", b"color context"),))}
     )
+
+
+def whole_parquet(file: StoragePath, _context: ConversionContext):
+    yield from load_parquet(str(file))
+
+
+def selected_answer(row: dict, _context: ConversionContext) -> bool:
+    return row["keep"]
+
+
+def decode_answer(row: dict, _context: ConversionContext) -> dict:
+    return {**row, "prompt": f"Decoded: {row['prompt']}"}
+
+
+def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(tmp_path: Path):
+    source = tmp_path / "input"
+    source.mkdir()
+    rows = [
+        {"path": f"row-{index}", "prompt": "Name a color", "answer": "red" if index % 7 else "", "keep": index % 5 != 0}
+        for index in range(24)
+    ]
+    pq.write_table(pa.Table.from_pylist(rows), source / "rows.parquet", row_group_size=3)
+    recipe = SourceRecipe(
+        name="colors",
+        version="1",
+        source=SourceFiles(
+            "colors",
+            "pinned",
+            ("rows.parquet",),
+            SourceFormat.PARQUET,
+            select=selected_answer,
+            decode=decode_answer,
+        ),
+        convert=convert_answer,
+        intended_use=IntendedUse.TRAIN,
+        rubric=None,
+        controls=None,
+    )
+    with ZephyrContext(client=LocalClient(), max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        whole = run_conversion(
+            replace(recipe, source=replace(recipe.source, read=whole_parquet)),
+            context,
+            str(source),
+            str(tmp_path / "whole"),
+        )
+        split = run_conversion(recipe, context, str(source), str(tmp_path / "split"), parquet_shard_bytes=1)
+    whole_files = list(Path(whole.normalized_path).glob("*.parquet"))
+    split_files = list(Path(split.normalized_path).glob("*.parquet"))
+    assert len(whole_files) == 1
+    assert len(split_files) == 8
+    whole_rows = {row["source_row"]: row for file in whole_files for row in load_parquet(str(file))}
+    split_rows = {row["source_row"]: row for file in split_files for row in load_parquet(str(file))}
+    assert whole_rows == split_rows
+    assert set(split_rows) == {f"rows.parquet:{index}" for index in range(24) if rows[index]["keep"]}
+    assert split.input_rows == whole.input_rows == 19
+    assert split.converted_rows == whole.converted_rows == 16
+    assert split.rejections == whole.rejections == {"source_defect:missing_answer": 3}
+    task = TaskSpec.model_validate_json(split_rows["rows.parquet:23"]["task_json"])
+    assert isinstance(task.context.events[0], TextMessage)
+    assert task.context.events[0].content == "Decoded: Name a color"
 
 
 def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_controls(tmp_path: Path):

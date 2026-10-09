@@ -11,6 +11,7 @@ from typing import Any
 
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
+from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_jsonl, load_parquet
 
 from taskcompendium.pipeline.fingerprints import callable_identity
@@ -68,15 +69,18 @@ def row_locator(file: str, index: int) -> str:
 
 @dataclass(frozen=True)
 class SourceShard:
-    """One staged file, or one part of a file that its source reads in parts.
+    """One staged file, an indexed file part, or a native Parquet row range.
 
     ``indices`` restricts a part to those rows; ``None`` reads all of them.
+    ``row_start`` and ``row_end`` bound native Parquet reads without renumbering rows.
     """
 
     file: str
     part: int
     parts: int
     indices: frozenset[int] | None
+    row_start: int = 0
+    row_end: int | None = None
 
     @property
     def name(self) -> str:
@@ -116,6 +120,10 @@ def _indexed_rows(
     if spec.parts is not None:
         return spec.parts(file, context, shard.part, shard.indices)
     assert shard.indices is None, "Only a parted source reads selected rows"
+    if shard.row_start != 0 or shard.row_end is not None:
+        assert spec.read is None and spec.format == SourceFormat.PARQUET, "Row bounds require a native Parquet reader"
+        rows = load_parquet(InputFileSpec(path=str(file), row_start=shard.row_start, row_end=shard.row_end))
+        return enumerate(rows, start=shard.row_start)
     return enumerate(spec.read(file, context) if spec.read is not None else _decoded_rows(file, spec.format))
 
 
