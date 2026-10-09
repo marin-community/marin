@@ -168,6 +168,8 @@ finally:
     await machine.close()
 ```
 
+`HostImage(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))` can also supply these paths for one machine. The factory combines them with its own mounts and puts the image's `bin_dirs` first on `PATH`; this lets a factory wrapper pass the runtime through `MachineSpec`.
+
 - Each machine has a root directory of its own, which `create` makes empty under the host's temporary directory and `close` removes. Commands see it as `/`, with the host's `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`, `/sys` and `/run/systemd/resolve` mounted read-only over it, together with each directory in `read_only` at its own host path. Every other path, including `/app`, `/tests`, `/tmp` and `HOME`, is the machine's own, so paths that the host process uses, such as an Iris task's `/app`, are never touched. No other host file is visible.
 - Machines are independent, so a process may run any number of them at once.
 - Files persist in the machine's root between commands. Each command gets new PID, IPC and UTS namespaces and a fresh `/proc`, `/dev` and `/dev/shm`; a command's processes end when it exits or times out. Under `NetworkPolicy.DENY` it also gets a network namespace with only loopback, which refuses TCP and UDP to the host and beyond; under `ALLOW` it uses the host network.

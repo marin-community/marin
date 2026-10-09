@@ -22,7 +22,6 @@ from typing import Any
 import verifyit
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.backends.local.python_environment import PythonEnvironment, build_python_environment
 from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, NetworkPolicy
 
@@ -194,16 +193,11 @@ def local_runtime(lock_url: str) -> LocalRuntime:
 
 
 @cache
-def local_factory(runtime: LocalRuntime, base: LocalMachineFactory | None = None) -> LocalMachineFactory:
-    """Mount a built runtime while preserving the selected local factory's configuration."""
-    if base is None:
-        return LocalMachineFactory(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,))
-    return LocalMachineFactory(
-        read_only=(*base.read_only, runtime.root),
-        bin_dirs=(runtime.bin_dir, *base.bin_dirs),
-        bwrap=base.bwrap,
-        hash_seed=base.hash_seed,
-    )
+def local_factory(runtime: LocalRuntime) -> MachineFactory:
+    """Create a local factory that mounts the built runtime."""
+    from shellbox.backends.local.machine import LocalMachineFactory  # noqa: PLC0415
+
+    return LocalMachineFactory(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,))
 
 
 @dataclass(frozen=True)

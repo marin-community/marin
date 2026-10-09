@@ -382,7 +382,6 @@ class LocalMachineFactory:
         self.bin_dirs = tuple(directory.absolute() for directory in bin_dirs)
         self.hash_seed = hash_seed
         self.bwrap = _working_bwrap(_bwrap_candidates(bwrap))
-        self._read_only = tuple(map(str, self.read_only))
         logger.info("Local backend sandboxes commands with %s", self.bwrap)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
@@ -390,8 +389,13 @@ class LocalMachineFactory:
             raise UnsupportedMachineSpec(f"The local backend requires HostImage, not {type(spec.source).__name__}")
         if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
             raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
+        read_only = (*self.read_only, *(directory.absolute() for directory in spec.source.read_only))
+        missing = [str(directory) for directory in read_only if not directory.is_dir()]
+        if missing:
+            raise ValueError(f"Read-only directories do not exist: {', '.join(missing)}")
+        read_only_paths = tuple(map(str, read_only))
         workdir = _absolute_path(spec.workdir or "/")
-        if _within(workdir, (*SYSTEM_DIRECTORIES, *self._read_only)):
+        if _within(workdir, (*SYSTEM_DIRECTORIES, *read_only_paths)):
             raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host directory")
         root = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="shellbox-local-"))
         try:
@@ -400,10 +404,16 @@ class LocalMachineFactory:
             shutil.rmtree(root)
             raise
         environment = {
-            "PATH": os.pathsep.join([*map(str, self.bin_dirs), DEFAULT_PATH]),
+            "PATH": os.pathsep.join(
+                [
+                    *(str(directory.absolute()) for directory in spec.source.bin_dirs),
+                    *map(str, self.bin_dirs),
+                    DEFAULT_PATH,
+                ]
+            ),
             "HOME": str(HOME),
             "LANG": "C.UTF-8",
         }
         if self.hash_seed is not None:
             environment["PYTHONHASHSEED"] = self.hash_seed
-        return LocalMachine(spec, bwrap=self.bwrap, root=root, read_only=self._read_only, environment=environment)
+        return LocalMachine(spec, bwrap=self.bwrap, root=root, read_only=read_only_paths, environment=environment)
