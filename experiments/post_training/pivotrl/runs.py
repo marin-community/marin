@@ -17,6 +17,12 @@ from marin.rl.pass_rates import PassRateSampling
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 
 
+def candidates_label(dataset: str, limit: int | None, grader: str | None = None) -> str:
+    """The path segment naming a candidate set: its dataset, its head size for smoke runs, and a non-default grader."""
+    parts = (dataset, None if limit is None else f"head-{limit}", grader)
+    return "-".join(part for part in parts if part)
+
+
 @dataclass(frozen=True)
 class NemotronPivotCandidates:
     """Long-format candidates from the shared catalog, ``experiments/datasets/nemotron_pivot.py``."""
@@ -30,13 +36,38 @@ class NemotronPivotCandidates:
 
     @property
     def label(self) -> str:
-        return self.dataset if self.limit is None else f"{self.dataset}-head-{self.limit}"
+        return candidates_label(self.dataset, self.limit)
+
+
+@dataclass(frozen=True)
+class OpenHandsCandidates:
+    """Candidates prepared from a pinned OpenHands trajectory release (see ``marin.rl.openhands_pivot``)."""
+
+    dataset: str
+    raw_name: str
+    hf_id: str
+    revision: str
+    raw_version: str
+    trajectories: int
+    validation_trajectories: int
+    seed: int
+    max_prompt_chars: int
+    task: str
+    filename: str = CANDIDATES_FILENAME
+    limit: int | None = None
+    """Keep only the first ``limit`` rows, for smoke runs."""
+    grader: str | None = None
+    """Names a non-default ``task`` in artifact paths, so its pass rates never reuse the default's."""
+
+    @property
+    def label(self) -> str:
+        return candidates_label(self.dataset, self.limit, self.grader)
 
 
 @dataclass(frozen=True)
 class PivotRLRun:
     name: str
-    candidates: NemotronPivotCandidates
+    candidates: NemotronPivotCandidates | OpenHandsCandidates
     model: ModelConfig
     accelerator: AcceleratorChoice
     sampling: PassRateSampling
@@ -51,6 +82,20 @@ class PivotRLRun:
 SWE_CANDIDATES = NemotronPivotCandidates(dataset="swe", task="experiments.post_training.pivotrl.task:PIVOT_TOOL_CALL")
 TERMINAL_CANDIDATES = NemotronPivotCandidates(
     dataset="terminal", task="experiments.post_training.pivotrl.task:PIVOT_TERMINAL"
+)
+
+OPENHANDS_CANDIDATES = OpenHandsCandidates(
+    dataset="openhands",
+    raw_name="raw/nebius-swe-rebench-openhands-trajectories",
+    hf_id="nebius/SWE-rebench-openhands-trajectories",
+    revision="35455389ab51bf5e2306bfd436ef72d0f98bf882",
+    raw_version="2026.10.08",
+    trajectories=200,
+    validation_trajectories=50,
+    seed=42,
+    # About 25-30k tokens, leaving room for the tool schemas and a reply in a 40k context.
+    max_prompt_chars=100_000,
+    task="experiments.post_training.pivotrl.openhands:OPENHANDS_NEXT_ACTION",
 )
 
 GRUG_SFT = ModelConfig(
@@ -93,6 +138,26 @@ SWE_GRUG = PivotRLRun(
 
 TERMINAL_GRUG = replace(SWE_GRUG, name="terminal-grug", candidates=TERMINAL_CANDIDATES)
 
+# Thinking off: the release's teacher never thinks.
+OPENHANDS_GRUG = replace(
+    SWE_GRUG,
+    name="openhands-grug",
+    candidates=OPENHANDS_CANDIDATES,
+    sampling=replace(SWE_GRUG.sampling, enable_thinking=False),
+)
+
+# The same pass rates with tier 2 on: pairs the rules leave undecided go to an LLM judge on OpenRouter.
+OPENHANDS_GRUG_JUDGED = replace(
+    OPENHANDS_GRUG,
+    name="openhands-grug-judged",
+    candidates=replace(
+        OPENHANDS_CANDIDATES,
+        task="experiments.post_training.pivotrl.openhands:OPENHANDS_NEXT_ACTION_JUDGED",
+        grader="judged",
+    ),
+    secret_env_keys=("OPENROUTER_TOKEN",),
+)
+
 # Exercises the whole path on one GPU in minutes: serving, grading, chunk commits, selection.
 SWE_QWEN_SMOKE = PivotRLRun(
     name="swe-qwen-smoke",
@@ -107,13 +172,24 @@ TERMINAL_QWEN_SMOKE = replace(
     SWE_QWEN_SMOKE, name="terminal-qwen-smoke", candidates=replace(TERMINAL_CANDIDATES, limit=64)
 )
 
+# Graded by functional next action, with the judge tier off. Thinking is off: the release's teacher
+# never thinks, so a thinking policy imitating it would learn to ignore its reasoning mode.
+OPENHANDS_QWEN_SMOKE = replace(
+    SWE_QWEN_SMOKE,
+    name="openhands-qwen-smoke",
+    candidates=replace(OPENHANDS_CANDIDATES, limit=64),
+    sampling=replace(SWE_QWEN_SMOKE.sampling, enable_thinking=False),
+)
+
 
 def seeded(run: PivotRLRun, seed: int) -> PivotRLRun:
     return replace(run, name=f"{run.name}-seed{seed}", sampling=replace(run.sampling, seed=seed))
 
 
 # Each smoke run twice, with different sampling seeds, to see how stable pass rates and selection are.
-SMOKE_RUNS = tuple(seeded(run, seed) for run in (SWE_QWEN_SMOKE, TERMINAL_QWEN_SMOKE) for seed in (1, 2))
+SMOKE_RUNS = tuple(
+    seeded(run, seed) for run in (SWE_QWEN_SMOKE, TERMINAL_QWEN_SMOKE, OPENHANDS_QWEN_SMOKE) for seed in (1, 2)
+)
 
 # The same 64-candidate smoke runs with a real policy, one 8xH100 node each.
 GRUG_SMOKE_RUNS = tuple(
@@ -127,7 +203,7 @@ GRUG_SMOKE_RUNS = tuple(
         ),
         1,
     )
-    for run in (SWE_QWEN_SMOKE, TERMINAL_QWEN_SMOKE)
+    for run in (SWE_QWEN_SMOKE, TERMINAL_QWEN_SMOKE, OPENHANDS_QWEN_SMOKE)
 )
 
 RUNS = {
@@ -135,6 +211,8 @@ RUNS = {
     for run in (
         SWE_GRUG,
         TERMINAL_GRUG,
+        OPENHANDS_GRUG,
+        OPENHANDS_GRUG_JUDGED,
         *SMOKE_RUNS,
         *GRUG_SMOKE_RUNS,
     )
