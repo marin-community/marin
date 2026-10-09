@@ -13,7 +13,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from taskcompendium.grading_result import Outcome
 
@@ -31,19 +30,6 @@ from taskforge.spec.controls import ControlKind
 from taskforge.validate.controls import control_turns
 
 
-def scripted(turns: tuple[dict, ...]):
-    """A model that serves ``turns`` in order, with token ids that extend each request's prefix."""
-
-    async def model(request: ModelRequest) -> ModelTurn:
-        served = sum(message["role"] == "assistant" for message in request.messages)
-        message = turns[served]
-        prompt = (*request.prefix_token_ids, 2 * served + 1)
-        stop = "tool_calls" if "tool_calls" in message else "stop"
-        return ModelTurn(message, prompt, (2 * served + 2,), None, stop)
-
-    return model
-
-
 @pytest.fixture
 def evidence_dir(evidence_root: Path) -> Path:
     return evidence_root / "build" / "live-test"
@@ -52,7 +38,7 @@ def evidence_dir(evidence_root: Path) -> Path:
 @pytest.mark.live_glm
 @pytest.mark.timeout(5400)
 async def test_authored_program_builds_a_task_its_positive_control_passes(
-    glm_settings, parallel_key, image_cache, proposal, evidence_dir
+    glm_settings, parallel_key, image_cache, proposal, scripted_model, evidence_dir
 ):
     run_dir = evidence_dir / time.strftime("%Y%m%d-%H%M%S")
     factories = machine_factories(MachineHost.LAPTOP, controller_url=None, image_cache=image_cache)
@@ -78,7 +64,7 @@ async def test_authored_program_builds_a_task_its_positive_control_passes(
     # Replay the positive control's whole transcript (shell turns included) through RolloutEngine.
     positive = next(c for c in draft.controls if c.kind == ControlKind.POSITIVE)
     turns = control_turns(positive)
-    engine = ShellboxRolloutEngine(scripted(turns), factories)
+    engine = ShellboxRolloutEngine(scripted_model(turns), factories)
     session = draft.lowered.session.model_copy(update={"max_turns": len(turns), "command_timeout": 60})
     rollout = await engine.run(draft.lowered.model_copy(update={"session": session}))
     assert rollout.grade.status == Outcome.GRADED

@@ -5,8 +5,9 @@
 
 Live tests carry ``@pytest.mark.live_glm`` and request the ``glm_settings`` fixture, which skips
 them unless the interactive GLM-5.3 endpoint is configured through the environment. Web tests take
-``parallel_key``, which skips unless ``TASKFORGE_PARALLEL_KEY_FILE`` names the Parallel key file.
-Live tests write raw evidence under ``evidence_root``, which is outside the checkout.
+``parallel_key``, which skips unless ``TASKFORGE_PARALLEL_KEY_FILE`` names the Parallel key file. Live
+tests that replay a control transcript through RolloutEngine take ``scripted_model``. Live tests
+write raw evidence under ``evidence_root``, which is outside the checkout.
 
 ``fake_glm`` is a scripted fake of the GLM router: ``POST /v1/chat/completions`` streams queued
 responses and ``GET /health`` reports queued worker counts. It runs as a real local HTTP server.
@@ -18,12 +19,13 @@ import os
 import tempfile
 import threading
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from rolloutengine.contracts import ModelRequest, ModelTurn
 
 from taskforge.ledger.records import LedgerEntry
 from taskforge.llm.endpoint import GLM_MODEL
@@ -109,6 +111,28 @@ def ledger() -> ListLedger:
 def image_cache() -> Path:
     """The ``image_cache`` live tests pass to ``machine_factories`` on a laptop."""
     return LIVE_IMAGE_CACHE
+
+
+ScriptedModel = Callable[[ModelRequest], Awaitable[ModelTurn]]
+
+
+def scripted(turns: tuple[dict, ...]) -> ScriptedModel:
+    """A model that serves ``turns`` in order, with token ids that extend each request's prefix."""
+
+    async def model(request: ModelRequest) -> ModelTurn:
+        served = sum(message["role"] == "assistant" for message in request.messages)
+        message = turns[served]
+        prompt = (*request.prefix_token_ids, 2 * served + 1)
+        stop = "tool_calls" if "tool_calls" in message else "stop"
+        return ModelTurn(message, prompt, (2 * served + 2,), None, stop)
+
+    return model
+
+
+@pytest.fixture
+def scripted_model() -> Callable[[tuple[dict, ...]], ScriptedModel]:
+    """``scripted_model(turns)`` replays ``turns`` as the policy model of a RolloutEngine rollout."""
+    return scripted
 
 
 @dataclass

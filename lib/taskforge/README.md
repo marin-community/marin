@@ -23,6 +23,7 @@ src/taskforge/
   builder/    builder programs: memoized steps, the Build SDK, program authoring, the standard template
   validate/   trials, the failure classifier, control replay, evidence aggregation, solver and
               adversary trials, calibration, attempt files as resumable evidence
+  review/     the Decision contract and the rules that derive it from validation evidence
 scripts/      Iris image builder, cluster probes, ledger summary
 docker/       grader-base image build context
 ```
@@ -31,7 +32,7 @@ Packages are totally ordered. A package imports only from packages to its left a
 packages, so no import cycle can form:
 
 ```
-content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate
+content_hash -> atomic_file -> ledger -> sandbox -> spec -> llm -> proposal -> triage -> builder -> validate -> review
 ```
 
 The foundation packages (`content_hash`, `atomic_file`, `ledger`, `sandbox`, `spec`, `llm`) import
@@ -40,7 +41,9 @@ modules, each of which keeps its types beside the code that checks their invaria
 `proposal.model` (`TaskProposal`), `proposal.source` (`ProposalBatch`, `SlotFailure`,
 `ProposalSource`), `triage.verdict` (`Verdict`, `TriageDecision`), `builder.run` (`TaskDraft`,
 `load_draft`, `item_id_for`), `builder.author` (`BuildProgram`, `Revision`), `validate.outcome`,
-`validate.evidence` and `validate.calibration` (`CalibrationSummary`, `Finding`).
+`validate.evidence`, `validate.calibration` (`CalibrationSummary`, `Finding`) and `review.decision`
+(`Decision`). `tests/test_imports.py` parses every module and fails on an import that points right
+in the order, or on a package the order does not name.
 
 ## Seams
 
@@ -158,6 +161,17 @@ modules, each of which keeps its types beside the code that checks their invaria
   control (`candidate_control`), NOTED trials are `CalibrationSummary.notes`, every assessment is in
   `CalibrationSummary.assessments`, and `RoleStats` counts passes, submissions, budget use, claims,
   failed audits, budget stops and tiers.
+- `review.rules.decide(draft, summary, history, rules: BandRules) -> Decision`: a pure rule table
+  over a `CalibrationSummary`. `BandRules` holds one `BandRule(repairs, then: BandChoice)` per band
+  kind and `ItemHistory.band_repairs` counts the repairs each kind has had. The `Decision` is
+  `Accept(summary, band)`, where `band` (`BandOutcome`) records where the task fell,
+  `Reject(kind, reasons, summary)` with kind
+  `TASK`, `BUDGET` or `HOST`, `Repair(program_digest, brief, invalidate)` or `Retry(cause, count)`,
+  and `review.decision.write_decision` and `load_decision` keep it in `decision.json` beside
+  `calibration.json`.
+  `RepairBrief` holds the `findings` the author must fix, the `notes` (noted adversary passes from
+  `CalibrationSummary.notes`) it shows as information, and the rendered `failure`;
+  `review.rules.render_brief(findings, notes)` builds it.
 
 A builder agent's turn and a rollout's model call take the same path to GLM and to the ledger:
 
@@ -294,6 +308,27 @@ The functions that take a `ValidationPolicy` or `ValidationEvidence` outside `va
 those parameters as protocols (`solver.TrialPolicy`, `adversary.AdversaryPolicy`,
 `calibration.SummaryPolicy`, `calibration.RoundEvidence`), because `ValidationPolicy` holds a
 `CalibrationBand` and the adversary brief, and the modules defining those take the policy.
+
+Review calls no model. Its rules, in order: decisive findings (a violated control, an adversary
+shortcut tiered as a repair, a task defect) repair the program even when some trials are ungraded,
+because retrying cannot improve them; trials this host cannot run reject the item as `HOST`, not as
+a task defect; other ungraded trials retry; a solve rate outside the band gets the repairs its
+kind's `BandRule` allows, then the consumer's `BandChoice` decides; clean evidence accepts with
+band `IN_BAND`. A decisive repair past the item's budget rejects as `BUDGET`. Taskforge's own
+policies reject a task still outside the band; the committed capability configuration accepts a
+too-easy task and labels it with its synthesis pass rate, the solve rate its summary carries. The
+accept choice outranks a spent repair budget, so a consumer that accepts too-easy tasks never loses
+one to `BUDGET`. An accept outside the band keeps `calibrated` false in its summary: `Accept.band`
+says where the task fell, `calibrated` says the evidence held no finding. A `Repair` carries a
+brief, not a patch: the loop passes `brief.failure` to `builder.author.author` as
+`Revision.failure`, so the author is the only model that writes builder code. The brief renders
+repair-tier shortcuts as controls the revised CONTROLS step must return verbatim, so the next
+round's control replay checks the fix, and lists noted adversary results after the findings as
+information, not defects. Notes never change a decision:
+an accepted summary carries them, and a repair's `invalidate` and a rejection's reasons come from
+the findings alone. `invalidate` names
+the steps whose roles the findings condemn, so a model-driven step the author left unchanged is
+resampled rather than replayed from the step cache.
 
 ## Testing
 
