@@ -18,7 +18,7 @@ from typing import Any
 import click
 import verifyit
 from taskcompendium.harbor import snapshots
-from taskcompendium.harbor.compare import ParityReport, Tolerance
+from taskcompendium.harbor.compare import ParityReport, write_archive_diff
 from taskcompendium.harbor.export import UnsupportedHarborTask, harbor_record
 from taskcompendium.harbor.records import NormalizedIndex
 from taskcompendium.harbor.snapshots import TaskSnapshot, snapshot_from_dict, task_snapshot
@@ -70,7 +70,9 @@ def frozen_checkout(repository: Path, revision: str, destination: Path) -> dict[
     }
 
 
-def candidate_snapshot(row: dict[str, Any], source: RlDataSource, config: str, grader_image: str) -> TaskSnapshot:
+def candidate_snapshot(
+    row: dict[str, Any], source: RlDataSource, config: str, grader_image: str, payload_root: Path | None = None
+) -> TaskSnapshot:
     if row["task_json"] is None:
         return task_snapshot(
             config, row["original_path"], row["normalization_reason"], detail=row["normalization_detail"] or ""
@@ -87,6 +89,10 @@ def candidate_snapshot(row: dict[str, Any], source: RlDataSource, config: str, g
         return task_snapshot(config, row["original_path"], "lowering_rejection", detail=str(error))
     if record.source != config or record.path != row["original_path"]:
         raise ValueError("Export changed the original source/path identity")
+    if payload_root is not None:
+        for name, blob in (("task", record.task_binary), ("oracle", record.solution_binary)):
+            if blob is not None:
+                (payload_root / name).write_bytes(blob)
     return task_snapshot(
         record.source,
         record.path,
@@ -105,7 +111,7 @@ def compare_source(
     revision: str,
     output: Path,
     grader_image: str,
-    tolerances: frozenset[Tolerance],
+    selected_path: str | None = None,
 ) -> dict[str, Any]:
     """Stream one exact source population and persist every matching or mismatching task."""
     pipeline = source.pipeline
@@ -121,6 +127,9 @@ def compare_source(
         pipeline.source.revision,
     ):
         raise ValueError(f"Normalized input provenance does not match {source.name}")
+    if "input_rows" not in manifest:
+        raise ValueError("Content comparison requires a QUICK source manifest with input_rows")
+    expected_rows = manifest["input_rows"]
     output.mkdir()
     provenance = {
         "source": source.name,
@@ -133,8 +142,8 @@ def compare_source(
         "manifest_file": file_identity(normalized / "manifest.json"),
         "raw_input": file_identity(raw_file),
         "normalized_inputs": [file_identity(path) for path in sorted((normalized / "normalize").glob("*.parquet"))],
-        "tolerances": sorted(tolerances),
         "runtime_verified": False,
+        "selected_path": selected_path,
     }
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     started = time.monotonic()
@@ -154,38 +163,64 @@ def compare_source(
         "--revision",
         revision,
     ]
-    with (
-        tempfile.TemporaryDirectory(prefix="index-", dir=output) as temporary,
-        NormalizedIndex(normalized / "normalize", Path(temporary) / "rows.sqlite") as index,
-        ParityReport(output / "parity.sqlite") as report,
-        (output / "reference.stderr").open("w") as stderr,
-        subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr, text=True, cwd=reference) as process,
-    ):
-        assert process.stdout is not None
-        try:
-            for line in process.stdout:
-                baseline = snapshot_from_dict(json.loads(line))
-                row = index.get(baseline.path)
-                current = candidate_snapshot(row, source, config, grader_image) if row is not None else None
-                report.add(baseline, current, tolerances=tolerances)
-                if report.counts["tasks"] % 1000 == 0:
-                    click.echo(json.dumps({"source": source.name, **report.summary()["counts"]}))
-            if process.wait() != 0:
-                raise RuntimeError(f"Frozen reference failed; see {output / 'reference.stderr'}")
-            for row in index.unmatched():
-                report.add(None, candidate_snapshot(row, source, config, grader_image), tolerances=tolerances)
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                process.wait()
-        summary = {**provenance, **report.summary(), "elapsed_seconds": time.monotonic() - started}
-        candidate_rows = sum(count for key, count in report.counts.items() if key.startswith("candidate:"))
-        if candidate_rows != manifest["input_rows"]:
-            raise ValueError(
-                f"Candidate row census disagrees with manifest: {candidate_rows} != {manifest['input_rows']}"
-            )
-        (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    return summary
+    with tempfile.TemporaryDirectory(prefix="index-", dir=output) as temporary:
+        payloads = Path(temporary)
+        baseline_payloads, candidate_payloads = payloads / "baseline", payloads / "candidate"
+        baseline_payloads.mkdir()
+        candidate_payloads.mkdir()
+        if selected_path is not None:
+            command += ["--path", selected_path, "--payload-root", str(baseline_payloads)]
+        with (
+            NormalizedIndex(normalized / "normalize", Path(temporary) / "rows.sqlite") as index,
+            ParityReport(output / "parity.sqlite") as report,
+            (output / "reference.stderr").open("w") as stderr,
+            subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr, text=True) as process,
+        ):
+            assert process.stdout is not None
+            try:
+                for line in process.stdout:
+                    baseline = snapshot_from_dict(json.loads(line))
+                    row = index.get(baseline.path)
+                    current = (
+                        candidate_snapshot(
+                            row, source, config, grader_image, candidate_payloads if selected_path is not None else None
+                        )
+                        if row is not None
+                        else None
+                    )
+                    report.add(baseline, current)
+                    if report.counts["tasks"] % 1000 == 0:
+                        click.echo(json.dumps({"source": source.name, **report.summary()["counts"]}))
+                if process.wait() != 0:
+                    raise RuntimeError(f"Frozen reference failed; see {output / 'reference.stderr'}")
+                if selected_path is None:
+                    for row in index.unmatched():
+                        report.add(None, candidate_snapshot(row, source, config, grader_image))
+                elif report.counts["tasks"] == 0:
+                    row = index.get(selected_path)
+                    if row is None:
+                        raise ValueError(f"Source path absent from both populations: {selected_path}")
+                    report.add(None, candidate_snapshot(row, source, config, grader_image, candidate_payloads))
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait()
+            summary = {**provenance, **report.summary(), "elapsed_seconds": time.monotonic() - started}
+            candidate_rows = sum(count for key, count in report.counts.items() if key.startswith("candidate:"))
+            if selected_path is None and candidate_rows != expected_rows:
+                raise ValueError(f"Candidate row census disagrees with manifest: {candidate_rows} != {expected_rows}")
+            if selected_path is not None:
+                with (output / "task.diff").open("w") as review:
+                    for name in ("task", "oracle"):
+                        before, after = baseline_payloads / name, candidate_payloads / name
+                        write_archive_diff(
+                            before.read_bytes() if before.exists() else None,
+                            after.read_bytes() if after.exists() else None,
+                            name,
+                            review,
+                        )
+            (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+        return summary
 
 
 @click.command(help=__doc__)
@@ -202,9 +237,11 @@ def compare_source(
 @click.option("--baseline-revision", required=True, help="Full legacy converter commit SHA.")
 @click.option("--source", "selected", multiple=True, help="Pipeline name; default is all retained TaskTrove sources.")
 @click.option(
+    "--inspect-path", help="Compare one original archive path and write its text diffs; requires one --source."
+)
+@click.option(
     "--grader-image", required=True, help="Explicit digest-pinned image used when lowering non-repository graders."
 )
-@click.option("--allow", "allowed", multiple=True, type=click.Choice([value.value for value in Tolerance]))
 @click.option("--output-root", required=True, type=click.Path(file_okay=False, path_type=Path))
 def main(
     normalized_roots: tuple[Path, ...],
@@ -212,8 +249,8 @@ def main(
     baseline_repository: Path,
     baseline_revision: str,
     selected: tuple[str, ...],
+    inspect_path: str | None,
     grader_image: str,
-    allowed: tuple[str, ...],
     output_root: Path,
 ) -> None:
     catalog = {
@@ -227,6 +264,8 @@ def main(
     if unknown:
         raise click.UsageError(f"Not retained TaskTrove sources: {sorted(unknown)}")
     names = sorted(set(selected) if selected else catalog)
+    if inspect_path is not None and len(names) != 1:
+        raise click.UsageError("--inspect-path requires exactly one --source")
     inputs = {}
     for root in normalized_roots:
         manifests = (
@@ -274,7 +313,7 @@ def main(
                 baseline_revision,
                 output_root / name,
                 grader_image,
-                frozenset(Tolerance(value) for value in allowed),
+                inspect_path,
             )
         except Exception as error:
             # A failed source stays explicit while the census continues through the remaining sources.

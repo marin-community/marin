@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from taskcompendium.harbor.compare import ParityReport, Tolerance, compare_tasks
+from taskcompendium.harbor.compare import ParityReport, compare_tasks, write_archive_diff
 from taskcompendium.harbor.export import archive_bytes
 from taskcompendium.harbor.records import NormalizedIndex
 from taskcompendium.harbor.snapshots import task_snapshot
@@ -70,7 +70,7 @@ def test_inventory_member_types_modes_and_link_targets_are_not_normalized_away()
     assert ("task/extra", "inventory") in {(difference.path, difference.kind) for difference in differences}
 
 
-def test_toml_formatting_is_explicit_and_does_not_tolerate_mode_or_value_changes():
+def test_toml_formatting_modes_and_parsed_values_are_reported_separately():
     before = task_snapshot("source", "task", "converted", task_binary=archive_bytes({"task.toml": b"answer = 1\n"}, {}))
     after = task_snapshot(
         "source",
@@ -78,18 +78,9 @@ def test_toml_formatting_is_explicit_and_does_not_tolerate_mode_or_value_changes
         "converted",
         task_binary=archive_bytes({"task.toml": b"answer=1 # comment\n"}, {"task.toml": "755"}),
     )
-    strict = compare_tasks(before, after)
-    assert {difference.kind for difference in strict} == {"mode", "bytes"}
-    assert all(difference.tolerance is None for difference in strict)
-    allowed = compare_tasks(before, after, tolerances=frozenset({Tolerance.TOML_FORMATTING}))
-    assert [(difference.kind, difference.tolerance) for difference in allowed] == [
-        ("mode", None),
-        ("bytes", Tolerance.TOML_FORMATTING),
-    ]
+    assert {difference.kind for difference in compare_tasks(before, after)} == {"mode", "bytes"}
     changed = task_snapshot("source", "task", "converted", task_binary=archive_bytes({"task.toml": b"answer=2\n"}, {}))
-    differences = compare_tasks(before, changed, tolerances=frozenset({Tolerance.TOML_FORMATTING}))
-    assert {difference.kind for difference in differences} == {"bytes", "parsed_toml"}
-    assert all(difference.tolerance is None for difference in differences)
+    assert {difference.kind for difference in compare_tasks(before, changed)} == {"bytes", "parsed_toml"}
 
 
 def test_report_retains_every_task_and_reuses_repeated_file_difference_details(tmp_path):
@@ -125,6 +116,62 @@ def test_legacy_static_filter_is_separate_from_the_converted_payload():
     assert (difference.category, difference.kind) == ("legacy_static_filter", "dockerfile")
     rejected = task_snapshot("source", "task", "source_defect", detail="bad environment")
     assert any(difference.kind == "conversion" for difference in compare_tasks(baseline, rejected))
+
+
+def test_report_does_not_persist_large_reference_bodies_from_renamed_specs(tmp_path):
+    reference = "private reference answer " * 12000
+    spec = f'reference = "{reference}"\n'.encode()
+    baseline = task_snapshot("source", "task", "converted", task_binary=archive_bytes({"tests/verifier.toml": spec}, {}))
+    candidate = task_snapshot("source", "task", "converted", task_binary=archive_bytes({"tests/spec.toml": spec}, {}))
+    path = tmp_path / "parity.sqlite"
+    with ParityReport(path) as report:
+        report.add(baseline, candidate)
+    with sqlite3.connect(path) as connection:
+        details = [zlib.decompress(row[0]) for row in connection.execute("SELECT details FROM difference_groups")]
+    assert sum(map(len, details)) < 4096
+    assert all(reference.encode() not in detail for detail in details)
+    assert {item["path"] for detail in details for item in json.loads(detail)} == {
+        "task/tests/verifier.toml",
+        "task/tests/spec.toml",
+    }
+
+
+def test_selected_archive_diff_exposes_changed_text_missing_files_and_binary_hashes():
+    before = archive_bytes(
+        {
+            "instruction.md": b"Solve old question\n",
+            "environment/Dockerfile": b"FROM old\n",
+            "tests/test.sh": b"old check\n",
+            "source.py": b"old public source\n",
+            "removed.py": b"deleted content\n",
+            "binary": b"\xffold",
+        },
+        {},
+    )
+    after = archive_bytes(
+        {
+            "instruction.md": b"Solve new question\n",
+            "environment/Dockerfile": b"FROM new\n",
+            "tests/test.sh": b"new check\n",
+            "source.py": b"new public source\n",
+            "binary": b"\xffnew",
+        },
+        {},
+    )
+    output = io.StringIO()
+    write_archive_diff(before, after, "task", output)
+    text = output.getvalue()
+    for old, new in [
+        ("Solve old question", "Solve new question"),
+        ("FROM old", "FROM new"),
+        ("old check", "new check"),
+        ("old public source", "new public source"),
+    ]:
+        assert f"-{old}\n" in text and f"+{new}\n" in text
+    assert "-deleted content\n" in text
+    assert '"candidate": null' in text
+    assert "Binary content differs" in text
+    assert '"sha256"' in text
 
 
 def test_disk_index_matches_reordered_source_paths_and_reports_unmatched_rows(tmp_path):

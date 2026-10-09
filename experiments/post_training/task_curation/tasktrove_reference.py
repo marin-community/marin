@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 
@@ -22,6 +23,8 @@ def main() -> None:
     parser.add_argument("--source", required=True)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--revision", required=True)
+    parser.add_argument("--path")
+    parser.add_argument("--payload-root", type=Path)
     args = parser.parse_args()
     checkout = args.checkout.resolve()
     # Load only the dependency-free wire encoder from current code. Importing current
@@ -51,9 +54,20 @@ def main() -> None:
             if filename is not None and not Path(filename).resolve().is_relative_to(checkout):
                 raise RuntimeError(f"Frozen reference imported host code: {name} from {filename}")
     index, info = registry.converter_index(), dataset.load_source_verdicts()[args.source]
-    for batch in pq.ParquetFile(args.input).iter_batches(batch_size=16):
+    batches = (
+        pq.ParquetFile(args.input).iter_batches(batch_size=16)
+        if args.path is None
+        else ds.dataset(args.input, format="parquet")
+        .scanner(filter=ds.field("path") == args.path, batch_size=16)
+        .to_batches()
+    )
+    for batch in batches:
         for row in batch.to_pylist():
             result = convert.convert_one(info, row["path"], row["task_binary"], index, args.revision)
+            if args.payload_root is not None:
+                for name, blob in (("task", result.task_binary), ("oracle", result.solution_binary)):
+                    if blob is not None:
+                        (args.payload_root / name).write_bytes(blob)
             snapshot = snapshots.task_snapshot(
                 args.source,
                 row["path"],

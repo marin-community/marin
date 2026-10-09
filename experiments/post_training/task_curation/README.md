@@ -411,3 +411,78 @@ count. Count differences remain visible: QUICK skips release deduplication and
 verification, so its output may include rows absent from the released dataset.
 The comparison does not establish grader equivalence or compare golden task
 binaries.
+
+### Full TaskTrove content comparison
+
+Compare all retained TaskTrove sources with a pinned legacy converter:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' \
+  -m experiments.post_training.task_curation.compare_tasktrove \
+  --normalized-root /tmp/curation-quick \
+  --raw-root /path/to/staged/tasktrove \
+  --baseline-repository . \
+  --baseline-revision 61bb85cc5231d8ac9344696ef51766257940538d \
+  --grader-image 'registry/grader@sha256:<digest>' \
+  --output-root /tmp/tasktrove-content-report
+```
+
+The raw root contains the pinned `<config>/tasks.parquet` files. Each normalized
+source directory contains `manifest.json` and `normalize/*.parquet` from QUICK conversion. Repeat
+`--normalized-root` to combine campaigns; later roots override earlier ones for
+the same source. Repeat `--source` to restrict a run. Without it, the command
+requires inputs for every retained TaskTrove source, including the OpenQA sources.
+The output directory must be new.
+
+The reference process loads the pinned TaskTrove pipeline, TaskCompendium and
+Verifyit code from Git. It runs `convert_one`, then the legacy spec, Dockerfile,
+gold-leak and shape checks. It records static rejections separately from conversion
+outcomes and still compares the converted payload. It does not run graders,
+reviews, deduplication or release caps. Release counts can therefore differ.
+
+Every original source/path is matched. The comparison covers instruction bytes,
+all task and oracle archive members, file types, modes, link targets, environment
+recipes, parsed TOML and outer row metadata. Archive compression, ordering,
+ownership and timestamps are excluded. Strict differences are diagnostics for
+migration review: packaging changes can be acceptable even when bytes differ.
+Parsed TOML is compared separately from text formatting. Runtime equivalence
+still requires execution.
+
+`run.json` records code, dependency and baseline provenance. Each source has
+`provenance.json`, `summary.json` and `parity.sqlite`. The SQLite `tasks` table
+retains every source/path and its outcome. Its `groups_json` column references
+`difference_groups.id`; `difference_groups.details` contains zlib-compressed JSON
+with exact paths, categories, hashes and parsed-setting identities. Repeated differences
+share storage; task archives and file bodies are discarded. Summary examples are
+bounded, but the SQLite report accounts for every task. Inspect a task's details
+with the standard library:
+
+```python
+import json
+import sqlite3
+import zlib
+
+with sqlite3.connect("parity.sqlite") as report:
+    (groups,) = report.execute(
+        "SELECT groups_json FROM tasks WHERE source=? AND path=?", (source, path)
+    ).fetchone()
+    for identity in json.loads(groups):
+        (details,) = report.execute(
+            "SELECT details FROM difference_groups WHERE id=?", (identity,)
+        ).fetchone()
+        print(json.loads(zlib.decompress(details)))
+```
+
+Review material instruction, test, source, environment and filtering differences
+before treating a source as aligned. Record accepted migration changes and
+unresolved differences with the report. A content difference does not fail the
+command; a source that could not be compared is recorded as failed, and the command
+continues through the remaining sources before returning a nonzero status.
+
+To inspect actual text for one task, repeat the command with one `--source` and
+`--inspect-path '<original archive path>'`, using a new output directory. The
+source report then covers only that task and includes `task.diff`: member metadata
+and unified diffs for instruction, environment, test, source and oracle files.
+Each file contributes up to 64 KiB of UTF-8 text per side; longer text is explicitly
+marked as truncated, and binary files retain full-content hashes. Only that task's
+archives are held temporarily and are removed after comparison.

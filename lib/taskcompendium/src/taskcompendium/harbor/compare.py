@@ -3,6 +3,7 @@
 
 """Compare Harbor archive content and audit counts against a pinned release manifest."""
 
+import difflib
 import hashlib
 import io
 import json
@@ -11,20 +12,17 @@ import tarfile
 import zlib
 from collections import Counter
 from dataclasses import asdict, dataclass
-from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import click
 import pyarrow.parquet as pq
 from harbor_config.models.task.config import TaskConfig
 
 from taskcompendium.harbor.export import TASKS_SCHEMA
-from taskcompendium.harbor.snapshots import TaskSnapshot, json_temporal
+from taskcompendium.harbor.snapshots import FileSnapshot, TaskSnapshot, archive_snapshot, json_temporal
 
-
-class Tolerance(StrEnum):
-    TOML_FORMATTING = "toml_formatting"
+MAX_REVIEW_TEXT_BYTES = 65536
 
 
 @dataclass(frozen=True)
@@ -34,7 +32,6 @@ class Difference:
     path: str
     baseline: Any
     candidate: Any
-    tolerance: Tolerance | None = None
 
 
 def file_category(path: str) -> str:
@@ -51,11 +48,70 @@ def file_category(path: str) -> str:
     return "public_source"
 
 
+def toml_identity(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    encoded = json.dumps(value, sort_keys=True, default=json_temporal).encode()
+    return {"sha256": hashlib.sha256(encoded).hexdigest(), "bytes": len(encoded), "keys": sorted(value)}
+
+
+def file_identity(value: FileSnapshot | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return {**asdict(value), "parsed_toml": toml_identity(value.parsed_toml)}
+
+
+def archive_contents(blob: bytes | None, namespace: str) -> dict[str, bytes]:
+    if blob is None:
+        return {}
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:*") as archive:
+        files = {}
+        for member in archive:
+            if member.isfile():
+                handle = archive.extractfile(member)
+                assert handle is not None
+                files[f"{namespace}/{member.name}"] = handle.read()
+        return files
+
+
+def write_archive_diff(baseline: bytes | None, candidate: bytes | None, namespace: str, output: TextIO) -> None:
+    """Write selected-task member changes and bounded text diffs for manual review.
+
+    Each side contributes at most 64 KiB of UTF-8 text per file. Truncation is
+    explicit, and the member metadata retains hashes of the complete contents.
+    """
+    before, after = archive_snapshot(baseline, namespace), archive_snapshot(candidate, namespace)
+    old_contents, new_contents = archive_contents(baseline, namespace), archive_contents(candidate, namespace)
+    for path in sorted(before.keys() | after.keys()):
+        if before.get(path) == after.get(path):
+            continue
+        output.write(f"\n=== {path} ===\n")
+        output.write(
+            json.dumps({"baseline": file_identity(before.get(path)), "candidate": file_identity(after.get(path))})
+        )
+        output.write("\n")
+        old, new = old_contents.get(path, b""), new_contents.get(path, b"")
+        if old == new:
+            continue
+        try:
+            old_text, new_text = old.decode(), new.decode()
+        except UnicodeDecodeError:
+            output.write("Binary content differs; complete hashes are above.\n")
+            continue
+        if len(old) > MAX_REVIEW_TEXT_BYTES or len(new) > MAX_REVIEW_TEXT_BYTES:
+            output.write(f"Text diff truncated to 65536 bytes per side (baseline={len(old)}, candidate={len(new)}).\n")
+            old_text, new_text = old[:MAX_REVIEW_TEXT_BYTES].decode(errors="replace"), new[
+                :MAX_REVIEW_TEXT_BYTES
+            ].decode(errors="replace")
+        for line in difflib.unified_diff(
+            old_text.splitlines(), new_text.splitlines(), f"baseline/{path}", f"candidate/{path}", lineterm=""
+        ):
+            output.write(line + "\n")
+
+
 def compare_tasks(
     baseline: TaskSnapshot | None,
     candidate: TaskSnapshot | None,
-    *,
-    tolerances: frozenset[Tolerance] = frozenset(),
 ) -> list[Difference]:
     """Compare outcomes and every archived file without inferring release filtering.
 
@@ -89,24 +145,13 @@ def compare_tasks(
         before, after = baseline.files.get(path), candidate.files.get(path)
         category = file_category(path)
         if before is None or after is None:
-            differences.append(
-                Difference(
-                    category, "inventory", path, asdict(before) if before else None, asdict(after) if after else None
-                )
-            )
+            differences.append(Difference(category, "inventory", path, file_identity(before), file_identity(after)))
             continue
         for field in ("type", "mode", "link"):
             old, new = getattr(before, field), getattr(after, field)
             if old != new:
                 differences.append(Difference(category, field, path, old, new))
         if before.sha256 != after.sha256 or before.size != after.size:
-            tolerance = None
-            if (
-                Tolerance.TOML_FORMATTING in tolerances
-                and before.parsed_toml is not None
-                and before.parsed_toml == after.parsed_toml
-            ):
-                tolerance = Tolerance.TOML_FORMATTING
             differences.append(
                 Difference(
                     category,
@@ -114,11 +159,14 @@ def compare_tasks(
                     path,
                     {"sha256": before.sha256, "size": before.size},
                     {"sha256": after.sha256, "size": after.size},
-                    tolerance,
                 )
             )
         if before.parsed_toml != after.parsed_toml:
-            differences.append(Difference(category, "parsed_toml", path, before.parsed_toml, after.parsed_toml))
+            differences.append(
+                Difference(
+                    category, "parsed_toml", path, toml_identity(before.parsed_toml), toml_identity(after.parsed_toml)
+                )
+            )
         if before.toml_error is not None or after.toml_error is not None:
             differences.append(Difference(category, "invalid_toml", path, before.toml_error, after.toml_error))
     return differences
@@ -160,20 +208,16 @@ class ParityReport:
         self,
         baseline: TaskSnapshot | None,
         candidate: TaskSnapshot | None,
-        *,
-        tolerances: frozenset[Tolerance] = frozenset(),
     ) -> None:
         task = baseline if baseline is not None else candidate
         assert task is not None
-        differences = compare_tasks(baseline, candidate, tolerances=tolerances)
-        mismatch = any(difference.tolerance is None for difference in differences)
-        result = "different" if mismatch else "tolerated" if differences else "equal"
+        differences = compare_tasks(baseline, candidate)
+        result = "different" if differences else "equal"
         groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         for difference in differences:
             key = (difference.category, difference.kind, difference.path.rpartition("/")[0])
             groups.setdefault(key, []).append(asdict(difference))
-            prefix = "tolerated" if difference.tolerance else "different"
-            self.categories[f"{prefix}:{difference.category}:{difference.kind}"] += 1
+            self.categories[f"{difference.category}:{difference.kind}"] += 1
         identifiers = []
         for details in groups.values():
             encoded = json.dumps(details, sort_keys=True, default=json_temporal).encode()
