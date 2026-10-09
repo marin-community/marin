@@ -169,4 +169,3 @@ def run_local_sources(
     if failed:
         raise CampaignFailed(f"Quick conversion failed for some sources; see {report_path}")
     return tuple(outcomes.values())
-
