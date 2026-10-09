@@ -74,6 +74,7 @@ EVAL_SUITES: dict[str, tuple[str, ...]] = {
         "gsm8k-0shot",
     ),
     "Chat / Math": ("math500", "aime24", "olympiadbench"),
+    "Long context": ("mrcr", "graphwalks"),
     "Code": ("humaneval", "humanevalplus", "mbppplus"),
 }
 

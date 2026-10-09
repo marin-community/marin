@@ -88,7 +88,11 @@ def budget_arguments(config: dict, task: dict, max_length: int | None) -> tuple[
     and sizes its own responses from the served context and its stored longest prompt, while an
     lm-eval-native generation task gets the served context minus a prompt reserve as ``max_gen_toks``.
     """
-    gen_budget = generation_budget(config["max_gen_toks"], max_length)
+    gen_budget = (
+        config["max_gen_toks"]
+        if config.get("prompt_budget_preflight", False)
+        else generation_budget(config["max_gen_toks"], max_length)
+    )
     if gen_budget != config["max_gen_toks"]:
         print(
             f"clamped max_gen_toks {config['max_gen_toks']} -> {gen_budget} to fit served context {max_length}",
@@ -127,14 +131,13 @@ def served_max_length(base_url: str) -> int | None:
 def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> str:
     """lm-eval ``--model_args`` for the served OpenAI endpoint (comma-joined ``key=value`` list)."""
     endpoint_path = "chat/completions" if use_chat else "completions"
-    if use_chat:
+    if use_chat and not config.get("prompt_budget_preflight", False):
         # The endpoint applies its own chat template, so the client needs no tokenizer. Loading one
         # rejects checkpoints whose tokenizer ships custom code (Kimi-Linear) or metadata the
         # client's Transformers cannot parse (Gemma 4). Mirrors marin-community/evalchemy#140.
         tokenizer_args: dict[str, object] = {"tokenizer_backend": "none"}
     else:
-        # Loglikelihood scoring needs local token IDs, so load the checkpoint tokenizer and allow
-        # its custom code.
+        # Loglikelihood scoring and prompt-budget preflight need the checkpoint tokenizer.
         tokenizer_args = {
             "tokenizer": config["tokenizer"],
             "tokenizer_backend": "huggingface",
@@ -248,7 +251,9 @@ def main() -> None:
 
     out_path = config["out_path"].rstrip("/")
     served = served_max_length(config["base_url"])
-    available_context = served - _CONTEXT_MARGIN if served is not None else None
+    # Benchmarks with prompt preflight reserve their own output and safety margin.
+    context_margin = 0 if config.get("prompt_budget_preflight", False) else _CONTEXT_MARGIN
+    available_context = served - context_margin if served is not None else None
     configured_context = config.get("max_length")
     configured_lengths = [value for value in (available_context, configured_context) if value is not None]
     max_length = min(configured_lengths) if configured_lengths else None

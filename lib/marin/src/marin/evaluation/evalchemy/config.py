@@ -75,6 +75,8 @@ class EvalchemyConfig(BaseModel):
     task_options: Mapping[str, EvalchemyTaskOptions] = Field(default_factory=dict)
     apply_chat_template: bool | None = None
     debug: bool = False
+    # The task counts rendered prompts and owns per-example output/context selection.
+    prompt_budget_preflight: bool = False
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: str | None = None

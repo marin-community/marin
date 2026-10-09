@@ -424,7 +424,7 @@ wheels = [
 [[package]]
 name = "evalchemy"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/evalchemy.git?branch=main#2083afa0b937cd7c2e1fbbccf23c8b713a1239a5" }
+source = { git = "https://github.com/marin-community/evalchemy.git?branch=codex%2Fgraphwalks#18a63bd0d9c314b91bbf19154678e3c64e0b6110" }
 dependencies = [
     { name = "bespokelabs-curator" },
     { name = "datasets" },
@@ -1133,7 +1133,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "evalchemy", git = "https://github.com/marin-community/evalchemy.git?branch=main" }]
+requires-dist = [{ name = "evalchemy", git = "https://github.com/marin-community/evalchemy.git?branch=codex%2Fgraphwalks" }]
 
 [[package]]
 name = "markdown-it-py"
