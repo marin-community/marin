@@ -110,11 +110,14 @@ def harbor_record(row: dict[str, Any], *, grader_image: str, family: str) -> Har
         spec = verifyit_spec(grader)
         answer_path = verifyit_answer_file(spec) if task.answer_type == AnswerType.TEXT else None
         files.update(verifier_runtime())
-        files["tests/verifier.toml"] = render_spec(spec).encode()
+        # Harbor reserves tests/verifier.toml for its image-installed verifyit command.
+        # Keep the bundled runtime wrapper in control of grading and public-file staging.
+        files["tests/taskcompendium-verifier.toml"] = render_spec(spec).encode()
         files["tests/test.sh"] = (
             b"#!/bin/bash\nset -euo pipefail\n"
             b"export PYTHONPATH=/tests/runtime\n"
-            b"exec python3 -c 'from verifyit.grade import main; raise SystemExit(main())' /tests/verifier.toml\n"
+            b"exec python3 -c 'from verifyit.grade import main; raise SystemExit(main())' "
+            b"/tests/taskcompendium-verifier.toml\n"
         )
         mode = grader.mode
         timeout = float(grader.parameters.get("timeout", 600))
