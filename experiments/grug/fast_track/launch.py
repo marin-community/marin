@@ -438,6 +438,7 @@ def build_h100_ladder_run(
     grad_accum_microbatches: int = 1,
     muon_probe_steps: tuple[int, ...] = (),
     snr_probe_steps: tuple[int, ...] = (),
+    noise_scale_steps: tuple[int, ...] = (),
     train_batch_dump_steps: tuple[int, ...] = (),
     train_text_count_patterns: tuple[str, ...] = (),
     fact_probe_input: str | None = None,
@@ -572,6 +573,7 @@ def build_h100_ladder_run(
         grad_accum_microbatches=grad_accum_microbatches,
         muon_probe_steps=muon_probe_steps,
         snr_probe_steps=snr_probe_steps,
+        noise_scale_steps=noise_scale_steps,
         train_batch_dump_steps=train_batch_dump_steps,
         train_text_count_patterns=train_text_count_patterns,
         fact_probe_input=fact_probe_input,
@@ -684,7 +686,9 @@ def build_h100_ladder_run(
                 ),
                 grad_capture_path=prefix_join(ctx.output_path, "grad_capture") if grad_capture_starts else None,
                 muon_probe_path=(
-                    prefix_join(ctx.output_path, "muon_probe") if muon_probe_steps or snr_probe_steps else None
+                    prefix_join(ctx.output_path, "muon_probe")
+                    if muon_probe_steps or snr_probe_steps or noise_scale_steps
+                    else None
                 ),
             ),
             eval=(
@@ -1008,6 +1012,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Comma-separated steps at which to run the SNR probe (snr_probe.py); results go to <output>/muon_probe/.",
 )
 @click.option(
+    "--noise-scale-steps",
+    default="",
+    help="Comma-separated steps at which to measure the per-component gradient noise scale (noise_scale.py); "
+    "results go to <output>/muon_probe/.",
+)
+@click.option(
     "--grad-accum",
     "grad_accum_microbatches",
     default=1,
@@ -1116,6 +1126,7 @@ def main(
     grad_accum_microbatches: int,
     muon_probe_steps: str,
     snr_probe_steps: str,
+    noise_scale_steps: str,
     dump_train_batches: str,
     count_train_text: tuple[str, ...],
     fact_probe_input: str | None,
@@ -1184,6 +1195,7 @@ def main(
         grad_accum_microbatches=grad_accum_microbatches,
         muon_probe_steps=tuple(int(step) for step in muon_probe_steps.split(",") if step),
         snr_probe_steps=tuple(int(step) for step in snr_probe_steps.split(",") if step),
+        noise_scale_steps=tuple(int(step) for step in noise_scale_steps.split(",") if step),
         train_batch_dump_steps=tuple(int(step) for step in dump_train_batches.split(",") if step),
         train_text_count_patterns=tuple(count_train_text),
         fact_probe_input=fact_probe_input,

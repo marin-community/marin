@@ -58,7 +58,7 @@ from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.trainer import TrainerConfig
 from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
-from levanter.utils.jax_utils import parameter_count
+from levanter.utils.jax_utils import leaf_key_paths, parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import (
@@ -119,6 +119,7 @@ from experiments.grug.fast_track.model import (
     write_ngram_stats,
 )
 from experiments.grug.fast_track.muon_probe import MuonProbe
+from experiments.grug.fast_track.noise_scale import NoiseScaleProbe
 from experiments.grug.fast_track.optimizer import (
     expert_consistency_metrics,
     hyperball_metrics,
@@ -362,6 +363,9 @@ class GrugTrainerConfig:
     # SNR probe (``snr_probe.py``): at each of these steps, compare Muon's update with SNR-weighted ones on held-out
     # payoff and loss; writes ``<muon_probe_path>/snr_probe_step<N>.npz``.
     snr_probe_steps: tuple[int, ...] = ()
+    # Gradient noise scale probe (``noise_scale.py``): at each of these steps, the agreement of independent gradients
+    # at several batch sizes per model component; writes ``<muon_probe_path>/noise_scale_step<N>.npz``.
+    noise_scale_steps: tuple[int, ...] = ()
     # Fact probe (``fact_probe.py``). ``train_batch_dump_steps``: write those steps' train batches to
     # ``<fact_probe_dir>/train_batch_step<N>.npz`` and stop before training. ``fact_probe_input``: score its rows
     # every ``fact_probe_every`` steps (the EMA weights every ``fact_probe_ema_every``) into ``fact_probe_dir``.
@@ -1133,6 +1137,24 @@ def _make_grad_capture_step(mp: jmp.Policy, *, z_loss_weight: float):
     return capture
 
 
+def _make_noise_scale_gradients(mp: jmp.Policy, *, z_loss_weight: float):
+    """``gradients(params, batch, row_weight, pending_qb_betas, step, ...)``: the full training gradient of ``batch``
+    with each sequence's loss weight scaled by ``row_weight`` ``[B]`` (``noise_scale.py``)."""
+    z_loss = z_loss_weight if z_loss_weight > 0 else None
+
+    @functools.partial(jax.jit, static_argnames=("loop_active", "router_tie_active"))
+    def gradients(params: Transformer, batch, row_weight, pending_qb_betas, step, loop_active, router_tie_active):
+        params = _apply_qb_betas(params, pending_qb_betas)
+        weight = reshard(row_weight.astype(batch.loss_weight.dtype), P(_BATCH_AXES))[:, None]
+        batch = replace(batch, loss_weight=batch.loss_weight * weight)
+        (_, _), grads = _loss_and_grads(
+            params, batch, mp, z_loss, step, loop_active, router_tie_active=router_tie_active
+        )
+        return grads
+
+    return gradients
+
+
 def _make_probe_loss(mp: jmp.Policy):
     """``loss(params, batch, pending_qb_betas, deltas)``: the plain next-token loss on ``batch`` after adding
     ``deltas`` to the captured matrices (``grad_capture.add_to_captured``)."""
@@ -1550,6 +1572,12 @@ def _host_batch(batch) -> tuple[np.ndarray, np.ndarray]:
 
 # Probe batches start this many steps past the run's last step (disjoint from the training data).
 _MUON_PROBE_DATA_OFFSET = 1000
+# Past the Muon/SNR probes' batches, so the probes never share data.
+_NOISE_PROBE_DATA_OFFSET = 20000
+
+
+def _leaf_names(tree) -> list[str]:
+    return [str(p) for p in jax.tree.leaves(leaf_key_paths(tree))]
 
 
 def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
@@ -2680,6 +2708,24 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             capture_writer = CaptureWriter(config.trainer.grad_capture_path)
         muon_probes: list[MuonProbe] = []
         snr_probes: list[SnrProbe] = []
+        noise_probes: list[NoiseScaleProbe] = []
+        if config.trainer.noise_scale_steps:
+            if config.trainer.muon_probe_path is None:
+                raise ValueError("noise_scale_steps needs muon_probe_path")
+            noise_gradients = _make_noise_scale_gradients(trainer.mp, z_loss_weight=config.trainer.z_loss_weight)
+            noise_batches = iter(train_loader.iter_from_step(trainer.num_train_steps + _NOISE_PROBE_DATA_OFFSET))
+            mask = config.optimizer.create_mask(state.params)
+            labels = dict(zip(_leaf_names(state.params), jax.tree.leaves(mask), strict=True))
+            noise_probes = [
+                NoiseScaleProbe(
+                    step,
+                    config.trainer.muon_probe_path,
+                    noise_batches,
+                    labels,
+                    ns_steps=config.optimizer.backend_steps,
+                )
+                for step in config.trainer.noise_scale_steps
+            ]
         if config.trainer.muon_probe_steps or config.trainer.snr_probe_steps:
             if config.trainer.muon_probe_path is None:
                 raise ValueError("muon_probe_steps and snr_probe_steps need muon_probe_path")
@@ -3000,6 +3046,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 p, b, betas, st, loop_active=la, router_tie_active=rt
                             ),
                         )
+                    for noise_probe in noise_probes:
+                        if current_step == noise_probe.step:
+                            pending_betas = state.pending_qb_betas
+                            noise_probe.run(
+                                state.params,
+                                state.step,
+                                lambda p, b, w, st, betas=pending_betas, la=loop_active, rt=router_tie_active: (
+                                    noise_gradients(p, b, w, betas, st, loop_active=la, router_tie_active=rt)
+                                ),
+                            )
                     for snr_probe in snr_probes:
                         pending_betas = state.pending_qb_betas
                         snr_probe.before_step(
