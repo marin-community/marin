@@ -8,28 +8,28 @@ from dataclasses import replace
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import RolloutContractError
 from shellbox.machine import Backend
-from taskcompendium.submission import PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.client import GlmUnavailable
-from taskforge.sandbox.factories import SHELLSIM
+from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.validate.attempts import load_outcome, trial_files
 from taskforge.validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, outcome_json, run_trial
+from tests.sandbox.fixture_images import FixtureImageFactory
 
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
+DOCKER_BACKEND = Backend.DOCKER.value
 
 
 def settings(factory) -> EngineSettings:
     return EngineSettings(
-        factories={SHELLSIM_BACKEND: factory},
-        capabilities={SHELLSIM_BACKEND: SHELLSIM},
+        factories={SHELLSIM_BACKEND: factory, DOCKER_BACKEND: FixtureImageFactory()},
+        capabilities={SHELLSIM_BACKEND: SHELLSIM, DOCKER_BACKEND: LOCAL_DOCKER},
         max_turns=4,
         command_timeout=10,
         tool_turn_timeout=20,
         model_turn_timeout=30,
         cleanup_timeout=10,
-        conventions=(PlainText(id="plain"),),
     )
 
 

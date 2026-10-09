@@ -13,15 +13,24 @@ import pytest
 from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON
 from rolloutengine.task_session import session_start
 from shellbox.machine import Backend
-from taskcompendium.models import AnswerType, AssistantToolCalls, ConversationInput, FunctionDefinition, TextMessage
+from taskcompendium.models import (
+    ANSWER_CALL_NAME,
+    ANSWER_FIELD,
+    AnswerCall,
+    AnswerType,
+    AssistantToolCalls,
+    ConversationInput,
+    FinalAction,
+    FunctionDefinition,
+    TextMessage,
+)
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import ANSWER_CALL_NAME, ANSWER_FIELD, AnswerCall, FinalAction, PlainText
 from verifyit.spec import FunctionCall, PredictedActionSpec
 
 from taskforge.ledger.jsonl import read_entries
 from taskforge.ledger.records import EntryKind
-from taskforge.sandbox.factories import SHELLSIM
-from taskforge.spec.draft import answer_verifier, assemble
+from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
+from taskforge.spec.draft import answer_grader, assemble
 from taskforge.validate.adversary import (
     CONTEXT_HEADER,
     PREAMBLE_SEPARATOR,
@@ -36,9 +45,10 @@ from taskforge.validate.attempts import ADVERSARY_KEY, load_adversary_attempt, t
 from taskforge.validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.validate.submissions import trial_claim
 from taskforge.validate.trials import CLEANUP_ERROR_COUNT, EngineSettings
+from tests.sandbox.fixture_images import FixtureImageFactory
 
-PLAIN = PlainText(id="plain")
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
+DOCKER_BACKEND = Backend.DOCKER.value
 SUM = "/workspace/sum.txt"
 WRITE_SUM = ("shell", f"echo 60 > {SUM}")
 SHORTCUT = AdversaryRole.SHORTCUT
@@ -46,25 +56,24 @@ SHORTCUT = AdversaryRole.SHORTCUT
 
 def settings(factory, capabilities=None, max_turns: int = 6) -> EngineSettings:
     return EngineSettings(
-        factories={SHELLSIM_BACKEND: factory},
-        capabilities={SHELLSIM_BACKEND: SHELLSIM} if capabilities is None else capabilities,
+        factories={SHELLSIM_BACKEND: factory, DOCKER_BACKEND: FixtureImageFactory()},
+        capabilities=(
+            {SHELLSIM_BACKEND: SHELLSIM, DOCKER_BACKEND: LOCAL_DOCKER} if capabilities is None else capabilities
+        ),
         max_turns=max_turns,
         command_timeout=10,
         tool_turn_timeout=20,
         model_turn_timeout=30,
         cleanup_timeout=10,
-        conventions=(PLAIN,),
     )
 
 
-async def one_trial(
-    tmp_path, task, rounds, fakes, client, policy=None, factory=None, context="", convention=PLAIN, **engine
-):
+async def one_trial(tmp_path, task, rounds, fakes, client, policy=None, factory=None, context="", **engine):
     """Run one adversary trial of ``task``; return it and its evidence directory."""
     site = rounds.site(tmp_path)
     factory = factory or fakes.flaky_factory(0, RuntimeError)
     trials = await run_adversaries(
-        rounds.draft(task, (), convention),
+        rounds.draft(task, ()),
         policy or rounds.policy(adversary_k=1),
         site,
         settings(factory, **engine),
@@ -89,7 +98,7 @@ async def test_the_brief_is_the_one_system_turn_and_the_task_follows_it(
 
     first = fake_glm.requests[0]
     assert first["messages"][0] == {"role": "system", "content": adversary_brief(4, "")}
-    assert first["messages"][1:] == [dict(m) for m in session_start(file_task.task, PLAIN).messages]
+    assert first["messages"][1:] == [dict(m) for m in session_start(file_task.task).messages]
     assert [tool["function"]["name"] for tool in first["tools"]] == ["shell", SUBMIT_TOOL_NAME]
     assert "files" in first["tools"][1]["function"]["parameters"]["properties"]
     record = json.loads((directory / "attempt-0.json").read_text())
@@ -150,7 +159,7 @@ async def test_submit_grades_a_fresh_machine_through_the_verifier(
     }
     assert isinstance(trial.outcome, Graded) and trial.outcome.reward == 1.0
     (submission,) = trial.submissions
-    assert submission.grade.detail["got"] == "60"
+    assert submission.grade.diagnostics["stdout"] == "got '60'\n1.0\n"
     assert submission.turn == 1 and submission.candidate.paths == (SUM,)
     assert resource_bytes(submission.candidate.files[0]) == b"60\n"
     assert trial_claim(trial.outcome).kind is ClaimKind.NO_SHORTCUT
@@ -169,7 +178,7 @@ async def test_the_verifier_never_sees_the_adversary_shell_state(
 async def test_a_planted_grader_is_not_the_grader_that_runs(
     tmp_path, file_task, rounds, fakes, fake_glm, glm_client, turns
 ):
-    planted = "/tests/grader.py"
+    planted = "/tests/grade.py"
     plant = ("shell", f"mkdir -p /tests && echo 'print(1)' > {planted}")
     turns(fake_glm, plant, ("submit", "Done.", (planted,)), "NO_SHORTCUT")
 
@@ -225,7 +234,7 @@ async def test_grading_diagnostics_are_withheld_from_the_model(
         "score_max",
     }
     (submission,) = trial.submissions
-    assert submission.grade.detail["got"] == "59" and not submission.passed
+    assert submission.grade.diagnostics["stdout"] == "got '59'\n0.0\n" and not submission.passed
 
 
 @pytest.mark.parametrize(
@@ -318,7 +327,7 @@ async def test_evidence_lands_per_role_and_index_with_submissions(
     turns(fake_glm, *[("submit", "Done.", ()), "NO_SHORTCUT"] * 2)
 
     trials = await run_adversaries(
-        rounds.draft(file_task, (), PLAIN),
+        rounds.draft(file_task, ()),
         rounds.policy(adversary_k=2),
         site,
         settings(fakes.flaky_factory(0, RuntimeError)),
@@ -360,11 +369,12 @@ async def test_a_refused_machine_is_one_unsupported_attempt(tmp_path, file_task,
 
 
 async def test_an_answer_call_candidate_is_submitted_through_the_answer_call(
-    tmp_path, math_task, rounds, fakes, fake_glm, glm_client, turns
+    tmp_path, math_task, relower, rounds, fakes, fake_glm, glm_client, turns
 ):
     turns(fake_glm, ("submit", "391"), ("submit", "395"), "NO_SHORTCUT")
+    answer_call = relower(math_task.task.model_copy(update={"answer_format": AnswerCall()}))
 
-    trial, _ = await one_trial(tmp_path, math_task, rounds, fakes, glm_client, convention=AnswerCall(id="answer-call"))
+    trial, _ = await one_trial(tmp_path, answer_call, rounds, fakes, glm_client)
 
     assert [(s.grade.reward, s.passed) for s in trial.submissions] == [(0.0, False), (1.0, True)]
     candidate = trial.submissions[1].candidate
@@ -383,7 +393,8 @@ def action_task(math_task, relower):
             "validate-action",
             "Look up the capital of France.",
             AnswerType.NATIVE_ACTION,
-            answer_verifier(spec),
+            FinalAction(),
+            answer_grader(spec),
             math_task.task.source,
             environment=None,
             final_tools=(lookup,),
@@ -403,7 +414,7 @@ async def test_a_final_action_candidate_makes_the_calls_it_lists(
         fake_glm.stream(tool_calls=((SUBMIT_TOOL_NAME, arguments),), finish="tool_calls")
     turns(fake_glm, "NO_SHORTCUT")
 
-    trial, _ = await one_trial(tmp_path, action_task, rounds, fakes, glm_client, convention=FinalAction(id="action"))
+    trial, _ = await one_trial(tmp_path, action_task, rounds, fakes, glm_client)
 
     (submit,) = fake_glm.requests[0]["tools"]
     assert "calls" in submit["function"]["parameters"]["properties"]

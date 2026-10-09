@@ -45,7 +45,7 @@ from rolloutengine.contracts import (
 )
 from rolloutengine.shell_tool import SHELL_TOOL_NAME
 from taskcompendium.grading_result import Outcome as GradeStatus
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import CONVERSATION_ANSWERS, TaskSpec, VerifyitGrader
 from verifyit.spec import Mode
 
 from taskforge.atomic_file import write_atomic
@@ -59,7 +59,6 @@ from taskforge.spec.controls import (
     Expectation,
     Transcript,
 )
-from taskforge.spec.draft import MACHINE_ANSWER_TYPES
 from taskforge.validate.adversary import CONTEXT_STOP_REASON, AdversaryRole
 from taskforge.validate.controls import ControlOutcome, ControlVerdict, wire_message, workspace_turn
 from taskforge.validate.evidence import Complete, Evidence, Incomplete, RewardStats
@@ -142,7 +141,8 @@ DEFECT_ROLES: Mapping[Cause, tuple[StepRole, ...]] = {
 }
 """The ungraded causes that are task defects, and the step roles that own each. The other causes
 outside ``RERUNNABLE`` are not the task's: the host cannot run it (``MACHINE_UNSUPPORTED``,
-``SUBMISSION_UNSUPPORTED``) or the model or classifier failed (``MODEL_REJECTED``, ``UNCLASSIFIED``)."""
+``SUBMISSION_UNSUPPORTED``), the candidate's own code failed to import or be collected
+(``CANDIDATE_CODE_ERROR``), or the model or classifier failed (``MODEL_REJECTED``, ``UNCLASSIFIED``)."""
 
 
 @dataclass(frozen=True)
@@ -181,12 +181,12 @@ BUDGET_STOPS = frozenset(
 )
 """Stop reasons that mean the adversary ran out of output, turns, time or context before a verdict."""
 
-UNIQUE_ANSWER_KINDS: frozenset[str] = frozenset(
+UNIQUE_ANSWER_MODES: frozenset[str] = frozenset(
     {Mode.EXACT, Mode.NUMERIC, Mode.MATH, Mode.MCQ, Mode.PREDICTED_ACTION, Mode.STRUCTURED_EXACT}
 )
-"""Grader kinds (``VerifierSpec.kind``, verifyit modes) with one expected answer, where a passing submission that
-mismatches every honest answer is a grader defect. ``shell``, ``script``, ``external`` and every other kind accept
-what their script accepts, so a mismatch there is at most a note (``tier_of`` row 9)."""
+"""verifyit modes with one expected answer, where a passing submission that mismatches every honest answer is a
+grader defect. Script graders and every other verifyit mode accept what their program accepts, so a mismatch
+there is at most a note (``tier_of`` row 9)."""
 
 
 @dataclass(frozen=True)
@@ -194,8 +194,8 @@ class TaskFacts:
     """What the adversary signals read of the task.
 
     Attributes:
-        machine_answer: The answer is the machine state (``MACHINE_ANSWER_TYPES``), not a text submission.
-        unique_answer: The grader has one expected answer (``UNIQUE_ANSWER_KINDS``).
+        machine_answer: The answer is the machine state (not in ``CONVERSATION_ANSWERS``), not a text submission.
+        unique_answer: The grader is verifyit in a mode with one expected answer (``UNIQUE_ANSWER_MODES``).
         input_paths: The task machine's files (``resources.all`` then ``resources.worker``) as absolute paths, in
             order.
         protected_paths: ``input_paths`` then the verifier's private files as installed under ``VERIFIER_ROOT``,
@@ -217,8 +217,8 @@ def task_facts(task: TaskSpec) -> TaskFacts:
     inputs = tuple(str(PurePosixPath("/", r.path)) for r in (*resources.all, *resources.worker))
     private = tuple(str(VERIFIER_ROOT / r.path) for r in resources.verifier)
     return TaskFacts(
-        task.answer_type in MACHINE_ANSWER_TYPES,
-        task.verifier.kind in UNIQUE_ANSWER_KINDS,
+        task.answer_type not in CONVERSATION_ANSWERS,
+        isinstance(task.grader, VerifyitGrader) and task.grader.mode in UNIQUE_ANSWER_MODES,
         inputs,
         tuple(dict.fromkeys((*inputs, *private))),
     )

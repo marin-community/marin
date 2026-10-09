@@ -5,8 +5,10 @@
 agent loops with the verifier as a tool, read back from the attempt files, summarized, and resumed without re-running
 settled trials.
 
-One round runs the file task of ``conftest``; the other runs the newest draft the live build test wrote
-under ``<evidence_root>/build/live-test/`` and skips when there is none. ``evidence_root`` is the fixture in
+One round runs the file task of ``conftest``, its verifier machine on the ShellSim-backed fixture image factory;
+the other runs the newest draft the live build test wrote under ``<evidence_root>/build/live-test/`` on the
+laptop's own factories (Docker for verifier machines) and skips when no draft there loads (drafts written before
+TaskSpec 0.25 do not). ``evidence_root`` is the fixture in
 ``tests/conftest.py``. Each writes ``<evidence_root>/validate/{g_adversary_round,h_built_adversary_round}-<utc>/``:
 the round's attempt files and ledger, ``calibration.json``, and ``summary.json`` (per-trial outcome, reward, stop
 reason, tool-call arguments (key ``commands``) and final reply, each adversary trial's submissions, claim, tier
@@ -25,9 +27,8 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend
+from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import TextMessage
-from taskcompendium.submission import PlainText
 
 from taskforge.builder.run import LOWERED_FILE, PROVENANCE_FILE, TaskDraft, load_draft
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
@@ -35,7 +36,14 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.sandbox.factories import SHELLSIM
+from taskforge.sandbox.factories import (
+    LOCAL_DOCKER,
+    SHELLSIM,
+    FactoryCapabilities,
+    MachineHost,
+    factory_capabilities,
+    machine_factories,
+)
 from taskforge.validate.adversary import (
     PREAMBLE_SEPARATOR,
     SUBMIT_TOOL_NAME,
@@ -68,11 +76,11 @@ from taskforge.validate.run import (
 from taskforge.validate.solver import ValidationSite, run_solver
 from taskforge.validate.submissions import AdversaryTrial, trial_claim
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, task_digest
+from tests.sandbox.fixture_images import FixtureImageFactory
 
 pytestmark = pytest.mark.live_glm
 
 LIVE_TIMEOUT = 2400
-PLAIN = PlainText(id="plain")
 MAX_TURNS = 24
 POLICY = ValidationPolicy(
     k=3,
@@ -182,19 +190,26 @@ class LiveRound:
     after: dict[str, int]
 
 
-async def live_round(client: GlmClient, draft: TaskDraft, directory: Path, purpose: str) -> LiveRound:
-    """Run controls, then solver and adversaries, on ShellSim; summarize from disk, resume, write ``summary.json``."""
-    digest = task_digest(draft.lowered, draft.convention)
+async def live_round(
+    client: GlmClient,
+    draft: TaskDraft,
+    directory: Path,
+    purpose: str,
+    factories: Mapping[str, MachineFactory],
+    capabilities: Mapping[str, FactoryCapabilities],
+) -> LiveRound:
+    """Run controls, then solver and adversaries, on ``factories``; summarize from disk, resume, write
+    ``summary.json``."""
+    digest = task_digest(draft.lowered)
     site = ValidationSite(draft.task.id, 0, directory / f"evidence-{digest[:12]}", JsonlLedger(directory / "ledger"))
     settings = EngineSettings(
-        factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
-        capabilities={Backend.SHELLSIM.value: SHELLSIM},
+        factories=factories,
+        capabilities=capabilities,
         max_turns=MAX_TURNS,
         command_timeout=60,
         tool_turn_timeout=120,
         model_turn_timeout=600,
         cleanup_timeout=60,
-        conventions=(draft.convention,),
     )
     model = partial(GlmRolloutModel, client, POLICY.sampling)
     started = time.monotonic()
@@ -245,7 +260,7 @@ async def live_round(client: GlmClient, draft: TaskDraft, directory: Path, purpo
 
 def assert_round_reads_back_and_resumes(run: LiveRound) -> None:
     draft, summary = run.draft, run.summary
-    digest = task_digest(draft.lowered, draft.convention)
+    digest = task_digest(draft.lowered)
     assert len(run.solver) == POLICY.k
     assert {role: len(o) for role, o in run.adversaries.items()} == {role: POLICY.adversary_k for role in AdversaryRole}
     assert summary == summarize(
@@ -292,9 +307,11 @@ def utc_now() -> str:
 async def test_a_validation_round_on_shellsim(client, evidence_dir, file_task, file_controls, rounds):
     run = await live_round(
         client,
-        rounds.draft(file_task, file_controls, PLAIN),
+        rounds.draft(file_task, file_controls),
         evidence_dir / f"g_adversary_round-{utc_now()}",
         "validation round on ShellSim: controls, k=3 solver, adversary_k=2 agent loops with 10 submissions, resume",
+        {Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: FixtureImageFactory()},
+        {Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: LOCAL_DOCKER},
     )
 
     assert_round_reads_back_and_resumes(run)
@@ -302,27 +319,33 @@ async def test_a_validation_round_on_shellsim(client, evidence_dir, file_task, f
     assert all(a.tier is not DefectTier.REPAIR for a in run.summary.assessments), assessment_summary(run.summary)
 
 
-def newest_built_draft(build_evidence: Path) -> Path | None:
-    """The newest complete draft in the current format; ``run_build`` writes the provenance file last."""
-    drafts = [
-        path.parent
-        for path in sorted(build_evidence.glob(f"*/*/draft/{PROVENANCE_FILE}"))
-        if (path.parent / LOWERED_FILE).is_file()
-    ]
-    return drafts[-1] if drafts else None
+def newest_built_draft(build_evidence: Path) -> tuple[Path, TaskDraft] | None:
+    """The newest complete draft that loads; ``run_build`` writes the provenance file last, and a draft written
+    before TaskSpec 0.25 fails to load and is passed over."""
+    for path in sorted(build_evidence.glob(f"*/*/draft/{PROVENANCE_FILE}"), reverse=True):
+        if not (path.parent / LOWERED_FILE).is_file():
+            continue
+        try:
+            return path.parent, load_draft(path.parent)
+        except ValueError:
+            continue
+    return None
 
 
 @pytest.mark.timeout(LIVE_TIMEOUT)
-async def test_a_validation_round_on_a_built_draft(client, evidence_dir, build_evidence):
+async def test_a_validation_round_on_a_built_draft(client, evidence_dir, build_evidence, image_cache):
     """The newest draft the live build test wrote, validated as the loop would; tiers are recorded, not asserted."""
-    directory = newest_built_draft(build_evidence)
-    if directory is None:
-        pytest.skip(f"no built draft under {build_evidence}")
+    built = newest_built_draft(build_evidence)
+    if built is None:
+        pytest.skip(f"no draft under {build_evidence} loads")
+    directory, draft = built
     run = await live_round(
         client,
-        load_draft(directory),
+        draft,
         evidence_dir / f"h_built_adversary_round-{utc_now()}",
         f"validation round on the built draft {directory.relative_to(build_evidence)}: controls, solver, adversaries",
+        machine_factories(MachineHost.LAPTOP, controller_url=None, image_cache=image_cache),
+        factory_capabilities(MachineHost.LAPTOP),
     )
 
     assert_round_reads_back_and_resumes(run)

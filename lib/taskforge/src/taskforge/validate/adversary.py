@@ -17,11 +17,10 @@ the spirit of the task or does not need the task's intended computation. Its fin
 one verdict line, ``NO_SHORTCUT`` or ``SHORTCUT: <why>`` (``submissions.parse_claim``). The brief is
 the system turn of every request; the task follows exactly as the solver sees it
 (``rolloutengine.task_session.session_start``), and a grading conversation is that task prefix plus
-the candidate's final assistant turn, rendered as the draft's convention submits an answer
+the candidate's final assistant turn, rendered as the task's answer format submits an answer
 (``submission_turn``): assistant text, an ``AnswerCall`` answer call, or a ``FinalAction``'s function
-calls. ``calibration`` tiers a
-trial from its submissions, mainly the ordinal of the accepted submission the claim refers to, never
-from the adversary's account alone.
+calls. ``calibration`` tiers a trial from its submissions, mainly the ordinal of the accepted submission
+the claim refers to, never from the adversary's account alone.
 
 Every attempt writes one attempt file holding ``trials.outcome_json``'s record, a ``RolloutData``
 synthesized from the agent run (``agent_rollout``), and an ``adversary`` record with the effective
@@ -66,16 +65,20 @@ from rolloutengine.task_session import session_start
 from shellbox.machine import Command, Machine
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.grading_result import Outcome as GradeStatus
-from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskResource, TaskSpec, TextMessage
-from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.submission import (
+from taskcompendium.models import (
     ANSWER_CALL_NAME,
     ANSWER_FIELD,
+    CONVERSATION_ANSWERS,
     AnswerCall,
+    AssistantToolCalls,
+    ConversationToolCall,
     FinalAction,
-    SubmissionConvention,
-    conversation_messages,
+    TaskResource,
+    TaskSpec,
+    TextMessage,
 )
+from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.submission import conversation_messages
 
 from taskforge.builder.run import TaskDraft
 from taskforge.llm.agent import AgentRun, AgentStop, AgentTool, ToolOutcome, assistant_message, run_agent, shell_tool
@@ -84,12 +87,11 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.proposal.model import TaskProposal
 from taskforge.sandbox.factories import task_refusals
-from taskforge.spec.draft import MACHINE_ANSWER_TYPES
 from taskforge.validate.attempts import adversary_attempt_json, load_adversary_attempt, trial_files
 from taskforge.validate.classify import classify
 from taskforge.validate.controls import wire_message
 from taskforge.validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, TrialKind, Ungraded
-from taskforge.validate.solver import TrialPolicy, ValidationSite, draft_settings
+from taskforge.validate.solver import TrialPolicy, ValidationSite
 from taskforge.validate.submissions import NO_SHORTCUT_LINE as NO_SHORTCUT_LINE
 from taskforge.validate.submissions import SHORTCUT_PREFIX as SHORTCUT_PREFIX
 from taskforge.validate.submissions import AdversaryTrial, Candidate, Submission, passing, trial_claim
@@ -98,13 +100,12 @@ from taskforge.validate.submissions import ClaimKind as ClaimKind
 from taskforge.validate.submissions import parse_claim as parse_claim
 from taskforge.validate.trials import (
     CLEANUP_ERROR_COUNT,
-    ConventionUnavailable,
     EngineSettings,
     TrialPlan,
     attempt_span,
     record_attempt,
     refusal_detail,
-    task_convention,
+    submission_refusal,
 )
 
 
@@ -158,7 +159,7 @@ CALLS_DESCRIPTION = (
     "The function calls of the final assistant message, each a final tool of the task; reply is the text beside "
     "them. Without calls the final message is reply alone."
 )
-"""The description of ``submit``'s ``calls`` under a ``FinalAction`` convention."""
+"""The description of ``submit``'s ``calls`` when the answer format is ``FinalAction``."""
 SUBMISSION_CALL_ID = "submission-{index}"
 """``str.format`` over ``{index}``: the call id of a candidate's ``index``-th function call."""
 
@@ -196,7 +197,7 @@ def with_preamble(preamble: str, messages: Sequence[Mapping[str, Any]]) -> tuple
 def submit_parameters(executable: bool, final_action: bool) -> dict[str, object]:
     """JSON schema of ``submit``: ``reply`` (string, required); on an executable environment also ``files``
     (absolute paths in the adversary's workspace the verifier must see; default none); under a ``FinalAction``
-    convention also ``calls`` (the final message's function calls, each a name and an arguments object; default
+    answer format also ``calls`` (the final message's function calls, each a name and an arguments object; default
     none)."""
     properties: dict[str, object] = {"reply": {"type": "string"}}
     if executable:
@@ -236,28 +237,27 @@ class UnofferedCall(ValueError):
     """A candidate's function call names no final tool of the task; its argument is the name."""
 
 
-def submission_turn(
-    task: TaskSpec, convention: SubmissionConvention, reply: str, calls: Sequence[Mapping[str, Any]]
-) -> TextMessage | AssistantToolCalls:
-    """The final assistant turn that submits ``reply`` (and, under ``FinalAction``, ``calls``) as ``convention``
-    carries an answer for ``task``.
+def submission_turn(task: TaskSpec, reply: str, calls: Sequence[Mapping[str, Any]]) -> TextMessage | AssistantToolCalls:
+    """The final assistant turn that submits ``reply`` (and, under ``FinalAction``, ``calls``) as the task's
+    answer format carries an answer.
 
     A task whose answer is the machine state reads no submission, so its turn is the text reply under any
-    convention. ``AnswerCall`` submits ``reply`` as the ``ANSWER_CALL_NAME`` call's ``ANSWER_FIELD``.
+    format. ``AnswerCall`` submits ``reply`` as the ``ANSWER_CALL_NAME`` call's ``ANSWER_FIELD``.
     ``FinalAction`` makes ``calls`` (``name`` and ``arguments`` each) with ``reply`` as their text, or replies
-    with text alone without calls. Other conventions read the text reply.
+    with text alone without calls. Other formats read the text reply.
 
     Raises:
         UnofferedCall: a call names no final tool of ``task``.
     """
-    if task.answer_type in MACHINE_ANSWER_TYPES:
+    answer_format = task.answer_format
+    if task.answer_type not in CONVERSATION_ANSWERS:
         return TextMessage(role="assistant", content=reply)
-    if isinstance(convention, AnswerCall):
+    if isinstance(answer_format, AnswerCall):
         call = ConversationToolCall(
             call_id=SUBMISSION_CALL_ID.format(index=0), name=ANSWER_CALL_NAME, arguments={ANSWER_FIELD: reply}
         )
         return AssistantToolCalls(calls=(call,))
-    if not isinstance(convention, FinalAction) or not calls:
+    if not isinstance(answer_format, FinalAction) or not calls:
         return TextMessage(role="assistant", content=reply)
     offered = {function.name for function in task.final_tools}
     unoffered = [call["name"] for call in calls if call["name"] not in offered]
@@ -332,7 +332,6 @@ class Verifier:
     """
 
     lowered: LoweredTaskSpec
-    convention: SubmissionConvention
     task_messages: tuple[dict[str, Any], ...]
     engine: ShellboxRolloutEngine
     machine: Machine | None
@@ -349,7 +348,7 @@ class Verifier:
         calls = arguments.get("calls", [])
         assert isinstance(reply, str) and isinstance(paths, list) and isinstance(calls, list)
         try:
-            turn = submission_turn(self.lowered.task, self.convention, reply, calls)
+            turn = submission_turn(self.lowered.task, reply, calls)
         except UnofferedCall as error:
             offered = sorted(function.name for function in self.lowered.task.final_tools)
             return json.dumps({"error": f"{error.args[0]} is not a final tool of the task; calls may name {offered}"})
@@ -486,7 +485,7 @@ def submission_turns(run: AgentRun) -> dict[int, int]:
 def _empty(task: TaskSpec) -> RolloutData:
     return RolloutData(
         task.id,
-        tuple(conversation_messages(task.context)),
+        tuple(conversation_messages(task.context.events)),
         (),
         (),
         (),
@@ -504,7 +503,6 @@ class _Attempt:
 
 async def _agent_attempt(
     lowered: LoweredTaskSpec,
-    convention: SubmissionConvention,
     policy: AdversaryPolicy,
     settings: EngineSettings,
     client: GlmClient,
@@ -519,7 +517,7 @@ async def _agent_attempt(
     after the loop finished is counted under ``CLEANUP_ERROR_COUNT`` rather than failing the attempt.
     """
     task = lowered.task
-    task_messages = session_start(task, convention).messages
+    task_messages = session_start(task).messages
     runtime = lowered.runtime.task_machine
     deadline = asyncio.timeout(lowered.session.attempt_timeout)
     run: AgentRun | None = None
@@ -543,14 +541,13 @@ async def _agent_attempt(
                     raise RolloutInterrupted(_empty(task), RolloutOperation.START) from error
             verifier = Verifier(
                 lowered,
-                convention,
                 task_messages,
-                settings.engine(no_model, convention),
+                settings.engine(no_model),
                 machine,
                 policy.adversary_submissions,
                 submissions,
             )
-            parameters = submit_parameters(machine is not None, isinstance(convention, FinalAction))
+            parameters = submit_parameters(machine is not None, isinstance(task.answer_format, FinalAction))
             submit = AgentTool(SUBMIT_TOOL_NAME, SUBMIT_DESCRIPTION, parameters, verifier.submit)
             tools = (submit,)
             if machine is not None:
@@ -566,7 +563,7 @@ async def _agent_attempt(
             finished = True
     except Exception as error:
         if not finished or deadline.expired():
-            cause = Cause.ATTEMPT_TIMEOUT if deadline.expired() else classify(error)
+            cause = Cause.ATTEMPT_TIMEOUT if deadline.expired() else classify(error, task)
             return _Attempt(Ungraded(cause, "".join(traceback.format_exception(error)), None), None)
         cleanup_errors = 1
     if run is not None:
@@ -585,15 +582,8 @@ def _claim_attributes(outcome: Outcome, submissions: Sequence[Submission]) -> di
     }
 
 
-def _refuse(
-    lowered: LoweredTaskSpec,
-    convention: SubmissionConvention | None,
-    plan: TrialPlan,
-    trial: str,
-    system: str,
-    outcome: Ungraded,
-) -> AdversaryTrial:
-    with attempt_span(lowered, convention, plan, trial, plan.first_attempt) as fields:
+def _refuse(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, system: str, outcome: Ungraded) -> AdversaryTrial:
+    with attempt_span(lowered, plan, trial, plan.first_attempt) as fields:
         record_attempt(fields, outcome, plan, trial, plan.first_attempt, adversary_attempt_json(outcome, (), system))
         fields.attrs.update(_claim_attributes(outcome, ()))
     return AdversaryTrial(outcome, system, ())
@@ -611,32 +601,30 @@ async def run_adversary_trial(
 ) -> AdversaryTrial:
     """One adversary trial: attempts until graded or the retries are spent, each attempt one agent loop.
 
-    Mirrors ``trials.run_trial`` with the agent loop as the attempt body: a task the draft's convention or no
-    factory can carry is one refused attempt; attempts are numbered from ``plan.first_attempt``; ``RETRYABLE``
-    causes are retried ``plan.max_retries`` times with ``plan.retry_backoff``. There is no token contract to
-    retry. Each attempt is one ``TRIAL`` ledger span (step ``adversary/<trial>/<attempt>``) and one attempt file,
-    with a fresh submission budget.
+    Mirrors ``trials.run_trial`` with the agent loop as the attempt body: a task whose answer format cannot
+    carry its answer, or that no factory can run, is one refused attempt; attempts are numbered from
+    ``plan.first_attempt``; ``RETRYABLE`` causes are retried ``plan.max_retries`` times with
+    ``plan.retry_backoff``. There is no token contract to retry. Each attempt is one ``TRIAL`` ledger span
+    (step ``adversary/<trial>/<attempt>``) and one attempt file, with a fresh submission budget.
     """
     lowered = settings.apply(plan.deadlines.apply(draft.lowered))
     task = lowered.task
-    try:
-        convention = task_convention(task, (draft.convention,))
-    except ConventionUnavailable as error:
-        outcome = Ungraded(Cause.SUBMISSION_UNSUPPORTED, str(error), None)
-        return _refuse(lowered, None, plan, trial, brief, outcome)
-    opening = with_preamble(brief, session_start(task, convention).messages)
+    unsupported = submission_refusal(task)
+    if unsupported is not None:
+        return _refuse(lowered, plan, trial, brief, Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None))
+    opening = with_preamble(brief, session_start(task).messages)
     system = str(opening[0]["content"])
     refusals = task_refusals(lowered, settings.capabilities)
     if refusals:
         outcome = Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None)
-        return _refuse(lowered, convention, plan, trial, system, outcome)
+        return _refuse(lowered, plan, trial, system, outcome)
     backoff = copy.copy(plan.retry_backoff)
     retries = 0
     attempt = plan.first_attempt
     while True:
         submissions: list[Submission] = []
-        with attempt_span(lowered, convention, plan, trial, attempt) as fields:
-            result = await _agent_attempt(lowered, convention, policy, settings, client, record, opening, submissions)
+        with attempt_span(lowered, plan, trial, attempt) as fields:
+            result = await _agent_attempt(lowered, policy, settings, client, record, opening, submissions)
             outcome = result.outcome
             payload = adversary_attempt_json(outcome, submissions, system)
             record_attempt(fields, outcome, plan, trial, attempt, payload)
@@ -672,7 +660,6 @@ async def run_adversaries(
     ``site.call_ledger(ADVERSARY, <role>/<index>)``.
     """
     brief = adversary_brief(policy.adversary_submissions, context)
-    settings = draft_settings(draft, settings)
     files = trial_files(site.evidence_dir, TrialKind.ADVERSARY)
 
     async def trial(name: str) -> AdversaryTrial:

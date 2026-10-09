@@ -129,7 +129,7 @@ modules, each of which keeps its types beside the code that checks their invaria
   under a `ValidationPolicy` (every field required) at a `ValidationSite(item_id, round,
   evidence_dir, ledger)`. `replay_controls` runs first; only when `controls_passed`, `run_solver`
   (`k` trials) and `run_adversaries` (`adversary_k` trials per `AdversaryRole`) run concurrently.
-  Every trial runs under the draft's own convention. The evidence directory holds
+  Every trial presents the task in its own answer format (`TaskSpec.answer_format`). The evidence directory holds
   `control/<id>/`, `solver/<index>/` and `adversary/<role>/<index>/` attempt files;
   `load_validation(draft, evidence_dir)` reads a round back as `ValidationEvidence`. `run_solver`
   takes a `solver.ModelFactory` (`Callable[[CallLedger], RolloutModel]`, for GLM
@@ -140,7 +140,7 @@ modules, each of which keeps its types beside the code that checks their invaria
   tool and a `submit` tool that grades a candidate (an answer plus listed workspace files) through
   `ShellboxRolloutEngine.grade_state` on a fresh machine and returns the grade;
   `ValidationPolicy.adversary_submissions` bounds the verifier calls per attempt. The candidate's
-  final turn is rendered as the draft's convention submits an answer (`submission_turn`): assistant
+  final turn is rendered as the task's answer format submits an answer (`submission_turn`): assistant
   text, an `AnswerCall` answer call, or under `FinalAction` the function calls `submit` lists
   (`calls`), each a final tool of the task. The brief
   (`adversary_brief(submissions, context)`) is the system turn, persisted as `adversary.system` in
@@ -252,8 +252,8 @@ outcomes. A trial is settled when its last attempt is graded or ungraded for a c
 `RERUNNABLE` (`RETRYABLE` plus `TOKEN_CONTRACT`). A re-entered round loads settled trials and
 re-runs the others with `TrialPlan.first_attempt` set to the attempt count on disk, so a crash at
 hundreds-wide repeats no settled rollout and no attempt file is overwritten. The evidence
-directory is keyed by `task_digest(lowered, convention)`, so evidence is never read
-against a different draft.
+directory is keyed by `task_digest(lowered)`, the digest of the lowered task with its answer
+format, so evidence is never read against a different draft.
 
 Controls run before any sampled trial: a violated control means the grader is wrong, and rollouts
 against it would measure the wrong grader. An adversary trial is an agent loop that red-teams the
@@ -279,7 +279,7 @@ repair, one found later is a note, a pass without a verdict is a note, a claimed
 the honest answer is a failed audit, and honest probes reported as `NO_SHORTCUT` are no defect. A
 repair ships the accepted candidate as a negative control with concern `shortcut`
 (`reward_max = REJECTION_CEILING`) that the revised program must ship, so the next round's control
-replay proves the fix. A many-answer grader (`shell`, `judge`, script graders) that accepts text no
+replay proves the fix. A many-answer grader (a script grader or a verifyit judge mode) that accepts text no
 honest run produced is a note when the adversary reports no shortcut, because such graders accept
 many outputs by design. Grader diagnostics are kept in the record and withheld from the model,
 because a grader may print the expected value. Adversary rollouts are evidence, never training

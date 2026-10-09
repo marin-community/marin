@@ -11,8 +11,8 @@ rollouts against a wrong grader are evidence about the wrong grader.
 There is no evidence file besides the attempt files: ``load_validation`` reconstructs a round's
 ``ValidationEvidence`` from ``<evidence_dir>/{control,solver,adversary}/``, so review runs offline
 and a decision can be re-derived from the item directory alone. A round's evidence directory is
-keyed by ``trials.task_digest(draft.lowered, draft.convention)``, so evidence can never be read
-against a different task, lowering or convention.
+keyed by ``trials.task_digest(draft.lowered)``, so evidence can never be read against a different
+task, lowering or answer format.
 """
 
 import asyncio
@@ -39,7 +39,7 @@ from taskforge.validate.controls import (
 )
 from taskforge.validate.evidence import Evidence
 from taskforge.validate.outcome import Outcome, TrialKind
-from taskforge.validate.solver import ValidationSite, draft_settings
+from taskforge.validate.solver import ValidationSite
 from taskforge.validate.submissions import NO_SHORTCUT_LINE, SHORTCUT_PREFIX, AdversaryTrial
 from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, run_trial, task_digest
 
@@ -158,7 +158,6 @@ async def replay_controls(
     task = draft.task
     check_replayable(task, draft.controls, settings.max_turns)
     context_turns = context_assistant_turns(task)
-    settings = draft_settings(draft, settings)
     files = trial_files(site.evidence_dir, TrialKind.CONTROL)
     unsettled = [c.id for c in draft.controls if c.id in files and not files[c.id].settled]
     plan = site.control_plan(policy, {cid: files[cid].attempts for cid in unsettled})
@@ -201,7 +200,7 @@ def load_validation(draft: TaskDraft, evidence_dir: Path) -> ValidationEvidence:
         assert files.last_path is not None
         adversaries.setdefault(AdversaryRole(role), {})[int(index)] = load_adversary_attempt(files.last_path)
     return ValidationEvidence(
-        task_digest=task_digest(draft.lowered, draft.convention),
+        task_digest=task_digest(draft.lowered),
         controls=tuple(control_outcome(c, _last(controls[c.id].last)) for c in draft.controls),
         solver=_by_index("solver", solver, evidence_dir),
         adversaries={

@@ -5,10 +5,10 @@
 
 An adversary trial is an agent loop with a ``submit`` tool (``validate.adversary``). Every call that
 reached the verifier is one ``Submission``: the ``Candidate`` it graded (the final assistant turn, rendered as
-the task's submission convention submits an answer, and the files captured from the adversary's workspace), the
-full ``GradeResult`` and whether it passed. The trial's
-final text reply ends on a verdict line that ``parse_claim`` reads into a ``Claim``. ``attempts``
-persists both beside the attempt's outcome; ``calibration`` tiers a trial from them.
+the task's answer format submits an answer, and the files captured from the adversary's workspace), the full
+``GradeResult`` and whether it passed. The trial's final text reply ends on a verdict line that ``parse_claim``
+reads into a ``Claim``. ``attempts`` persists both beside the attempt's outcome; ``calibration`` tiers a trial
+from them.
 """
 
 import json
@@ -21,8 +21,7 @@ from typing import Any
 from pydantic import TypeAdapter
 from rolloutengine.contracts import LENGTH_STOP_REASON, RolloutData
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import AssistantToolCalls, TaskResource, TextMessage
-from taskcompendium.submission import ANSWER_CALL_NAME, ANSWER_FIELD
+from taskcompendium.models import ANSWER_CALL_NAME, ANSWER_FIELD, AssistantToolCalls, TaskResource, TextMessage
 
 from taskforge.validate.controls import wire_message
 from taskforge.validate.outcome import GRADED_STATUSES, Outcome
@@ -37,7 +36,7 @@ class Candidate:
     workspace."""
 
     turn: TextMessage | AssistantToolCalls
-    """The submission as the task's convention carries it: a text reply, an ``ANSWER_CALL_NAME`` call, or a final
+    """The submission as the task's answer format carries it: a text reply, an ``ANSWER_CALL_NAME`` call, or a final
     action's function calls."""
     files: tuple[TaskResource, ...]
     """Relative to the machine root and sorted by path; ``()`` on a task without a machine or when none were

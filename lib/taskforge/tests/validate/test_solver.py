@@ -1,35 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""run_solver: k trials under the draft's convention, resumed per trial from the attempt files."""
+"""run_solver: k trials of the draft, resumed per trial from the attempt files."""
 
 from dataclasses import dataclass
 
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from shellbox.machine import Backend
-from taskcompendium.submission import JsonAnswer, PlainText
 
 from taskforge.ledger.jsonl import read_entries
 from taskforge.llm.client import GlmUnavailable
-from taskforge.sandbox.factories import SHELLSIM
+from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.validate.outcome import Cause, Graded, Ungraded
 from taskforge.validate.solver import run_solver
 from taskforge.validate.trials import EngineSettings
+from tests.sandbox.fixture_images import FixtureImageFactory
 
-PLAIN = PlainText(id="plain")
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
+DOCKER_BACKEND = Backend.DOCKER.value
 
 
-def settings(factory, conventions=(PLAIN,)) -> EngineSettings:
+def settings(factory) -> EngineSettings:
     return EngineSettings(
-        factories={SHELLSIM_BACKEND: factory},
-        capabilities={SHELLSIM_BACKEND: SHELLSIM},
+        factories={SHELLSIM_BACKEND: factory, DOCKER_BACKEND: FixtureImageFactory()},
+        capabilities={SHELLSIM_BACKEND: SHELLSIM, DOCKER_BACKEND: LOCAL_DOCKER},
         max_turns=4,
         command_timeout=10,
         tool_turn_timeout=20,
         model_turn_timeout=30,
         cleanup_timeout=10,
-        conventions=conventions,
     )
 
 
@@ -49,7 +48,7 @@ class UnavailableFirst:
 
 
 async def test_a_re_entered_solver_runs_only_the_unsettled_trials(tmp_path, math_task, rounds, fakes):
-    draft = rounds.draft(math_task, (), PLAIN)
+    draft = rounds.draft(math_task, ())
     policy = rounds.policy(k=3)
     site = rounds.site(tmp_path)
     flaky = UnavailableFirst(fakes.script_model([fakes.text("395")]), failures=1)
@@ -72,15 +71,3 @@ async def test_a_re_entered_solver_runs_only_the_unsettled_trials(tmp_path, math
     ]
     steps = [e.step for e in read_entries(tmp_path / "ledger" / "item.jsonl")]
     assert sorted(steps) == sorted({*(f"solver/{i}/0" for i in range(3)), f"solver/{failed}/1"})
-
-
-async def test_solver_trials_run_under_the_drafts_convention(tmp_path, math_task, rounds, fakes):
-    # The run-wide settings list JSON first; the draft was built for plain text, so a plain reply is correct.
-    draft = rounds.draft(math_task, (), PLAIN)
-    run_wide = settings(fakes.flaky_factory(0, RuntimeError), conventions=(JsonAnswer(id="json"), PLAIN))
-
-    outcomes = await run_solver(
-        draft, rounds.policy(k=2), rounds.site(tmp_path), run_wide, lambda _: fakes.script_model([fakes.text("395")])
-    )
-
-    assert [o.reward for o in outcomes if isinstance(o, Graded)] == [1.0, 1.0]

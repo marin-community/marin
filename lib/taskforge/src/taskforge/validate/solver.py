@@ -6,15 +6,15 @@
 The solver is the run's rollout model (``llm.rollout_model.GlmRolloutModel``) under the
 validation policy's sampling, built per trial by a ``ModelFactory`` so its calls are recorded
 under the trial's ledger step. Every trial goes through ``trials.run_trial`` with the draft's
-lowered task, under ``EngineSettings`` whose conventions are pinned to the draft's own
-convention, so a draft is validated with the presentation its controls were authored for. A trial
-already settled on disk is loaded rather than run again; an unsettled one re-enters with its
-attempt numbers continuing after the files on disk (``attempts.TrialFiles``).
+lowered task, presented in the task's own answer format (``TaskSpec.answer_format``), the one its
+controls were authored for. A trial already settled on disk is loaded rather than run again; an
+unsettled one re-enters with its attempt numbers continuing after the files on disk
+(``attempts.TrialFiles``).
 """
 
 import asyncio
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -93,11 +93,6 @@ class ValidationSite:
         )
 
 
-def draft_settings(draft: TaskDraft, settings: EngineSettings) -> EngineSettings:
-    """``settings`` with the draft's own convention as the only one, as every validation trial runs."""
-    return replace(settings, conventions=(draft.convention,))
-
-
 async def resume_trials(
     draft: TaskDraft,
     policy: TrialPolicy,
@@ -112,7 +107,6 @@ async def resume_trials(
     A trial settled under ``site.evidence_dir/<kind>`` is loaded, not run. An unsettled one runs with
     ``first_attempt`` set to the number of its attempt files, so no file is overwritten.
     """
-    settings = draft_settings(draft, settings)
     files = trial_files(site.evidence_dir, kind)
 
     async def trial(name: str, model: RolloutModel) -> Outcome:

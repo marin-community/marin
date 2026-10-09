@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pydantic
 import pytest
-from taskcompendium.submission import PlainText
 
 from taskforge.builder.run import TaskDraft
 from taskforge.validate.adversary import AdversaryRole, adversary_brief
@@ -41,7 +40,6 @@ from taskforge.validate.submissions import passing
 from taskforge.validate.trials import task_digest
 
 ROUND_EVIDENCE = "evidence-776baa368c39"
-PLAIN = PlainText(id="plain")
 NUMBERS = "/workspace/numbers.txt"
 LIVE_SUBMISSIONS = 10
 
@@ -95,12 +93,12 @@ def old_round_dirs(evidence_dir: Path) -> dict[str, Path]:
 
 @pytest.fixture
 def file_draft(file_task, file_controls, rounds) -> TaskDraft:
-    return rounds.draft(file_task, file_controls, PLAIN)
+    return rounds.draft(file_task, file_controls)
 
 
 @pytest.fixture
 def submission_round_dirs(evidence_dir: Path, file_draft: TaskDraft) -> list[Path]:
-    digest = task_digest(file_draft.lowered, file_draft.convention)
+    digest = task_digest(file_draft.lowered)
     dirs = sorted(evidence_dir.glob(f"g_adversary_round-*/evidence-{digest[:12]}"))
     if not dirs:
         pytest.skip("no adversary round of the file task as lowered today on this machine")

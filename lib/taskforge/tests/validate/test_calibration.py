@@ -5,7 +5,7 @@
 their verifier submissions into repairs (with the accepted candidate as a control), notes and no defect.
 
 Adversary trials run for real against ``fake_glm`` (scripted agent turns) on ShellSim with the task's grader, a
-script that runs on the host."""
+Python program that runs in a verifier machine on the ShellSim-backed fixture image factory."""
 
 from collections import Counter
 from dataclasses import replace
@@ -15,14 +15,20 @@ from rigging.timing import ExponentialBackoff
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome as GradeStatus
-from taskcompendium.models import AnswerType, AssistantToolCalls, ConversationToolCall
-from taskcompendium.submission import ANSWER_CALL_NAME, ANSWER_FIELD, PlainText
+from taskcompendium.models import (
+    ANSWER_CALL_NAME,
+    ANSWER_FIELD,
+    AnswerType,
+    AssistantToolCalls,
+    ConversationToolCall,
+    PlainText,
+)
 
 from taskforge.builder.step import StepRole
 from taskforge.ledger.jsonl import JsonlLedger
-from taskforge.sandbox.factories import SHELLSIM
+from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.spec.controls import REJECTION_CEILING, ControlKind, Transcript, reply
-from taskforge.spec.draft import assemble, script_verifier
+from taskforge.spec.draft import ANSWER_PATH, assemble, grader_environment, python_grader
 from taskforge.validate.adversary import AdversaryRole, ClaimKind, run_adversaries
 from taskforge.validate.calibration import (
     DECISIVE,
@@ -47,15 +53,16 @@ from taskforge.validate.outcome import Cause, Outcome, TrialKind, Ungraded
 from taskforge.validate.run import ValidationEvidence
 from taskforge.validate.submissions import AdversaryTrial
 from taskforge.validate.trials import Deadlines, EngineSettings, TrialPlan, run_trial
+from tests.sandbox.fixture_images import FixtureImageFactory
 
 DIGEST = "ab" * 32
 UNAVAILABLE = Ungraded(Cause.MODEL_UNAVAILABLE, "router drained", None)
 SETUP_FAILED = Ungraded(Cause.TASK_SETUP, "setup command exited 3", None)
-PLAIN = PlainText(id="plain")
 SHORTCUT = AdversaryRole.SHORTCUT
 NUMBERS = "/workspace/numbers.txt"
 SUM = "/workspace/sum.txt"
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
+DOCKER_BACKEND = Backend.DOCKER.value
 
 
 RECOMPUTES = f"captured({SUM!r}).strip() == str(sum(int(n) for n in captured({NUMBERS!r}).split()))"
@@ -74,7 +81,14 @@ def lenient_text_task(math_task, relower, verdict_grader) -> LoweredTaskSpec:
             "validate-lenient-text",
             task.context.events[-1].content,
             AnswerType.NUMBER,
-            script_verifier(verdict_grader("'395' in answer"), {}, timeout=30),
+            PlainText(),
+            python_grader(
+                verdict_grader("'395' in answer"),
+                {},
+                environment=grader_environment(None),
+                answer_path=ANSWER_PATH,
+                timeout=30,
+            ),
             task.source,
             environment=None,
         )
@@ -103,14 +117,13 @@ def trial(tmp_path, fakes):
             first_attempt=0,
         )
         settings = EngineSettings(
-            factories={SHELLSIM_BACKEND: fakes.flaky_factory(0, RuntimeError)},
-            capabilities={SHELLSIM_BACKEND: SHELLSIM},
+            factories={SHELLSIM_BACKEND: fakes.flaky_factory(0, RuntimeError), DOCKER_BACKEND: FixtureImageFactory()},
+            capabilities={SHELLSIM_BACKEND: SHELLSIM, DOCKER_BACKEND: LOCAL_DOCKER},
             max_turns=max_turns,
             command_timeout=10,
             tool_turn_timeout=20,
             model_turn_timeout=30,
             cleanup_timeout=10,
-            conventions=(PlainText(id="plain"),),
         )
         messages = [*(fakes.shell(command) for command in turns), *(() if reply is None else (fakes.text(reply),))]
         return await run_trial(task, plan, settings, fakes.script_model(messages), str(count))
@@ -128,18 +141,17 @@ def adversary(tmp_path, rounds, fakes, fake_glm, glm_client, turns):
         count += 1
         turns(fake_glm, *script)
         settings = EngineSettings(
-            factories={SHELLSIM_BACKEND: fakes.flaky_factory(0, RuntimeError)},
-            capabilities={SHELLSIM_BACKEND: SHELLSIM},
+            factories={SHELLSIM_BACKEND: fakes.flaky_factory(0, RuntimeError), DOCKER_BACKEND: FixtureImageFactory()},
+            capabilities={SHELLSIM_BACKEND: SHELLSIM, DOCKER_BACKEND: LOCAL_DOCKER},
             max_turns=8,
             command_timeout=10,
             tool_turn_timeout=20,
             model_turn_timeout=30,
             cleanup_timeout=10,
-            conventions=(PLAIN,),
         )
         site = rounds.site(tmp_path / f"adversary-{count}")
         trials = await run_adversaries(
-            rounds.draft(task, (), PLAIN), rounds.policy(adversary_k=1), site, settings, glm_client, ""
+            rounds.draft(task, ()), rounds.policy(adversary_k=1), site, settings, glm_client, ""
         )
         return trials[SHORTCUT][0]
 
@@ -299,7 +311,7 @@ def test_task_facts_name_inputs_grader_files_and_uniqueness(file_task, math_task
     assert task_facts(math_task.task) == math_facts and math_facts.unique_answer
 
 
-FILE_FACTS = TaskFacts(True, False, (NUMBERS,), (NUMBERS, "/tests/grader.py"))
+FILE_FACTS = TaskFacts(True, False, (NUMBERS,), (NUMBERS, "/tests/grade.py"))
 TEXT_FACTS = TaskFacts(False, False, (), ())
 UNIQUE_TEXT_FACTS = TaskFacts(False, True, (), ())
 TEXT_INPUT_FACTS = TaskFacts(False, False, ("/data/q.txt",), ("/data/q.txt",))
