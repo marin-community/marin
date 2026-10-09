@@ -23,6 +23,7 @@ from finestore.schema import arrow_schema
 from harbor_config.models.task.config import TaskConfig
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.script_grader import GRADE_ARGV
+from taskcompendium.convert.tasktrove import TEST_SH
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -79,7 +80,7 @@ VERIFIER_SPEC_PATH = "tests/taskcompendium-verifier.toml"
 HARBOR_REWARD_PATH = "/logs/verifier/reward.txt"
 GRADER_STDOUT_PATH = "/logs/verifier/taskcompendium-stdout.txt"
 REPOSITORY_WORKSPACE = "/testbed"
-HARBOR_SCRIPT_ARGV = ("bash", "/tests/test.sh")
+HARBOR_SCRIPT_ARGV = ("bash", f"/{TEST_SH}")
 
 
 def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
@@ -190,7 +191,7 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
         # Harbor reserves tests/verifier.toml for its image-installed verifyit command.
         # Keep the bundled runtime wrapper in control of grading and public-file staging.
         files[VERIFIER_SPEC_PATH] = render_spec(spec).encode()
-        files["tests/test.sh"] = (
+        files[TEST_SH] = (
             "#!/bin/bash\nset -euo pipefail\n"
             "export PYTHONPATH=/tests/runtime\n"
             "exec python3 -c 'from verifyit.grade import main; raise SystemExit(main())' "
@@ -205,7 +206,7 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
             raise UnsupportedHarborTask("Script collection hooks require dedicated Harbor lowering")
         if grader.argv == GRADE_ARGV and isinstance(grader.reward, StdoutReward):
             files.update(verifier_runtime())
-            files["tests/test.sh"] = (
+            files[TEST_SH] = (
                 "#!/bin/bash\nset -euo pipefail\n"
                 f"mkdir -p /logs/verifier\nrm -f {HARBOR_REWARD_PATH}\n"
                 f"{shlex.join(grader.argv)} > {GRADER_STDOUT_PATH}\n"
@@ -239,7 +240,7 @@ def _verifier_program(task: TaskSpec, grader_image: str | None) -> _VerifierProg
         files["tests/taskcompendium-resources.json"] = json.dumps(
             [resource.path for resource in task.resources.verifier]
         ).encode()
-        files["tests/test.sh"] = (
+        files[TEST_SH] = (
             "#!/bin/bash\nset -euo pipefail\nexport PYTHONPATH=/tests/runtime\n"
             f"exec python3 /tests/grade_candidate.py /{VERIFIER_SPEC_PATH} "
             f"{shlex.quote(answer_path)}\n"
@@ -309,15 +310,15 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         files[name] = resource_bytes(resource)
         if resource.mode:
             modes[name] = resource.mode
-    if "tests/test.sh" not in files:
+    if TEST_SH not in files:
         raise UnsupportedHarborTask("Script grader has no test.sh resource")
     if repository_state:
         if "tests/verifier.toml" in files:
             raise UnsupportedHarborTask("Repository verifier spec uses Harbor's reserved entrypoint")
         # Native artifact collection is best-effort. An absent repository must not
         # fall back to a fresh empty build workspace or reach the trusted grader.
-        files["tests/test.sh"] = (
-            f"#!/bin/bash\nset -euo pipefail\ntest -d {REPOSITORY_WORKSPACE}/.git\n".encode() + files["tests/test.sh"]
+        files[TEST_SH] = (
+            f"#!/bin/bash\nset -euo pipefail\ntest -d {REPOSITORY_WORKSPACE}/.git\n".encode() + files[TEST_SH]
         )
     outputs = list(task.output_paths)
     if repository_state:
@@ -337,7 +338,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
             files["tests/public/" + resource.path] = resource_bytes(resource)
             if resource.mode:
                 modes["tests/public/" + resource.path] = resource.mode
-        files["tests/test.sh"] = b"#!/bin/bash\nset -euo pipefail\ncp -a /tests/public/. /\n" + files["tests/test.sh"]
+        files[TEST_SH] = b"#!/bin/bash\nset -euo pipefail\ncp -a /tests/public/. /\n" + files[TEST_SH]
     metadata = {
         "taskcompendium_id": task.id,
         "source_dataset": task.source.dataset,
@@ -384,7 +385,7 @@ def harbor_record(row: dict[str, Any], *, grader_image: str | None, family: str)
         if resource.path.startswith(("solution/", "tests/setup_files/"))
     }
     solution_modes = {resource.path: resource.mode for resource in task.resources.oracle if resource.mode}
-    template = hashlib.sha256(files["tests/test.sh"]).hexdigest()[:12]
+    template = hashlib.sha256(files[TEST_SH]).hexdigest()[:12]
     return HarborRecord(
         path=row["original_path"],
         source=metadata["tasktrove_source"],

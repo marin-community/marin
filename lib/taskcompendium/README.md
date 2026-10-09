@@ -129,10 +129,14 @@ count actor and grader contexts separately, including duplicated bytes.
 QUICK can retain recipes without executing them. A preserved recipe does not
 make mutable base tags or build-time downloads reproducible. Before execution,
 an external resolver must replace the context with a digest-pinned image and
-declare supported backends. Current runtimes and SAMPLE/FULL controls reject
+declare supported backends. Generic execution runtimes and SAMPLE/FULL controls reject
 unresolved contexts before selecting or creating machines. Local and ShellSim
-backends cannot be declared for a Docker build context. Native Harbor build
-import and export remain unsupported.
+backends cannot be declared for a Docker build context.
+
+The [Harbor exporter](../../experiments/post_training/task_curation/harbor.py)
+packages separate actor and verifier build contexts for supported repository
+tasks. Export writes the build inputs without building images or running
+containers. Native Harbor build import remains unsupported.
 
 ## Resource mounts
 
