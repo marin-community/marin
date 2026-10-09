@@ -65,7 +65,7 @@ from taskforge.builder.run import Provenance, TaskDraft
 from taskforge.ledger.finelog import LEDGER_NAMESPACE, CompositeLedger, FlushResult, connect_finelog_ledger
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
 from taskforge.ledger.records import EntryKind, Ledger
-from taskforge.llm.client import AttemptOutcome, FinishReason, GlmClient, GlmEndpoint, Pool, Usage
+from taskforge.llm.client import HEALTH_TIMEOUT, AttemptOutcome, FinishReason, GlmClient, GlmEndpoint, Pool, Usage
 from taskforge.llm.endpoint import API_ROOT
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.loop.program import LEDGER_DIR
@@ -100,7 +100,6 @@ from taskforge.validate.solver import ValidationSite, run_solver
 MATH_ANSWER = "395"
 # Prints names only; `env | cut` would leak fragments of multi-line values into evidence.
 ENV_NAMES_SCRIPT = "awk 'BEGIN{for(k in ENVIRON) print k}' | sort | tr '\\n' ' '"
-HEALTH_TIMEOUT = 20.0
 # The probe task's own session; validation replaces every limit but the verifier timeout and the
 # answer grader runs in process, so none binds.
 PROBE_SESSION = session(
