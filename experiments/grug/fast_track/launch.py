@@ -359,6 +359,7 @@ def build_h100_ladder_run(
     dump_hlo: bool = False,
     resume_from: str | None = None,
     xla_memory_report: bool = False,
+    master_param_mode: MasterParamMode | None = None,
     pgle_runs: int = 0,
     pipeline_depth: int = 0,
     loader_buffer_batches: int = TRAIN_LOADER_BUFFER_SIZE,
@@ -402,9 +403,11 @@ def build_h100_ladder_run(
             raise ValueError("attn_res_remat_attention requires the kma recipe")
         model = dataclasses.replace(model, attn_res_remat_attention=True)
     model = _apply_settings(model, model_settings or {})
+    if master_param_mode is None:
+        master_param_mode = MasterParamMode.FP32_PINNED_HOST if rung.hero_memory else MasterParamMode.DEVICE
     mp_policy = (
         "params=bfloat16,compute=bfloat16,output=bfloat16"
-        if rung.hero_memory
+        if master_param_mode == MasterParamMode.FP32_PINNED_HOST
         else "params=float32,compute=bfloat16,output=bfloat16"
     )
     expert_axis_size = 1 if dense else rung.global_device_count
@@ -467,7 +470,7 @@ def build_h100_ladder_run(
         expert_axis_size=expert_axis_size,
         replica_axis_size=(1),
         offload_opt_state=rung.hero_memory,
-        master_param_mode=MasterParamMode.FP32_PINNED_HOST if rung.hero_memory else MasterParamMode.DEVICE,
+        master_param_mode=master_param_mode,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
         grad_accum_microbatches=grad_accum_microbatches,
@@ -715,6 +718,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Load this checkpoint directory (another run's <output>/checkpoints) first.",
 )
 @click.option(
+    "--master-param-mode",
+    type=click.Choice([m.value for m in MasterParamMode]),
+    default=None,
+    help="Where the fp32 weights live (default: pinned host on hero-memory rungs, device otherwise).",
+)
+@click.option(
     "--xla-memory-report",
     is_flag=True,
     help="Dump XLA's train-step buffer assignment and memory-usage report to <output>/xla_memory/ (also on OOM).",
@@ -842,6 +851,7 @@ def main(
     dump_hlo: bool,
     resume_from: str | None,
     xla_memory_report: bool,
+    master_param_mode: str | None,
     pgle_runs: int,
     pipeline_depth: int,
     loader_buffer_batches: int,
@@ -880,6 +890,7 @@ def main(
         dump_hlo=dump_hlo,
         resume_from=resume_from,
         xla_memory_report=xla_memory_report,
+        master_param_mode=MasterParamMode(master_param_mode) if master_param_mode else None,
         pgle_runs=pgle_runs,
         pipeline_depth=pipeline_depth,
         loader_buffer_batches=loader_buffer_batches,
