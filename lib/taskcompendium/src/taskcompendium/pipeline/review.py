@@ -410,16 +410,6 @@ class ReviewBatchResult:
     attempts: list[ReviewAttempt]
 
 
-def review_evidence(result: ReviewBatchResult) -> dict[str, Any]:
-    """Serialize batch evidence without repeating the combined response stream."""
-    attempts = []
-    for attempt in result.attempts:
-        value = asdict(attempt)
-        del value["requests"]["output"]
-        attempts.append(value)
-    return {"reviews": [review.model_dump(mode="json") for review in result.reviews], "attempts": attempts}
-
-
 class Reviewer(Protocol):
     @property
     def identity(self) -> dict[str, Any]: ...
@@ -586,7 +576,6 @@ class BatchReviewer:
         return batch_output(
             self.client,
             requests,
-            filename="task-curation.jsonl",
             poll_seconds=self.poll_seconds,
             max_batch_bytes=self.max_batch_bytes,
         )

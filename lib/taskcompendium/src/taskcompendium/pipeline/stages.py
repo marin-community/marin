@@ -18,6 +18,7 @@ from typing import Any
 import msgspec
 import pyarrow as pa
 from fray.types import ResourceConfig
+from pydantic import TypeAdapter
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -52,9 +53,9 @@ from taskcompendium.pipeline.review import (
     DEFAULT_REVIEW_RETRY_MAX_TOKENS,
     BatchReviewer,
     ChatReviewer,
+    ReviewBatchResult,
     Reviewer,
     review_batch_id,
-    review_evidence,
     review_tasks,
 )
 from taskcompendium.pipeline.review_requests import DEFAULT_MAX_BATCH_BYTES
@@ -87,6 +88,7 @@ AUDIT_SHARD_TEMPLATE = "audit/part-{shard:05d}.parquet"
 REVIEW_INPUT_PATTERN = "review-inputs/batch-*.jsonl.gz"
 REVIEW_EVIDENCE_TEMPLATE = "evidence/part-{shard:05d}.parquet"
 REVIEW_EVIDENCE_SCHEMA = pa.schema([("batch_id", pa.string()), ("evidence_json", pa.string())])
+REVIEW_BATCH_ADAPTER = TypeAdapter(ReviewBatchResult)
 ACCEPTED_SHARD_TEMPLATE = "accepted/part-{shard:05d}.parquet"
 UNAVAILABLE_REVIEW_STATUSES = frozenset({"invalid", "unavailable"})
 """Review statuses that leave a task without a usable verdict."""
@@ -225,12 +227,16 @@ def _audit_batch(
             )
         row = audit_columns(audit)
         if index == 0:
-            row["review_batch"] = {"batch_id": batch_id, "evidence_json": json.dumps(review_evidence(result))}
+            row["review_batch"] = (batch_id, result)
         yield row
 
 
 def _batch_evidence(row: dict[str, Any]) -> dict[str, Any] | None:
-    return row.get("review_batch")
+    batch = row.get("review_batch")
+    if batch is None:
+        return None
+    batch_id, result = batch
+    return {"batch_id": batch_id, "evidence_json": REVIEW_BATCH_ADAPTER.dump_json(result).decode()}
 
 
 def _audit_row(row: dict[str, Any]) -> dict[str, Any]:

@@ -889,7 +889,6 @@ def test_inference_batches_obey_upload_budgets_and_preserve_responses(request_li
     output = batch_output(
         service,
         requests,
-        filename="review.jsonl",
         poll_seconds=0,
         max_batch_requests=request_limit,
         max_batch_bytes=byte_limit,
@@ -910,7 +909,6 @@ def test_inference_budget_defers_oversized_task_and_continues_other_requests():
     output = batch_output(
         service,
         requests,
-        filename="review.jsonl",
         poll_seconds=0,
         max_batch_bytes=100,
     )
@@ -925,7 +923,6 @@ def test_inference_batch_failure_preserves_successful_parts_and_evidence():
     output = batch_output(
         service,
         requests,
-        filename="review.jsonl",
         poll_seconds=0,
         max_batch_requests=1,
     )
@@ -1061,7 +1058,7 @@ class PartialBatchService(BatchService):
     def output(self, batch):
         result = super().output(batch)
         if batch["id"] == "batch-0":
-            return Output(result.output.splitlines()[0] + "\n")
+            return Output(result.output.splitlines()[-1] + "\n")
         return result
 
 
@@ -1078,11 +1075,14 @@ def test_query_cache_fetches_only_missing_completions_on_repeated_review(tmp_pat
         tasks.append(task)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
     first = reviewer.review(tasks, SVAMP_RUBRIC).reviews
-    assert [record.status for record in first] == [ReviewStatus.REVIEWED, ReviewStatus.UNAVAILABLE]
-    resumed = replace(reviewer).review(tasks, SVAMP_RUBRIC).reviews
-    assert all(record.status == ReviewStatus.REVIEWED for record in resumed)
+    assert [record.status for record in first] == [ReviewStatus.UNAVAILABLE, ReviewStatus.REVIEWED]
+    resumed = replace(reviewer).review(tasks, SVAMP_RUBRIC)
+    assert all(record.status == ReviewStatus.REVIEWED for record in resumed.reviews)
     assert [len(requests) for requests in service.batches.values()] == [2, 1]
-    assert [record.task_id for record in resumed] == ["first", "second"]
+    assert [record.task_id for record in resumed.reviews] == ["first", "second"]
+    query_ids = list(resumed.attempts[0].query_task_ids)
+    assert resumed.attempts[0].requests.cache_hits == (query_ids[1],)
+    assert [request["custom_id"] for request in service.batches["batch-1"]] == [query_ids[0]]
 
 
 SOURCE_CONTRACT_RUBRIC = ReviewRubric(

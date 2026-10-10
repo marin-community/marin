@@ -18,6 +18,7 @@ from taskcompendium.pipeline.models import ReviewStatus
 
 DEFAULT_MAX_BATCH_REQUESTS = 64
 DEFAULT_MAX_BATCH_BYTES = 4 * 1024 * 1024
+BATCH_UPLOAD_FILENAME = "task-curation.jsonl"
 
 
 @dataclass(frozen=True)
@@ -37,11 +38,14 @@ class RequestOutput:
     """Combined completions for parsing, with the observations that produced them."""
 
     requests: tuple[Mapping[str, Any], ...]
-    output: str
     observations: list[RequestObservation]
     cache_keys: dict[str, str] = field(default_factory=dict)
     cache_hits: tuple[str, ...] = ()
     model_revision: str | None = None
+
+    @property
+    def output(self) -> str:
+        return "\n".join(observation.output.rstrip("\n") for observation in self.observations if observation.output)
 
 
 @dataclass(frozen=True)
@@ -195,7 +199,6 @@ def batch_output(
     client: BatchClient,
     requests: Sequence[Mapping[str, Any]],
     *,
-    filename: str,
     poll_seconds: float,
     max_batch_requests: int = DEFAULT_MAX_BATCH_REQUESTS,
     max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
@@ -234,11 +237,10 @@ def batch_output(
     for part in parts:
         started = time.monotonic()
         try:
-            observations.append(_submitted_batch_output(client, part, filename=filename, poll_seconds=poll_seconds))
+            observations.append(_submitted_batch_output(client, part, poll_seconds=poll_seconds))
         finally:
             metrics.update_counter("review/requests/provider_seconds", time.monotonic() - started)
-    output = "\n".join(observation.output.rstrip("\n") for observation in observations if observation.output)
-    return RequestOutput(tuple(requests), output, observations)
+    return RequestOutput(tuple(requests), observations)
 
 
 def _unavailable_output(requests: Sequence[Mapping[str, Any]], code: str, message: str) -> str:
@@ -252,7 +254,6 @@ def _submitted_batch_output(
     client: BatchClient,
     requests: Sequence[Mapping[str, Any]],
     *,
-    filename: str,
     poll_seconds: float,
 ) -> RequestObservation:
     file_id = batch_id = None
@@ -260,7 +261,7 @@ def _submitted_batch_output(
     metrics = counters.current_stage()
     request_ids = tuple(request["custom_id"] for request in requests)
     try:
-        file_id = client.upload(requests, filename)
+        file_id = client.upload(requests, BATCH_UPLOAD_FILENAME)
         submission = client.create(file_id)
         batch_id = submission.batch_id
         file_id = submission.file_id

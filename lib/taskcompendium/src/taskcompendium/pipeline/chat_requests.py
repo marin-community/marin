@@ -97,4 +97,4 @@ def chat_output(
                 metrics.update_counter("review/direct/provider_seconds", result.provider_seconds)
                 metrics.update_counter("review/direct/admission_seconds", result.admission_seconds)
     ordered = [observations[request["custom_id"]] for request in requests]
-    return RequestOutput(tuple(requests), "\n".join(observation.output for observation in ordered), ordered)
+    return RequestOutput(tuple(requests), ordered)

@@ -101,7 +101,7 @@ def test_invalid_cache_entry_does_not_block_inference(tmp_path, corruption):
 
     def submit(selected):
         calls.append(selected)
-        return RequestOutput(tuple(selected), raw, [RequestObservation(("task",), raw)])
+        return RequestOutput(tuple(selected), [RequestObservation(("task",), raw)])
 
     cache_root = str(tmp_path / "cache")
     options = dict(
@@ -185,7 +185,7 @@ def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monk
 
     def submit(selected):
         submitted.extend(selected)
-        return RequestOutput(tuple(selected), raw, [RequestObservation(("task",), raw)])
+        return RequestOutput(tuple(selected), [RequestObservation(("task",), raw)])
 
     result = cached_request_output(
         requests,

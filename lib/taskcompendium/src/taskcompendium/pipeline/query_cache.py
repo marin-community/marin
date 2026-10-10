@@ -59,7 +59,6 @@ def cached_batch_output(
         submit=partial(
             batch_output,
             client,
-            filename="task-curation.jsonl",
             poll_seconds=poll_seconds,
             max_batch_bytes=max_batch_bytes,
         ),
@@ -252,11 +251,9 @@ def cached_request_output(
             submitted, observed = _submitted_completions(misses, submit=submit)
             observations.extend(observed)
             for task_id, output in submitted.items():
-                completed[task_id] = output
                 if valid_completion(output, task_id):
                     identity = _request_identity(misses[task_id], model_revision)
                     _store_completion(cache, keys[task_id], identity, output)
-        output = "\n".join(completed[task_id] for task_id in dict.fromkeys(row["custom_id"] for row in requests))
-        return RequestOutput(tuple(requests), output, observations, keys, hits, model_revision)
+        return RequestOutput(tuple(requests), observations, keys, hits, model_revision)
     finally:
         _close_cache(cache)
