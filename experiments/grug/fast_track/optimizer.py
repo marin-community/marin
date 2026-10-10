@@ -103,7 +103,7 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate)
 # output-gate matrices and the random-init ``kda_dd_rope`` angle projections (w_rot_down/w_rot_up) take the
 # MuonH catch-all, the ShortConv kernels and output-norm scale are ``.weight`` leaves (Adam), and the zero-init
 # angle amplitude ``rot_scale`` is on the generic Adam list.
-_KDA_ATTN_LEAF = re.compile(r"kda_blocks(?:_tail)?\.stacked\.attn\.(\w+)")
+_KDA_ATTN_LEAF = re.compile(r"kda_blocks(?:_tail|_rest)?\.stacked\.attn\.(\w+)")
 # Low-rank forget gate, per-head A_log, per-channel dt_bias and the zero-init push / erase-gate
 # projections (MuonH cannot move a zero matrix): Adam (no weight decay).
 _KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias", "push_decay", "w_push", "w_erase", "beta_scale"})

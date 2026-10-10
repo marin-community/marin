@@ -3994,6 +3994,12 @@ class _LayerScan(NamedTuple):
 def _layer_scan(cfg: GrugModelConfig, schedule: _BlockSchedule) -> _LayerScan:
     """The scanned prefix of ``scan_layers``: the leading run of ``global_every``-layer units whose layers
     match unit 0's mixer kinds and masks and are not tail layers (whose stacks differ in shape)."""
+    unit, num_units = _scan_units(cfg)
+    return _LayerScan(unit, num_units, schedule)
+
+
+def _scan_units(cfg: GrugModelConfig) -> tuple[tuple[_UnitLayer, ...], int]:
+    """``_layer_scan``'s unit and unit count, without the AttnRes schedule."""
     unit_size = cfg.global_every
     kda, tail = set(_kda_layer_indices(cfg)), set(_tail_layers(cfg))
 
@@ -4010,7 +4016,7 @@ def _layer_scan(cfg: GrugModelConfig, schedule: _BlockSchedule) -> _LayerScan:
         _UnitLayer(is_kda, sum(other[0] == is_kda for other in unit0[:j]), use_long)
         for j, (is_kda, use_long, _) in enumerate(unit0)
     )
-    return _LayerScan(unit, num_units, schedule)
+    return unit, num_units
 
 
 def _scan_history_layer(
@@ -4260,6 +4266,10 @@ class Transformer(eqx.Module):
     """Softmax-attention layers of ``latent_out_full_layers``, whose routed experts write the full stream."""
     kda_blocks_tail: ArrayStacked[Block] | None
     """KDA layers of ``latent_out_full_layers``."""
+    stacked_blocks_rest: ArrayStacked[Block] | None
+    """Softmax-attention layers of ``_rest_layers`` (``scan_layers`` only)."""
+    kda_blocks_rest: ArrayStacked[Block] | None
+    """KDA layers of ``_rest_layers`` (``scan_layers`` only)."""
     final_norm: LearnedRMSNorm
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
@@ -4321,6 +4331,7 @@ class Transformer(eqx.Module):
 
         softmax_layers, kda_layers = _stack_layer_indices(cfg)
         softmax_tail, kda_tail = _tail_stack_layer_indices(cfg)
+        softmax_rest, kda_rest = _rest_stack_layer_indices(cfg)
         # The tail layers' config override is static per layer (MoEMLP.cfg); without tail layers there is none
         # (and dense models could not even build one).
         tail_cfg = _tail_layer_config(layer_base) if softmax_tail or kda_tail else layer_base
@@ -4338,6 +4349,8 @@ class Transformer(eqx.Module):
                 stack(softmax_tail, False, _final_layer_config(cfg, tail_cfg)) if softmax_tail else None
             ),
             kda_blocks_tail=stack(kda_tail, True, tail_cfg) if kda_tail else None,
+            stacked_blocks_rest=stack(softmax_rest, False, body_cfg) if softmax_rest else None,
+            kda_blocks_rest=stack(kda_rest, True, body_cfg) if kda_rest else None,
             final_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="final"),
             final_gated_norm=(
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.final_gated_norm else None
@@ -4397,12 +4410,23 @@ class Transformer(eqx.Module):
 
     def layer_stacks(self) -> list[ArrayStacked[Block]]:
         """The block stacks; stack ``k`` holds layers ``stack_layer_indices()[k]``."""
-        stacks = (self.stacked_blocks, self.kda_blocks, self.stacked_blocks_tail, self.kda_blocks_tail)
+        stacks = (
+            self.stacked_blocks,
+            self.kda_blocks,
+            self.stacked_blocks_rest,
+            self.kda_blocks_rest,
+            self.stacked_blocks_tail,
+            self.kda_blocks_tail,
+        )
         return [s for s in stacks if s is not None]
 
     def stack_layer_indices(self) -> list[tuple[int, ...]]:
         """The layer indices held by each of ``layer_stacks()``, in stack order."""
-        groups = (*_stack_layer_indices(self.config), *_tail_stack_layer_indices(self.config))
+        groups = (
+            *_stack_layer_indices(self.config),
+            *_rest_stack_layer_indices(self.config),
+            *_tail_stack_layer_indices(self.config),
+        )
         return [indices for indices in groups if indices]
 
     def layers(self) -> list[Block]:
@@ -5166,11 +5190,29 @@ class HeadReplay:
 jax.tree_util.register_dataclass(HeadReplay, data_fields=["hidden", "labels", "weight", "scale"], meta_fields=[])
 
 
+def _rest_layers(cfg: GrugModelConfig) -> tuple[int, ...]:
+    """Under ``scan_layers``, the non-tail layers past the scanned units. They get their own ``*_blocks_rest``
+    stacks so the main stacks hold exactly the scanned layers: the scan's gradients then reshape into the
+    parameters in place instead of being copied back into a longer stack (~30 GiB per GPU at hero width)."""
+    if not cfg.scan_layers:
+        return ()
+    unit, num_units = _scan_units(cfg)
+    tail = set(_tail_layers(cfg))
+    return tuple(i for i in range(len(unit) * num_units, cfg.num_layers) if i not in tail)
+
+
+def _rest_stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """``(softmax_layers, kda_layers)`` of the ``*_blocks_rest`` stacks (``_rest_layers``)."""
+    kda_layers = set(_kda_layer_indices(cfg))
+    rest = _rest_layers(cfg)
+    return tuple(i for i in rest if i not in kda_layers), tuple(i for i in rest if i in kda_layers)
+
+
 def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[int, ...]]:
     """``(softmax_layers, kda_layers)``: the layer indices of ``Transformer.stacked_blocks`` and ``kda_blocks``
-    (``latent_out_full_layers`` excluded: they live in the tail stacks)."""
+    (``latent_out_full_layers`` and ``_rest_layers`` excluded: they live in the tail and rest stacks)."""
     kda_layers = _kda_layer_indices(cfg)
-    tail = set(_tail_layers(cfg))
+    tail = set(_tail_layers(cfg)) | set(_rest_layers(cfg))
     softmax = tuple(i for i in range(cfg.num_layers) if i not in kda_layers and i not in tail)
     return softmax, tuple(i for i in kda_layers if i not in tail)
 

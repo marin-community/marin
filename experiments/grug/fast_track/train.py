@@ -449,7 +449,14 @@ def _to_dropless_local(
 
 
 def _layer_stacks(model: Transformer):
-    return (model.stacked_blocks, model.kda_blocks, model.stacked_blocks_tail, model.kda_blocks_tail)
+    return (
+        model.stacked_blocks,
+        model.kda_blocks,
+        model.stacked_blocks_rest,
+        model.kda_blocks_rest,
+        model.stacked_blocks_tail,
+        model.kda_blocks_tail,
+    )
 
 
 def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:

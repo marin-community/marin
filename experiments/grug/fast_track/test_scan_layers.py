@@ -22,7 +22,21 @@ def _loss_grads_metrics(**overrides):
 
     with jax.set_mesh(mesh):
         (loss, metrics), grads = eqx.filter_jit(eqx.filter_value_and_grad(loss_fn, has_aux=True))(model, tokens)
-    return float(loss), eqx.filter(grads, eqx.is_inexact_array), metrics
+    return float(loss), _per_layer_leaves(grads), metrics
+
+
+def _per_layer_leaves(grads):
+    """Gradient leaves layer by layer, then the non-layer leaves: independent of how layers are grouped into
+    stacks (``scan_layers`` splits off ``*_blocks_rest``)."""
+    layers = [leaf for layer in grads.layers() for leaf in jax.tree.leaves(eqx.filter(layer, eqx.is_inexact_array))]
+    stack_fields = [f for f in vars(grads) if f.endswith(("blocks", "blocks_tail", "blocks_rest"))]
+    rest = eqx.tree_at(
+        lambda m: [getattr(m, f) for f in stack_fields],
+        grads,
+        replace=[None] * len(stack_fields),
+        is_leaf=lambda x: x is None,
+    )
+    return layers + jax.tree.leaves(eqx.filter(rest, eqx.is_inexact_array))
 
 
 @pytest.mark.parametrize(
@@ -32,6 +46,8 @@ def _loss_grads_metrics(**overrides):
         dict(num_layers=8, attn_res_num_blocks=4),
         # The d512 layout: one scanned unit, then the latent_out_full tail layers unrolled.
         dict(num_layers=6, latent_out_full_layers=(4, 5)),
+        # Two scanned units, then one layer in the rest stack ahead of the tail.
+        dict(num_layers=10, attn_res_num_blocks=3, latent_out_full_layers=(9,)),
         # Three scanned units with an extra AttnRes source and the per-layer AttnRes knobs.
         dict(
             num_layers=14,
