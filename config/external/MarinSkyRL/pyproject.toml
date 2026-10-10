@@ -16,4 +16,4 @@ override-dependencies = ["marin-rigging[secrets]>=0.2.139.dev37117265303"]
 
 [tool.uv.sources]
 # The isolated lock keeps the selected branch revision immutable.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "aaaaf89d3b926308b6340a3921d258d49952470a" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "028c51dbb8d20bbb4be1fbda54a3a6587c0f4adf" }
