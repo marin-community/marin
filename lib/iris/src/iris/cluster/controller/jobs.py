@@ -14,7 +14,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
-from sqlalchemy import bindparam, func, select
+from sqlalchemy import Row, bindparam, func, select
 
 from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
 from iris.cluster.config import user_admitted
@@ -26,7 +26,7 @@ from iris.cluster.constraints import (
     validate_tpu_request,
 )
 from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.auth import ADMIN_ROLE, ControllerAuth, authorize_owner_if_configured
+from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_owner_if_configured
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import BackendCapability, BackendObservation, JobFeasibilityRequest, TaskBackend
 from iris.cluster.controller.budget import budget_user_id
@@ -40,6 +40,7 @@ from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.redaction import redact_request_env_vars
+from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -53,6 +54,7 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
     ADMIN_PRIORITY_BAND_VALUES,
+    CONTAINER_PROFILE_VALUES,
     PRIORITY_BAND_VALUES,
     job_state_friendly,
     priority_band_name,
@@ -314,6 +316,23 @@ def _get_autoscaler_pending_hints(dependencies: JobDependencies) -> dict[str, Pe
     return dependencies.runtime.backend_observation.pending_hints
 
 
+def _task_caller_parent(dependencies: JobDependencies, job_id: JobName) -> Row | None:
+    """The parent's job row when a task of that parent launches ``job_id``, else None.
+
+    A task may give its child the admin-gated band or profile its parent already
+    holds: inheriting it grants nothing the parent's submitter did not. The
+    token's ``job_id`` claim must name the parent, so a task cannot borrow the
+    privileges of another job with the same owner.
+    """
+    identity = get_verified_identity()
+    if identity is None or identity.role != TASK_ROLE or job_id.parent is None:
+        return None
+    if identity.job_id != job_id.parent.to_wire():
+        return None
+    with dependencies.db.read_snapshot() as snapshot:
+        return reads.get_job_detail(snapshot, job_id.parent)
+
+
 def _profile_is_elevated(profile: int) -> bool:
     return resolve_container_profile(profile) in (
         job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
@@ -555,7 +574,9 @@ def _resolve_launch_priority(
     if launch.received_handoff:
         return band
     if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider:
-        authorize(AuthzAction.MANAGE_BUDGETS)
+        parent = _task_caller_parent(dependencies, launch.job_id)
+        if parent is None or priority_band_rank(band) < priority_band_rank(int(parent.priority_band)):
+            authorize(AuthzAction.MANAGE_BUDGETS)
         return band
     with dependencies.db.read_snapshot() as snapshot:
         user_budget = reads.get_user_budget(snapshot, launch.budget_user)
@@ -578,9 +599,19 @@ def _validate_launch_profile(
     launch: LaunchIdentity,
 ) -> None:
     """Authorize elevated profiles and reject unsupported runtime combinations."""
+    # Backends treat an unrecognized profile as DEFAULT, which would silently drop
+    # the isolation a newer client asked for.
+    if resolve_container_profile(request.container_profile) not in CONTAINER_PROFILE_VALUES:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT, f"Unknown container profile {request.container_profile}; upgrade the controller"
+        )
     if _profile_is_elevated(request.container_profile):
         if dependencies.auth.provider and not launch.received_handoff:
-            authorize(AuthzAction.SET_CONTAINER_PROFILE)
+            parent = _task_caller_parent(dependencies, launch.job_id)
+            if parent is None or resolve_container_profile(parent.container_profile) != resolve_container_profile(
+                request.container_profile
+            ):
+                authorize(AuthzAction.SET_CONTAINER_PROFILE)
         logger.info(
             "Job %s using elevated container profile %s",
             launch.job_id.to_wire(),
@@ -596,15 +627,35 @@ def _validate_launch_profile(
             "host docker socket); this cluster's backend does not support it. Use a privileged "
             "profile with an in-pod runtime, or submit to a docker-worker cluster.",
         )
-    if resolve_container_profile(
-        request.container_profile
-    ) == job_pb2.CONTAINER_PROFILE_GVISOR and request.resources.device.WhichOneof("device") in ("gpu", "tpu"):
+    if request.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX) and (
+        request.resources.device.WhichOneof("device") in ("gpu", "tpu")
+    ):
         raise ConnectError(
             Code.INVALID_ARGUMENT,
-            "Container profile gvisor is CPU-only: the runsc runtime cannot pass a GPU or TPU "
+            "gVisor container profiles are CPU-only: the runsc runtime cannot pass a GPU or TPU "
             "through to the sandboxed guest. Use the default or privileged profile for "
             "accelerator tasks.",
         )
+    if request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX and (request.bundle_blob or request.bundle_id):
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            "Container profile sandbox runs a self-contained image and accepts no workspace bundle; "
+            "submit without a workspace.",
+        )
+    _resolve_egress_policy(request)
+    if request.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
+        logger.warning(
+            "Job %s uses deprecated CONTAINER_PROFILE_GVISOR; upgrade the submitter to SANDBOX",
+            launch.job_id.to_wire(),
+        )
+
+
+def _resolve_egress_policy(request: controller_pb2.Controller.LaunchJobRequest) -> None:
+    """Resolve UNSPECIFIED egress in place and reject an unknown policy or a sandbox on the cluster network."""
+    try:
+        request.egress_policy = resolve_egress_policy(request.container_profile, request.egress_policy)
+    except ValueError as e:
+        raise ConnectError(Code.INVALID_ARGUMENT, str(e)) from e
 
 
 def _validate_launch_capacity(

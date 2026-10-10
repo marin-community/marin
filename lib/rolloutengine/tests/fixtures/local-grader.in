@@ -1,0 +1,3 @@
+six==1.17.0
+tomli-w>=1.2
+harbor-config @ https://github.com/marin-community/harbor/archive/6b2e76e1dae5c084eed05edefefffcec8c0c1ad9.tar.gz#subdirectory=packages/harbor-config

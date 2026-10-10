@@ -31,7 +31,7 @@ from marin.inference.openai_batch import CHAT_COMPLETIONS_ENDPOINT
 from marin.inference.structured_output import StructuredTool
 from pydantic import Field, ValidationError
 from rigging.filesystem.storage_path import StoragePath
-from tasktrove_verify.modes.extract import extract_boxed
+from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.curriculum_sft.generation import (
     MANIFEST_FILENAME,

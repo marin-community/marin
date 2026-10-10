@@ -39,10 +39,11 @@ import gc
 import io
 import logging
 import math
+import pickle
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, NamedTuple, Protocol
 
 import cloudpickle
 import humanfriendly
@@ -118,15 +119,17 @@ _SCATTER_MAX_ROW_GROUPS_PER_CHUNK = 512
 # not collide with these names.
 _SHARD_COL = "__zephyr_shard__"
 _SORT_KEY_COL = "__zephyr_sort_key__"
-# A cloudpickle-serialized Python object representing the item
+# A pickled Python object representing the item
 _PAYLOAD_COL = "__payload__"
 # Temporary flat columns folded into the _SORT_KEY_COL struct during
 # _items_to_dataframe; never present in written chunks.
 _KEY_TMP_COL = "__zephyr_key_tmp__"
 _SORT_VALUE_TMP_COL = "__zephyr_sort_value_tmp__"
 
-# Python items consumed before creating a DataFrame.
+# Bound frames by both row count and serialized payload size: a row can itself
+# contain a batch of large records.
 _DATAFRAME_ROW_COUNT = 1000
+_DATAFRAME_PAYLOAD_BYTES = 8 * 1024 * 1024
 # Threshold for triggering a gc.collect() after a flush.
 _GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
 
@@ -143,10 +146,21 @@ def _task_memory_bytes() -> int:
     return memory_bytes
 
 
+def _dumps(item: Any) -> bytes:
+    """Serialize one shuffled item to a stream ``pickle.loads`` can read."""
+    try:
+        return pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)
+    except (pickle.PicklingError, AttributeError, TypeError):
+        # Items the stdlib pickler cannot reference by import path (lambdas,
+        # classes defined inside a function) still need cloudpickle; it writes
+        # the same stream format, several times slower, so it is the fallback.
+        return cloudpickle.dumps(item)
+
+
 def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
     """Yield Python items from a DataFrame, stripping routing columns and deserializing payloads."""
     for p in df[_PAYLOAD_COL].to_list():
-        yield cloudpickle.loads(p)
+        yield pickle.loads(p)
 
 
 def _columns_to_dataframe(
@@ -197,7 +211,7 @@ def _items_to_dataframe(
 ) -> pl.DataFrame:
     """Convert a list of Python items to a DataFrame with routing columns.
 
-    Cloudpickle-serializes items into ``_PAYLOAD_COL`` and adds ``_SHARD_COL``
+    Pickles items into ``_PAYLOAD_COL`` and adds ``_SHARD_COL``
     (int32 target shard index) and ``_SORT_KEY_COL``. This is the adapter
     between Python-item pipelines and the DataFrame-based
     :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
@@ -211,18 +225,28 @@ def _items_to_dataframe(
     key_bytes: list[bytes] = []
     sort_values: list[Any] = []
     for item in items:
-        key = key_fn(item)
-        try:
-            kb = encode_key(key)
-        except TypeError as err:
-            raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
-        # Route from the bytes we just encoded: deterministic_hash(key) would
-        # msgpack-encode the same key a second time for every scattered item.
-        shards.append(hash_encoded_key(kb) % num_output_shards if num_output_shards > 0 else 0)
-        key_bytes.append(kb)
-        sort_values.append(sort_fn(item) if sort_fn is not None else None)
-    payloads = [cloudpickle.dumps(item) for item in items]
+        routing = _item_routing(item, key_fn, sort_fn, num_output_shards)
+        shards.append(routing.shard)
+        key_bytes.append(routing.key_bytes)
+        sort_values.append(routing.sort_value)
+    payloads = [_dumps(item) for item in items]
     return _columns_to_dataframe(payloads, shards, key_bytes, sort_values)
+
+
+class _ItemRouting(NamedTuple):
+    shard: int
+    key_bytes: bytes
+    sort_value: Any
+
+
+def _item_routing(item: Any, key_fn: Callable, sort_fn: Callable | None, num_output_shards: int) -> _ItemRouting:
+    key = key_fn(item)
+    try:
+        key_bytes = encode_key(key)
+    except TypeError as err:
+        raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
+    shard = hash_encoded_key(key_bytes) % num_output_shards if num_output_shards > 0 else 0
+    return _ItemRouting(shard, key_bytes, sort_fn(item) if sort_fn is not None else None)
 
 
 class _SidecarFilesystem(Protocol):
@@ -868,12 +892,26 @@ def _write_scatter(
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
     ) as writer:
-        pending: list[Any] = []
+        payloads: list[bytes] = []
+        shards: list[int] = []
+        key_bytes: list[bytes] = []
+        sort_values: list[Any] = []
+        payload_bytes = 0
         for item in items:
-            pending.append(item)
-            if len(pending) >= _DATAFRAME_ROW_COUNT:
-                writer.write(_items_to_dataframe(pending, key_fn, sort_fn, num_output_shards))
-                pending.clear()
-        if pending:
-            writer.write(_items_to_dataframe(pending, key_fn, sort_fn, num_output_shards))
+            routing = _item_routing(item, key_fn, sort_fn, num_output_shards)
+            payload = _dumps(item)
+            payloads.append(payload)
+            shards.append(routing.shard)
+            key_bytes.append(routing.key_bytes)
+            sort_values.append(routing.sort_value)
+            payload_bytes += len(payload)
+            if len(payloads) >= _DATAFRAME_ROW_COUNT or payload_bytes >= _DATAFRAME_PAYLOAD_BYTES:
+                writer.write(_columns_to_dataframe(payloads, shards, key_bytes, sort_values))
+                payloads.clear()
+                shards.clear()
+                key_bytes.clear()
+                sort_values.clear()
+                payload_bytes = 0
+        if payloads:
+            writer.write(_columns_to_dataframe(payloads, shards, key_bytes, sort_values))
         return writer.close()

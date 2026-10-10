@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { cellsByModel, cohortWarning, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
@@ -27,6 +27,7 @@ import {
   type PanelRow,
 } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
 
@@ -38,7 +39,15 @@ const route = useRoute()
 const showArchived = ref(false)
 const showFlagged = ref(false)
 const completeOnly = ref(false)
-const cohort = ref('')
+const cohort = computed({
+  get: () => {
+    const raw = route.query.cohort
+    return (Array.isArray(raw) ? raw[0] : raw) || meta.value?.default_cohort || ''
+  },
+  set: (value: string) => {
+    void router.replace({ query: { ...route.query, cohort: value || meta.value?.default_cohort } })
+  },
+})
 const modelQuery = ref('')
 const facetValues = reactive<Record<string, string>>({})
 const aggregatePolicy = ref('')
@@ -74,6 +83,16 @@ const query = computed(() => {
 
 const { data, loading, error, refresh } = useApi<Panel>(() => query.value)
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
+// Pin the resolved default so shared URLs retain their cohort after the default changes.
+watch(
+  () => meta.value?.default_cohort,
+  (value) => {
+    if (value && !route.query.cohort) cohort.value = value
+  },
+)
+const comparabilityWarning = computed(() =>
+  meta.value ? cohortWarning(cohort.value || meta.value.default_cohort, meta.value) : null,
+)
 
 onMounted(() => {
   refresh()
@@ -121,14 +140,18 @@ function clearFilters() {
 const selected = ref<string[]>([])
 
 function toggleModel(model: string) {
+  if (cohort.value === 'all') return
   const at = selected.value.indexOf(model)
   if (at >= 0) selected.value.splice(at, 1)
   else if (selected.value.length < MAX_COMPARE) selected.value.push(model)
 }
 function canSelect(model: string): boolean {
-  return selected.value.includes(model) || selected.value.length < MAX_COMPARE
+  return cohort.value !== 'all' && (selected.value.includes(model) || selected.value.length < MAX_COMPARE)
 }
-const comparing = computed(() => selected.value.length >= 2)
+const comparing = computed(() => cohort.value !== 'all' && selected.value.length >= 2)
+watch(selection, () => {
+  selected.value = []
+})
 
 // Benchmarks every selected model has a cell on — what Compare will actually score.
 const sharedTasks = computed<string[]>(() => {
@@ -175,7 +198,7 @@ function persistSelection(present: string[], updateRoute = true) {
   if (!updateRoute) return
   const selected = [...selectedEvals]
   const benchmarks = selected.length > 0 && selected.length !== present.length ? selected.join(',') : undefined
-  void router.replace({ query: { ...route.query, benchmarks } })
+  void router.replace({ query: { ...route.query, cohort: cohort.value, benchmarks } })
 }
 function syncSelection(present: string[]) {
   const fromRoute = routeBenchmarks()
@@ -421,23 +444,28 @@ function goToRun(runId: string) {
   router.push(`/runs/${runId}`)
 }
 function goToModel(model: string) {
-  router.push(`/models/${encodeURIComponent(model)}`)
+  router.push({
+    path: `/models/${encodeURIComponent(model)}`,
+    query: { cohort: cohort.value || data.value?.request.cohort_version },
+  })
 }
 </script>
 
 <template>
   <section>
     <div class="mb-4">
-      <h2 class="text-lg font-semibold">Panel</h2>
+      <h2 class="text-lg font-semibold">Panel{{ comparabilityWarning ? '*' : '' }}</h2>
       <p class="text-xs text-text-muted mt-0.5">
         One row per model, one column per benchmark, each cell the newest valid result. A score is the rate over the
         items a run graded; its 95% interval covers sampling error and widens by whatever share of the attempted items
         the run never graded. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
+      <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
+      <p v-if="cohort === 'all'" class="text-xs text-status-warning mt-2">Choose one cohort to compare models.</p>
     </div>
 
     <!-- Fleet readout -->
-    <div v-if="data" class="flex rounded-lg border border-surface-border bg-surface overflow-hidden mb-5">
+    <div v-if="data && !loading && !error" class="flex rounded-lg border border-surface-border bg-surface overflow-hidden mb-5">
       <div class="px-5 py-3 border-r border-surface-border-subtle">
         <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted">Models</div>
         <div class="font-mono text-2xl font-semibold tabular-nums">{{ readout.models }}</div>
@@ -482,8 +510,11 @@ function goToModel(model: string) {
       <label class="flex flex-col text-xs text-text-secondary gap-1">
         Cohort
         <select v-model="cohort" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[9rem]">
-          <option value="">Newest per benchmark</option>
-          <option v-for="version in meta?.versions ?? []" :key="version" :value="version">{{ version }}</option>
+          <option value="">Default: {{ meta?.default_cohort ?? 'verified cohort' }}</option>
+          <option value="all">Newest per benchmark (all cohorts)*</option>
+          <option v-for="version in meta?.versions ?? []" :key="version" :value="version">
+            {{ version }}{{ meta?.verified_cohorts.includes(version) ? '' : '*' }}
+          </option>
         </select>
       </label>
       <label class="flex flex-col text-xs text-text-secondary gap-1">
@@ -569,11 +600,13 @@ function goToModel(model: string) {
       {{ error }}
     </div>
 
-    <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
+    <PolicyRejections v-if="data && !loading && !error" :rejections="data.policy_rejections" scope="this cohort" class="mb-4" />
+
+    <div v-if="loading" class="text-sm text-text-muted py-12 text-center">Loading…</div>
 
     <EmptyState v-else-if="data && data.rows.length === 0" icon="🏁" message="No models match these filters." />
 
-    <div v-else-if="data" class="space-y-6">
+    <div v-else-if="data && !error" class="space-y-6">
       <!-- Models: the eval rail as each row's measurement profile, plus the opt-in aggregate -->
       <div>
         <div class="flex items-baseline justify-between mb-2">

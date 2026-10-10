@@ -15,6 +15,7 @@ import shellsim
 
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+    Backend,
     Command,
     ExitReason,
     MachineSpec,
@@ -30,6 +31,7 @@ DEFAULT_CPU_LIMIT = 10_000_000_000
 DEFAULT_DISK_LIMIT = 256 * 1024 * 1024
 DEFAULT_OUTPUT_LIMIT = 128 * 1024 * 1024
 DEFAULT_MEMORY_MB = 256
+SIMULATOR_PANIC_EXIT_CODE = 1
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
@@ -44,7 +46,16 @@ class ShellSimShellSession:
     async def execute(
         self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
     ) -> ShellUpdate:
-        result = await self.machine._run_source(command)
+        try:
+            result = await self.machine._run_source(command)
+        except shellsim.SimulationError as error:
+            output = str(error).encode()
+            return ShellUpdate(
+                output[:output_limit_bytes],
+                ShellStatus.COMPLETED,
+                SIMULATOR_PANIC_EXIT_CODE,
+                len(output) > output_limit_bytes,
+            )
         output = result.stdout + result.stderr
         return ShellUpdate(
             output[:output_limit_bytes],
@@ -109,6 +120,8 @@ class ShellSimMachine:
     async def run(self, command: Command) -> Result:
         if not command.argv:
             raise ValueError("Command argv is empty")
+        if command.user not in (None, "0", "root"):
+            raise UnsupportedMachineSpec("ShellSim does not provide separate execution users")
         for name in command.env:
             if ENV_NAME.fullmatch(name) is None:
                 raise ValueError(f"Invalid environment variable name: {name}")
@@ -120,6 +133,17 @@ class ShellSimMachine:
         except TimeoutError:
             self._closed = True
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        except shellsim.SimulationError as error:
+            stderr = str(error).encode()
+            limit = command.output_limit_bytes
+            return Result(
+                SIMULATOR_PANIC_EXIT_CODE,
+                b"",
+                stderr[:limit],
+                False,
+                len(stderr) > limit,
+                ExitReason.EXITED,
+            )
         limit = command.output_limit_bytes
         return Result(
             result.returncode,
@@ -164,6 +188,8 @@ class ShellSimMachine:
 class ShellSimMachineFactory:
     """Start a fresh ShellSim built-in environment for each trial."""
 
+    backend: Backend = Backend.SHELLSIM
+
     def __init__(
         self,
         *,
@@ -176,6 +202,8 @@ class ShellSimMachineFactory:
         self.output = output
 
     async def create(self, spec: MachineSpec) -> ShellSimMachine:
+        if spec.cpus is not None or spec.storage_mb is not None or spec.gpus:
+            raise UnsupportedMachineSpec("ShellSim does not provide machine CPU, storage, or GPU allocations")
         if not isinstance(spec.source, ShellSimBuiltins):
             raise UnsupportedMachineSpec("ShellSim uses only its built-in commands; select ShellSimBuiltins")
         if spec.network is not NetworkPolicy.DENY:

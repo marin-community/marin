@@ -67,6 +67,19 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Configure Docker Hub mirror
+        # Cache hits avoid Hub pull limits; misses fall back to Docker Hub.
+        run: |
+          config=/etc/docker/daemon.json
+          if [[ -f "$config" ]]; then
+            sudo cat "$config" > "$RUNNER_TEMP/docker-daemon.json"
+          else
+            echo '{}' > "$RUNNER_TEMP/docker-daemon.json"
+          fi
+          jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' \
+            "$RUNNER_TEMP/docker-daemon.json" | sudo tee "$config" > /dev/null
+          sudo systemctl restart docker
+
       - name: Test the service
         working-directory: ${{ matrix.test_path }}
         run: uv run pytest

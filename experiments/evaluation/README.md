@@ -63,6 +63,7 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+`--seed` overrides the Evalchemy seed for every selected task in that launch and is stored in its record;
 `--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
 verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
@@ -222,13 +223,19 @@ A dry run checks the YAML shape and the resolved Marin launch plan; task availab
 the Evalchemy process starts. [evalchemy#67](https://github.com/marin-community/evalchemy/issues/67)
 tracks a CLI validation mode that can move task-catalog errors back before Iris submission.
 
+For a `--version eval-policy-...-verified` launch, the launcher selects the Evalchemy and Harbor
+revisions in `RUNTIME_COMMITS` from `lib/marin/src/marin/evaluation/eval_policy.py`. Evalchemy's
+child requirement uses the pinned Evalchemy commit. Harbor preflight and workers use
+`config/external/harbor/pins/<Harbor commit>/uv.lock` with `uv run --frozen`. Launches without a
+verified policy version use the current shared pins in `config/external/`.
+
 `tasks` selects one or more evaluator task names. Use `task_options.<task>` for `num_fewshot`,
 `task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include
 `apply_chat_template`, `limit`, `batch_size`, `seed`, `gen_kwargs`, `extra_model_args`, `max_length`,
 and `max_tokens`. `runtime_extras` names optional Evalchemy dependency groups required by custom task
 packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog when omitted; an
 explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
-launcher `--limit` overrides the file limit. `record.json` stores the resulting task
+launcher `--limit` overrides the file limit while `--seed` overrides the file seed. `record.json` stores the resulting task
 options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
 record provenance stores the exact Evalchemy requirement, including runtime extras. FinanceBench
 also requires a `judge` block with a dedicated endpoint, model, and secret reference. Marin forwards
@@ -295,9 +302,9 @@ resume policy; each benchmark retains its own retry count and exception taxonomy
 expects the generated Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; create that
 tree with Harbor's DS-1000 adapter before launching it.
 
-Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution
-install the exact `marin.external_dependencies.HARBOR` revision in an isolated uv environment. Every
-Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
+The root workspace locks an optional Harbor dependency for TaskCompendium's adapters. Evaluation
+preflight and execution install the exact `marin.external_dependencies.HARBOR` revision in an isolated
+uv environment. Every Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
 Marin runtime task cap in `eval.harbor.task_limit`. A policy's own `n_tasks` remains represented by
 the digest.
 

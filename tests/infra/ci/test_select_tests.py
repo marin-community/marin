@@ -3,11 +3,14 @@
 
 """Tests for the import-driven test selector (infra/ci/select_tests.py)."""
 
+import re
+import subprocess
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
 
 from infra.ci.select_tests import (
     SCOPES,
@@ -16,6 +19,7 @@ from infra.ci.select_tests import (
     SelectionResult,
     classify,
     matrix_leg,
+    select_all_tests,
     select_changed_tests,
     select_local_tests,
 )
@@ -162,15 +166,16 @@ def test_full_marin_suite_includes_experiment_tests(
 
     selection = select_changed_tests(changed_files, tmp_path, run_all_tests=run_all_tests)
 
-    assert leg_paths(selection.matrix, "marin") == ["tests", "experiments"]
+    assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
 
 
 def test_deleted_experiment_source_runs_full_marin_suite(tmp_path: Path) -> None:
     write(tmp_path, "experiments/moe/test_optimizer.py", "from experiments.moe.optimizer import RATE\n")
+    write(tmp_path, "tests/test_root.py", "def test_root():\n    assert True\n")
 
     matrix = select_matrix(["experiments/moe/optimizer.py"], tmp_path)
 
-    assert leg_paths(matrix, "marin") == ["tests", "experiments"]
+    assert leg_paths(matrix, "marin") == ["experiments/moe/test_optimizer.py", "tests/test_root.py"]
 
 
 def test_deleted_experiment_test_is_not_handed_to_pytest(tmp_path: Path) -> None:
@@ -259,14 +264,254 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
-def test_taskcompendium_change_selects_isolated_suite(tmp_path: Path) -> None:
-    selection = select_changed_tests(["lib/taskcompendium/src/taskcompendium/lowering.py"], tmp_path)
+@pytest.mark.parametrize(
+    "changed_path,suites",
+    [
+        ("lib/taskcompendium/src/taskcompendium/lowering.py", ["rolloutengine-unit", "taskcompendium-unit"]),
+        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit"]),
+        ("lib/shellbox/src/shellbox/machine.py", ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit"]),
+        ("lib/shellbox/tests/test_docker_machine.py", ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit"]),
+        ("lib/shellbox/pyproject.toml", ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit"]),
+        (
+            "lib/verifyit/src/verifyit/grading.py",
+            ["rolloutengine-unit", "taskcompendium-unit"],
+        ),
+        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit"]),
+    ],
+)
+def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
+    selection = select_changed_tests([changed_path], tmp_path)
 
     assert selection.matrix == []
-    assert selection.suites == ["taskcompendium-unit"]
+    assert selection.suites == suites
 
     full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
-    assert "taskcompendium-unit" in full_selection.suites
+    assert set(suites) <= set(full_selection.suites)
+
+
+@pytest.mark.parametrize(
+    "shellbox_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
+)
+def test_required_unit_check_propagates_shellbox_result(shellbox_result: str, expected_exit: int) -> None:
+    workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
+    aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]
+    results = dict.fromkeys(aggregate["needs"], "success")
+    if "shellbox" in results:
+        results["shellbox"] = shellbox_result
+    script = re.sub(
+        r"\$\{\{ needs\.(\w+)\.result \}\}",
+        lambda match: results.get(match.group(1), ""),
+        aggregate["steps"][0]["run"],
+    )
+
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+
+    assert result.returncode == expected_exit
+
+
+@pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
+def test_shared_dependency_change_selects_taskcompendium_and_shellbox_suites(tmp_path: Path, changed_file: str) -> None:
+    selection = select_changed_tests([changed_file], tmp_path)
+
+    assert "taskcompendium-unit" in selection.suites
+    assert "shellbox-unit" in selection.suites
+
+
+def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Path) -> None:
+    write(tmp_path, "lib/verifyit/src/verifyit/__init__.py")
+    write(tmp_path, "lib/verifyit/src/verifyit/grade.py", "def grade(): ...\n")
+    write(tmp_path, "lib/verifyit/tests/test_grade.py", "from verifyit.grade import grade\n")
+    write(tmp_path, "tests/test_verifier.py", "from verifyit.grade import grade\n")
+
+    matrix = select_matrix(["lib/verifyit/src/verifyit/grade.py"], tmp_path)
+
+    assert leg_paths(matrix, "verifyit") == ["lib/verifyit/tests/test_grade.py"]
+    assert leg_paths(matrix, "marin") == ["tests/test_verifier.py"]
+    verifier_leg = next(leg for leg in matrix if leg.package == "verifyit")
+    assert verifier_leg.extras == "--extra all"
+
+
+@pytest.mark.parametrize("run_all_tests", [False, True])
+def test_verifier_manifest_and_full_runs_select_entire_library(tmp_path: Path, run_all_tests: bool) -> None:
+    write(tmp_path, "lib/verifyit/tests/test_grade.py", "def test_grade(): ...\n")
+
+    selection = select_changed_tests(
+        [] if run_all_tests else ["lib/verifyit/pyproject.toml"], tmp_path, run_all_tests=run_all_tests
+    )
+
+    assert leg_paths(selection.matrix, "verifyit") == ["lib/verifyit/tests"]
+
+
+def _verifier_members(verifier_source: str) -> str:
+    if verifier_source == "workspace":
+        return '"lib/levanter", "lib/haliax", "lib/verifyit"'
+    return '"lib/levanter", "lib/haliax"'
+
+
+def _tpu_lock(
+    *,
+    jax_version: str = "0.11.1",
+    shared_version: str = "1",
+    leaf_version: str = "1",
+    verifier_source: str = "workspace",
+    tpu_marker: str = "",
+    jax_source: str = 'registry = "https://pypi.org/simple"',
+) -> str:
+    source = (
+        'editable = "lib/verifyit"'
+        if verifier_source == "workspace"
+        else ('git = "https://github.com/marin-community/verifyit?rev=abc123"')
+    )
+    marker = f', marker = "{tpu_marker}"' if tpu_marker else ""
+    return f"""\
+    version = 1
+    requires-python = ">=3.12"
+    [manifest]
+    members = [{_verifier_members(verifier_source)}]
+    [[package]]
+    name = "marin-root"
+    version = "0.1.0"
+    source = {{ editable = "." }}
+    dependencies = [{{ name = "verifyit" }}]
+    [[package]]
+    name = "verifyit"
+    version = "0.1.0"
+    source = {{ {source} }}
+    [[package]]
+    name = "marin-levanter"
+    version = "0.2.0"
+    source = {{ editable = "lib/levanter" }}
+    dependencies = [{{ name = "marin-haliax" }}, {{ name = "shared" }}]
+    [package.optional-dependencies]
+    tpu = [{{ name = "jax", version = "{jax_version}"{marker} }}]
+    [package.dev-dependencies]
+    test = [{{ name = "pytest" }}]
+    [[package]]
+    name = "marin-haliax"
+    source = {{ editable = "lib/haliax" }}
+    dependencies = [{{ name = "shared" }}]
+    [[package]]
+    name = "shared"
+    version = "{shared_version}"
+    source = {{ registry = "https://pypi.org/simple" }}
+    dependencies = [{{ name = "leaf" }}]
+    [[package]]
+    name = "leaf"
+    version = "{leaf_version}"
+    source = {{ registry = "https://pypi.org/simple" }}
+    [[package]]
+    name = "jax"
+    version = "{jax_version}"
+    source = {{ {jax_source} }}
+    [[package]]
+    name = "pytest"
+    version = "8.0.0"
+    source = {{ registry = "https://pypi.org/simple" }}
+    """
+
+
+def _tpu_manifest(verifier_source: str = "workspace") -> str:
+    source = (
+        "{ workspace = true }"
+        if verifier_source == "workspace"
+        else ('{ git = "https://github.com/marin-community/verifyit", rev = "abc123" }')
+    )
+    return f"""\
+    [project]
+    name = "marin-root"
+    requires-python = ">=3.12"
+    dependencies = ["verifyit"]
+    [tool.uv.workspace]
+    members = [{_verifier_members(verifier_source)}]
+    [tool.uv.sources]
+    verifyit = {source}
+    """
+
+
+def _commit_base_tpu_workspace(tmp_path: Path) -> str:
+    write(tmp_path, "uv.lock", _tpu_lock())
+    write(tmp_path, "pyproject.toml", _tpu_manifest())
+    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    write(tmp_path, "lib/levanter/tests/test_torch.py", "@pytest.mark.torch\ndef test_torch():\n    assert True\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "base"],
+        cwd=tmp_path,
+        check=True,
+    )
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+
+def test_verifier_git_source_keeps_cpu_coverage_without_tpu(tmp_path: Path) -> None:
+    base = _commit_base_tpu_workspace(tmp_path)
+    write(tmp_path, "uv.lock", _tpu_lock(verifier_source="git"))
+    write(tmp_path, "pyproject.toml", _tpu_manifest(verifier_source="git"))
+
+    selection = select_changed_tests(["uv.lock", "pyproject.toml"], tmp_path, base_ref=base)
+
+    assert selection.reason == "broad-trigger"
+    assert "marin-levanter" in {leg.package for leg in selection.matrix}
+    assert "levanter-tpu" not in selection.suites
+    assert selection.suite_test_paths["levanter-torch"] == ["lib/levanter/tests/test_torch.py"]
+
+
+@pytest.mark.parametrize(
+    "lock_change",
+    [
+        {"jax_version": "0.11.2"},
+        {"shared_version": "2"},
+        {"leaf_version": "2"},
+        {"tpu_marker": "python_version >= '3.12'"},
+        {"jax_source": 'git = "https://github.com/jax-ml/jax?rev=abc123"'},
+    ],
+)
+def test_reachable_dependency_changes_select_tpu(tmp_path: Path, lock_change: dict[str, str]) -> None:
+    base = _commit_base_tpu_workspace(tmp_path)
+    write(tmp_path, "uv.lock", _tpu_lock(**lock_change))
+
+    selection = select_changed_tests(["uv.lock"], tmp_path, base_ref=base)
+
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_unavailable_or_invalid_dependency_graph_selects_tpu(tmp_path: Path, missing: bool) -> None:
+    base = _commit_base_tpu_workspace(tmp_path)
+    if missing:
+        (tmp_path / "uv.lock").unlink()
+    else:
+        write(tmp_path, "uv.lock", "[[package]\n")
+
+    selection = select_changed_tests(["uv.lock"], tmp_path, base_ref=base)
+
+    assert "levanter-tpu" in selection.suites
+
+
+def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
+    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+
+    selection = select_all_tests(tmp_path)
+
+    assert selection.reason == "run-all-tests"
+    assert "shellbox-unit" in selection.suites
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "lib/levanter/src/levanter/model.py",
+        "lib/haliax/src/haliax/core.py",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ],
+)
+def test_source_and_ci_changes_still_select_tpu(tmp_path: Path, path: str) -> None:
+    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    selection = select_changed_tests([path], tmp_path, run_all_tests=True)
+
+    assert "levanter-tpu" in selection.suites
 
 
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:

@@ -80,7 +80,19 @@ The restart preflight resolves operator-side controller secrets before taking a 
 
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
-If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
+If checkpoint times out, inspect controller logs for completed uploads and
+thread stacks for ongoing SQLite copies before retrying. The RPC
+timeout does not cancel the server-side copy, so retries can leave concurrent
+backups running. SQLite backups pin a read snapshot across page batches to
+avoid restarting under concurrent writes. Without that snapshot, sustained
+writes can prevent the copy from finishing. The read snapshot permits
+writes but delays WAL reclamation until the copy completes.
+
+`iris cluster controller restart --skip-checkpoint` bypasses the pre-restart
+backup. It can lose recent state if startup restores an older checkpoint.
+CoreWeave controllers using node-local storage can move nodes on restart; see
+[controller storage and placement](docs/coreweave.md#controller-state) before
+relying on the local DB.
 
 **Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them, pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
 
@@ -344,6 +356,11 @@ one write transaction with the scheduler instead of racing it. Only tasks
 running on a worker (ASSIGNED / BUILDING / RUNNING) can be changed; pending or
 already-terminal tasks are rejected with a reason. `preempted` charges the
 preemption budget; `failed` is terminal with no retry.
+
+For federated jobs, the parent forwards task and attempt actions to the
+execution peer. The peer validates the current attempt and queues the action;
+a stale parent mirror does not determine which attempt is stopped. A successful
+reply means the action was queued. Check task status to confirm it took effect.
 
 Use `job complete` only when the workload should be recorded as successful. It
 marks the Job and every unfinished Task and Attempt `SUCCEEDED`, then stops
@@ -641,6 +658,34 @@ rebuilt policy resolves them to the non-admin default on their next request (no 
 revoke — the role is resolved per request). The only fleet-wide credential kill switch
 is rotating the cluster signing key (`iris cluster init-keys` + redeploy), which
 re-auths every worker.
+
+### Worker credential renewal
+
+Workers renew their controller JWT through `RenewWorkerToken` one day before
+its 30-day expiry. A background check runs every 30 seconds, including while
+idle. The RPC admits authenticated workers and admins and always issues a
+worker-role credential; expired credentials cannot renew themselves.
+
+Rigging serializes concurrent renewal requests and keeps a still-valid token
+usable during a transient issuer outage, retrying after 30 seconds. Renewed
+credentials are atomically stored with mode `0600` in
+`<worker cache_dir>/credentials/worker.jwt`. Worker and node-agent restarts use
+the cached credential when it expires later than the bootstrap token. The controller
+renews its own provisioning credential before using it for new workers.
+
+If task state advances but logs are absent, inspect worker-local Docker logs.
+`Table(log) ... UNAUTHENTICATED` can come from controller endpoint discovery,
+before any request reaches Finelog. Compare a direct Finelog RPC with
+`ListEndpoints` using the worker credential. Decode only expiry metadata when
+diagnosing; never print the bearer token. A timeout can invalidate a working
+cached endpoint and expose a credential that expired earlier.
+
+A worker whose bootstrap and cached credentials have both expired needs a fresh
+worker credential from an operator. Update `/etc/iris/worker_config.json`, then
+restart the worker and node-agent processes.
+Preserve running task containers and verify their adoption, unchanged attempts,
+and fresh Finelog rows. Restarting shared Finelog does not repair this condition.
+Deploy the controller's renewal RPC before deploying workers that call it.
 
 ### Calling the IAP endpoint with `curl`
 

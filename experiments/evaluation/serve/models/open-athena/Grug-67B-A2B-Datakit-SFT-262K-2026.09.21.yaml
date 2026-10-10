@@ -16,3 +16,6 @@ serve:
   - --enable-expert-parallel
   - --model-loader-extra-config
   - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

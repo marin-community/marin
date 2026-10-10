@@ -76,7 +76,7 @@ uv run --no-project infra/ci/run_tests.py
   cluster tests. Run excluded markers only when the user or a dedicated task
   guide explicitly requests them; otherwise defer them to CI.
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
-- In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
+- Never read or write large amounts of data across GCS regions; GCS storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
 ## Communication & Commits

@@ -4,7 +4,7 @@
 
 This alert watches whether a run is stepping. [`TrainingLossSpike`](training-loss-spike-alert.md) watches what those steps produce, over the same enrollment.
 
-The rule evaluates once a minute and waits five minutes before notification. An eligible root has a current `iris.task_state` row. The row is at most 90 seconds old and reports one or more running tasks. The root name matches `%/hero-%-coord` or `%/hero-%-coord-%`. The namespace before the run name is unrestricted.
+The rule evaluates once a minute and waits five minutes before notification. An eligible root has a current `iris.task_state` row. The row is at most 90 seconds old and reports one or more running tasks. The root name matches `/marin/hero-%-coord` or `/marin/hero-%-coord-%`. The production hero launcher submits with `IRIS_USER=marin`; similarly named jobs under other users do not enroll.
 
 Hero alert enrollment is a launch naming contract. The last root component is `<run-id>-coord` or `<run-id>-coord-<retry>`. The `<run-id>` value begins with `hero-`. The Levanter trainer `id` is the same `<run-id>`. A retry suffix changes the Iris job identity only. It does not change the logical run identity.
 
@@ -21,7 +21,7 @@ The bridge derives `hero-20260819` from the root job, then queries the structure
 
 Initialization and missing-progress grace start at the later of the current contiguous Iris running interval and the selected telemetry execution. A coordinator restart or trainer retry therefore receives a new initialization window. A hard hang retains its training execution anchor for a day, and after ten minutes of silence this rule reports `telemetry_gone` rather than a stall. All states remain instances of `TrainingProgressStalled`, and notification grouping excludes phase and reason, so later reclassification cannot open a second Slack group.
 
-`iris.task_state.root_job_id` names the coordinator root, while `levanter.metrics.job_id` names the descendant trainer. For example, the root `/rav/hero-20260819-coord` owns metrics from `/rav/hero-20260819-coord/grug-train-hero-20260819`. The bridge joins on origin cluster, exact `run_id`, and this descendant relationship. Alert labels use the coordinator root. No task-to-node mapping or GPU-utilization condition is required.
+`iris.task_state.root_job_id` names the coordinator root, while `levanter.metrics.job_id` names the descendant trainer. For example, the root `/marin/hero-20260819-coord` owns metrics from `/marin/hero-20260819-coord/grug-train-hero-20260819`. The bridge joins on origin cluster, exact `run_id`, and this descendant relationship. Alert labels use the coordinator root. No task-to-node mapping or GPU-utilization condition is required.
 
 The required Levanter metric records are `progress_time_seconds` and numeric `phase` (`initializing=0`, `training=1`, `finished=2`). Each row carries `step` as a typed column; there is no separate step record. `TelemetryTracker` initializes phase and progress, records wall time after its completed-step `train/loss` callback, and marks a finished run. The hero launchers already pass their trainer ID into telemetry as `run_id`; W&B retains its separate `hero` tag.
 

@@ -34,7 +34,7 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
-from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.config import NodeHealthConfig, TaskOutputPolicy
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -57,9 +57,11 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
+    EGRESS_LABEL,
     NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
     RDMA_RESOURCE,
@@ -96,10 +98,10 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
+from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
     OUTPUT_MOUNT,
-    STANDARD_MOUNTS,
     TASK_OUTPUT_FINALIZING_STATUS,
     VENV_PATH,
     WORKDIR_MOUNT,
@@ -120,7 +122,8 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind
+from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
+from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
@@ -454,14 +457,17 @@ def _lookup_pod(
 
 
 def _build_volumes_and_mounts(
+    mount_specs: Sequence[MountSpec],
     cache_dir: str,
     shm_limit_bytes: int,
 ) -> tuple[list[dict], list[dict]]:
-    """Build standard pod volumes and container volume mounts.
+    """Build pod volumes and container volume mounts for ``mount_specs`` plus /dev/shm.
 
-    Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
-    they persist across pods on the same node. /dev/shm is memory-backed and
-    shares the task container's memory limit when one is set.
+    ``mount_specs`` comes from the task's ``TaskIsolation.mounts``; for a
+    sandbox task it has no CACHE entries, so no hostPath volume is created.
+    Workdir, outputs and tmpfs use emptyDir; cache mounts use hostPath under
+    cache_dir so they persist across pods on the same node. /dev/shm is
+    memory-backed and shares the task container's memory limit when one is set.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -470,7 +476,7 @@ def _build_volumes_and_mounts(
     """
     volumes: list[dict] = []
     mounts: list[dict] = []
-    for spec in STANDARD_MOUNTS:
+    for spec in mount_specs:
         if spec.kind is MountKind.CACHE:
             volumes.append(
                 {
@@ -828,9 +834,15 @@ def _build_pod_manifest(
     # job needs no special image and iris does not inspect the resource request.
     task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
-    service_account = config.service_account
-    host_network = config.host_network
     managed_label = config.managed_label
+    isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
+    service_account = config.service_account if isolation.include_service_account else ""
+    # Legacy gVisor needs the CNI-created interface and routes for cluster egress.
+    host_network = (
+        config.host_network
+        and isolation.network is TaskNetwork.CLUSTER
+        and run_req.container_profile != job_pb2.CONTAINER_PROFILE_GVISOR
+    )
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -839,13 +851,15 @@ def _build_pod_manifest(
         attempt_uid=run_req.attempt_uid,
         num_tasks=run_req.num_tasks,
         bundle_id=run_req.bundle_id,
-        controller_address=config.controller_address,
+        controller_address=config.controller_address if isolation.include_controller_address else None,
+        task_token=run_req.task_token if isolation.include_task_token else None,
         environment=run_req.environment,
         constraints=run_req.constraints,
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
     )
-    combined = {**config.task_env, **dict(run_req.environment.env_vars), **iris_env}
+    cluster_env = config.task_env if isolation.include_cluster_env else {}
+    combined = {**cluster_env, **dict(run_req.environment.env_vars), **iris_env}
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
     env_list.append(
@@ -907,7 +921,7 @@ def _build_pod_manifest(
     # ResourceSpec.memory defaults to zero, so low-level accelerator requests may omit it.
     if not shm_limit_bytes and has_accelerator:
         shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
-    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, shm_limit_bytes=shm_limit_bytes)
+    volumes, vol_mounts = _build_volumes_and_mounts(isolation.mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
 
     container: dict = {
         "name": "task",
@@ -926,7 +940,7 @@ def _build_pod_manifest(
     }
     # Operator-injected env (defaults.inject_env). envFrom is the lowest
     # precedence in K8s, so explicit env entries above (user -e, iris vars) win.
-    if config.env_secret_name:
+    if config.env_secret_name and isolation.include_cluster_env:
         container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
@@ -947,6 +961,8 @@ def _build_pod_manifest(
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
+    if isolation.network is not TaskNetwork.CLUSTER:
+        labels[EGRESS_LABEL] = isolation.network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1011,20 +1027,26 @@ def _build_pod_manifest(
     # excluded from pod-phase computation, so completion detection (which keys on
     # pod.status.phase) is unaffected. The hostPath volume gives it read-only
     # access to the node's pod log directory.
-    logship = _build_logship_sidecar(
-        iris_env["IRIS_TASK_ID"],
-        config.controller_address,
-        config.logship_image,
-    )
-    volumes.append(
-        {
-            "name": _LOGSHIP_VOLUME_NAME,
-            "hostPath": {"path": _NODE_POD_LOG_DIR, "type": "Directory"},
-        }
-    )
+    #
+    # A sandbox pod gets neither this nor the output uploader. Containers in a
+    # pod share its network, so the task can use any route a sidecar has: a
+    # finelog route exposes every job's logs, and the uploader needs the env
+    # Secret's object-store keys and a route to the object store.
+    sidecars = isolation.network is TaskNetwork.CLUSTER
+    init_containers: list[dict] = []
+    if sidecars:
+        init_containers.append(
+            _build_logship_sidecar(iris_env["IRIS_TASK_ID"], config.controller_address, config.logship_image)
+        )
+        volumes.append(
+            {
+                "name": _LOGSHIP_VOLUME_NAME,
+                "hostPath": {"path": _NODE_POD_LOG_DIR, "type": "Directory"},
+            }
+        )
 
     containers = [container]
-    if config.task_outputs is not None:
+    if config.task_outputs is not None and sidecars:
         volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
         containers.append(
             _build_output_uploader(
@@ -1040,14 +1062,16 @@ def _build_pod_manifest(
     spec: dict = {
         "restartPolicy": "Never",
         "containers": containers,
-        "initContainers": [logship],
+        "initContainers": init_containers,
         "volumes": volumes,
     }
 
     # gVisor isolates the whole pod via a node RuntimeClass; the container
     # securityContext stays at the DEFAULT posture (see _security_context).
-    if resolve_container_profile(run_req.container_profile) == job_pb2.CONTAINER_PROFILE_GVISOR:
+    if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
         spec["runtimeClassName"] = "gvisor"
+    if not isolation.include_service_account:
+        spec["automountServiceAccountToken"] = False
 
     if managed_label:
         node_selector[managed_label] = "true"
@@ -2065,7 +2089,7 @@ class PeriodicProfiler:
         """
         dispatch = _K8sProfileDispatch(self._kubectl, target.pod_name)
         try:
-            data = capture_threads(dispatch, pid="1")
+            data = capture_threads(dispatch, pid="1", nonblocking=True)
         except Exception as e:
             logger.debug("PeriodicProfiler: thread dump failed for pod %s: %s", target.pod_name, e)
             return None
@@ -2220,17 +2244,6 @@ def _proc_int(text: str, default: int = 0) -> int:
         return default
 
 
-def _stat_fields_after_comm(raw: str) -> list[str]:
-    """Fields of ``/proc/PID/stat`` starting at ``state`` (field 3).
-
-    The ``comm`` field (2) is parenthesized and may itself contain spaces or
-    parens, so index from the last ``)`` rather than splitting the whole line.
-    Returned index ``i`` is stat field ``i + 3``.
-    """
-    rclose = raw.rfind(")")
-    return raw[rclose + 2 :].split() if rclose != -1 else []
-
-
 def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
     """Parse ``_POD_PROC_STATUS_SCRIPT`` output into a ``ProcessInfo`` for PID 1.
 
@@ -2266,8 +2279,8 @@ def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
         # utime (field 14) + stime (field 15) => indices 11, 12 after comm.
         return _proc_int(fields[11]) + _proc_int(fields[12]) if len(fields) >= 13 else 0
 
-    stat1 = _stat_fields_after_comm(sections.get("stat1", ""))
-    stat2 = _stat_fields_after_comm(sections.get("stat2", ""))
+    stat1 = stat_fields_after_comm(sections.get("stat1", ""))
+    stat2 = stat_fields_after_comm(sections.get("stat2", ""))
     uptime1, uptime2 = _uptime("uptime1"), _uptime("uptime2")
 
     interval = uptime2 - uptime1
@@ -2342,6 +2355,7 @@ class K8sTaskProvider:
     # but these LISTs run at most once per cluster_scan_interval to bound kubectl
     # load. New-pod application (dispatch) is NOT gated — it runs every tick.
     # Tests set this to 0.0 so every reconcile scans.
+    node_health: NodeHealthConfig | None = None
     cluster_scan_interval: float = 5.0
     _pod_unresolved_counts: dict[RunningTaskEntry, int] = field(default_factory=dict, init=False, repr=False)
     # The disruption condition last seen on an attempt's pod, keyed by the
@@ -2357,10 +2371,10 @@ class K8sTaskProvider:
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
     # Terminal-resource GC runs on its own thread. _gc_lock guards the deferred-cleanup
-    # hash set, the one piece of state it shares with the control loop.
+    # pod-name set, the one piece of state it shares with the control loop.
     _gc_emitter: PeriodicEmitter | None = field(default=None, init=False, repr=False)
     _gc_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
-    _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
+    _pending_gc_pods: set[str] = field(default_factory=set, init=False, repr=False)
     _output_finalization_started: dict[RunningTaskEntry, float] = field(default_factory=dict, init=False, repr=False)
     _released_output_attempts: set[RunningTaskEntry] = field(default_factory=set, init=False, repr=False)
 
@@ -2448,9 +2462,7 @@ class K8sTaskProvider:
         cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node
         refresh) run at most once per ``cluster_scan_interval``, and continue to
         run on an idle cluster (the controller never gates a cluster backend's
-        reconcile on having work) so orphaned pods are reaped. Terminal-resource
-        GC only takes the active-pod snapshot here; its pass runs on its own
-        thread.
+        reconcile on having work) so orphaned pods are reaped.
         """
         apply_failures: list[TaskUpdate] = []
         for run_req in request.tasks_to_run:
@@ -2493,6 +2505,8 @@ class K8sTaskProvider:
         if now - self._last_cluster_scan < self.cluster_scan_interval:
             return apply_failures
         self._last_cluster_scan = now
+        if self.node_health is not None and self.node_health.storage is not None:
+            reconcile_storage_health(self.kubectl, self.node_health.storage, self.node_health.max_cordoned_nodes)
 
         # Single pod list for the entire cycle — excludes terminal pods via field selector.
         managed_pods = self.kubectl.list_json(
@@ -2720,25 +2734,26 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
-        self.kubectl.apply_json(manifest)
         task_id = run_req.task_id
+        if _is_coordinator_task(run_req):
+            # Protect the retry as soon as its pod appears, even if GC removes the old PDB.
+            pdb = _build_pdb_manifest(
+                pod_name,
+                self.pods.namespace,
+                _task_hash(task_id),
+                run_req.priority,
+                managed_label=self.pods.managed_label,
+            )
+            self.kubectl.apply_json(pdb)
+            logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
+
+        self.kubectl.apply_json(manifest)
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
             task_id,
             run_req.attempt_id,
         )
-
-        if _is_coordinator_task(run_req):
-            pdb = _build_pdb_manifest(
-                pod_name,
-                self.pods.namespace,
-                _task_hash(run_req.task_id),
-                run_req.priority,
-                managed_label=self.pods.managed_label,
-            )
-            self.kubectl.apply_json(pdb)
-            logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
         """Delete pods that aren't in the desired ``(task_hash, attempt_id)`` set.
@@ -2754,7 +2769,6 @@ class K8sTaskProvider:
         path.
         """
         stray_pod_names: list[str] = []
-        stray_hashes: set[str] = set()
         stray_pod_groups: set[str] = set()
         stray_gang_pod_names: list[str] = []
         for pod in cached_pods:
@@ -2772,7 +2786,6 @@ class K8sTaskProvider:
             pod_name = pod.get("metadata", {}).get("name")
             if pod_name:
                 stray_pod_names.append(pod_name)
-                stray_hashes.add(task_hash)
                 pod_group = labels.get(_KUEUE_POD_GROUP_NAME)
                 if pod_group:
                     stray_pod_groups.add(pod_group)
@@ -2781,17 +2794,16 @@ class K8sTaskProvider:
         if not stray_pod_names:
             return
 
+        # Retain exact attempt names even if deletion or reservation release fails.
+        with self._gc_lock:
+            self._pending_gc_pods.update(stray_pod_names)
         self.kubectl.delete_many(K8sResource.PODS, stray_pod_names, wait=False)
         # The GC pass re-drives any gang pods that survive this teardown.
         self._release_gang_reservations(stray_gang_pod_names, stray_pod_groups)
-        # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
-        with self._gc_lock:
-            self._pending_gc_hashes.update(stray_hashes)
 
         logger.info(
-            "Deleted %d stray pods for %d task hashes (%d Kueue workloads released, CM/PDB cleanup deferred to GC)",
+            "Deleted %d stray pods (%d Kueue workloads released, CM/PDB cleanup deferred to GC)",
             len(stray_pod_names),
-            len(stray_hashes),
             len(stray_pod_groups),
         )
 
@@ -2868,12 +2880,6 @@ class K8sTaskProvider:
         cutoff = now - _GC_MAX_AGE_SECONDS
         gang_cutoff = now - _GANG_GC_MAX_AGE_SECONDS
 
-        # Task hashes that still have active (Pending/Running) pods must NOT have their
-        # configmaps/PDBs deleted, even if an older attempt of the same task is
-        # terminal — task_hash is shared across attempts.
-        active_hashes = {
-            h for pod in active_pods if (h := pod.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH))
-        }
         # Pod-groups with live (Pending/Running) members share one Kueue
         # Workload across the gang; releasing it would evict the running
         # siblings, so the gang sweep must skip those groups entirely.
@@ -2881,45 +2887,34 @@ class K8sTaskProvider:
             g for pod in active_pods if (g := pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME))
         }
 
-        # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
-        #    since last GC, by task_hash label selector.
-        #    Only discard hashes actually cleaned up: skipped hashes (still active)
-        #    and any the sweep did not reach stay in the set for the next GC cycle,
-        #    so a failed delete retries instead of leaking the resources forever.
+        # Resource names include the pod's attempt UID. Never delete by task hash:
+        # dispatch can create a retry's ConfigMap after the active-pod snapshot.
         with self._gc_lock:
-            safe_pending = self._pending_gc_hashes - active_hashes
+            pending = self._pending_gc_pods.copy()
         cleaned: set[str] = set()
         try:
-            for task_hash in safe_pending:
-                labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
-                self.kubectl.delete_by_labels(K8sResource.CONFIGMAPS, labels, wait=False)
-                self.kubectl.delete_by_labels(K8sResource.PDBS, labels, wait=False)
-                cleaned.add(task_hash)
-        except Exception:
-            # Isolated from the pod sweep below: a persistently failing CM/PDB delete
-            # must not be what stops terminal pods from ever being collected.
-            logger.exception("GC: CM/PDB cleanup failed after %d of %d hashes", len(cleaned), len(safe_pending))
+            for pod_name in pending:
+                self.kubectl.delete(K8sResource.CONFIGMAPS, f"{pod_name}-wf", wait=False)
+                self.kubectl.delete(K8sResource.PDBS, _pdb_name(pod_name), wait=False)
+                cleaned.add(pod_name)
+        except KubectlError:
+            # Keep failed cleanup queued without preventing the terminal-pod sweep.
+            logger.exception("GC: CM/PDB cleanup failed after %d of %d pods", len(cleaned), len(pending))
         finally:
             with self._gc_lock:
-                self._pending_gc_hashes -= cleaned
+                self._pending_gc_pods -= cleaned
         if cleaned:
-            logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(cleaned))
+            logger.info("GC: cleaned up CMs/PDBs for %d pods", len(cleaned))
 
-        # 2. Age-based sweep: delete terminal pods older than the cutoff and enqueue
-        #    their task hashes, so step 1 of a later pass cleans up the configmaps and
-        #    PDBs once it has confirmed no attempt of that task is active.
         old_pod_names: list[str] = []
-        old_task_hashes: set[str] = set()
         gang_pod_names: list[str] = []
         gang_pod_groups: set[str] = set()
-        gang_task_hashes: set[str] = set()
         for pod in self._iter_terminal_pods():
             meta = pod.get("metadata", {})
             created = meta.get("creationTimestamp", "")
             if not created:
                 continue
             ts = parse_k8s_timestamp(created).timestamp()
-            task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
             pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
             # Gang sweep: a deletionTimestamp means a prior delete is
             # wedged on the Kueue finalizer; otherwise the shorter gang
@@ -2933,13 +2928,14 @@ class K8sTaskProvider:
             if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
                 gang_pod_names.append(meta["name"])
                 gang_pod_groups.add(pod_group)
-                if task_hash:
-                    gang_task_hashes.add(task_hash)
                 continue
             if ts < cutoff:
                 old_pod_names.append(meta["name"])
-                if task_hash:
-                    old_task_hashes.add(task_hash)
+
+        # Queue before deleting the pods so a partial failure cannot orphan their resources.
+        with self._gc_lock:
+            self._pending_gc_pods.update(gang_pod_names)
+            self._pending_gc_pods.update(old_pod_names)
 
         if gang_pod_names:
             # force (gracePeriodSeconds=0): these pods are already terminal, so
@@ -2947,10 +2943,6 @@ class K8sTaskProvider:
             # deletion when the node's kubelet is gone (node failure).
             self.kubectl.delete_many(K8sResource.PODS, gang_pod_names, force=True, wait=False)
             self._release_gang_reservations(gang_pod_names, gang_pod_groups)
-            # CM/PDB cleanup follows the deferred path so active retry
-            # attempts sharing the task hash keep their resources.
-            with self._gc_lock:
-                self._pending_gc_hashes.update(gang_task_hashes)
             logger.info(
                 "GC: swept %d terminal gang pods, released %d Kueue workloads",
                 len(gang_pod_names),
@@ -2959,18 +2951,9 @@ class K8sTaskProvider:
 
         if old_pod_names:
             self.kubectl.delete_many(K8sResource.PODS, old_pod_names, wait=False)
-            # CM/PDB cleanup follows the deferred path, as the gang sweep does. Doing
-            # it inline here would hang the only record of these hashes on a local:
-            # the pods that named them are deleted above, so no later pass could
-            # rediscover them, and anything that raised in between would orphan their
-            # configmaps and PDBs for good. Step 1 of the next pass deletes them
-            # against its own fresh active-pod read, and retries whatever fails.
-            with self._gc_lock:
-                self._pending_gc_hashes.update(old_task_hashes)
             logger.info(
-                "GC: deleted %d terminal pods, deferred CM/PDB cleanup for %d task hashes (age > %ds)",
+                "GC: deleted %d terminal pods, deferred CM/PDB cleanup (age > %ds)",
                 len(old_pod_names),
-                len(old_task_hashes),
                 _GC_MAX_AGE_SECONDS,
             )
 
@@ -2999,10 +2982,13 @@ class K8sTaskProvider:
         policy = self.pods.task_outputs
         if policy is None or pod.get("status", {}).get("phase") != "Running" or not _task_container_terminated(pod):
             return None
+        # A running pod reports every container, so no status means no uploader (a sandbox pod).
+        uploader = _output_container_status(pod)
+        if uploader is None:
+            return None
 
         started = self._output_finalization_started.setdefault(entry, time.monotonic())
-        uploader = _output_container_status(pod)
-        uploader_running = uploader is not None and "running" in uploader.get("state", {})
+        uploader_running = "running" in uploader.get("state", {})
         if uploader_running and entry not in self._released_output_attempts:
             try:
                 release = self.kubectl.exec(

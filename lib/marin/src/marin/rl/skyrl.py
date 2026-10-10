@@ -312,11 +312,11 @@ class ArtifactDataSource:
 
 @dataclass(frozen=True)
 class TaskTroveDataSource:
-    """A metadata-selected cohort from the compatibility RL view of a TaskTrove release."""
+    """A metadata-selected cohort from an explicitly named packed Harbor file."""
 
     step: ArtifactStep[Artifact]
     selection: TaskTroveSelection
-    relative_path: str = "tasks/part-00000.parquet"
+    relative_path: str
     manifest_path: str = "manifest.json"
 
     def __post_init__(self) -> None:
@@ -382,10 +382,13 @@ class IrisSkyRLExecution:
     parent_cluster_config: str | None
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
+    job_timeout_seconds: int = 0
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
             raise ValueError("SkyRL coordinator_timeout_hours must be positive")
+        if self.job_timeout_seconds < 0:
+            raise ValueError("SkyRL job_timeout_seconds cannot be negative")
         if (self.target_cluster is None) != (self.parent_cluster_config is None):
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
@@ -743,10 +746,6 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
-    terminal_bench = recipe.get("terminal_bench", {})
-    harbor = terminal_bench.get("harbor", {}) if isinstance(terminal_bench, dict) else {}
-    agent_name = harbor.get("name") if isinstance(harbor, dict) else None
-    controller_ingress = agent_name == "opencode"
     submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
     target_cluster = None if submit_through_ambient_controller else execution.target_cluster
     parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
@@ -782,15 +781,9 @@ def _launch_config_yaml(
             },
             "priority": execution.priority,
             "max_retries": execution.max_retries,
-            "timeout": 0,
+            "timeout": execution.job_timeout_seconds,
             "target_cluster": target_cluster,
             "parent_cluster_config": parent_cluster_config,
-        },
-        "ingress": {
-            "mode": "controller" if controller_ingress else "direct",
-            "host": "iris.oa.dev" if controller_ingress and execution.cluster.startswith("cw-") else "",
-            "record_literal": controller_ingress,
-            "vllm_http_port": 8000,
         },
         "ray": {
             "port": 6379,

@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "verifyit"
+version = "0.1.0"
+description = "One grader for TaskTrove Clean tasks: reads tests/verifier.toml, writes /logs/verifier/reward.json."
+readme = "README.md"
+requires-python = ">=3.11"
+# Grading dependencies remain optional; shared error metadata uses Harbor's config-only package.
+dependencies = [
+    "tomli-w>=1.2",
+    "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
+]
+
+[project.scripts]
+verifyit = "verifyit.grade:main"
+
+[project.optional-dependencies]
+answer = ["math-verify>=0.9", "sympy>=1.12"]
+schema = ["jsonschema>=4.20", "pyyaml>=6.0"]
+judge = ["openai>=1.59.9"]
+reasoning-gym = ["reasoning-gym>=0.1.25"]
+all = ["verifyit[answer,schema,judge,reasoning-gym]"]
+
+[dependency-groups]
+test = [
+    "pytest>=8.3.2",
+    "pytest-timeout",
+    "pytest-xdist",
+    "pytest-json-report>=1.5",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/verifyit"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src/verifyit"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests", "."]
+timeout = 120
+filterwarnings = ["ignore::DeprecationWarning"]
+addopts = "--import-mode=importlib"
