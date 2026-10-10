@@ -84,7 +84,6 @@ RUNTIME_ENV = {
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
-XLA_SHARD_AUTOTUNING_FLAG = "--xla_gpu_shard_autotuning"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
@@ -154,11 +153,7 @@ def restore_template_from(state):
 
 
 def _apply_runtime_defaults(
-    *,
-    inline_watch_enabled: bool,
-    ragged_transport: RaggedTransport | None,
-    collective_overlap_limit: int | None,
-    processes_per_task: int,
+    *, inline_watch_enabled: bool, ragged_transport: RaggedTransport | None, collective_overlap_limit: int | None
 ) -> None:
     """Set the runtime env and XLA flag defaults; ``ragged_transport`` is None unless the MoE is ragged, and
     ``collective_overlap_limit`` (None: by mode) overrides the concurrent-collective limit."""
@@ -180,10 +175,6 @@ def _apply_runtime_defaults(
         "--xla_gpu_memory_limit_slop_factor=85",
         XLA_GPU_COMMAND_BUFFER_FLAG,
     )
-    if processes_per_task > 1:
-        # Sharded autotuning splits the fusions across processes and exchanges results; on the 64-process GB200
-        # rack the 48-layer train step's compile waited on it for 30+ minutes with every rank idle.
-        flag_defaults += (f"{XLA_SHARD_AUTOTUNING_FLAG}=false",)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     if ragged_transport is not None:
@@ -1571,7 +1562,6 @@ def run_grug(config: GrugRunConfig) -> None:
         inline_watch_enabled=inline_watch_enabled,
         ragged_transport=config.ragged_transport if ragged else None,
         collective_overlap_limit=config.collective_overlap_limit,
-        processes_per_task=config.processes_per_task,
     )
     local_entrypoint = _run_grug_local
     if config.trainer.xla_memory_report_path is not None:
