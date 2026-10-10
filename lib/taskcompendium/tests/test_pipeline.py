@@ -208,7 +208,7 @@ def test_review_tasks_returns_attempts_and_reuses_prefetched_cache(tmp_path, app
 
 def test_review_tasks_propagates_unexpected_response_membership(apple_row, monkeypatch):
     service = BatchService()
-    monkeypatch.setattr(service, "output", lambda batch: Output(json.dumps(response("unexpected"))))
+    monkeypatch.setattr(service, "output", lambda _batch: Output(json.dumps(response("unexpected"))))
     with pytest.raises(ValueError, match="Unexpected batch response ID"):
         review_tasks(
             [svamp_task("task", apple_row)], SVAMP_RUBRIC, BatchReviewer(service, "fixture", "revision"), cached=None
