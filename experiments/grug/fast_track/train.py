@@ -12,6 +12,7 @@ import math
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -1487,6 +1488,7 @@ def _write_train_step_hlo(train_step, state_leaves, batch, path: str) -> None:
 
 _XLA_DUMP_DIR = "/tmp/grug_xla_dump"
 _XLA_MEMORY_REPORT_SUFFIXES = ("buffer-assignment.txt", "memory-usage-report.txt")
+_XLA_MEMORY_REPORT_POLL_SECONDS = 5
 
 
 def _xla_memory_report_flags() -> str:
@@ -1505,12 +1507,32 @@ def _upload_xla_memory_reports(dest: str) -> None:
     logger.info("uploaded %d XLA memory reports to %s", len(reports), dest)
 
 
+def _upload_xla_memory_reports_when_written(dest: str, stop: threading.Event) -> None:
+    """Upload the reports as soon as XLA writes them: a step that OOMs takes the peer processes down, and the
+    coordination service then kills this one before any end-of-run upload."""
+    while not stop.wait(_XLA_MEMORY_REPORT_POLL_SECONDS):
+        if any(
+            path.endswith(_XLA_MEMORY_REPORT_SUFFIXES) and "after_optimizations" in path
+            for path in glob.glob(f"{_XLA_DUMP_DIR}/*jit_train_step*")
+        ):
+            # The dump files are written back to back; let the second one land. The dump means the backend
+            # is up, so process_index no longer forces an early init.
+            time.sleep(_XLA_MEMORY_REPORT_POLL_SECONDS)
+            if jax.process_index() == 0:
+                _upload_xla_memory_reports(dest)
+            return
+
+
 def _run_grug_local_with_memory_report(config: GrugRunConfig) -> None:
+    dest = config.trainer.xla_memory_report_path
+    stop = threading.Event()
+    threading.Thread(target=_upload_xla_memory_reports_when_written, args=(dest, stop), daemon=True).start()
     try:
         _run_grug_local(config)
     finally:
+        stop.set()
         if jax.process_index() == 0:
-            _upload_xla_memory_reports(config.trainer.xla_memory_report_path)
+            _upload_xla_memory_reports(dest)
 
 
 def run_grug(config: GrugRunConfig) -> None:
