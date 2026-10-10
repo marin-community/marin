@@ -19,10 +19,10 @@ from typing import Any
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from taskcompendium.convert.tasktrove import ANSWER_PATH, archive_resources
 from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
@@ -43,13 +43,13 @@ from taskcompendium.pipeline.models import (
     Reply,
     WorkspaceFiles,
 )
-from verifyit.spec import ExactSpec
+from verifyit.spec import DEFAULT_OUTPUT, ExactSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import SCORERS as ULTRA_SCORERS
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
@@ -59,8 +59,6 @@ TRANSDUCTIVE_AGENT = "nvarc_transductive_simple_agent"
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
-ARC_SHIPS = (SCORERS, ULTRA_SCORERS)
-"""The vendored directories an ARC task ships files from: NVARC here, its answer extractor in Ultra's."""
 NVARC_MODULES = "skyrl_gym/envs/nemotron_ultra"
 ARC_GRADE = grade_script(
     HERE / "arc_grade.py",
@@ -179,7 +177,9 @@ def _tasktrove_task(
         id=row.id,
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
-        environment_requirements=EnvironmentRequirements(capabilities=("filesystem", "python")),
+        environment_requirements=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS, capabilities=("filesystem", "python")
+        ),
         # The archive's own tests are replaced by the NVARC grader, so only its other files are kept.
         resources=ResourceGroups(worker=archive.worker, verifier=package.resources, oracle=archive.oracle),
         output_paths=output_paths,
@@ -192,11 +192,11 @@ def _tasktrove_task(
 
 def convert_tasktrove_inductive(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
     """The grader reads ``solution.py`` first and ``answer.txt`` as a fallback."""
-    return _tasktrove_task(row, context, ArcMode.INDUCTIVE, (SOLUTION_PATH, ANSWER_PATH))
+    return _tasktrove_task(row, context, ArcMode.INDUCTIVE, (SOLUTION_PATH, DEFAULT_OUTPUT))
 
 
 def convert_tasktrove_transductive(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
-    return _tasktrove_task(row, context, ArcMode.TRANSDUCTIVE, (ANSWER_PATH,))
+    return _tasktrove_task(row, context, ArcMode.TRANSDUCTIVE, (DEFAULT_OUTPUT,))
 
 
 def convert_ultra_arc(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
@@ -208,7 +208,7 @@ def convert_ultra_arc(row: RawRow, context: ConversionContext) -> NormalizedTask
     rejection = reference_rejection(mode, request.contract)
     if rejection is not None:
         return rejection
-    return blend_task(row, request, arc_package(mode, request.contract, context, answer_path=ANSWER_PATH))
+    return blend_task(row, request, arc_package(mode, request.contract, context, answer_path=DEFAULT_OUTPUT))
 
 
 def grid_text(grid: list[list[int]]) -> str:
@@ -230,7 +230,7 @@ def tasktrove_golden(task: TaskSpec) -> WorkspaceFiles:
     if isinstance(task.grader, VerifyitGrader):
         spec = verifyit_spec(task.grader)
         assert isinstance(spec, ExactSpec)
-        return WorkspaceFiles({ANSWER_PATH: (spec.expected[0] + "\n").encode()})
+        return WorkspaceFiles({DEFAULT_OUTPUT: (spec.expected[0] + "\n").encode()})
     record = grader_config(task)["contract"]
     return WorkspaceFiles({SOLUTION_PATH: literal_transform(record["expected_output"]).encode()})
 
@@ -265,12 +265,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(INDUCTIVE_CONFIG),
                 convert=convert_tasktrove_inductive,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_INDUCTIVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=ARC_SHIPS,
             ),
         ),
         RlDataSource(
@@ -289,12 +287,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(TRANSDUCTIVE_CONFIG),
                 convert=convert_tasktrove_transductive,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_TRANSDUCTIVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=ARC_SHIPS,
             ),
         ),
     ]

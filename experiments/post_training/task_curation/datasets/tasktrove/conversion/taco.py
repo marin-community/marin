@@ -21,13 +21,18 @@ import warnings
 
 from verifyit.spec import Compare, StdioSpec
 
-from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
-from taskcompendium.convert.tasktrove_converted_task import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    INSTRUCTION,
+    SOLVE_SH,
+    TaskFiles,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
     Rejected,
 )
-from taskcompendium.convert.tasktrove_stdio_cases import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio_cases import (
     SOLUTION_COMMAND,
     case_files_from_dirs,
     comparison_from_instruction,

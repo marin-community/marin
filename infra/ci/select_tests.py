@@ -92,7 +92,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
-    "verifyit": "verifyit",
+    "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
 }

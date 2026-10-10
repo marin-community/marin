@@ -31,7 +31,6 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from taskcompendium.convert.tasktrove import ANSWER_PATH
 from taskcompendium.grader import grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,
@@ -54,7 +53,7 @@ from taskcompendium.pipeline.models import (
     Reply,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
-from verifyit.spec import ReasoningGymSpec
+from verifyit.spec import DEFAULT_OUTPUT, ReasoningGymSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import (
@@ -62,7 +61,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     TaskTroveConverter,
     tasktrove_source,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, UrlSource, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource, process_rows
 from experiments.post_training.task_curation.source import (
     HARBOR_GRADING_REVISION,
     MARINSKYRL_GRADING_REVISION,
@@ -99,8 +98,8 @@ GENERATED_GRADE = grade_script(HERE / "reasoning_gym_grade.py", *shipped_files(H
 
 TASKTROVE_CONFIG = "laion__nemotron-gym-reasoning-gym-v2"
 SCORER_TIMEOUT = 60.0
-ANSWER_FILE_NOTE = f"\nThe runtime writes your final assistant response to {ANSWER_PATH}."
-REWRITE_REASON = f"The grader reads the reply, which the runtime writes to {ANSWER_PATH}"
+ANSWER_FILE_NOTE = f"\nThe runtime writes your final assistant response to {DEFAULT_OUTPUT}."
+REWRITE_REASON = f"The grader reads the reply, which the runtime writes to {DEFAULT_OUTPUT}"
 
 GENERATED_RUBRIC = """
 Read the complete generated question and verify that every grid, rule, sequence, or example required to solve it is
@@ -282,7 +281,7 @@ def convert_generated(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
         {"contract": contract},
         environment=required_grader_environment(context),
         timeout=SCORER_TIMEOUT,
-        answer_path=ANSWER_PATH,
+        answer_path=DEFAULT_OUTPUT,
         env={"PYTHONHASHSEED": str(generation["python_hash_seed"])},
     )
     return TaskSpec(
@@ -306,7 +305,7 @@ def generated_golden(task: TaskSpec) -> Reply | None:
 def reply_instruction(instruction: str) -> str:
     """Ask for the answer in the reply where the instruction asked for ``/app/answer.txt``."""
     public = replace_phrases(instruction, ANSWER_FILE_DELIVERY)
-    if public == instruction and ANSWER_PATH in instruction:
+    if public == instruction and DEFAULT_OUTPUT in instruction:
         # Unrecognized wording: keep it, and say where the reply ends up.
         public += ANSWER_FILE_NOTE
     return public
@@ -382,7 +381,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_generated,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=GENERATED_RUBRIC,
                 controls=GENERATED_CONTROLS,
@@ -405,7 +403,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(TASKTROVE_CONFIG),
                 convert=TaskTroveConverter(TASKTROVE_CONFIG, convert_tasktrove),
                 version="3",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,

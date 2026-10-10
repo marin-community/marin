@@ -21,7 +21,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
@@ -31,11 +30,10 @@ from taskcompendium.pipeline.models import Controls, Converter, IntendedUse
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_parquet
 
-from experiments.post_training.task_curation.datasets.arc.arc import ARC_SHIPS, ULTRA_ARC_CONTROLS, convert_ultra_arc
+from experiments.post_training.task_curation.datasets.arc.arc import ULTRA_ARC_CONTROLS, convert_ultra_arc
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
     CODE_CONTROLS,
-    CODE_SHIPS,
     DAPO,
     MATH_CONTROLS,
     MCQA_CONTROLS,
@@ -43,7 +41,6 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     RDKIT_CONTROLS,
     REASONING_GYM_CONTROLS,
     REPLY_CONTROLS,
-    SHIPS,
     TOOL_ACTION_CONTROLS,
     VERIFIER_REVISION,
     convert_calendar,
@@ -64,7 +61,6 @@ from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     HfSource,
     RowDecoder,
-    ShellSim,
     process_rows,
 )
 from experiments.post_training.task_curation.source import (
@@ -317,8 +313,7 @@ def preference_rubric(scope: str) -> str:
 class Component:
     """How one component's rows become tasks; ``decode`` and ``inputs`` restore placeholder questions.
 
-    ``grader`` is what the component's grade script needs and ``ships`` holds the scorer directories it
-    packages; components graded in process or kept as ``NoGrader`` contracts name neither.
+    ``grader`` declares packages needed by the component's grade script.
     """
 
     convert: Converter
@@ -327,23 +322,21 @@ class Component:
     decode: RowDecoder | None = None
     inputs: Mapping[str, HfSource] = field(default_factory=dict)
     grader: Environment | None = None
-    ships: tuple[Path, ...] = ()
 
 
 def scored(
     convert: Converter,
     rubric: str,
     controls: Controls = REPLY_CONTROLS,
-    ships: tuple[Path, ...] = SHIPS,
 ) -> Component:
     """A component whose grade script needs the grader packages."""
-    return Component(convert, rubric, controls, grader=GRADER_PACKAGES, ships=ships)
+    return Component(convert, rubric, controls, grader=GRADER_PACKAGES)
 
 
 ABSTENTION = Component(convert_ungraded, QA_ABSTENTION_RUBRIC)
 AGENTIC_SAFETY = Component(convert_ungraded_agent, AGENTIC_SAFETY_RUBRIC)
 CALENDAR = scored(convert_calendar, INSTRUCTION_FOLLOWING_RUBRIC)
-COMPETITIVE_CODE = scored(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS, CODE_SHIPS)
+COMPETITIVE_CODE = scored(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS)
 FORMAT = scored(convert_format, INSTRUCTION_FOLLOWING_RUBRIC)
 INSTRUCTION_FOLLOWING = scored(convert_instruction_following, INSTRUCTION_FOLLOWING_RUBRIC)
 MATH = Component(
@@ -353,7 +346,7 @@ MATH_PROOF = Component(convert_ungraded, MATH_PROOF_RUBRIC)
 MCQA = scored(convert_mcqa, QA_MULTIPLE_CHOICE_RUBRIC, MCQA_CONTROLS)
 MULTICHALLENGE = Component(convert_ungraded, INSTRUCTION_FOLLOWING_RUBRIC)
 NEXT_ACTION = scored(convert_tool_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
-NVARC = scored(convert_ultra_arc, ARC_RUBRIC, ULTRA_ARC_CONTROLS, ARC_SHIPS)
+NVARC = scored(convert_ultra_arc, ARC_RUBRIC, ULTRA_ARC_CONTROLS)
 RDKIT = scored(convert_rdkit, CHEMISTRY_RUBRIC, RDKIT_CONTROLS)
 REASONING_GYM = scored(convert_reasoning_gym, REASONING_GYM_RUBRIC, REASONING_GYM_CONTROLS)
 SAFETY = Component(convert_ungraded, SAFETY_RUBRIC)
@@ -1784,13 +1777,11 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
             ),
             convert=component.convert,
             version="2",
-            environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=component.rubric,
             controls=component.controls,
             inputs=inputs,
             grader=component.grader,
-            ships=component.ships,
         ),
     )
 

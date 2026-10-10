@@ -26,8 +26,8 @@ is the environment every grade script in the catalog imports:
 - every package in [`../datasets/grader.lock`](../datasets/grader.lock), with
   hashes required: the math, chemistry, schema, instruction-following and
   Reasoning Gym scorer dependencies, `pytest` with `pytest-json-report` and
-  `hypothesis`, the packages the Stack Overflow Python-test tasks import,
-  `harbor-config`, and `verifiable-instructions` at a pinned commit;
+  `hypothesis`, packages used by Stack Overflow Python-test tasks, and
+  `verifiable-instructions` at a pinned commit;
 - the NLTK `punkt_tab` and `wordnet` data.
 
 `COMPILER_GRADER_PACKAGES` adds `build-essential` for the TaskTrove
@@ -46,8 +46,8 @@ uv --directory experiments/post_training/task_curation/datasets pip compile \
 Every built environment also puts `verifyit` from this repository on the
 grader's import path, because verifyit graders import it. Scorer code is not
 installed. A family vendors upstream scorers under `datasets/<family>/scorers/`,
-lists that directory in its declaration's `ships`, and its converter packages
-the files into each task.
+and its converter packages the files into each task. Bump the recipe version
+when converter or bundled scorer code changes.
 
 ## Building
 

@@ -3,22 +3,19 @@
 
 """Curation code and task-content identities."""
 
-import hashlib
-import sys
 from collections.abc import Callable
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 from verifyit.spec import Mode
 
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import SCHEMA_VERSION, NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.models import SourceRecipe
 
-NORMALIZATION_STAGE_REVISION = "10"
+NORMALIZATION_STAGE_REVISION = "11"
 VERIFICATION_STAGE_REVISION = "5"
 REVIEW_STAGE_REVISION = "4"
 
@@ -51,16 +48,6 @@ def callable_identity(function: Callable[..., Any]) -> dict[str, Any]:
             "parameters": {field.name: _value_identity(getattr(function, field.name)) for field in fields(function)},
         }
     return {"module": function.__module__, "name": function.__qualname__}
-
-
-def function_code_identity(function: Callable[..., Any]) -> dict[str, Any]:
-    """A callable's identity plus the digest of the module source that defines it."""
-    module = sys.modules[callable_module(function)]
-    assert module.__file__ is not None, "Code identity requires a module file"
-    return {
-        **callable_identity(function),
-        "source_sha256": hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest(),
-    }
 
 
 def callable_module(function: Callable[..., Any]) -> str:

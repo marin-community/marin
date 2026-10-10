@@ -7,13 +7,12 @@ import ast
 import re
 from pathlib import Path
 
-from verifyit.spec import Mode, PytestSpec
-
-from taskcompendium.convert.tasktrove import DOCKERFILE, TASKTROVE_REPO
-from taskcompendium.convert.tasktrove_python_unit_tests import pytest_dockerfile
-from taskcompendium.convert.verifyit_build import verifyit_build_context
 from taskcompendium.models import DockerBuildContext, TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import Mode, PytestSpec
+
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TASKTROVE_REPO
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 
 JUDGE_SOURCES = frozenset(
     {
@@ -41,6 +40,22 @@ MODE_EXTRAS: dict[str, tuple[str, ...]] = {
 }
 
 
+PYTEST_ENV = "/opt/tasktrove-pytest"
+PYTEST_INSTALL = (
+    f"RUN python3 -m venv --system-site-packages {PYTEST_ENV}"
+    f" && {PYTEST_ENV}/bin/pip install --no-cache-dir pytest pytest-json-report{{dependencies}}\n"
+)
+
+
+def legacy_pytest_dockerfile(dockerfile: str, tree: ast.Module) -> str:
+    """Install the legacy isolated pytest interpreter and its test-import dependencies."""
+    modules = {
+        alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
+    } | {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+    dependencies = " mock" if "mock" in modules else ""
+    return dockerfile.rstrip() + "\n" + PYTEST_INSTALL.format(dependencies=dependencies)
+
+
 def source_actor_build(task: TaskSpec, *, source: str, mode: str, package: Path | None) -> DockerBuildContext | None:
     """Recover the old actor recipe from private provenance without changing the TaskSpec."""
     if task.source.dataset != TASKTROVE_REPO:
@@ -65,7 +80,7 @@ def source_actor_build(task: TaskSpec, *, source: str, mode: str, package: Path 
         assert isinstance(spec, PytestSpec)
         resources = {resource.path: resource for resource in task.resources.verifier}
         test = resources[spec.paths[0].removeprefix("/tests/")]
-        dockerfile = pytest_dockerfile(dockerfile, ast.parse(resource_bytes(test)))
+        dockerfile = legacy_pytest_dockerfile(dockerfile, ast.parse(resource_bytes(test)))
     # Legacy text converters retained only the source Dockerfile.
     # Declared executable build contexts are handled before this compatibility path.
     extras = ("schema", "judge") if source == "laion__nemotron-gym-structured-outputs-v4" else MODE_EXTRAS.get(mode, ())

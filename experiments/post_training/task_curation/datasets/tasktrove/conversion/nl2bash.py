@@ -21,13 +21,18 @@ import json
 
 from verifyit.spec import ScriptSpec
 
-from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
-from taskcompendium.convert.tasktrove_converted_task import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    INSTRUCTION,
+    SOLVE_SH,
+    VERIFIER_DATA,
+    TaskFiles,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
     Rejected,
 )
-from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
 
 CHECKER_NAME = "nl2bash_check.py"
 DATA_NAME = "nl2bash_expected.json"
@@ -144,7 +149,7 @@ CHECKER_PY = _CHECKER_TEMPLATE.replace("__DATA_NAME__", DATA_NAME)
 
 def convert_nl2bash(task: TaskFiles) -> ConvertedTask | Rejected:
     """NL-to-bash: ``{"expected_output": "..."}`` captured from the oracle command's stdout+stderr."""
-    data = verifier_data(task)
+    data = json.loads(task.text(VERIFIER_DATA))
     expected = data.get("expected_output")
     if not isinstance(expected, str):
         return Rejected(ConvertStatus.NULL_GRADER, f"expected_output missing or not a string: {type(expected)}")

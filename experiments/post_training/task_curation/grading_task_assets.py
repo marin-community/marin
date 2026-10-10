@@ -15,9 +15,12 @@ from typing import Any
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from taskcompendium.convert.nemotron_ultra import blend_component
-from taskcompendium.convert.tasktrove import archive_file, unpack_task_binary
 from taskcompendium.pipeline.inputs import ConversionContext
 
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    archive_file,
+    unpack_task_binary,
+)
 from experiments.post_training.task_curation.source import GradingDatasetFile, SweGradingAssets
 from infra.marina.applets.rl_data_catalog.server.grading_code import python_grading_code
 

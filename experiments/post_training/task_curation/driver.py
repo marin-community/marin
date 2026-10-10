@@ -9,6 +9,9 @@ from typing import cast
 
 import click
 from fray.types import ResourceConfig
+from iris.cluster.client.job_info import get_job_info
+from shellbox.backends.iris.machine import IrisMachineFactory
+from shellbox.machine import Backend, MachineFactory
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
@@ -16,16 +19,17 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
 from experiments.post_training.task_curation.config import (
-    ImageGraderExecution,
     InputOverrides,
     PipelineOptions,
     RecipeSettings,
 )
 from experiments.post_training.task_curation.local import run_local_steps
+from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import runnable_sources
 
 QUICK_MAX_WORKERS = 4
+IRIS_JOB_TTL = 1800
 
 
 def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
@@ -35,6 +39,26 @@ def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
     return {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
+
+
+def _image_factory(backend: Backend | None, controller_url: str | None) -> MachineFactory | None:
+    if backend is None:
+        return None
+    if backend == Backend.GVISOR:
+        if controller_url is None:
+            job = get_job_info()
+            controller_url = job.controller_address if job is not None else None
+        if controller_url is None:
+            raise click.UsageError("--image-backend gvisor requires --controller-url outside an Iris job")
+        return IrisMachineFactory(controller_url=controller_url, job_ttl=IRIS_JOB_TTL, secret_env=None)
+    if backend != Backend.DAYTONA:
+        raise ValueError(f"Unsupported image backend: {backend}")
+    # Daytona is an optional Shellbox dependency; local and Iris campaigns do not import its SDK.
+    try:
+        from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
+    except ImportError as error:
+        raise click.UsageError("--image-backend daytona requires the Shellbox daytona extra") from error
+    return DaytonaMachineFactory()
 
 
 @click.command(help=__doc__)
@@ -63,15 +87,13 @@ def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
     help="Iris container profile of the Zephyr workers; local graders need a privileged pod to build sandboxes.",
 )
 @click.option(
-    "--verification-backend",
-    type=click.Choice([backend.value for backend in ImageGraderExecution]),
-    default=ImageGraderExecution.IRIS.value,
-    show_default=True,
-    help="Where image graders run: Iris jobs or local gVisor. Local grader environments run in the worker.",
+    "--image-backend",
+    type=click.Choice([Backend.GVISOR.value, Backend.DAYTONA.value]),
+    help="Image controls: gvisor via Iris or daytona. Omit for local and simulator controls only.",
 )
 @click.option(
     "--controller-url",
-    help="Iris controller for --verification-backend iris; inside an Iris job, defaults to the job's controller.",
+    help="Controller for --image-backend gvisor; defaults to the current Iris job's controller.",
 )
 @click.option("--seed", type=int, default=0)
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
@@ -118,7 +140,7 @@ def main(
     concurrent_sources: int,
     worker_image: str | None,
     container_profile: str,
-    verification_backend: str,
+    image_backend: str | None,
     controller_url: str | None,
     seed: int,
     verification_sample_size: int,
@@ -194,8 +216,9 @@ def main(
         relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=normalized_shards,
-        verification_backend=ImageGraderExecution(verification_backend),
-        controller_url=controller_url,
+        machines=CampaignMachines(
+            image_factory=_image_factory(Backend(image_backend) if image_backend is not None else None, controller_url)
+        ),
         seed=seed,
         verification_sample_size=verification_sample_size,
         execution=AuditExecution(max_workers=max_workers, worker_resources=worker_resources),

@@ -16,6 +16,7 @@ from shellbox.machine import Backend, DockerImage, Machine, MachineFactory, Mach
 
 from taskcompendium.convert.answers import numeric_answer_task, source_defect
 from taskcompendium.models import (
+    CommandSemantics,
     EnvironmentRequirements,
     ExitCodeReward,
     ScriptGrader,
@@ -54,7 +55,7 @@ SVAMP_RUBRIC = ReviewRubric(
     ),
 )
 GRADER_IMAGE = "fixture@sha256:" + "b" * 64
-GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, compatible_backends=(Backend.DOCKER,))
+GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)
 
 
 def svamp_row_task(row: RawRow) -> TaskSpec | ImportRejection:

@@ -48,7 +48,7 @@ class LocalGraderMachines:
         return {"backend": Backend.DOCKER.value, "image": LOCAL_GRADER_IMAGE}
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[LocalGraderFactory, MachineSpec]:
-        if Backend.LOCAL in environment.compatible_backends:
+        if environment.packages_lock is not None:
             return LocalGraderFactory(Backend.LOCAL), MachineSpec(HostImage(), memory_mb=memory_mb)
         assert environment.docker_image is not None
         return LocalGraderFactory(Backend.DOCKER), MachineSpec(

@@ -41,14 +41,21 @@ from verifyit.spec import (
     render_spec,
 )
 
-from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
-from taskcompendium.convert.tasktrove_converted_task import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    INSTRUCTION,
+    VERIFIER_DATA,
+    TaskFiles,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import (
+    normalize_schema,
+    usable_schema,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
     Rejected,
 )
-from taskcompendium.convert.tasktrove_json_schemas import normalize_schema, usable_schema
-from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
 
 SCHEMA_NAME = "schema.json"
 SCHEMA_FILE = f"tests/{SCHEMA_NAME}"
@@ -243,7 +250,7 @@ def graded_by(schema_type: SchemaType, schema: object) -> tuple[Spec, dict[str, 
 
 def convert_nemotron_structured_outputs(task: TaskFiles) -> ConvertedTask | Rejected:
     """Structured-output schema tasks: ``{"schema": ..., "schema_type": "json" | "xml" | ...}``."""
-    data = verifier_data(task)
+    data = json.loads(task.text(VERIFIER_DATA))
     raw_type = data.get("schema_type")
     try:
         schema_type = SchemaType(raw_type)
@@ -280,5 +287,4 @@ def convert_nemotron_structured_outputs(task: TaskFiles) -> ConvertedTask | Reje
         dockerfile=task.text(DOCKERFILE),
         tags=("structured-outputs", "grounded", "script", "nemotron", schema_type.value),
         data_files=nested_files,
-        verifier_extras=("schema", "judge"),
     )

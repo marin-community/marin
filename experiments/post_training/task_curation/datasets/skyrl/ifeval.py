@@ -18,16 +18,16 @@ from typing import Any
 
 from pydantic import ValidationError
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from taskcompendium.convert.tasktrove import ANSWER_PATH
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow
+from verifyit.spec import DEFAULT_OUTPUT
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import (
     HARBOR_GRADING_REVISION,
     MARINSKYRL_GRADING_REVISION,
@@ -156,7 +156,7 @@ def ifeval_task(
         {"constraints": normalized},
         environment=required_grader_environment(context),
         timeout=GRADER_TIMEOUT,
-        answer_path=ANSWER_PATH,
+        answer_path=DEFAULT_OUTPUT,
     )
     return conversation_task(row, events=events, package=package, evidence=evidence)
 
@@ -215,12 +215,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_nemotron_if,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
@@ -243,12 +241,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_rlvr_ifeval,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
     ]

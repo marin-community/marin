@@ -8,8 +8,8 @@ import re
 from verifyit.modes.extract import collapse_whitespace
 from verifyit.spec import Compare
 
-from taskcompendium.convert.tasktrove import TaskFiles
-from taskcompendium.convert.tasktrove_converted_task import ConvertStatus, Rejected
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertStatus, Rejected
 
 SOLUTION_COMMAND = "python3 /app/solution.py"
 """How every stdio converter runs the agent's program, once per case."""

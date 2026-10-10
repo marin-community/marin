@@ -9,25 +9,17 @@ description = "Task execution and exact-token rollout records"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "pydantic>=2",
-    "taskcompendium",
+    "marin-taskcompendium",
     "marin-shellbox",
-    "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
 ]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-shellbox[daytona,shellsim]"]
-
-[tool.uv.workspace]
-
-[tool.uv]
-prerelease = "allow"
-
-[tool.uv.sources]
-taskcompendium = { path = "../taskcompendium", editable = true }
-marin-shellbox = { path = "../shellbox", editable = true }
-
-[tool.hatch.metadata]
-allow-direct-references = true
+test = [
+    "pytest>=8.3",
+    "pytest-asyncio",
+    "pytest-timeout",
+    "marin-shellbox[daytona,shellsim]",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rolloutengine"]
@@ -56,4 +48,4 @@ known-first-party = ["rolloutengine"]
 disable-project-excludes-heuristics = true
 project-includes = ["src"]
 search-path = ["src"]
-python-interpreter = ".venv/bin/python"
+python-interpreter = "../../.venv/bin/python"

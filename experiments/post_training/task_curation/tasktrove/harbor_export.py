@@ -12,16 +12,36 @@ import shlex
 import tarfile
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from functools import cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tomlkit
 from finestore.schema import arrow_schema
-from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.script_grader import GRADE_ARGV
+from taskcompendium.models import (
+    DOCKER_IMAGE_PATTERN,
+    AnswerType,
+    ArtifactKind,
+    CommandSemantics,
+    FileReward,
+    MissingArtifactPolicy,
+    PlainText,
+    ScriptGrader,
+    StdoutReward,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+    verifyit_answer_file,
+    verifyit_spec,
+)
+from taskcompendium.runtime.grading import DIAGNOSTIC_OUTPUT_BYTES
+from taskcompendium.runtime.local import RUNTIME_PACKAGES, context_paths
+from taskcompendium.runtime.resources import resource_bytes
 from verifyit.modes.extract import collapse_whitespace
 from verifyit.spec import (
     DEFAULT_WORKSPACE,
@@ -39,28 +59,19 @@ from verifyit.spec import (
     render_spec,
 )
 
-from taskcompendium.convert.script_grader import GRADE_ARGV
-from taskcompendium.convert.tasktrove import DOCKERFILE, TASKTROVE_REPO, TEST_SH
-from taskcompendium.convert.verifyit_build import VERIFYIT_CONTEXT
-from taskcompendium.harbor.tasktrove import source_actor_build
-from taskcompendium.models import (
-    DOCKER_IMAGE_PATTERN,
-    AnswerType,
-    ArtifactKind,
-    FileReward,
-    MissingArtifactPolicy,
-    PlainText,
-    ScriptGrader,
-    StdoutReward,
-    TaskSpec,
-    TextMessage,
-    VerifyitGrader,
-    verifyit_answer_file,
-    verifyit_spec,
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    TASKTROVE_REPO,
+    TEST_SH,
 )
-from taskcompendium.runtime.grading import DIAGNOSTIC_OUTPUT_BYTES
-from taskcompendium.runtime.local import RUNTIME_PACKAGES, context_paths
-from taskcompendium.runtime.resources import resource_bytes
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT
+from experiments.post_training.task_curation.tasktrove.source_images import source_actor_build
+
+
+class VerifierEnvironmentMode(StrEnum):
+    SHARED = "shared"
+    SEPARATE = "separate"
+
 
 TASKS_FILENAME = "tasks.parquet"
 MANIFEST_FILENAME = "manifest.json"
@@ -199,6 +210,8 @@ def _environment_mode(task: TaskSpec) -> VerifierEnvironmentMode:
 def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentMode) -> None:
     environment = task.environment_requirements
     grader = task.grader
+    if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+        raise UnsupportedHarborTask("Harbor cannot preserve shell simulator semantics")
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
     if repository_state:
         if (
@@ -239,8 +252,8 @@ def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentM
         raise UnsupportedHarborTask(f"Unsupported answer type: {task.answer_type}")
     if task.answer_type == AnswerType.TEXT and not isinstance(task.answer_format, PlainText):
         raise UnsupportedHarborTask("Text extraction beyond plain text requires dedicated Harbor lowering")
-    if task.output_directories or task.final_tools:
-        raise UnsupportedHarborTask("Directory capture and final tool calls require dedicated Harbor lowering")
+    if task.final_tools:
+        raise UnsupportedHarborTask("Final tool calls require dedicated Harbor lowering")
     if environment.setup_commands or environment.packages_lock:
         raise UnsupportedHarborTask("Agent setup commands and package locks require an environment build")
     if set(environment.tool_providers) - {"shell"}:
@@ -471,7 +484,11 @@ def harbor_payload(
     grader_public = (
         []
         if environment_mode == VerifierEnvironmentMode.SHARED
-        else [resource for resource in public if "/" + resource.path not in outputs]
+        else [
+            resource
+            for resource in public
+            if not any(PurePosixPath("/" + resource.path).is_relative_to(path) for path in outputs)
+        ]
     )
     if grader_public:
         for resource in grader_public:
@@ -518,7 +535,6 @@ def harbor_payload(
     if environment.working_directory is not None:
         config["environment"]["workdir"] = environment.working_directory
     files["task.toml"] = tomlkit.dumps(config).encode()
-    TaskConfig.model_validate_toml(files["task.toml"].decode())
     solution = {
         resource.path: resource_bytes(resource)
         for resource in task.resources.oracle
@@ -629,9 +645,11 @@ def export_harbor(
         "environment_build_required": True,
         "source": source.name,
         "source_id": source.source_id,
-        "harbor_config_validated": True,
         "runtime_verified": False,
-        "limitation": "Builds and execution have not run; base-image dependencies and source recipes remain unverified.",
+        "limitation": (
+            "Harbor schema, builds, and execution are unverified; "
+            "base-image dependencies and source recipes have not been checked."
+        ),
     }
     (output_root / MANIFEST_FILENAME).write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
