@@ -462,8 +462,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "enable_chunked_prefill": True,
         # Capture CUDA graphs for decode.
         "enforce_eager": False,
+        # Task sessions send token requests directly to model engines.
         "enable_http_endpoint": False,
-        # Use the model tokenizer's built-in chat template.
         "chat_template": None,
         "engine_init_kwargs": dict(recipe.engine_init_kwargs),
         "sampling_params": {

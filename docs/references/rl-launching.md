@@ -58,7 +58,7 @@ See [task rollouts](task-rollouts.md) for task execution and backend limits.
 The launcher uses the frozen project in `config/external/MarinSkyRL` in an isolated environment.
 This project supplies the pinned SkyRL revision, published Rigging package, and platform wheel sources.
 The launch document records that revision in `runtime.launcher_commit`.
-The launcher requires a Marin workspace with these project files.
+Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
 
 ```text
 Marin experiment
