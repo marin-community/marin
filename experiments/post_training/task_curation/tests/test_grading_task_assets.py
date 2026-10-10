@@ -21,7 +21,10 @@ def test_grading_identity_changes_only_for_selected_verifier_inputs(tmp_path, mo
     ]
     blend = tmp_path / "blend.jsonl"
     blend.write_text(
-        "".join(json.dumps({"dataset": "pivot", "trajectory_id": key["trajectory_id"], "info": {}, "metadata": key}) + "\n" for key in keys)
+        "".join(
+            json.dumps({"dataset": "pivot", "trajectory_id": key["trajectory_id"], "info": {}, "metadata": key}) + "\n"
+            for key in keys
+        )
     )
     membership = tmp_path / "membership.parquet"
     pq.write_table(pa.table({"instance_id": ["selected"]}), membership)

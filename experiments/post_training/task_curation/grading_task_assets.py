@@ -37,7 +37,7 @@ class SweTaskKey:
 
 
 def swe_task_key(values: Mapping[str, Any]) -> SweTaskKey:
-    """Use the same typed pivot coordinates as the native proxy loader."""
+    """Return a task key after validating its trajectory and pivot coordinates."""
     trajectory = values["trajectory_id"]
     if isinstance(trajectory, bool) or not isinstance(trajectory, (str, int)):
         raise ValueError("SWE trajectory identifier must be a string or integer")
@@ -47,7 +47,9 @@ def swe_task_key(values: Mapping[str, Any]) -> SweTaskKey:
     for field in ("instance_id", "agent_cls"):
         if not isinstance(values[field], str) or not values[field]:
             raise ValueError(f"SWE {field} must be a nonempty string")
-    return SweTaskKey(str(trajectory), values["step"], values["turn"], values["depth"], values["instance_id"], values["agent_cls"])
+    return SweTaskKey(
+        str(trajectory), values["step"], values["turn"], values["depth"], values["instance_id"], values["agent_cls"]
+    )
 
 
 def verifier_asset_revision(path: str, content: bytes) -> str:
@@ -89,13 +91,19 @@ def task_verifier_assets(row: dict[str, Any]) -> tuple[SweTaskKey, dict[str, str
 
 @lru_cache(maxsize=16)
 def grading_dataset_path(reference: GradingDatasetFile) -> Path:
-    return Path(hf_hub_download(repo_id=reference.repository, repo_type="dataset", revision=reference.revision, filename=reference.filename))
+    return Path(
+        hf_hub_download(
+            repo_id=reference.repository, repo_type="dataset", revision=reference.revision, filename=reference.filename
+        )
+    )
 
 
 @lru_cache(maxsize=16)
 def proxy_asset_index(reference: GradingDatasetFile) -> dict[SweTaskKey, dict[str, str]]:
     index = {}
-    for batch in pq.ParquetFile(grading_dataset_path(reference)).iter_batches(columns=["path", "task_binary"], batch_size=64):
+    for batch in pq.ParquetFile(grading_dataset_path(reference)).iter_batches(
+        columns=["path", "task_binary"], batch_size=64
+    ):
         for row in batch.to_pylist():
             key, files = task_verifier_assets(row)
             if key in index:
@@ -106,7 +114,9 @@ def proxy_asset_index(reference: GradingDatasetFile) -> dict[SweTaskKey, dict[st
 
 def swe_grading_asset_manifest(selection: SweGradingAssets) -> dict[str, Any]:
     """Bind only the proxy verifiers reachable from this source's selected rows."""
-    members = frozenset(pq.read_table(grading_dataset_path(selection.membership), columns=["instance_id"])["instance_id"].to_pylist())
+    members = frozenset(
+        pq.read_table(grading_dataset_path(selection.membership), columns=["instance_id"])["instance_id"].to_pylist()
+    )
     proxies = proxy_asset_index(selection.proxies)
     selected = {}
     with grading_dataset_path(selection.blend).open() as stream:
