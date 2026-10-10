@@ -184,9 +184,23 @@ or a same-project `secretRef` that the host resolves from Secret Manager at laun
 `roles/secretmanager.secretAccessor` for each reference in
 `infra/pulumi/src/iac/gcp/loom.py` before applying the profile. Profile
 environment is applied after `envClear`, so strict automation profiles receive
-it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
-a session land under `/loom/<job>` instead of inheriting the session container's
-`app` OS account.
+it too. The shared `loomEnvironment` block sets `IRIS_USER=loom`, which makes
+Iris jobs submitted from a session land under `/loom/<job>` instead of inheriting
+the session container's `app` OS account. The codehealth profile merges this
+block with its database settings; the messaging-only profile does not use it.
+
+The shared environment directs uv's cache and managed Python installations to
+`/opt/uv` on the existing `loom_uv` volume, and Cargo build output to
+`/home/app/.cache/cargo-build` on the `loom_loom_home` volume. The init service
+creates the Cargo directory before sessions start. `CODEX_CONFIG` grants
+workspace-write access to these two directories so sessions can reuse them
+without redirecting caches into `/tmp`. These are deployment-owned profile
+settings. Use a Loom build containing both
+[ACP writable-root forwarding](https://github.com/marin-community/loom/pull/384)
+and [repository-config removal](https://github.com/marin-community/loom/pull/385)
+so repository configuration cannot override the grants.
+After activation, new sessions receive the grants; existing sessions need an
+explicit handoff to adopt the updated profile environment.
 
 An interactive session always brokers the `loom-oa-dev` GitHub App for its own
 repository, and a stored personal token still takes precedence over it. The

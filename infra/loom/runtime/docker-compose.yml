@@ -18,6 +18,7 @@ services:
       - sh
       - -ceu
       - |
+        mkdir -p /home/app/.cache/cargo-build
         loom config set auth.trust_loopback false
         loom config set auth.cookie_secure true
         loom config set auth.base_url "https://$$LOOM_DOMAIN"
