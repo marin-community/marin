@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 
 from taskcompendium.convert.answers import exact_answer_task
-from taskcompendium.harbor.export import UnsupportedHarborTask, VerifierPayloadIdentity, archive_bytes, harbor_payload
+from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, VerifierPayloadIdentity, archive_bytes, harbor_payload
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow
 

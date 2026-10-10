@@ -16,7 +16,7 @@ from typing import Any
 
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import rewritten_task
-from taskcompendium.convert.tasktrove import ANSWER_PATH, archive_file, archive_resources, archive_script_grader
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH, archive_file, archive_resources, archive_script_grader
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,

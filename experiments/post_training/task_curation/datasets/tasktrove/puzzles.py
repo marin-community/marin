@@ -11,7 +11,7 @@ import json
 
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.tasktrove import archive_file
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext

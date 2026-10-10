@@ -40,9 +40,9 @@ from verifyit.spec import (
 )
 
 from taskcompendium.convert.script_grader import GRADE_ARGV
-from taskcompendium.convert.tasktrove import DOCKERFILE, TASKTROVE_REPO, TEST_SH
-from taskcompendium.convert.verifyit_build import VERIFYIT_CONTEXT
-from taskcompendium.harbor.tasktrove import source_actor_build
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TASKTROVE_REPO, TEST_SH
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT
+from experiments.post_training.task_curation.tasktrove.source_images import source_actor_build
 from taskcompendium.models import (
     DOCKER_IMAGE_PATTERN,
     AnswerType,

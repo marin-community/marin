@@ -10,8 +10,8 @@ source's ``solution/solve.sh``.
 """
 
 
-from taskcompendium.convert.executable import solve_script, tasktrove_archive_task
-from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH, convert_nl2bash
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import solve_script, tasktrove_archive_task
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH, convert_nl2bash
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 

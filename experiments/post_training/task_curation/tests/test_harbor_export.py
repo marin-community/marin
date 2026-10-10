@@ -14,8 +14,8 @@ import yaml
 from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext, run
-from taskcompendium.harbor import export as harbor
-from taskcompendium.harbor.export import VerifierPayloadIdentity
+from experiments.post_training.task_curation.tasktrove import harbor_export as harbor
+from experiments.post_training.task_curation.tasktrove.harbor_export import VerifierPayloadIdentity
 from taskcompendium.models import NoGrader
 from upath import UPath
 

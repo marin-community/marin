@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.tasktrove import ANSWER_PATH, SOLVE_SH, archive_files
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH, SOLVE_SH, archive_files
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,

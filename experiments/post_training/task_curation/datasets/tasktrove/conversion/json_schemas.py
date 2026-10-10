@@ -13,7 +13,7 @@ broken after that, so those tasks are rejected rather than shipped with a grader
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
-from taskcompendium.convert.tasktrove_converted_task import ConvertStatus, Rejected
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertStatus, Rejected
 
 # Numeric/length keywords the dataset sometimes sets to JSON null instead of omitting; Draft
 # 2020-12 requires a number here, so null always fails the metaschema check.

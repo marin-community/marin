@@ -41,14 +41,14 @@ from verifyit.spec import (
     render_spec,
 )
 
-from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles
-from taskcompendium.convert.tasktrove_converted_task import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, INSTRUCTION, TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
     Rejected,
 )
-from taskcompendium.convert.tasktrove_json_schemas import normalize_schema, usable_schema
-from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import normalize_schema, usable_schema
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.nemotron_data import verifier_data
 
 SCHEMA_NAME = "schema.json"
 SCHEMA_FILE = f"tests/{SCHEMA_NAME}"

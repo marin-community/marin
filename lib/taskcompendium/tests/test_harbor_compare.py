@@ -16,7 +16,7 @@ import pytest
 
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.harbor.compare import ParityReport, compare_tasks, write_archive_diff
-from taskcompendium.harbor.export import archive_bytes, archive_file_mode, harbor_payload, harbor_record
+from experiments.post_training.task_curation.tasktrove.harbor_export import archive_bytes, archive_file_mode, harbor_payload, harbor_record
 from taskcompendium.harbor.records import NormalizedIndex
 from taskcompendium.harbor.snapshots import file_map_snapshot, task_snapshot
 from taskcompendium.models import ResourceGroups, Source, TaskSpec

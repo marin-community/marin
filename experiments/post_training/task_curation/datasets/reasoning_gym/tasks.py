@@ -31,7 +31,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from taskcompendium.convert.tasktrove import ANSWER_PATH
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH
 from taskcompendium.grader import grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,

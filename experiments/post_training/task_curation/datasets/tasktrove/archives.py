@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass, replace
 
-from taskcompendium.convert.tasktrove import TASKS_FILE, TASKTROVE_REPO, archive_resource, unpack_task_binary
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import TASKS_FILE, TASKTROVE_REPO, archive_resource, unpack_task_binary
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow

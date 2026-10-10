@@ -9,9 +9,9 @@ from pathlib import Path
 
 from verifyit.spec import Mode, PytestSpec
 
-from taskcompendium.convert.tasktrove import DOCKERFILE, TASKTROVE_REPO
-from taskcompendium.convert.tasktrove_python_unit_tests import pytest_dockerfile
-from taskcompendium.convert.verifyit_build import verifyit_build_context
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TASKTROVE_REPO
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import pytest_dockerfile
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from taskcompendium.models import DockerBuildContext, TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.runtime.resources import resource_bytes
 

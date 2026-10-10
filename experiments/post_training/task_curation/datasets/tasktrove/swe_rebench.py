@@ -15,8 +15,8 @@ import json
 import re
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.executable import swe_task
-from taskcompendium.convert.tasktrove import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import swe_task
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
     INSTRUCTION,
     SOLUTION_DIR,
@@ -25,7 +25,7 @@ from taskcompendium.convert.tasktrove import (
     TaskFiles,
     archive_files,
 )
-from taskcompendium.convert.tasktrove_converted_task import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
     Rejected,

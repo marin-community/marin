@@ -12,13 +12,13 @@ the grader packages include the same ones, so a submission that imports one ther
 
 from dataclasses import dataclass, field
 
-from taskcompendium.convert.executable import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     SOLUTION_PATHS,
     solve_script,
     tasktrove_archive_task,
     tasktrove_python_task,
 )
-from taskcompendium.convert.tasktrove_python_unit_tests import convert as convert_unit_tests
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import convert as convert_unit_tests
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 

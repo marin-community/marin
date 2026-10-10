@@ -19,7 +19,7 @@ from typing import Any
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from taskcompendium.convert.tasktrove import ANSWER_PATH, archive_resources
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH, archive_resources
 from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,

@@ -10,7 +10,7 @@ from typing import Any
 
 from verifyit.spec import Spec
 
-from taskcompendium.convert.tasktrove import SOLUTION_DIR, TaskFiles, archive_files
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import SOLUTION_DIR, TaskFiles, archive_files
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 
 

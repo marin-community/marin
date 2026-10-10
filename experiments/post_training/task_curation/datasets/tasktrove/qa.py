@@ -14,7 +14,7 @@ import re
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.tasktrove import archive_resources
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply

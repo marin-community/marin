@@ -16,9 +16,9 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from taskcompendium.convert.answers import answer_task
-from taskcompendium.convert.verifyit_build import verifyit_build_context
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from taskcompendium.grader import verifyit_package
-from taskcompendium.harbor.export import UnsupportedHarborTask, harbor_record
+from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, harbor_record
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,

@@ -11,27 +11,27 @@ an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
 
 from pathlib import Path
 
-from taskcompendium.convert.executable import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     SOLUTION_PATHS,
     converted_workspace_task,
     solve_script,
     tasktrove_archive_task,
     tasktrove_python_task,
 )
-from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles, archive_resources
-from taskcompendium.convert.tasktrove_code_contests import convert_code_contests
-from taskcompendium.convert.tasktrove_codeforces import convert_codeforces
-from taskcompendium.convert.tasktrove_converted_task import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, INSTRUCTION, TaskFiles, archive_resources
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.codeforces import convert_codeforces
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertFn,
     ConvertStatus,
     Rejected,
     archive_conversion,
 )
-from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
-from taskcompendium.convert.tasktrove_stdio_cases import SOLUTION_COMMAND, case_files, hidden_case_rejection
-from taskcompendium.convert.tasktrove_taco import convert_taco
-from taskcompendium.convert.verifyit_build import verifyit_build_context
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.nemotron_data import verifier_data
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio_cases import SOLUTION_COMMAND, case_files, hidden_case_rejection
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow

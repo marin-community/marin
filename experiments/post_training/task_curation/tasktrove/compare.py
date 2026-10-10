@@ -19,7 +19,7 @@ import click
 import verifyit
 from taskcompendium.harbor import snapshots
 from taskcompendium.harbor.compare import ParityReport, write_archive_diff
-from taskcompendium.harbor.export import UnsupportedHarborTask, archive_bytes, archive_file_mode, harbor_payload
+from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, archive_bytes, archive_file_mode, harbor_payload
 from taskcompendium.harbor.records import NormalizedIndex
 from taskcompendium.harbor.snapshots import TaskSnapshot, file_map_snapshot, snapshot_from_dict, task_snapshot
 from taskcompendium.models import AnswerType, TaskSpec

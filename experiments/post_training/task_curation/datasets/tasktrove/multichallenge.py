@@ -16,7 +16,7 @@ import tomllib
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.delivery import rewritten_task
-from taskcompendium.convert.tasktrove import archive_file
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment

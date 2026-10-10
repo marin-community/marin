@@ -14,12 +14,14 @@ from shellbox.machine import Backend, DockerImage, ExitReason, MachineSpec, Resu
 from verifyit.spec import StdioSpec
 
 from taskcompendium.convert.environment import grading_environment
-from taskcompendium.convert.executable import SOLUTION_PATHS, workspace_task
+from taskcompendium.convert.executable import workspace_task
 from taskcompendium.models import GradingAttempt, OutputDirectory, Source, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellEnvironment, ShellFactory
+
+SOLUTION_PATHS = ("/app/solution.py", "/app/solution.cpp")
 
 from .test_runtime import EXITED, FileMachine, FileMachines, finished
 

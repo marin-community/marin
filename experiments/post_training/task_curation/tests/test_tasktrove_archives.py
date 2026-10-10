@@ -8,12 +8,12 @@ import json
 
 import pytest
 
-from taskcompendium.convert.tasktrove import INSTRUCTION, SOLVE_SH
-from taskcompendium.convert.tasktrove_code_contests import convert_code_contests
-from taskcompendium.convert.tasktrove_converted_task import ConvertedTask, archive_conversion
-from taskcompendium.convert.tasktrove_nemotron_structured_outputs import convert_nemotron_structured_outputs
-from taskcompendium.convert.tasktrove_nl2bash import convert_nl2bash
-from taskcompendium.convert.tasktrove_taco import convert_taco
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import INSTRUCTION, SOLVE_SH
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertedTask, archive_conversion
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.structured_outputs import convert_nemotron_structured_outputs
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import convert_nl2bash
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 
 DOCKERFILE = b"FROM python:3.12-slim\n"

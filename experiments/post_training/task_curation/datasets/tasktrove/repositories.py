@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.executable import swe_task
-from taskcompendium.convert.tasktrove import archive_files
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import swe_task
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_files
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     Converter,

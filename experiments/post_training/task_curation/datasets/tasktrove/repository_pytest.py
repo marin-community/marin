@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.tasktrove import TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import TaskFiles
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 from verifyit.spec import PytestSpec
 

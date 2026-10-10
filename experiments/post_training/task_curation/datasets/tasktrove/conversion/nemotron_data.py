@@ -5,7 +5,7 @@
 
 import json
 
-from taskcompendium.convert.tasktrove import TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import TaskFiles
 
 VERIFIER_DATA = "tests/verifier_data.json"
 METADATA = "metadata.json"

@@ -4,8 +4,8 @@
 """Deferred repository images and private workspace graders."""
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.tasktrove import DOCKERFILE, TEST_SH_REWARD, TaskFiles
-from taskcompendium.convert.verifyit_build import VERIFYIT_CONTEXT, verifyit_build_context
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TEST_SH_REWARD, TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT, verifyit_build_context
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,

@@ -14,18 +14,18 @@ import pytest
 from shellbox.machine import Backend, Command, DockerImage, ExitReason, HostImage, MachineFactory, MachineSpec, Result
 from verifyit.spec import StdioSpec
 
-from taskcompendium.convert.executable import (
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     SOLUTION_PATHS,
     converted_workspace_task,
     python_delivery,
     solve_script,
     tasktrove_archive_task,
 )
-from taskcompendium.convert.tasktrove import INSTRUCTION, SOLUTION_DIR, TaskFiles
-from taskcompendium.convert.tasktrove_converted_task import ConvertedTask
-from taskcompendium.convert.tasktrove_stdio_cases import SOLUTION_COMMAND
-from taskcompendium.convert.verifyit_build import verifyit_build_context
-from taskcompendium.harbor.export import harbor_record
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import INSTRUCTION, SOLUTION_DIR, TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertedTask
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio_cases import SOLUTION_COMMAND
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
+from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_record
 from taskcompendium.models import (
     ConversationTrace,
     EnvironmentRequirements,
@@ -50,7 +50,7 @@ from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import ShellFactory
 
-from .pipeline_stages import fixture_recipe
+from lib.taskcompendium.tests.pipeline_stages import fixture_recipe
 
 IMAGE = "test@sha256:" + "a" * 64
 ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, compatible_backends=(Backend.DOCKER,))

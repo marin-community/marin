@@ -12,9 +12,9 @@ import click
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.convert import tasktrove, tasktrove_python_unit_tests, verifyit_build
-from taskcompendium.harbor import export as harbor
-from taskcompendium.harbor.export import MANIFEST_FILENAME, HarborSourceMetadata
+from experiments.post_training.task_curation.datasets.tasktrove.conversion import archive as tasktrove, python_unit_tests as tasktrove_python_unit_tests, verifyit_build
+from experiments.post_training.task_curation.tasktrove import harbor_export as harbor
+from experiments.post_training.task_curation.tasktrove.harbor_export import MANIFEST_FILENAME, HarborSourceMetadata
 
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.environment import PINNED_IMAGE

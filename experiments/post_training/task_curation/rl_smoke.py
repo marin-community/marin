@@ -29,7 +29,7 @@ from marin.rl.skyrl import (
     TaskTroveSelection,
     skyrl_step,
 )
-from taskcompendium.harbor.export import MANIFEST_FILENAME, TASKS_FILENAME
+from experiments.post_training.task_curation.tasktrove.harbor_export import MANIFEST_FILENAME, TASKS_FILENAME
 
 from experiments.post_training.curriculum_rl.launch import HF_EXPORT_SUBDIR, model_step
 from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL, QWEN3_REVISION
