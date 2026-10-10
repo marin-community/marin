@@ -632,7 +632,7 @@ def _launcher_command(config_path: str) -> list[str]:
         "run",
         "--isolated",
         "--project",
-        str(workspace_root / "config/external/MarinSkyRL"),
+        str(workspace_root / "config/external" / MARIN_SKYRL.config_name),
         "--frozen",
         "marinskyrl",
         "iris",

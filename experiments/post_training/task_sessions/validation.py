@@ -50,7 +50,7 @@ BATCH_SIZE = 8
 RUN_NAME = "checkpoints/task-session-validation"
 GROUP_SIZE = 4
 MICRO_BATCH_SIZE = 4
-VALIDATION_ROWS = BATCH_SIZE
+VALIDATION_ROWS = 8
 RETENTION_BYTES_PER_STEP = 16 * 1024 * 1024
 RETENTION_BYTES_PER_RUN = 128 * 1024 * 1024
 
@@ -130,7 +130,7 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
         {"type": "inference_stats", "log_every_steps": 1, "log_to_console": True, "log_to_tracker": True},
     ]
     config["generator"]["trajectory_retention"] = {
-        "sample_count_per_step": 8,
+        "sample_count_per_step": BATCH_SIZE,
         "max_bytes_per_step": RETENTION_BYTES_PER_STEP,
         "max_bytes_per_run": RETENTION_BYTES_PER_RUN,
         "required": True,
@@ -147,7 +147,7 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     data_name = user_owned_name(f"documents/task-session-validation/{data_identity}")
     data = ArtifactStep(
         name=data_name,
-        version=resolve_version(data_name, version),
+        version=version,
         artifact_type=Artifact,
         run=remote(write_validation_data, resources=ResourceConfig.with_cpu(cpu=2, ram="8g", disk="8g")),
         build_config=lambda ctx: ValidationDataConfig(ctx.output_path, rows),

@@ -17,9 +17,6 @@ policy-training and rollout spans are enabled explicitly.
 and applies two update epochs per batch. `--lane sync` is a manual experiment
 outside the canary and CI. It uses zero staleness,
 the regular policy objective and truncated importance sampling (TIS) with a cap of 2.
-The async lane selects `trainer.algorithm.policy_loss_type=behavior_clip`.
-The sync lane selects `trainer.algorithm.policy_loss_type=regular`.
-The sync lane selects `trainer.algorithm.off_policy_correction=tis`.
 The two lanes use the same trainer loop, 64 prompts with eight samples each, a full-batch mini-batch,
 matching training and forward micro-batches of 16 per GPU, and learning
 rate 2e-6.
@@ -115,6 +112,10 @@ count at temperature 1. The async gate requires step 0 sampled reward in
 `--eval-minimum-score` selects an exploratory sampled-score stopping threshold.
 The checked-in gate preset and async spec use 0.65. A stopping step ends
 training; checkpoints and HF export require their explicit flags.
+The 0.65 threshold comes from a [calibration run](https://wandb.ai/dogml/marin-cat-count-canary/runs/1jr0tjpg)
+with a different runtime. This evidence does not establish the threshold for the TaskSession runtime.
+The [TaskSession validation](../task_sessions/validation.py) checks training and exports,
+but does not recalibrate the canary gate.
 Megatron logs `policy/dp_weight_checksum_mismatch` after every optimizer step;
 any mismatch fails the spec. The grouped step metric keeps the maximum across
 optimizer windows. Greedy, held-out and extrapolation scores are reported only.
