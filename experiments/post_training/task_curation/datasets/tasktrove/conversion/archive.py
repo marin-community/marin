@@ -16,7 +16,6 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 from taskcompendium.convert.answers import unsupported
@@ -64,19 +63,8 @@ class TaskFiles:
         blob = self.files.get(path)
         return None if blob is None else blob.decode("utf-8", errors="replace")
 
-    @property
-    def has_solution(self) -> bool:
-        return any(p.startswith(SOLUTION_DIR) for p in self.files)
-
     def under(self, prefix: str) -> dict[str, bytes]:
         return {p: b for p, b in self.files.items() if p.startswith(prefix)}
-
-    def write_to(self, root: Path) -> None:
-        """Materialize every file under ``root``, creating directories as needed."""
-        for path, data in self.files.items():
-            target = root / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
 
 
 def unpack_task_binary(row: dict[str, Any], _context: ConversionContext) -> dict[str, Any]:

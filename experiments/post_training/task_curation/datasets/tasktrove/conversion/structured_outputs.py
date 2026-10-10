@@ -41,14 +41,21 @@ from verifyit.spec import (
     render_spec,
 )
 
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, INSTRUCTION, TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    INSTRUCTION,
+    TaskFiles,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import (
+    normalize_schema,
+    usable_schema,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.nemotron_data import verifier_data
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
     Rejected,
 )
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import normalize_schema, usable_schema
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.nemotron_data import verifier_data
 
 SCHEMA_NAME = "schema.json"
 SCHEMA_FILE = f"tests/{SCHEMA_NAME}"
@@ -280,5 +287,4 @@ def convert_nemotron_structured_outputs(task: TaskFiles) -> ConvertedTask | Reje
         dockerfile=task.text(DOCKERFILE),
         tags=("structured-outputs", "grounded", "script", "nemotron", schema_type.value),
         data_files=nested_files,
-        verifier_extras=("schema", "judge"),
     )

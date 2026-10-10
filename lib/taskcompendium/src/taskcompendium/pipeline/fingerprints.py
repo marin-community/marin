@@ -14,7 +14,7 @@ from typing import Any
 
 from verifyit.spec import Mode
 
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import SCHEMA_VERSION, NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.models import SourceRecipe
 

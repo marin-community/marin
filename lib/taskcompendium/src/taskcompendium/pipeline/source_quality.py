@@ -12,7 +12,7 @@ from functools import partial
 
 from pydantic import BaseModel, ConfigDict
 
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,

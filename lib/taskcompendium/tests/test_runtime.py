@@ -18,7 +18,8 @@ from verifyit.spec import ScriptSpec, render_spec, spec_from_table
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,

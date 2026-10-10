@@ -8,18 +8,8 @@ import json
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import TaskFiles
 
 VERIFIER_DATA = "tests/verifier_data.json"
-METADATA = "metadata.json"
 
 
 def verifier_data(task: TaskFiles) -> dict:
     """``tests/verifier_data.json``: the grader's per-task inputs (expected answers, schema, cases)."""
     return json.loads(task.text(VERIFIER_DATA))
-
-
-def metadata(task: TaskFiles) -> dict:
-    """Top-level ``metadata.json`` when the template ships one, else empty.
-
-    ``None`` values are dropped: they reach ``task.toml``, and TOML has no null.
-    """
-    raw = task.get_text(METADATA)
-    return {key: value for key, value in json.loads(raw).items() if value is not None} if raw else {}

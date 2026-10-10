@@ -30,7 +30,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 import taskcompendium
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
 from taskcompendium.pipeline.models import (
