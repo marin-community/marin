@@ -27,7 +27,7 @@ from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
@@ -349,7 +349,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, convert_judged),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 grader=GRADER_PACKAGES,

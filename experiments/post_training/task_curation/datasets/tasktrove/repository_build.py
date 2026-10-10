@@ -7,6 +7,7 @@ from taskcompendium.convert.answers import unsupported
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
+    CommandSemantics,
     DockerBuildContext,
     EnvironmentRequirements,
     ResourceGroups,
@@ -84,7 +85,9 @@ def repository_build_task(
                 inline_resource(REPOSITORY_SETUP, setup.encode()),
             )
         )
-    environment = EnvironmentRequirements(docker_build=DockerBuildContext(files=tuple(grader_files)))
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=DockerBuildContext(files=tuple(grader_files))
+    )
     verifier = (
         *verifier,
         inline_resource(VERIFIER_SPEC, render_spec(spec).encode()),

@@ -16,7 +16,7 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
 from experiments.post_training.task_curation.config import (
-    ImageGraderExecution,
+    ImageGraderPlacement,
     InputOverrides,
     PipelineOptions,
     RecipeSettings,
@@ -63,15 +63,15 @@ def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
     help="Iris container profile of the Zephyr workers; local graders need a privileged pod to build sandboxes.",
 )
 @click.option(
-    "--verification-backend",
-    type=click.Choice([backend.value for backend in ImageGraderExecution]),
-    default=ImageGraderExecution.IRIS.value,
+    "--image-grader-placement",
+    type=click.Choice([backend.value for backend in ImageGraderPlacement]),
+    default=ImageGraderPlacement.IRIS.value,
     show_default=True,
-    help="Where image graders run: Iris jobs or local gVisor. Local grader environments run in the worker.",
+    help="Where image graders run: Iris jobs or gVisor on the worker. Local grader environments run in the worker.",
 )
 @click.option(
     "--controller-url",
-    help="Iris controller for --verification-backend iris; inside an Iris job, defaults to the job's controller.",
+    help="Iris controller for --image-grader-placement iris; inside an Iris job, defaults to the job's controller.",
 )
 @click.option("--seed", type=int, default=0)
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
@@ -118,7 +118,7 @@ def main(
     concurrent_sources: int,
     worker_image: str | None,
     container_profile: str,
-    verification_backend: str,
+    image_grader_placement: str,
     controller_url: str | None,
     seed: int,
     verification_sample_size: int,
@@ -194,7 +194,7 @@ def main(
         relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=normalized_shards,
-        verification_backend=ImageGraderExecution(verification_backend),
+        image_grader_placement=ImageGraderPlacement(image_grader_placement),
         controller_url=controller_url,
         seed=seed,
         verification_sample_size=verification_sample_size,

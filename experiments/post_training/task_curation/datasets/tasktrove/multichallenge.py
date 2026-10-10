@@ -27,7 +27,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
@@ -106,7 +106,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_multichallenge),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 grader=GRADER_PACKAGES,

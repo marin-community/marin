@@ -25,7 +25,7 @@ from zephyr.readers import load_parquet
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation import pipeline as processor
 from experiments.post_training.task_curation.campaign import CampaignPool
-from experiments.post_training.task_curation.config import ImageGraderExecution
+from experiments.post_training.task_curation.config import ImageGraderPlacement
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
@@ -83,7 +83,7 @@ def arguments(tmp_path) -> list[str]:
         "--coordinator-memory": "16g",
         "--normalized-shards": "1",
         "--worker-image": "fixture-image",
-        "--verification-backend": "gvisor",
+        "--image-grader-placement": "gvisor",
         "--report-path": str(tmp_path / "report.json"),
     }
     return [item for pair in options.items() for item in pair]
@@ -115,7 +115,7 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     monkeypatch.setattr(
         LocalRuntime, "ensure_built", lambda self: (self.root.mkdir(parents=True), built.append(self.root))
     )
-    machines = campaign_machines(ImageGraderExecution.IRIS, PINNED_WORKER, CONTROLLER_URL)
+    machines = campaign_machines(ImageGraderPlacement.IRIS, PINNED_WORKER, CONTROLLER_URL)
     factory, spec = machines.machine(environment_requirements(environment, artifact), 2048)
     runtime = local_runtime(artifact.lock_url)
     request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
@@ -129,7 +129,7 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
 def iris_arguments(tmp_path) -> list[str]:
     """The fixture options with the verification backend left at its default, Iris."""
     options = arguments(tmp_path)
-    index = options.index("--verification-backend")
+    index = options.index("--image-grader-placement")
     return options[:index] + options[index + 2 :]
 
 

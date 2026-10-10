@@ -20,6 +20,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
+    CommandSemantics,
     DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
@@ -159,12 +160,13 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
     row, converted = normalized_row
     converted = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "generic"})})
     environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=DockerBuildContext(
             files=(
                 inline_resource("Dockerfile", b"FROM source:latest\nCOPY required.bin /required.bin\n"),
                 inline_resource("required.bin", b"source environment data"),
             )
-        )
+        ),
     )
     if role == "actor":
         task = converted.model_copy(update={"environment_requirements": environment})
@@ -194,7 +196,9 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
                 "grader": ScriptGrader(
                     argv=("bash", "/tests/test.sh"),
                     answer_path=None,
-                    environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                    ),
                     reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format="number"),)),
                 ),
                 "resources": task.resources.model_copy(
@@ -451,7 +455,9 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
             "grader": ScriptGrader(
                 argv=("python3", "/tests/grade.py"),
                 answer_path=None,
-                environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+                environment=EnvironmentRequirements(
+                    command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                ),
                 reward=StdoutReward(),
             ),
         }
@@ -484,6 +490,7 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
 def repository_task(normalized_row) -> TaskSpec:
     _, task = normalized_row
     environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
         capabilities=("git_repository",),
         docker_build=verifyit_build_context("FROM python:3.12-slim\nWORKDIR /testbed\n", (), package=VERIFYIT_PACKAGE),
     )
@@ -632,7 +639,7 @@ print(float(answer == actor_dependency.expected))
     package = verifyit_package(
         ScriptSpec(path="check.py", workspace=str(workspace)),
         (inline_resource("check.py", checker),),
-        environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+        environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE),
     )
     task = original.model_copy(
         update={

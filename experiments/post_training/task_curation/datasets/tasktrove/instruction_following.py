@@ -25,7 +25,7 @@ from verifyit.spec import Constraint, SchemaFormat
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import is_trivial
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
@@ -232,7 +232,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(IFEVAL_CONFIG),
                 convert=TaskTroveConverter(IFEVAL_CONFIG, convert_ifeval),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=IFEVAL_RUBRIC,
             ),
@@ -253,7 +252,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(STRUCTURED_CONFIG),
                 convert=TaskTroveConverter(STRUCTURED_CONFIG, convert_structured),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=STRUCTURED_RUBRIC,
                 controls=Controls(),

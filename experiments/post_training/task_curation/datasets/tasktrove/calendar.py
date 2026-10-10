@@ -44,7 +44,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_resources,
     archive_script_grader,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 WITNESS_PATH = "solution/answer.json"
@@ -200,7 +200,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(config),
                 convert=TaskTroveConverter(config, convert_calendar),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=rubric,
                 controls=Controls(golden=calendar_golden),

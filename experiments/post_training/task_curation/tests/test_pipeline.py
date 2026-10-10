@@ -4,7 +4,6 @@
 import hashlib
 import importlib.util
 import json
-import re
 import sys
 import threading
 from dataclasses import replace
@@ -17,8 +16,6 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.machine import Backend
-from taskcompendium.convert.environment import IMAGE_BACKENDS
 from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import FilterPolicy, ReviewRubric
@@ -31,11 +28,10 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult
-from experiments.post_training.task_curation.config import ImageGraderExecution, PipelineOptions, RecipeSettings
+from experiments.post_training.task_curation.config import ImageGraderPlacement, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
-    MissingEnvironmentArtifact,
     built_environment,
     environment_artifact,
 )
@@ -73,7 +69,7 @@ def math500() -> CurationRecipe:
     return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
 
 
-def machines(backend: ImageGraderExecution) -> GradingMachines:
+def machines(backend: ImageGraderPlacement) -> GradingMachines:
     return campaign_machines(backend, "fixture-worker", "http://controller.invalid")
 
 
@@ -87,7 +83,7 @@ def config() -> SourcePipelineConfig:
         execution=AuditExecution(),
         filter_policy=FilterPolicy(),
         normalized_shards=2,
-        machines=machines(ImageGraderExecution.GVISOR),
+        machines=machines(ImageGraderPlacement.WORKER),
     )
 
 
@@ -125,8 +121,8 @@ def test_review_settings_enter_identity_only_with_a_rubric(config):
     assert step_name(unreviewed, revised) == step_name(unreviewed, config)
 
 
-def test_verification_backend_enters_identity_only_with_controls(config):
-    iris = replace(config, machines=machines(ImageGraderExecution.IRIS))
+def test_image_grader_placement_enters_identity_only_with_controls(config):
+    iris = replace(config, machines=machines(ImageGraderPlacement.IRIS))
     assert step_name(math500(), iris) != step_name(math500(), config)
     unchecked = replace(math500(), controls=None)
     assert step_name(unchecked, iris) == step_name(unchecked, config)
@@ -191,29 +187,12 @@ def test_a_changed_grader_environment_renames_the_artifact(grader_lock, config):
     assert step_name(pipeline, config) != original.name
 
 
-def test_a_grader_environment_without_a_built_artifact_names_the_build_command(grader_lock, config):
-    pipeline = replace(math500(), grader=Environment(lock=grader_lock))
-    with pytest.raises(
-        MissingEnvironmentArtifact,
-        match=re.escape("run: uv run python -m experiments.post_training.task_curation.images --identity "),
-    ):
-        source_step(
-            pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
-        )
-
-
-def test_an_environment_image_runs_as_declared_in_a_sandbox():
-    requirements = environment_requirements(Environment(image=AGENT_IMAGE))
-    assert (requirements.docker_image, requirements.compatible_backends) == (AGENT_IMAGE, IMAGE_BACKENDS)
-    assert requirements.packages_lock is None
-
-
 def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_image(grader_lock):
     environment = Environment(lock=grader_lock, apt=("build-essential", "jq"))
     (built,) = run(environment_artifact(environment, REPOSITORY))
     requirements = environment_requirements(environment, built_environment(environment))
     assert built.image is not None and built.image.startswith(f"{REPOSITORY}@sha256:")
-    assert (requirements.docker_image, requirements.compatible_backends) == (built.image, IMAGE_BACKENDS)
+    assert requirements.docker_image == built.image
     assert requirements.packages_lock is None
 
 
@@ -229,7 +208,6 @@ def test_environments_the_worker_image_covers_run_in_the_worker_from_their_lock(
     environment = declare(grader_lock)
     (built,) = run(environment_artifact(environment, REPOSITORY))
     requirements = environment_requirements(environment, built_environment(environment))
-    assert requirements.compatible_backends == (Backend.LOCAL,)
     assert requirements.docker_image is None
     assert requirements.packages_lock == built.lock_url
     assert hashlib.sha256(StoragePath(requirements.packages_lock).read_bytes()).hexdigest() == built.lock_sha256

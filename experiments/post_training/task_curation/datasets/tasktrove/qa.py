@@ -24,7 +24,7 @@ from verifyit.spec import JudgeSpec
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 MCQA_CONFIG = "laion__nemotron-gym-knowledge-mcqa-v2"
@@ -273,7 +273,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     source=tasktrove_source(config),
                     convert=TaskTroveConverter(config, convert_openqa),
                     version="3",
-                    environment=ShellSim(),
                     intended_use=IntendedUse.TRAIN,
                     rubric=OPENQA_RUBRIC,
                     grader=GRADER_PACKAGES,
@@ -300,7 +299,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(MCQA_CONFIG),
                 convert=TaskTroveConverter(MCQA_CONFIG, convert_knowledge_mcqa),
                 version="5",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=KNOWLEDGE_MCQA_RUBRIC,
                 controls=Controls(golden=reference_reply),

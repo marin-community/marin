@@ -4,7 +4,7 @@
 """Dataset declarations and the artifact steps that ingest them.
 
 A ``CurationRecipe`` names one pinned source, the converter that turns each row into a
-``TaskSpec`` with its grader fixed, the agent's environment, what its graders' environment must
+``TaskSpec`` with its grader fixed, what its graders' environment must
 provide, an optional review rubric and optional grader controls. ``process_rows`` constructs a graph
 for ``taskcompendium.pipeline.source_processing.run_source_pipeline``. SAMPLE/FULL cache a
 ``data/rl/<name>-<hash>`` artifact; QUICK converts at the explicit local output path.
@@ -41,9 +41,8 @@ from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Backend, DockerImage, MachineFactory, MachineSpec, NetworkPolicy
-from taskcompendium.convert.environment import IMAGE_BACKENDS
-from taskcompendium.models import EnvironmentRequirements, require_resolved_environment
+from shellbox.machine import DockerImage, MachineFactory, MachineSpec, NetworkPolicy
+from taskcompendium.models import SCHEMA_VERSION, CommandSemantics, EnvironmentRequirements, require_resolved_environment
 from taskcompendium.pipeline.controls import GradingMachines, controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
 from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFileOverride, SourceFiles, SourceFormat
@@ -77,7 +76,7 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
-from experiments.post_training.task_curation.config import ImageGraderExecution, PipelineOptions, RecipeSettings
+from experiments.post_training.task_curation.config import ImageGraderPlacement, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
@@ -157,15 +156,10 @@ class UrlSource:
         return (self.filename,)
 
 
-@dataclass(frozen=True)
-class ShellSim:
-    """No agent machine: conversation tasks, or shell tasks served by the simulated shell."""
-
-
 def environment_requirements(
     environment: Environment, built: EnvironmentArtifact | None = None
 ) -> EnvironmentRequirements:
-    """The requirements a task records for ``environment``; they name where the pipeline runs it.
+    """Record the image or package lock a task needs for Linux process execution.
 
     A declared image runs in a sandbox of that image, and an environment that needs apt packages the
     worker image lacks runs in a sandbox of the image built for it. Any other environment runs in the
@@ -175,13 +169,13 @@ def environment_requirements(
     where = placement(environment)
     if where == Placement.IMAGE:
         assert environment.image is not None
-        return EnvironmentRequirements(docker_image=environment.image, compatible_backends=IMAGE_BACKENDS)
+        return EnvironmentRequirements(docker_image=environment.image, command_semantics=CommandSemantics.LINUX_PROCESS)
     if built is None:
         raise ValueError("An environment without a declared image runs from its built artifact")
     if where == Placement.BUILT_IMAGE:
         assert built.image is not None
-        return EnvironmentRequirements(docker_image=built.image, compatible_backends=IMAGE_BACKENDS)
-    return EnvironmentRequirements(compatible_backends=(Backend.LOCAL,), packages_lock=built.lock_url)
+        return EnvironmentRequirements(docker_image=built.image, command_semantics=CommandSemantics.LINUX_PROCESS)
+    return EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=built.lock_url)
 
 
 def environment_record(environment: Environment, built: EnvironmentArtifact | None) -> dict[str, Any]:
@@ -201,9 +195,8 @@ class CurationRecipe:
     review and ``controls=None`` skips grader verification. ``inputs`` are auxiliary pinned files
     staged before conversion; the source callables and converter find them in ``context.inputs``.
 
-    ``environment`` is the agent's: ``ShellSim()`` or an ``Environment`` naming its image, which the
-    converter records on each task. ``grader`` is what the source's grader scripts need; the pipeline
-    builds it, decides where it runs (``environment_requirements``) and passes the result to the
+    Converters record each task's agent requirements. ``grader`` is what the source's grader
+    scripts need; the pipeline builds it and passes the requirements to the
     converter as ``context.grader_environment``. ``ships`` are directories, such as
     ``datasets/<family>/scorers``, whose files the converter packages into tasks. The artifact
     identity hashes the converter module's directory, every file below ``ships`` and the grader's
@@ -215,7 +208,6 @@ class CurationRecipe:
     source: HfSource | UrlSource
     convert: Converter
     version: str
-    environment: Environment | ShellSim
     intended_use: IntendedUse
     rubric: str | None = None
     controls: Controls | None = None
@@ -228,9 +220,6 @@ class CurationRecipe:
         missing = [str(path) for path in self.ships if not path.is_dir()]
         if missing:
             raise ValueError(f"{self.name} ships directories that do not exist: {missing}")
-        # Converters record the agent's requirements on each task without a built artifact to consult.
-        if isinstance(self.environment, Environment) and self.environment.image is None:
-            raise ValueError(f"{self.name} must name the agent environment's image")
 
     @property
     def dataset(self) -> HfSource | UrlSource:
@@ -241,10 +230,10 @@ class CurationRecipe:
         return self.source.files
 
 
-def machines_identity(backend: ImageGraderExecution, worker_image: str, controller: bool) -> dict[str, Any]:
+def machines_identity(placement: ImageGraderPlacement, worker_image: str, controller: bool) -> dict[str, Any]:
     """The settings every backend's grading machines share; the worker image carries the grading code."""
     return {
-        "backend": backend.value,
+        "backend": "gvisor" if placement == ImageGraderPlacement.WORKER else "iris",
         "worker_image": worker_image,
         # Local graders run in bubblewrap sandboxes on the worker; recorded so a backend change reverifies.
         "local_backend": "bubblewrap",
@@ -261,7 +250,7 @@ class IrisMachines:
     controller_url: str | None
 
     def identity(self) -> dict[str, Any]:
-        return machines_identity(ImageGraderExecution.IRIS, self.worker_image, controller=True)
+        return machines_identity(ImageGraderPlacement.IRIS, self.worker_image, controller=True)
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         image = _sandbox_image(environment)
@@ -278,13 +267,13 @@ class IrisMachines:
 
 
 @dataclass(frozen=True)
-class GvisorMachines:
+class WorkerMachines:
     """Run each sandbox image under gVisor on the local Docker daemon."""
 
     worker_image: str
 
     def identity(self) -> dict[str, Any]:
-        return machines_identity(ImageGraderExecution.GVISOR, self.worker_image, controller=False)
+        return machines_identity(ImageGraderPlacement.WORKER, self.worker_image, controller=False)
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         image = _sandbox_image(environment)
@@ -302,7 +291,7 @@ def _sandbox_image(environment: EnvironmentRequirements) -> str:
 class CampaignMachines:
     """Grading machines for a campaign: local environments grade in the worker, images on ``sandbox``."""
 
-    sandbox: IrisMachines | GvisorMachines
+    sandbox: IrisMachines | WorkerMachines
     local: LocalGraderMachines
 
     def identity(self) -> dict[str, Any]:
@@ -310,16 +299,16 @@ class CampaignMachines:
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         require_resolved_environment(environment)
-        if Backend.LOCAL in environment.compatible_backends:
+        if environment.packages_lock is not None:
             return self.local.machine(environment, memory_mb)
         return self.sandbox.machine(environment, memory_mb)
 
 
-def campaign_machines(backend: ImageGraderExecution, worker_image: str, controller_url: str | None) -> GradingMachines:
-    """Grading machines for every source in a campaign: sandbox graders on ``backend``, local graders in the worker."""
-    if backend == ImageGraderExecution.IRIS:
+def campaign_machines(placement: ImageGraderPlacement, worker_image: str, controller_url: str | None) -> GradingMachines:
+    """Grading machines for every source in a campaign: image graders on ``placement``, local graders in the worker."""
+    if placement == ImageGraderPlacement.IRIS:
         return CampaignMachines(IrisMachines(worker_image, controller_url), LocalGraderMachines())
-    return CampaignMachines(GvisorMachines(worker_image), LocalGraderMachines())
+    return CampaignMachines(WorkerMachines(worker_image), LocalGraderMachines())
 
 
 def job_controller_url() -> str | None:
@@ -334,7 +323,7 @@ def _controller_url(controller_url: str | None) -> str:
         return controller_url
     job_url = job_controller_url()
     if job_url is None:
-        raise click.UsageError("--verification-backend iris outside an Iris job requires --controller-url")
+        raise click.UsageError("--image-grader-placement iris outside an Iris job requires --controller-url")
     return job_url
 
 
@@ -408,7 +397,7 @@ def _source_config(
         None,
         (
             campaign_machines(
-                settings.verification_backend, settings.execution.worker_resources.image, settings.controller_url
+                settings.image_grader_placement, settings.execution.worker_resources.image, settings.controller_url
             )
             if controls is not None
             else None
@@ -571,7 +560,7 @@ def _run_curation(
                 grader_environment = environment_requirements(environment)
             elif environment.lock is not None:
                 grader_environment = EnvironmentRequirements(
-                    compatible_backends=(Backend.LOCAL,), packages_lock=str(environment.lock.resolve())
+                    command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=str(environment.lock.resolve())
                 )
             else:
                 raise ValueError(
@@ -634,11 +623,6 @@ def pipeline_identity(
         "inputs": {name: download_identity(source) for name, source in sorted(pipeline.inputs.items())},
         "code": recipe_code_identity(recipe),
         "converter": converter_identity(pipeline, grader),
-        "environment": (
-            environment_record(pipeline.environment, None)
-            if isinstance(pipeline.environment, Environment)
-            else {"shellsim": True}
-        ),
         "resource_budget_bytes": pipeline.resource_budget_bytes,
         "rubric": pipeline.rubric,
         "review": asdict(config.review) if pipeline.rubric is not None else None,
@@ -869,7 +853,7 @@ def _quick_step(pipeline: CurationRecipe, options: PipelineOptions) -> ArtifactS
     }
     return ArtifactStep(
         name=pipeline.name,
-        version=PIPELINE_VERSION,
+        version=f"{PIPELINE_VERSION}-task-schema-{SCHEMA_VERSION}",
         artifact_type=CampaignArtifact,
         run=partial(_run_quick_source, pipeline, options),
         build_config=partial(_quick_run, options, primary, auxiliary),

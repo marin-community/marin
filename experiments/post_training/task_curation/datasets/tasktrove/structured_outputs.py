@@ -29,7 +29,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
     MISSING_INSTRUCTION,
     convert_nemotron_structured_outputs,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
@@ -127,7 +127,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_structured_outputs),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=STRUCTURED_OUTPUTS_RUBRIC,
                 grader=GRADER_PACKAGES,

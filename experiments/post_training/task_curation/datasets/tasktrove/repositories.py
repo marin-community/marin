@@ -36,7 +36,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
     trusted_pytest,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.swe_rebench import convert_swe_rebench_task
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 REPOSITORY_CRITERIA = """
@@ -118,7 +118,6 @@ def repository_source(
             convert=TaskTroveConverter(config, convert),
             version=version,
             ships=ships,
-            environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=rubric,
         ),

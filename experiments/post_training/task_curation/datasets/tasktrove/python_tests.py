@@ -207,7 +207,6 @@ def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask |
 class PythonTestsSource:
     config: str
     convert: Converter
-    image: Environment
     rubric: str
     info: SourceInfo = field(kw_only=True)
 
@@ -216,7 +215,6 @@ SOURCES = {
     "curriculum_easy": PythonTestsSource(
         "DCAgent__exp_rpt_curriculum-easy",
         convert_python_tests,
-        AGENT_IMAGE,
         CURRICULUM_EASY_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_curriculum-easy",
@@ -234,7 +232,6 @@ SOURCES = {
     "curriculum_medium": PythonTestsSource(
         "DCAgent__exp_rpt_curriculum-medium-v2",
         convert_python_tests,
-        AGENT_IMAGE,
         CURRICULUM_MEDIUM_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_curriculum-medium-v2",
@@ -252,7 +249,6 @@ SOURCES = {
     "e2egit": PythonTestsSource(
         "DCAgent__exp_rpt_e2egit-v2",
         convert_python_tests,
-        AGENT_IMAGE,
         E2EGIT_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_e2egit-v2",
@@ -270,7 +266,6 @@ SOURCES = {
     "e2egit_large": PythonTestsSource(
         "DCAgent__exp_rpt_e2egit-large",
         convert_python_tests,
-        AGENT_IMAGE,
         E2EGIT_LARGE_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_e2egit-large",
@@ -288,7 +283,6 @@ SOURCES = {
     "multifile": PythonTestsSource(
         "DCAgent__exp_rpt_multifile-v3",
         convert_python_tests,
-        AGENT_IMAGE,
         MULTIFILE_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_multifile-v3",
@@ -306,7 +300,6 @@ SOURCES = {
     "pymethods": PythonTestsSource(
         "DCAgent__exp_rpt_pymethods2test-v3",
         convert_python_tests,
-        AGENT_IMAGE,
         PYMETHODS_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_pymethods2test-v3",
@@ -324,7 +317,6 @@ SOURCES = {
     "pymethods_large": PythonTestsSource(
         "DCAgent__exp_rpt_pymethods2test-large-v2",
         convert_python_tests,
-        AGENT_IMAGE,
         PYMETHODS_LARGE_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_pymethods2test-large-v2",
@@ -342,7 +334,6 @@ SOURCES = {
     "unitsyn": PythonTestsSource(
         "DCAgent__exp_rpt_unitsyn-python-v4",
         convert_unitsyn,
-        AGENT_IMAGE,
         UNITSYN_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_unitsyn-python-v4",
@@ -360,7 +351,6 @@ SOURCES = {
     "unitsyn_large": PythonTestsSource(
         "DCAgent__exp_rpt_unitsyn-python-large-v2",
         convert_python_tests,
-        AGENT_IMAGE,
         UNITSYN_LARGE_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_unitsyn-python-large-v2",
@@ -378,7 +368,6 @@ SOURCES = {
     "stack_pytest": PythonTestsSource(
         "DCAgent__exp_rpt_stack-pytest-v2",
         convert_stack_pytest,
-        STACK_PYTEST_AGENT_IMAGE,
         STACK_PYTEST_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_stack-pytest-v2",
@@ -406,7 +395,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, source.convert),
                 version="1",
-                environment=source.image,
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=PYTHON_TESTS_CONTROLS,

@@ -24,6 +24,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.grading import grade_answer
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     ConversationInput,
     ConversationTrace,
     DockerBuildContext,
@@ -305,15 +306,17 @@ def test_tasks_over_the_resource_budget_are_deferred_and_counted(tmp_path, apple
 
 def convert_with_build_contexts(row: RawRow, _context: ConversionContext) -> TaskSpec:
     actor = EnvironmentRequirements(
-        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM scratch\n"),))
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM scratch\n"),)),
     )
     grader = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=DockerBuildContext(
             files=(
                 inline_resource("Dockerfile", b"FROM scratch\n"),
                 inline_resource("payload", b"x" * row.data["attachment_bytes"]),
             )
-        )
+        ),
     )
     return cast(TaskSpec, svamp_row_task(row)).model_copy(
         update={

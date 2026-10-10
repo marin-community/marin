@@ -64,7 +64,6 @@ from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     HfSource,
     RowDecoder,
-    ShellSim,
     process_rows,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
@@ -1446,7 +1445,6 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
             ),
             convert=component.convert,
             version="2",
-            environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=component.rubric,
             controls=component.controls,

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from shellbox.machine import Backend, Command, DockerImage, ExitReason, HostImage, MachineFactory, MachineSpec, Result
 from taskcompendium.models import (
+    CommandSemantics,
     ConversationTrace,
     EnvironmentRequirements,
     GradingAttempt,
@@ -57,7 +58,7 @@ from experiments.post_training.task_curation.tasktrove.harbor_export import harb
 from lib.taskcompendium.tests.pipeline_stages import fixture_recipe
 
 IMAGE = "test@sha256:" + "a" * 64
-ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, compatible_backends=(Backend.DOCKER,))
+ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)
 EXITED = Result(0, b"", b"", False, False, ExitReason.EXITED)
 MISSING_FILE = Result(44, b"", b"", False, False, ExitReason.EXITED)
 CONTROLS = Controls(golden=solve_script)
@@ -206,7 +207,7 @@ class RoutedMachines:
         return {"backend": "fixture"}
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        if Backend.LOCAL in environment.compatible_backends:
+        if environment.packages_lock is not None:
             return self.local, MachineSpec(HostImage())
         assert environment.docker_image is not None
         return self.sandbox, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
@@ -304,25 +305,26 @@ async def test_captured_submission_cannot_supply_its_own_reward(executable_task,
 
 
 def incompatible(task: TaskSpec, role: str) -> TaskSpec:
-    """``task`` with the worker's or grader's environment declared for another backend."""
+    """Require simulated shell behavior from a native process machine."""
     data = task.model_dump(mode="json")
     requirements = data["environment_requirements"] if role == "worker" else data["grader"]["environment"]
-    requirements["compatible_backends"] = ["gvisor"]
+    requirements["docker_image"] = None
+    requirements["command_semantics"] = "shell_simulator"
     return TaskSpec.model_validate_json(json.dumps(data))
 
 
 @pytest.mark.asyncio
-async def test_agent_machine_rejects_an_incompatible_backend_before_start(executable_task):
+async def test_agent_machine_rejects_incompatible_command_semantics_before_start(executable_task):
     machines = GradingMachines()
     factory = ShellFactory(machines, MachineSpec(DockerImage(IMAGE)), {}, 1, 1024)
-    with pytest.raises(ValueError, match="not declared compatible"):
+    with pytest.raises(ValueError, match="semantics"):
         await factory.create(incompatible(executable_task, "worker"))
     assert not machines.machines
 
 
 def test_a_local_grader_grades_the_oracle_output_of_a_sandbox_of_the_agent_image(executable_task):
     data = executable_task.model_dump(mode="json")
-    data["grader"]["environment"] = {"compatible_backends": ["local"], "packages_lock": "fixture/requirements.lock"}
+    data["grader"]["environment"] = {"command_semantics": "linux_process", "packages_lock": "fixture/requirements.lock"}
     machines = RoutedMachines()
     report = run_controls(TaskSpec.model_validate_json(json.dumps(data)), controls=CONTROLS, machines=machines)
     assert checks(report) == {"golden": CheckStatus.PASS}
@@ -335,7 +337,7 @@ def test_a_local_grader_grades_the_oracle_output_of_a_sandbox_of_the_agent_image
 
 def test_grader_controls_reject_an_incompatible_backend_before_start(executable_task):
     machines = ControlMachines()
-    with pytest.raises(ValueError, match="not declared compatible"):
+    with pytest.raises(ValueError, match="semantics"):
         run_controls(incompatible(executable_task, "grader"), controls=CONTROLS, machines=machines)
     assert not machines.factory.machines
 
@@ -392,7 +394,7 @@ def test_converter_language_survives_harbor_export_without_changing_payload(exec
     if execution == "shared":
         # This explicit recipe has no archived Dockerfile to fall back to.
         build = verifyit_build_context("FROM python:3.12-slim\nWORKDIR /app\n", (), package=VERIFYIT_PACKAGE)
-        environment = EnvironmentRequirements(docker_build=build)
+        environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=build)
     records = []
     for declared_language in ("", language):
         task = converted_workspace_task(

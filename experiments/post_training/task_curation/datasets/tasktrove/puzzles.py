@@ -23,7 +23,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     tasktrove_source,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 PUZZLES_CONFIG = "laion__all-puzzles-v2"
@@ -95,7 +95,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(PUZZLES_CONFIG),
                 convert=TaskTroveConverter(PUZZLES_CONFIG, convert_puzzle),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=Controls(golden=reference_reply),

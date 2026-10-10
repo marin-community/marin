@@ -8,13 +8,13 @@ import json
 
 import pytest
 from pydantic import ValidationError
-from shellbox.machine import Backend
 from verifyit.spec import ExactSpec
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading import grade_answer
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     ConversationInput,
     ConversationTrace,
     DockerBuildContext,
@@ -33,7 +33,7 @@ from taskcompendium.submission import chat_request
 IMAGE = "private/grader@sha256:" + "a" * 64
 GRADING_ENVIRONMENT = EnvironmentRequirements(
     docker_image=IMAGE,
-    compatible_backends=(Backend.DOCKER,),
+    command_semantics=CommandSemantics.LINUX_PROCESS,
     setup_commands=("pip install --no-index /tests/wheels/*.whl",),
     environment_variables={"CHECK_MODE": "strict"},
 )
@@ -58,10 +58,16 @@ def specification():
     "update",
     [
         {"environment_requirements": EnvironmentRequirements(capabilities=("browser",))},
-        {"environment_requirements": EnvironmentRequirements(docker_image="org/image@sha256:" + "a" * 64)},
+        {"environment_requirements": EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR)},
         {
             "environment_requirements": EnvironmentRequirements(
-                docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"),))
+                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="org/image@sha256:" + "a" * 64
+            )
+        },
+        {
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"),)),
             )
         },
         {"environment_requirements": EnvironmentRequirements(working_directory="/app")},
@@ -142,7 +148,9 @@ def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(specifi
 def test_build_context_roundtrip_keeps_bytes_metadata_and_role_boundaries(specification):
     dockerfile = inline_resource("Dockerfile", b"FROM mutable:latest\nCOPY payload.bin /input\n")
     payload = inline_resource("payload.bin", b"\x00\xff\x80").model_copy(update={"mode": "0755", "mtime_ns": 123456789})
-    environment = EnvironmentRequirements(docker_build=DockerBuildContext(files=(dockerfile, payload)))
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=DockerBuildContext(files=(dockerfile, payload))
+    )
     wire = specification.model_dump()
     wire["environment_requirements"] = environment.model_dump()
     wire["grader"] = ScriptGrader(argv=("true",), environment=environment).model_dump()
@@ -257,8 +265,12 @@ def test_inline_file_bytes_and_metadata_survive_json_reader(specification, paylo
     assert restored.mtime_ns == 1_725_555_600_123_456_789
 
 
-SCRIPT = {"kind": "script", "argv": ["python3", "/tests/grade.py"], "environment": {"docker_image": IMAGE}}
-VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "environment": {"docker_image": IMAGE}}
+SCRIPT = {
+    "kind": "script",
+    "argv": ["python3", "/tests/grade.py"],
+    "environment": {"docker_image": IMAGE, "command_semantics": "linux_process"},
+}
+VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "environment": {"docker_image": IMAGE, "command_semantics": "linux_process"}}
 
 
 @pytest.mark.parametrize(
@@ -276,9 +288,6 @@ VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "environment": {"docker_image": IMAG
                 "grader": SCRIPT | {"answer_path": None},
             },
             id="output-directory-under-verifier-logs",
-        ),
-        pytest.param(
-            {"grader": SCRIPT | {"environment": {"compatible_backends": ["docker"]}}}, id="script-without-image"
         ),
         pytest.param(
             {"answer_type": "file", "output_paths": ["/app/answer.txt"], "grader": SCRIPT},
@@ -313,6 +322,6 @@ def test_task_validation_rejects_invalid_grading_contracts(specification, update
 
 def test_task_json_rejects_prior_schema_version(specification):
     payload = json.loads(specification.model_dump_json())
-    payload["schema_version"] = "0.24"
+    payload["schema_version"] = "0.25"
     with pytest.raises(ValidationError):
         TaskSpec.model_validate_json(json.dumps(payload))

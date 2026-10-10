@@ -15,7 +15,7 @@ from verifyit.spec import StdioSpec
 
 from taskcompendium.convert.environment import grading_environment
 from taskcompendium.convert.executable import workspace_task
-from taskcompendium.models import GradingAttempt, OutputDirectory, Source, TaskSpec, VerifyitGrader
+from taskcompendium.models import CommandSemantics, GradingAttempt, OutputDirectory, Source, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
@@ -241,7 +241,7 @@ async def test_directory_capture_cannot_claim_shellsim_python_support(directory_
     task = directory_task.model_copy(
         update={
             "environment_requirements": directory_task.environment_requirements.model_copy(
-                update={"docker_image": None, "compatible_backends": (Backend.SHELLSIM,)}
+                update={"docker_image": None, "command_semantics": CommandSemantics.SHELL_SIMULATOR}
             )
         }
     )

@@ -62,7 +62,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     tasktrove_source,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, UrlSource, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 HERE = Path(__file__).parent
@@ -374,7 +374,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_generated,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=GENERATED_RUBRIC,
                 controls=GENERATED_CONTROLS,
@@ -397,7 +396,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(TASKTROVE_CONFIG),
                 convert=TaskTroveConverter(TASKTROVE_CONFIG, convert_tasktrove),
                 version="3",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,

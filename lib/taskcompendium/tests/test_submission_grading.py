@@ -6,7 +6,6 @@
 import json
 
 import pytest
-from shellbox.machine import Backend
 from verifyit.json_comparison import NumericTypePolicy
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec, ScriptSpec, Spec, StructuredExactSpec
 
@@ -15,6 +14,7 @@ from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
@@ -34,7 +34,7 @@ from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.submission import submission_compatibility
 
 GRADING_ENVIRONMENT = EnvironmentRequirements(
-    docker_image="private/grader@sha256:" + "a" * 64, compatible_backends=(Backend.DOCKER,)
+    docker_image="private/grader@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
 )
 
 

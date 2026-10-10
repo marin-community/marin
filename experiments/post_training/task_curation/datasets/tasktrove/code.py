@@ -11,7 +11,7 @@ an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
 
 from pathlib import Path
 
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import Compare, StdioSpec
@@ -51,7 +51,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.verif
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
-    ShellSim,
     environment_requirements,
     process_rows,
 )
@@ -135,7 +134,7 @@ def source_stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | Impor
     if isinstance(converted, ImportRejection):
         return converted
     build = verifyit_build_context(converted.dockerfile, archive_resources(row.data).oracle, package=VERIFYIT_PACKAGE)
-    environment = EnvironmentRequirements(docker_build=build)
+    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=build)
     task = converted_workspace_task(
         row,
         converted,
@@ -199,7 +198,6 @@ def stdio_source(
     info: SourceInfo,
     *,
     version: str = "1",
-    environment: Environment | ShellSim = AGENT_IMAGE,
     grader: Environment | None = COMPILER_GRADER_PACKAGES,
     ships: tuple[Path, ...] = (),
 ) -> RlDataSource[CurationRecipe]:
@@ -212,7 +210,6 @@ def stdio_source(
             convert=TaskTroveConverter(config, convert),
             version=version,
             ships=ships,
-            environment=environment,
             intended_use=IntendedUse.TRAIN,
             rubric=rubric,
             controls=EXECUTABLE_CONTROLS,
@@ -229,7 +226,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert_code_contests_task,
             CODE_CONTESTS_RUBRIC,
             version="2",
-            environment=ShellSim(),
             grader=None,
             ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
@@ -281,7 +277,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert_taco_task,
             TACO_RUBRIC,
             version="2",
-            environment=ShellSim(),
             grader=None,
             ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(

@@ -46,7 +46,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     SOLVE_SH,
     archive_files,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 SCORER_RUNNERS = {
@@ -313,7 +313,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, source.convert),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=MATH_CONTROLS,

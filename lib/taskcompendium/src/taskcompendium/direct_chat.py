@@ -12,10 +12,11 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
     features = [
         name
         for name, value in (
-            ("compatible_backends", requirements.compatible_backends),
+            ("command_semantics", requirements.command_semantics),
             ("capabilities", requirements.capabilities),
             ("docker_image", requirements.docker_image),
             ("docker_build", requirements.docker_build),
+            ("packages_lock", requirements.packages_lock),
             ("working_directory", requirements.working_directory),
             ("setup_commands", requirements.setup_commands),
             ("environment_variables", requirements.environment_variables),
