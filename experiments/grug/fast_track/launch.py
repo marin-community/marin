@@ -184,7 +184,8 @@ class H100LadderRung:
     attn_res_remat_attention: bool = False
     device: str = "H100"
     nodes: int = 1
-    # Hero-scale memory: bf16 device params with a pinned-host fp32 master and offloaded optimizer state.
+    # Hero-scale memory, as on the GB200 hero: fp32 params on device and the optimizer state offloaded to pinned host
+    # (the GB200 PJRT plugin caps pinned host at 64 GB per process, which an fp32 master does not fit beside).
     hero_memory: bool = False
 
     @property
@@ -402,11 +403,7 @@ def build_h100_ladder_run(
             raise ValueError("attn_res_remat_attention requires the kma recipe")
         model = dataclasses.replace(model, attn_res_remat_attention=True)
     model = _apply_settings(model, model_settings or {})
-    mp_policy = (
-        "params=bfloat16,compute=bfloat16,output=bfloat16"
-        if rung.hero_memory
-        else "params=float32,compute=bfloat16,output=bfloat16"
-    )
+    mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.global_device_count
     if rung.global_device_count % (expert_axis_size * (1)) != 0:
         raise ValueError(
@@ -467,7 +464,7 @@ def build_h100_ladder_run(
         expert_axis_size=expert_axis_size,
         replica_axis_size=(1),
         offload_opt_state=rung.hero_memory,
-        master_param_mode=MasterParamMode.FP32_PINNED_HOST if rung.hero_memory else MasterParamMode.DEVICE,
+        master_param_mode=MasterParamMode.DEVICE,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
         grad_accum_microbatches=grad_accum_microbatches,
