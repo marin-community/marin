@@ -91,7 +91,7 @@ config:
         CARGO_TARGET_DIR:
           value: /home/app/.cache/cargo-build
         CODEX_CONFIG:
-          value: '{"sandbox_workspace_write":{"writable_roots":["/opt/uv","/home/app/.cache/cargo-build"]}}'
+          value: '{"sandbox_workspace_write":{"writable_roots":["/opt/uv/cache","/home/app/.cache/cargo-build"]}}'
       githubRepositories: &interactiveGithubRepositories
         - Open-Athena/*
         - marin-community/*

@@ -193,8 +193,10 @@ The shared environment directs uv's cache and managed Python installations to
 `/opt/uv` on the existing `loom_uv` volume, and Cargo build output to
 `/home/app/.cache/cargo-build` on the `loom_loom_home` volume. The init service
 creates the Cargo directory before sessions start. `CODEX_CONFIG` grants
-workspace-write access to these two directories so sessions can reuse them
-without redirecting caches into `/tmp`. These are deployment-owned profile
+workspace-write access to `/opt/uv/cache` and `/home/app/.cache/cargo-build`.
+Managed Python installations at `/opt/uv/python` stay outside those writable
+roots; operators must provision any required interpreters. Sessions reuse the
+shared caches without redirecting them into `/tmp`. These are deployment-owned profile
 settings. Use a Loom build containing both
 [ACP writable-root forwarding](https://github.com/marin-community/loom/pull/384)
 and [repository-config removal](https://github.com/marin-community/loom/pull/385)
