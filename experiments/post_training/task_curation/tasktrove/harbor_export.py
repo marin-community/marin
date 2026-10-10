@@ -22,6 +22,26 @@ import pyarrow.parquet as pq
 import tomlkit
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.script_grader import GRADE_ARGV
+from taskcompendium.models import (
+    DOCKER_IMAGE_PATTERN,
+    AnswerType,
+    ArtifactKind,
+    CommandSemantics,
+    FileReward,
+    MissingArtifactPolicy,
+    PlainText,
+    ScriptGrader,
+    StdoutReward,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+    verifyit_answer_file,
+    verifyit_spec,
+)
+from taskcompendium.runtime.grading import DIAGNOSTIC_OUTPUT_BYTES
+from taskcompendium.runtime.local import RUNTIME_PACKAGES, context_paths
+from taskcompendium.runtime.resources import resource_bytes
 from verifyit.modes.extract import collapse_whitespace
 from verifyit.spec import (
     DEFAULT_WORKSPACE,
@@ -39,28 +59,13 @@ from verifyit.spec import (
     render_spec,
 )
 
-from taskcompendium.convert.script_grader import GRADE_ARGV
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TASKTROVE_REPO, TEST_SH
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    TASKTROVE_REPO,
+    TEST_SH,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT
 from experiments.post_training.task_curation.tasktrove.source_images import source_actor_build
-from taskcompendium.models import (
-    DOCKER_IMAGE_PATTERN,
-    AnswerType,
-    ArtifactKind,
-    FileReward,
-    MissingArtifactPolicy,
-    PlainText,
-    ScriptGrader,
-    StdoutReward,
-    TaskSpec,
-    TextMessage,
-    VerifyitGrader,
-    verifyit_answer_file,
-    verifyit_spec,
-)
-from taskcompendium.runtime.grading import DIAGNOSTIC_OUTPUT_BYTES
-from taskcompendium.runtime.local import RUNTIME_PACKAGES, context_paths
-from taskcompendium.runtime.resources import resource_bytes
 
 
 class VerifierEnvironmentMode(StrEnum):
@@ -205,6 +210,8 @@ def _environment_mode(task: TaskSpec) -> VerifierEnvironmentMode:
 def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentMode) -> None:
     environment = task.environment_requirements
     grader = task.grader
+    if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+        raise UnsupportedHarborTask("Harbor cannot preserve shell simulator semantics")
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
     if repository_state:
         if (

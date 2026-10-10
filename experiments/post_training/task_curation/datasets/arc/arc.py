@@ -181,7 +181,7 @@ def _tasktrove_task(
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(
-            command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("filesystem", "python")
+            command_semantics=CommandSemantics.LINUX_PROCESS, capabilities=("filesystem", "python")
         ),
         # The archive's own tests are replaced by the NVARC grader, so only its other files are kept.
         resources=ResourceGroups(worker=archive.worker, verifier=package.resources, oracle=archive.oracle),

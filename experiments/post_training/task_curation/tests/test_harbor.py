@@ -155,6 +155,21 @@ def test_harbor_mcqa_file_format_matches_its_grader(normalized_row, tmp_path, le
     assert grade(spec, tmp_path, tmp_path).reward == reward
 
 
+def test_harbor_rejects_simulated_shell_semantics(normalized_row):
+    row, task = normalized_row
+    requirements = task.environment_requirements.model_copy(
+        update={"docker_image": None, "command_semantics": CommandSemantics.SHELL_SIMULATOR}
+    )
+    task = task.model_copy(update={"environment_requirements": requirements})
+    with pytest.raises(UnsupportedHarborTask, match="shell simulator semantics"):
+        harbor_record(
+            {**row, "task_json": task.model_dump_json()},
+            grader_image=GRADER_IMAGE,
+            family="qa",
+            fallback_actor_image=BASE_IMAGE,
+        )
+
+
 @pytest.mark.parametrize("role", ["actor", "grader"])
 def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(normalized_row, role):
     row, converted = normalized_row

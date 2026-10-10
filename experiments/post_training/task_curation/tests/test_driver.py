@@ -19,6 +19,7 @@ from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import HostImage, NetworkPolicy
 from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from zephyr.readers import load_parquet
 
@@ -83,7 +84,7 @@ def arguments(tmp_path) -> list[str]:
         "--coordinator-memory": "16g",
         "--normalized-shards": "1",
         "--worker-image": "fixture-image",
-        "--image-grader-placement": "gvisor",
+        "--image-grader-placement": "worker",
         "--report-path": str(tmp_path / "report.json"),
     }
     return [item for pair in options.items() for item in pair]
@@ -111,18 +112,17 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     monkeypatch.setattr("shellbox.backends.local.machine._working_bwrap", lambda candidates: Path("/usr/bin/bwrap"))
     environment = Environment(lock=tracked_lock(tmp_path), data=("nltk:punkt_tab",))
     (artifact,) = run(environment_artifact(environment, REPOSITORY))
-    built = []
-    monkeypatch.setattr(
-        LocalRuntime, "ensure_built", lambda self: (self.root.mkdir(parents=True), built.append(self.root))
-    )
+    monkeypatch.setattr(LocalRuntime, "ensure_built", lambda self: self.root.mkdir(parents=True))
     machines = campaign_machines(ImageGraderPlacement.IRIS, PINNED_WORKER, CONTROLLER_URL)
-    factory, spec = machines.machine(environment_requirements(environment, artifact), 2048)
+    requirements = environment_requirements(environment, artifact)
+    factory, spec = machines.machine(requirements, 2048)
+    spec = prepare_machine_spec(requirements, factory, spec)
     runtime = local_runtime(artifact.lock_url)
     request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
     assert runtime.lock_sha256 == artifact.lock_sha256 and runtime.data == ("nltk:punkt_tab",)
-    assert built == [runtime.root]
-    assert factory.read_only == (runtime.root,) and factory.bin_dirs == (runtime.root / "env" / "venv" / "bin",)
-    assert spec.source == HostImage() and spec.network == NetworkPolicy.DENY and spec.workdir == "/app"
+    assert runtime.root.is_dir()
+    assert spec.source == HostImage(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,))
+    assert spec.memory_mb is None and spec.network == NetworkPolicy.DENY and spec.workdir == "/app"
     assert spec.env == {"NLTK_DATA": str(runtime.root / "share" / "nltk_data")}
 
 

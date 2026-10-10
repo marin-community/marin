@@ -42,7 +42,7 @@ from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import DockerImage, MachineFactory, MachineSpec, NetworkPolicy
-from taskcompendium.models import SCHEMA_VERSION, CommandSemantics, EnvironmentRequirements, require_resolved_environment
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, require_resolved_environment
 from taskcompendium.pipeline.controls import GradingMachines, controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
 from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFileOverride, SourceFiles, SourceFormat
@@ -86,6 +86,7 @@ from experiments.post_training.task_curation.images.build import (
 from experiments.post_training.task_curation.source import RlDataSource
 
 PIPELINE_VERSION = "2026.10.07.1"
+QUICK_VERSION = "2026.10.09.1"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 REVIEW_REQUEST_TIMEOUT = 60
@@ -853,7 +854,7 @@ def _quick_step(pipeline: CurationRecipe, options: PipelineOptions) -> ArtifactS
     }
     return ArtifactStep(
         name=pipeline.name,
-        version=f"{PIPELINE_VERSION}-task-schema-{SCHEMA_VERSION}",
+        version=QUICK_VERSION,
         artifact_type=CampaignArtifact,
         run=partial(_run_quick_source, pipeline, options),
         build_config=partial(_quick_run, options, primary, auxiliary),

@@ -6,11 +6,13 @@
 import base64
 import io
 import json
+import shutil
 import tarfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
+from marin.execution.lazy import run
 from shellbox.machine import Backend, Command, DockerImage, ExitReason, HostImage, MachineFactory, MachineSpec, Result
 from taskcompendium.models import (
     CommandSemantics,
@@ -34,6 +36,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.transforms import normalize_row
 from taskcompendium.runtime.grading import grade_in_sandbox
+from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import ShellFactory
 from verifyit.spec import StdioSpec
@@ -54,7 +57,10 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertedTask
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio_cases import SOLUTION_COMMAND
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
+from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_record
+from experiments.post_training.task_curation.tests.image_builds import REPOSITORY, install_fake_build_tools, tracked_lock
 from lib.taskcompendium.tests.pipeline_stages import fixture_recipe
 
 IMAGE = "test@sha256:" + "a" * 64
@@ -304,10 +310,10 @@ async def test_captured_submission_cannot_supply_its_own_reward(executable_task,
     assert machines.machines[0].closed
 
 
-def incompatible(task: TaskSpec, role: str) -> TaskSpec:
+def simulator_task(task: TaskSpec) -> TaskSpec:
     """Require simulated shell behavior from a native process machine."""
     data = task.model_dump(mode="json")
-    requirements = data["environment_requirements"] if role == "worker" else data["grader"]["environment"]
+    requirements = data["environment_requirements"]
     requirements["docker_image"] = None
     requirements["command_semantics"] = "shell_simulator"
     return TaskSpec.model_validate_json(json.dumps(data))
@@ -318,13 +324,23 @@ async def test_agent_machine_rejects_incompatible_command_semantics_before_start
     machines = GradingMachines()
     factory = ShellFactory(machines, MachineSpec(DockerImage(IMAGE)), {}, 1, 1024)
     with pytest.raises(ValueError, match="semantics"):
-        await factory.create(incompatible(executable_task, "worker"))
+        await factory.create(simulator_task(executable_task))
     assert not machines.machines
 
 
-def test_a_local_grader_grades_the_oracle_output_of_a_sandbox_of_the_agent_image(executable_task):
+def test_a_local_grader_grades_the_oracle_output_of_a_sandbox_of_the_agent_image(
+    executable_task, tmp_path, monkeypatch, request
+):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
+    install_fake_build_tools(tmp_path, monkeypatch)
+    lock = tracked_lock(tmp_path)
+    lock.write_text(lock.read_text() + f"\n# {tmp_path}\n")
+    (artifact,) = run(environment_artifact(Environment(lock=lock), REPOSITORY))
+    runtime = local_runtime(artifact.lock_url)
+    request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
+    monkeypatch.setattr(LocalRuntime, "ensure_built", lambda self: self.root.mkdir(parents=True))
     data = executable_task.model_dump(mode="json")
-    data["grader"]["environment"] = {"command_semantics": "linux_process", "packages_lock": "fixture/requirements.lock"}
+    data["grader"]["environment"] = {"command_semantics": "linux_process", "packages_lock": artifact.lock_url}
     machines = RoutedMachines()
     report = run_controls(TaskSpec.model_validate_json(json.dumps(data)), controls=CONTROLS, machines=machines)
     assert checks(report) == {"golden": CheckStatus.PASS}
@@ -335,10 +351,10 @@ def test_a_local_grader_grades_the_oracle_output_of_a_sandbox_of_the_agent_image
     assert oracle.closed and grader.closed
 
 
-def test_grader_controls_reject_an_incompatible_backend_before_start(executable_task):
-    machines = ControlMachines()
-    with pytest.raises(ValueError, match="semantics"):
-        run_controls(incompatible(executable_task, "grader"), controls=CONTROLS, machines=machines)
+def test_grader_controls_reject_simulation_of_linux_processes_before_start(executable_task):
+    machines = ControlMachines(factory=GradingMachines(backend=Backend.SHELLSIM))
+    with pytest.raises(ValueError, match="native Linux processes"):
+        run_controls(executable_task, controls=CONTROLS, machines=machines)
     assert not machines.factory.machines
 
 

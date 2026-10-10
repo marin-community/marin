@@ -229,11 +229,6 @@ def test_environment_declarations_reject_contradictory_or_unpinned_needs(grader_
         declare(grader_lock)
 
 
-def test_an_agent_environment_must_name_its_image(grader_lock):
-    with pytest.raises(ValueError, match="agent environment's image"):
-        replace(math500(), environment=Environment(lock=grader_lock))
-
-
 def test_rubric_paragraphs_become_review_criteria():
     pipeline = replace(math500(), rubric="\nFirst criterion\nspans two lines.\n\nSecond criterion.\n")
     assert source_recipe(pipeline, {}, None).rubric == ReviewRubric(

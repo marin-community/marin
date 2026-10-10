@@ -21,6 +21,7 @@ from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.executable import workspace_task
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
     NoGrader,
@@ -291,6 +292,7 @@ def swe_task(row: RawRow, *, workspace: str) -> TaskSpec | ImportRejection:
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
             capabilities=REPOSITORY_CAPABILITIES,
             tool_providers={
                 "shell": ProviderRequirement(
