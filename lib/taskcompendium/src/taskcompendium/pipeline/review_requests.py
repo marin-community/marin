@@ -203,12 +203,12 @@ def batch_output(
     max_batch_requests: int = DEFAULT_MAX_BATCH_REQUESTS,
     max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
 ) -> RequestOutput:
-    """Submit ``requests`` as provider batches and return their combined raw JSONL output.
+    """Submit ``requests`` as provider batches and return request and response observations.
 
     Each output line is one provider response keyed by ``custom_id``. Batches stay within
     ``max_batch_requests`` and ``max_batch_bytes``. A request over the byte budget, or in a batch
     whose submission fails, gets an error line instead while the other requests continue; the
-    reviewer owns retries. Request and response observations are returned to the caller.
+    reviewer owns retries.
     """
     if max_batch_requests < 1 or max_batch_bytes < 1:
         raise ValueError("Inference batch budgets must be positive")
