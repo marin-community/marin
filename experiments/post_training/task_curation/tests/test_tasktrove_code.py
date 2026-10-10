@@ -40,10 +40,9 @@ from experiments.post_training.task_curation.tests.conversion import (
 pytest_plugins = ("lib.verifyit.tests.test_judge",)
 
 PIPELINES = {
-    source.name: source.pipeline
+    source.name: cast(RlDataPipeline, source.pipeline)
     for module in (code, python_tests, nl2bash, structured_outputs)
     for source in module.sources()
-    if isinstance(source.pipeline, RlDataPipeline)
 }
 
 CODENET = (Path(__file__).parent / "fixtures/codenet.tar.gz").read_bytes()

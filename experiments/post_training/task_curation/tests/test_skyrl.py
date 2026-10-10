@@ -5,6 +5,7 @@
 
 import json
 from copy import deepcopy
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -35,10 +36,9 @@ from experiments.post_training.task_curation.tests.conversion import (
 )
 
 PIPELINES = {
-    source.name: source.pipeline
+    source.name: cast(RlDataPipeline, source.pipeline)
     for module in (math, code, ifeval, mcq, preference)
     for source in module.sources()
-    if isinstance(source.pipeline, RlDataPipeline)
 }
 
 SUM_TESTS = {"inputs": ["1 2\n"], "outputs": ["3\n"]}

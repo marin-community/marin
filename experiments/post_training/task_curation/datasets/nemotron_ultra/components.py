@@ -60,7 +60,13 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     convert_ungraded_agent,
 )
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, RowDecoder, ShellSim
+from experiments.post_training.task_curation.pipeline import (
+    HfSource,
+    RlDataPipeline,
+    RowDecoder,
+    ShellSim,
+    recipe_source,
+)
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
@@ -1420,12 +1426,12 @@ def pipeline_name(blend: str, path: str) -> str:
     return NAME_PREFIX + blend + "_" + re.sub(r"[^a-z0-9]+", "_", path.lower()).strip("_")
 
 
-def _source(blend: str, path: str) -> RlDataSource:
+def _source(blend: str, path: str) -> RlDataSource[RlDataPipeline]:
     component = COMPONENTS[path]
     name, _, split = path.partition("/")
     select = SweRows(name, SweSplit(split)) if split else ComponentRows(name)
     inputs = {SWE_GYM.repo: SWE_GYM} if split else dict(component.inputs)
-    return RlDataSource(
+    return recipe_source(
         info=BLENDS[blend][path],
         pipeline=RlDataPipeline(
             name=pipeline_name(blend, path),
@@ -1450,5 +1456,5 @@ def _source(blend: str, path: str) -> RlDataSource:
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     return [_source(blend, path) for blend, paths in BLENDS.items() for path in paths]

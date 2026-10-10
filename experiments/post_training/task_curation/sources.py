@@ -24,7 +24,6 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
-from experiments.post_training.task_curation.pipeline import RlDataPipeline
 from experiments.post_training.task_curation.source import RlDataSource
 
 
@@ -65,12 +64,3 @@ def runnable_sources() -> dict[str, RlDataSource]:
     if len(set(names)) != len(names):
         raise ValueError("Duplicate RL pipeline names")
     return {source.name: source for source in sources}
-
-
-def standard_pipelines() -> dict[str, RlDataPipeline]:
-    """Standard recipes for consumers that require converters or grader environments."""
-    return {
-        source.name: source.pipeline
-        for source in runnable_sources().values()
-        if isinstance(source.pipeline, RlDataPipeline)
-    }

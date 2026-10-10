@@ -62,7 +62,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     TaskTroveConverter,
     tasktrove_source,
 )
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource, recipe_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 HERE = Path(__file__).parent
@@ -344,9 +344,9 @@ GENERATED_CONTROLS = Controls(golden=generated_golden)
 TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     return [
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="MarinSkyRL:reasoning_gym",
                 title="open-thought/reasoning-gym",
@@ -380,7 +380,7 @@ def sources() -> list[RlDataSource]:
                 grader=GRADER_PACKAGES,
             ),
         ),
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-reasoning-gym-v2",
                 title="laion/nemotron-gym-reasoning-gym-v2",

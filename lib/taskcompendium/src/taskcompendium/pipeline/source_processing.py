@@ -1036,10 +1036,11 @@ def _run_quick(
 
     Model review, resource budgets, deduplication, mechanical checks and grader controls do not run.
     The output is unreviewed and has no production admission or ``final/`` view.
-    Existing outputs are rejected so a failed rerun cannot mix old and new shards.
+    Existing conversion payloads are rejected so a failed rerun cannot mix old and new shards.
+    The artifact executor may create its bookkeeping files before this stage begins.
     """
     output = StoragePath(output_path)
-    if output.exists():
+    if (output / "normalize").exists() or (output / "manifest.json").exists():
         raise FileExistsError(f"Conversion output already exists: {output_path}")
     result = write_conversion(
         conversion_stage(

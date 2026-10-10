@@ -16,7 +16,6 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from zephyr.dataset import Dataset
 
-from experiments.post_training.task_curation.binding import pipeline_step
 from experiments.post_training.task_curation.campaign import (
     CampaignArtifact,
     CampaignFailed,
@@ -24,14 +23,17 @@ from experiments.post_training.task_curation.campaign import (
     CampaignRuntime,
     run_campaign,
 )
-from experiments.post_training.task_curation.invocation import PipelineResult
-from experiments.post_training.task_curation.tests.custom_pipeline import number_source
+from experiments.post_training.task_curation.invocation import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.results import PipelineResult
+from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
 @pytest.mark.parametrize(
     "mode, expected", [(SourceProcessingMode.SAMPLE, [3, 6]), (SourceProcessingMode.FULL, [3, 6, 9])]
 )
-def test_custom_campaign_retains_named_products_without_standard_dependencies(tmp_path, monkeypatch, mode, expected):
+def test_dataset_campaign_retains_named_products_without_review_or_grader_dependencies(
+    tmp_path, monkeypatch, mode, expected
+):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     primary = tmp_path / "numbers.txt"
@@ -40,8 +42,9 @@ def test_custom_campaign_retains_named_products_without_standard_dependencies(tm
     factor = tmp_path / "factor.txt"
     factor.write_text("3")
     runtime = CampaignRuntime()
-    step = pipeline_step(
-        number_source(unused), mode=mode, campaign=runtime, source_input=str(primary), inputs={"factor": str(factor)}
+    source = number_source(unused)
+    step = source.pipeline(
+        source, PipelineOptions(mode, runtime, inputs=InputOverrides(str(primary), auxiliary={"factor": str(factor)}))
     )
     client = LocalClient()
     try:

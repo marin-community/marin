@@ -25,7 +25,7 @@ from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, SchemaFormat
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, recipe_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
@@ -211,9 +211,9 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
     return rewritten_task(task, original=instruction, reason=STRUCTURED_REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     return [
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id=f"Task Trove:{IFEVAL_CONFIG}",
                 title="laion/nemotron-gym-instruction-following-v3",
@@ -236,7 +236,7 @@ def sources() -> list[RlDataSource]:
                 rubric=IFEVAL_RUBRIC,
             ),
         ),
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id=f"Task Trove:{STRUCTURED_CONFIG}",
                 title="laion/nemotron-gym-instruction-following-structured-v3",

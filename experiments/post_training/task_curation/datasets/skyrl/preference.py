@@ -27,7 +27,7 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse, RawRow
 
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, recipe_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 PREFERENCE_VERIFIER = SourceReference(
@@ -380,9 +380,9 @@ def convert_kto_component(row: RawRow, _context: ConversionContext) -> TaskSpec 
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     hh = [
-        RlDataSource(
+        recipe_source(
             info=subset.info,
             pipeline=RlDataPipeline(
                 name=subset.name,
@@ -397,7 +397,7 @@ def sources() -> list[RlDataSource]:
         for subset in HH_SUBSETS
     ]
     kto = [
-        RlDataSource(
+        recipe_source(
             info=info,
             pipeline=RlDataPipeline(
                 name=name,

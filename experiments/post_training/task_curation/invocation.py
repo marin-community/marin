@@ -1,21 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Invocation and results shared by dataset-owned curation implementations."""
+"""The graph-building interface shared by dataset-owned curation pipelines."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
-from taskcompendium.pipeline.inputs import SourceFileOverride
-from taskcompendium.pipeline.models import SourceStatus
+from marin.execution.lazy import ArtifactStep
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
-from zephyr.context import ZephyrContext
+
+from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime
+from experiments.post_training.task_curation.settings import RecipeSettings
 
 
 class CurationSource(Protocol):
-    """Catalog identity available to a pipeline without depending on its recipe."""
-
     @property
     def name(self) -> str: ...
 
@@ -24,26 +24,28 @@ class CurationSource(Protocol):
 
 
 @dataclass(frozen=True)
-class PipelineRun:
-    """One invocation; implementations choose ingestion and interpret input overrides."""
-
-    mode: SourceProcessingMode
-    context: ZephyrContext
-    output_path: str
-    source_input: str | None = None
-    inputs: Mapping[str, str] = field(default_factory=dict)
-    source_overrides: Mapping[str, SourceFileOverride] = field(default_factory=dict)
+class InputOverrides:
+    root: str | None = None
+    files: Mapping[str, Path] = field(default_factory=dict)
+    auxiliary: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
-class PipelineResult:
-    """Named products and evidence, with only the stages the implementation chose."""
+class LocalPaths:
+    output_root: Path
+    download_cache: Path
 
-    status: SourceStatus
-    outputs: dict[str, str]
-    evidence: dict[str, str]
-    stages: tuple[str, ...]
+
+@dataclass(frozen=True)
+class PipelineOptions:
+    """Invocation choices; a dataset owns its dependencies and optional stages."""
+
+    mode: SourceProcessingMode
+    runtime: CampaignRuntime
+    inputs: InputOverrides = field(default_factory=InputOverrides)
+    local: LocalPaths | None = None
+    recipe_settings: RecipeSettings | None = None
 
 
 class CurationPipeline(Protocol):
-    def __call__(self, source: CurationSource, run: PipelineRun) -> PipelineResult: ...
+    def __call__(self, source: CurationSource, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]: ...

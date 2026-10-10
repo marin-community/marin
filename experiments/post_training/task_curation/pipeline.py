@@ -5,7 +5,7 @@
 
 An ``RlDataPipeline`` names one pinned source, the converter that turns each row into a
 ``TaskSpec`` with its grader fixed, the agent's environment, what its graders' environment must
-provide, an optional review rubric and optional grader controls. ``source_step`` turns a declaration
+provide, an optional review rubric and optional grader controls. Calling it turns a declaration
 into one cached ``data/rl/<name>-<hash>`` artifact produced by
 ``taskcompendium.pipeline.source_processing.run_source_pipeline``.
 """
@@ -16,10 +16,11 @@ import os
 import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import requests
 from marin.datakit.download.huggingface import (
@@ -57,10 +58,11 @@ from taskcompendium.pipeline.source_processing import (
 )
 from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION
-from taskcompendium.pipeline.sources import source_files_identity
+from taskcompendium.pipeline.sources import conversion_shards, source_files_identity
 from taskcompendium.runtime.local import context_paths
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
+from zephyr.runners import SubprocessRunner
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
@@ -69,7 +71,9 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
-from experiments.post_training.task_curation.invocation import CurationSource, PipelineResult, PipelineRun
+from experiments.post_training.task_curation.invocation import CurationSource, PipelineOptions
+from experiments.post_training.task_curation.results import PipelineResult
+from experiments.post_training.task_curation.source import DataSourceReview, RlDataSource, SourceInfo, SourceReference
 
 PIPELINE_VERSION = "2026.10.07.1"
 URL_CHUNK_BYTES = 1024 * 1024
@@ -185,8 +189,6 @@ class RlDataPipeline:
     grader: Environment | None = None
     ships: tuple[Path, ...] = ()
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
-    config: SourcePipelineConfig | None = field(default=None, kw_only=True, repr=False, compare=False)
-    grader_environment: EnvironmentRequirements | None = field(default=None, kw_only=True, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         missing = [str(path) for path in self.ships if not path.is_dir()]
@@ -196,55 +198,75 @@ class RlDataPipeline:
         if isinstance(self.environment, Environment) and self.environment.image is None:
             raise ValueError(f"{self.name} must name the agent environment's image")
 
-    def __call__(self, source: CurationSource, run: PipelineRun) -> PipelineResult:
-        """Run the standard processor; reviewed settings are bound by its artifact builder."""
-        if run.source_input is None:
-            raise ValueError(f"Standard curation requires staged primary inputs: {source.name}")
-        config = None
-        if run.mode != SourceProcessingMode.QUICK:
-            if self.config is None:
-                raise ValueError(f"Reviewed standard curation requires settings: {source.name}")
-            config = replace(self.config, mode=run.mode)
-        result = _run_standard_curation(
-            self,
-            mode=run.mode,
-            context=run.context,
-            source_input=run.source_input,
-            output_path=run.output_path,
-            inputs=run.inputs,
-            config=config,
-            grader_environment=self.grader_environment,
-            source_overrides=run.source_overrides,
+    def __call__(self, source: CurationSource, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
+        """Construct this dataset's ingestion and processing graph without running it."""
+        if options.mode == SourceProcessingMode.QUICK:
+            return _quick_step(self, options)
+        if options.recipe_settings is None:
+            raise ValueError(f"Source processing requires recipe settings: {source.name}")
+        config = options.recipe_settings.source_config(options.mode, self.controls)
+        if self.controls is None:
+            config = replace(config, machines=None)
+        return cast(ArtifactStep[CampaignArtifact], _reviewed_step(self, config, options))
+
+
+def recipe_source(
+    info: SourceInfo,
+    pipeline: RlDataPipeline,
+    review: DataSourceReview = DataSourceReview(),
+) -> RlDataSource[RlDataPipeline]:
+    """Register a concrete recipe, deriving its immutable catalog identity once."""
+    upstream = pipeline.source
+    if isinstance(upstream, HfSource):
+        dataset = SourceReference(
+            upstream.repo,
+            upstream.revision,
+            f"https://huggingface.co/datasets/{upstream.repo}/tree/{upstream.revision}",
         )
-        if isinstance(result, ConversionResult):
-            return PipelineResult(
-                SourceStatus.COMPLETED,
-                {"normalize": result.normalized_path},
-                {"manifest": result.manifest_path},
-                ("normalize",),
-            )
-        if result.status == SourceStatus.INCOMPLETE:
-            raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
-        review_manifest = json.loads((StoragePath(result.review_path) / "manifest.json").read_text())
-        manifest = json.loads(StoragePath(result.manifest_path).read_text())
-        telemetry = json.loads(StoragePath(manifest["telemetry"]).read_text())
-        stages = ["download", "normalize"]
-        if review_manifest["rubric"] is not None:
-            stages.append("review")
-        if any(phase["phase"] == "verification" for phase in telemetry["phases"]):
-            stages.append("verify")
-        stages.append("final")
+        files = upstream.files
+    else:
+        dataset = SourceReference(upstream.filename, upstream.sha256, upstream.url)
+        files = (upstream.filename,)
+    return RlDataSource(
+        info=replace(info, dataset=dataset),
+        pipeline=pipeline,
+        review=review,
+        name=pipeline.name,
+        version=pipeline.version,
+        files=files,
+    )
+
+
+def _pipeline_result(result: ConversionResult | SourcePipelineResult) -> PipelineResult:
+    if isinstance(result, ConversionResult):
         return PipelineResult(
-            result.status,
-            {"normalize": result.normalize_path, "final": result.final_path},
-            {
-                "download": result.download_path,
-                "review": result.review_path,
-                "verify": result.verify_path,
-                "manifest": result.manifest_path,
-            },
-            tuple(stages),
+            SourceStatus.COMPLETED,
+            {"normalize": result.normalized_path},
+            {"manifest": result.manifest_path},
+            ("normalize",),
         )
+    if result.status == SourceStatus.INCOMPLETE:
+        raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
+    review_manifest = json.loads((StoragePath(result.review_path) / "manifest.json").read_text())
+    manifest = json.loads(StoragePath(result.manifest_path).read_text())
+    telemetry = json.loads(StoragePath(manifest["telemetry"]).read_text())
+    stages = ["download", "normalize"]
+    if review_manifest["rubric"] is not None:
+        stages.append("review")
+    if any(phase["phase"] == "verification" for phase in telemetry["phases"]):
+        stages.append("verify")
+    stages.append("final")
+    return PipelineResult(
+        result.status,
+        {"normalize": result.normalize_path, "final": result.final_path},
+        {
+            "download": result.download_path,
+            "review": result.review_path,
+            "verify": result.verify_path,
+            "manifest": result.manifest_path,
+        },
+        tuple(stages),
+    )
 
 
 class RlDataArtifact(CampaignArtifact):
@@ -306,7 +328,7 @@ def source_recipe(
     )
 
 
-def _run_standard_curation(
+def _run_curation(
     pipeline: RlDataPipeline,
     *,
     mode: SourceProcessingMode,
@@ -517,53 +539,35 @@ def _source_run(
 def _run_source(
     pipeline: RlDataPipeline,
     config: SourcePipelineConfig,
-    source: CurationSource,
+    options: PipelineOptions,
     run: SourceRun,
-    *,
-    campaign: CampaignRuntime,
 ) -> RlDataArtifact:
     grader_environment = None
     if pipeline.grader is not None:
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
-    implementation = replace(pipeline, config=config, grader_environment=grader_environment)
-    result = implementation(
-        source,
-        PipelineRun(
-            mode=config.mode,
-            context=campaign.context,
-            source_input=run.source_input,
-            output_path=run.output_path,
-            inputs=run.inputs,
-        ),
+    assert options.recipe_settings is not None
+    config = options.recipe_settings.execution_config(config, pipeline.rubric)
+    result = _run_curation(
+        pipeline,
+        mode=options.mode,
+        context=options.runtime.context,
+        source_input=run.source_input,
+        output_path=run.output_path,
+        inputs=run.inputs,
+        config=config,
+        grader_environment=grader_environment,
     )
-    manifest = asdict(
-        SourcePipelineResult(
-            result.evidence["download"],
-            result.outputs["normalize"],
-            result.evidence["review"],
-            result.evidence["verify"],
-            result.outputs["final"],
-            result.evidence["manifest"],
-            result.status,
-        )
-    )
-    return RlDataArtifact(path=run.output_path, status=result.status, manifest=manifest, result=result)
+    envelope = _pipeline_result(result)
+    return RlDataArtifact(path=run.output_path, status=envelope.status, manifest=asdict(result), result=envelope)
 
 
-def source_step(
-    pipeline: RlDataPipeline, config: SourcePipelineConfig, campaign: CampaignRuntime, *, source: CurationSource
+def _reviewed_step(
+    pipeline: RlDataPipeline,
+    config: SourcePipelineConfig,
+    options: PipelineOptions,
 ) -> ArtifactStep[RlDataArtifact]:
-    """The ``data/rl/<name>-<hash>`` artifact for one declaration.
-
-    A ``grader`` without a declared image requires its environment's artifact to be built already; see
-    ``images.build``.
-    """
-    if config.mode == SourceProcessingMode.QUICK:
-        raise ValueError(
-            "QUICK conversion invokes the pipeline with staged inputs; it does not build reviewed artifacts"
-        )
-    downloaded, inputs = source_downloads(pipeline, campaign)
+    downloaded, inputs = source_downloads(pipeline, options.runtime)
     grader_step = None
     grader_built = None
     if pipeline.grader is not None and placement(pipeline.grader) != Placement.IMAGE:
@@ -575,7 +579,84 @@ def source_step(
         name=f"data/rl/{pipeline.name}-{digest}",
         version=PIPELINE_VERSION,
         artifact_type=RlDataArtifact,
-        run=partial(_run_source, pipeline, config, source, campaign=campaign),
+        run=partial(_run_source, pipeline, config, options),
         build_config=partial(_source_run, identity, downloaded, inputs, grader_step),
         deps=(downloaded, *inputs.values(), *((grader_step,) if grader_step is not None else ())),
+    )
+
+
+@dataclass(frozen=True)
+class QuickRun:
+    source_input: str
+    inputs: dict[str, str]
+    output_path: str
+
+
+def _quick_run(
+    options: PipelineOptions,
+    downloaded: ArtifactStep[Artifact] | None,
+    auxiliary: Mapping[str, ArtifactStep[Artifact]],
+    ctx: StepContext,
+) -> QuickRun:
+    return QuickRun(
+        source_input=ctx.artifact_path(downloaded) if downloaded is not None else options.inputs.root or ctx.output_path,
+        inputs={**options.inputs.auxiliary, **{name: ctx.artifact_path(step) for name, step in auxiliary.items()}},
+        output_path=ctx.output_path,
+    )
+
+
+@contextmanager
+def _conversion_context(context: ZephyrContext, pipeline: RlDataPipeline, run: QuickRun, overrides):
+    shards = conversion_shards(run.source_input, source_files(pipeline.source), overrides=overrides)
+    if context.max_workers <= 1 or not any(shard.row_end is not None and shard.parts > 1 for shard in shards):
+        yield context
+        return
+    # Split Parquet conversion benefits from processes; small conversions keep the local runner.
+    with ZephyrContext(
+        client=context.client,
+        max_workers=context.max_workers,
+        resources=context.resources,
+        chunk_storage_prefix=str(StoragePath(run.output_path).parent / ".zephyr-process"),
+        name="task-curation-quick-process",
+        stage_runner_factory=SubprocessRunner,
+    ) as process_context:
+        yield process_context
+
+
+def _run_quick_source(pipeline: RlDataPipeline, options: PipelineOptions, run: QuickRun) -> CampaignArtifact:
+    overrides = {}
+    for logical, file in options.inputs.files.items():
+        with file.open("rb") as stream:
+            checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+        overrides[logical] = SourceFileOverride(str(file.resolve()), checksum)
+    with _conversion_context(options.runtime.context, pipeline, run, overrides) as context:
+        result = _run_curation(
+            pipeline,
+            mode=options.mode,
+            context=context,
+            source_input=run.source_input,
+            output_path=run.output_path,
+            inputs=run.inputs,
+            source_overrides=overrides,
+        )
+    envelope = _pipeline_result(result)
+    return CampaignArtifact(path=run.output_path, status=envelope.status, result=envelope)
+
+
+def _quick_step(pipeline: RlDataPipeline, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
+    primary = None
+    if options.inputs.root is None and not options.inputs.files:
+        primary = download_step(pipeline.source, options.runtime)
+    auxiliary = {
+        name: download_step(upstream, options.runtime)
+        for name, upstream in sorted(pipeline.inputs.items())
+        if name not in options.inputs.auxiliary
+    }
+    return ArtifactStep(
+        name=pipeline.name,
+        version=PIPELINE_VERSION,
+        artifact_type=CampaignArtifact,
+        run=partial(_run_quick_source, pipeline, options),
+        build_config=partial(_quick_run, options, primary, auxiliary),
+        deps=(*((primary,) if primary is not None else ()), *auxiliary.values()),
     )

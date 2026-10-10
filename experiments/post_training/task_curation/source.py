@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from experiments.post_training.task_curation.invocation import CurationPipeline
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline
 
 
 @dataclass(frozen=True)
@@ -27,8 +26,8 @@ class SourceInfo:
     before conversion or curation. Leave it unknown unless the pinned payload
     or a complete manifest establishes it. A sample size is not a source count.
 
-    ``dataset`` identifies custom runnable sources and inventory entries. The
-    standard declaration adapter derives it from the pinned input. Tags describe task type,
+    ``dataset`` identifies runnable sources and inventory entries. Recipe
+    registration derives it from the pinned input. Tags describe task type,
     interaction, benchmark status, and source-specific search terms.
     """
 
@@ -59,44 +58,26 @@ class DataSourceReview:
 
 
 @dataclass(frozen=True)
-class RlDataSource:
+class RlDataSource[PipelineT: CurationPipeline]:
     """One source population, its assessment, and an optional curation callable.
 
     Stable IDs preserve Atlas review history even when the callable changes.
     Sources without a pipeline remain discoverable in the inventory.
-    Standard declarations derive immutable catalog fields from their recipe;
-    custom declarations specify their dataset, version and files independently.
+    Recipe registration derives immutable catalog fields from its declaration.
+    Other datasets specify those fields independently.
     """
 
     info: SourceInfo
-    pipeline: CurationPipeline | None = None
+    pipeline: PipelineT | None = None
     review: DataSourceReview = field(default_factory=DataSourceReview)
     version: str = "1"
     files: tuple[str, ...] = ()
-    dataset: SourceReference | None = field(init=False)
-    name: str = field(init=False)
+    name: str = field(default="", kw_only=True)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "name", self.info.id.partition(":")[2])
-        object.__setattr__(self, "dataset", self.info.dataset)
-        if not isinstance(self.pipeline, RlDataPipeline):
-            return
-        if self.info.dataset is not None:
-            raise ValueError("Standard sources derive their dataset from pipeline.source")
-        # Derive standard catalog identity at construction, including dataclasses.replace.
-        # Consumers never need to inspect an execution callable for metadata.
-        upstream = self.pipeline.source
-        if isinstance(upstream, HfSource):
-            dataset = SourceReference(
-                upstream.repo,
-                upstream.revision,
-                f"https://huggingface.co/datasets/{upstream.repo}/tree/{upstream.revision}",
-            )
-            files = upstream.files
-        else:
-            dataset = SourceReference(upstream.filename, upstream.sha256, upstream.url)
-            files = (upstream.filename,)
-        object.__setattr__(self, "name", self.pipeline.name)
-        object.__setattr__(self, "version", self.pipeline.version)
-        object.__setattr__(self, "dataset", dataset)
-        object.__setattr__(self, "files", files)
+        if not self.name:
+            object.__setattr__(self, "name", self.info.id.partition(":")[2])
+
+    @property
+    def dataset(self) -> SourceReference | None:
+        return self.info.dataset

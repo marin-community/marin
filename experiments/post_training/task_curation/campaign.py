@@ -22,7 +22,7 @@ from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.task_curation.invocation import PipelineResult
+from experiments.post_training.task_curation.results import PipelineResult
 
 logger = logging.getLogger(__name__)
 

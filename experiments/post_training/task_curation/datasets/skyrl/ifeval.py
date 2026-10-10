@@ -27,7 +27,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, recipe_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 IFEVAL_VERIFIER = SourceReference(
@@ -185,9 +185,9 @@ def convert_rlvr_ifeval(row: RawRow, context: ConversionContext) -> TaskSpec | I
 CONTROLS = Controls()
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     return [
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="MarinSkyRL:nemotron_if",
                 title="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
@@ -214,7 +214,7 @@ def sources() -> list[RlDataSource]:
                 ships=(SCORERS,),
             ),
         ),
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="MarinSkyRL:rlvr_ifeval",
                 title="allenai/RLVR-IFeval",

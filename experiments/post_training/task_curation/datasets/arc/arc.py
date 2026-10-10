@@ -49,7 +49,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import SCORERS as ULTRA_SCORERS
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, recipe_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
@@ -247,9 +247,9 @@ TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden, memory_mb=GRADER_MEMORY_M
 ULTRA_ARC_CONTROLS = Controls(golden=ultra_arc_golden, memory_mb=GRADER_MEMORY_MB)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     return [
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2",
                 title="laion/nemotron-gym-arc-agi-python-inductive-v2",
@@ -272,7 +272,7 @@ def sources() -> list[RlDataSource]:
                 ships=ARC_SHIPS,
             ),
         ),
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-arc-agi-transductive-v3",
                 title="laion/nemotron-gym-arc-agi-transductive-v3",

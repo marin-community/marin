@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from click import UsageError
 from click.testing import CliRunner
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
@@ -26,42 +29,45 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
-from experiments.post_training.task_curation.driver import (
+from experiments.post_training.task_curation.driver import main
+from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.images.build import environment_artifact
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements, recipe_source
+from experiments.post_training.task_curation.settings import (
     VerificationBackend,
     campaign_machines,
     job_controller_url,
-    main,
 )
-from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.images.build import environment_artifact
-from experiments.post_training.task_curation.pipeline import environment_requirements
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
-from experiments.post_training.task_curation.tests.custom_pipeline import number_source
+from experiments.post_training.task_curation.source import SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
     REPOSITORY,
     install_fake_build_tools,
     tracked_lock,
 )
+from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 PINNED_WORKER = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
 CONTROLLER_URL = "http://controller.invalid"
 GRADER = "ghcr.io/marin-community/task-curation-grader@sha256:" + "b" * 64
 
 
-def math500():
-    return next(
-        source.pipeline for source in skyrl_math.sources() if source.name == "math500" and source.pipeline is not None
-    )
+def math500() -> RlDataPipeline:
+    return cast(RlDataPipeline, next(source.pipeline for source in skyrl_math.sources() if source.name == "math500"))
 
 
 @pytest.fixture
-def catalog(monkeypatch):
+def catalog(monkeypatch, tmp_path):
     pipelines = {name: replace(math500(), name=name) for name in ("first", "second", "third")}
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.runnable_sources",
         lambda: {
-            name: RlDataSource(info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), pipeline=pipeline)
-            for name, pipeline in pipelines.items()
+            **{
+                name: recipe_source(
+                    info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), pipeline=pipeline
+                )
+                for name, pipeline in pipelines.items()
+            },
+            "numbers": number_source(tmp_path / "not-yet-generated"),
         },
     )
     return pipelines
@@ -90,6 +96,7 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     assert full.exit_code == 0, full.output
     assert subset.exit_code == 0, subset.output
     planned = json.loads(full.output)["sources"]
+    assert len(planned) == 4 and planned[-1]["name"] == "data/rl/numbers"
     assert json.loads(subset.output)["sources"] == [planned[0], planned[2]]
 
     unknown = runner.invoke(main, [*arguments(tmp_path), "--source", "unknown", "--run"])
@@ -130,8 +137,8 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
 
 
 def test_iris_verification_requires_a_controller():
-    with pytest.raises(ValueError, match="controller URL"):
-        campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, None)
+    with pytest.raises(UsageError, match="--controller-url"):
+        campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, None).machine(grading_environment(GRADER), 2048)
 
 
 def test_machine_identity_records_the_backend_and_controller_presence():
@@ -157,12 +164,10 @@ def iris_arguments(tmp_path) -> list[str]:
     return options[:index] + options[index + 2 :]
 
 
-def test_iris_backend_outside_a_job_requires_a_controller_url(tmp_path, catalog):
+def test_iris_backend_planning_does_not_require_a_controller(tmp_path, catalog):
     result = CliRunner().invoke(main, iris_arguments(tmp_path))
-    assert result.exit_code == 2
-    assert "requires --controller-url" in result.output
-    explicit = CliRunner().invoke(main, [*iris_arguments(tmp_path), "--controller-url", CONTROLLER_URL])
-    assert explicit.exit_code == 0, explicit.output
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "report.json").exists()
 
 
 def test_iris_backend_inside_a_job_uses_the_job_controller(tmp_path, catalog, iris_job):
@@ -226,7 +231,7 @@ def test_reviewed_cli_rejects_local_input_and_output_options(tmp_path, catalog, 
 
 
 @pytest.mark.parametrize("mode, expected", [("quick", [2, 4, 6]), ("sample", [2, 4]), ("full", [2, 4, 6])])
-def test_custom_cli_runs_own_ingestion_without_review_controller_or_build_settings(
+def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_settings(
     tmp_path, monkeypatch, mode, expected
 ):
     monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
@@ -249,6 +254,8 @@ def test_custom_cli_runs_own_ingestion_without_review_controller_or_build_settin
     assert planned.exit_code == 0, planned.output
     assert len(json.loads(planned.output)["sources"]) == 1
     assert not report.exists()
+    assert not (tmp_path / "downloads").exists()
+    assert not (tmp_path / "artifacts").exists()
     client = LocalClient()
     try:
         with set_current_client(client):
@@ -259,6 +266,16 @@ def test_custom_cli_runs_own_ingestion_without_review_controller_or_build_settin
         assert json.loads(StoragePath(result["outputs"]["numbers"]).read_text()) == expected
         assert json.loads(StoragePath(result["evidence"]["ingestion"]).read_text())["mode"] == mode
         assert result["stages"] == ["ingest", "multiply"]
-        assert not (tmp_path / "downloads").exists()
+        if mode == "quick":
+            # The generated pipeline really consumes its upstream artifact.
+            ingested = list((tmp_path / "downloads").rglob("numbers.txt"))
+            assert len(ingested) == 1
+            assert ingested[0].read_text() == "1\n2\n3\n"
+            input_file.unlink()
+            StoragePath(result["outputs"]["numbers"]).write_text("[]")
+            repeated = runner.invoke(main, [*options, "--run"])
+            assert repeated.exit_code == 0, repeated.output
+            assert json.loads(StoragePath(result["outputs"]["numbers"]).read_text()) == expected
+            assert Path(os.environ["MARIN_PREFIX"]) == tmp_path / "artifacts"
     finally:
         client.shutdown()

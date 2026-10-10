@@ -7,6 +7,8 @@ Each test converts an archive kept under ``fixtures/`` and grades it through the
 path. See ``local_grader`` for building the image these tests run.
 """
 
+from typing import cast
+
 import pytest
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import ScriptGrader, TaskSpec
@@ -24,10 +26,9 @@ pytestmark = pytest.mark.docker
 
 GRADING_MEMORY_MB = 2048
 PIPELINES = {
-    source.name: source.pipeline
+    source.name: cast(RlDataPipeline, source.pipeline)
     for module in (calendar, math, python_tests)
     for source in module.sources()
-    if isinstance(source.pipeline, RlDataPipeline)
 }
 ARCHIVE_GRADERS = [
     ("tasktrove-math_gym", "math_gym"),

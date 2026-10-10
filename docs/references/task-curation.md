@@ -17,37 +17,40 @@ Building the catalog performs no downloads, inference or job submission.
 
 ## Dataset-owned invocation
 
-`RlDataSource.pipeline` is a `CurationPipeline` callable:
+`RlDataSource.pipeline` is one graph-building callable:
 
 ```python
-def curate(source: CurationSource, run: PipelineRun) -> PipelineResult:
+def curate(source: CurationSource, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     ...
 ```
 
-`PipelineRun` carries an explicit QUICK, SAMPLE or FULL mode, the active Zephyr
-context, output location, optional primary input path, auxiliary input paths and
-per-file overrides. Each implementation owns ingestion and chooses its
-conversion, validation, review and control stages. A custom callable can read a
-local format or generate inputs without declaring an HF download, grader or
-reviewer.
+`PipelineOptions` contains an explicit QUICK, SAMPLE or FULL mode, the campaign
+runtime, input overrides, optional local output/cache paths and optional concrete
+recipe settings. Each dataset constructs its own dependencies and chooses its
+conversion, validation, review and control stages. Its run closure accesses the
+active Zephyr context through the runtime. A pipeline can generate inputs or
+read local files without reviewer credentials, grader builds or sandbox setup.
 
-`PipelineResult` contains the existing `SourceStatus`, named output and evidence
-paths, and the names of the stages it ran. Outputs need no `final` or admitted
-view. Exceptions enter the campaign's existing failure report while peer results
-remain available. The campaign report retains the envelope when a callable
-returns a `PipelineResult`.
+`CampaignArtifact.result` carries a `PipelineResult`: the existing `SourceStatus`,
+named output and evidence paths, and the stages that actually ran. It requires no
+`final` or admitted view. Exceptions enter the campaign's failure report while
+peer results remain available.
 
-The existing `RlDataPipeline` is the standard implementation. Its artifact
-binding retains pinned downloads, grader dependencies, policies and cache
-identity. Only this implementation receives the standard review configuration
-and resolved grader environment.
+`RlDataPipeline` is a reusable recipe implementation of this same callable. It
+chooses pinned downloads and grader dependencies, then invokes the existing
+source processor. Review endpoints and credentials resolve only during its
+chosen review path; controller lookup occurs when its grader machine is used.
+QUICK executes the complete declared dependency graph through StepRunner. Its
+terminal uses the executor's mutable `dev` rerun policy at the explicit output
+root; ingestion dependencies retain their versions and caches. Recipe conversion
+refuses existing `normalize/` or `manifest.json` payloads, including partial
+outputs. Other datasets own their overwrite behavior.
 
-Catalog fields are available on `RlDataSource` without executing its callable.
-Standard declarations derive `name`, `version`, `dataset` and `files` once at
-construction from their immutable recipe. Custom declarations use the suffix of
-`SourceInfo.id` after its first colon as their invocation name. They supply
-`SourceInfo.dataset`, `RlDataSource.version` and optional `RlDataSource.files`.
-Atlas reads these fields directly.
+Catalog fields are available without executing a pipeline. `recipe_source`
+derives `name`, `version`, `SourceInfo.dataset` and `files` once from its immutable
+declaration. Other registrations supply these fields directly; an omitted name
+uses the suffix of `SourceInfo.id` after its first colon. Atlas reads these fields
+without inspecting the execution implementation.
 
 ## Package organization
 
@@ -57,11 +60,11 @@ Atlas reads these fields directly.
 | `experiments/post_training/task_curation/environment.py` | `Environment`, what a machine must provide, and `placement`, which decides where it runs |
 | `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
 | `experiments/post_training/task_curation/environment_runtime.py` | The uv environments that local graders run in on the Zephyr worker |
-| `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()`, `runnable_sources()` and the standard-only `standard_pipelines()` projection |
+| `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()` and `runnable_sources()` |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
 | `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
 | `experiments/post_training/task_curation/pipeline.py`, `local.py` | Source-level mode dispatch and local mechanical conversion |
-| `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
+| `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, shared pool and per-source results |
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
 | `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
 | `taskcompendium.runtime` | Grading in fresh Shellbox machines |
@@ -76,9 +79,9 @@ ArtifactSteps.
 An `RlDataSource` has `info`, `review` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
 search tags, notes and an optional input-row count. A `SourceReference` groups a
-name, revision and URL for the verifier or dataset. Standard sources derive
-dataset identity from their recipe; custom sources specify it independently of
-execution. `DataSourceReview` records an authored grade, evidence URL, date and
+name, revision and URL for the verifier or dataset. Recipe registrations derive
+dataset identity from their declaration; other registrations specify it
+independently of execution. `DataSourceReview` records an authored grade, evidence URL, date and
 the dataset/verifier revisions it covers. Its default is unrated. Executed
 reviews and difficulty measurements remain in the Atlas database.
 
@@ -231,17 +234,18 @@ are admitted like rows of in-process graders.
 
 ## Conversion modes
 
-Each dataset's callable receives `PipelineRun` with an explicit mode. The
+Each dataset's callable receives `PipelineOptions` with an explicit mode. The
 single `driver` CLI requires `--mode quick|sample|full` and
 prints a plan unless `--run` is supplied. QUICK runs locally without review or
 controller settings. See the campaign quickstart below for input overrides.
-The standard implementation shares conversion and the normalized schema across
+The recipe implementation shares conversion and the normalized schema across
 its modes. QUICK retains TaskSpecs
 and typed rejections, skipping admission, fingerprints, review, deduplication
 and grading. It records declared images or locks without building environments.
 
-Standard SAMPLE and FULL bind `SourcePipelineConfig` and a resolved grader
-environment. Custom callables require neither. FULL reviews a bounded panel, then
+Recipe SAMPLE and FULL bind `SourcePipelineConfig` and a resolved grader
+environment. Other callables choose their own configuration. The recipe's FULL
+mode reviews a bounded panel, then
 reuses those conversions when its quality gate allows expansion. The procedure
 below describes those reviewed stages. See the
 [campaign quickstart](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)

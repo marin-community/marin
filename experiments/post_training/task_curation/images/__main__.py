@@ -14,23 +14,18 @@ import click
 from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.post_training.task_curation.environment import Environment, Placement, placement
+from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES, GRADER_PACKAGES
+from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
     DEFAULT_REPOSITORY,
     environment_artifact,
     identity_digest,
 )
-from experiments.post_training.task_curation.sources import standard_pipelines
 
 
 def declared_environments() -> dict[str, Environment]:
     """Every environment the catalog declares that the pipeline builds, by identity."""
-    declared = [
-        environment
-        for pipeline in standard_pipelines().values()
-        for environment in (pipeline.environment, pipeline.grader)
-        if isinstance(environment, Environment) and placement(environment) != Placement.IMAGE
-    ]
+    declared = (GRADER_PACKAGES, COMPILER_GRADER_PACKAGES)
     return {identity_digest(environment): environment for environment in declared}
 
 

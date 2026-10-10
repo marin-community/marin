@@ -12,7 +12,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, recipe_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 MCQ_VERIFIER = SourceReference(
@@ -89,9 +89,9 @@ def convert_openscience(row: RawRow, _context: ConversionContext) -> TaskSpec | 
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     return [
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="MarinSkyRL:gpqa",
                 title="Idavidrein/gpqa · gpqa_diamond",
@@ -115,7 +115,7 @@ def sources() -> list[RlDataSource]:
                 rubric=GPQA_RUBRIC,
             ),
         ),
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="MarinSkyRL:openscience",
                 title="nvidia/OpenScience",

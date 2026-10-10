@@ -4,6 +4,7 @@
 import hashlib
 import json
 from dataclasses import replace
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -11,11 +12,11 @@ import pytest
 from taskcompendium.pipeline.inputs import SourceFormat
 
 from experiments.post_training.task_curation.count_inputs import parquet_counts
+from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.export_catalog import catalog_document, source_row
-from experiments.post_training.task_curation.pipeline import HfSource
+from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, recipe_source
 from experiments.post_training.task_curation.source import DataSourceReview, RlDataSource, SourceInfo
-from experiments.post_training.task_curation.sources import standard_pipelines
-from experiments.post_training.task_curation.tests.custom_pipeline import number_source
+from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
 def test_parquet_count_export_identifies_the_counted_input(tmp_path):
@@ -27,10 +28,10 @@ def test_parquet_count_export_identifies_the_counted_input(tmp_path):
     metadata.write_text("pinned-input\nfile-etag\n0\n")
     count = parquet_counts(snapshot, "pinned-input", "*.parquet")["tasks.parquet"]
     pipeline = replace(
-        standard_pipelines()["math500"],
+        cast(RlDataPipeline, next(source.pipeline for source in skyrl_math.sources() if source.name == "math500")),
         source=HfSource("local/questions", "pinned-input", ("tasks.parquet",), SourceFormat.PARQUET),
     )
-    source = RlDataSource(
+    source = recipe_source(
         info=SourceInfo(id="local:questions", title="Questions", origin="local", count=count),
         pipeline=pipeline,
     )
@@ -67,7 +68,7 @@ def test_catalog_export_is_deterministic_and_keeps_metadata_only_sources():
     assert catalog_document([changed, excluded])["revision"] != document["revision"]
 
 
-def test_custom_catalog_identity_is_available_without_execution(tmp_path):
+def test_dataset_catalog_identity_is_available_without_execution(tmp_path):
     source = number_source(tmp_path / "not-staged")
     row = source_row(source)
     assert row["dataset_id"] == "local-numbers"

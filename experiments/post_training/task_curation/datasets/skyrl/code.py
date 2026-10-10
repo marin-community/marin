@@ -30,7 +30,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, recipe_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 LCB_VERIFIER = SourceReference(
@@ -293,9 +293,9 @@ def reference_solution(task: TaskSpec) -> Reply | None:
 CONTROLS = Controls(golden=reference_solution, memory_mb=CODE_GRADER_MEMORY_MB)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     return [
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="MarinSkyRL:apps",
                 title="codeparrot/apps",
@@ -319,7 +319,7 @@ def sources() -> list[RlDataSource]:
                 ships=(SCORERS,),
             ),
         ),
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="MarinSkyRL:eurus2_code",
                 title="PRIME-RL/Eurus-2-RL-Data · code",
@@ -347,7 +347,7 @@ def sources() -> list[RlDataSource]:
                 ships=(SCORERS,),
             ),
         ),
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="MarinSkyRL:verifiable_code",
                 title="open-r1/verifiable-coding-problems-python",
@@ -374,7 +374,7 @@ def sources() -> list[RlDataSource]:
                 ships=(SCORERS,),
             ),
         ),
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="MarinSkyRL:gretel_text_to_sql",
                 title="gretelai/synthetic_text_to_sql",

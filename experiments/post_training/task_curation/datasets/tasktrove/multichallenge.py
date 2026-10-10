@@ -27,7 +27,7 @@ from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, recipe_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
@@ -85,9 +85,9 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec 
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     return [
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
                 title="laion/nemotron-gym-multichallenge-advanced-v4",

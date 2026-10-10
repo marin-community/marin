@@ -5,6 +5,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -55,7 +56,7 @@ from experiments.post_training.task_curation.tests.conversion import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures/nemotron_ultra"
-PIPELINES = {source.name: source.pipeline for source in sources() if isinstance(source.pipeline, RlDataPipeline)}
+PIPELINES = {source.name: cast(RlDataPipeline, source.pipeline) for source in sources()}
 SWE_GYM_INSTANCE = "gym-1"
 SWE_REBENCH_INSTANCE = "rebench-1"
 DAPO_QUESTION = "What is 2 + 3?"

@@ -23,7 +23,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     TaskTroveConverter,
     tasktrove_source,
 )
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, recipe_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 PUZZLES_CONFIG = "laion__all-puzzles-v2"
@@ -74,9 +74,9 @@ def convert_puzzle(row: RawRow, _context: ConversionContext) -> TaskSpec | Norma
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[RlDataPipeline]]:
     return [
-        RlDataSource(
+        recipe_source(
             info=SourceInfo(
                 id=f"Task Trove:{PUZZLES_CONFIG}",
                 title="laion/all-puzzles-v2",

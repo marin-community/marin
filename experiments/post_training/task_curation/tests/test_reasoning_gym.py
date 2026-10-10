@@ -7,6 +7,7 @@ import json
 import tomllib
 import zipfile
 from fractions import Fraction
+from typing import cast
 
 import pytest
 import reasoning_gym
@@ -30,9 +31,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     tasktrove_row,
 )
 
-PIPELINES = {
-    source.name: source.pipeline for source in declarations.sources() if isinstance(source.pipeline, RlDataPipeline)
-}
+PIPELINES = {source.name: cast(RlDataPipeline, source.pipeline) for source in declarations.sources()}
 EXCLUDED = (("composite", "Requires explicit component configuration"),)
 TASKTROVE_INSTRUCTION = "Solve x + 8 = 50. Write ONLY your final answer to **`/app/answer.txt`**"
 TASKTROVE_ENTRY = {"question": "Solve x + 8 = 50.", "answer": "42", "metadata": {"source_dataset": "simple_equations"}}
