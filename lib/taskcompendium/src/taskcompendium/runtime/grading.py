@@ -586,11 +586,10 @@ async def _grade_staged(
             async with asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(
                     prepare_machine_spec,
-                    grading.environment.model_copy(
-                        update={"environment_variables": resolve_env_vars(grading.environment.environment_variables, host_environment)}
-                    ),
+                    grading.environment,
                     factory,
                     machine_spec,
+                    host_environment,
                 )
                 machine = await factory.create(replace(prepared, workdir=grading.workspace))
             try:

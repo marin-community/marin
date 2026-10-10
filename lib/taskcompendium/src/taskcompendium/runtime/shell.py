@@ -7,13 +7,13 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
-from harbor_config.env import resolve_env_vars
 from shellbox.machine import (
     Command,
     Machine,
@@ -234,11 +234,10 @@ class ShellFactory:
         async with asyncio.timeout(self.machine_spec.startup_timeout):
             prepared = await asyncio.to_thread(
                 prepare_machine_spec,
-                requirements.model_copy(
-                    update={"environment_variables": resolve_env_vars(requirements.environment_variables)}
-                ),
+                requirements,
                 self.machine_factory,
                 self.machine_spec,
+                dict(os.environ),
             )
             machine = await self.machine_factory.create(prepared)
         try:

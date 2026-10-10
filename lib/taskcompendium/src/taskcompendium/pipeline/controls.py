@@ -4,11 +4,11 @@
 """Grade a source's control submissions through the same grading path rollouts use."""
 
 import asyncio
+import os
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Protocol
 
-from harbor_config.env import resolve_env_vars
 from shellbox.machine import Command, MachineFactory, MachineSpec
 from verifyit.grade import positive_candidate
 from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec
@@ -234,11 +234,10 @@ async def _oracle_attempt(
     async with asyncio.timeout(spec.startup_timeout):
         prepared = await asyncio.to_thread(
             prepare_machine_spec,
-            environment.model_copy(
-                update={"environment_variables": resolve_env_vars(environment.environment_variables)}
-            ),
+            environment,
             factory,
             spec,
+            dict(os.environ),
         )
         machine = await factory.create(prepared)
     try:

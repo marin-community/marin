@@ -25,7 +25,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, require_resolved_environment
-from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars
+from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.resources import resource_bytes
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
@@ -128,11 +128,10 @@ async def _prepare_machine(
     async with asyncio.timeout(runtime.startup_timeout):
         prepared = await asyncio.to_thread(
             prepare_machine_spec,
-            requirements.model_copy(
-                update={"environment_variables": resolve_env_vars(requirements.environment_variables, os.environ)}
-            ),
+            requirements,
             factories[runtime.backend],
             _machine_spec(requirements, runtime),
+            dict(os.environ),
         )
         machine = await _acquire_machine(runtime, prepared, factories, cleanup, owned)
         await _install_resources(machine, resources)

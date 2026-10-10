@@ -87,7 +87,10 @@ def validate_machine_spec(requirements: EnvironmentRequirements, factory: Machin
 
 
 def prepare_machine_spec(
-    requirements: EnvironmentRequirements, factory: MachineFactory, spec: MachineSpec
+    requirements: EnvironmentRequirements,
+    factory: MachineFactory,
+    spec: MachineSpec,
+    host_environment: Mapping[str, str],
 ) -> MachineSpec:
     """Bind required software, working directory and variables to a selected machine.
 
@@ -95,6 +98,7 @@ def prepare_machine_spec(
     Resource installation, setup commands, machine creation and cleanup remain with the caller.
     """
     validate_machine_spec(requirements, factory, spec)
+    required_variables = resolve_env_vars(requirements.environment_variables, host_environment)
     if requirements.docker_image is not None:
         require_image(spec, requirements.docker_image)
     variables = {}
@@ -115,7 +119,7 @@ def prepare_machine_spec(
     return replace(
         spec,
         workdir=requirements.working_directory if requirements.working_directory is not None else spec.workdir,
-        env={**variables, **spec.env, **requirements.environment_variables},
+        env={**variables, **spec.env, **required_variables},
         # Memory is advisory for local grading; bubblewrap has no allocation API.
         memory_mb=None if factory.backend == Backend.LOCAL else spec.memory_mb,
     )
