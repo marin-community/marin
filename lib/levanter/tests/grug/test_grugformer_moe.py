@@ -47,6 +47,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _TransportBufferSite,
     _unpermute_from_global_expert,
 )
+from levanter.grug._moe.ep_ring import _gather_dispatch_combine
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -1630,6 +1631,38 @@ def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: lis
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
+    """In bf16 the gather combine and the dispatch gradient sum each token's rows in float32, then round once."""
+    tokens, topk, hidden, slots = 6, 4, 32, 16
+    rng = np.random.default_rng(0)
+    # The slots hold the first four tokens' assignments in random order, and the last two slots are padding.
+    picked = rng.permutation(slots).astype(np.int32)
+    valid = np.arange(slots) < 14
+    token = picked // topk
+    # Integers below 256, and their products with powers of two, are exact in bf16, and float32 sums of four of
+    # them are exact. Each token sum's final rounding is then the only one, whatever order the adds run in.
+    # Summing in bf16 in k order instead would change 26 of the combined values and 16 of the gradient values.
+    rows = rng.integers(-255, 256, (slots, hidden)).astype(np.float32)
+    weights = np.exp2(rng.integers(-2, 2, slots)).astype(np.float32)
+    rows_cotangent = rng.integers(-255, 256, (slots, hidden)).astype(np.float32)
+
+    @jax.jit
+    def evaluate(x, rows, weights, rows_cotangent):
+        dispatch_combine = _gather_dispatch_combine(jnp.asarray(picked), jnp.asarray(valid), tokens, topk)
+        _, dispatch_vjp = jax.vjp(dispatch_combine.dispatch, x)
+        return dispatch_combine.combine(rows, weights), dispatch_vjp(rows_cotangent)[0]
+
+    x = jnp.zeros((tokens, hidden), jnp.bfloat16)
+    combined, x_gradient = evaluate(x, *(jnp.asarray(a, jnp.bfloat16) for a in (rows, weights, rows_cotangent)))
+
+    expected_combined = np.zeros((tokens, hidden), np.float32)
+    np.add.at(expected_combined, token[valid], (rows * weights[:, None])[valid])
+    expected_x_gradient = np.zeros((tokens, hidden), np.float32)
+    np.add.at(expected_x_gradient, token[valid], rows_cotangent[valid])
+    np.testing.assert_array_equal(np.asarray(combined), np.asarray(expected_combined, jnp.bfloat16))
+    np.testing.assert_array_equal(np.asarray(x_gradient), np.asarray(expected_x_gradient, jnp.bfloat16))
 
 
 def _simulate_ragged_a2a(operands, outputs, params):

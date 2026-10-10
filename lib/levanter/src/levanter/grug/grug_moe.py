@@ -458,6 +458,9 @@ def moe_mlp(
     `token_valid` excludes invalid positions from dispatch, capacity accounting,
     and expert gradients. Omitted validity treats every token as valid.
 
+    Expert-parallel implementations such as `ring` and `ring_gather_combine` run only on an expert axis of size two
+    or more. Without one they fall back to the local `scatter` path, so a single-device call never reaches them.
+
     With `implementation="ragged_all_to_all"` on an expert axis of size two or
     more, SiLU experts with bfloat16 or float32 tokens on an SM100 GPU with
     QuACK installed take the combine-weight gradient on the expert side, from
