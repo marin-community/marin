@@ -36,7 +36,6 @@ from experiments.post_training.bfcl_rl.offline_student_collect import native_stu
 from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCache
 
 TEACHER_SEED = 511993168
-STUDENT_SEED = 770471633
 TASK = "bfcl-irrelevance-0"
 HARNESS = ("opencode",)
 RECOVERY_VERSION = "2026.10.04.21"
@@ -70,11 +69,13 @@ def collection_snapshot_step(collection: ArtifactStep, data: ArtifactStep) -> Ar
     )
 
 
-def collection_smoke_step(teacher_source: str, collection_version: str) -> ArtifactStep[RecoveryPreferenceCache]:
+def collection_smoke_step(
+    teacher_source: str, collection_version: str, student_seed: int
+) -> ArtifactStep[RecoveryPreferenceCache]:
     with build_context(BuildContext(VersionCodex(collection_version))):
         teacher = offline_collection_step(teacher_source, TEACHER_SEED, TASK, 32, HARNESS)
         student = native_student_collection_step(
-            RECOVERY_VERSION, EXPORT_VERSION, CHECKPOINT_STEP, STUDENT_SEED, TASK, 32, HARNESS
+            RECOVERY_VERSION, EXPORT_VERSION, CHECKPOINT_STEP, student_seed, TASK, 32, HARNESS
         )
     policy = replace(recovered_model(RECOVERY_VERSION, EXPORT_VERSION), relative_path=f"hf/step-{CHECKPOINT_STEP}")
     data = complement_data_step()
@@ -96,7 +97,7 @@ def collection_smoke_step(teacher_source: str, collection_version: str) -> Artif
             student=NativeCollectionInput(
                 str(StoragePath(ctx.artifact_path(student_snapshot)) / "snapshot.json"),
                 ModelSource(original.model, original.revision, policy.resolve(ctx).uri, EXPORT_VERSION),
-                STUDENT_SEED,
+                student_seed,
                 NativeCollectionScope.SEALED_BATCHES,
             ),
             data_root=ctx.artifact_path(data),
@@ -118,8 +119,10 @@ def collection_smoke_step(teacher_source: str, collection_version: str) -> Artif
     )
 
 
-def pipeline_smoke_step(teacher_source: str, input_version: str, collection_version: str) -> ArtifactStep:
-    fresh = collection_smoke_step(teacher_source, collection_version)
+def pipeline_smoke_step(
+    teacher_source: str, input_version: str, collection_version: str, student_seed: int
+) -> ArtifactStep:
+    fresh = collection_smoke_step(teacher_source, collection_version, student_seed)
     name = user_owned_name(INPUT_NAME)
     frozen = ArtifactStep.adopt(name + "-input", input_version, f"{name}/{input_version}", kind=Artifact)
     complement = complement_data_step()
@@ -152,14 +155,19 @@ def pipeline_smoke_step(teacher_source: str, input_version: str, collection_vers
 @click.option("--teacher-source", required=True)
 @click.option("--input-version", required=True)
 @click.option(
+    "--student-seed", type=int, required=True, help="Explicit seed for fresh student collection and provenance."
+)
+@click.option(
     "--collection-version", required=True, help="Immutable teacher/student collection version to build or reuse."
 )
 @click.option("--stage", type=click.Choice([value.value for value in SmokeStage]), required=True)
 @rl_build_options
-def main(teacher_source: str, input_version: str, collection_version: str, stage: str) -> ArtifactStep:
+def main(
+    teacher_source: str, input_version: str, collection_version: str, student_seed: int, stage: str
+) -> ArtifactStep:
     if SmokeStage(stage) is SmokeStage.COLLECT:
-        return collection_smoke_step(teacher_source, collection_version)
-    return pipeline_smoke_step(teacher_source, input_version, collection_version)
+        return collection_smoke_step(teacher_source, collection_version, student_seed)
+    return pipeline_smoke_step(teacher_source, input_version, collection_version, student_seed)
 
 
 if __name__ == "__main__":
