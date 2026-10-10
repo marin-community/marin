@@ -74,6 +74,7 @@ from experiments.grug.fast_track.model import (
 
 logger = logging.getLogger(__name__)
 
+_HOST_MEMORY_LIMIT_ENV = "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"
 RUNTIME_ENV = {
     "LD_PRELOAD": "libjemalloc.so.2",
     "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
@@ -988,6 +989,10 @@ def _stall_diagnostic(timeout) -> None:
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    # The GPU client reads the pinned-host limit when it is created, which happens in this process after the
+    # dispatcher: an environment variable forwarded from the coordinator does not reach it on GB200 (probe
+    # lc1-hostlim2 saw it unset and capped at 64 GB), so set it here before any device is touched.
+    os.environ.setdefault(_HOST_MEMORY_LIMIT_ENV, RUNTIME_ENV[_HOST_MEMORY_LIMIT_ENV])
     marker = config.trainer.completion_marker_path
     if marker is not None and fsspec.core.url_to_fs(marker)[0].exists(marker):
         logger.info("run already completed (%s exists); not retraining", marker)
