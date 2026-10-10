@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
-    CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
     ExitCodeReward,
@@ -42,7 +41,6 @@ def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentR
     """Grade the submitted Git patch in a fresh machine from the same image."""
     if environment.docker_image is None or environment.tool_providers:
         raise ValueError("SWE tasks require a prebuilt, digest-pinned shell image")
-    environment = environment.model_copy(update={"command_semantics": CommandSemantics.LINUX_PROCESS})
     task_environment = environment.model_copy(
         update={
             "capabilities": ("shell", "filesystem"),

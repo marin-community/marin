@@ -107,7 +107,6 @@ The `CurationRecipe` configuration has these fields:
 | `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion changes outside the hashed files. |
-| `environment` | `ShellSim()` for conversation tasks, or `Environment(image=...)` naming the digest-pinned image an agent works in. |
 | `intended_use` | `train` or `eval`. |
 | `rubric` | Optional review rubric string, one criterion per paragraph. |
 | `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
@@ -127,8 +126,8 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 
 ## Environments
 
-An `Environment` states what a machine must provide. A declaration never names
-a backend; the pipeline places each environment:
+An `Environment` declares grader build inputs. The converter records agent and
+grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
 
 | Field | Meaning |
 |---|---|
@@ -140,9 +139,9 @@ a backend; the pipeline places each environment:
 
 | Declaration | Placement | Recorded `EnvironmentRequirements` |
 |---|---|---|
-| `image` set | A sandbox of that image | `docker_image=image`, `compatible_backends=(gvisor, docker)` |
-| `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `docker_image=<built digest>`, `compatible_backends=(gvisor, docker)` |
-| Anything else | A bubblewrap sandbox on the Zephyr worker | `compatible_backends=(local,)`, `packages_lock=<lock URL>` |
+| `image` set | A sandbox of that image | `command_semantics=LINUX_PROCESS`, `docker_image=image` |
+| `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `command_semantics=LINUX_PROCESS`, `docker_image=<built digest>` |
+| Anything else | A bubblewrap sandbox on the Zephyr worker | `command_semantics=LINUX_PROCESS`, `packages_lock=<lock URL>` |
 
 `WORKER_IMAGE_APT` in `environment.py` lists the Debian packages the `task`
 stage of `lib/iris/Dockerfile` installs, such as `build-essential` and `git`.
@@ -151,8 +150,9 @@ lock every grade script in the catalog imports with the NLTK `punkt_tab` and
 `wordnet` data, runs in the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
-An agent environment must name its image, because converters record the
-agent's requirements on each task.
+Converters declare agent requirements independently. A simulated shell requires
+explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation.
+Conversation-only tasks need no machine. Memory settings are advisory sizing hints.
 
 ## Graders and controls
 
@@ -304,6 +304,7 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --review-cache CACHE_PREFIX --mode sample \
   --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
   --normalized-shards 32 \
+  --image-backend gvisor \
   --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
@@ -339,10 +340,12 @@ self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
 `/tmp/task-curation-env-<identity>`, with the NLTK data and `verifyit`; the
 sandbox mounts only that directory and the system directories, and concurrent
 graders on one host build it once.
-`--verification-backend` is where sandbox graders run: `iris` (the default) or
-`gvisor`. Iris schedules each grader machine on the controller of the enclosing
-Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
-Docker daemon.
+Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
+The gVisor launcher uses the enclosing Iris job's controller, or `--controller-url`
+outside a job, to create sandbox jobs. Daytona creates remote sandboxes through its API.
+Neither path requires a Docker daemon in the Zephyr worker. Without an image backend,
+controls can still use package locks through Local or explicit simulator requirements
+through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
 `--base-url` overrides it. `--mode sample` is a test run that

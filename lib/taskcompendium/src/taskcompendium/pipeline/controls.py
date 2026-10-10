@@ -277,7 +277,7 @@ async def _oracle_attempt(
             return GradingAttempt(
                 ConversationTrace(events=(*task.context.events, FILE_SUBMISSION_MESSAGE)), evidence.files
             )
-        # A relative answer file names the file the oracle wrote in the grader workspace.
+        # Relative answers are read from the same workspace as the oracle command.
         answer = await machine.run(
             Command(
                 ("cat", command.answer_file),

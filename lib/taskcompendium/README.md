@@ -43,7 +43,7 @@ flowchart LR
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
-| `schema_version` | Version of the serialized spec: `0.25`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.26`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
@@ -96,25 +96,23 @@ Public expectations belong in `context`: for example, the columns a CSV must con
 
 `environment_requirements` declares the initial state and operations needed to solve a task.
 
-`compatible_backends` lists the Shellbox backends the source author permits for
-this environment, such as `shellsim` or `gvisor`. A grader environment has its own
-list. Empty means no Shellbox backend is declared; it is not a wildcard.
-TaskCompendium's shell runtime and `grade_task` check the selected factory against
-the appropriate list before creating a machine. A required Docker image excludes ShellSim. See the
-[source-author rubric](src/taskcompendium/pipeline/README.md) for compatibility
-criteria and the distinction between declarations and sampled runtime evidence.
+`command_semantics` describes native Linux processes or a simulated shell.
+The caller selects a Shellbox factory; shared runtime preparation checks that it
+can satisfy the requirements and binds the image or lock-backed dependencies.
+Agent and grader requirements remain separate. Conversation-only tasks need no
+command semantics, and missing packaging never implies simulation.
 
 | Field | Meaning |
 | --- | --- |
 | `capabilities` | Unique operation names, such as `shell`, `network`, `filesystem`, `process`, or `browser`. Names are open so future capabilities can be represented. |
-| `compatible_backends` | Unique Shellbox backend names permitted by the source author; empty declares none. |
+| `command_semantics` | `LINUX_PROCESS` for native execution, `SHELL_SIMULATOR` for the simulated command language and virtual filesystem, or `None` when no shell execution is required. |
 | `docker_image` | Optional immutable image reference, such as `registry/project@sha256:<64 lowercase hex digits>`. Tags alone are rejected. |
 | `docker_build` | Optional `DockerBuildContext(files=...)` containing inline regular files relative to the build-context root, including `Dockerfile`. The recipe is unresolved data. |
 | `working_directory` | Optional normalized absolute POSIX path for the main workspace. Omission declares no required working directory. |
 | `setup_commands` | Ordered commands required to establish the initial workspace. |
 | `environment_variables` | String values required in the worker or grading machine environment. |
 | `tool_providers` | Mapping from a task-local provider instance name to a required action interface and initial state. |
-| `packages_lock` | Storage URL of a uv-compiled, hash-pinned requirements lock. A `local` environment requires it: the host builds the lock into a Python environment for the commands it runs. Other environments must omit it. |
+| `packages_lock` | Storage URL of an artifact-backed, hash-pinned Python requirements lock. Current runtime preparation supports these through Shellbox local. |
 
 Each `ProviderRequirement` contains `action_interface`, a versioned contract name such as `workplace:v1`, and required `initial_state`, a JSON value such as a string, null, or an object. Two named instances can require the same interface with different initial states. No digest is required. The selected runtime owns provider implementation, transport, state initialization, reset, and tool execution. `final_tools` contains only ordered function definitions advertised at the final decision point; it supplies no implementation.
 
@@ -123,11 +121,13 @@ The task's environment and worker file mounts describe worker initial state. A g
 `docker_image`, `docker_build`, and `packages_lock` are mutually exclusive.
 Build files preserve bytes, modes and timestamps; paths cannot collide. Resource
 budgets count actor and grader contexts separately. Execution requires the caller
-to build each context and replace it with a digest-pinned image and supported
-backends. TaskCompendium supplies no build resolver; runtimes and SAMPLE/FULL
-controls reject unresolved contexts. Local and ShellSim backends cannot declare them.
+to build each context and replace it with a digest-pinned image. All three
+dependency forms require `LINUX_PROCESS` semantics. TaskCompendium supplies no
+build resolver; runtimes and SAMPLE/FULL controls reject unresolved contexts.
+Native requirements without packaging remain representable but cannot execute
+through the current adapters. Memory settings are advisory sizing hints.
 
-The [Harbor exporter](src/taskcompendium/harbor/export.py) emits build inputs;
+The [Harbor exporter](../../experiments/post_training/task_curation/tasktrove/harbor_export.py) emits build inputs;
 see the [campaign quickstart](../../experiments/post_training/task_curation/README.md#harbor-compatibility-view)
 for execution limits. The Harbor-to-TaskSpec importer requires a prebuilt image.
 
@@ -314,7 +314,7 @@ Three functions grade an attempt:
 
 - `taskcompendium.grading.grade_answer(task, attempt)` grades with an in-process `VerifyitGrader`. The answer format extracts the submission, or `attempt.state` supplies it for a `state` answer, and `verifyit.candidate.grade_candidate` scores it. It raises `TypeError` for other graders.
 - `taskcompendium.runtime.grading.grade_in_sandbox(task, attempt, factory, machine_spec, *, task_machine=None, timeout=None)` is asynchronous. It grades with a `VerifyitGrader` that has an environment, or with a `ScriptGrader`, in a fresh machine from `factory`. `task_machine` is the agent's machine, required for `collect` and `artifacts`. Machine exceptions propagate.
-- `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. An in-process grader uses `grade_answer`. A grader with an environment uses `grade_in_sandbox` after `grade_task` checks the factory's backend against `environment.compatible_backends`. A missing factory or machine specification, and a machine `RuntimeError` or `OSError`, become `infra_error`. A `SessionGrader` raises `TypeError`.
+- `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. An in-process grader uses `grade_answer`; a sandbox grader uses shared environment preparation and `grade_in_sandbox`. Unsupported requirements raise before machine creation. A missing factory or machine specification, and machine `RuntimeError` or `OSError`, become `infra_error`. A `SessionGrader` raises `TypeError`.
 
 RolloutEngine's Shellbox session calls `grade_answer` or `grade_in_sandbox` after the turn loop; see [task rollouts](../../docs/references/task-rollouts.md).
 
@@ -349,4 +349,5 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.25` stores the answer format and the typed grader on each task. Decoders reject other schema versions; existing conversion pipelines must emit the current contract.
+Schema `0.26` replaces backend permissions with command semantics. Reconvert
+older TaskSpecs before using the updated readers; no compatibility shim is supplied.

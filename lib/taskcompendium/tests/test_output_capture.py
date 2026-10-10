@@ -10,7 +10,15 @@ import tarfile
 from dataclasses import dataclass, field
 
 import pytest
-from shellbox.machine import Backend, DockerImage, ExitReason, MachineSpec, Result, UnsupportedMachineSpec
+from shellbox.machine import (
+    Backend,
+    DockerImage,
+    ExitReason,
+    MachineSpec,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from verifyit.spec import StdioSpec
 
 from taskcompendium.convert.environment import grading_environment
@@ -174,7 +182,7 @@ async def test_directory_grader_mount_or_outside_root_rejected_before_capture_an
     )
     machines = FileMachines()
     with pytest.raises(ValueError, match=r"private mounts|workspace"):
-        await ShellFactory(machines, MachineSpec(DockerImage("test")), {}, 1, 1024).create(task)
+        await ShellFactory(machines, MachineSpec(DockerImage(IMAGE)), {}, 1, 1024).create(task)
     with pytest.raises(ValueError, match=r"private mounts|workspace"):
         await grade_in_sandbox(
             task, GradingAttempt(finished(task), {root + "/file.yml": b"x"}), machines, grading_machine(task)
@@ -235,18 +243,22 @@ async def test_directory_order_matches_original_find_discovery(directory_task, t
 
 
 @pytest.mark.asyncio
-async def test_directory_capture_cannot_claim_shellsim_python_support(directory_task):
+async def test_directory_capture_rejects_simulator_before_acquisition(directory_task):
     machines = FileMachines()
     machines.backend = Backend.SHELLSIM
     task = directory_task.model_copy(
         update={
             "environment_requirements": directory_task.environment_requirements.model_copy(
-                update={"docker_image": None, "command_semantics": CommandSemantics.SHELL_SIMULATOR}
+                update={
+                    "docker_image": None,
+                    "command_semantics": CommandSemantics.SHELL_SIMULATOR,
+                    "capabilities": ("shell", "filesystem"),
+                }
             )
         }
     )
-    with pytest.raises(UnsupportedMachineSpec, match="POSIX Python 3"):
-        await ShellFactory(machines, MachineSpec(DockerImage("test")), {}, 1, 1024).create(task)
+    with pytest.raises(UnsupportedMachineSpec):
+        await ShellFactory(machines, MachineSpec(ShellSimBuiltins()), {}, 1, 1024).create(task)
     assert not machines.machines
 
 

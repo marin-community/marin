@@ -104,7 +104,7 @@ def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tm
     "changed_file",
     [
         Path(verifyit.__file__).with_name("candidate_file.py"),
-        Path(harbor.__file__).with_name("tasktrove.py"),
+        Path(harbor.__file__).with_name("source_images.py"),
         VERIFYIT_PACKAGE / "pyproject.toml",
     ],
 )
