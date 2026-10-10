@@ -199,6 +199,40 @@ TRAIN_LOADER_BUFFER_SIZE = 512
 _LOGGED_QB_BETA_MAX_EXPERTS = 16
 
 
+class MasterParamMode(StrEnum):
+    """Where the authoritative weights live.
+
+    DEVICE keeps them as the device params themselves, with no separate master copy; FP32_PINNED_HOST keeps a
+    pinned-host fp32 master while the device params are its cast to the param dtype (as in grug/moe_hero_ep).
+    """
+
+    DEVICE = "device"
+    FP32_PINNED_HOST = "fp32_pinned_host"
+
+
+_FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
+
+
+def _tree_to_memory_kind(tree, memory_kind: str):
+    """Move named-sharded arrays to a JAX memory kind."""
+
+    def _move(leaf):
+        if not isinstance(leaf, jax.Array):
+            return leaf
+        sharding = jax.typeof(leaf).sharding
+        mesh = getattr(sharding, "mesh", None)
+        if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
+            if jax.sharding.get_abstract_mesh().empty:
+                return leaf
+            # Scalar optimizer metadata has no operand to inherit the active mesh from; bind it before changing
+            # the memory kind so the initial and updated states have the same JIT input signature.
+            leaf = jax.sharding.reshard(leaf, P())
+            sharding = jax.typeof(leaf).sharding
+        return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
+
+    return jax.tree.map(_move, tree)
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -248,6 +282,9 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    # Hero-scale memory: optimizer state on pinned host memory between steps, and where the master weights live.
+    offload_opt_state: bool = False
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE
 
 
 @dataclass(frozen=True)
@@ -648,14 +685,27 @@ def initial_state(
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None = None,
+    offload_opt_state: bool = False,
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ) -> GrugTrainState:
-    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    initialized = Transformer.init(model_config, key=key)
+    if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+        master_params = _FP32_POLICY.cast_to_param(initialized)
+        params = mp.cast_to_param(master_params)
+        opt_state = optimizer.init(master_params)
+        master_params = _tree_to_memory_kind(master_params, "pinned_host")
+    else:
+        params = mp.cast_to_param(initialized)
+        master_params = None
+        opt_state = optimizer.init(params)
+    if offload_opt_state:
+        opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
     return GrugTrainState(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
-        master_params=None,
+        master_params=master_params,
         ema_params=params if ema_beta is not None else None,
-        opt_state=optimizer.init(params),
+        opt_state=opt_state,
         pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.qb_num_experts)),
     )
 
@@ -773,9 +823,12 @@ def _make_train_step(
     ema_start_step: int = 0,
     watch_config: WatchConfig | None = None,
     grad_accum_microbatches: int = 1,
+    offload_opt_state: bool = False,
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ):
     """``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
-    (``_accumulated_loss_and_grads``)."""
+    (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
+    between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -799,7 +852,7 @@ def _make_train_step(
         else:
             (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
-        opt_state_in = state.opt_state
+        opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
             # MFU-baseline mode: run fwd+bwd (grads above) but skip the optimizer update (Muon NS).
             # Params/master/opt_state pass through unchanged, so loss does not descend -- this isolates
@@ -808,12 +861,24 @@ def _make_train_step(
             opt_state = opt_state_in
             params = qb_params
             master_params = state.master_params
+        elif master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+            if state.master_params is None:
+                raise ValueError("master_params must be initialized for an fp32 pinned-host master")
+            master_in = _apply_qb_betas(_tree_to_memory_kind(state.master_params, "device"), state.pending_qb_betas)
+            with jax.named_scope("opt_update"):
+                updates, opt_state = optimizer.update(_FP32_POLICY.cast_to_param(grads), opt_state_in, master_in)
+            with jax.named_scope("apply_updates"):
+                master_params = optax.apply_updates(master_in, updates)
+            params = mp.cast_to_param(master_params)
+            master_params = _tree_to_memory_kind(master_params, "pinned_host")
         else:
             with jax.named_scope("opt_update"):
                 updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
             with jax.named_scope("apply_updates"):
                 params = optax.apply_updates(qb_params, updates)
             master_params = None
+        if offload_opt_state:
+            opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
 
         if ema_beta is None:
             ema_params = None
@@ -949,6 +1014,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_start_step=ema_start_step,
         watch_config=inline_watch_config,
         grad_accum_microbatches=config.trainer.grad_accum_microbatches,
+        offload_opt_state=config.trainer.offload_opt_state,
+        master_param_mode=config.trainer.master_param_mode,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -983,6 +1050,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
+                offload_opt_state=config.trainer.offload_opt_state,
+                master_param_mode=config.trainer.master_param_mode,
             )
 
         state = _init_state(model_key)
