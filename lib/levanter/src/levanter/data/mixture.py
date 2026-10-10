@@ -47,6 +47,8 @@ class MixtureDataset(AsyncDataset[T]):
             - ALL_STOP_STRATEGY: stop when all datasets have been exhausted
             - RESTART_STRATEGY: restart the dataset when it has been exhausted
         key: random key for datasets sampling
+        start_offsets: per-dataset index added to every sequence a dataset serves, so a dataset can resume
+            at a chosen read position. Missing names start at 0.
     """
 
     def __init__(
@@ -58,6 +60,7 @@ class MixtureDataset(AsyncDataset[T]):
         randomize_blocks: bool = True,
         key: PRNGKeyArray | int,
         stop_strategy: str = StopStrategy.RESTART_STRATEGY,
+        start_offsets: Mapping[str, int] | None = None,
     ):
         if isinstance(weights, dict):
             weight_stages = [(0, weights)]
@@ -87,6 +90,8 @@ class MixtureDataset(AsyncDataset[T]):
             if any(weights.get(name, 0) > 0 for _, weights in self.weight_stages)
         }
         self.dataset_index: list[str] = list(self.datasets.keys())
+        start_offsets = start_offsets or {}
+        self._start_offsets = np.array([start_offsets.get(name, 0) for name in self.dataset_index], dtype=np.int64)
         self.block_size = block_size
         # we pack index and ds id into a single 32 bit, so block size must be at most 2^16
         if block_size >= 2**16:
@@ -226,7 +231,23 @@ class MixtureDataset(AsyncDataset[T]):
         offset_in_stage = (block_id * self.block_size - self.weight_stages[stage][0]) // self.block_size
         current_stage_offset = offset_in_stage * self._counts_per_block_per_stage[stage][dataset_id]
 
-        return dataset_id, int(dataset_index) + int(base_offset) + int(current_stage_offset)
+        start_offset = self._start_offsets[dataset_id]
+        return dataset_id, int(dataset_index) + int(base_offset) + int(current_stage_offset) + int(start_offset)
+
+    def sequence_counts_before_block(self, block_id: int) -> dict[str, int]:
+        """Return how many sequences each dataset serves before mixture block ``block_id``, excluding start offsets.
+
+        Takes a block rather than an index: within a partly served block, slots are shuffled, so a count is not a
+        read position.
+        """
+        stage = self._get_stage_for_block(block_id)
+        counts = np.array(
+            [self._count_before_stage(dataset_id, stage) for dataset_id in range(len(self.dataset_index))],
+            dtype=np.int64,
+        )
+        blocks_in_stage = (block_id * self.block_size - self.weight_stages[stage][0]) // self.block_size
+        counts += blocks_in_stage * self._counts_per_block_per_stage[stage].astype(np.int64)
+        return {name: int(count) for name, count in zip(self.dataset_index, counts, strict=True)}
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T]:
         block_ids = np.array([idx // self.block_size for idx in indices])
@@ -319,7 +340,9 @@ class MixtureDataset(AsyncDataset[T]):
                     return self._set_finiteness_cache(None)
                 continue
 
-            exhaustion_index = self._first_exhaustion_index_for_dataset(dataset_id, dataset_length)
+            exhaustion_index = self._first_exhaustion_index_for_dataset(
+                dataset_id, dataset_length - int(self._start_offsets[dataset_id])
+            )
             if exhaustion_index is None:
                 if self.stop_strategy == StopStrategy.ALL_STOP_STRATEGY:
                     return self._set_finiteness_cache(None)
