@@ -8,21 +8,16 @@ import json
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from functools import partial
 from itertools import batched
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any
-from uuid import uuid4
 
 import msgspec
 from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
-from rigging.filesystem.transfer import copy_plan, execute_copies
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo, format_shard_path
@@ -31,7 +26,6 @@ from zephyr.plan import make_windows
 from zephyr.readers import load_jsonl, load_parquet
 from zephyr.writers import DEFAULT_TARGET_BUFFER_BYTES, write_jsonl_file, write_parquet_file
 
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
@@ -58,6 +52,8 @@ from taskcompendium.pipeline.review import (
     BatchReviewer,
     ChatReviewer,
     Reviewer,
+    review_batch_id,
+    review_tasks,
 )
 from taskcompendium.pipeline.review_requests import DEFAULT_MAX_BATCH_BYTES
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
@@ -88,8 +84,6 @@ AUDIT_INPUT_PATTERN = "audit/*.parquet"
 AUDIT_SHARD_TEMPLATE = "audit/part-{shard:05d}.parquet"
 REVIEW_INPUT_PATTERN = "review-inputs/batch-*.jsonl.gz"
 ACCEPTED_SHARD_TEMPLATE = "accepted/part-{shard:05d}.parquet"
-EVIDENCE_COPY_THREADS = 16
-"""Concurrent file copies of one review attempt's evidence, mostly small cache envelopes."""
 UNAVAILABLE_REVIEW_STATUSES = frozenset({"invalid", "unavailable"})
 """Review statuses that leave a task without a usable verdict."""
 COUNT_COLUMNS = ["normalization_reason", "review_status", "quality_basis", "filter_status", "filter_reasons"]
@@ -136,21 +130,6 @@ def _write_json(path: StoragePath, value: Any) -> None:
 def _read_json(path: StoragePath) -> Any:
     with path.open("rt") as stream:
         return json.load(stream)
-
-
-def persist_evidence(local_path: Path, remote_path: StoragePath) -> None:
-    """Copy one attempt's evidence tree to its unique durable path, several files at a time."""
-    plan = copy_plan((str(local_path),), str(remote_path), recursive=True, no_clobber=False)
-    for directory in plan.directories:
-        directory.destination.filesystem.makedirs(directory.destination.path, exist_ok=True)
-    with ThreadPoolExecutor(EVIDENCE_COPY_THREADS) as pool:
-        # Consume the results so that a failed copy raises here.
-        list(pool.map(lambda action: execute_copies((action,)), plan.copies))
-
-
-def review_batch_id(task_ids: Iterable[str]) -> str:
-    """The identity of one review batch, which names its input file and its evidence."""
-    return canonical_sha256({"task_ids": list(task_ids)})
 
 
 def _persist_review_batch(records: list[dict[str, Any]], output: StoragePath) -> str:
@@ -232,34 +211,16 @@ def _audit_batch(
         yield from (audit_columns(audit) for audit in audits)
         return
     batch_id = review_batch_id(task.id for task in candidates)
-    evidence = output_path / "evidence" / batch_id / f"attempt-{uuid4().hex}"
-    with TemporaryDirectory(prefix="task-curation-review-") as directory:
-        local = Path(directory)
-        try:
-            reviews_path = local / "reviews.json"
-            reviews = reviewer.review(candidates, rubric, local / "review", cached=cached.get(batch_id))
-            reviews_path.write_text(json.dumps([review.model_dump(mode="json") for review in reviews]))
-            expected = {task.id for task in candidates}
-            if len(reviews) != len(candidates) or {review.task_id for review in reviews} != expected:
-                raise ValueError("Audit observations do not match the eligible task membership")
-            for status, count in Counter(review.status for review in reviews).items():
-                counters.current_stage().update_counter(f"review/final/{status}", count)
-            reviews_by_id = {review.task_id: review for review in reviews}
-            for audit in audits:
-                if audit.task_id in reviews_by_id:
-                    audit = audit.model_copy(
-                        update={
-                            "review": reviews_by_id[audit.task_id],
-                        }
-                    )
-                yield audit_columns(audit)
-        finally:
-            # Each attempt retains its request evidence, including failed attempts.
-            started = time.monotonic()
-            try:
-                persist_evidence(local, evidence)
-            finally:
-                counters.current_stage().update_counter("review/evidence_seconds", time.monotonic() - started)
+    reviews = review_tasks(candidates, rubric, reviewer, output_path, cached=cached.get(batch_id))
+    reviews_by_id = {review.task_id: review for review in reviews}
+    for audit in audits:
+        if audit.task_id in reviews_by_id:
+            audit = audit.model_copy(
+                update={
+                    "review": reviews_by_id[audit.task_id],
+                }
+            )
+        yield audit_columns(audit)
 
 
 @dataclass

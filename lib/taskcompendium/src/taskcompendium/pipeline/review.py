@@ -6,12 +6,22 @@
 import hashlib
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+import time
+from collections import Counter
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from functools import partial
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Protocol
+from uuid import uuid4
 
+from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.transfer import copy_plan, execute_copies
+from zephyr import counters
+
+from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
@@ -29,6 +39,8 @@ from taskcompendium.pipeline.review_requests import (
 )
 from taskcompendium.runtime.resources import resource_bytes
 
+EVIDENCE_COPY_THREADS = 16
+"""Concurrent file copies of one review attempt's evidence, mostly small cache envelopes."""
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
 DEFAULT_REVIEW_MAX_TOKENS = 4096
@@ -407,6 +419,60 @@ class Reviewer(Protocol):
     def read_cache(self, batches: Sequence[Sequence[TaskSpec]], rubric: ReviewRubric) -> list[CachedRequests | None]:
         """Read the cached first-attempt responses of several review batches together."""
         ...
+
+
+def persist_evidence(local_path: Path, remote_path: StoragePath) -> None:
+    """Copy one attempt's evidence tree to its unique durable path, several files at a time."""
+    plan = copy_plan((str(local_path),), str(remote_path), recursive=True, no_clobber=False)
+    for directory in plan.directories:
+        directory.destination.filesystem.makedirs(directory.destination.path, exist_ok=True)
+    with ThreadPoolExecutor(EVIDENCE_COPY_THREADS) as pool:
+        # Consume the results so that a failed copy raises here.
+        list(pool.map(lambda action: execute_copies((action,)), plan.copies))
+
+
+def review_batch_id(task_ids: Iterable[str]) -> str:
+    """The identity of one review batch, which names its input file and its evidence."""
+    return canonical_sha256({"task_ids": list(task_ids)})
+
+
+def review_tasks(
+    tasks: Sequence[TaskSpec],
+    rubric: ReviewRubric,
+    reviewer: Reviewer,
+    output_path: StoragePath,
+    *,
+    cached: CachedRequests | None,
+) -> list[ReviewRecord]:
+    """Review a task batch and persist evidence, including on failure.
+
+    Evidence is retained under ``output_path/evidence/<batch ID>/attempt-<UUID>``.
+    ``cached`` is this batch's share of a ``reviewer.read_cache`` result; pass
+    ``None`` to let the reviewer read its cache. Empty batches produce no evidence.
+    """
+    if not tasks:
+        return []
+    batch_id = review_batch_id(task.id for task in tasks)
+    evidence = output_path / "evidence" / batch_id / f"attempt-{uuid4().hex}"
+    with TemporaryDirectory(prefix="task-curation-review-") as directory:
+        local = Path(directory)
+        try:
+            reviews_path = local / "reviews.json"
+            reviews = reviewer.review(tasks, rubric, local / "review", cached=cached)
+            reviews_path.write_text(json.dumps([review.model_dump(mode="json") for review in reviews]))
+            expected = {task.id for task in tasks}
+            if len(reviews) != len(tasks) or {review.task_id for review in reviews} != expected:
+                raise ValueError("Audit observations do not match the eligible task membership")
+            for status, count in Counter(review.status for review in reviews).items():
+                counters.current_stage().update_counter(f"review/final/{status}", count)
+            return reviews
+        finally:
+            # Each attempt retains its request evidence, including failed attempts.
+            started = time.monotonic()
+            try:
+                persist_evidence(local, evidence)
+            finally:
+                counters.current_stage().update_counter("review/evidence_seconds", time.monotonic() - started)
 
 
 def completion_body(

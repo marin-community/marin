@@ -53,7 +53,7 @@ from taskcompendium.pipeline.models import (
     ReviewStatus,
 )
 from taskcompendium.pipeline.query_cache import cached_batch_output
-from taskcompendium.pipeline.review import BatchReviewer, review_records
+from taskcompendium.pipeline.review import BatchReviewer, review_records, review_tasks
 from taskcompendium.pipeline.review_requests import batch_output
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.sources import SourceShard, source_shards, staged_file_rows, staged_inputs
@@ -180,6 +180,85 @@ def apple_row():
         "Answer": "2",
         "Equation": "2",
     }
+
+
+def test_review_tasks_persists_each_attempt_and_reuses_prefetched_cache(tmp_path, apple_row):
+    tasks = [
+        svamp_task("task-b", apple_row),
+        svamp_task("task-a", {**apple_row, "Body": "Bea has 2 apples."}),
+    ]
+    originals = [task.model_dump_json() for task in tasks]
+    service = BatchService()
+    reviewer = BatchReviewer(service, "fixture", "revision", query_cache_root=str(tmp_path / "cache"))
+    output = StoragePath(str(tmp_path / "reviewed"))
+    first = review_tasks(tasks, SVAMP_RUBRIC, reviewer, output, cached=None)
+    cached = reviewer.read_cache([tasks], SVAMP_RUBRIC)[0]
+    second = review_tasks(tasks, SVAMP_RUBRIC, reviewer, output, cached=cached)
+
+    assert [record.task_id for record in first] == ["task-b", "task-a"]
+    assert [record.status for record in first] == [ReviewStatus.REVIEWED] * 2
+    assert second == first
+    assert [task.model_dump_json() for task in tasks] == originals
+    assert len(service.batches) == 1
+    batch_id = hashlib.sha256(b'{"task_ids":["task-b","task-a"]}').hexdigest()
+    attempts = list((tmp_path / "reviewed/evidence" / batch_id).glob("attempt-*"))
+    assert len(attempts) == 2
+    for attempt in attempts:
+        assert json.loads((attempt / "reviews.json").read_text()) == [record.model_dump(mode="json") for record in first]
+        envelopes = [json.loads(path.read_text()) for path in (attempt / "review/query-cache").glob("*.json")]
+        assert {envelope["identity"]["request"]["custom_id"] for envelope in envelopes} == {
+            request["custom_id"] for request in service.batches["batch-0"]
+        }
+    assert len(list((tmp_path / "reviewed/evidence").rglob("batch-submission.json"))) == 1
+
+
+def test_review_tasks_retains_failed_attempt_evidence_before_propagating(tmp_path, apple_row, monkeypatch):
+    tasks = [svamp_task("task", apple_row)]
+    service = BatchService()
+    reviewer = BatchReviewer(service, "fixture", "revision")
+    output = StoragePath(str(tmp_path / "reviewed"))
+    with monkeypatch.context() as patch:
+        patch.setattr(service, "output", lambda batch: Output(json.dumps(response("unexpected"))))
+        with pytest.raises(ValueError, match="Unexpected batch response ID"):
+            review_tasks(tasks, SVAMP_RUBRIC, reviewer, output, cached=None)
+
+    batch_id = hashlib.sha256(b'{"task_ids":["task"]}').hexdigest()
+    evidence = tmp_path / "reviewed/evidence" / batch_id
+    failed = next(evidence.glob("attempt-*"))
+    assert not (failed / "reviews.json").exists()
+    assert json.loads((failed / "review/batch-submission.json").read_text())["batch_id"] == "batch-0"
+    assert json.loads((failed / "review/raw-output.jsonl").read_text())["custom_id"] == "unexpected"
+    request = json.loads((failed / "review/requests.jsonl").read_text())
+    assert request["custom_id"] == "task"
+    original = (failed / "review/raw-output.jsonl").read_bytes()
+
+    reviews = review_tasks(tasks, SVAMP_RUBRIC, reviewer, output, cached=None)
+    assert reviews[0].status == ReviewStatus.REVIEWED
+    assert len(list(evidence.glob("attempt-*"))) == 2
+    assert (failed / "review/raw-output.jsonl").read_bytes() == original
+
+
+def test_audit_reviews_only_eligible_tasks_and_attaches_persisted_reviews(tmp_path, apple_row, svamp_recipe):
+    service = BatchService()
+    manifest = run_stages(
+        svamp_recipe,
+        [apple_row, apple_row, {**apple_row, "Answer": "invalid"}],
+        output_path=tmp_path,
+        limit=3,
+        reviewer=BatchReviewer(service, "fixture", "revision"),
+    )
+    rows = stage_table(tmp_path).to_pylist()
+    reviewed = [row for row in rows if row["review_status"] == "reviewed"]
+    assert len(reviewed) == 1
+    assert manifest["dispositions"] == {"keep": 1, "reject": 2}
+    assert all(row["review_status"] is None for row in rows if row["filter_status"] == "reject")
+    submitted = [request["custom_id"] for batch in service.batches.values() for request in batch]
+    assert submitted == [reviewed[0]["task_id"]]
+    saved = next((tmp_path / "audited/evidence").glob("*/attempt-*/reviews.json"))
+    review = json.loads(saved.read_text())[0]
+    assert review["task_id"] == reviewed[0]["task_id"]
+    assert review["verdict"]["quality"] == reviewed[0]["review_quality"]
+    assert review["verdict"]["evidence"] == reviewed[0]["review_evidence"]
 
 
 def convert_mixed_import(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -808,7 +887,7 @@ def test_batch_provider_failures_have_finite_neutral_retries(tmp_path, apple_row
     task = svamp_row_task(RawRow("task", source, apple_row))
     assert isinstance(task, TaskSpec)
     reviewer = BatchReviewer(service, "model", "deployment", query_cache_root=str(tmp_path / "cache"))
-    record = reviewer.review([task], SVAMP_RUBRIC, tmp_path / "review")[0]
+    record = review_tasks([task], SVAMP_RUBRIC, reviewer, StoragePath(str(tmp_path / "review")), cached=None)[0]
     assert len(attempts) == 3
     assert record.status == (ReviewStatus.REVIEWED if recover else ReviewStatus.UNAVAILABLE)
     assert (record.verdict is not None) == recover
