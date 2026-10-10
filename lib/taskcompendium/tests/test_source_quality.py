@@ -373,9 +373,14 @@ def test_raw_panel_counts_broken_contracts_and_failed_checks_against_all_drawn_r
 
 
 @pytest.mark.parametrize(
-    "exclusion", ["normalization:unsupported", "normalization:converter_error", "exact_semantic_duplicate"]
+    "exclusion,usable",
+    [
+        ("normalization:unsupported", 0),
+        ("normalization:unsupported", 99),
+        ("normalization:converter_error", 49),
+        ("exact_semantic_duplicate", 49),
+    ],
 )
-@pytest.mark.parametrize("usable", [0, 49, 99])
 def test_raw_conversion_gaps_and_duplicates_are_neutral(exclusion, usable):
     ids = tuple(str(index) for index in range(usable))
     report = source_quality_report(

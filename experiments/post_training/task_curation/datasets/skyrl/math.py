@@ -21,7 +21,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, UrlSource
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, UrlSource, process_rows
 from experiments.post_training.task_curation.source import (
     HARBOR_GRADING_REVISION,
     MARINSKYRL_GRADING_REVISION,
@@ -425,12 +425,7 @@ SOURCES = (
                     "https://github.com/marin-community/MarinSkyRL/tree/"
                     "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/gsm8k"
                 ),
-                grading=GradingSelection(
-                    "verifyit",
-                    (),
-                    MARINSKYRL_GRADING_REVISION,
-                    HARBOR_GRADING_REVISION,
-                ),
+                grading=GradingSelection("verifyit", (), MARINSKYRL_GRADING_REVISION, HARBOR_GRADING_REVISION),
             ),
         ),
     ),
@@ -552,10 +547,11 @@ SOURCES = (
 )
 
 
-def math_source(source: MathSource) -> RlDataSource:
+def math_source(source: MathSource) -> RlDataSource[CurationRecipe]:
     return RlDataSource(
+        pipeline=process_rows,
         info=source.info,
-        pipeline=RlDataPipeline(
+        config=CurationRecipe(
             name=source.name,
             source=source.source,
             convert=source.convert,
@@ -568,5 +564,5 @@ def math_source(source: MathSource) -> RlDataSource:
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [math_source(source) for source in SOURCES]

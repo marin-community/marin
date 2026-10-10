@@ -884,6 +884,26 @@ def test_docker_worker_refuses_internet_egress_without_the_host_filter(mock_work
     mock_runtime.create_container.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "profile, egress, expected_token",
+    [
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, "task-token"),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_NONE, None),
+    ],
+)
+def test_task_token_reaches_every_task_but_a_sandbox(mock_worker, mock_runtime, profile, egress, expected_token):
+    request = create_run_task_request()
+    request.container_profile = profile
+    request.egress_policy = egress
+    request.task_token = "task-token"
+    request.environment.env_vars["IRIS_TASK_TOKEN"] = "stale-token"
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.call_args[0][0].env.get("IRIS_TASK_TOKEN") == expected_token
+
+
 def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):
     """Per-task task_image overrides the worker's default_task_image."""
     config = WorkerConfig(

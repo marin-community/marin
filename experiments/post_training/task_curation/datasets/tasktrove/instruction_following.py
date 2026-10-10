@@ -4,8 +4,8 @@
 """TaskTrove instruction-following sources, graded in process by verifyit.
 
 The IFEval source's constraints map directly to verifyit's IFEval checks, which score the fraction
-satisfied. The structured-output source accepts any instance valid under its JSON Schema. Both
-reject tasks that no answer can satisfy, which the in-process graders cannot detect themselves.
+satisfied. Structured tasks accept any schema-valid instance. Conversion excludes malformed,
+vacuous or contradictory schemas and conflicting public language requirements.
 """
 
 import json
@@ -16,6 +16,7 @@ from jsonschema.validators import validator_for
 from taskcompendium.convert.answers import ifeval_task, json_schema_task, source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
+from taskcompendium.convert.tasktrove_json_schemas import is_trivial
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
@@ -23,9 +24,12 @@ from verifyit.grade import InvalidTask
 from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, SchemaFormat
 
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+
+IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
+STRUCTURED_CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"
 
 SHELL_PREAMBLE = "You are running in a shell-based sandbox."
 PREAMBLE_SEPARATOR = "\n---\n"
@@ -175,6 +179,7 @@ def convert_ifeval(row: RawRow, _context: ConversionContext) -> TaskSpec | Norma
     task = ifeval_task(row, prompt=prompt.strip(), constraints=constraints)
     if isinstance(task, ImportRejection):
         return task
+    task = task.model_copy(update={"tags": ("instruction-following", "ifeval", "nemotron")})
     return rewritten_task(task, original=instruction, reason=IFEVAL_REWRITE_REASON)
 
 
@@ -189,6 +194,8 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
         validator_for(schema).check_schema(schema)
     except SchemaError as error:
         return source_defect("invalid_schema", str(error))
+    if is_trivial(schema):
+        return source_defect("null_grader", "Schema has no properties or required fields to check")
     conflicts = required_object_conflicts(schema)
     if conflicts:
         return source_defect("unsatisfiable_schema", "; ".join(conflicts))
@@ -200,14 +207,16 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
     )
     if isinstance(task, ImportRejection):
         return task
+    task = task.model_copy(update={"tags": ("instruction-following", "structured-output", "json-schema", "nemotron")})
     return rewritten_task(task, original=instruction, reason=STRUCTURED_REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-instruction-following-v3",
+                id=f"Task Trove:{IFEVAL_CONFIG}",
                 title="laion/nemotron-gym-instruction-following-v3",
                 origin="Task Trove",
                 family="instruction-following",
@@ -218,10 +227,10 @@ def sources() -> list[RlDataSource]:
                     "(vacuous pass) at conversion."
                 ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-ifeval",
-                source=tasktrove_source("laion__nemotron-gym-instruction-following-v3"),
-                convert=convert_ifeval,
+                source=tasktrove_source(IFEVAL_CONFIG),
+                convert=TaskTroveConverter(IFEVAL_CONFIG, convert_ifeval),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
@@ -229,8 +238,9 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-instruction-following-structured-v3",
+                id=f"Task Trove:{STRUCTURED_CONFIG}",
                 title="laion/nemotron-gym-instruction-following-structured-v3",
                 origin="Task Trove",
                 family="instruction-following",
@@ -238,10 +248,10 @@ def sources() -> list[RlDataSource]:
                 count=9437,
                 notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-structured",
-                source=tasktrove_source("laion__nemotron-gym-instruction-following-structured-v3"),
-                convert=convert_structured,
+                source=tasktrove_source(STRUCTURED_CONFIG),
+                convert=TaskTroveConverter(STRUCTURED_CONFIG, convert_structured),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

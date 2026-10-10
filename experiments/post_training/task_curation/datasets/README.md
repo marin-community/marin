@@ -2,11 +2,11 @@
 
 Every RL dataset is one `RlDataSource` declared here, and every declaring module
 exports `sources()`, which [sources.py](../sources.py) collects into the catalog.
-Each source combines source information and an optional `RlDataPipeline` recipe.
-A declaration names the pinned source, the converter that builds each task with
-its grader, the agent environment, and an optional review rubric and grader
-controls. See the [experiment overview](../README.md) for the fields and the
-artifact each declaration produces.
+Each source combines source information, its typed `config` and one optional
+pipeline callable. The callable owns ingestion and stages. The reusable
+`process_rows` callable accepts `CurationRecipe` for pinned row conversion,
+optional review and grader controls. See the [reference](../../../../docs/references/task-curation.md#declarations)
+for declaration fields and artifact outputs.
 
 ## Adding a dataset
 
@@ -15,15 +15,16 @@ artifact each declaration produces.
    Set `SourceInfo`'s stable `id`, display `title`, `origin`, family and tags.
    Leave `count=None` unless the pinned input population has been counted.
    Keep an existing ID when updating a source so its Atlas reviews remain linked.
-2. For a runnable source, define its pinned files and converter in
-   `RlDataPipeline`; [skyrl/math.py](skyrl/math.py) is an example. Reuse
+2. For a runnable source, supply `config` and a callable accepting the source
+   and `PipelineOptions`. To use the common row processor, set
+   `config=CurationRecipe(...)` and `pipeline=process_rows`;
+   [skyrl/math.py](skyrl/math.py) is an example. Reuse
    `taskcompendium.convert` helpers where they fit. Inventory-only sources use
    `info.dataset=SourceReference(...)` and no pipeline. Use the `excluded` tag
    when the entry should be hidden by default.
 3. If adding a module, import it and include its `sources()` results in
-   [all_sources()](../sources.py). Add a representative input to the family test's
-   `ROWS` and run that test and [test_catalog.py](../tests/test_catalog.py)
-   for a new converter.
+   [all_sources()](../sources.py). Add a behavioral conversion test in the family
+   test module, and run it with [test_catalog.py](../tests/test_catalog.py).
 4. Regenerate the Atlas JSON from the repository root:
 
    ```bash
@@ -37,8 +38,7 @@ JSON; commit the Python declarations, not the generated file. The applet build
 regenerates this JSON automatically. To update the dashboard, follow
 [RL Data Atlas publishing](../../../../docs/references/rl-data-atlas.md).
 **Refresh sources** loads the published catalog; it does not rebuild it.
-See the [source API and count command](../README.md#declaring-a-dataset) for
-the compact declaration example and offline parquet counts.
+See [offline parquet counts](../README.md#declaring-a-dataset) for count regeneration.
 
 ## Script graders
 
@@ -55,7 +55,8 @@ needs more declares its own `Environment` (see
 [environment.py](../environment.py)), such as `COMPILER_GRADER_PACKAGES`,
 which adds a C++ toolchain. The packages live in [grader.in](grader.in) and
 its compiled lock [grader.lock](grader.lock); regenerate the lock after
-changing `grader.in` (see [images/](../images/README.md)).
+changing `grader.in`. For a new buildable environment, follow the
+[registration instruction](../images/README.md#building).
 
 A rubric and controls can come later: without a rubric rows are kept
 unreviewed, and without controls sandbox-graded rows other than judge-graded
@@ -77,7 +78,7 @@ ones stay out of `final/`.
 | [tasktrove/python_tests.py](tasktrove/python_tests.py) | TaskTrove Python unit-test sources as one table, graded by pytest. |
 | [tasktrove/nl2bash.py](tasktrove/nl2bash.py) | TaskTrove shell tasks, graded by an output checker. |
 | [tasktrove/repositories.py](tasktrove/repositories.py) | TaskTrove SWE repositories; no agent image covers their per-task repositories. |
-| [tasktrove/structured_outputs.py](tasktrove/structured_outputs.py), [tasktrove/instruction_following.py](tasktrove/instruction_following.py) | Structured-output and instruction-following tasks, graded in process. |
+| [tasktrove/structured_outputs.py](tasktrove/structured_outputs.py), [tasktrove/instruction_following.py](tasktrove/instruction_following.py) | Structured format and grounding checks; instruction-following constraints. |
 | [tasktrove/math.py](tasktrove/math.py) | TaskTrove math, graded by verifyit's `math` mode in the grader sandbox; source scorer parity is not guaranteed. |
 | [tasktrove/judged.py](tasktrove/judged.py), [tasktrove/qa.py](tasktrove/qa.py) | Judged responses and open QA (verifyit judge, admitted without controls), and knowledge MCQA. |
 | [tasktrove/calendar.py](tasktrove/calendar.py), [tasktrove/multichallenge.py](tasktrove/multichallenge.py), [tasktrove/puzzles.py](tasktrove/puzzles.py) | Calendar scheduling (the archive's checker), multi-turn challenges (verifyit judge) and puzzles. |

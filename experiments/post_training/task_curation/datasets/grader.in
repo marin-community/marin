@@ -31,7 +31,7 @@ requests==2.33.1
 pytest
 pytest-json-report
 hypothesis
-tomlkit
+tomli-w>=1.2
 harbor-config @ https://github.com/marin-community/harbor/archive/6b2e76e1dae5c084eed05edefefffcec8c0c1ad9.tar.gz#subdirectory=packages/harbor-config
 
 # The Stack Overflow Python-test tasks (tasktrove-stack_pytest): their hidden tests import mock, typer,

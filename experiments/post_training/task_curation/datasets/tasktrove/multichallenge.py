@@ -25,9 +25,9 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
@@ -81,12 +81,14 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec 
     )
     prompt = TextMessage(role="user", content=response_instruction(instruction))
     task = conversation_task(row, events=(prompt,), package=package)
+    task = task.model_copy(update={"tags": ("instruction-following", "multi-turn", "judge", "checklist", "nemotron")})
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
                 title="laion/nemotron-gym-multichallenge-advanced-v4",
@@ -99,10 +101,10 @@ def sources() -> list[RlDataSource]:
                     "preserves the source's explicit positive or negated pass condition."
                 ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-multichallenge",
                 source=tasktrove_source(CONFIG),
-                convert=convert_multichallenge,
+                convert=TaskTroveConverter(CONFIG, convert_multichallenge),
                 version="1",
                 environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,

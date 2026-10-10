@@ -3,7 +3,8 @@
 
 """ARC-AGI grid puzzles: two TaskTrove Nemotron Gym configs and the Nemotron Ultra NVARC converter.
 
-Every ARC task is graded by ``arc_grade.py`` with the vendored NVARC scorer from ``scorers/``, with the
+TaskTrove transductive tasks retain the release's whitespace-normalized exact grid comparison.
+Other ARC tasks use ``arc_grade.py`` with the vendored NVARC scorer from ``scorers/``, with the
 grader packages (``GRADER_PACKAGES``). An inductive submission is a ``transform(grid)`` program,
 which the script runs on the hidden test input as an unprivileged user; a transductive submission is
 the output grid. TaskTrove tasks ask for a file (``/app/solution.py`` or ``/app/answer.txt``); Ultra
@@ -19,7 +20,7 @@ from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
 from taskcompendium.convert.tasktrove import ANSWER_PATH, archive_resources
-from taskcompendium.grader import GraderPackage, grader_config
+from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -28,6 +29,8 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -40,12 +43,13 @@ from taskcompendium.pipeline.models import (
     Reply,
     WorkspaceFiles,
 )
+from verifyit.spec import ExactSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import SCORERS as ULTRA_SCORERS
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
@@ -96,9 +100,9 @@ review model can fully solve a difficult ARC puzzle.
 Compare the hidden expected grid against the examples and test input when a concrete rule can be established. Do not
 invent an alternative key from superficial pattern matching.
 
-The NVARC scorer reads /app/answer.txt, takes its last boxed answer if any, and accepts only lines of digits and
-whitespace; JSON, brackets or prose fail. The wrapper requests plain space-separated rows while its quoted source asks
-for a boxed output; both parse, so record any other format conflict rather than silently rewriting it.
+The grader reads /app/answer.txt and compares the last boxed answer or the whole answer after whitespace normalization
+against space-separated grid rows, as in the TaskTrove release. JSON and extra unboxed prose fail. Record conflicts
+between the source's quoted answer format and its file-submission instruction rather than silently rewriting it.
 """
 
 
@@ -161,7 +165,15 @@ def _tasktrove_task(
     rejection = reference_rejection(mode, record)
     if rejection is not None:
         return rejection
-    package = arc_package(mode, record, context, answer_path=None)
+    if mode == ArcMode.TRANSDUCTIVE:
+        package = verifyit_package(
+            ExactSpec(expected=(grid_text(record["expected_output"]),)),
+            environment=required_grader_environment(context),
+        )
+        tags = ("reasoning", "arc-agi", "grid-match", "nemotron")
+    else:
+        package = arc_package(mode, record, context, answer_path=None)
+        tags = ("reasoning", "arc-agi", "grid-transform", "code", "nemotron", "language:python")
     archive = archive_resources(row.data)
     return TaskSpec(
         id=row.id,
@@ -174,6 +186,7 @@ def _tasktrove_task(
         answer_type=AnswerType.FILE,
         answer_format=PlainText(),
         grader=package.grader,
+        tags=tags,
     )
 
 
@@ -214,10 +227,12 @@ def _record(task: TaskSpec) -> tuple[ArcMode, dict[str, Any]]:
 
 
 def tasktrove_golden(task: TaskSpec) -> WorkspaceFiles:
-    mode, record = _record(task)
-    if mode == ArcMode.INDUCTIVE:
-        return WorkspaceFiles({SOLUTION_PATH: literal_transform(record["expected_output"]).encode()})
-    return WorkspaceFiles({ANSWER_PATH: (grid_text(record["expected_output"]) + "\n").encode()})
+    if isinstance(task.grader, VerifyitGrader):
+        spec = verifyit_spec(task.grader)
+        assert isinstance(spec, ExactSpec)
+        return WorkspaceFiles({ANSWER_PATH: (spec.expected[0] + "\n").encode()})
+    record = grader_config(task)["contract"]
+    return WorkspaceFiles({SOLUTION_PATH: literal_transform(record["expected_output"]).encode()})
 
 
 def ultra_arc_golden(task: TaskSpec) -> Reply:
@@ -232,9 +247,10 @@ TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden, memory_mb=GRADER_MEMORY_M
 ULTRA_ARC_CONTROLS = Controls(golden=ultra_arc_golden, memory_mb=GRADER_MEMORY_MB)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2",
                 title="laion/nemotron-gym-arc-agi-python-inductive-v2",
@@ -244,7 +260,7 @@ def sources() -> list[RlDataSource]:
                 count=10000,
                 notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-arc_inductive",
                 source=tasktrove_source(INDUCTIVE_CONFIG),
                 convert=convert_tasktrove_inductive,
@@ -258,6 +274,7 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-arc-agi-transductive-v3",
                 title="laion/nemotron-gym-arc-agi-transductive-v3",
@@ -267,7 +284,7 @@ def sources() -> list[RlDataSource]:
                 count=10000,
                 notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-arc_transductive",
                 source=tasktrove_source(TRANSDUCTIVE_CONFIG),
                 convert=convert_tasktrove_transductive,

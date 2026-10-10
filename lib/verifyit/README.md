@@ -150,6 +150,21 @@ uv run --group test pytest lib/verifyit/tests
 
 Callers that already extracted an answer use `verifyit.candidate.grade_candidate` for the in-process modes, or the per-mode candidate functions in `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset declarations select the grader and lower source fields into its inputs. Shared comparisons belong in VerifyIT; source-specific reward functions stay with the dataset, in its grade scripts and the vendored source scorers they ship.
 
+For text candidates stored in a file, supply the contract and resource locations explicitly:
+
+```bash
+python -m verifyit.candidate_file \
+  --spec /tests/contract.toml --answer /app/answer.txt \
+  --workspace /app --logs-dir /logs/verifier \
+  --resources-manifest /tests/resources.json
+```
+
+The resource manifest is a JSON list of paths relative to its containing directory; use `[]`
+when there are no resources. The command passes the entire file text to `grade_candidate`,
+preserving its extraction rules, and writes the same verdict and reward files as `verifyit`.
+A missing answer scores zero. This entrypoint accepts text candidates; callers holding decoded
+JSON or function calls use the Python API.
+
 A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
 
 `StructuredExactSpec` compares acquired JSON values through `grade_structured_exact_candidate`.

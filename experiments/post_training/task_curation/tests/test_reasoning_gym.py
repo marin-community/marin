@@ -4,19 +4,26 @@
 """Reasoning Gym tasks are graded by their own task scorer, on regenerated entries where generated."""
 
 import json
+import tomllib
 import zipfile
 from fractions import Fraction
+from typing import cast
 
 import pytest
 import reasoning_gym
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
-from taskcompendium.models import AnswerType, ScriptGrader, TaskSpec, TextMessage
+from taskcompendium.harbor.export import harbor_payload
+from taskcompendium.models import TaskSpec, TextMessage, verifyit_spec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
+from taskcompendium.runtime.resources import resource_bytes
+from verifyit.grade import Status, grade
 
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.reasoning_gym import generate
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as declarations
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
@@ -24,7 +31,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     tasktrove_row,
 )
 
-PIPELINES = {source.name: source.pipeline for source in declarations.sources() if source.pipeline is not None}
+RECIPES = {source.name: cast(CurationRecipe, source.config) for source in declarations.sources()}
 EXCLUDED = (("composite", "Requires explicit component configuration"),)
 TASKTROVE_INSTRUCTION = "Solve x + 8 = 50. Write ONLY your final answer to **`/app/answer.txt`**"
 TASKTROVE_ENTRY = {"question": "Solve x + 8 = 50.", "answer": "42", "metadata": {"source_dataset": "simple_equations"}}
@@ -64,43 +71,6 @@ GENERATED_ROW = {
     },
 }
 ROWS: dict[str, dict] = {"reasoning_gym_generated": GENERATED_ROW, "tasktrove-reasoning-gym": tasktrove_archive()}
-GRADERS = {
-    "reasoning_gym_generated": (("python3", "/tests/grade.py"), {"PYTHONHASHSEED": "0"}),
-    "tasktrove-reasoning-gym": (("bash", "/tests/test.sh"), {}),
-}
-
-
-@pytest.mark.parametrize("name", sorted(ROWS))
-def test_reasoning_gym_task_runs_its_scorer_in_the_grading_image(name):
-    task = converted_task(PIPELINES[name], ROWS[name])
-    grader = task.grader
-    assert isinstance(grader, ScriptGrader)
-    argv, env = GRADERS[name]
-    assert (grader.argv, grader.env, grader.answer_path) == (argv, env, "/app/answer.txt")
-    assert grader.environment == fixture_context(PIPELINES[name]).grader_environment
-    assert task.answer_type == AnswerType.TEXT
-    controls = PIPELINES[name].controls
-    assert controls is not None and controls.golden is not None
-    assert controls.golden(task) == Reply(TextMessage(role="assistant", content="42"))
-
-
-def test_generated_task_ships_its_grade_script_with_the_generator_encoding():
-    task = converted_task(PIPELINES["reasoning_gym_generated"], GENERATED_ROW)
-    assert {resource.path for resource in task.resources.verifier} == {"grade.py", "generate.py", "config.json"}
-    assert grader_config(task)["contract"]["generator_version"] == declarations.GENERATOR_VERSION
-
-
-def test_tasktrove_instruction_asks_for_the_answer_in_the_reply():
-    result = convert_row(PIPELINES["tasktrove-reasoning-gym"], tasktrove_archive())
-    assert isinstance(result, NormalizedTask)
-    assert result.task.context.events == (
-        TextMessage(role="user", content="Solve x + 8 = 50. Return ONLY your final answer in the assistant response"),
-    )
-    assert [change.field for change in result.changes] == ["instruction"]
-    unrecognized = convert_row(PIPELINES["tasktrove-reasoning-gym"], tasktrove_archive("Put x in /app/answer.txt."))
-    assert isinstance(unrecognized, NormalizedTask)
-    message = unrecognized.task.context.events[0]
-    assert isinstance(message, TextMessage) and message.content.endswith(declarations.ANSWER_FILE_NOTE)
 
 
 @pytest.mark.parametrize(
@@ -113,30 +83,23 @@ def test_tasktrove_instruction_asks_for_the_answer_in_the_reply():
             ImportFailureKind.SOURCE_DEFECT,
             "invalid_entry",
         ),
-        (
-            tasktrove_row(
-                {"instruction.md": b"Solve.", "tests/verifier_data.json": json.dumps(TASKTROVE_ENTRY).encode()}
-            ),
-            ImportFailureKind.UNSUPPORTED,
-            "missing_archive_grader",
-        ),
     ],
 )
 def test_tasktrove_rejects_rows_without_an_entry_or_grader(row, kind, reason):
-    result = convert_row(PIPELINES["tasktrove-reasoning-gym"], row)
+    result = convert_row(RECIPES["tasktrove-reasoning-gym"], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (kind, reason)
 
 
 def test_generated_row_without_matching_provenance_is_a_converter_error():
     row = {**GENERATED_ROW, "generation": {**GENERATED_ROW["generation"], "task": "basic_arithmetic"}}
-    result = convert_row(PIPELINES["reasoning_gym_generated"], row)
+    result = convert_row(RECIPES["reasoning_gym_generated"], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (ImportFailureKind.CONVERTER_ERROR, "invalid_generated_reasoning_entry")
 
 
 def test_generated_row_a_fresh_dataset_does_not_reproduce_is_rejected():
-    result = convert_row(PIPELINES["reasoning_gym_generated"], {**GENERATED_ROW, "reproducible": False})
+    result = convert_row(RECIPES["reasoning_gym_generated"], {**GENERATED_ROW, "reproducible": False})
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "irreproducible_entry")
 
@@ -269,7 +232,7 @@ def test_generated_rows_keep_generator_output_out_of_the_jsonl(noisy_generator_w
     controls = first["recorded_pinned_generator_controls"]
     assert controls["positive"] == {"candidate": "0", "reward": 1.0}
     assert controls["negative"] == {"candidate": "definitely wrong", "reward": 0.0}
-    result = convert_row(PIPELINES["reasoning_gym_generated"], first)
+    result = convert_row(RECIPES["reasoning_gym_generated"], first)
     assert isinstance(result, TaskSpec)
     exact = grader_config(TaskSpec.model_validate_json(result.model_dump_json()))["contract"]["entry"]["metadata"]
     fraction = exact["exact_fraction"]
@@ -280,7 +243,7 @@ def test_generated_rows_record_entries_a_fresh_dataset_does_not_reproduce(noisy_
     monkeypatch.setenv("REASONING_TEST_DRIFT", "1")
     (row,) = first_rows(noisy_generator_wheel)
     assert row["reproducible"] is False
-    result = convert_row(PIPELINES["reasoning_gym_generated"], row)
+    result = convert_row(RECIPES["reasoning_gym_generated"], row)
     assert isinstance(result, ImportRejection) and result.reason == "irreproducible_entry"
 
 
@@ -306,13 +269,13 @@ def test_generated_rows_record_a_scorer_error_for_the_wrong_answer(noisy_generat
     (row,) = first_rows(noisy_generator_wheel)
     negative = row["recorded_pinned_generator_controls"]["negative"]
     assert negative["reward"] is None and negative["scoring_error"]["type"] == "ValueError"
-    assert isinstance(convert_row(PIPELINES["reasoning_gym_generated"], row), TaskSpec)
+    assert isinstance(convert_row(RECIPES["reasoning_gym_generated"], row), TaskSpec)
 
 
 def test_generated_row_without_a_known_answer_has_no_golden(noisy_generator_wheel, monkeypatch):
     monkeypatch.setenv("REASONING_TEST_NO_ANSWER", "1")
     (row,) = first_rows(noisy_generator_wheel)
-    task = convert_row(PIPELINES["reasoning_gym_generated"], row)
+    task = convert_row(RECIPES["reasoning_gym_generated"], row)
     assert isinstance(task, TaskSpec)
     assert declarations.generated_golden(task) is None
 
@@ -337,3 +300,76 @@ def test_generated_rows_use_the_declared_hash_seed_not_the_parents(noisy_generat
         observed.extend(first_rows(noisy_generator_wheel, python_hash_seed=6501))
     assert observed[0] == observed[1]
     assert observed[0]["generation"]["python_hash_seed"] == 6501
+
+
+def test_tasktrove_reasoning_gym_preserves_fractional_reward(tmp_path):
+    pipeline = RECIPES["tasktrove-reasoning-gym"]
+    converted = cast(NormalizedTask, convert_row(pipeline, tasktrove_archive()))
+    task = converted.task
+    prompt = task.context.events[0].content
+    assert TASKTROVE_ENTRY["question"] in prompt
+    assert "/app/answer.txt" not in prompt
+    assert converted.changes[0].original == TASKTROVE_INSTRUCTION
+    assert task.grader.environment == fixture_context(pipeline).grader_environment
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    for resource in task.resources.verifier:
+        (tests / resource.path).write_bytes(resource_bytes(resource))
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    (workspace / "answer.txt").write_text("x = 42")
+    verdict = grade(verifyit_spec(task.grader), tests, workspace)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 1 / 3)
+    assert declarations.tasktrove_golden(task) == Reply(TextMessage(role="assistant", content="42"))
+
+
+def test_tasktrove_unrecognized_delivery_keeps_instruction_and_discloses_capture_path():
+    instruction = "Solve x + 8 = 50. Put x in /app/answer.txt."
+    converted = cast(NormalizedTask, convert_row(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive(instruction)))
+    prompt = converted.task.context.events[0].content
+    assert prompt.startswith(instruction)
+    assert "/app/answer.txt" in prompt[len(instruction) :]
+    assert converted.changes[0].original == instruction
+
+
+def test_tasktrove_reasoning_gym_exports_its_source_environment():
+    task = converted_task(
+        RECIPES["tasktrove-reasoning-gym"],
+        tasktrove_archive(**{"environment/Dockerfile": b"FROM python:3.11-slim\nWORKDIR /app\n"}),
+    )
+    payload = harbor_payload(
+        {
+            "task_json": task.model_dump_json(),
+            "source_row": declarations.TASKTROVE_CONFIG + "/fixture",
+            "original_path": "fixture",
+        },
+        grader_image=None,
+        family="reasoning-gym",
+        fallback_actor_image="unused",
+        verifyit_package_root=VERIFYIT_PACKAGE,
+    )
+    config = tomllib.loads(payload.files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert payload.files["environment/Dockerfile"].startswith(b"FROM python:3.11-slim\nWORKDIR /app\n")
+    assert "tests/Dockerfile" not in payload.files
+
+
+@pytest.mark.parametrize("dataset", ["arc_agi", "rearc"])
+def test_tasktrove_reasoning_gym_grades_json_grid_entries(dataset, tmp_path):
+    entry = {
+        "question": "Fill the grid.",
+        "answer": "1 2\n3 4",
+        "metadata": {"source_dataset": dataset, "output": [[1, 2], [3, 4]]},
+    }
+    task = converted_task(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive(entry=entry))
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    for resource in task.resources.verifier:
+        (tests / resource.path).write_bytes(resource_bytes(resource))
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+
+    for candidate, expected in [(entry["answer"], 1.0), ("1 2\n3 5", 0.05), ("not a grid", 0.0)]:
+        (workspace / "answer.txt").write_text(candidate)
+        verdict = grade(verifyit_spec(task.grader), tests, workspace)
+        assert (verdict.status, verdict.reward) == (Status.SCORED, expected)

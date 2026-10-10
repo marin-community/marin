@@ -12,7 +12,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, process_rows
 from experiments.post_training.task_curation.source import (
     HARBOR_GRADING_REVISION,
     MARINSKYRL_GRADING_REVISION,
@@ -97,9 +97,10 @@ def convert_openscience(row: RawRow, _context: ConversionContext) -> TaskSpec | 
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:gpqa",
                 title="Idavidrein/gpqa · gpqa_diamond",
@@ -108,7 +109,7 @@ def sources() -> list[RlDataSource]:
                 tags=("rlvr", "single-turn", "benchmark", "license:cc-by-4.0", "gym/mcq"),
                 verifier=MCQ_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="gpqa",
                 source=HfSource(
                     "Idavidrein/gpqa",
@@ -124,6 +125,7 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:openscience",
                 title="nvidia/OpenScience",
@@ -132,7 +134,7 @@ def sources() -> list[RlDataSource]:
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/mcq"),
                 verifier=MCQ_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="openscience",
                 source=HfSource(
                     "nvidia/OpenScience",

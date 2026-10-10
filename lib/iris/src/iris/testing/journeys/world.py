@@ -114,7 +114,7 @@ class JourneyWorld:
             log_service_address="",
             local_log_dir=state_dir / "log-server",
             host=config.host,
-            worker_token=None,
+            worker_token_provider=None,
         )
         self.log_stack = log_stack
         controller = Controller(

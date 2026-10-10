@@ -11,8 +11,19 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, ExitReason, Machine, NetworkPolicy, Result, ShellSimBuiltins
+from shellbox.machine import (
+    Backend,
+    Command,
+    DockerImage,
+    ExitReason,
+    Machine,
+    NetworkPolicy,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -20,6 +31,7 @@ from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
     ConversationInput,
+    DockerBuildContext,
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
@@ -61,6 +73,108 @@ from rolloutengine.task_session import WORKSPACE_INSTRUCTION
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=FIXTURE_IMAGE)
 TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("attack", [None, "source", "archive"])
+async def test_artifact_collection_cannot_read_root_files_through_candidate_path_changes(attack):
+    machines = []
+
+    class CandidateMachine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def run(self, command):
+            if command.argv[0] == "tar":
+                if attack == "source":
+                    mutation = await self.machine.run(
+                        Command(
+                            (
+                                "sh",
+                                "-c",
+                                "mv /workspace/artifacts /workspace/submitted && ln -s /private /workspace/artifacts",
+                            ),
+                            user="nobody",
+                        )
+                    )
+                    assert mutation.exit_code == 0
+                elif attack == "archive":
+                    mutation = await self.machine.run(
+                        Command(("ln", "-sf", "/private/answer", command.argv[2]), user="nobody")
+                    )
+                    assert mutation.exit_code != 0
+            return await self.machine.run(command)
+
+        async def upload(self, source, target):
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            await self.machine.download(source, target)
+
+        async def close(self):
+            await self.machine.close()
+
+    class Factory:
+        backend = Backend.DOCKER
+
+        async def create(self, spec):
+            machine = await DockerMachineFactory().create(replace(spec, source=DockerImage("busybox:1.36")))
+            machines.append(machine)
+            if spec.env.get("ARTIFACT_TASK_MACHINE") != "1":
+                return machine
+            prepared = await machine.run(
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        "mkdir -m 700 /private && printf secret > /private/answer && "
+                        "chmod 600 /private/answer && chmod 777 /workspace && "
+                        "mkdir -m 777 /workspace/artifacts",
+                    ),
+                    cwd="/",
+                    user="0",
+                )
+            )
+            assert prepared.exit_code == 0
+            written = await machine.run(
+                Command(("sh", "-c", "printf public > /workspace/artifacts/answer"), user="nobody")
+            )
+            assert written.exit_code == 0
+            return CandidateMachine(machine)
+
+    task = file_task(
+        environment_requirements=EnvironmentRequirements(
+            docker_image=FIXTURE_IMAGE,
+            working_directory="/workspace",
+            environment_variables={"ARTIFACT_TASK_MACHINE": "1"},
+        ),
+        grader=workspace_grader(
+            argv=("sh", "-c", "cmp /workspace/artifacts/answer /tests/expected"),
+            reward=ExitCodeReward(),
+            artifacts=(
+                VerifierArtifact(
+                    source="/workspace/artifacts",
+                    target="/workspace/artifacts",
+                    kind=ArtifactKind.DIRECTORY,
+                    exclude=("cache",),
+                ),
+            ),
+        ),
+        resources=ResourceGroups(verifier=(inline_resource("expected", b"public"),)),
+    )
+    runtime = lowered(task, machine=machine_runtime(user="nobody"), verifier_machine=machine_runtime())
+    rollout_engine = engine(ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()})
+    record = await rollout_engine.run(runtime)
+    if attack == "source":
+        assert (record.grade.status, record.grade.reward, record.grade.failure) == (
+            Outcome.INFRA_ERROR,
+            None,
+            GradingFailure.EXECUTION,
+        )
+    else:
+        assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    for machine in machines:
+        assert (await docker("inspect", machine.name)).exit_code != 0
 
 
 @dataclass
@@ -212,6 +326,35 @@ async def test_lowering_preserves_task_and_produces_private_grade_with_training_
     assert result.loss_mask == (1,)
     assert result.logprobs == (-0.5,)
     assert "12" not in json.dumps(model.requests[0].messages)
+
+
+@pytest.mark.parametrize("unresolved_role", ["actor", "grader"])
+@pytest.mark.parametrize("entrypoint", ["lower", "run"])
+async def test_unresolved_recipe_rejected_before_fallback_machine_or_model_start(unresolved_role, entrypoint):
+    environment = EnvironmentRequirements(
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"),))
+    )
+    task = file_task()
+    if unresolved_role == "actor":
+        task = task.model_copy(update={"environment_requirements": environment})
+    else:
+        task = task.model_copy(
+            update={"grader": workspace_grader(argv=("sh", "/tests/grade.sh"), environment=environment)}
+        )
+    spec = lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    reloaded = LoweredTaskSpec.model_validate_json(spec.model_dump_json())
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([{"role": "assistant", "content": "Done."}])
+    runner = engine(model, {"local": factory})
+    with pytest.raises(UnsupportedMachineSpec):
+        if entrypoint == "lower":
+            lower_task(
+                reloaded.task, reloaded.runtime, reloaded.session, factories=runner.factories, sessions=runner.sessions
+            )
+        else:
+            await runner.run(reloaded)
+    assert factory.machines == []
+    assert model.requests == []
 
 
 @pytest.mark.parametrize(
@@ -962,13 +1105,19 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
 
 
 async def test_environment_setup_runs_as_root_before_agent_commands():
-    commands = []
     closed = asyncio.Event()
 
     class Machine:
+        def __init__(self):
+            self.learner_ready = False
+
         async def run(self, command):
-            commands.append(command)
-            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+            if command.user == "0" and command.argv == ("sh", "-c", "mkdir -p /logs/agent"):
+                self.learner_ready = True
+            if command.user != "0" and not self.learner_ready:
+                return Result(126, b"", b"User is not prepared", False, False, ExitReason.EXITED)
+            output = command.user.encode() if command.argv == ("whoami",) else b""
+            return Result(0, output, b"", False, False, ExitReason.EXITED)
 
         async def close(self):
             closed.set()
@@ -985,7 +1134,8 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
             return SessionStart(({"role": "user", "content": "Run the task."},), {})
 
         async def advance(self, turn):
-            await self.machine.run(Command(("whoami",)))
+            result = await self.machine.run(Command(("whoami",)))
+            assert (result.exit_code, result.stdout) == (0, b"learner")
             return Transition(done=True)
 
         async def grade(self, messages):
@@ -1001,11 +1151,43 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
         ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()}, sessions={"fixture": Session}
     ).run(lowered(task, machine=machine_runtime(user="learner"), task_session="fixture"))
     assert record.grade.reward == 1.0
-    assert [command.user for command in commands] == ["0", "learner"]
     assert closed.is_set()
 
 
-@pytest.mark.parametrize("failure", [None, "download", "remove"])
+@pytest.mark.parametrize(
+    "result,cause_type",
+    [
+        (Result(126, b"", b"", False, False, ExitReason.EXITED), RuntimeError),
+        (Result(None, b"", b"", False, False, ExitReason.TIMED_OUT), TimeoutError),
+    ],
+)
+async def test_execution_user_preflight_fails_during_start_before_model_inference(result, cause_type):
+    closed = asyncio.Event()
+
+    class FailedProbeMachine:
+        async def run(self, command):
+            return result
+
+        async def close(self):
+            closed.set()
+
+    class Factory:
+        async def create(self, spec):
+            return FailedProbeMachine()
+
+    model = ReplayModel([])
+    task = arithmetic_task().model_copy(
+        update={"environment_requirements": EnvironmentRequirements(docker_image=FIXTURE_IMAGE)}
+    )
+    with pytest.raises(RolloutInterrupted) as caught:
+        await engine(model, {"local": Factory()}).run(lowered(task, machine=machine_runtime(user="learner")))
+    assert caught.value.operation == RolloutOperation.START
+    assert isinstance(caught.value.__cause__, cause_type)
+    assert model.requests == []
+    assert closed.is_set()
+
+
+@pytest.mark.parametrize("failure", [None, "download", "remove", "download_and_remove"])
 async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_path, failure):
     answer = tmp_path / "answer"
     answer.write_bytes(b"12\n")
@@ -1019,8 +1201,8 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
             if command.argv[:2] == ("tar", "-cf"):
                 return Result(0, b"", b"", False, False, ExitReason.EXITED)
             if (
-                failure == "remove"
-                and command.argv[:2] == ("rm", "-f")
+                failure in {"remove", "download_and_remove"}
+                and command.argv[:2] == ("rm", "-rf")
                 and command.argv[2].startswith("/tmp/taskcompendium-artifact-")
             ):
                 return Result(1, b"", b"Cannot remove artifact archive", False, False, ExitReason.EXITED)
@@ -1028,7 +1210,7 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
 
         async def download(self, source, target):
             if source.startswith("/tmp/taskcompendium-artifact-"):
-                if failure == "download":
+                if failure in {"download", "download_and_remove"}:
                     raise ConnectionError("Artifact download failed")
                 with tarfile.open(target, "w") as archive:
                     archive.add(answer, arcname="answer")
@@ -1043,7 +1225,10 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
 
     class Factory:
         async def create(self, spec):
-            return Machine(await factory.create(spec))
+            machine = await factory.create(spec)
+            await machine.run(Command(("mkdir", "-p", "/workspace/project")))
+            await machine.upload(answer, "/workspace/project/answer")
+            return Machine(machine)
 
     task = file_task(
         grader=workspace_grader(
@@ -1061,7 +1246,7 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
     )
     runner = engine(ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": Factory()})
     spec = lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
-    if failure == "download":
+    if failure in {"download", "download_and_remove"}:
         with pytest.raises(RolloutInterrupted) as caught:
             await runner.run(spec)
         assert caught.value.operation == RolloutOperation.GRADE

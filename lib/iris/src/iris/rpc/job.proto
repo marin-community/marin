@@ -748,4 +748,9 @@ message RunTaskRequest {
 
   // The task's egress policy, resolved by the controller (never UNSPECIFIED).
   EgressPolicy egress_policy = 16;
+
+  // Controller-minted bearer token (role "task", subject = the job's owner)
+  // that the task's own Iris client presents to the controller. Empty for a
+  // profile that withholds it (SANDBOX) or a controller without a JWT signer.
+  string task_token = 17;
 }

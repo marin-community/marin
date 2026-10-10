@@ -3,14 +3,18 @@
 
 import hashlib
 import importlib.util
+import json
 import re
 import sys
 import threading
 from dataclasses import replace
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from typing import cast
 
 import pytest
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Backend
@@ -22,10 +26,13 @@ from taskcompendium.pipeline.source_processing import SourcePipelineConfig, Sour
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
+from zephyr.context import ZephyrContext
+from zephyr.readers import load_parquet
 
-from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation import pipeline as pipeline_module
+from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult
+from experiments.post_training.task_curation.config import ImageGraderExecution, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
-from experiments.post_training.task_curation.driver import VerificationBackend, campaign_machines
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
     MissingEnvironmentArtifact,
@@ -33,14 +40,18 @@ from experiments.post_training.task_curation.images.build import (
     environment_artifact,
 )
 from experiments.post_training.task_curation.pipeline import (
+    CurationRecipe,
     DownloadRequest,
+    HfSource,
     UrlSource,
+    campaign_machines,
     download_source,
     download_step,
     environment_requirements,
+    process_rows,
     source_recipe,
-    source_step,
 )
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
     REPOSITORY,
     install_fake_build_tools,
@@ -58,13 +69,11 @@ def convert(row, _context):
 """
 
 
-def math500():
-    return next(
-        source.pipeline for source in skyrl_math.sources() if source.name == "math500" and source.pipeline is not None
-    )
+def math500() -> CurationRecipe:
+    return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
 
 
-def machines(backend: VerificationBackend) -> GradingMachines:
+def machines(backend: ImageGraderExecution) -> GradingMachines:
     return campaign_machines(backend, "fixture-worker", "http://controller.invalid")
 
 
@@ -78,18 +87,23 @@ def config() -> SourcePipelineConfig:
         execution=AuditExecution(),
         filter_policy=FilterPolicy(),
         normalized_shards=2,
-        machines=machines(VerificationBackend.GVISOR),
+        machines=machines(ImageGraderExecution.GVISOR),
     )
 
 
+def source_step(recipe: CurationRecipe, options: PipelineOptions):
+    source = RlDataSource(
+        info=SourceInfo(id=f"fixture:{recipe.name}", title=recipe.name, origin="fixture"),
+        config=recipe,
+        pipeline=process_rows,
+    )
+    return process_rows(source, options)
+
+
 def step_name(pipeline, config) -> str:
-    return source_step(pipeline, config, CampaignRuntime()).name
-
-
-def test_step_is_named_for_the_declaration_and_stable(config):
-    first, second = step_name(math500(), config), step_name(math500(), config)
-    assert first == second
-    assert first.startswith("data/rl/math500-")
+    return source_step(
+        pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
+    ).name
 
 
 @pytest.mark.parametrize(
@@ -112,7 +126,7 @@ def test_review_settings_enter_identity_only_with_a_rubric(config):
 
 
 def test_verification_backend_enters_identity_only_with_controls(config):
-    iris = replace(config, machines=machines(VerificationBackend.IRIS))
+    iris = replace(config, machines=machines(ImageGraderExecution.IRIS))
     assert step_name(math500(), iris) != step_name(math500(), config)
     unchecked = replace(math500(), controls=None)
     assert step_name(unchecked, iris) == step_name(unchecked, config)
@@ -157,11 +171,6 @@ def test_shipped_scorer_bytes_rename_the_artifact(fixture_converter, config):
     assert step_name(unshipped, config) != original
 
 
-def test_declarations_ship_only_existing_directories(tmp_path):
-    with pytest.raises(ValueError, match="do not exist"):
-        replace(math500(), ships=(tmp_path / "missing",))
-
-
 @pytest.fixture
 def grader_lock(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
@@ -173,7 +182,9 @@ def test_a_changed_grader_environment_renames_the_artifact(grader_lock, config):
     grader = Environment(lock=grader_lock)
     pipeline = replace(math500(), grader=grader)
     run(environment_artifact(grader, REPOSITORY))
-    original = source_step(pipeline, config, CampaignRuntime())
+    original = source_step(
+        pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
+    )
     assert environment_artifact(grader).name in [dep.name for dep in original.deps]
     grader_lock.write_text("numpy==2.3.4\n")
     run(environment_artifact(grader, REPOSITORY))
@@ -186,7 +197,9 @@ def test_a_grader_environment_without_a_built_artifact_names_the_build_command(g
         MissingEnvironmentArtifact,
         match=re.escape("run: uv run python -m experiments.post_training.task_curation.images --identity "),
     ):
-        source_step(pipeline, config, CampaignRuntime())
+        source_step(
+            pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
+        )
 
 
 def test_an_environment_image_runs_as_declared_in_a_sandbox():
@@ -254,6 +267,58 @@ def test_declarations_with_the_same_pinned_files_share_one_download():
     pipeline = math500()
     selected = replace(pipeline.source, select=lambda row, context: True)
     assert download_step(selected, CampaignRuntime()).name == download_step(pipeline.source, CampaignRuntime()).name
+
+
+def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, fixture_converter, config, monkeypatch):
+    _, convert = fixture_converter
+    primary = tmp_path / "source"
+    primary.mkdir()
+    (primary / "rows.jsonl").write_text('{"prompt": "Two plus two?", "answer": "4"}\n')
+    pipeline = replace(
+        math500(),
+        source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+        convert=convert,
+        rubric=None,
+        controls=None,
+        grader=None,
+    )
+    runtime = CampaignRuntime()
+    options = PipelineOptions(
+        SourceProcessingMode.SAMPLE,
+        runtime,
+        recipe_settings=RecipeSettings(config=replace(config, review=None, execution=AuditExecution(), machines=None)),
+    )
+    step = source_step(pipeline, options)
+    # Substitute only the HF transfer boundary; materialize the real declared dependency.
+    original_plan = pipeline_module.plan_download
+
+    def local_plan(request):
+        return original_plan(replace(request, source_url_override=str(primary)))
+
+    monkeypatch.setattr(pipeline_module, "plan_download", local_plan)
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    client = LocalClient()
+    try:
+        with (
+            set_current_client(client),
+            ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
+            runtime.activate(context),
+        ):
+            artifact = run(step, max_concurrent=1)[0]
+        result = cast(PipelineResult, artifact.result)
+        assert result.stages == ("download", "normalize", "final")
+        rows = [
+            row
+            for shard in (StoragePath(result.outputs["final"]) / "*.parquet").glob()
+            for row in load_parquet(str(shard))
+        ]
+        assert [row["source_row"] for row in rows] == ["rows.jsonl:0"]
+        review = json.loads((StoragePath(result.evidence["review"]) / "report.json").read_text())
+        verification = json.loads((StoragePath(result.evidence["verify"]) / "report.json").read_text())
+        assert review["status"] == "unreviewed"
+        assert verification["status"] == "skipped"
+    finally:
+        client.shutdown()
 
 
 @pytest.fixture

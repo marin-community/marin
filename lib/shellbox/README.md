@@ -53,10 +53,14 @@ and injects them into the Iris job environment. Keep credentials out of
 `MachineSpec.env`, serialized task data, and command arguments. A factory with
 secrets must never be used for actor jobs; ordinary factories inject none.
 
-Docker stops the command's process group on a timeout or caller cancellation.
-A successful stop preserves the machine. A failed stop raises an infrastructure error and closes the machine.
+Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
+A failed stop without confirmed completion raises an infrastructure error and closes the machine.
+Docker also stops the process group on caller cancellation. Daytona closes the machine on caller cancellation.
+
 Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
-Before machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
+Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
+Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
+Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
 Model commands that run as root can stop other root-owned processes.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
@@ -100,7 +104,12 @@ memory settings. Backends reject resource overrides that they cannot apply.
 username or UID string. An omitted user retains the image's user. ShellSim and
 QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
 control process as root and uses `su` for other execution users. Numeric UIDs
-require `getent` and a matching guest account. The local backend runs other users only from a root process.
+require `getent` and a matching guest account.
+The local backend runs other users only from a root process.
+Daytona framework commands use `/usr/sbin:/usr/bin:/sbin:/bin` for `PATH`.
+Agent commands retain the image's `PATH` and explicit task or command overrides.
+The command deadline includes account and `su` capability probes.
+Failed command-file cleanup closes the sandbox and preserves a primary command error.
 An empty Docker `MachineSpec.workdir` retains the image's working directory.
 Docker, gVisor, Iris and local machines create a nonempty `workdir` when the machine starts, so
 commands can run there even when the image lacks it.

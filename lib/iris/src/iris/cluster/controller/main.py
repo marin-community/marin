@@ -249,7 +249,7 @@ def run_controller_serve(
         log_service_address=log_service_address,
         local_log_dir=local_state_dir / "log-server",
         host=host,
-        worker_token=auth.worker_token if auth.worker_token else None,
+        worker_token_provider=auth.worker_token_provider,
     )
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS

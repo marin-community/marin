@@ -15,6 +15,7 @@ from taskcompendium.models import (
     SessionGrader,
     TaskSpec,
     require_compatible_backend,
+    require_resolved_environment,
 )
 from taskcompendium.runtime.grading import grade_in_sandbox
 
@@ -38,6 +39,7 @@ def grade_task(
         raise TypeError("A session grader runs inside its rollout session")
     if grader.environment is None:
         return grade_answer(task, attempt)
+    require_resolved_environment(grader.environment)
     if machine_factory is None or machine_spec is None:
         return GradeResult(Outcome.INFRA_ERROR, None, "Sandbox grading requires a machine factory and specification")
     require_compatible_backend(grader.environment, machine_factory.backend)

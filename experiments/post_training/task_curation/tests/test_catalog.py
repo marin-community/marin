@@ -4,6 +4,7 @@
 import hashlib
 import json
 from dataclasses import replace
+from typing import cast
 
 import httpx
 import pyarrow as pa
@@ -12,9 +13,10 @@ import pytest
 from taskcompendium.pipeline.inputs import SourceFormat
 
 from experiments.post_training.task_curation.count_inputs import parquet_counts
+from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.export_catalog import catalog_document, source_row
 from experiments.post_training.task_curation.grading_catalog import annotate_catalog_grading
-from experiments.post_training.task_curation.pipeline import HfSource
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import (
     DataSourceReview,
     GradingSelection,
@@ -22,23 +24,7 @@ from experiments.post_training.task_curation.source import (
     SourceInfo,
     SourceReference,
 )
-from experiments.post_training.task_curation.sources import all_pipelines
-from experiments.post_training.task_curation.tests import (
-    test_arc,
-    test_nemotron_ultra,
-    test_reasoning_gym,
-    test_skyrl,
-    test_tasktrove_code,
-    test_tasktrove_text,
-)
-
-FAMILY_TESTS = (test_arc, test_nemotron_ultra, test_reasoning_gym, test_skyrl, test_tasktrove_code, test_tasktrove_text)
-
-
-def test_every_declaration_has_a_fixture_row():
-    covered = [name for module in FAMILY_TESTS for name in module.ROWS]
-    assert len(covered) == len(set(covered))
-    assert set(covered) == set(all_pipelines())
+from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
 def test_parquet_count_export_identifies_the_counted_input(tmp_path):
@@ -50,12 +36,13 @@ def test_parquet_count_export_identifies_the_counted_input(tmp_path):
     metadata.write_text("pinned-input\nfile-etag\n0\n")
     count = parquet_counts(snapshot, "pinned-input", "*.parquet")["tasks.parquet"]
     pipeline = replace(
-        all_pipelines()["math500"],
+        cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500")),
         source=HfSource("local/questions", "pinned-input", ("tasks.parquet",), SourceFormat.PARQUET),
     )
     source = RlDataSource(
+        pipeline=process_rows,
         info=SourceInfo(id="local:questions", title="Questions", origin="local", count=count),
-        pipeline=pipeline,
+        config=pipeline,
     )
     row = source_row(source)
     assert row["task_count"] == 3
@@ -88,6 +75,21 @@ def test_catalog_export_is_deterministic_and_keeps_metadata_only_sources():
     )
     changed = replace(reviewed, info=replace(reviewed.info, count=8))
     assert catalog_document([changed, excluded])["revision"] != document["revision"]
+
+
+def test_dataset_catalog_identity_is_available_without_execution(tmp_path):
+    source = number_source(tmp_path / "not-staged")
+    row = source_row(source)
+    assert row["dataset_id"] == "local-numbers"
+    assert row["dataset_revision"] == "pinned"
+    assert row["pipeline"] == {
+        "name": "numbers",
+        "version": "1",
+        "source": "local-numbers",
+        "revision": "pinned",
+        "files": (),
+    }
+    assert row["url"] == "https://example.org/numbers"
 
 
 def test_generated_grading_tracks_scorer_changes_and_ignores_unrelated_methods():

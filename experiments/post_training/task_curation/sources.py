@@ -24,7 +24,6 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
-from experiments.post_training.task_curation.pipeline import RlDataPipeline
 from experiments.post_training.task_curation.source import RlDataSource
 
 
@@ -58,10 +57,10 @@ def all_sources() -> dict[str, RlDataSource]:
     return {source.info.id: source for source in sources}
 
 
-def all_pipelines() -> dict[str, RlDataPipeline]:
-    """Runnable conversion recipes from the authoritative source registry."""
-    pipelines = [source.pipeline for source in all_sources().values() if source.pipeline is not None]
-    names = [pipeline.name for pipeline in pipelines]
+def runnable_sources() -> dict[str, RlDataSource]:
+    """Sources with dataset-owned execution, keyed by invocation name."""
+    sources = [source for source in all_sources().values() if source.pipeline is not None]
+    names = [source.name for source in sources]
     if len(set(names)) != len(names):
         raise ValueError("Duplicate RL pipeline names")
-    return {pipeline.name: pipeline for pipeline in pipelines}
+    return {source.name: source for source in sources}

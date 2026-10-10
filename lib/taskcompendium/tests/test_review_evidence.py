@@ -6,7 +6,14 @@
 import hashlib
 import json
 
-from taskcompendium.models import ResourceGroups, Source, TaskSpec
+from taskcompendium.models import (
+    DockerBuildContext,
+    EnvironmentRequirements,
+    ResourceGroups,
+    ScriptGrader,
+    Source,
+    TaskSpec,
+)
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.review import completion_body
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
@@ -28,19 +35,32 @@ def test_review_can_inspect_verifier_text_without_changing_task_bytes():
     assert resource_bytes(task.resources.verifier[0]) == resource_bytes(resource)
 
 
-def test_review_marks_omitted_fixture_content_and_retains_full_task():
+def test_review_bounds_private_and_build_files_without_changing_the_task():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     task = svamp_row_task(
         RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
     )
     assert isinstance(task, TaskSpec)
-    resource = inline_resource("tests/large.txt", b"a" * 100_000)
-    task = task.model_copy(update={"resources": ResourceGroups(verifier=(resource,))})
+    large = inline_resource("large", b"x" * 100_000)
+    build = DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"), large))
+    environment = EnvironmentRequirements(docker_build=build)
+    task = task.model_copy(
+        update={
+            "environment_requirements": environment,
+            "grader": ScriptGrader(environment=environment, argv=("true",)),
+            "resources": ResourceGroups(verifier=(large,)),
+        }
+    )
+    original = task.model_dump_json()
     payload = json.loads(completion_body(task, SVAMP_RUBRIC, "reviewer", 100)["messages"][1]["content"])
-    preview = payload["resources"][0]
-    assert preview["truncated"] and preview["byte_count"] == 100_000
-    assert 0 < len(preview["text"]) < preview["byte_count"]
-    assert resource_bytes(task.resources.verifier[0]) == b"a" * 100_000
+    assert "content_base64" not in json.dumps(payload)
+    previews = {resource["role"]: resource for resource in payload["resources"] if resource["path"] == "large"}
+    assert previews.keys() == {"verifier", "actor_build", "grader_build"}
+    for preview in previews.values():
+        assert preview["truncated"] and preview["byte_count"] == 100_000
+        assert 0 < len(preview["text"]) < preview["byte_count"]
+    assert payload["resource_manifest"]["total_count"] == 5
+    assert task.model_dump_json() == original
 
 
 def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():

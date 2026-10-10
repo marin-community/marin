@@ -8,6 +8,7 @@ Grader inputs cross into the grading machine as one archive: verifier resources 
 state, the conversation, and copied artifacts. The agent's own machine never grades.
 """
 
+import errno
 import io
 import json
 import math
@@ -64,6 +65,10 @@ STATE_PATH = "/app/state.json"
 STAGING_ARCHIVE = "/tmp/taskcompendium-grading.tar"
 DIAGNOSTIC_OUTPUT_BYTES = 16_384
 ROOT = "0"
+LINKED_ARTIFACT_EXIT = 45
+MAX_ARTIFACT_EXPANDED_BYTES = 1024**3
+MAX_ARTIFACT_MEMBERS = 100_000
+INVALID_ARTIFACT_ERRNOS = {errno.ENAMETOOLONG, errno.ENOTDIR, errno.EISDIR, errno.EEXIST}
 
 
 class _StepFailed(Exception):
@@ -165,63 +170,132 @@ async def _run_checked(machine: Machine, command: Command, failure: str) -> None
 
 async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float) -> bool:
     """Download an artifact. Return false only when its missing-file policy permits omission."""
-    kind = artifact.kind
-    if kind == ArtifactKind.AUTO or artifact.missing == MissingArtifactPolicy.SKIP:
-        result = await machine.run(
+    result = await machine.run(
+        Command(
+            argv=(
+                "sh",
+                "-c",
+                'path=${1%/}; while [ "$path" ] && [ "$path" != / ]; do '
+                f'[ ! -L "$path" ] || exit {LINKED_ARTIFACT_EXIT}; '
+                'case "$path" in */*) path=${path%/*};; *) break;; esac; done; '
+                'if [ -d "$1" ]; then printf directory; elif [ -f "$1" ]; then printf file; '
+                f"else exit {MISSING_CAPTURE_EXIT_CODE}; fi",
+                "artifact-kind",
+                artifact.source,
+            ),
+            timeout=timeout,
+        )
+    )
+    if result.reason == ExitReason.TIMED_OUT:
+        raise _StepFailed(
+            _infra_error(
+                f"Cannot inspect grading artifact {artifact.source}: timed out",
+                GradingFailure.TIMEOUT,
+                _diagnostics(result),
+            )
+        )
+    if result.exit_code == MISSING_CAPTURE_EXIT_CODE and artifact.missing == MissingArtifactPolicy.SKIP:
+        return False
+    if result.exit_code == MISSING_CAPTURE_EXIT_CODE:
+        raise SubmissionFailure(f"Grading artifact is missing: {artifact.source}")
+    if result.exit_code == LINKED_ARTIFACT_EXIT:
+        raise SubmissionFailure(f"Grading artifact path contains a link: {artifact.source}")
+    if result.exit_code != 0 or result.stdout_truncated:
+        raise _StepFailed(
+            _infra_error(
+                f"Cannot inspect grading artifact {artifact.source}: exit={result.exit_code}",
+                GradingFailure.EXECUTION,
+                _diagnostics(result),
+            )
+        )
+    try:
+        kind = ArtifactKind(result.stdout.decode())
+    except (UnicodeError, ValueError) as error:
+        raise SubmissionFailure(f"Invalid grading artifact kind: {artifact.source}") from error
+    if artifact.kind != ArtifactKind.AUTO and artifact.kind != kind:
+        raise SubmissionFailure(f"Grading artifact has the wrong kind: {artifact.source}")
+    remote_directory = f"/tmp/taskcompendium-artifact-{uuid4().hex}"
+    remote_archive = f"{remote_directory}/archive.tar"
+    primary_error = None
+    try:
+        # The agent can write this file, but the root-owned parent prevents pathname replacement.
+        await _run_checked(
+            machine,
             Command(
                 (
                     "sh",
                     "-c",
-                    'if [ -d "$1" ]; then printf directory; elif [ -f "$1" ]; then printf file; '
-                    f"else exit {MISSING_CAPTURE_EXIT_CODE}; fi",
-                    "artifact-kind",
-                    artifact.source,
+                    'umask 077; mkdir "$1" && chmod 755 "$1" && : > "$1/archive.tar" && chmod 666 "$1/archive.tar"',
+                    "artifact-directory",
+                    remote_directory,
                 ),
                 timeout=timeout,
                 user=ROOT,
-            )
-        )
-        if result.exit_code == MISSING_CAPTURE_EXIT_CODE and artifact.missing == MissingArtifactPolicy.SKIP:
-            return False
-        if result.exit_code != 0:
-            raise _StepFailed(
-                _infra_error(
-                    f"Cannot inspect grading artifact {artifact.source}: exit={result.exit_code}",
-                    GradingFailure.EXECUTION,
-                    _diagnostics(result),
-                )
-            )
-        kind = ArtifactKind(result.stdout.decode())
-    if kind == ArtifactKind.DIRECTORY:
-        target.mkdir()
-    if not artifact.exclude or kind != ArtifactKind.DIRECTORY:
-        await machine.download(artifact.source, target)
-        return True
-    remote_archive = f"/tmp/taskcompendium-artifact-{uuid4().hex}.tar"
-    await _run_checked(
-        machine,
-        Command(
-            (
-                "tar",
-                "-cf",
-                remote_archive,
-                *(f"--exclude={pattern}" for pattern in artifact.exclude),
-                "-C",
-                artifact.source,
-                ".",
+                env={"PATH": "/usr/bin:/bin"},
             ),
-            timeout=timeout,
-            user=ROOT,
-        ),
-        f"Cannot archive grading artifact {artifact.source}",
-    )
-    archive_path = target.with_suffix(".tar")
-    await machine.download(remote_archive, archive_path)
-    await _run_checked(
-        machine, Command(("rm", "-f", remote_archive), timeout=timeout, user=ROOT), "Cannot remove artifact archive"
-    )
-    with tarfile.open(archive_path) as archive:
-        archive.extractall(target, filter="data")
+            "Cannot create protected artifact directory",
+        )
+        await _run_checked(
+            machine,
+            Command(
+                argv=(
+                    "tar",
+                    "-cf",
+                    remote_archive,
+                    *(f"--exclude={pattern}" for pattern in artifact.exclude if kind == ArtifactKind.DIRECTORY),
+                    "-C",
+                    artifact.source if kind == ArtifactKind.DIRECTORY else str(PurePosixPath(artifact.source).parent),
+                    "--",
+                    "." if kind == ArtifactKind.DIRECTORY else PurePosixPath(artifact.source).name,
+                ),
+                timeout=timeout,
+            ),
+            f"Cannot archive grading artifact {artifact.source}",
+        )
+        archive_path = target.with_suffix(".tar")
+        await machine.download(remote_archive, archive_path)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        try:
+            await _run_checked(
+                machine,
+                Command(("rm", "-rf", remote_directory), timeout=timeout, user=ROOT, env={"PATH": "/usr/bin:/bin"}),
+                "Cannot remove private artifact archive",
+            )
+        except Exception as error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(f"Artifact archive cleanup failed: {error!r}")
+    extracted = target.with_suffix(".contents")
+    extracted.mkdir()
+    expanded_bytes = 0
+    try:
+        with tarfile.open(archive_path, "r:") as archive:
+            for count, member in enumerate(archive, start=1):
+                if count > MAX_ARTIFACT_MEMBERS:
+                    raise SubmissionFailure(f"Grading artifact exceeds the member count limit: {artifact.source}")
+                if member.issym() or member.islnk():
+                    raise SubmissionFailure(f"Grading artifact contains a link: {member.name}")
+                expanded_bytes += member.size
+                if expanded_bytes > MAX_ARTIFACT_EXPANDED_BYTES:
+                    raise SubmissionFailure(f"Grading artifact exceeds the expanded size limit: {artifact.source}")
+                try:
+                    archive.extract(member, extracted, filter="data")
+                except OSError as error:
+                    if error.errno not in INVALID_ARTIFACT_ERRNOS:
+                        raise
+                    raise SubmissionFailure(f"Invalid grading artifact member: {member.name}") from error
+    except tarfile.TarError as error:
+        raise SubmissionFailure(f"Invalid grading artifact archive: {artifact.source}") from error
+    if kind == ArtifactKind.DIRECTORY:
+        extracted.rename(target)
+    else:
+        file = extracted / PurePosixPath(artifact.source).name
+        if not file.is_file():
+            raise SubmissionFailure(f"Grading artifact archive has no regular file: {artifact.source}")
+        file.rename(target)
     return True
 
 
@@ -383,9 +457,9 @@ def _sandbox_grading(
         raise TypeError(
             f"Sandbox grading requires a verifyit grader with an environment or a script grader, not {grader.kind}"
         )
+    require_environment_source(machine_spec, grading.environment)
     if (grading.collect or grading.artifacts) and task_machine is None:
         raise ValueError("Collecting grader inputs requires the task machine")
-    require_environment_source(machine_spec, grading.environment)
     validate_output_directories(task.output_directories, grading.workspace)
     return grading
 
@@ -521,6 +595,8 @@ async def _grade_staged(
                 await machine.close()
     except _StepFailed as failure:
         return failure.result
+    except SubmissionFailure as error:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
 
 
 async def _grade_on(

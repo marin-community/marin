@@ -19,7 +19,7 @@ from experiments.post_training.task_curation.tests.local_grader import (
     grade,
     with_verifier_file,
 )
-from experiments.post_training.task_curation.tests.test_arc import GRID, PIPELINES, ROWS, ULTRA_CONTEXT, ultra_row
+from experiments.post_training.task_curation.tests.test_arc import GRID, RECIPES, ROWS, ULTRA_CONTEXT, ultra_row
 
 pytestmark = [pytest.mark.docker, pytest.mark.timeout(300)]
 
@@ -38,7 +38,7 @@ def ultra_task(agent: str) -> TaskSpec:
 
 
 def tasks() -> dict[str, tuple[TaskSpec, arc.Controls]]:
-    tasktrove = {name: (converted_task(PIPELINES[name], ROWS[name]), PIPELINES[name].controls) for name in ROWS}
+    tasktrove = {name: (converted_task(RECIPES[name], ROWS[name]), RECIPES[name].controls) for name in ROWS}
     ultra = {
         agent: (ultra_task(agent), arc.ULTRA_ARC_CONTROLS) for agent in (arc.INDUCTIVE_AGENT, arc.TRANSDUCTIVE_AGENT)
     }
@@ -57,15 +57,15 @@ def test_golden_control_scores_the_reference_one(name, machines):
 
 
 def test_transform_cannot_read_the_hidden_record(machines):
-    task = converted_task(PIPELINES["tasktrove-arc_inductive"], ROWS["tasktrove-arc_inductive"])
+    task = converted_task(RECIPES["tasktrove-arc_inductive"], ROWS["tasktrove-arc_inductive"])
     result = grade(task, WorkspaceFiles({"/app/solution.py": CONFIG_READING_TRANSFORM}), machines, arc.GRADER_MEMORY_MB)
     assert (result.status, result.reward) == (Outcome.GRADED, 0.0), result
     assert result.diagnostics is not None and "PermissionError" in result.diagnostics["stderr"]
 
 
 def test_grade_script_fails_rather_than_scoring_when_nvarc_cannot_import(machines):
-    task = converted_task(PIPELINES["tasktrove-arc_transductive"], ROWS["tasktrove-arc_transductive"])
+    task = converted_task(RECIPES["tasktrove-arc_inductive"], ROWS["tasktrove-arc_inductive"])
     broken = inline_resource("skyrl_gym/envs/nemotron_ultra/nvarc.py", b"import package_missing_from_the_grader_image\n")
-    result = grade(with_verifier_file(task, broken), WorkspaceFiles({"/app/answer.txt": b"0 1\n2 9\n"}), machines, 2048)
+    result = grade(with_verifier_file(task, broken), arc.tasktrove_golden(task), machines, 2048)
     assert result.status == Outcome.INFRA_ERROR
     assert result.diagnostics is not None and result.diagnostics["exit_code"] != 0

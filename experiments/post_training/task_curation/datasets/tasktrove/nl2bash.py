@@ -16,10 +16,10 @@ from taskcompendium.pipeline.inputs import ConversionContext, required_grader_en
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements
+from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 AGENT_IMAGE = Environment(
@@ -54,9 +54,10 @@ def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedT
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
                 title="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
@@ -66,10 +67,10 @@ def sources() -> list[RlDataSource]:
                 count=1498,
                 notes="Semantic output comparison against an oracle command run in the same sandbox.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-nl2bash",
                 source=tasktrove_source(CONFIG),
-                convert=convert_nl2bash_task,
+                convert=TaskTroveConverter(CONFIG, convert_nl2bash_task),
                 version="1",
                 environment=AGENT_IMAGE,
                 intended_use=IntendedUse.TRAIN,

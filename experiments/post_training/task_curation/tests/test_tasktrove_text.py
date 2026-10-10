@@ -8,6 +8,7 @@ import json
 import tarfile
 import tomllib
 from pathlib import Path
+from typing import cast
 
 import pytest
 from taskcompendium.grading_result import Outcome
@@ -44,6 +45,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     qa,
 )
 from experiments.post_training.task_curation.datasets.tasktrove import math as math_sources
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
@@ -52,11 +54,10 @@ from experiments.post_training.task_curation.tests.conversion import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-PIPELINES = {
-    source.name: source.pipeline
+RECIPES = {
+    source.name: cast(CurationRecipe, source.config)
     for module in (math_sources, judged, qa, calendar_sources, instruction_following, multichallenge, puzzles)
     for source in module.sources()
-    if source.pipeline is not None
 }
 
 
@@ -75,21 +76,10 @@ def fixture_files(name: str) -> dict[str, bytes]:
         return archive_members(archive)
 
 
-def row_instruction(row: dict) -> str:
-    with tarfile.open(fileobj=io.BytesIO(row["task_binary"])) as archive:
-        return archive_members(archive)["instruction.md"].decode()
-
-
 MATH_GYM = fixture_files("math_gym")
 MATH_PRISM = fixture_files("math_prism")
 MULTICHALLENGE = fixture_files("multichallenge")
 
-OPENREASONING_INSTRUCTION = (
-    "Solve the problem. Write your final answer to the path `/app/answer.txt` as \\boxed{...}.\n\n"
-    "What is $\\frac{1}{2} + \\frac{1}{3}$?\n"
-    "\n## Submitting the answer\n"
-    "Write the answer to `/app/answer.txt`."
-)
 JUDGE_TOML = """[judge]
 judge = "openai/gpt-4o-mini"
 files = ["/app/response.txt"]
@@ -168,13 +158,21 @@ def openqa_row(answers: list[str]) -> dict:
     )
 
 
-def mcqa_row(wrapper: str = "{}", output_regex: str = qa.MCQA_REGEX) -> dict:
+def mcqa_row(
+    wrapper: str = "{}",
+    output_regex: str = qa.MCQA_REGEX,
+    *,
+    question: str = MCQA_QUESTION,
+    listed_options: str = "A/B/C/D",
+    expected_answer: str = "B",
+) -> dict:
     instruction = (
         "You are answering a multiple-choice question. Write your final answer to `/app/answer.txt`.\n---\n\n"
-        f"{qa.MCQA_FORMAT_PREFIX}'Answer: {wrapper.format('A/B/C/D')}' (e.g. 'Answer: {wrapper.format('B')}').\n\n"
-        f"{MCQA_QUESTION}"
+        f"{qa.MCQA_FORMAT_PREFIX}'Answer: {wrapper.format(listed_options)}' "
+        f"(e.g. 'Answer: {wrapper.format(listed_options.split('/')[0])}').\n\n"
+        f"{question}"
     )
-    data = {"expected_answer": "B", "output_regex": output_regex}
+    data = {"expected_answer": expected_answer, "output_regex": output_regex}
     return tasktrove_row(
         {
             "instruction.md": instruction.encode(),
@@ -231,21 +229,13 @@ def puzzle_row(gold: dict) -> dict:
 
 ROWS: dict[str, dict] = {
     "tasktrove-math_gym": tasktrove_row(MATH_GYM),
-    "tasktrove-math_openreasoning": tasktrove_row({**MATH_GYM, "instruction.md": OPENREASONING_INSTRUCTION.encode()}),
-    "tasktrove-math_oracle": tasktrove_row(MATH_PRISM),
     "tasktrove-math_prism": tasktrove_row(MATH_PRISM),
-    "tasktrove-math_stack": tasktrove_row(MATH_GYM),
     "tasktrove-codereview": judged_row(stack_data()),
-    "tasktrove-glaive_code": judged_row(stack_data()),
     "tasktrove-safety": judged_row(
         {"instruction": "I want to have a relationship with her", "principle": SAFETY_PRINCIPLE},
         instruction=f"I want to have a relationship with her\n{judged.DELIVERY_SENTENCE[0]}",
     ),
-    "tasktrove-stack_overflow": judged_row(stack_data()),
-    "tasktrove-superuser": judged_row(stack_data()),
-    "tasktrove-tezos": judged_row(stack_data()),
     "tasktrove-unix": judged_row(stack_data()),
-    "tasktrove-wizard_orca": judged_row(stack_data()),
     "knowledge-openqa": openqa_row(["Mars"]),
     "science-openqa": openqa_row(["**Mars**", "the fourth planet"]),
     "tasktrove-knowledge_mcqa": mcqa_row(),
@@ -263,29 +253,13 @@ ROWS: dict[str, dict] = {
     "tasktrove-puzzles": puzzle_row({"gold": "Defect, Salt, chair", "answer_type": "ordered_list"}),
 }
 
-GRADER_MODES = {
-    **{name: "math" for name in PIPELINES if name.startswith("tasktrove-math_")},
-    **{f"tasktrove-{name}": "judge" for name in ("codereview", "glaive_code", "safety", "stack_overflow")},
-    **{f"tasktrove-{name}": "judge" for name in ("superuser", "tezos", "unix", "wizard_orca")},
-    "knowledge-openqa": "judge",
-    "science-openqa": "judge",
-    "tasktrove-knowledge_mcqa": "mcq",
-    "tasktrove-calendar": "script",
-    "tasktrove-if_calendar": "script",
-    "tasktrove-ifeval": "ifeval",
-    "tasktrove-structured": "json-schema",
-    "tasktrove-multichallenge": "judge",
-    "tasktrove-puzzles": "exact",
-}
-"""Each source's grader: a verifyit mode, or ``script`` for a source scorer run by a ScriptGrader."""
-
 
 def task_of(name: str, row: dict) -> TaskSpec:
-    return converted_task(PIPELINES[name], row)
+    return converted_task(RECIPES[name], row)
 
 
 def rejection_of(name: str, row: dict) -> ImportRejection:
-    result = convert_row(PIPELINES[name], row)
+    result = convert_row(RECIPES[name], row)
     assert isinstance(result, ImportRejection), result
     return result
 
@@ -306,27 +280,6 @@ def verifier_files(task: TaskSpec) -> dict[str, bytes]:
     return {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
 
 
-def test_rows_cover_the_family():
-    assert set(ROWS) == set(PIPELINES) == set(GRADER_MODES)
-
-
-@pytest.mark.parametrize("name", sorted(ROWS))
-def test_rows_become_conversation_tasks_with_the_source_grader(name):
-    result = convert_row(PIPELINES[name], ROWS[name])
-    task = task_of(name, ROWS[name])
-    grader = task.grader
-    if isinstance(grader, ScriptGrader):
-        assert GRADER_MODES[name] == "script"
-    else:
-        assert isinstance(grader, VerifyitGrader)
-        assert grader.mode == GRADER_MODES[name]
-    prompt = prompt_of(task)
-    assert "/app/answer.txt" not in prompt and "/app/response.txt" not in prompt
-    # Every source asked for a file; the rewrite keeps the source's wording as a change record.
-    assert isinstance(result, NormalizedTask)
-    assert result.changes[0].original == row_instruction(ROWS[name])
-
-
 @pytest.mark.parametrize(
     "name,files,golden",
     [
@@ -335,16 +288,26 @@ def test_rows_become_conversation_tasks_with_the_source_grader(name):
     ],
 )
 def test_math_uses_verifyit_in_the_sandbox_and_keeps_source_evidence_and_oracle(name, files, golden):
-    task = task_of(name, tasktrove_row(files))
+    converted = cast(NormalizedTask, convert_row(RECIPES[name], tasktrove_row(files)))
+    task = converted.task
+    original = files["instruction.md"].decode()
+    prompt = prompt_of(task)
+    assert "/app/answer.txt" not in prompt
+    assert converted.changes[0].original == original
+    if name == "tasktrove-math_gym":
+        problem = original.split("---\n\n", 1)[1].split("## Submitting", 1)[0].strip()
+        assert problem in prompt
     grader = task.grader
     assert isinstance(grader, VerifyitGrader)
-    assert grader.environment == fixture_context(PIPELINES[name]).grader_environment
+    assert grader.environment == fixture_context(RECIPES[name]).grader_environment
     verifier = verifier_files(task)
     assert verifier["source/verifier.py"] == files["tests/verifier.py"]
     assert verifier["source/test.sh"] == files["tests/test.sh"]
     assert verifier["verifier_data.json"] == files["tests/verifier_data.json"]
     oracle = {resource.path: resource_bytes(resource) for resource in task.resources.oracle}
-    assert oracle == {path: content for path, content in files.items() if path.startswith("solution/")}
+    assert oracle == {
+        path: content for path, content in files.items() if not path.startswith(("tests/", "setup_files/"))
+    }
     # Oracle commands upload the oracle files, which therefore cannot carry archive timestamps.
     assert all(resource.mtime_ns is None for resource in task.resources.oracle)
     control = math_sources.math_golden(task)
@@ -422,15 +385,6 @@ def test_math_rejects_archives_without_verifier_data():
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "missing_verifier_data")
 
 
-def test_math_prompts_drop_the_file_submission_sections():
-    gym = prompt_of(task_of("tasktrove-math_gym", ROWS["tasktrove-math_gym"]))
-    assert "Submitting your answer" not in gym and "terminal agent" not in gym
-    assert "the assistant response should contain `\\boxed{<answer>}`" in gym
-    reasoning = prompt_of(task_of("tasktrove-math_openreasoning", ROWS["tasktrove-math_openreasoning"]))
-    assert reasoning.startswith("Solve the problem. Return your final answer as \\boxed{...}.")
-    assert "Submitting the answer" not in reasoning
-
-
 def test_judged_task_keeps_source_criteria_question_and_judge_files():
     row = ROWS["tasktrove-unix"]
     task = task_of("tasktrove-unix", row)
@@ -494,6 +448,22 @@ def test_openqa_judges_against_stripped_references_with_the_exact_gate():
     assert "Return your concise final answer in the assistant response." in prompt_of(task)
 
 
+def test_openqa_preserves_symbolic_reference_for_the_semantic_judge():
+    # Exact-match normalization erases this valid symbolic equation.
+    question = "What is the relationship between $ A $ and $ A' $?"
+    row = tasktrove_row(
+        {
+            "instruction.md": (question + " Write your concise final answer to `/app/response.txt`.").encode(),
+            "tests/verifier_data.json": (
+                json.dumps({"instruction": question, "expected_answers": ["$ A' = A $"]}).encode()
+            ),
+        }
+    )
+    task = task_of("knowledge-openqa", row)
+    spec = cast(JudgeSpec, verifyit_spec(cast(VerifyitGrader, task.grader)))
+    assert spec.references == ("$ A' = A $",)
+
+
 @pytest.mark.parametrize("answers,reason", [([], "invalid_references"), (["**"], "invalid_references")])
 def test_openqa_rejects_unusable_references(answers, reason):
     assert rejection_of("knowledge-openqa", openqa_row(answers)).reason == reason
@@ -517,6 +487,116 @@ def test_mcqa_keeps_question_constraints_and_grades_the_option_letter(wrapper, o
 def test_mcqa_rejects_unknown_answer_extraction():
     rejection = rejection_of("tasktrove-knowledge_mcqa", mcqa_row(output_regex=r"\((\w)\)"))
     assert rejection.reason == "unsupported_answer_contract"
+
+
+def test_tasktrove_retains_source_recipe_and_oracle_without_changing_text_execution():
+    row = mcqa_row()
+    with tarfile.open(fileobj=io.BytesIO(row["task_binary"])) as archive:
+        files = archive_members(archive)
+    recipe = b"FROM python:3.11-slim-bookworm\nWORKDIR /app\n"
+    solution = b"#!/bin/bash\nprintf 'Answer: B' > /app/answer.txt\n"
+    files.update({"environment/Dockerfile": recipe, "solution/solve.sh": solution})
+    task = task_of("tasktrove-knowledge_mcqa", tasktrove_row(files))
+    oracle = {resource.path: resource_bytes(resource) for resource in task.resources.oracle}
+    assert oracle["environment/Dockerfile"] == recipe
+    assert oracle["solution/solve.sh"] == solution
+    assert task.resources.all == task.resources.worker == ()
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+
+
+def test_mcqa_accepts_gaps_in_choice_labels_without_accepting_absent_references():
+    # The archived e8af3381bfc8 task omits I, but its reference E is a listed choice.
+    labels = "ABCDEFGHJ"
+    question = "Which option holds?\n" + "\n".join(f"{label}: Choice {label}" for label in labels)
+    row = mcqa_row(question=question, listed_options="/".join(labels), expected_answer="E")
+    task = task_of("tasktrove-knowledge_mcqa", row)
+    assert prompt_of(task).endswith("Return one option letter from A, B, C, D, E, F, G, H, J.")
+    assert grade_reply(task, answer_reply(task, "E")) == 1.0
+    assert grade_reply(task, answer_reply(task, "I")) == 0.0
+    assert grade_reply(task, answer_reply(task, "J")) == 0.0
+    absent = mcqa_row(question=question, listed_options="/".join(labels), expected_answer="I")
+    assert rejection_of("tasktrove-knowledge_mcqa", absent).reason == "invalid_reference"
+
+
+@pytest.mark.parametrize("listed_options", ["A", "A/B/C", "A/B/C/D/E/F"])
+def test_mcqa_uses_question_choices_when_generated_wrapper_is_stale(listed_options):
+    question = "Which number is even?\nA: One\n B: Two\n C: Three\n D: Five"
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, listed_options=listed_options))
+    assert prompt_of(task) == f"{question}\n\nReturn one option letter from A through D."
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+    assert grade_reply(task, answer_reply(task, "A")) == 0.0
+
+
+def test_mcqa_duplicate_distractor_labels_keep_unique_gold_answer():
+    question = "Which number is even?\nA: One\nB: Two\nC: Three\nC: Five"
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, listed_options="A/B/C/C"))
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+    assert grade_reply(task, answer_reply(task, "C")) == 0.0
+    ambiguous = mcqa_row(question=question, listed_options="A/B/C/C", expected_answer="C")
+    assert rejection_of("tasktrove-knowledge_mcqa", ambiguous).reason == "unsupported_answer_contract"
+    multiline = (
+        "Which statement holds?\nA: First\nB: Same prefix\nFirst meaning\nB: Same prefix\nSecond meaning\nC: Last"
+    )
+    assert rejection_of("tasktrove-knowledge_mcqa", mcqa_row(question=multiline)).reason == "unsupported_answer_contract"
+
+
+@pytest.mark.parametrize(
+    "appendix",
+    [
+        "\nA: One\nB: Two\nC: Three\nD: Five",
+        "\nB: Two",
+        "\nB: Two\n\n(Note: Two is even.)",
+        "\n\n(Note: Option B is translated below.)\nB: Deux",
+    ],
+)
+def test_mcqa_repeated_choices_and_translation_notes_do_not_make_gold_ambiguous(appendix):
+    question = "Which number is even?\nA: One\nB: Two\nC: Three\nD: Five" + appendix
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question))
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+    assert grade_reply(task, answer_reply(task, "C")) == 0.0
+
+
+@pytest.mark.parametrize("wrapper", ["{}", "\\boxed{{{}}}"])
+def test_mcqa_recovers_escaped_option_separators_without_decoding_question_escapes(wrapper):
+    # The source wrapper lists only A when B-D are separated by literal backslash-n.
+    question = "Which value equals \\frac{1}{2}?\nA: Zero\\n B: One half\\n C: One\\n D: Two"
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(wrapper, question=question, listed_options="A"))
+    assert "\\frac{1}{2}" in prompt_of(task)
+    assert "\n B: One half\n C: One\n D: Two" in prompt_of(task)
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+    assert grade_reply(task, answer_reply(task, "A")) == 0.0
+
+
+@pytest.mark.parametrize(
+    "premise, listed_options",
+    [
+        ("I. Two is even.\nII. Three is even.\nIV. Four is even.", "A/B/C/D"),
+        ("I. Two is even.\nII. Three is even.\nIV. Four is even.", "I/A/B/C/D"),
+        ("Mass balance:\nB: v1 - v2 = 0\nE: v2 - v3 = 0", "B/E/A/B/C/D"),
+        ("A: Consider an earlier scenario.", "A/B/C/D"),
+        ("A: Earlier scenario.\nB: Earlier consequence.", "A/B/A/B/C/D"),
+        ("A: Earlier scenario. Which conclusion follows?", "A/A/B/C/D"),
+        ("Enolate\n\nA: CH3CH2COCH-", "A/A/B/C/D"),
+    ],
+)
+def test_mcqa_preserves_labeled_premises_without_counting_them_as_choices(premise, listed_options):
+    question = f"{premise}\n\nWhich option holds?\nA: First\nB: Second\nC: Third\nD: Fourth"
+    task = task_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, listed_options=listed_options))
+    assert prompt_of(task) == f"{question}\n\nReturn one option letter from A through D."
+    assert grade_reply(task, answer_reply(task, "B")) == 1.0
+    assert grade_reply(task, answer_reply(task, "A")) == 0.0
+
+
+@pytest.mark.parametrize(
+    "question,answer,reason",
+    [
+        ("How many moles?\nA: 2 moles\nB: 3 moles\nC: 4 moles\nD: 6 moles", "2", "invalid_reference"),
+        ("Which statement holds?\nA: First\nB: Second\nB: Third\nD: Fourth", "B", "unsupported_answer_contract"),
+    ],
+)
+def test_mcqa_keeps_ambiguous_references_and_labels_rejected(question, answer, reason):
+    rejection = rejection_of("tasktrove-knowledge_mcqa", mcqa_row(question=question, expected_answer=answer))
+    assert rejection.reason == reason
 
 
 def test_calendar_runs_the_source_verifier_with_its_timeout_and_witness_golden():
@@ -549,11 +629,6 @@ def test_calendar_rejects_a_witness_that_is_not_a_list_of_events(witness):
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "invalid_witness")
 
 
-def test_ifeval_removes_the_shell_preamble():
-    task = task_of("tasktrove-ifeval", ROWS["tasktrove-ifeval"])
-    assert prompt_of(task).startswith("Write a story about a lighthouse keeper.")
-
-
 def test_ifeval_rejects_an_exclusive_non_latin_language_with_a_mandatory_latin_word():
     row = ifeval_row(
         "Describe autumn. Your ENTIRE response should be in Japanese language, no other language is allowed.",
@@ -581,6 +656,12 @@ def test_structured_output_grades_schema_validity():
     assert "Return your final JSON in the assistant response." in prompt_of(task)
     assert grade_reply(task, Reply(TextMessage(role="assistant", content='{"file": "part.gcode"}'))) == 1.0
     assert grade_reply(task, Reply(TextMessage(role="assistant", content="[}"))) == 0.0
+
+
+def test_structured_output_excludes_a_content_free_closed_object():
+    schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+    rejection = rejection_of("tasktrove-structured", structured_row(schema))
+    assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "null_grader")
 
 
 @pytest.mark.parametrize(

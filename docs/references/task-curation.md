@@ -15,6 +15,42 @@ sources = all_sources()  # stable Atlas ID -> RlDataSource
 
 Building the catalog performs no downloads, inference or job submission.
 
+## Dataset-owned invocation
+
+`RlDataSource.pipeline` is one graph-building callable:
+
+```python
+def curate(source: RlDataSource[MyConfig], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
+    ...
+```
+
+`PipelineOptions` contains an explicit QUICK, SAMPLE or FULL mode, the campaign
+runtime, input overrides and optional concrete recipe settings. The executor
+receives output/cache paths separately. Each dataset constructs its own dependencies and chooses its
+conversion, validation, review and control stages. Its run closure accesses the
+active Zephyr context through the runtime. A pipeline can generate inputs or
+read local files without reviewer credentials, grader builds or sandbox setup.
+
+`CampaignArtifact.result` carries a `PipelineResult`: the existing `SourceStatus`,
+named output and evidence paths, and the stages that actually ran. It requires no
+`final` or admitted view. Exceptions enter the campaign's failure report while
+peer results remain available.
+
+`process_rows(source: RlDataSource[CurationRecipe], options)` is a reusable callable. It
+chooses pinned downloads and grader dependencies, then invokes the existing
+source processor. Review endpoints and credentials resolve only during its
+chosen review path; controller lookup occurs when its grader machine is used.
+QUICK executes the complete declared dependency graph through StepRunner. Its
+terminal uses the executor's mutable `dev` rerun policy at the explicit output
+root; ingestion dependencies retain their versions and caches. Recipe conversion
+refuses existing `normalize/` or `manifest.json` payloads, including partial
+outputs. Other datasets own their overwrite behavior.
+
+`RlDataSource` stores its typed dataset-owned `config` and one plain callable.
+Configurations expose catalog facts (`name`, `version`, `dataset`, `files`) without
+converter, rubric or service requirements. Pinned inputs expose their reference
+directly. Atlas reads these facts without invoking or inspecting the callable.
+
 ## Package organization
 
 | Package | Responsibility |
@@ -23,10 +59,12 @@ Building the catalog performs no downloads, inference or job submission.
 | `experiments/post_training/task_curation/environment.py` | `Environment`, what a machine must provide, and `placement`, which decides where it runs |
 | `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
 | `experiments/post_training/task_curation/environment_runtime.py` | The uv environments that local graders run in on the Zephyr worker |
-| `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()`, and its runnable `all_pipelines()` projection |
+| `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()` and `runnable_sources()` |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
-| `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
-| `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, grading machines, shared pool and full-mode admission |
+| `experiments/post_training/task_curation/config.py` | Invocation options and concrete recipe settings; service binding belongs to `process_rows` |
+| `experiments/post_training/task_curation/pipeline.py` | `CurationRecipe`, `process_rows` and its `data/rl/<name>-<hash>` artifact |
+| `experiments/post_training/task_curation/pipeline.py`, `local.py` | Source-level mode dispatch and local mechanical conversion |
+| `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, shared pool and per-source results |
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
 | `taskcompendium.pipeline` | Sampling, review, filtering, verification and outputs |
 | `taskcompendium.runtime` | Grading in fresh Shellbox machines |
@@ -38,12 +76,11 @@ ArtifactSteps.
 
 ## Declarations
 
-An `RlDataSource` has `info`, `review` and an optional `pipeline`.
+An `RlDataSource` has `info`, `review`, a typed `config` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
 search tags, notes and an optional input-row count. A `SourceReference` groups a
-name, revision and URL for the verifier or an inventory-only dataset. Runnable
-sources derive dataset identity from `pipeline.source`, with no second dataset
-definition. `DataSourceReview` records an authored grade, evidence URL, date and
+name, revision and URL for the verifier or inventory dataset. Runnable sources
+expose their pinned input through `config.dataset`. `DataSourceReview` records an authored grade, evidence URL, date and
 the dataset/verifier revisions it covers. Its default is unrated. Executed
 reviews and difficulty measurements remain in the Atlas database.
 
@@ -62,7 +99,7 @@ See [RL Data Atlas](rl-data-atlas.md) for publishing and saved reviews, and the
 [experiment README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
 for offline count regeneration.
 
-The `RlDataPipeline` recipe has these fields:
+The `CurationRecipe` configuration has these fields:
 
 | Field | Meaning |
 |---|---|
@@ -77,7 +114,7 @@ The `RlDataPipeline` recipe has these fields:
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
 | `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
-| `resource_budget_bytes` | Decoded resource bytes a task may carry, default 1,000,000; larger tasks are deferred as `resources_over_budget`. |
+| `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
 
 Families whose members differ only by data are tables: one module builds every
 declaration of the family in a loop.
@@ -194,7 +231,28 @@ task the panel converts is judge-graded, verification samples nothing and
 records `skipped` with reason `judge grader; no control path yet`, and kept rows
 are admitted like rows of in-process graders.
 
+## Conversion modes
+
+Each dataset's callable receives `PipelineOptions` with an explicit mode. The
+single `driver` CLI requires `--mode quick|sample|full` and
+prints a plan unless `--run` is supplied. QUICK runs locally without review or
+controller settings. See the campaign quickstart below for input overrides.
+The recipe implementation shares conversion and the normalized schema across
+its modes. QUICK retains TaskSpecs
+and typed rejections, skipping admission, fingerprints, review, deduplication
+and grading. It records declared images or locks without building environments.
+
+Recipe SAMPLE and FULL bind `SourcePipelineConfig` and a resolved grader
+environment. Other callables choose their own configuration. The recipe's FULL
+mode reviews a bounded panel, then
+reuses those conversions when its quality gate allows expansion. The procedure
+below describes those reviewed stages. See the
+[campaign quickstart](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
+for local overrides, Harbor export and pinned content comparison commands.
+
 ## Source procedure
+
+Sample and full modes run the reviewed procedure below.
 
 1. Download the pinned files once per distinct pin
    (`task-curation/download/<hash>`).
@@ -212,6 +270,13 @@ are admitted like rows of in-process graders.
    machine, rerun up to twice more after an infrastructure error, and the source
    passes at a 95% pass fraction. Judge-graded sources skip this step.
 7. Admit rows and write the outputs.
+
+For a standalone task batch, call
+`review_tasks(tasks, rubric, reviewer, cached=None)` from
+`taskcompendium.pipeline.review`. It returns a `ReviewBatchResult` with `.reviews`
+and `.attempts`. The caller's sink owns serialization and output. Pipeline sinks
+write one evidence record per batch alongside audit rows in the same execution,
+without repeating provider calls.
 
 Verification telemetry records `select`, `trials`, and `row_gate` executions.
 The gate writes the complete audit and accepted rows together and returns
@@ -243,7 +308,8 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
-Build the declared environments first, with the same `MARIN_PREFIX`:
+Build the [registered environments](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/images/README.md#building)
+first, with the same `MARIN_PREFIX`:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.images --all
@@ -279,7 +345,7 @@ Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
 Docker daemon.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
-`--base-url` overrides it. `--mode sample`, the default, is a test run that
+`--base-url` overrides it. `--mode sample` is a test run that
 converts and gates only each source's panel. `--mode full` runs each source on
 its own: it makes its own panel quality decision, converts every row of an
 accepted source, draws its control sample from all kept rows, and ends `gated`

@@ -24,7 +24,7 @@ from shellbox.machine import (
     Result,
     ShellSimBuiltins,
 )
-from taskcompendium.models import EnvironmentRequirements, TaskResource
+from taskcompendium.models import EnvironmentRequirements, TaskResource, require_resolved_environment
 from taskcompendium.runtime.local import local_runtime
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -62,6 +62,7 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
 
 
 def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
+    require_resolved_environment(requirements)
     if requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
@@ -99,6 +100,7 @@ async def _acquire_machine(
     requirements: EnvironmentRequirements,
 ) -> Machine:
     """Create a machine closed by ``owned``, retaining ownership if creation outlives cancellation."""
+    require_resolved_environment(requirements)
     machine_cleanup = cleanup
     if runtime.cleanup_timeout is not None:
         machine_cleanup = _Cleanup(runtime.cleanup_timeout, cleanup.errors)
@@ -145,6 +147,12 @@ async def _prepare_machine(
                 raise TimeoutError("Environment setup command timed out")
             if result.exit_code != 0:
                 raise RuntimeError(f"Environment setup command failed: {result.reason}, exit={result.exit_code}")
+        if runtime.user is not None:
+            result = await machine.run(Command(("true",), timeout=runtime.startup_timeout))
+            if result.reason == ExitReason.TIMED_OUT:
+                raise TimeoutError("Execution user startup probe timed out")
+            if result.exit_code != 0:
+                raise RuntimeError(f"Execution user startup probe failed: {result.reason}, exit={result.exit_code}")
     return machine
 
 

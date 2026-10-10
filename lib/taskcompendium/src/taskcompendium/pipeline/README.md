@@ -27,6 +27,16 @@ returns `NormalizedTask` when it records changes to the source (for example a
 prompt rewrite), and `ImportRejection` with a stable reason code for rows it
 cannot convert.
 
+## Conversion without a recipe
+
+Caller-owned ingestion supplies decoded `RawRow` values and source provenance to
+[`convert_raw_row`](conversion.py), with a converter and `ConversionContext`.
+The returned `ConvertedRow` values feed [`write_conversion`](source_processing.py)
+on an entered `ZephyrContext`, which writes unreviewed `normalize/` shards and a
+`manifest.json`, returning paths, row counts and rejections in `ConversionResult`.
+Conversion executes lazily with writing: measure the executing call, and optionally
+pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
+
 ## Stages
 
 [source_processing.py](source_processing.py) runs these stages; the

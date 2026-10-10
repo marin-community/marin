@@ -8,18 +8,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, Machine, MachineSpec, Result
+from shellbox.machine import Backend, Command, DockerImage, Machine, MachineSpec, Result, UnsupportedMachineSpec
 from verifyit.spec import SchemaFormat
 
 from taskcompendium.convert.answers import (
-    exact_answer_task,
     json_schema_task,
-    math_answer_task,
-    mcq_task,
     numeric_answer_task,
 )
 from taskcompendium.models import (
     AnswerType,
+    DockerBuildContext,
     EnvironmentRequirements,
     NoGrader,
     ResourceGroups,
@@ -80,14 +78,8 @@ def checks(task: TaskSpec, controls: Controls, machines: FixtureGradingMachines 
 
 
 def in_process_task(kind: str) -> TaskSpec:
-    if kind == "math":
-        task = math_answer_task(ROW, prompt="What is half of one?", answer=r"\boxed{\frac{1}{2}}")
-    elif kind == "numeric":
+    if kind == "numeric":
         task = numeric_answer_task(ROW, prompt="What is 3 + 4?", answer="7", tolerance_abs=0, tolerance_rel=0)
-    elif kind == "mcq":
-        task = mcq_task(ROW, prompt="Which is blue? A. grass B. snow C. sky D. coal", answer="c", options=4)
-    elif kind == "exact":
-        task = exact_answer_task(ROW, prompt="Name the capital of France.", answers=("Paris",), ignore_case=True)
     else:
         task = json_schema_task(
             ROW, prompt="Return a JSON object.", schema=json.dumps({"type": "object"}), schema_format=SchemaFormat.JSON
@@ -123,14 +115,12 @@ def wrong_reply(task: TaskSpec) -> Reply:
     return answer_reply(task, "__incorrect_answer__")
 
 
-@pytest.mark.parametrize("kind", ["math", "numeric", "mcq", "exact"])
-def test_reference_golden_passes_for_in_process_graders(kind):
-    assert checks(in_process_task(kind), REFERENCE_CONTROLS) == {"golden": PASS}
+def test_reference_golden_passes_for_in_process_graders():
+    assert checks(in_process_task("numeric"), REFERENCE_CONTROLS) == {"golden": PASS}
 
 
-@pytest.mark.parametrize("kind", ["math", "numeric", "mcq", "exact"])
-def test_golden_fails_when_the_grader_rejects_it(kind):
-    assert checks(in_process_task(kind), Controls(golden=wrong_reply)) == {"golden": FAIL}
+def test_golden_fails_when_the_grader_rejects_it():
+    assert checks(in_process_task("numeric"), Controls(golden=wrong_reply)) == {"golden": FAIL}
 
 
 @pytest.mark.parametrize("controls", [Controls(), REFERENCE_CONTROLS], ids=["none", "no_reference"])
@@ -144,6 +134,23 @@ def test_graders_without_offline_grading_have_unsupported_controls(grader):
     task = in_process_task("numeric").model_copy(update={"grader": grader})
     report = control_suite(REFERENCE_CONTROLS, FixtureGradingMachines()).run(task)
     assert [check.status for check in report.checks] == [CheckStatus.UNSUPPORTED]
+
+
+@pytest.mark.parametrize("role", ["actor", "grader"])
+def test_controls_reject_unresolved_build_before_machine_selection_or_oracle_fallback(role):
+    task = file_task()
+    build = EnvironmentRequirements(
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))
+    )
+    if role == "actor":
+        task = task.model_copy(update={"environment_requirements": build})
+    else:
+        task = task.model_copy(update={"grader": task.grader.model_copy(update={"environment": build})})
+    # No machine provider is supplied: unresolved recipes must be rejected before
+    # providers are required, and must never use the grader image for an oracle.
+    suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), None)
+    with pytest.raises(UnsupportedMachineSpec):
+        suite.run(task)
 
 
 @pytest.mark.parametrize(

@@ -4,14 +4,20 @@
 """ARC tasks, from TaskTrove archives and Nemotron Ultra rows, ship the NVARC scorer and its grade script."""
 
 import json
+from typing import cast
 
 import pytest
-from taskcompendium.grader import grader_config
-from taskcompendium.models import AnswerType, ScriptGrader, Source, StdoutReward, TextMessage
+from taskcompendium.models import (
+    Source,
+    VerifyitGrader,
+    verifyit_spec,
+)
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow, Reply, WorkspaceFiles
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow, WorkspaceFiles
+from verifyit.grade import grade
 
 from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import (
     FIXTURE_GRADER_ENVIRONMENT,
     convert_row,
@@ -19,7 +25,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     tasktrove_row,
 )
 
-PIPELINES = {source.name: source.pipeline for source in arc.sources() if source.pipeline is not None}
+RECIPES = {source.name: cast(CurationRecipe, source.config) for source in arc.sources()}
 # The Nemotron Ultra declarations that use convert_ultra_arc name the grader packages.
 ULTRA_CONTEXT = ConversionContext({}, FIXTURE_GRADER_ENVIRONMENT)
 GRID = [[0, 1], [2, 9]]
@@ -29,19 +35,6 @@ ARCHIVE_FILES = {
     "tests/verifier.py": b"print(1)\n",
     "environment/Dockerfile": b"FROM python:3.11\nRUN pip install numpy scipy\n",
 }
-SHIPPED = {
-    "grade.py",
-    "config.json",
-    "local_sandbox.py",
-    "skyrl_gym/__init__.py",
-    "skyrl_gym/envs/__init__.py",
-    "skyrl_gym/envs/aime/utils.py",
-    "skyrl_gym/envs/nemotron_ultra/__init__.py",
-    "skyrl_gym/envs/nemotron_ultra/answer_extraction.py",
-    "skyrl_gym/envs/nemotron_ultra/nvarc.py",
-    "skyrl_gym/envs/nemotron_ultra/sandbox.py",
-}
-"""The grade script, the row's record, and the NVARC scorer with the modules and package markers it imports."""
 
 
 def archive(instruction: str, verifier_data: dict) -> dict:
@@ -60,39 +53,24 @@ ROWS: dict[str, dict] = {
     ),
     "tasktrove-arc_transductive": archive("Write the output grid to /app/answer.txt.", {"expected_output": GRID}),
 }
-TASKTROVE = {
-    "tasktrove-arc_inductive": (
-        ("/app/solution.py", "/app/answer.txt"),
-        {"mode": "inductive", "contract": {"test_input": GRID, "expected_output": GRID}},
-        {"/app/solution.py": arc.literal_transform(GRID).encode()},
-    ),
-    "tasktrove-arc_transductive": (
-        ("/app/answer.txt",),
-        {"mode": "transductive", "contract": {"expected_output": GRID}},
-        {"/app/answer.txt": b"0 1\n2 9\n"},
-    ),
-}
 
 
-@pytest.mark.parametrize("name", sorted(ROWS))
-def test_tasktrove_arc_grades_the_agents_files_with_nvarc(name):
-    output_paths, config, golden = TASKTROVE[name]
-    task = converted_task(PIPELINES[name], ROWS[name])
-    grader = task.grader
-    assert isinstance(grader, ScriptGrader)
-    assert (grader.argv, grader.cwd, grader.answer_path, grader.reward) == (
-        ("python3", "/tests/grade.py"),
-        "/",
-        None,
-        StdoutReward(),
-    )
-    assert grader.environment == FIXTURE_GRADER_ENVIRONMENT
-    assert (task.answer_type, task.output_paths) == (AnswerType.FILE, output_paths)
-    assert {resource.path for resource in task.resources.verifier} == SHIPPED
-    assert grader_config(task) == config
-    controls = PIPELINES[name].controls
-    assert controls is not None and controls.golden is not None
-    assert controls.golden(task) == WorkspaceFiles(golden)
+@pytest.mark.parametrize(
+    ("answer", "reward"),
+    [
+        ("0 1\n2 9\n", 1.0),
+        (" 0\t1  2 9 ", 1.0),
+        ("\\boxed{0 1\n2 9}", 1.0),
+        ("[[0, 1], [2, 9]]", 0.0),
+        ("0 1\n2 8", 0.0),
+    ],
+)
+def test_tasktrove_transductive_preserves_the_release_grid_comparison(answer, reward, tmp_path):
+    task = converted_task(RECIPES["tasktrove-arc_transductive"], ROWS["tasktrove-arc_transductive"])
+    (tmp_path / "answer.txt").write_text(answer)
+    result = grade(verifyit_spec(cast(VerifyitGrader, task.grader)), tmp_path, tmp_path)
+    assert result.reward == reward
+    assert arc.tasktrove_golden(task) == WorkspaceFiles({"/app/answer.txt": b"0 1\n2 9\n"})
 
 
 @pytest.mark.parametrize(
@@ -131,7 +109,7 @@ def test_tasktrove_arc_grades_the_agents_files_with_nvarc(name):
     ],
 )
 def test_tasktrove_arc_rejects_rows_nvarc_cannot_score(name, row, kind, reason):
-    result = convert_row(PIPELINES[name], row)
+    result = convert_row(RECIPES[name], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (kind, reason)
 
@@ -144,28 +122,6 @@ def ultra_row(agent: str, **fields) -> RawRow:
         **fields,
     }
     return RawRow("nvarc", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), data)
-
-
-def reply(content: str) -> Reply:
-    return Reply(TextMessage(role="assistant", content=content))
-
-
-def test_ultra_transductive_golden_submits_the_expected_grid():
-    result = arc.convert_ultra_arc(ultra_row(arc.TRANSDUCTIVE_AGENT, expected_output=GRID), ULTRA_CONTEXT)
-    assert not isinstance(result, ImportRejection)
-    task = result.task
-    assert isinstance(task.grader, ScriptGrader) and task.grader.answer_path == "/app/answer.txt"
-    assert grader_config(task)["mode"] == "transductive"
-    assert arc.ultra_arc_golden(task) == reply("0 1\n2 9")
-
-
-def test_ultra_inductive_golden_submits_a_literal_transform():
-    row = ultra_row(arc.INDUCTIVE_AGENT, test_input=GRID, expected_output=GRID)
-    result = arc.convert_ultra_arc(row, ULTRA_CONTEXT)
-    assert not isinstance(result, ImportRejection)
-    task = result.task
-    assert {resource.path for resource in task.resources.verifier} == SHIPPED
-    assert arc.ultra_arc_golden(task) == reply(f"```python\n{arc.literal_transform(GRID)}```")
 
 
 def test_ultra_inductive_row_without_a_test_input_is_rejected():

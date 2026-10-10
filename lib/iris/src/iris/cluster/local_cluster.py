@@ -213,7 +213,7 @@ class LocalCluster:
             log_service_address="",
             local_log_dir=Path(self._db_dir.name) / "log-server",
             host="127.0.0.1",
-            worker_token=auth.worker_token if auth.worker_token else None,
+            worker_token_provider=auth.worker_token_provider,
         )
 
         # Autoscaler creates its own temp dirs for worker resources
