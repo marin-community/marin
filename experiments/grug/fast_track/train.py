@@ -99,8 +99,9 @@ RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
 class RaggedTransport(StrEnum):
     """XLA GPU kernel behind ``ragged_all_to_all`` (all three ship in the stock x86_64 PJRT plugin).
 
-    ``DEVICE`` and ``ONE_SHOT`` write straight into peer GPUs' buffers, which XLA only allows when one process
-    owns every GPU of the collective (``processes_per_task=1``); ``NCCL`` also runs with one process per GPU.
+    ``ONE_SHOT`` writes straight into peer GPUs' buffers over peer pointers, which XLA only allows when one process
+    owns every GPU of the collective (``processes_per_task=1``). ``DEVICE`` goes through NCCL symmetric buffers and,
+    like ``NCCL``, runs with one process per GPU (the GB200 hero runs it with 4 processes per node).
     """
 
     DEVICE = "device"
@@ -334,7 +335,7 @@ class GrugRunConfig:
     def __post_init__(self) -> None:
         if (
             self.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION
-            and self.ragged_transport is not RaggedTransport.NCCL
+            and self.ragged_transport is RaggedTransport.ONE_SHOT
             and self.processes_per_task > 1
         ):
             raise ValueError(
