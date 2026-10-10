@@ -115,7 +115,7 @@ def convert_for_local_rollout(row: RawRow, context: ConversionContext, *, conver
     return replace(normalized, task=task)
 
 
-def write_files(files):
+def file_write_command(files):
     return " && ".join(
         f"mkdir -p {Path(path).parent} && printf %s {base64.b64encode(data).decode()} | base64 -d > {path}"
         for path, data in files.items()
@@ -143,7 +143,7 @@ async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_
         candidates = (
             [files["solution/solve.sh"].decode(), "printf 'print(0)' > /app/solution.py"]
             if tool_name
-            else [write_files(TYPER_PACKAGE), write_files(BROKEN_PACKAGE)]
+            else [file_write_command(TYPER_PACKAGE), file_write_command(BROKEN_PACKAGE)]
         )
     recipe = replace(
         recipe,
