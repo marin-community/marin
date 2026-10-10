@@ -79,13 +79,14 @@ TMPDIR=/cache uv run --package marin-levanter --extra gpu python -m \
 ```
 
 For remote output, use writable disk-backed scratch (`/cache` in Iris containers)
-with space for the largest serialized layer. Iris Docker's `/tmp` uses RAM.
+with space for the largest serialized shard. Iris Docker's `/tmp` uses RAM.
 Local output is written directly to the destination.
 
 Keep the checkpoint immutable. Run one exporting gang per destination. The
 global device count must be divisible by `expert_axis_size * replica_axis_size`;
 both axes default to one. Every device must fit the largest expert bank in full.
-Process zero needs host RAM for one layer plus serialization buffers.
+Files use Levanter's 5 GB shard target; a larger expert bank stays in one file.
+Process zero needs host RAM for one shard plus serialization buffers.
 
 Load the BF16 output with [Marin vLLM's split-expert loader](https://github.com/marin-community/vllm/pull/77).
 Tokenizer files are not copied. Set vLLM's `--tokenizer` and

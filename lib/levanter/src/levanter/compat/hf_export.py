@@ -208,6 +208,16 @@ class _HFShardWriter:
             self.release(reserved_bytes)
 
 
+def _add_host_tensor(
+    tensors: dict[str, np.ndarray], key: str, replicated: jax.Array, outputs: tuple[str, ...]
+) -> None:
+    host = np.asarray(replicated.addressable_data(0), order="C")
+    if outputs == (key,):
+        tensors[key] = host
+    else:
+        tensors.update(zip(outputs, host, strict=True))
+
+
 def save_hf_shards(
     shards: Mapping[str, Mapping[str, jax.Array | jax.ShapeDtypeStruct]],
     load_shard: Callable[[tuple[str, ...]], Mapping[str, jax.Array]],
@@ -219,8 +229,9 @@ def save_hf_shards(
     tensor_names: Mapping[str, tuple[str, ...]] | None = None,
     upload_to_hf: Callable[[str, str], None] | None = None,
 ) -> list[HFShardRecord]:
-    """Gather a fixed shard layout on every rank; write only on process zero.
+    """Replicate tensors on every rank; copy to CPU and write only on process zero.
 
+    One writer supports host-local paths and process-zero HF upload callbacks.
     All ranks use matching shard/key order, shapes and dtypes. tensor_names names
     slices along each tensor's first axis. Device staging needs one full tensor.
     Reserve twice each shard's payload; oversized shards run alone. With one worker,
@@ -252,15 +263,10 @@ def save_hf_shards(
                 weights = load_shard(tuple(shapes))
                 for key in shapes:
                     replicated = jax.sharding.reshard(weights[key], P())
-                    host = np.asarray(multihost_utils.process_allgather(replicated, tiled=True), order="C")
+                    replicated.block_until_ready()
+                    outputs = tensor_names[key] if tensor_names is not None else (key,)
+                    run_on_export_writer(lambda: _add_host_tensor(tensors, key, replicated, outputs))
                     del replicated
-                    if jax.process_index() == 0:
-                        outputs = tensor_names[key] if tensor_names is not None else (key,)
-                        if outputs == (key,):
-                            tensors[key] = host
-                        else:
-                            tensors.update(zip(outputs, host, strict=True))
-                    del host
                 del weights
 
                 run_on_export_writer(lambda: writer.submit(filename, tensors, names, reserved_bytes))

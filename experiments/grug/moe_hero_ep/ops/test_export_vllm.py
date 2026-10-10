@@ -17,6 +17,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
 
+import experiments.grug.moe_hero_ep.ops.export_vllm as hero_export
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
@@ -79,11 +80,13 @@ def reload_export(root: Path) -> tuple[dict, dict[str, np.ndarray]]:
     return index, tensors
 
 
-def test_native_export_preserves_all_weights_and_config(tmp_path):
+def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(hero_export, "DEFAULT_MAX_SHARD_SIZE", 4096)
     request, model = native_fixture(str(tmp_path / "checkpoint"), master=True)
     export(request)
     root = Path(request.destination)
-    _, tensors = reload_export(root)
+    index, tensors = reload_export(root)
+    assert len(set(index["weight_map"].values())) > 1
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         # The established HF mapping is the oracle for unchanged ordinary weights.
         expected = model.to_state_dict()
@@ -108,12 +111,15 @@ def test_native_export_preserves_all_weights_and_config(tmp_path):
 
 
 def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(hero_export, "DEFAULT_MAX_SHARD_SIZE", 4096)
     request, _ = native_fixture(str(tmp_path / "checkpoint"))
     root = Path(request.destination)
     original_save = hf_export.save_file
+    written = []
 
     def interrupt_write(tensors, path, **kwargs):
-        if path.name == "model-layer-000.safetensors":
+        written.append(path)
+        if len(written) == 2:
             path.write_bytes(b"interrupted")
             raise OSError("write interrupted")
         original_save(tensors, path, **kwargs)
@@ -123,25 +129,25 @@ def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path
         with pytest.raises(OSError, match="write interrupted"):
             export(request)
     assert not (root / "export-manifest.json").exists()
-    global_shard = root / "model-global.safetensors"
+    completed_shard = written[0]
     # A resume with a different config must not reuse existing shards.
     with pytest.raises(FileExistsError):
         export(dataclasses.replace(request, model=dataclasses.replace(request.model, qk_mult=1.5)))
 
     # Corruption with unchanged size must stop resume and preserve the damaged object.
-    original = global_shard.read_bytes()
+    original = completed_shard.read_bytes()
     corrupted = original[:-1] + bytes([original[-1] ^ 1])
-    global_shard.write_bytes(corrupted)
+    completed_shard.write_bytes(corrupted)
     with pytest.raises(ValueError, match="integrity"):
         export(request)
-    assert global_shard.read_bytes() == corrupted
+    assert completed_shard.read_bytes() == corrupted
     assert not (root / "export-manifest.json").exists()
-    global_shard.write_bytes(original)
-    committed_mtime = global_shard.stat().st_mtime_ns
+    completed_shard.write_bytes(original)
+    committed_mtime = completed_shard.stat().st_mtime_ns
 
     export(request)
     reload_export(root)
-    assert global_shard.stat().st_mtime_ns == committed_mtime
+    assert completed_shard.stat().st_mtime_ns == committed_mtime
     before = {path.name: path.read_bytes() for path in root.iterdir()}
     with pytest.raises(FileExistsError):
         export(request)

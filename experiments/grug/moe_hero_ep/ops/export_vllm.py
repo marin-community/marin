@@ -13,6 +13,7 @@ import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, _shard_hf_checkpoint
 from levanter.compat.hf_export import HFShardResume, run_on_export_writer, save_hf_shards, write_export_json
 from levanter.distributed import DistributedConfig
 from levanter.grug.sharding import compact_grug_mesh
@@ -27,7 +28,7 @@ from experiments.grug.moe_hero_ep.weights import restore_weights
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
 INDEX_FILENAME = "model.safetensors.index.json"
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
 EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
 
 
@@ -78,21 +79,13 @@ def export(config: ExportConfig) -> None:
         jax.block_until_ready(model)
         gc.collect()
         state_dict = grugmoe_inference_state_dict(model)
-        groups: dict[str, list[str]] = {}
-        for name in state_dict:
-            match = re.match(r"^model\.layers\.(\d+)\.", name)
-            group = f"layer-{int(match[1]):03d}" if match else "global"
-            groups.setdefault(group, []).append(name)
-
-        shards = {
-            f"model-{group}.safetensors": {name: state_dict[name] for name in names} for group, names in groups.items()
-        }
+        shards, _ = _shard_hf_checkpoint(state_dict, max_shard_size=DEFAULT_MAX_SHARD_SIZE)
         tensor_names = {name: tuple(_split_names(name, config.model.num_experts)) for name in state_dict}
         records = save_hf_shards(
             shards,
             lambda keys: {name: state_dict[name] for name in keys},
             config.destination,
-            # One writer and an oversized-shard budget stage only one layer plus serialization buffers.
+            # One writer stages one planned shard plus serialization buffers.
             export_host_budget_bytes=1,
             max_concurrent_shards=1,
             resume=HFShardResume(root, export_id),
