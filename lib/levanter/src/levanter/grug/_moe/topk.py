@@ -5,15 +5,18 @@
 
 XLA:GPU uses its own top-k kernel only for rows of at least 1,024 elements (``TopkSpecializer``).
 Narrower rows, such as a router's logits over a few hundred experts, fall back to a full sort of
-every row followed by a slice: 1.2 ms per call at the hero's ``[65536, 384]`` on GB200.
+every row followed by a slice: 1.2 ms per call at the hero's ``[65536, 384]`` on GB200. ROCm lowers
+the same call to rocprim radix sorts.
 
 Here one warp holds one row in registers, as one power-of-two tile or, when it pads less, three
 equal power-of-two tiles (a 384-wide row needs no padding), and takes ``k`` successive maxima. Each
 step reduces twice: the largest key, then the lowest column holding it. The key is the float32 bit
 pattern with the magnitude bits of negative values flipped, the total order XLA's sort comparator
 uses, so ``+0`` ranks above ``-0`` and a positive NaN above ``+inf``. The indices and their order are
-therefore those of ``jax.lax.top_k`` for every input, including ties, signed zeros and NaNs. Rows of
-1,024 or more go to ``jax.lax.top_k``, which XLA then runs on its own kernel.
+therefore those of ``jax.lax.top_k`` on CPU and CUDA for every input, including ties, signed zeros
+and NaNs. ROCm's ``jax.lax.top_k`` ties ``-0`` with ``+0`` and orders NaN payloads differently, so
+on ROCm the two differ on rows whose top k reach such values. Rows of 1,024 or more go to
+``jax.lax.top_k``, which XLA then runs on its own kernel.
 
 A taken or absent entry gets the smallest key and the column ``n``, which the lowest-column
 reduction never returns. The column marks the entry dead because a negative NaN such as 0xFFFFFFFF
@@ -120,11 +123,11 @@ def _tile_layout(n: int) -> tuple[int, int]:
 
 
 def top_k_indices(x: Float[Array, "T N"], k: int) -> Int[Array, "T K"]:
-    """Indices of the ``k`` largest entries of each row, in ``jax.lax.top_k``'s order.
+    """Indices of the ``k`` largest entries of each row, in ``jax.lax.top_k``'s order on CPU and CUDA.
 
-    Runs the Triton kernel for float32 rows of fewer than 1,024 entries on GPU, and
-    ``jax.lax.top_k`` otherwise. The kernel has no partitioning rule, so under a sharded mesh call
-    it inside ``shard_map``.
+    Runs the Triton kernel for float32 rows of fewer than 1,024 entries on an NVIDIA or AMD GPU with
+    ``jax_triton`` installed, and ``jax.lax.top_k`` otherwise. The kernel has no partitioning rule, so
+    under a sharded mesh call it inside ``shard_map``.
     """
     if x.ndim != 2:
         raise ValueError(f"expected a [T, N] array, got shape {x.shape}")

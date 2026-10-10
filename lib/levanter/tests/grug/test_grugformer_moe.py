@@ -918,8 +918,14 @@ _TOP_K_CASES = [
 ]
 
 
+def _cpu_top_k_indices(values: jax.Array, k: int) -> jax.Array:
+    # ROCm's lax.top_k ties -0 with +0 and reorders NaN payloads; XLA:CPU keeps the total order.
+    with jax.default_device(jax.devices("cpu")[0]):
+        return jax.lax.top_k(np.asarray(values), k)[1]
+
+
 def test_top_k_indices_run_inside_a_checking_shard_map_on_gpu():
-    # The hero calls the kernel per token shard, inside a shard_map that checks varying axes.
+    # Routing calls the kernel per token shard, inside a shard_map that checks varying axes.
     _skip_without_sonic_gpu_runtime()
     devices = jax.devices()
     mesh = Mesh(np.asarray(devices), ("data",), axis_types=(AxisType.Explicit,))
@@ -935,7 +941,7 @@ def test_top_k_indices_run_inside_a_checking_shard_map_on_gpu():
             )
         )(jax.sharding.reshard(values, P("data", None)))
 
-    expected = jax.jit(lambda v: jax.lax.top_k(v, 9)[1])(values)
+    expected = _cpu_top_k_indices(values, 9)
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 
@@ -946,7 +952,7 @@ def test_top_k_indices_match_lax_top_k_on_gpu(rows, width, k):
 
     actual = jax.jit(lambda v: top_k_indices(v, k))(values)
 
-    expected = jax.jit(lambda v: jax.lax.top_k(v, k)[1])(values)
+    expected = _cpu_top_k_indices(values, k)
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 
