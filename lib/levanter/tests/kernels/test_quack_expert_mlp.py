@@ -115,6 +115,43 @@ def test_expert_mlp_backward_row_dot_is_the_output_scale_gradient():
     _assert_bfloat16_close(row_dot, expected)
 
 
+@pytest.mark.parametrize("tail_rows", [0, 127])
+def test_relu2_expert_mlp_forward_gradients_and_row_dot_match_reference(tail_rows):
+    _require_sm100()
+    sonic = importlib.import_module("levanter.grug._moe.sonic_cute")
+    rng = np.random.default_rng(13)
+    x = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
+    w_up = jnp.asarray(rng.normal(0, 0.2, (3, 64, 128)), dtype=jnp.bfloat16)
+    w_down = jnp.asarray(rng.normal(0, 0.2, (3, 128, 64)), dtype=jnp.bfloat16)
+    dy = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
+    # Unused capacity must not affect active outputs or any expert weight gradient.
+    x = jnp.pad(x, ((0, tail_rows), (0, 0)), constant_values=jnp.nan)
+    dy = jnp.pad(dy, ((0, tail_rows), (0, 0)), constant_values=jnp.nan)
+    cu = jnp.asarray(_CU_SEQLENS, dtype=jnp.int32)
+
+    def reference(a, b, c):
+        outputs = []
+        for expert, start, stop in [(0, 0, _EXPERT_SPLIT), (2, _EXPERT_SPLIT, _NUM_TOKENS)]:
+            outputs.append(jnp.square(jax.nn.relu(a[start:stop] @ b[expert])) @ c[expert])
+        return jnp.concatenate(outputs)
+
+    @jax.jit
+    def run(a, b, c, dy):
+        y, residuals = sonic._relu2_expert_mlp_quack_fwd(a, b, c, cu)
+        return y, sonic._relu2_expert_mlp_quack_backward(residuals, dy)
+
+    actual, (dx, dw_up, dw_down, row_dot) = run(x, w_up, w_down, dy)
+    as_f32 = lambda a: a.astype(jnp.float32)  # noqa: E731
+    expected, expected_pullback = jax.vjp(jax.jit(reference), as_f32(x[:_NUM_TOKENS]), as_f32(w_up), as_f32(w_down))
+    _assert_bfloat16_close(actual[:_NUM_TOKENS], expected)
+    expected_dx, expected_dw_up, expected_dw_down = expected_pullback(as_f32(dy[:_NUM_TOKENS]))
+    _assert_bfloat16_close(dx[:_NUM_TOKENS], expected_dx)
+    _assert_bfloat16_close(dw_up, expected_dw_up)
+    _assert_bfloat16_close(dw_down, expected_dw_down)
+    # The row dot is d/ds of <s * y, dy> for a per-row scale s, without reading y.
+    _assert_bfloat16_close(row_dot[:_NUM_TOKENS], jnp.sum(expected * as_f32(dy[:_NUM_TOKENS]), axis=-1))
+
+
 def test_muon_symmetric_gemm_matches_gram_matrix():
     _require_sm100()
     kernels = importlib.import_module("levanter.grug._moe.quack_symmetric_cute")

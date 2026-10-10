@@ -248,6 +248,31 @@ class _CuteExpertMlp:
         return dx, _deinterleave_gate_up(dw13_interleaved), dw2, output_dot_cotangent
 
 
+@dataclasses.dataclass(frozen=True)
+class _CuteRelu2ExpertMlp:
+    """Ungated ReLU^2 experts on QuACK's SM100 grouped GEMMs, activation path and weight gradients alike.
+
+    ReLU^2 is fused into the up-projection's epilogue and its backward into the epilogue of the
+    ``d post`` GEMM. Like ``_CuteExpertMlp``, the kernels take the active sizes and leave trailing
+    rows unspecified.
+    """
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+        from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_fwd  # noqa: PLC0415
+
+        cumulative_group_sizes = jnp.concatenate(
+            [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
+        )
+        return _relu2_expert_mlp_quack_fwd(x_dispatch, moe_w13_local, moe_w2_local, cumulative_group_sizes)
+
+    def backward(self, residuals, cotangent):
+        from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_backward  # noqa: PLC0415
+
+        return _relu2_expert_mlp_quack_backward(residuals, cotangent)
+
+
 @functools.cache
 def _quack_grouped_gemm_available() -> bool:
     if jax.default_backend() != "gpu":
@@ -272,12 +297,15 @@ def _quack_grouped_gemm_available() -> bool:
 def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungated: bool) -> _ExpertMlp:
     """Pick the fastest expert-MLP kernel this process can actually run.
 
-    QuACK's kernel fuses SwiGLU, so it only applies to gated SiLU; ``fused_relu2`` on ungated
-    experts selects the fused ReLU^2 grouped GEMMs. Everything else -- another activation, a
-    non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the portable
-    `ragged_dot` path, which computes the same function.
+    QuACK's SM100 kernels fuse SwiGLU for gated SiLU experts and ReLU^2 for ungated ``fused_relu2``
+    experts. Without them, ``fused_relu2`` on ungated experts selects the Pallas fused ReLU^2
+    grouped GEMMs. Everything else -- another activation, a non-SM100 GPU, a TPU or CPU, or a
+    build without the GPU extra -- runs the portable `ragged_dot` path, which computes the same
+    function.
     """
     if ungated and activation_fn is fused_relu2:
+        if _quack_grouped_gemm_available():
+            return _CuteRelu2ExpertMlp()
         return _FusedRelu2ExpertMlp("pallas_gpu" if jax.default_backend() == "gpu" else "reference")
     if not ungated and activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
         return _CuteExpertMlp()

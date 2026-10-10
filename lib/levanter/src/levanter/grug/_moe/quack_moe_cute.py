@@ -2,15 +2,18 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vendored CuTeDSL→JAX shim for QuACK's SM100 gated grouped GEMM (SonicMoE kernel).
+"""Vendored CuTeDSL→JAX shim for QuACK's SM100 grouped GEMMs (SonicMoE kernels).
 
 Mirrors David's `_fa4_cute_backend.py` pattern: build a thin ``@cute.jit`` launcher
 with the JAX ``cutlass_call`` signature ``(stream, *inputs, *outputs, **scalars)``
-that composes QuACK's SM100 kernel with a gated epilogue, then wrap it with
-``cutlass.jax.cutlass_call``. Forward-only for now (grouped SwiGLU): tokens are
-pre-sorted by expert (varlen_m via ``cu_seqlens_m``; no A_idx gather).
+that composes QuACK's SM100 kernel with an epilogue, then wrap it with
+``cutlass.jax.cutlass_call``. Tokens are pre-sorted by expert (varlen_m via
+``cu_seqlens_m``; no A_idx gather). Launchers:
 
-A[M,K] @ B[E,K,2N]  -> (per expert group) -> SwiGLU -> PostAct[M,N]
+  gated      A[M,K] @ B[E,K,2N] -> SwiGLU -> PostAct[M,N]
+  act        A[M,K] @ B[E,K,N]  -> (PreAct, act(PreAct))            ungated forward
+  dact       A[M,K] @ B[E,N,K]^T, C = PreAct -> (dPreAct, act(PreAct), row dot)
+  plain      A[M,K] @ B -> D, grouped over rows (varlen_m) or the contraction (varlen_k)
 """
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
 from quack.cute_dsl_utils import get_max_active_clusters
-from quack.epilogue.library import linear_act_mod
+from quack.epilogue.library import dact_mod, linear_act_mod
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
@@ -60,6 +63,26 @@ def _max_active_clusters(cluster_mnk) -> int:
     return get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
 
 
+def _mint_epilogue_gemm(epilogue, *, kind_sig, paired_acc):
+    """Mint the SM100 GEMM class for a QuACK epilogue mod.
+
+    QuACK 0.6.4 composes fused GEMMs from epilogues. Mint the kernel directly because its public
+    launch planner accepts Torch tensors, while these launchers receive CuTe tensors.
+    ``kind_sig`` names the epilogue's tensor operands in the kernel's terms (``("c", "c")`` for a
+    mod that reads the C operand); ``paired_acc`` is the gated mods' adjacent-column pairing.
+    """
+    return epilogue._mint(
+        kind_sig=kind_sig,
+        sm=10,
+        paired_acc=paired_acc,
+        packed_c=False,
+        prepass_sig=(),
+        rounding=RoundingMode.RN,
+        arg_forms=(),
+        add_to_output=False,
+    )
+
+
 @cute_launcher_factory
 def _build_launcher(
     *, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle, use_clc_persistence=False
@@ -71,18 +94,7 @@ def _build_launcher(
       mD:[M,2N] preact out (n-major)  mPostAct:[M,N] swiglu out (n-major)
     """
     epilogue = linear_act_mod(activation, gated=True, has_c=False, has_rowvec=False, has_colvec=False)
-    # QuACK 0.6.4 composes gated GEMMs from epilogues. Mint the kernel directly because
-    # its public launch planner accepts Torch tensors, while this launcher receives CuTe tensors.
-    gemm_type = epilogue._mint(
-        kind_sig=(),
-        sm=10,
-        paired_acc=True,
-        packed_c=False,
-        prepass_sig=(),
-        rounding=RoundingMode.RN,
-        arg_forms=(),
-        add_to_output=False,
-    )
+    gemm_type = _mint_epilogue_gemm(epilogue, kind_sig=(), paired_acc=True)
 
     @cute.jit
     def launcher(stream, mA, mB, mCuSeqlens, mD, mPostAct):
@@ -155,6 +167,182 @@ def quack_gated_grouped_gemm(
     )
     preact, postact = call(x_sort, w_gate_up, cu_seqlens.astype(jnp.int32))
     return (preact, postact) if return_preact else postact
+
+
+@cute_launcher_factory
+def _build_act_launcher(
+    *, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle, use_clc_persistence
+):
+    """Return a ``@cute.jit`` ungated activation launcher with the cutlass_call signature.
+
+    Signature: (stream, mA, mB, mCuSeqlens, mD, mPostAct)
+      mA:[M,K] tokens (k-major)  mB:[E,K,N] weights  mCuSeqlens:[E+1] int32
+      mD:[M,N] preact out (n-major)  mPostAct:[M,N] act(preact) out (n-major)
+    """
+    epilogue = linear_act_mod(activation, gated=False, has_c=False, has_rowvec=False, has_colvec=False)
+    gemm_type = _mint_epilogue_gemm(epilogue, kind_sig=(), paired_acc=False)
+
+    @cute.jit
+    def launcher(stream, mA, mB, mCuSeqlens, mD, mPostAct):
+        gemm = gemm_type(
+            _ACC,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=use_clc_persistence,
+            use_pdl=_QUACK_USE_PDL,
+        )
+        epi_args = gemm_type.EpilogueArguments(mAuxOut=mPostAct)
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        varlen_args = make_varlen_args(mCuSeqlens, None, None)
+        gemm(mA, mB, mD, None, epi_args, scheduler_args, varlen_args, stream)
+
+    return launcher
+
+
+@cute_launcher_factory
+def _build_dact_launcher(
+    *, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle, use_clc_persistence
+):
+    """Return a ``@cute.jit`` activation-backward launcher with the cutlass_call signature.
+
+    The accumulator is ``dpostact``; the epilogue reads the saved preactivation as C and emits
+    ``dpreact``, the recomputed ``act(preact)``, and per-CTA-tile partials of the row dot
+    ``<act(preact), dpostact>`` (QuACK's ``dact_mod`` with its reduce on).
+
+    Signature: (stream, mA, mB, mCuSeqlens, mC, mD, mPostAct, mDotPartials)
+      mA:[M,K] dpostact's cotangent source (k-major)  mB:[E,N,K] weights (k-major)
+      mCuSeqlens:[E+1] int32  mC:[M,N] preact  mD:[M,N] dpreact  mPostAct:[M,N] act(preact)
+      mDotPartials:[M, ceil(N / tile_n)] fp32
+    """
+    epilogue = dact_mod(activation, has_scale=False, has_reduce=True)
+    gemm_type = _mint_epilogue_gemm(epilogue, kind_sig=(("c", "c"),), paired_acc=False)
+
+    @cute.jit
+    def launcher(stream, mA, mB, mCuSeqlens, mC, mD, mPostAct, mDotPartials):
+        gemm = gemm_type(
+            _ACC,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=use_clc_persistence,
+            use_pdl=_QUACK_USE_PDL,
+        )
+        epi_args = gemm_type.EpilogueArguments(mAuxOut=mPostAct, mColVecReduce=mDotPartials)
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        varlen_args = make_varlen_args(mCuSeqlens, None, None)
+        gemm(mA, mB, mD, mC, epi_args, scheduler_args, varlen_args, stream)
+
+    return launcher
+
+
+def quack_act_grouped_gemm(
+    x_sort,
+    w,
+    cu_seqlens,
+    *,
+    activation,
+    tile_mn=(256, 128),
+    cluster_mnk=(2, 1, 1),
+    max_swizzle=8,
+    use_clc_persistence=False,
+):
+    """Grouped ungated ``act(x @ w)`` on QuACK's SM100 kernel, keeping the preactivation.
+
+    x_sort: [M, K] tokens sorted by expert. w: [E, K, N]. cu_seqlens: [E+1] int32.
+    ``activation`` is a key of QuACK's ``act_fn_map`` (e.g. ``"relu_sq"``).
+    Returns ``(preact, postact)``, both [M, N]; rows past ``cu_seqlens[-1]`` are unspecified.
+    """
+    M = x_sort.shape[0]
+    N = w.shape[2]
+    launcher = _build_act_launcher(
+        a_dtype=_cute_dtype(x_sort.dtype),
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        activation=activation,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+        use_clc_persistence=use_clc_persistence,
+    )
+    ts = cjax.TensorSpec
+    row_spec = ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False)
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=(
+            jax.ShapeDtypeStruct((M, N), x_sort.dtype),
+            jax.ShapeDtypeStruct((M, N), x_sort.dtype),
+        ),
+        # w is physically [E,K,N]; present the n-major logical order [E,N,K].
+        input_spec=(
+            row_spec,
+            ts(mode=(0, 2, 1), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False),
+            ts(static=False),
+        ),
+        output_spec=(row_spec, row_spec),
+        use_static_tensors=False,
+    )
+    return call(x_sort, w, cu_seqlens.astype(jnp.int32))
+
+
+def quack_dact_grouped_gemm(
+    dout,
+    w,
+    preact,
+    cu_seqlens,
+    *,
+    activation,
+    tile_mn=(256, 128),
+    cluster_mnk=(2, 1, 1),
+    max_swizzle=8,
+    use_clc_persistence=False,
+):
+    """Backward of ``act`` fused into the grouped GEMM that produces its incoming gradient.
+
+    ``dpostact = dout @ w[e]^T`` per expert group, with dout: [M, K] and w: [E, N, K] (the
+    forward's next weight, contracted over its output dim). preact: [M, N], the saved input of
+    ``act``. Returns ``(dpreact, postact, row_dot)``: ``dpreact = act'(preact) * dpostact`` and the
+    recomputed ``postact = act(preact)``, both [M, N], and ``row_dot[m] = <postact, dpostact>`` in
+    fp32, [M]. Rows past ``cu_seqlens[-1]`` are unspecified in all three.
+    """
+    M = dout.shape[0]
+    N = w.shape[1]
+    if preact.shape != (M, N):
+        raise ValueError(f"preact must be {(M, N)}, got {preact.shape}")
+    launcher = _build_dact_launcher(
+        a_dtype=_cute_dtype(dout.dtype),
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        activation=activation,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+        use_clc_persistence=use_clc_persistence,
+    )
+    ts = cjax.TensorSpec
+    row_spec = ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False)
+    # The reduce writes one fp32 partial per (row, N tile); QuACK sizes the tiles by the config
+    # tile's N, which the 2-CTA MMA leaves whole.
+    n_tiles = -(-N // tile_mn[1])
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=(
+            jax.ShapeDtypeStruct((M, N), dout.dtype),
+            jax.ShapeDtypeStruct((M, N), preact.dtype),
+            jax.ShapeDtypeStruct((M, n_tiles), jnp.float32),
+        ),
+        # w is physically [E,N,K], already the k-major logical order.
+        input_spec=(
+            row_spec,
+            ts(mode=(0, 1, 2), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False),
+            ts(static=False),
+            row_spec,
+        ),
+        output_spec=(row_spec, row_spec, ts(static=False)),
+        use_static_tensors=False,
+    )
+    dpreact, postact, dot_partials = call(dout, w, cu_seqlens.astype(jnp.int32), preact)
+    return dpreact, postact, jnp.sum(dot_partials, axis=-1)
 
 
 @cute_launcher_factory
