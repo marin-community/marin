@@ -249,7 +249,8 @@ def inference_mesh(num_chips: int, tensor_parallel_size: int) -> MeshConfig:
             num_chips,
             data,
         )
-    return MeshConfig(axes={"replica": 1, "data": data, "model": tensor_parallel_size})
+    # Snowball's raw PartitionSpecs name expert and context even when both dimensions are inactive.
+    return MeshConfig(axes={"replica": 1, "data": data, "model": tensor_parallel_size, "expert": 1, "context": 1})
 
 
 def validate_levanter_dtype(dtype: str) -> str:

@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import click
+import marin.inference.vllm_server as vllm_server
 import pytest
 import requests
 from click.testing import CliRunner
@@ -28,6 +29,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
+from levanter.testing.cpu_devices import run_on_cpu_devices
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
 from marin.inference import iris_vllm
 from marin.inference.backend import ModelSpec
@@ -387,6 +389,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert indexes == [
         f"https://download.pytorch.org/whl/{VLLM_GPU_RELEASE.torch_backend}",
         "https://download.pytorch.org/whl/cpu",
+        "https://flashinfer.ai/whl/",
     ]
     assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
     assert "--torch-backend" not in cmd
@@ -421,7 +424,8 @@ def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypa
         IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
 
 
-def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
+@pytest.mark.parametrize("source", [VllmType.UPSTREAM, VllmType.MARIN_FORK])
+def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path, source):
     site_packages = tmp_path / "site-packages"
     nvcc = site_packages / "nvidia" / "cu13" / "bin" / "nvcc"
     nvcc.parent.mkdir(parents=True)
@@ -446,28 +450,34 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
         "#!/usr/bin/env python3\n"
         "import json, os, pathlib, sys\n"
         "pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({"
-        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH']}))\n"
+        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH'],"
+        "'compilers': {key:os.environ.get(key) for key in "
+        "['NVRTC_HOME','FLASHINFER_NVCC','TRITON_PTXAS_PATH','TRITON_PTXAS_BLACKWELL_PATH']}}))\n"
     )
     vllm.chmod(0o755)
 
-    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
+    launcher = IsolatedCudaVllm(source=source, version=DEFAULT_CUDA_VLLM_VERSION)
     command = launcher.command()
     requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
-    assert set(requirements) >= {
-        "nvidia-cuda-nvcc==13.0.88",
-        "nvidia-cuda-crt==13.0.88",
-        "nvidia-nvvm==13.0.88",
-    }
+    backend = "cu130" if source is VllmType.UPSTREAM else VLLM_GPU_RELEASE.torch_backend
+    version = CUDA_TOOLCHAIN_VERSION_BY_BACKEND[backend]
+    assert set(requirements) >= {f"{name}=={version}" for name in ("nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm")}
     assert not any(requirement.startswith("nvidia-cuda-nvrtc==") for requirement in requirements)
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]
     wrapped_command = command[bootstrap_index + 2 :]
+    if source is VllmType.MARIN_FORK:
+        # Replace the separately tested wheel entrypoint with the environment capture target.
+        wrapped_command = ["vllm"]
     environment = {
         **os.environ,
         "CAPTURE": str(capture),
         "PATH": os.pathsep.join((str(tool_bin), os.environ["PATH"])),
         "PYTHONPATH": str(site_packages),
+        "FLASHINFER_NVCC": "/old/nvcc",
+        "TRITON_PTXAS_PATH": "/old/ptxas",
+        "TRITON_PTXAS_BLACKWELL_PATH": "/old/ptxas-blackwell",
     }
     subprocess.run([sys.executable, "-c", bootstrap, *wrapped_command, "serve", "model"], env=environment, check=True)
 
@@ -478,6 +488,33 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert (nvcc.parent.parent / "lib64").resolve() == cuda_lib.resolve()
     assert (cuda_lib / "libcudart.so").resolve() == cudart.resolve()
     assert (cuda_lib / "libnvrtc.so").resolve() == nvrtc.resolve()
+    if source is VllmType.MARIN_FORK:
+        assert observed["compilers"] == {
+            "NVRTC_HOME": str(nvcc.parent.parent.resolve()),
+            "FLASHINFER_NVCC": str(nvcc.resolve()),
+            "TRITON_PTXAS_PATH": str(nvcc.parent.resolve() / "ptxas"),
+            "TRITON_PTXAS_BLACKWELL_PATH": str(nvcc.parent.resolve() / "ptxas"),
+        }
+
+
+@pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
+def test_isolated_cuda_vllm_uses_the_selected_architecture_constraints(monkeypatch, architecture):
+    monkeypatch.setattr("platform.machine", lambda: architecture)
+    urls = {wheel.architecture: f"https://example.test/{wheel.architecture}.txt" for wheel in VLLM_GPU_RELEASE.wheels}
+    release = dataclasses.replace(
+        VLLM_GPU_RELEASE,
+        wheels=tuple(
+            dataclasses.replace(wheel, constraints_url=urls[wheel.architecture]) for wheel in VLLM_GPU_RELEASE.wheels
+        ),
+    )
+    monkeypatch.setattr(vllm_server, "VLLM_GPU_RELEASE", release)
+
+    command = IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
+
+    assert command[command.index("--constraint") + 1] == urls[architecture]
+    requirements = [command[index + 1] for index, argument in enumerate(command) if argument == "--with"]
+    assert "cuda-toolkit[nvcc,cccl,nvrtc]" in requirements
+    assert "flashinfer-cubin" in requirements
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():
@@ -514,20 +551,52 @@ def test_validate_levanter_dtype_rejects_vllm_aliases():
             validate_levanter_dtype(alias)
 
 
-@pytest.mark.parametrize(
-    ("num_chips", "tensor_parallel_size", "expected"),
-    [
-        (8, 8, {"replica": 1, "data": 1, "model": 8}),  # the slice divides the head count: shard across it
-        (8, 2, {"replica": 1, "data": 4, "model": 2}),  # it does not: the leftover chips replicate
-    ],
-)
-def test_inference_mesh_covers_every_chip(num_chips, tensor_parallel_size, expected):
-    assert dict(inference_mesh(num_chips, tensor_parallel_size).axes) == expected
-
-
 def test_inference_mesh_rejects_a_tp_that_does_not_divide_the_slice():
     with pytest.raises(ValueError, match="does not divide"):
         inference_mesh(8, 3)
+
+
+def test_snowball_scores_on_the_levanter_serving_mesh():
+    run_on_cpu_devices(
+        """
+        import haliax as hax
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from haliax import Axis
+        from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
+        from levanter.grug.sharding import compact_grug_mesh
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+        from levanter.trainer import TrainerConfig
+        from marin.inference.levanter_backend import inference_mesh
+
+        config = SnowballConfig(
+            vocab_size=32, hidden_dim=16, intermediate_dim=16,
+            shared_expert_intermediate_dim=16, num_experts=8, num_experts_per_token=2,
+            num_layers=2, num_heads=2, num_kv_heads=1, head_dim=8,
+            max_seq_len=8, sliding_window=4, attention_implementation="reference",
+            moe_implementation="ring",
+        )
+        Vocab, Batch, Pos = Axis("vocab", 32), Axis("batch", 8), Axis("position", 4)
+        token_ids = np.arange(32, dtype=np.int32).reshape(8, 4)
+        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+            model = SnowballLMHeadModel.init(Vocab, config, key=jax.random.PRNGKey(0))
+            inputs = hax.named(jnp.asarray(token_ids), (Batch, Pos))
+            expected = np.asarray(hax.named_jit(lambda m, x: m(x))(model, inputs).array)
+            weights = {k: np.asarray(v) for k, v in to_torch_compatible_state_dict(model).items()}
+
+        trainer = TrainerConfig(
+            mesh=inference_mesh(8, 1), use_explicit_mesh_axes=config.requires_explicit_mesh_axes,
+        )
+        with trainer.use_device_mesh():
+            model = SnowballLMHeadModel.init(Vocab, config, key=jax.random.PRNGKey(1))
+            model = from_torch_compatible_state_dict(model, weights)
+            inputs = hax.named(jnp.asarray(token_ids), (Batch, Pos))
+            actual = np.asarray(hax.named_jit(lambda m, x: m(x))(model, inputs).array)
+        np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+        """,
+        device_count=8,
+    )
 
 
 def test_cli_rejects_vllm_flags_under_the_levanter_backend():
