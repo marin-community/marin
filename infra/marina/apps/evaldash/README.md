@@ -52,6 +52,13 @@ expanding each serve group to its evals, plus a flat filterable table), run deta
 interval and ungraded-item breakdown, metrics, version + description, live iris job/attempt status,
 live finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest probes).
 
+Run filters search the full catalog before applying the result limit. Model and eval pickers
+search the catalog's names by case-insensitive word fragments and support arrow keys, Enter,
+and Escape. Filters, result limit, and launch/flat view are carried in the run-log URL.
+Runs span all cohorts; the cohort carried by the shell navigation applies to scored views.
+Filtering launches by eval retains all their sibling runs and the full launch's status.
+`/meta` returns `run_facets` over all records, including smoke runs, separately from panel facets.
+
 Model detail links record the selected cohort in `?cohort=`, including `all` and `unversioned`,
 so reopening a link restores the same runs and scores. Links without a cohort resolve to the
 dashboard's default cohort and add it to the URL.
@@ -86,8 +93,8 @@ The kernel is the only access gate; there is no application auth. Handlers read 
 The kernel mounts these under `/evaldash/api/`.
 
 ```
-GET  /runs?model=&eval=&user=&status=&group=&limit=   filtered run rows
-GET  /groups?model=&user=&limit=   runs collapsed into launches (one row per group_id) with per-eval members
+GET  /runs?model=&eval=&user=&status=&version=&accelerator=&group=&limit=   filtered run rows
+GET  /groups?model=&eval=&user=&status=&version=&accelerator=&limit=   runs collapsed into launches (one row per group_id) with per-eval members
 GET  /runs/{run_id}     the full record.json for one run (404 if absent)
 GET  /runs/{run_id}/jobs           live iris job + per-task attempt status for each role
 GET  /runs/{run_id}/logs?role=&tail=&substring=   live finelog log lines for one role
@@ -148,7 +155,9 @@ The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-2
 The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
 and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
-in the selected cohort and benchmarks.
+in the selected cohort and benchmarks. Compare's searchable Add model dropdown supports up to four
+selections, with controls to remove one model or clear the set. Model names wrap in the picker,
+comparison results, and model cards; config digests remain visible on a separate line.
 
 Historical cohort labels remain selectable. `cohort=all` selects the newest admissible run per
 benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects

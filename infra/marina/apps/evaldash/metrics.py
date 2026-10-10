@@ -445,6 +445,14 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
 def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
     """Return panel filter metadata and all known variants for each family."""
     all_models = sorted({comparison_model_name(record.model) for record in records})
+    run_facets = {
+        "model": all_models,
+        "eval": sorted({r.evaluation.name for r in records}),
+        "version": sorted({r.version for r in records if r.version}),
+        "status": sorted({r.status.value for r in records}),
+        "user": sorted({r.user for r in records if r.user}),
+        "accelerator": sorted({r.hardware.accelerator for r in records if r.hardware.accelerator}),
+    }
     records = _panel_records(records)
     eval_names = {r.evaluation.name for r in records}
     by_family = group_by_family(sorted(eval_names), declared_families(records))
@@ -454,6 +462,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
     }
     return {
         "models": all_models,
+        "run_facets": run_facets,
         "default_cohort": SEPTEMBER_24_VERSION,
         "verified_cohorts": list(POLICIES),
         "evals": sorted(eval_names),

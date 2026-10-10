@@ -12,6 +12,7 @@ import { fleetBest } from '@/utils/panel'
 import type { Panel, PanelRow } from '@/types/api'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import ModelName from '@/components/shared/ModelName.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -26,7 +27,7 @@ const panelQuery = computed(() => {
   if (showArchived.value) params.set('include_archived', '1')
   return `api/panel?${params.toString()}`
 })
-const { data, refresh } = useApi<Panel>(() => panelQuery.value)
+const { data, loading, error, refresh } = useApi<Panel>(() => panelQuery.value)
 watch(panelQuery, refresh)
 
 onMounted(refresh)
@@ -67,8 +68,9 @@ function open(model: string) {
       <input
         v-model="query"
         type="search"
+        aria-label="Filter models"
         placeholder="Filter models…"
-        class="rounded border border-surface-border bg-surface px-3 py-1.5 text-sm font-mono min-w-[16rem]"
+        class="rounded border border-surface-border bg-surface px-3 py-1.5 text-sm font-mono w-full sm:w-80 min-w-0"
       />
       <label class="flex items-center gap-2 text-sm text-text-secondary">
         <input v-model="showArchived" type="checkbox" class="accent-accent" />
@@ -77,20 +79,26 @@ function open(model: string) {
       <span class="text-xs text-text-muted ml-auto">{{ models.length }} models</span>
     </div>
 
-    <EmptyState v-if="data && models.length === 0" icon="🔎" message="No models match." />
+    <p v-if="loading" class="text-sm text-text-muted" role="status">Loading models…</p>
+    <div v-else-if="error" role="alert" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">
+      Could not load models: {{ error }}
+      <button type="button" class="ml-3 underline" @click="refresh">Retry</button>
+    </div>
+    <EmptyState v-else-if="data && models.length === 0" icon="🔎" message="No models match." />
 
-    <div v-else class="grid gap-3" style="grid-template-columns: repeat(auto-fill, minmax(320px, 1fr))">
+    <div v-else class="grid gap-3" style="grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr))">
       <button
         v-for="row in models"
         :key="row.model"
+        :aria-label="row.model"
         class="text-left rounded-lg border border-surface-border bg-surface p-4 hover:border-accent-border hover:bg-surface-raised transition-colors"
         :class="{ 'opacity-50': row.archived }"
         @click="open(row.model)"
       >
-        <div class="flex items-baseline gap-2 mb-2">
-          <span class="font-mono font-semibold text-sm text-accent truncate">{{ row.model }}</span>
+        <div class="space-y-2 mb-2">
+          <ModelName :model="row.model" class="font-semibold text-sm text-accent" />
           <span
-            class="ml-auto font-mono text-[11px] tabular-nums whitespace-nowrap"
+            class="block font-mono text-[11px] tabular-nums whitespace-nowrap"
             :class="row.covered <= 1 ? 'text-status-warning' : 'text-text-muted'"
             >{{ row.covered }}/{{ tasks.length }} benchmarks<span v-if="row.covered <= 1"> ⚠</span></span
           >
