@@ -5,9 +5,9 @@
 
 An ``RlDataPipeline`` names one pinned source, the converter that turns each row into a
 ``TaskSpec`` with its grader fixed, the agent's environment, what its graders' environment must
-provide, an optional review rubric and optional grader controls. Calling it turns a declaration
-into one cached ``data/rl/<name>-<hash>`` artifact produced by
-``taskcompendium.pipeline.source_processing.run_source_pipeline``.
+provide, an optional review rubric and optional grader controls. Calling it constructs a graph
+for ``taskcompendium.pipeline.source_processing.run_source_pipeline``. SAMPLE/FULL cache a
+``data/rl/<name>-<hash>`` artifact; QUICK converts at the explicit local output path.
 """
 
 import hashlib

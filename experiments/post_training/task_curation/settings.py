@@ -66,7 +66,7 @@ class IrisMachines:
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         image = _sandbox_image(environment)
         factory = IrisMachineFactory(
-            controller_url=_controller_url(VerificationBackend.IRIS, self.controller_url),
+            controller_url=_controller_url(self.controller_url),
             scheduling_timeout=IRIS_SCHEDULING_TIMEOUT,
             job_ttl=IRIS_JOB_TTL,
             secret_env=None,
@@ -129,9 +129,9 @@ def job_controller_url() -> str | None:
     return info.controller_address if info is not None else None
 
 
-def _controller_url(backend: VerificationBackend, controller_url: str | None) -> str | None:
-    """``controller_url``, or for Iris verification without one, the controller of this process's job."""
-    if backend != VerificationBackend.IRIS or controller_url is not None:
+def _controller_url(controller_url: str | None) -> str:
+    """The explicit Iris controller, or the controller of this process's job."""
+    if controller_url is not None:
         return controller_url
     job_url = job_controller_url()
     if job_url is None:
