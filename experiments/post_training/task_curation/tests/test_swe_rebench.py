@@ -187,7 +187,7 @@ def test_non_python_parser_requires_named_test_results(tmp_path, log, resolved):
 )
 def test_elixir_trace_grades_named_tests(tmp_path, log, resolved):
     files = elixir_source()
-    task = converted_task(all_pipelines()["tasktrove-swe_rebench"], tasktrove_row(files))
+    task = converted_task(RECIPES["tasktrove-swe_rebench"], tasktrove_row(files))
     parser = next(resource_bytes(resource) for resource in task.resources.verifier if resource.path == "test_state.py")
     namespace = {}
     exec(compile(parser, "test_state.py", "exec"), namespace)
