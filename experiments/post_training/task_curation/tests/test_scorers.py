@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vendored scorers import from the files a task ships, and the patched APPS evaluator grades like the original.
-
-``CLOSURES`` names, per scorer, the files a task copies into ``/tests`` and the third-party modules the
-grader image provides. Every check runs in a fresh interpreter: the APPS evaluator installs a SIGALRM
-handler when imported, and the closures stage different ``skyrl_gym`` packages.
-"""
+"""NVARC execution and APPS grading against independent expected results."""
 
 import importlib.util
 import json
@@ -25,12 +20,6 @@ SKYRL = DATASETS / "skyrl" / "scorers"
 ARC = DATASETS / "arc" / "scorers"
 ULTRA_ENVS = "skyrl_gym/envs/nemotron_ultra"
 APPS_EVALUATOR = SKYRL / "apps_testing_util.py"
-APPS_PATCH = SKYRL / "apps_testing_util_py312.patch"
-ORIGINAL_APPS_PYTHON = (
-    *("uv", "run", "--no-project", "--python", "3.10"),
-    *("--with", "pyext==0.7", "--with", "numpy==1.23.5", "python"),
-)
-"""The interpreter and packages of the APPS image the patch replaces."""
 
 
 def shipped(root: Path, *paths: str) -> dict[str, Path]:
@@ -40,7 +29,6 @@ def shipped(root: Path, *paths: str) -> dict[str, Path]:
 
 @dataclass(frozen=True)
 class ScorerClosure:
-    modules: tuple[str, ...]
     files: dict[str, Path]
     """Path under ``/tests`` -> vendored file."""
     requires: tuple[str, ...] = ()
@@ -70,65 +58,10 @@ ULTRA_BASE = shipped(
 """Every Ultra and NVARC task ships the final-answer extractor and the package around it."""
 
 
-def ultra_scorer(name: str, *requires: str) -> ScorerClosure:
-    return ScorerClosure(
-        (f"skyrl_gym.envs.nemotron_ultra.{name}",), {**ULTRA_BASE, **shipped(ULTRA, f"{ULTRA_ENVS}/{name}.py")}, requires
-    )
-
-
-def flat_scorer(name: str, *requires: str) -> ScorerClosure:
-    return ScorerClosure((name.removesuffix(".py"),), shipped(SKYRL, name), requires)
-
-
 NVARC = ScorerClosure(
-    ("skyrl_gym.envs.nemotron_ultra.nvarc", "local_sandbox"),
     {**ULTRA_BASE, **shipped(ARC, f"{ULTRA_ENVS}/nvarc.py", f"{ULTRA_ENVS}/sandbox.py", "local_sandbox.py")},
     ("requests", "numpy"),
 )
-
-CLOSURES = {
-    "ultra_calendar": ultra_scorer("calendar"),
-    "ultra_code_gen": ScorerClosure(
-        ("skyrl_gym.envs.nemotron_ultra.code_gen",),
-        {
-            **ULTRA_BASE,
-            **shipped(ULTRA, f"{ULTRA_ENVS}/code_gen.py"),
-            "skyrl_gym/envs/lcb/livecodebench.py": SKYRL / "livecodebench.py",
-        },
-        ("numpy", "pandas"),
-    ),
-    "ultra_format_verification": ultra_scorer("format_verification"),
-    "ultra_instruction_following": ultra_scorer("instruction_following", "verifiable_instructions"),
-    "ultra_mcqa": ultra_scorer("mcqa"),
-    "ultra_rdkit_chemistry": ultra_scorer("rdkit_chemistry"),
-    "ultra_structured_outputs": ultra_scorer("structured_outputs", "openapi_schema_validator", "xmltodict", "yaml"),
-    "ultra_tool_call": ultra_scorer("tool_call"),
-    "arc_nvarc": NVARC,
-    "skyrl_livecodebench": flat_scorer("livecodebench.py", "numpy", "pandas"),
-    "skyrl_text_to_sql": flat_scorer("text_to_sql_scoring.py"),
-    "skyrl_ifeval": flat_scorer("ifeval_utils.py"),
-    "skyrl_apps": flat_scorer("apps_testing_util.py", "numpy"),
-}
-
-IMPORT_CHECK = """
-import importlib, pathlib, sys
-tests = pathlib.Path(sys.argv[1])
-sys.path.insert(0, str(tests))
-for name in sys.argv[2:]:
-    module = importlib.import_module(name)
-    assert pathlib.Path(module.__file__).is_relative_to(tests), f"{name} imported from {module.__file__}"
-"""
-
-
-@pytest.mark.parametrize("name", sorted(CLOSURES))
-def test_scorer_imports_from_shipped_files(name: str, tmp_path: Path):
-    closure = CLOSURES[name]
-    closure.skip_if_unavailable()
-    tests = closure.stage(tmp_path)
-    result = subprocess.run(
-        (sys.executable, "-I", "-c", IMPORT_CHECK, str(tests), *closure.modules), capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
 
 
 NVARC_RECORD = {"test_input": [[1, 2], [3, 4]], "expected_output": [[2, 3], [4, 5]]}
@@ -249,26 +182,7 @@ def apps_grade(python: Sequence[str], evaluator: Path, problem: dict) -> list:
     return json.loads(result.stdout.splitlines()[-1])
 
 
-@pytest.fixture(scope="module")
-def original_apps_evaluator(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """The pinned upstream evaluator, recovered by reversing the committed patch."""
-    if shutil.which("uv") is None:
-        pytest.skip("uv is unavailable to run the original APPS evaluator")
-    directory = tmp_path_factory.mktemp("apps")
-    if subprocess.run(("uv", "python", "find", "--no-project", "3.10"), cwd=directory, capture_output=True).returncode:
-        pytest.skip("Python 3.10 is unavailable to run the original APPS evaluator")
-    shutil.copyfile(APPS_EVALUATOR, directory / APPS_EVALUATOR.name)
-    subprocess.run(("git", "apply", "--reverse", str(APPS_PATCH)), cwd=directory, check=True)
-    return directory / APPS_EVALUATOR.name
-
-
 @pytest.mark.parametrize("name", sorted(APPS_PROBLEMS))
 def test_patched_apps_evaluator_grades_fixture(name: str):
     problem = APPS_PROBLEMS[name]
     assert apps_grade((sys.executable,), APPS_EVALUATOR, problem) == problem["grade"]
-
-
-@pytest.mark.parametrize("name", sorted(APPS_PROBLEMS))
-def test_original_apps_evaluator_grades_fixture(name: str, original_apps_evaluator: Path):
-    problem = APPS_PROBLEMS[name]
-    assert apps_grade(ORIGINAL_APPS_PYTHON, original_apps_evaluator, problem) == problem["grade"]

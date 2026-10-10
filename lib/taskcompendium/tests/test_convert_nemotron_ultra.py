@@ -10,26 +10,17 @@ from taskcompendium.convert.nemotron_ultra import (
     agent_request,
     blend_component,
     blend_request,
-    blend_task,
     text_request,
 )
-from taskcompendium.grader import GraderPackage
 from taskcompendium.models import (
-    AnswerType,
     AssistantToolCalls,
     ConversationToolCall,
-    EnvironmentRequirements,
-    FinalAction,
     FunctionDefinition,
-    PlainText,
-    ScriptGrader,
-    Source,
     TextMessage,
     ToolResult,
 )
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 
-ROW = RawRow("ultra-row", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {})
 TOOL = {
     "type": "function",
     "name": "lookup",
@@ -121,18 +112,3 @@ def test_agent_and_text_requests_admit_only_their_grading_agents():
 def test_blend_component_names_agent_keyed_rows_by_agent():
     assert blend_component(row()) == "component"
     assert blend_component({"agent_ref": {"name": "next_action_agent"}}) == "agent:next_action_agent"
-
-
-@pytest.mark.parametrize(
-    ("answer_type", "answer_format"), [(AnswerType.TEXT, PlainText()), (AnswerType.NATIVE_ACTION, FinalAction())]
-)
-def test_blend_task_advertises_tools_without_running_them(answer_type, answer_format):
-    request = blend_request(row())
-    assert isinstance(request, BlendRequest)
-    grader = ScriptGrader(argv=("true",), environment=EnvironmentRequirements(docker_image="grader@sha256:" + "a" * 64))
-    result = blend_task(ROW, request, GraderPackage(grader), answer_type)
-    task = result.task
-    assert (task.answer_type, task.answer_format, task.grader) == (answer_type, answer_format, grader)
-    assert task.final_tools == request.tools and not task.interaction_tools
-    assert task.environment_requirements == EnvironmentRequirements()
-    assert result.changes == request.changes

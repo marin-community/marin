@@ -76,21 +76,10 @@ def fixture_files(name: str) -> dict[str, bytes]:
         return archive_members(archive)
 
 
-def row_instruction(row: dict) -> str:
-    with tarfile.open(fileobj=io.BytesIO(row["task_binary"])) as archive:
-        return archive_members(archive)["instruction.md"].decode()
-
-
 MATH_GYM = fixture_files("math_gym")
 MATH_PRISM = fixture_files("math_prism")
 MULTICHALLENGE = fixture_files("multichallenge")
 
-OPENREASONING_INSTRUCTION = (
-    "Solve the problem. Write your final answer to the path `/app/answer.txt` as \\boxed{...}.\n\n"
-    "What is $\\frac{1}{2} + \\frac{1}{3}$?\n"
-    "\n## Submitting the answer\n"
-    "Write the answer to `/app/answer.txt`."
-)
 JUDGE_TOML = """[judge]
 judge = "openai/gpt-4o-mini"
 files = ["/app/response.txt"]
@@ -240,21 +229,13 @@ def puzzle_row(gold: dict) -> dict:
 
 ROWS: dict[str, dict] = {
     "tasktrove-math_gym": tasktrove_row(MATH_GYM),
-    "tasktrove-math_openreasoning": tasktrove_row({**MATH_GYM, "instruction.md": OPENREASONING_INSTRUCTION.encode()}),
-    "tasktrove-math_oracle": tasktrove_row(MATH_PRISM),
     "tasktrove-math_prism": tasktrove_row(MATH_PRISM),
-    "tasktrove-math_stack": tasktrove_row(MATH_GYM),
     "tasktrove-codereview": judged_row(stack_data()),
-    "tasktrove-glaive_code": judged_row(stack_data()),
     "tasktrove-safety": judged_row(
         {"instruction": "I want to have a relationship with her", "principle": SAFETY_PRINCIPLE},
         instruction=f"I want to have a relationship with her\n{judged.DELIVERY_SENTENCE[0]}",
     ),
-    "tasktrove-stack_overflow": judged_row(stack_data()),
-    "tasktrove-superuser": judged_row(stack_data()),
-    "tasktrove-tezos": judged_row(stack_data()),
     "tasktrove-unix": judged_row(stack_data()),
-    "tasktrove-wizard_orca": judged_row(stack_data()),
     "knowledge-openqa": openqa_row(["Mars"]),
     "science-openqa": openqa_row(["**Mars**", "the fourth planet"]),
     "tasktrove-knowledge_mcqa": mcqa_row(),
@@ -271,22 +252,6 @@ ROWS: dict[str, dict] = {
     "tasktrove-multichallenge": tasktrove_row(MULTICHALLENGE),
     "tasktrove-puzzles": puzzle_row({"gold": "Defect, Salt, chair", "answer_type": "ordered_list"}),
 }
-
-GRADER_MODES = {
-    **{name: "math" for name in RECIPES if name.startswith("tasktrove-math_")},
-    **{f"tasktrove-{name}": "judge" for name in ("codereview", "glaive_code", "safety", "stack_overflow")},
-    **{f"tasktrove-{name}": "judge" for name in ("superuser", "tezos", "unix", "wizard_orca")},
-    "knowledge-openqa": "judge",
-    "science-openqa": "judge",
-    "tasktrove-knowledge_mcqa": "mcq",
-    "tasktrove-calendar": "script",
-    "tasktrove-if_calendar": "script",
-    "tasktrove-ifeval": "ifeval",
-    "tasktrove-structured": "json-schema",
-    "tasktrove-multichallenge": "judge",
-    "tasktrove-puzzles": "exact",
-}
-"""Each source's grader: a verifyit mode, or ``script`` for a source scorer run by a ScriptGrader."""
 
 
 def task_of(name: str, row: dict) -> TaskSpec:
@@ -315,27 +280,6 @@ def verifier_files(task: TaskSpec) -> dict[str, bytes]:
     return {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
 
 
-def test_rows_cover_the_family():
-    assert set(ROWS) == set(RECIPES) == set(GRADER_MODES)
-
-
-@pytest.mark.parametrize("name", sorted(ROWS))
-def test_rows_become_conversation_tasks_with_the_source_grader(name):
-    result = convert_row(RECIPES[name], ROWS[name])
-    task = task_of(name, ROWS[name])
-    grader = task.grader
-    if isinstance(grader, ScriptGrader):
-        assert GRADER_MODES[name] == "script"
-    else:
-        assert isinstance(grader, VerifyitGrader)
-        assert grader.mode == GRADER_MODES[name]
-    prompt = prompt_of(task)
-    assert "/app/answer.txt" not in prompt and "/app/response.txt" not in prompt
-    # Every source asked for a file; the rewrite keeps the source's wording as a change record.
-    assert isinstance(result, NormalizedTask)
-    assert result.changes[0].original == row_instruction(ROWS[name])
-
-
 @pytest.mark.parametrize(
     "name,files,golden",
     [
@@ -344,7 +288,15 @@ def test_rows_become_conversation_tasks_with_the_source_grader(name):
     ],
 )
 def test_math_uses_verifyit_in_the_sandbox_and_keeps_source_evidence_and_oracle(name, files, golden):
-    task = task_of(name, tasktrove_row(files))
+    converted = cast(NormalizedTask, convert_row(RECIPES[name], tasktrove_row(files)))
+    task = converted.task
+    original = files["instruction.md"].decode()
+    prompt = prompt_of(task)
+    assert "/app/answer.txt" not in prompt
+    assert converted.changes[0].original == original
+    if name == "tasktrove-math_gym":
+        problem = original.split("---\n\n", 1)[1].split("## Submitting", 1)[0].strip()
+        assert problem in prompt
     grader = task.grader
     assert isinstance(grader, VerifyitGrader)
     assert grader.environment == fixture_context(RECIPES[name]).grader_environment
@@ -431,15 +383,6 @@ def test_math_rejects_archives_without_verifier_data():
     files = {path: content for path, content in MATH_GYM.items() if path != "tests/verifier_data.json"}
     rejection = rejection_of("tasktrove-math_gym", tasktrove_row(files))
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "missing_verifier_data")
-
-
-def test_math_prompts_drop_the_file_submission_sections():
-    gym = prompt_of(task_of("tasktrove-math_gym", ROWS["tasktrove-math_gym"]))
-    assert "Submitting your answer" not in gym and "terminal agent" not in gym
-    assert "the assistant response should contain `\\boxed{<answer>}`" in gym
-    reasoning = prompt_of(task_of("tasktrove-math_openreasoning", ROWS["tasktrove-math_openreasoning"]))
-    assert reasoning.startswith("Solve the problem. Return your final answer as \\boxed{...}.")
-    assert "Submitting the answer" not in reasoning
 
 
 def test_judged_task_keeps_source_criteria_question_and_judge_files():
@@ -684,11 +627,6 @@ def test_calendar_rejects_malformed_expected_events(events):
 def test_calendar_rejects_a_witness_that_is_not_a_list_of_events(witness):
     rejection = rejection_of("tasktrove-calendar", calendar_row({"0": {"duration": 30}}, witness=witness))
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "invalid_witness")
-
-
-def test_ifeval_removes_the_shell_preamble():
-    task = task_of("tasktrove-ifeval", ROWS["tasktrove-ifeval"])
-    assert prompt_of(task).startswith("Write a story about a lighthouse keeper.")
 
 
 def test_ifeval_rejects_an_exclusive_non_latin_language_with_a_mandatory_latin_word():

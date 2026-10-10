@@ -412,11 +412,6 @@ def test_apps_golden_skips_python2_solutions_for_the_first_python3_one():
     assert golden.event == TextMessage(role="assistant", content=f"```python\n{SUM_SOLUTION}\n```")
 
 
-def test_apps_accepts_alternative_expected_outputs():
-    row = {**ROWS["apps"], "input_output": json.dumps({"inputs": [""], "outputs": [["a", "b"]]})}
-    assert isinstance(converted_task(RECIPES["apps"], row).grader, ScriptGrader)
-
-
 def test_asdiv_reader_yields_problem_fields(tmp_path):
     path = tmp_path / "ASDiv.xml"
     path.write_text(

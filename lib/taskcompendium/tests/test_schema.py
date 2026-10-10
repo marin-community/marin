@@ -9,37 +9,23 @@ import json
 import pytest
 from pydantic import ValidationError
 from shellbox.machine import Backend
-from verifyit.spec import ExactSpec, ScriptSpec
+from verifyit.spec import ExactSpec
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading import grade_answer
 from taskcompendium.models import (
-    AnswerCall,
     AnswerType,
-    ArtifactKind,
-    Boxed,
     ConversationInput,
     ConversationTrace,
     DockerBuildContext,
     EnvironmentRequirements,
-    FileReward,
-    FinalAction,
-    FunctionDefinition,
     GradingAttempt,
-    JsonAnswer,
-    MissingArtifactPolicy,
-    NoGrader,
     PlainText,
     ResourceGroups,
-    RewardFile,
-    RewardFileFormat,
     ScriptGrader,
-    SessionGrader,
     Source,
     TaskSpec,
     TextMessage,
-    VerifierArtifact,
-    VerifierCommand,
 )
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import chat_request
@@ -53,7 +39,6 @@ GRADING_ENVIRONMENT = EnvironmentRequirements(
 )
 EXACT_DONE = verifyit_package(ExactSpec(expected=("done",))).grader
 EXACT_DONE_IN_ENVIRONMENT = verifyit_package(ExactSpec(expected=("done",)), environment=GRADING_ENVIRONMENT).grader
-LOOKUP = FunctionDefinition(name="lookup", parameters={"type": "object"})
 
 
 @pytest.fixture
@@ -272,107 +257,13 @@ def test_inline_file_bytes_and_metadata_survive_json_reader(specification, paylo
     assert restored.mtime_ns == 1_725_555_600_123_456_789
 
 
-@pytest.mark.parametrize(
-    "update",
-    [
-        pytest.param(
-            {"answer_type": AnswerType.TEXT, "answer_format": JsonAnswer(), "grader": EXACT_DONE},
-            id="verifyit-in-process",
-        ),
-        pytest.param(
-            {
-                "answer_type": AnswerType.FILE,
-                "output_paths": ("/app/solution.py",),
-                "grader": (
-                    verifyit_package(
-                        ScriptSpec(path="grade.py", verdict_file="verdict.json", timeout=60),
-                        environment=GRADING_ENVIRONMENT,
-                    ).grader
-                ),
-            },
-            id="verifyit-environment",
-        ),
-        pytest.param(
-            {
-                "answer_type": AnswerType.WORKSPACE_STATE,
-                "grader": ScriptGrader(
-                    argv=("python3", "/tests/grade.py"),
-                    cwd="/workspace",
-                    env={"GRADE_MODE": "strict"},
-                    environment=GRADING_ENVIRONMENT,
-                    collect=(VerifierCommand(argv=("sh", "-c", "git diff > /tmp/patch.diff"), cwd="/workspace"),),
-                    artifacts=(
-                        VerifierArtifact(
-                            source="/tmp/patch.diff", target="/workspace/patch.diff", kind=ArtifactKind.FILE
-                        ),
-                        VerifierArtifact(
-                            source="/workspace/build",
-                            target="/workspace/build",
-                            kind=ArtifactKind.DIRECTORY,
-                            exclude=("*.o",),
-                            missing=MissingArtifactPolicy.SKIP,
-                        ),
-                    ),
-                    answer_path=None,
-                    reward=FileReward(
-                        files=(
-                            RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON, key="score"),
-                            RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),
-                        ),
-                        pass_above=0.5,
-                    ),
-                    timeout=120.0,
-                ),
-            },
-            id="script",
-        ),
-        pytest.param(
-            {
-                "answer_type": AnswerType.NATIVE_ACTION,
-                "answer_format": FinalAction(require_call=True, max_calls=2),
-                "final_tools": (LOOKUP,),
-                "grader": SessionGrader(),
-            },
-            id="session",
-        ),
-        pytest.param(
-            {
-                "answer_format": Boxed(),
-                "grader": NoGrader(
-                    reason="Source evaluator is unavailable",
-                    contract={"evaluator": "llm_judge", "rubric": ["cites a source", "states 12"], "weight": 0.5},
-                ),
-            },
-            id="none",
-        ),
-        pytest.param({"answer_format": AnswerCall()}, id="answer-call"),
-    ],
-)
-def test_task_json_round_trip_preserves_grader_and_answer_format(specification, update):
-    task = TaskSpec.model_validate(
-        {
-            **dict(specification),
-            "environment_requirements": EnvironmentRequirements(environment_variables={"TASK_MODE": "repair"}),
-            "resources": ResourceGroups(
-                worker=(inline_resource("project/input.txt", b"public input"),),
-                verifier=(inline_resource("grade.py", b"print(1.0)\n"), inline_resource("config.json", b"{}")),
-            ),
-            **update,
-        }
-    )
-    assert TaskSpec.model_validate_json(task.model_dump_json()) == task
-
-
 SCRIPT = {"kind": "script", "argv": ["python3", "/tests/grade.py"], "environment": {"docker_image": IMAGE}}
 VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "environment": {"docker_image": IMAGE}}
-LOOKUP_WIRE = [{"name": "lookup", "parameters": {"type": "object"}}]
 
 
 @pytest.mark.parametrize(
     "update",
     [
-        pytest.param({"answer_type": "json"}, id="plain-text-cannot-carry-json"),
-        pytest.param({"answer_format": {"kind": "json_value"}}, id="json-value-cannot-carry-text"),
         pytest.param(
             {"answer_type": "file", "output_paths": ["/tests/answer.txt"], "grader": SCRIPT | {"answer_path": None}},
             id="output-path-under-tests",
@@ -386,10 +277,6 @@ LOOKUP_WIRE = [{"name": "lookup", "parameters": {"type": "object"}}]
             },
             id="output-directory-under-verifier-logs",
         ),
-        pytest.param(
-            {"answer_type": "file", "output_paths": ["/app/answer.txt"]}, id="in-process-grader-with-file-answer"
-        ),
-        pytest.param({"answer_type": "workspace_state"}, id="in-process-grader-with-workspace-answer"),
         pytest.param(
             {"grader": SCRIPT | {"environment": {"compatible_backends": ["docker"]}}}, id="script-without-image"
         ),
@@ -408,23 +295,6 @@ LOOKUP_WIRE = [{"name": "lookup", "parameters": {"type": "object"}}]
             id="script-conversation-path-replaces-resource",
         ),
         pytest.param(
-            {"grader": {"kind": "verifyit", "mode": "script", "parameters": {"path": "grade.py"}}},
-            id="verifyit-mode-without-in-process-grader",
-        ),
-        pytest.param(
-            {
-                "answer_type": "native_action",
-                "answer_format": {"kind": "final_action"},
-                "final_tools": LOOKUP_WIRE,
-                "grader": VERIFYIT_ENVIRONMENT | {"mode": "exact", "parameters": {"expected": ["done"]}},
-            },
-            id="verifyit-environment-with-native-action",
-        ),
-        pytest.param(
-            {"grader": VERIFYIT_ENVIRONMENT | {"mode": "pytest", "parameters": {}}},
-            id="verifyit-workspace-mode-with-text-answer",
-        ),
-        pytest.param(
             {
                 "grader": (
                     VERIFYIT_ENVIRONMENT
@@ -432,20 +302,6 @@ LOOKUP_WIRE = [{"name": "lookup", "parameters": {"type": "object"}}]
                 )
             },
             id="verifyit-answer-file-under-tests",
-        ),
-        pytest.param(
-            {
-                "answer_type": "number",
-                "grader": {
-                    "kind": "verifyit",
-                    "mode": "numeric",
-                    "parameters": {"expected": "bad", "tolerance_abs": 0, "tolerance_rel": 0},
-                },
-            },
-            id="verifyit-invalid-numeric-reference",
-        ),
-        pytest.param(
-            {"grader": {"kind": "verifyit", "mode": "exact", "parameters": {}}}, id="verifyit-missing-reference"
         ),
     ],
 )

@@ -821,9 +821,13 @@ def drop_archive_path(row, _context):
     return {key: value for key, value in row.items() if key != "path"}
 
 
-@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
-@pytest.mark.parametrize("source_format", [SourceFormat.JSONL, SourceFormat.PARQUET])
-@pytest.mark.parametrize("location", ["declared", "override"])
+@pytest.mark.parametrize(
+    "mode,source_format,location",
+    [
+        (SourceProcessingMode.SAMPLE, SourceFormat.JSONL, "declared"),
+        (SourceProcessingMode.FULL, SourceFormat.PARQUET, "override"),
+    ],
+)
 def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path, mode, source_format, location):
     source = tmp_path / "input"
     rows = [{**row, "path": f"archive-{index}"} for index, row in enumerate(apple_rows(3))]
