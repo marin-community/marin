@@ -5,6 +5,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import click
 from fray.types import ResourceConfig
@@ -17,7 +18,7 @@ from experiments.post_training.task_curation.campaign import CampaignPool, Campa
 from experiments.post_training.task_curation.invocation import InputOverrides, LocalPaths, PipelineOptions
 from experiments.post_training.task_curation.local import run_local_steps
 from experiments.post_training.task_curation.settings import RecipeSettings, VerificationBackend
-from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import runnable_sources
 
 QUICK_MAX_WORKERS = 4
@@ -34,11 +35,11 @@ def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
 
 @click.command(help=__doc__)
 @click.option("--model", default=GLM_MODEL, show_default=True)
-@click.option("--model-revision", help="Required for recipe SAMPLE/FULL.")
+@click.option("--model-revision", help="Required when a recipe uses model review.")
 @click.option("--base-url", help="OpenAI-compatible review endpoint; defaults to the relay job's endpoint.")
 @click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB, show_default=True, help="Iris GLM relay job to resolve.")
-@click.option("--review-cache", help="Required for recipe SAMPLE/FULL.")
-@click.option("--review-mode", type=click.Choice(["batch", "chat"]), help="Required for recipe SAMPLE/FULL.")
+@click.option("--review-cache", help="Required when a recipe uses model review.")
+@click.option("--review-mode", type=click.Choice(["batch", "chat"]), help="Required when a recipe uses model review.")
 @click.option(
     "--review-concurrency",
     type=click.IntRange(min=1, max=MAX_DIRECT_CONCURRENT_REQUESTS),
@@ -145,7 +146,7 @@ def main(
             {name: str(Path(path).resolve()) for name, path in auxiliary},
         )
         options = PipelineOptions(processing_mode, runtime, inputs=inputs, local=local)
-        steps = {name: source.pipeline(source, options) for name, source in selected.items()}
+        steps = {name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()}
         if not do_run:
             plan = {
                 "mode": processing_mode,
@@ -196,7 +197,7 @@ def main(
         execution=AuditExecution(max_workers=max_workers, worker_resources=worker_resources),
     )
     options = PipelineOptions(processing_mode, runtime, recipe_settings=recipe_settings)
-    steps = [source.pipeline(source, options) for source in selected.values()]
+    steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]
     pool = CampaignPool(
         max_workers,
         concurrent_sources,

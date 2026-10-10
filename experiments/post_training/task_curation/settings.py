@@ -6,7 +6,7 @@
 import os
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 import click
 from fray.types import ResourceConfig
@@ -161,7 +161,7 @@ def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_
 
 def _pipeline_config(
     mode: SourceProcessingMode,
-    review: ReviewConfig,
+    review: ReviewConfig | None,
     reviewer: Reviewer | None,
     machines: GradingMachines | None,
     *,
@@ -208,18 +208,21 @@ class RecipeSettings:
     verification_sample_size: int = 20
     execution: AuditExecution = field(default_factory=AuditExecution)
 
-    def source_config(self, mode: SourceProcessingMode, controls: Controls | None) -> SourcePipelineConfig:
+    def source_config(
+        self, mode: SourceProcessingMode, controls: Controls | None, rubric: str | None
+    ) -> SourcePipelineConfig:
+        review = self.config.review if self.config is not None else self.review
+        if rubric is not None and review is None:
+            raise click.UsageError("Recipe review configuration requires --model-revision and --review-mode")
         if self.config is not None:
             return replace(self.config, mode=mode)
-        if self.review is None:
-            raise click.UsageError("Recipe review configuration requires --model-revision and --review-mode")
         if self.normalized_shards is None:
             raise click.UsageError("Recipe conversion requires --normalized-shards")
         if self.execution.worker_resources is None:
             raise ValueError("Recipe execution requires worker resources")
         return _pipeline_config(
             mode,
-            self.review,
+            review,
             None,
             (
                 campaign_machines(self.verification_backend, self.execution.worker_resources.image, self.controller_url)
@@ -239,7 +242,7 @@ class RecipeSettings:
         if self.review_cache is None:
             raise click.UsageError("Recipe review requires --review-cache")
         reviewer = _reviewer(
-            config.review,
+            cast(ReviewConfig, config.review),
             self.base_url if self.base_url is not None else resolve_glm_base_url(self.relay_job),
             review_cache=self.review_cache,
             review_concurrency=self.review_concurrency,

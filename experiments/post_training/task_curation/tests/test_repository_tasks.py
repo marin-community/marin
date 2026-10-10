@@ -18,8 +18,10 @@ from verifyit.modes import grade_pytest
 from verifyit.spec import PytestSpec, parse_spec
 
 from experiments.post_training.task_curation.datasets.tasktrove import repositories
-from experiments.post_training.task_curation.pipeline import RlDataPipeline
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
+
+RECIPES = {source.name: cast(CurationRecipe, source.config) for source in repositories.sources()}
 
 
 @dataclass(frozen=True)
@@ -73,10 +75,7 @@ def test_unusable_repository_grading_contract_is_rejected(problem, reason):
         files["instruction.md"] = b"Fix the spin bug."
     files["tests/config.json"] = json.dumps(config).encode()
     result = convert_row(
-        cast(
-            RlDataPipeline,
-            next(source.pipeline for source in repositories.sources() if source.name == "tasktrove-swesmith"),
-        ),
+        RECIPES["tasktrove-swesmith"],
         tasktrove_row(files),
     )
     assert cast(ImportRejection, result).reason == reason
@@ -129,10 +128,7 @@ def repository_fixture(tmp_path) -> RepositoryFixture:
     commit = git(workspace, "rev-parse", "HEAD")
     files = source_files(commit)
     task = converted_task(
-        cast(
-            RlDataPipeline,
-            next(source.pipeline for source in repositories.sources() if source.name == "tasktrove-swesmith"),
-        ),
+        RECIPES["tasktrove-swesmith"],
         tasktrove_row(files),
     )
     tests_dir = tmp_path / "private"

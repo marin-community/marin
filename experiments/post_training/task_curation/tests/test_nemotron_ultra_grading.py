@@ -20,7 +20,7 @@ from experiments.post_training.task_curation.tests.local_grader import (
     grade,
     with_verifier_file,
 )
-from experiments.post_training.task_curation.tests.test_nemotron_ultra import COMPONENT_ROWS, PIPELINES
+from experiments.post_training.task_curation.tests.test_nemotron_ultra import COMPONENT_ROWS, RECIPES
 
 pytestmark = [pytest.mark.docker, pytest.mark.timeout(600)]
 
@@ -43,7 +43,7 @@ def report_call(count: object) -> Reply:
 
 def task(path: str) -> TaskSpec:
     blend = "mopd" if path == STRUCTURED_TOOL else "rlvr2"
-    return converted_task(PIPELINES[pipeline_name(blend, path)], COMPONENT_ROWS[path])
+    return converted_task(RECIPES[pipeline_name(blend, path)], COMPONENT_ROWS[path])
 
 
 @pytest.mark.parametrize(
@@ -76,7 +76,7 @@ def test_grade_script_scores_the_reply(path, submission, reward, machines):
     ["ultra_sft_step3200_comp_coding", "ultra_sft_step3200_rdkit", "ultra_sft_step3200_toolcall_schema"],
 )
 def test_golden_control_scores_the_reference_one(path, machines):
-    controls = PIPELINES[pipeline_name("rlvr2", path)].controls
+    controls = RECIPES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
     report = run_controls(task(path), controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}

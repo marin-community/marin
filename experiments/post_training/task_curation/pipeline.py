@@ -3,9 +3,9 @@
 
 """Dataset declarations and the artifact steps that ingest them.
 
-An ``RlDataPipeline`` names one pinned source, the converter that turns each row into a
+A ``CurationRecipe`` names one pinned source, the converter that turns each row into a
 ``TaskSpec`` with its grader fixed, the agent's environment, what its graders' environment must
-provide, an optional review rubric and optional grader controls. Calling it constructs a graph
+provide, an optional review rubric and optional grader controls. ``process_rows`` constructs a graph
 for ``taskcompendium.pipeline.source_processing.run_source_pipeline``. SAMPLE/FULL cache a
 ``data/rl/<name>-<hash>`` artifact; QUICK converts at the explicit local output path.
 """
@@ -71,9 +71,9 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
-from experiments.post_training.task_curation.invocation import CurationSource, PipelineOptions
+from experiments.post_training.task_curation.invocation import PipelineOptions
 from experiments.post_training.task_curation.results import PipelineResult
-from experiments.post_training.task_curation.source import DataSourceReview, RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource
 
 PIPELINE_VERSION = "2026.10.07.1"
 URL_CHUNK_BYTES = 1024 * 1024
@@ -104,6 +104,14 @@ class HfSource:
     read: FileReader | None = None
     parts: FileParts | None = None
 
+    @property
+    def name(self) -> str:
+        return self.repo
+
+    @property
+    def url(self) -> str:
+        return f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}"
+
 
 @dataclass(frozen=True)
 class UrlSource:
@@ -121,6 +129,18 @@ class UrlSource:
     def __post_init__(self) -> None:
         if re.fullmatch(r"[0-9a-f]{64}", self.sha256) is None:
             raise ValueError(f"URL source requires a lowercase SHA-256 digest: {self.url}")
+
+    @property
+    def name(self) -> str:
+        return self.filename
+
+    @property
+    def revision(self) -> str:
+        return self.sha256
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        return (self.filename,)
 
 
 @dataclass(frozen=True)
@@ -159,7 +179,7 @@ def environment_record(environment: Environment, built: EnvironmentArtifact | No
 
 
 @dataclass(frozen=True)
-class RlDataPipeline:
+class CurationRecipe:
     """One RL data source and how its rows become tasks.
 
     ``name`` is the catalog key and artifact name. ``version`` is the converter revision; bump it
@@ -198,43 +218,27 @@ class RlDataPipeline:
         if isinstance(self.environment, Environment) and self.environment.image is None:
             raise ValueError(f"{self.name} must name the agent environment's image")
 
-    def __call__(self, source: CurationSource, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
-        """Construct this dataset's ingestion and processing graph without running it."""
-        if options.mode == SourceProcessingMode.QUICK:
-            return _quick_step(self, options)
-        if options.recipe_settings is None:
-            raise ValueError(f"Source processing requires recipe settings: {source.name}")
-        config = options.recipe_settings.source_config(options.mode, self.controls)
-        if self.controls is None:
-            config = replace(config, machines=None)
-        return cast(ArtifactStep[CampaignArtifact], _reviewed_step(self, config, options))
+    @property
+    def dataset(self) -> HfSource | UrlSource:
+        return self.source
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        return self.source.files
 
 
-def recipe_source(
-    info: SourceInfo,
-    pipeline: RlDataPipeline,
-    review: DataSourceReview = DataSourceReview(),
-) -> RlDataSource[RlDataPipeline]:
-    """Register a concrete recipe, deriving its immutable catalog identity once."""
-    upstream = pipeline.source
-    if isinstance(upstream, HfSource):
-        dataset = SourceReference(
-            upstream.repo,
-            upstream.revision,
-            f"https://huggingface.co/datasets/{upstream.repo}/tree/{upstream.revision}",
-        )
-        files = upstream.files
-    else:
-        dataset = SourceReference(upstream.filename, upstream.sha256, upstream.url)
-        files = (upstream.filename,)
-    return RlDataSource(
-        info=replace(info, dataset=dataset),
-        pipeline=pipeline,
-        review=review,
-        name=pipeline.name,
-        version=pipeline.version,
-        files=files,
-    )
+def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
+    """Construct the reusable source processor's graph from this dataset's recipe."""
+    recipe = source.config
+    assert recipe is not None
+    if options.mode == SourceProcessingMode.QUICK:
+        return _quick_step(recipe, options)
+    if options.recipe_settings is None:
+        raise ValueError(f"Source processing requires recipe settings: {source.name}")
+    config = options.recipe_settings.source_config(options.mode, recipe.controls, recipe.rubric)
+    if recipe.controls is None:
+        config = replace(config, machines=None)
+    return cast(ArtifactStep[CampaignArtifact], _reviewed_step(recipe, config, options))
 
 
 def _pipeline_result(result: ConversionResult | SourcePipelineResult) -> PipelineResult:
@@ -277,7 +281,7 @@ class SourcePipelineIncomplete(RuntimeError):
     """The quality gate could not decide or a control trial hit an infrastructure error; evidence is retained."""
 
 
-def review_rubric(pipeline: RlDataPipeline) -> ReviewRubric | None:
+def review_rubric(pipeline: CurationRecipe) -> ReviewRubric | None:
     """Split a rubric string into criteria at blank lines."""
     if pipeline.rubric is None:
         return None
@@ -312,7 +316,7 @@ def source_files(source: HfSource | UrlSource) -> SourceFiles:
 
 
 def source_recipe(
-    pipeline: RlDataPipeline, inputs: Mapping[str, str], grader_environment: EnvironmentRequirements | None
+    pipeline: CurationRecipe, inputs: Mapping[str, str], grader_environment: EnvironmentRequirements | None
 ) -> SourceRecipe:
     return SourceRecipe(
         name=pipeline.name,
@@ -329,7 +333,7 @@ def source_recipe(
 
 
 def _run_curation(
-    pipeline: RlDataPipeline,
+    pipeline: CurationRecipe,
     *,
     mode: SourceProcessingMode,
     context: ZephyrContext,
@@ -379,7 +383,7 @@ def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def converter_identity(pipeline: RlDataPipeline, grader: EnvironmentArtifact | None) -> dict[str, Any]:
+def converter_identity(pipeline: CurationRecipe, grader: EnvironmentArtifact | None) -> dict[str, Any]:
     """The converter, every file it can package into a task, and the environment its graders run in.
 
     Files are the converter module's directory's ``*.py`` and everything below ``ships``, keyed
@@ -407,7 +411,7 @@ def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
 
 
 def pipeline_identity(
-    pipeline: RlDataPipeline, config: SourcePipelineConfig, grader: EnvironmentArtifact | None
+    pipeline: CurationRecipe, config: SourcePipelineConfig, grader: EnvironmentArtifact | None
 ) -> dict[str, Any]:
     """Everything that can change a source artifact's contents; ``grader`` is the grader's built environment."""
     recipe = source_recipe(pipeline, {}, None)
@@ -503,7 +507,7 @@ def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> Ar
 
 
 def source_downloads(
-    pipeline: RlDataPipeline, campaign: CampaignRuntime
+    pipeline: CurationRecipe, campaign: CampaignRuntime
 ) -> tuple[ArtifactStep[Artifact], dict[str, ArtifactStep[Artifact]]]:
     """Pinned primary and auxiliary downloads shared by local and reviewed runs."""
     return download_step(pipeline.source, campaign), {
@@ -537,7 +541,7 @@ def _source_run(
 
 
 def _run_source(
-    pipeline: RlDataPipeline,
+    pipeline: CurationRecipe,
     config: SourcePipelineConfig,
     options: PipelineOptions,
     run: SourceRun,
@@ -563,7 +567,7 @@ def _run_source(
 
 
 def _reviewed_step(
-    pipeline: RlDataPipeline,
+    pipeline: CurationRecipe,
     config: SourcePipelineConfig,
     options: PipelineOptions,
 ) -> ArtifactStep[RlDataArtifact]:
@@ -606,8 +610,9 @@ def _quick_run(
 
 
 @contextmanager
-def _conversion_context(context: ZephyrContext, pipeline: RlDataPipeline, run: QuickRun, overrides):
+def _conversion_context(context: ZephyrContext, pipeline: CurationRecipe, run: QuickRun, overrides):
     shards = conversion_shards(run.source_input, source_files(pipeline.source), overrides=overrides)
+    assert context.max_workers is not None
     if context.max_workers <= 1 or not any(shard.row_end is not None and shard.parts > 1 for shard in shards):
         yield context
         return
@@ -623,7 +628,7 @@ def _conversion_context(context: ZephyrContext, pipeline: RlDataPipeline, run: Q
         yield process_context
 
 
-def _run_quick_source(pipeline: RlDataPipeline, options: PipelineOptions, run: QuickRun) -> CampaignArtifact:
+def _run_quick_source(pipeline: CurationRecipe, options: PipelineOptions, run: QuickRun) -> CampaignArtifact:
     overrides = {}
     for logical, file in options.inputs.files.items():
         with file.open("rb") as stream:
@@ -643,7 +648,7 @@ def _run_quick_source(pipeline: RlDataPipeline, options: PipelineOptions, run: Q
     return CampaignArtifact(path=run.output_path, status=envelope.status, result=envelope)
 
 
-def _quick_step(pipeline: RlDataPipeline, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
+def _quick_step(pipeline: CurationRecipe, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     primary = None
     if options.inputs.root is None and not options.inputs.files:
         primary = download_step(pipeline.source, options.runtime)

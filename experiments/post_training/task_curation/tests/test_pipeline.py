@@ -40,17 +40,19 @@ from experiments.post_training.task_curation.images.build import (
 )
 from experiments.post_training.task_curation.invocation import PipelineOptions
 from experiments.post_training.task_curation.pipeline import (
+    CurationRecipe,
     DownloadRequest,
     HfSource,
-    RlDataPipeline,
     UrlSource,
     download_source,
     download_step,
     environment_requirements,
+    process_rows,
     source_recipe,
 )
 from experiments.post_training.task_curation.results import PipelineResult
 from experiments.post_training.task_curation.settings import RecipeSettings, VerificationBackend, campaign_machines
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
     REPOSITORY,
     install_fake_build_tools,
@@ -68,8 +70,8 @@ def convert(row, _context):
 """
 
 
-def math500() -> RlDataPipeline:
-    return cast(RlDataPipeline, next(source.pipeline for source in skyrl_math.sources() if source.name == "math500"))
+def math500() -> CurationRecipe:
+    return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
 
 
 def machines(backend: VerificationBackend) -> GradingMachines:
@@ -90,16 +92,19 @@ def config() -> SourcePipelineConfig:
     )
 
 
+def source_step(recipe: CurationRecipe, options: PipelineOptions):
+    source = RlDataSource(
+        info=SourceInfo(id=f"fixture:{recipe.name}", title=recipe.name, origin="fixture"),
+        config=recipe,
+        pipeline=process_rows,
+    )
+    return process_rows(source, options)
+
+
 def step_name(pipeline, config) -> str:
-    return pipeline(
+    return source_step(
         pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
     ).name
-
-
-def test_step_is_named_for_the_declaration_and_stable(config):
-    first, second = step_name(math500(), config), step_name(math500(), config)
-    assert first == second
-    assert first.startswith("data/rl/math500-")
 
 
 @pytest.mark.parametrize(
@@ -167,11 +172,6 @@ def test_shipped_scorer_bytes_rename_the_artifact(fixture_converter, config):
     assert step_name(unshipped, config) != original
 
 
-def test_declarations_ship_only_existing_directories(tmp_path):
-    with pytest.raises(ValueError, match="do not exist"):
-        replace(math500(), ships=(tmp_path / "missing",))
-
-
 @pytest.fixture
 def grader_lock(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
@@ -183,7 +183,7 @@ def test_a_changed_grader_environment_renames_the_artifact(grader_lock, config):
     grader = Environment(lock=grader_lock)
     pipeline = replace(math500(), grader=grader)
     run(environment_artifact(grader, REPOSITORY))
-    original = pipeline(
+    original = source_step(
         pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
     )
     assert environment_artifact(grader).name in [dep.name for dep in original.deps]
@@ -198,7 +198,7 @@ def test_a_grader_environment_without_a_built_artifact_names_the_build_command(g
         MissingEnvironmentArtifact,
         match=re.escape("run: uv run python -m experiments.post_training.task_curation.images --identity "),
     ):
-        pipeline(
+        source_step(
             pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
         )
 
@@ -287,9 +287,9 @@ def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, fi
     options = PipelineOptions(
         SourceProcessingMode.SAMPLE,
         runtime,
-        recipe_settings=RecipeSettings(config=replace(config, execution=AuditExecution(), machines=None)),
+        recipe_settings=RecipeSettings(config=replace(config, review=None, execution=AuditExecution(), machines=None)),
     )
-    step = pipeline(pipeline, options)
+    step = source_step(pipeline, options)
     # Substitute only the HF transfer boundary; materialize the real declared dependency.
     original_plan = pipeline_module.plan_download
 

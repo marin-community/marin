@@ -118,12 +118,13 @@ class SourcePipelineConfig:
     """Campaign settings shared by every source.
 
     ``machines`` runs sandbox grader controls; ``None`` permits only in-process graders.
+    ``review=None`` supports recipes without a model-review rubric.
     """
 
     mode: SourceProcessingMode
     quality_policy: SourceQualityPolicy
     verification_policy: SourceVerificationPolicy
-    review: ReviewConfig
+    review: ReviewConfig | None
     execution: AuditExecution
     filter_policy: FilterPolicy
     normalized_shards: int
@@ -961,6 +962,8 @@ def run_source_pipeline(
         )
     if config is None or config.mode != mode:
         raise ValueError("Reviewed modes require a matching source pipeline configuration")
+    if recipe.rubric is not None and config.review is None:
+        raise ValueError("A recipe with a rubric requires review configuration")
     telemetry = SourceTelemetry(canonical_source, output_path)
     run = _SourceRun(
         recipe, context, source_input, StoragePath(output_path), config, telemetry, source_overrides, parquet_shard_bytes

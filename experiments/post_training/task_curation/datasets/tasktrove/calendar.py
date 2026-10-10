@@ -39,7 +39,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, recipe_source
+from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 WITNESS_PATH = "solution/answer.json"
@@ -152,7 +152,7 @@ def calendar_golden(task: TaskSpec) -> Reply | None:
     return None if witness is None else answer_reply(task, witness)
 
 
-def sources() -> list[RlDataSource[RlDataPipeline]]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     sources = (
         (
             "tasktrove-calendar",
@@ -187,9 +187,10 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
         ),
     )
     return [
-        recipe_source(
+        RlDataSource(
             info=info,
-            pipeline=RlDataPipeline(
+            pipeline=process_rows,
+            config=CurationRecipe(
                 name=name,
                 source=tasktrove_source(config),
                 convert=TaskTroveConverter(config, convert_calendar),

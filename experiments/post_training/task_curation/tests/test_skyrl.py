@@ -28,15 +28,15 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.task_grading import grade_task
 
 from experiments.post_training.task_curation.datasets.skyrl import code, ifeval, math, mcq, preference
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, source_files
+from experiments.post_training.task_curation.pipeline import CurationRecipe, source_files
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
     fixture_context,
 )
 
-PIPELINES = {
-    source.name: cast(RlDataPipeline, source.pipeline)
+RECIPES = {
+    source.name: cast(CurationRecipe, source.config)
     for module in (math, code, ifeval, mcq, preference)
     for source in module.sources()
 }
@@ -241,7 +241,7 @@ def verifier_file(task: TaskSpec, path: str) -> bytes:
 
 @pytest.mark.parametrize("name", sorted(ANSWERS))
 def test_in_process_grader_scores_the_known_answer(name):
-    task = converted_task(PIPELINES[name], ROWS[name])
+    task = converted_task(RECIPES[name], ROWS[name])
     correct, wrong = ANSWERS[name]
     assert isinstance(task.grader, VerifyitGrader) and task.grader.environment is None
     assert grade_reply(task, correct).reward == 1.0
@@ -249,7 +249,7 @@ def test_in_process_grader_scores_the_known_answer(name):
 
 
 def test_gpqa_shuffles_choices_and_keys_the_correct_option():
-    task = converted_task(PIPELINES["gpqa"], ROWS["gpqa"])
+    task = converted_task(RECIPES["gpqa"], ROWS["gpqa"])
     prompt = task.context.events[-1].content
     letter = next(line[0] for line in prompt.splitlines() if line.endswith(". Neutron"))
     wrong = next(line[0] for line in prompt.splitlines() if line.endswith(". Proton"))
@@ -259,10 +259,10 @@ def test_gpqa_shuffles_choices_and_keys_the_correct_option():
 
 @pytest.mark.parametrize("name", sorted(CODE_SOURCES))
 def test_code_task_golden_control_replays_the_known_solution(name):
-    task = converted_task(PIPELINES[name], ROWS[name])
+    task = converted_task(RECIPES[name], ROWS[name])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
-    assert grader.environment == fixture_context(PIPELINES[name]).grader_environment
+    assert grader.environment == fixture_context(RECIPES[name]).grader_environment
     final_prompt = task.context.events[-1]
     assert isinstance(final_prompt, TextMessage) and final_prompt.role == "user"
     golden = code.reference_solution(task)
@@ -279,7 +279,7 @@ def test_code_task_golden_control_replays_the_known_solution(name):
 
 
 def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
-    pipeline = PIPELINES["eurus2_code"]
+    pipeline = RECIPES["eurus2_code"]
     assert pipeline.source.select is not None
     assert not pipeline.source.select({**ROWS["eurus2_code"], "ability": "math"}, fixture_context(pipeline))
     task = converted_task(pipeline, ROWS["eurus2_code"])
@@ -295,9 +295,9 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
     ],
 )
 def test_ifeval_task_gives_the_scorer_skyrl_constraints(name, constraints):
-    task = converted_task(PIPELINES[name], ROWS[name])
+    task = converted_task(RECIPES[name], ROWS[name])
     assert isinstance(task.grader, ScriptGrader)
-    assert task.grader.environment == fixture_context(PIPELINES[name]).grader_environment
+    assert task.grader.environment == fixture_context(RECIPES[name]).grader_environment
     assert grader_config(task)["constraints"] == constraints
 
 
@@ -309,14 +309,14 @@ def test_nemotron_repeat_prompt_constraint_receives_the_instruction():
             "instruction_kwargs": [{"prompt_to_repeat": "Write a haiku about rain."}],
         },
     }
-    task = converted_task(PIPELINES["nemotron_if"], row)
+    task = converted_task(RECIPES["nemotron_if"], row)
     (constraint,) = grader_config(task)["constraints"]
     assert constraint == {"func_name": "validate_repeat_prompt", "original_prompt": row["input"][0]["content"]}
 
 
 @pytest.mark.parametrize("name", sorted(PREFERENCE_SOURCES))
 def test_preference_task_hides_candidates_and_has_no_grader(name):
-    task = converted_task(PIPELINES[name], ROWS[name])
+    task = converted_task(RECIPES[name], ROWS[name])
     assert isinstance(task.grader, NoGrader)
     final = task.context.events[-1]
     assert isinstance(final, TextMessage) and final.role == "user"
@@ -399,7 +399,7 @@ REJECTIONS = [
 
 @pytest.mark.parametrize(("name", "changes", "kind", "reason"), REJECTIONS)
 def test_skyrl_converter_rejects_unusable_rows(name, changes, kind, reason):
-    result = convert_row(PIPELINES[name], {**ROWS[name], **changes})
+    result = convert_row(RECIPES[name], {**ROWS[name], **changes})
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (kind, reason)
 
@@ -407,14 +407,14 @@ def test_skyrl_converter_rejects_unusable_rows(name, changes, kind, reason):
 def test_apps_golden_skips_python2_solutions_for_the_first_python3_one():
     python2 = "a, b = map(int, raw_input().split())\nprint a + b"
     row = {**ROWS["apps"], "solutions": json.dumps([python2, SUM_SOLUTION])}
-    golden = code.reference_solution(converted_task(PIPELINES["apps"], row))
+    golden = code.reference_solution(converted_task(RECIPES["apps"], row))
     assert golden is not None
     assert golden.event == TextMessage(role="assistant", content=f"```python\n{SUM_SOLUTION}\n```")
 
 
 def test_apps_accepts_alternative_expected_outputs():
     row = {**ROWS["apps"], "input_output": json.dumps({"inputs": [""], "outputs": [["a", "b"]]})}
-    assert isinstance(converted_task(PIPELINES["apps"], row).grader, ScriptGrader)
+    assert isinstance(converted_task(RECIPES["apps"], row).grader, ScriptGrader)
 
 
 def test_asdiv_reader_yields_problem_fields(tmp_path):
@@ -424,7 +424,7 @@ def test_asdiv_reader_yields_problem_fields(tmp_path):
         "<Body>Seven apples.</Body><Question>How many?</Question><Answer>7 (apples)</Answer>"
         "</Problem></ProblemSet></Machine-Reading-Corpus-File>"
     )
-    (row,) = math.asdiv_rows(StoragePath(str(path)), fixture_context(PIPELINES["asdiv"]))
+    (row,) = math.asdiv_rows(StoragePath(str(path)), fixture_context(RECIPES["asdiv"]))
     assert row == {
         "ID": "nluds-0001",
         "Grade": "1",
@@ -464,8 +464,8 @@ def staged_component_rows(tmp_path, parent: list[dict], kto: list[dict], name: s
     return staged_raw_file_rows(
         str(tmp_path / "kto"),
         SourceShard(preference.TRAIN_FILE, 0, 1, None),
-        source_files(PIPELINES[name].source),
-        fixture_context(PIPELINES[name], {preference.PARENT_INPUT: StoragePath(str(tmp_path / "parent"))}),
+        source_files(RECIPES[name].source),
+        fixture_context(RECIPES[name], {preference.PARENT_INPUT: StoragePath(str(tmp_path / "parent"))}),
     )
 
 
@@ -484,7 +484,7 @@ def test_kto_component_rows_keep_history_labels_order_and_duplicates(tmp_path):
     assert [row["data"]["label"] for row in selected] == [False, True, False, True]
     for row in selected:
         assert row["data"]["kto_component_provenance"]["parent_rows"] == [0, 2]
-        task = converted_task(PIPELINES["kto_component_capybara"], row["data"])
+        task = converted_task(RECIPES["kto_component_capybara"], row["data"])
         first, *_ = task.context.events
         assert isinstance(first, TextMessage) and first.content == "First system"
         assert len(task.context.events) == 4

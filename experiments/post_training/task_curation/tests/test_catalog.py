@@ -14,7 +14,7 @@ from taskcompendium.pipeline.inputs import SourceFormat
 from experiments.post_training.task_curation.count_inputs import parquet_counts
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.export_catalog import catalog_document, source_row
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, recipe_source
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import DataSourceReview, RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
@@ -28,12 +28,13 @@ def test_parquet_count_export_identifies_the_counted_input(tmp_path):
     metadata.write_text("pinned-input\nfile-etag\n0\n")
     count = parquet_counts(snapshot, "pinned-input", "*.parquet")["tasks.parquet"]
     pipeline = replace(
-        cast(RlDataPipeline, next(source.pipeline for source in skyrl_math.sources() if source.name == "math500")),
+        cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500")),
         source=HfSource("local/questions", "pinned-input", ("tasks.parquet",), SourceFormat.PARQUET),
     )
-    source = recipe_source(
+    source = RlDataSource(
+        pipeline=process_rows,
         info=SourceInfo(id="local:questions", title="Questions", origin="local", count=count),
-        pipeline=pipeline,
+        config=pipeline,
     )
     row = source_row(source)
     assert row["task_count"] == 3

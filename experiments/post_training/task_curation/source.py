@@ -4,9 +4,41 @@
 """Source identity and assessments, independent of the Atlas presentation."""
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Protocol
 
-from experiments.post_training.task_curation.invocation import CurationPipeline
+from marin.execution.lazy import ArtifactStep
+
+from experiments.post_training.task_curation.campaign import CampaignArtifact
+from experiments.post_training.task_curation.invocation import PipelineOptions
+
+
+class PinnedReference(Protocol):
+    """Catalog identity exposed by a dataset's existing pinned input."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def revision(self) -> str | None: ...
+
+    @property
+    def url(self) -> str: ...
+
+
+class CatalogConfig(Protocol):
+    """Catalog facts; each dataset supplies its own execution configuration."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def version(self) -> str: ...
+
+    @property
+    def dataset(self) -> PinnedReference | None: ...
+
+    @property
+    def files(self) -> tuple[str, ...]: ...
 
 
 @dataclass(frozen=True)
@@ -26,8 +58,8 @@ class SourceInfo:
     before conversion or curation. Leave it unknown unless the pinned payload
     or a complete manifest establishes it. A sample size is not a source count.
 
-    ``dataset`` identifies runnable sources and inventory entries. Recipe
-    registration derives it from the pinned input. Tags describe task type,
+    ``dataset`` identifies inventory entries without a configuration. Runnable
+    sources expose their configured pinned input directly. Tags describe task type,
     interaction, benchmark status, and source-specific search terms.
     """
 
@@ -58,26 +90,36 @@ class DataSourceReview:
 
 
 @dataclass(frozen=True)
-class RlDataSource[PipelineT: CurationPipeline]:
-    """One source population, its assessment, and an optional curation callable.
+class RlDataSource[ConfigT: CatalogConfig]:
+    """One source population, its dataset-owned configuration and callable.
 
     Stable IDs preserve Atlas review history even when the callable changes.
     Sources without a pipeline remain discoverable in the inventory.
-    Recipe registration derives immutable catalog fields from its declaration.
-    Other datasets specify those fields independently.
+    Configurations expose catalog facts independently of execution. Inventory
+    entries without a configuration or callable retain their authored metadata.
     """
 
     info: SourceInfo
-    pipeline: PipelineT | None = None
+    config: ConfigT | None = None
+    pipeline: "CurationPipeline[ConfigT] | None" = None
     review: DataSourceReview = field(default_factory=DataSourceReview)
-    version: str = "1"
-    files: tuple[str, ...] = ()
-    name: str = field(default="", kw_only=True)
-
-    def __post_init__(self) -> None:
-        if not self.name:
-            object.__setattr__(self, "name", self.info.id.partition(":")[2])
 
     @property
-    def dataset(self) -> SourceReference | None:
-        return self.info.dataset
+    def name(self) -> str:
+        return self.config.name if self.config is not None else self.info.id.partition(":")[2]
+
+    @property
+    def version(self) -> str:
+        return self.config.version if self.config is not None else "1"
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        return self.config.files if self.config is not None else ()
+
+    @property
+    def dataset(self) -> PinnedReference | None:
+        return self.config.dataset if self.config is not None else self.info.dataset
+
+
+class CurationPipeline[ConfigT: CatalogConfig](Protocol):
+    def __call__(self, source: RlDataSource[ConfigT], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]: ...

@@ -20,7 +20,7 @@ Building the catalog performs no downloads, inference or job submission.
 `RlDataSource.pipeline` is one graph-building callable:
 
 ```python
-def curate(source: CurationSource, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
+def curate(source: RlDataSource[MyConfig], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     ...
 ```
 
@@ -36,7 +36,7 @@ named output and evidence paths, and the stages that actually ran. It requires n
 `final` or admitted view. Exceptions enter the campaign's failure report while
 peer results remain available.
 
-`RlDataPipeline` is a reusable recipe implementation of this same callable. It
+`process_rows(source: RlDataSource[CurationRecipe], options)` is a reusable callable. It
 chooses pinned downloads and grader dependencies, then invokes the existing
 source processor. Review endpoints and credentials resolve only during its
 chosen review path; controller lookup occurs when its grader machine is used.
@@ -46,11 +46,10 @@ root; ingestion dependencies retain their versions and caches. Recipe conversion
 refuses existing `normalize/` or `manifest.json` payloads, including partial
 outputs. Other datasets own their overwrite behavior.
 
-Catalog fields are available without executing a pipeline. `recipe_source`
-derives `name`, `version`, `SourceInfo.dataset` and `files` once from its immutable
-declaration. Other registrations supply these fields directly; an omitted name
-uses the suffix of `SourceInfo.id` after its first colon. Atlas reads these fields
-without inspecting the execution implementation.
+`RlDataSource` stores its typed dataset-owned `config` and one plain callable.
+Configurations expose catalog facts (`name`, `version`, `dataset`, `files`) without
+converter, rubric or service requirements. Pinned inputs expose their reference
+directly. Atlas reads these facts without invoking or inspecting the callable.
 
 ## Package organization
 
@@ -62,7 +61,7 @@ without inspecting the execution implementation.
 | `experiments/post_training/task_curation/environment_runtime.py` | The uv environments that local graders run in on the Zephyr worker |
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()` and `runnable_sources()` |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
-| `experiments/post_training/task_curation/pipeline.py` | `RlDataPipeline` and its `data/rl/<name>-<hash>` artifact |
+| `experiments/post_training/task_curation/pipeline.py` | `CurationRecipe`, `process_rows` and its `data/rl/<name>-<hash>` artifact |
 | `experiments/post_training/task_curation/pipeline.py`, `local.py` | Source-level mode dispatch and local mechanical conversion |
 | `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, shared pool and per-source results |
 | `taskcompendium.convert` | Conversion techniques shared by declarations |
@@ -76,12 +75,11 @@ ArtifactSteps.
 
 ## Declarations
 
-An `RlDataSource` has `info`, `review` and an optional `pipeline`.
+An `RlDataSource` has `info`, `review`, a typed `config` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
 search tags, notes and an optional input-row count. A `SourceReference` groups a
-name, revision and URL for the verifier or dataset. Recipe registrations derive
-dataset identity from their declaration; other registrations specify it
-independently of execution. `DataSourceReview` records an authored grade, evidence URL, date and
+name, revision and URL for the verifier or inventory dataset. Runnable sources
+expose their pinned input through `config.dataset`. `DataSourceReview` records an authored grade, evidence URL, date and
 the dataset/verifier revisions it covers. Its default is unrated. Executed
 reviews and difficulty measurements remain in the Atlas database.
 
@@ -100,7 +98,7 @@ See [RL Data Atlas](rl-data-atlas.md) for publishing and saved reviews, and the
 [experiment README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
 for offline count regeneration.
 
-The `RlDataPipeline` recipe has these fields:
+The `CurationRecipe` configuration has these fields:
 
 | Field | Meaning |
 |---|---|
@@ -309,7 +307,8 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
-Build the declared environments first, with the same `MARIN_PREFIX`:
+Build the [registered environments](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/images/README.md#building)
+first, with the same `MARIN_PREFIX`:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.images --all

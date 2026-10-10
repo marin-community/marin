@@ -64,6 +64,7 @@ def test_dataset_campaign_retains_named_products_without_review_or_grader_depend
         assert json.loads(StoragePath(result.outputs["numbers"]).read_text()) == expected
         assert json.loads(StoragePath(result.evidence["ingestion"]).read_text()) == {
             "source": "numbers",
+            "catalog_id": source.info.id,
             "mode": mode,
             "input": str(primary),
         }

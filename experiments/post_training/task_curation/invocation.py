@@ -6,21 +6,11 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
 
-from marin.execution.lazy import ArtifactStep
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
-from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime
+from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.settings import RecipeSettings
-
-
-class CurationSource(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def version(self) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -45,7 +35,3 @@ class PipelineOptions:
     inputs: InputOverrides = field(default_factory=InputOverrides)
     local: LocalPaths | None = None
     recipe_settings: RecipeSettings | None = None
-
-
-class CurationPipeline(Protocol):
-    def __call__(self, source: CurationSource, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]: ...

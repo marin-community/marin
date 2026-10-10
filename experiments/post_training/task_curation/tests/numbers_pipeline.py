@@ -6,7 +6,6 @@
 import hashlib
 import json
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 
 from marin.execution.artifact import Artifact
@@ -16,9 +15,20 @@ from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
-from experiments.post_training.task_curation.invocation import CurationSource, PipelineOptions
+from experiments.post_training.task_curation.invocation import PipelineOptions
 from experiments.post_training.task_curation.results import PipelineResult
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+
+NUMBERS_DATASET = SourceReference("local-numbers", "pinned", "https://example.org/numbers")
+
+
+@dataclass(frozen=True)
+class NumbersConfig:
+    name: str
+    input_path: Path
+    version: str = "1"
+    dataset: SourceReference = NUMBERS_DATASET
+    files: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,7 +49,10 @@ class NumbersRun:
     limit: int | None
 
 
-def numbers_pipeline(source: CurationSource, options: PipelineOptions, *, path: Path) -> ArtifactStep[CampaignArtifact]:
+def numbers_pipeline(source: RlDataSource[NumbersConfig], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
+    settings = source.config
+    assert settings is not None
+    path = settings.input_path
     digest = hashlib.sha256(str(path).encode()).hexdigest()[:16]
     upstream = ArtifactStep(
         name=f"task-curation/numbers-input/{digest}",
@@ -66,7 +79,11 @@ def numbers_pipeline(source: CurationSource, options: PipelineOptions, *, path: 
         output = StoragePath(run.output_path) / "numbers.json"
         output.write_text(json.dumps([value * factor for value in values]))
         evidence = StoragePath(run.output_path) / "ingestion.json"
-        evidence.write_text(json.dumps({"source": source.name, "mode": options.mode, "input": run.input_path}))
+        evidence.write_text(
+            json.dumps(
+                {"source": source.name, "catalog_id": source.info.id, "mode": options.mode, "input": run.input_path}
+            )
+        )
         result = PipelineResult(
             SourceStatus.SAMPLED if options.mode == SourceProcessingMode.SAMPLE else SourceStatus.COMPLETED,
             {"numbers": str(output)},
@@ -85,14 +102,13 @@ def numbers_pipeline(source: CurationSource, options: PipelineOptions, *, path: 
     )
 
 
-def number_source(path: Path, name: str = "numbers") -> RlDataSource:
+def number_source(path: Path, name: str = "numbers") -> RlDataSource[NumbersConfig]:
     return RlDataSource(
         info=SourceInfo(
             id=f"fixture:{name}",
             title=name,
             origin="fixture",
-            dataset=SourceReference("local-numbers", "pinned", "https://example.org/numbers"),
         ),
-        pipeline=partial(numbers_pipeline, path=path),
-        version="1",
+        config=NumbersConfig(name, path),
+        pipeline=numbers_pipeline,
     )

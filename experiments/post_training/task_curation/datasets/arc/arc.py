@@ -49,7 +49,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import SCORERS as ULTRA_SCORERS
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import ULTRA_BASE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, recipe_source
+from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 INDUCTIVE_CONFIG = "laion__nemotron-gym-arc-agi-python-inductive-v2"
@@ -247,9 +247,10 @@ TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden, memory_mb=GRADER_MEMORY_M
 ULTRA_ARC_CONTROLS = Controls(golden=ultra_arc_golden, memory_mb=GRADER_MEMORY_MB)
 
 
-def sources() -> list[RlDataSource[RlDataPipeline]]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-arc-agi-python-inductive-v2",
                 title="laion/nemotron-gym-arc-agi-python-inductive-v2",
@@ -259,7 +260,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 count=10000,
                 notes="Agent writes a transform, graded on held-out grids. One of the best sources here.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-arc_inductive",
                 source=tasktrove_source(INDUCTIVE_CONFIG),
                 convert=convert_tasktrove_inductive,
@@ -272,7 +273,8 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 ships=ARC_SHIPS,
             ),
         ),
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-arc-agi-transductive-v3",
                 title="laion/nemotron-gym-arc-agi-transductive-v3",
@@ -282,7 +284,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 count=10000,
                 notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-arc_transductive",
                 source=tasktrove_source(TRANSDUCTIVE_CONFIG),
                 convert=convert_tasktrove_transductive,

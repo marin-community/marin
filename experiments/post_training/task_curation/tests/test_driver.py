@@ -5,40 +5,41 @@ import json
 import os
 import shutil
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from click import UsageError
 from click.testing import CliRunner
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from iris.cluster.client.job_info import JobInfo, set_job_info
-from iris.cluster.types import JobName
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.backends.iris.machine import IrisMachineFactory
-from shellbox.backends.local.machine import LocalMachineFactory
-from shellbox.image import RegistryImage
 from shellbox.machine import HostImage, NetworkPolicy
-from taskcompendium.convert.environment import grading_environment
+from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
+from experiments.post_training.task_curation import pipeline as processor
+from experiments.post_training.task_curation.campaign import CampaignPool
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import environment_artifact
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements, recipe_source
+from experiments.post_training.task_curation.pipeline import (
+    CurationRecipe,
+    HfSource,
+    environment_requirements,
+    process_rows,
+)
 from experiments.post_training.task_curation.settings import (
     VerificationBackend,
     campaign_machines,
-    job_controller_url,
 )
-from experiments.post_training.task_curation.source import SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
     REPOSITORY,
     install_fake_build_tools,
@@ -48,11 +49,10 @@ from experiments.post_training.task_curation.tests.numbers_pipeline import numbe
 
 PINNED_WORKER = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
 CONTROLLER_URL = "http://controller.invalid"
-GRADER = "ghcr.io/marin-community/task-curation-grader@sha256:" + "b" * 64
 
 
-def math500() -> RlDataPipeline:
-    return cast(RlDataPipeline, next(source.pipeline for source in skyrl_math.sources() if source.name == "math500"))
+def math500() -> CurationRecipe:
+    return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
 
 
 @pytest.fixture
@@ -62,8 +62,10 @@ def catalog(monkeypatch, tmp_path):
         "experiments.post_training.task_curation.driver.runnable_sources",
         lambda: {
             **{
-                name: recipe_source(
-                    info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), pipeline=pipeline
+                name: RlDataSource(
+                    pipeline=process_rows,
+                    info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"),
+                    config=pipeline,
                 )
                 for name, pipeline in pipelines.items()
             },
@@ -104,15 +106,6 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     assert "Unknown source: unknown" in unknown.output
 
 
-def test_iris_schedules_each_grader_image_on_the_controller_without_network():
-    machines = campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, CONTROLLER_URL)
-    factory, spec = machines.machine(grading_environment(GRADER), 2048)
-    assert isinstance(factory, IrisMachineFactory)
-    assert spec.source == RegistryImage(GRADER)
-    assert spec.network == NetworkPolicy.DENY
-    assert spec.memory_mb == 2048
-
-
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
@@ -129,32 +122,10 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     runtime = local_runtime(artifact.lock_url)
     request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
     assert runtime.lock_sha256 == artifact.lock_sha256 and runtime.data == ("nltk:punkt_tab",)
-    assert isinstance(factory, LocalMachineFactory)
     assert built == [runtime.root]
     assert factory.read_only == (runtime.root,) and factory.bin_dirs == (runtime.root / "env" / "venv" / "bin",)
     assert spec.source == HostImage() and spec.network == NetworkPolicy.DENY and spec.workdir == "/app"
     assert spec.env == {"NLTK_DATA": str(runtime.root / "share" / "nltk_data")}
-
-
-def test_iris_verification_requires_a_controller():
-    with pytest.raises(UsageError, match="--controller-url"):
-        campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, None).machine(grading_environment(GRADER), 2048)
-
-
-def test_machine_identity_records_the_backend_and_controller_presence():
-    iris = campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, CONTROLLER_URL).identity()
-    gvisor = campaign_machines(VerificationBackend.GVISOR, PINNED_WORKER, None).identity()
-    assert (iris["backend"], iris["controller"]) == ("iris", True)
-    assert (gvisor["backend"], gvisor["controller"]) == ("gvisor", False)
-    other_controller = campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, "http://other.invalid").identity()
-    assert other_controller == iris
-
-
-@pytest.fixture
-def iris_job():
-    set_job_info(JobInfo(task_id=JobName.from_string("/fixture/driver/0"), controller_address=CONTROLLER_URL))
-    yield
-    set_job_info(None)
 
 
 def iris_arguments(tmp_path) -> list[str]:
@@ -168,12 +139,6 @@ def test_iris_backend_planning_does_not_require_a_controller(tmp_path, catalog):
     result = CliRunner().invoke(main, iris_arguments(tmp_path))
     assert result.exit_code == 0, result.output
     assert not (tmp_path / "report.json").exists()
-
-
-def test_iris_backend_inside_a_job_uses_the_job_controller(tmp_path, catalog, iris_job):
-    assert job_controller_url() == CONTROLLER_URL
-    result = CliRunner().invoke(main, iris_arguments(tmp_path))
-    assert result.exit_code == 0, result.output
 
 
 def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch):
@@ -264,7 +229,9 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
         outcome = json.loads(report.read_text())["sources"][0]
         result = outcome["result"]
         assert json.loads(StoragePath(result["outputs"]["numbers"]).read_text()) == expected
-        assert json.loads(StoragePath(result["evidence"]["ingestion"]).read_text())["mode"] == mode
+        evidence = json.loads(StoragePath(result["evidence"]["ingestion"]).read_text())
+        assert evidence["mode"] == mode
+        assert evidence["catalog_id"] == source.info.id
         assert result["stages"] == ["ingest", "multiply"]
         if mode == "quick":
             # The generated pipeline really consumes its upstream artifact.
@@ -277,5 +244,76 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
             assert repeated.exit_code == 0, repeated.output
             assert json.loads(StoragePath(result["outputs"]["numbers"]).read_text()) == expected
             assert Path(os.environ["MARIN_PREFIX"]) == tmp_path / "artifacts"
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize("mode", ["sample", "full"])
+@pytest.mark.parametrize("rubric", [None, "Check the reference answer."])
+def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path, monkeypatch, mode, rubric):
+    monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.driver.CampaignPool",
+        partial(CampaignPool, chunk_storage_prefix=str(tmp_path / "chunks")),
+    )
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    source = replace(
+        declared,
+        config=replace(
+            math500(),
+            source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+            rubric=rubric,
+            controls=None,
+            grader=None,
+        ),
+    )
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    (remote / "rows.jsonl").write_text('{"problem": "Two plus two?", "answer": "4"}\n')
+    original = processor.plan_download
+    monkeypatch.setattr(
+        processor, "plan_download", lambda request: original(replace(request, source_url_override=str(remote)))
+    )
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
+    report = tmp_path / "report.json"
+    options = [
+        "--mode",
+        mode,
+        "--max-workers",
+        "1",
+        "--coordinator-memory",
+        "1g",
+        "--worker-image",
+        "fixture-image",
+        "--normalized-shards",
+        "1",
+        "--report-path",
+        str(report),
+    ]
+    runner = CliRunner()
+    planned = runner.invoke(main, options)
+    assert planned.exit_code == (2 if rubric is not None else 0), planned.output
+    assert not (tmp_path / "artifacts").exists()
+    assert not report.exists()
+    client = LocalClient()
+    try:
+        with set_current_client(client):
+            executed = runner.invoke(main, [*options, "--run"])
+        if rubric is not None:
+            assert executed.exit_code == 2, executed.output
+            assert not (tmp_path / "artifacts").exists()
+            assert not report.exists()
+            return
+        assert executed.exit_code == 0, executed.output
+        result = json.loads(report.read_text())["sources"][0]["result"]
+        rows = [
+            row
+            for shard in (StoragePath(result["outputs"]["final"]) / "*.parquet").glob()
+            for row in load_parquet(str(shard))
+        ]
+        assert [row["source_row"] for row in rows] == ["rows.jsonl:0"]
+        assert result["stages"] == ["download", "normalize", "final"]
     finally:
         client.shutdown()

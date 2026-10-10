@@ -24,14 +24,12 @@ from experiments.post_training.task_curation.campaign import CampaignFailed, Cam
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
 from experiments.post_training.task_curation.invocation import InputOverrides, LocalPaths, PipelineOptions
 from experiments.post_training.task_curation.local import run_local_steps
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, recipe_source
-from experiments.post_training.task_curation.source import SourceInfo
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 
 
-def run_recipe_sources(
-    pipelines, input_root, output_root, *, inputs, max_workers, download_cache, source_files_override=None
-):
+def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, download_cache, source_files_override=None):
     runtime = CampaignRuntime()
     options = PipelineOptions(
         SourceProcessingMode.QUICK,
@@ -40,7 +38,9 @@ def run_recipe_sources(
         local=LocalPaths(output_root, download_cache),
     )
     sources = {
-        name: recipe_source(info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), pipeline=pipeline)
+        name: RlDataSource(
+            pipeline=process_rows, info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), config=pipeline
+        )
         for name, pipeline in pipelines.items()
     }
     steps = {name: source.pipeline(source, options) for name, source in sources.items()}
@@ -56,7 +56,7 @@ def convert_local_answer(row, context):
 
 @pytest.fixture
 def local_source():
-    source = cast(RlDataPipeline, calendar.sources()[0].pipeline)
+    source = cast(CurationRecipe, calendar.sources()[0].config)
     return replace(
         source,
         source=HfSource("fixture/questions", "a" * 40, ("rows.parquet",), SourceFormat.PARQUET),
@@ -73,7 +73,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     pq.write_table(pa.Table.from_pylist([{"path": "original-row", "prompt": "One plus one?", "answer": "two"}]), staged)
     output = tmp_path / "output"
     with pytest.raises(CampaignFailed):
-        run_recipe_sources(
+        run_recipes(
             {missing.name: missing, source.name: source},
             input_root,
             output,
@@ -121,7 +121,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     auxiliary = remote / "fixture/answers" / revision
     auxiliary.mkdir(parents=True)
     (auxiliary / "answer.txt").write_text("two")
-    source = cast(RlDataPipeline, calendar.sources()[0].pipeline)
+    source = cast(CurationRecipe, calendar.sources()[0].config)
     source = replace(
         source,
         source=HfSource("fixture/questions", revision, ("rows.jsonl",), SourceFormat.JSONL),
@@ -138,7 +138,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     monkeypatch.setattr(pipeline_module, "plan_download", local_plan)
     cache = tmp_path / "downloads"
     cold = tmp_path / "cold"
-    run_recipe_sources({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
+    run_recipes({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
     task = converted_task(cold, source.name)
     assert verifyit_spec(cast(VerifyitGrader, task.grader)) == ExactSpec(("two",), ignore_case=False)
     assert not list(cache.rglob("unselected.jsonl"))
@@ -151,7 +151,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     payloads = {file: file.read_bytes() for file in (cold / source.name).rglob("*.parquet")}
     manifest_bytes = (cold / source.name / "manifest.json").read_bytes()
     with pytest.raises(CampaignFailed):
-        run_recipe_sources({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
+        run_recipes({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
     assert os.environ["MARIN_PREFIX"] == ambient
     assert {file: file.read_bytes() for file in payloads} == payloads
     assert (cold / source.name / "manifest.json").read_bytes() == manifest_bytes
@@ -159,7 +159,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
 
     shutil.rmtree(remote)
     warm = tmp_path / "warm"
-    run_recipe_sources({source.name: source}, None, warm, inputs={}, max_workers=1, download_cache=cache)
+    run_recipes({source.name: source}, None, warm, inputs={}, max_workers=1, download_cache=cache)
     assert converted_task(warm, source.name) == task
 
     # Remove the test-owned auxiliary cache after taking the remote offline.
@@ -170,7 +170,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     override.mkdir()
     (override / "answer.txt").write_text("explicit answer")
     overridden = tmp_path / "overridden"
-    run_recipe_sources(
+    run_recipes(
         {source.name: source},
         None,
         overridden,
@@ -191,7 +191,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     (updated / "rows.jsonl").write_text('{"prompt": "The next pinned question"}\n')
     source = replace(source, source=replace(cast(HfSource, source.source), revision=next_revision))
     next_output = tmp_path / "next"
-    run_recipe_sources({source.name: source}, None, next_output, inputs={}, max_workers=1, download_cache=cache)
+    run_recipes({source.name: source}, None, next_output, inputs={}, max_workers=1, download_cache=cache)
     next_task = converted_task(next_output, source.name)
     assert next_task.source.revision == next_revision
     assert cast(TextMessage, next_task.context.events[0]).content == "The next pinned question"
@@ -205,7 +205,7 @@ def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes
         pa.Table.from_pylist([{"path": "original-row", "prompt": "One plus one?", "answer": "two"}]), local_file
     )
     output = tmp_path / "output"
-    run_recipe_sources(
+    run_recipes(
         {source.name: source},
         None,
         output,

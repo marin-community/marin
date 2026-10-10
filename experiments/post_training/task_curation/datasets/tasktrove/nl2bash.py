@@ -19,7 +19,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, environment_requirements, recipe_source
+from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 AGENT_IMAGE = Environment(
@@ -54,9 +54,10 @@ def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedT
     )
 
 
-def sources() -> list[RlDataSource[RlDataPipeline]]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
                 title="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
@@ -66,7 +67,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 count=1498,
                 notes="Semantic output comparison against an oracle command run in the same sandbox.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-nl2bash",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_nl2bash_task),

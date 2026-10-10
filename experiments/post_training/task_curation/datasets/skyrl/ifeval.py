@@ -27,7 +27,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, recipe_source
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 IFEVAL_VERIFIER = SourceReference(
@@ -185,9 +185,10 @@ def convert_rlvr_ifeval(row: RawRow, context: ConversionContext) -> TaskSpec | I
 CONTROLS = Controls()
 
 
-def sources() -> list[RlDataSource[RlDataPipeline]]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:nemotron_if",
                 title="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
@@ -196,7 +197,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/ifeval"),
                 verifier=IFEVAL_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="nemotron_if",
                 source=HfSource(
                     "nvidia/Llama-Nemotron-Post-Training-Dataset",
@@ -214,7 +215,8 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 ships=(SCORERS,),
             ),
         ),
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:rlvr_ifeval",
                 title="allenai/RLVR-IFeval",
@@ -223,7 +225,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 tags=("rlvr", "single-turn", "license:odc-by", "gym/ifeval"),
                 verifier=IFEVAL_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="rlvr_ifeval",
                 source=HfSource(
                     "allenai/RLVR-IFeval",

@@ -23,7 +23,7 @@ from verifyit.grade import Status, grade
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.reasoning_gym import generate
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as declarations
-from experiments.post_training.task_curation.pipeline import RlDataPipeline
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
@@ -31,7 +31,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     tasktrove_row,
 )
 
-PIPELINES = {source.name: cast(RlDataPipeline, source.pipeline) for source in declarations.sources()}
+RECIPES = {source.name: cast(CurationRecipe, source.config) for source in declarations.sources()}
 EXCLUDED = (("composite", "Requires explicit component configuration"),)
 TASKTROVE_INSTRUCTION = "Solve x + 8 = 50. Write ONLY your final answer to **`/app/answer.txt`**"
 TASKTROVE_ENTRY = {"question": "Solve x + 8 = 50.", "answer": "42", "metadata": {"source_dataset": "simple_equations"}}
@@ -78,32 +78,32 @@ GRADERS = {
 
 @pytest.mark.parametrize("name", ["reasoning_gym_generated"])
 def test_reasoning_gym_task_runs_its_scorer_in_the_grading_image(name):
-    task = converted_task(PIPELINES[name], ROWS[name])
+    task = converted_task(RECIPES[name], ROWS[name])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
     argv, env = GRADERS[name]
     assert (grader.argv, grader.env, grader.answer_path) == (argv, env, "/app/answer.txt")
-    assert grader.environment == fixture_context(PIPELINES[name]).grader_environment
+    assert grader.environment == fixture_context(RECIPES[name]).grader_environment
     assert task.answer_type == AnswerType.TEXT
-    controls = PIPELINES[name].controls
+    controls = RECIPES[name].controls
     assert controls is not None and controls.golden is not None
     assert controls.golden(task) == Reply(TextMessage(role="assistant", content="42"))
 
 
 def test_generated_task_ships_its_grade_script_with_the_generator_encoding():
-    task = converted_task(PIPELINES["reasoning_gym_generated"], GENERATED_ROW)
+    task = converted_task(RECIPES["reasoning_gym_generated"], GENERATED_ROW)
     assert {resource.path for resource in task.resources.verifier} == {"grade.py", "generate.py", "config.json"}
     assert grader_config(task)["contract"]["generator_version"] == declarations.GENERATOR_VERSION
 
 
 def test_tasktrove_instruction_asks_for_the_answer_in_the_reply():
-    result = convert_row(PIPELINES["tasktrove-reasoning-gym"], tasktrove_archive())
+    result = convert_row(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive())
     assert isinstance(result, NormalizedTask)
     assert result.task.context.events == (
         TextMessage(role="user", content="Solve x + 8 = 50. Return ONLY your final answer in the assistant response"),
     )
     assert [change.field for change in result.changes] == ["instruction"]
-    unrecognized = convert_row(PIPELINES["tasktrove-reasoning-gym"], tasktrove_archive("Put x in /app/answer.txt."))
+    unrecognized = convert_row(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive("Put x in /app/answer.txt."))
     assert isinstance(unrecognized, NormalizedTask)
     message = unrecognized.task.context.events[0]
     assert isinstance(message, TextMessage) and message.content.endswith(declarations.ANSWER_FILE_NOTE)
@@ -122,20 +122,20 @@ def test_tasktrove_instruction_asks_for_the_answer_in_the_reply():
     ],
 )
 def test_tasktrove_rejects_rows_without_an_entry_or_grader(row, kind, reason):
-    result = convert_row(PIPELINES["tasktrove-reasoning-gym"], row)
+    result = convert_row(RECIPES["tasktrove-reasoning-gym"], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (kind, reason)
 
 
 def test_generated_row_without_matching_provenance_is_a_converter_error():
     row = {**GENERATED_ROW, "generation": {**GENERATED_ROW["generation"], "task": "basic_arithmetic"}}
-    result = convert_row(PIPELINES["reasoning_gym_generated"], row)
+    result = convert_row(RECIPES["reasoning_gym_generated"], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (ImportFailureKind.CONVERTER_ERROR, "invalid_generated_reasoning_entry")
 
 
 def test_generated_row_a_fresh_dataset_does_not_reproduce_is_rejected():
-    result = convert_row(PIPELINES["reasoning_gym_generated"], {**GENERATED_ROW, "reproducible": False})
+    result = convert_row(RECIPES["reasoning_gym_generated"], {**GENERATED_ROW, "reproducible": False})
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "irreproducible_entry")
 
@@ -268,7 +268,7 @@ def test_generated_rows_keep_generator_output_out_of_the_jsonl(noisy_generator_w
     controls = first["recorded_pinned_generator_controls"]
     assert controls["positive"] == {"candidate": "0", "reward": 1.0}
     assert controls["negative"] == {"candidate": "definitely wrong", "reward": 0.0}
-    result = convert_row(PIPELINES["reasoning_gym_generated"], first)
+    result = convert_row(RECIPES["reasoning_gym_generated"], first)
     assert isinstance(result, TaskSpec)
     exact = grader_config(TaskSpec.model_validate_json(result.model_dump_json()))["contract"]["entry"]["metadata"]
     fraction = exact["exact_fraction"]
@@ -279,7 +279,7 @@ def test_generated_rows_record_entries_a_fresh_dataset_does_not_reproduce(noisy_
     monkeypatch.setenv("REASONING_TEST_DRIFT", "1")
     (row,) = first_rows(noisy_generator_wheel)
     assert row["reproducible"] is False
-    result = convert_row(PIPELINES["reasoning_gym_generated"], row)
+    result = convert_row(RECIPES["reasoning_gym_generated"], row)
     assert isinstance(result, ImportRejection) and result.reason == "irreproducible_entry"
 
 
@@ -305,13 +305,13 @@ def test_generated_rows_record_a_scorer_error_for_the_wrong_answer(noisy_generat
     (row,) = first_rows(noisy_generator_wheel)
     negative = row["recorded_pinned_generator_controls"]["negative"]
     assert negative["reward"] is None and negative["scoring_error"]["type"] == "ValueError"
-    assert isinstance(convert_row(PIPELINES["reasoning_gym_generated"], row), TaskSpec)
+    assert isinstance(convert_row(RECIPES["reasoning_gym_generated"], row), TaskSpec)
 
 
 def test_generated_row_without_a_known_answer_has_no_golden(noisy_generator_wheel, monkeypatch):
     monkeypatch.setenv("REASONING_TEST_NO_ANSWER", "1")
     (row,) = first_rows(noisy_generator_wheel)
-    task = convert_row(PIPELINES["reasoning_gym_generated"], row)
+    task = convert_row(RECIPES["reasoning_gym_generated"], row)
     assert isinstance(task, TaskSpec)
     assert declarations.generated_golden(task) is None
 
@@ -339,7 +339,7 @@ def test_generated_rows_use_the_declared_hash_seed_not_the_parents(noisy_generat
 
 
 def test_tasktrove_reasoning_gym_preserves_fractional_reward(tmp_path):
-    pipeline = PIPELINES["tasktrove-reasoning-gym"]
+    pipeline = RECIPES["tasktrove-reasoning-gym"]
     task = converted_task(pipeline, tasktrove_archive())
     assert task.grader.environment == fixture_context(pipeline).grader_environment
     tests = tmp_path / "tests"
@@ -356,7 +356,7 @@ def test_tasktrove_reasoning_gym_preserves_fractional_reward(tmp_path):
 
 def test_tasktrove_reasoning_gym_exports_its_source_environment():
     task = converted_task(
-        PIPELINES["tasktrove-reasoning-gym"],
+        RECIPES["tasktrove-reasoning-gym"],
         tasktrove_archive(**{"environment/Dockerfile": b"FROM python:3.11-slim\nWORKDIR /app\n"}),
     )
     payload = harbor_payload(
@@ -383,7 +383,7 @@ def test_tasktrove_reasoning_gym_grades_json_grid_entries(dataset, tmp_path):
         "answer": "1 2\n3 4",
         "metadata": {"source_dataset": dataset, "output": [[1, 2], [3, 4]]},
     }
-    task = converted_task(PIPELINES["tasktrove-reasoning-gym"], tasktrove_archive(entry=entry))
+    task = converted_task(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive(entry=entry))
     tests = tmp_path / "tests"
     tests.mkdir()
     for resource in task.resources.verifier:

@@ -41,10 +41,10 @@ from experiments.post_training.task_curation.datasets.environments import COMPIL
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import (
-    RlDataPipeline,
+    CurationRecipe,
     ShellSim,
     environment_requirements,
-    recipe_source,
+    process_rows,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -193,10 +193,11 @@ def stdio_source(
     environment: Environment | ShellSim = AGENT_IMAGE,
     grader: Environment | None = COMPILER_GRADER_PACKAGES,
     ships: tuple[Path, ...] = (),
-) -> RlDataSource[RlDataPipeline]:
-    return recipe_source(
+) -> RlDataSource[CurationRecipe]:
+    return RlDataSource(
+        pipeline=process_rows,
         info=info,
-        pipeline=RlDataPipeline(
+        config=CurationRecipe(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
             convert=TaskTroveConverter(config, convert),
@@ -211,7 +212,7 @@ def stdio_source(
     )
 
 
-def sources() -> list[RlDataSource[RlDataPipeline]]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         stdio_source(
             "code_contests",

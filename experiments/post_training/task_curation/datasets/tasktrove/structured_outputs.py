@@ -29,7 +29,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, recipe_source
+from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
@@ -109,9 +109,10 @@ def convert_structured_outputs(row: RawRow, context: ConversionContext) -> TaskS
     return rewritten_task(task, original=original, reason=REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource[RlDataPipeline]]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
                 title="laion/nemotron-gym-structured-outputs-v4",
@@ -121,7 +122,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 count=53870,
                 notes="All formats require both a format check and a source-grounding judge.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-structured_outputs",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_structured_outputs),

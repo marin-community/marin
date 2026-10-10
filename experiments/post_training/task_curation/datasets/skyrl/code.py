@@ -30,7 +30,7 @@ from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUs
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, recipe_source
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 LCB_VERIFIER = SourceReference(
@@ -293,9 +293,10 @@ def reference_solution(task: TaskSpec) -> Reply | None:
 CONTROLS = Controls(golden=reference_solution, memory_mb=CODE_GRADER_MEMORY_MB)
 
 
-def sources() -> list[RlDataSource[RlDataPipeline]]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:apps",
                 title="codeparrot/apps",
@@ -304,7 +305,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/lcb"),
                 verifier=LCB_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="apps",
                 source=HfSource(
                     "codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", ("train.jsonl",), SourceFormat.JSONL
@@ -319,7 +320,8 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 ships=(SCORERS,),
             ),
         ),
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:eurus2_code",
                 title="PRIME-RL/Eurus-2-RL-Data · code",
@@ -328,7 +330,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 tags=("rlvr", "single-turn", "license:mit", "gym/lcb"),
                 verifier=LCB_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="eurus2_code",
                 source=HfSource(
                     "PRIME-RL/Eurus-2-RL-Data",
@@ -347,7 +349,8 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 ships=(SCORERS,),
             ),
         ),
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:verifiable_code",
                 title="open-r1/verifiable-coding-problems-python",
@@ -356,7 +359,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 tags=("rlvr", "single-turn", "gym/lcb"),
                 verifier=LCB_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="verifiable_code",
                 source=HfSource(
                     "open-r1/verifiable-coding-problems-python",
@@ -374,7 +377,8 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                 ships=(SCORERS,),
             ),
         ),
-        recipe_source(
+        RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:gretel_text_to_sql",
                 title="gretelai/synthetic_text_to_sql",
@@ -390,7 +394,7 @@ def sources() -> list[RlDataSource[RlDataPipeline]]:
                     ),
                 ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="gretel_text_to_sql",
                 source=HfSource(
                     "gretelai/synthetic_text_to_sql",

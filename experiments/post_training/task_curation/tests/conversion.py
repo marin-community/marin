@@ -17,7 +17,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
 from experiments.post_training.task_curation.images.build import BASE_IMAGE, PYTHON_VERSION, EnvironmentArtifact
 from experiments.post_training.task_curation.pipeline import (
-    RlDataPipeline,
+    CurationRecipe,
     ShellSim,
     environment_requirements,
     source_recipe,
@@ -46,7 +46,7 @@ FIXTURE_GRADER_ENVIRONMENT = environment_requirements(GRADER_PACKAGES, fixture_b
 """The grader packages' environment as the source pipeline supplies it to converters."""
 
 
-def fixture_context(pipeline: RlDataPipeline, inputs: StagedInputs | None = None) -> ConversionContext:
+def fixture_context(pipeline: CurationRecipe, inputs: StagedInputs | None = None) -> ConversionContext:
     """The context the source pipeline supplies, with a fixture build of the declared grader environment."""
     grader = None
     if pipeline.grader is not None:
@@ -56,7 +56,7 @@ def fixture_context(pipeline: RlDataPipeline, inputs: StagedInputs | None = None
 
 
 def convert_row(
-    pipeline: RlDataPipeline, data: dict[str, Any], *, inputs: StagedInputs | None = None
+    pipeline: CurationRecipe, data: dict[str, Any], *, inputs: StagedInputs | None = None
 ) -> TaskSpec | NormalizedTask | ImportRejection:
     """Select, decode and convert one raw source row."""
     context = fixture_context(pipeline, inputs)
@@ -68,7 +68,7 @@ def convert_row(
     return pipeline.convert(RawRow(row_task_id(recipe, source), source, decoded), context)
 
 
-def converted_task(pipeline: RlDataPipeline, data: dict[str, Any], *, inputs: StagedInputs | None = None) -> TaskSpec:
+def converted_task(pipeline: CurationRecipe, data: dict[str, Any], *, inputs: StagedInputs | None = None) -> TaskSpec:
     """Convert a row that must produce a task whose agent environment matches the declaration."""
     result = convert_row(pipeline, data, inputs=inputs)
     if isinstance(result, ImportRejection):
