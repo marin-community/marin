@@ -123,6 +123,7 @@ auth:
   # GitHub GPU workflows submit through the marin hub as github-iris; the
   # remaining non-openathena identities are interactive principals.
   allowed_submitters:
+    - principal:human-079
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - contractor@hai-gcp-models.iam.gserviceaccount.com

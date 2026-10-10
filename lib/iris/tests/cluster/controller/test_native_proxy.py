@@ -3,6 +3,7 @@
 
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,9 +11,12 @@ from typing import cast
 from urllib.parse import unquote
 
 import httpx
+import jwt
 import pytest
 import uvicorn
-from iris.cluster.config import AuthConfig
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from iris.cluster.config import AuthConfig, IapAuthConfig
 from iris.cluster.controller.auth import (
     VERIFIED_IDENTITY_HEADER,
     NativeProxyAuthConfig,
@@ -27,6 +31,7 @@ from iris.managed_thread import ThreadContainer
 from rigging import telemetry
 from rigging.testing import RecordingTelemetryTransport
 from rigging.timing import Duration, ExponentialBackoff
+from rigging.token_authority import generate_ed25519_keypair
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
@@ -34,6 +39,7 @@ from starlette.routing import Route
 
 _ENDPOINT_NAME = "/system/native-test"
 _ENCODED_NAME = "system.native-test"
+_IAP_KEYS_PATH = "/iap-keys"
 
 
 @pytest.fixture
@@ -77,7 +83,7 @@ def _standalone_proxy(auth_config_json: str) -> NativeProxy:
     return proxy
 
 
-def _start_upstream(threads: ThreadContainer) -> tuple[str, list[bytes]]:
+def _start_upstream(threads: ThreadContainer, iap_keys: dict[str, str] | None = None) -> tuple[str, list[bytes]]:
     received_bodies: list[bytes] = []
 
     async def echo(request: Request) -> JSONResponse:
@@ -102,6 +108,9 @@ def _start_upstream(threads: ThreadContainer) -> tuple[str, list[bytes]]:
     async def reject(_request: Request) -> JSONResponse:
         return JSONResponse({"detail": "upstream auth"}, status_code=401)
 
+    async def public_keys(_request: Request) -> JSONResponse:
+        return JSONResponse(iap_keys or {})
+
     server = uvicorn.Server(
         uvicorn.Config(
             Starlette(
@@ -109,6 +118,7 @@ def _start_upstream(threads: ThreadContainer) -> tuple[str, list[bytes]]:
                     Route("/echo", echo, methods=["GET", "POST"]),
                     Route("/redirect", redirect),
                     Route("/reject", reject),
+                    Route(_IAP_KEYS_PATH, public_keys),
                 ]
             ),
             host="127.0.0.1",
@@ -564,6 +574,63 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
     assert forwarded.status_code == 401
     assert authenticated.status_code == 200
     assert spoofed.status_code == 401
+
+
+def test_iap_user_override_preserves_existing_admin_permissions(make_controller, monkeypatch) -> None:
+    key_id = "iap-test"
+    key = ec.generate_private_key(ec.SECP256R1())
+    public_key = (
+        key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
+    audience = "/projects/1/global/backendServices/2"
+    collaborator = "collaborator@example.com"
+    auth = create_controller_auth(
+        AuthConfig(
+            iap=IapAuthConfig(signed_header_audience=audience, unprovisioned_role="admin"),
+            admin_users=[collaborator],
+            user_roles={collaborator: "user"},
+        ),
+        cluster_name="iap-role-test",
+        signing_key_pem=generate_ed25519_keypair().private_pem,
+    )
+
+    def headers(email: str) -> dict[str, str]:
+        assertion = jwt.encode(
+            {"aud": audience, "iss": "https://cloud.google.com/iap", "exp": int(time.time()) + 60, "email": email},
+            key,
+            algorithm="ES256",
+            headers={"kid": key_id},
+        )
+        return {"x-goog-iap-jwt-assertion": assertion, "x-forwarded-for": "203.0.113.10"}
+
+    threads = ThreadContainer()
+    try:
+        upstream, _ = _start_upstream(threads, iap_keys={key_id: public_key})
+        monkeypatch.setattr("iris.cluster.controller.controller.IAP_PUBLIC_KEYS_URL", f"{upstream}{_IAP_KEYS_PATH}")
+        controller = make_controller(host="127.0.0.1", port=0, auth=auth)
+        controller.start()
+        with httpx.Client(base_url=controller.url) as client:
+            for email, expected_role, expected_status in [
+                (collaborator, "user", 403),
+                ("operator@example.com", "admin", 200),
+            ]:
+                request_headers = headers(email)
+                identity = client.post(
+                    "/iris.cluster.ControllerService/GetCurrentUser", json={}, headers=request_headers
+                )
+                assert identity.status_code == 200
+                assert identity.json()["userId"] == email
+                assert identity.json()["role"] == expected_role
+                budget = client.post(
+                    "/iris.cluster.ControllerService/SetUserBudget",
+                    json={"user_id": collaborator, "budget_limit": 100, "max_band": "PRIORITY_BAND_BATCH"},
+                    headers=request_headers,
+                )
+                assert budget.status_code == expected_status
+    finally:
+        threads.stop()
 
 
 @pytest.mark.parametrize(

@@ -560,6 +560,10 @@ class DefaultsConfig(_Config):
 # ---------------------------------------------------------------------------
 
 
+PRINCIPAL_REFERENCE_PREFIX = "principal:"
+UserRole = Literal["admin", "user", "dashboard"]
+
+
 class IapAuthConfig(_Config):
     url: str = ""
     # Desktop OAuth client the CLI drives for the browser edge-login flow.
@@ -572,10 +576,9 @@ class IapAuthConfig(_Config):
     # this only to give machine callers an `aud` distinct from the desktop client.
     programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
-    # Role granted to an IAP-verified email the role policy does not match (not in
-    # admin_users); admin_users always resolve to admin. "admin" here makes IAP's
-    # own allowlist the sole gate.
-    unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
+    # Role for an IAP identity absent from user_roles and admin_users.
+    # "admin" here makes IAP's own allowlist the sole gate.
+    unprovisioned_role: UserRole = "dashboard"
 
 
 class AuthConfig(_OneofConfig):
@@ -589,6 +592,8 @@ class AuthConfig(_OneofConfig):
     # no arm selected, a non-empty list alone enables auth (provider "cidr").
     trusted_cidrs: list[str] = Field(default_factory=list)
     admin_users: list[str] = Field(default_factory=list)
+    # Exact IAP identities; overrides admin_users and the provider default.
+    user_roles: dict[str, UserRole] = Field(default_factory=dict)
     # Authenticate-but-not-require: valid tokens get their identity; tokenless
     # requests fall through as anonymous admin; invalid tokens still rejected.
     optional: bool = False

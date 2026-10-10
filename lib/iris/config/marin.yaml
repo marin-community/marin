@@ -1,5 +1,5 @@
 # Iris production configuration for Marin cluster
-# Usage: uv run iris --cluster=marin cluster start
+# Render principal references before deploying with iris --config=<rendered-file>.
 
 # This cluster's identity. Used for token minting and for authenticating to peers.
 name: marin
@@ -110,6 +110,8 @@ storage:
 # and tasks; loopback covers SSH tunnels); anything forwarded through the LB
 # carries X-Forwarded-For and never matches a CIDR.
 auth:
+  user_roles:
+    "principal:human-079": user
   iap:
     url: https://iris.oa.dev
     # `iris login` drives the browser edge-login flow with the Marin desktop OAuth
@@ -349,3 +351,6 @@ user_budgets:
       - morrisy
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE
+  - user_ids: [principal:human-079]
+    budget_limit: 0
+    max_band: PRIORITY_BAND_BATCH

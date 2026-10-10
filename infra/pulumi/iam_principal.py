@@ -15,13 +15,15 @@
       | uv run --package marin-iac --extra deploy \
           python infra/pulumi/iam_principal.py decrypt --diff
 
-Both operations use the marin-iac KMS key. Plaintext emails remain local.
+These commands use the marin-iac KMS key. Plaintext emails remain outside Git.
 """
 
 import argparse
 import re
 import sys
+from pathlib import Path
 
+import yaml
 from google.cloud import kms_v1
 from iac.gcp.iam_config import (
     IAM_DATA_PATH,
@@ -32,10 +34,12 @@ from iac.gcp.iam_config import (
     write_iam_config,
 )
 from iac.gcp.iam_kms import crypto_key_id, decrypt_member, encrypt_email
+from iris.cluster.config import PRINCIPAL_REFERENCE_PREFIX, config_to_dict, load_config
 
 _PRINCIPAL_REFERENCE_PATTERNS = (
     re.compile(rf"^[+-]\s*-\s+principal:\s+({PRINCIPAL_ID_PATTERN})\s*$"),
     re.compile(rf'principals\["({PRINCIPAL_ID_PATTERN})"\]'),
+    re.compile(rf"{re.escape(PRINCIPAL_REFERENCE_PREFIX)}({PRINCIPAL_ID_PATTERN})"),
 )
 _PRINCIPAL_RECORD_RE = re.compile(rf"^[+-]\s*({PRINCIPAL_ID_PATTERN}):\s+(\S+)\s*$")
 
@@ -84,6 +88,39 @@ def decrypt_ciphertexts(ciphertexts: list[str]) -> None:
         print(decrypt_member(client, key_id, ciphertext))
 
 
+def render_iris(config_path: Path, output_path: Path) -> None:
+    """Resolve IAM references in Iris identity fields into a private deployment file."""
+    output_path = output_path.resolve()
+    if output_path.is_relative_to(Path(__file__).resolve().parents[2]):
+        raise ValueError("Rendered Iris configs must stay outside the checkout")
+    config = load_config(config_path)
+    identities = {user for tier in config.user_budgets for user in tier.user_ids}
+    if config.auth is not None:
+        identities.update((*config.auth.user_roles, *config.auth.admin_users, *config.auth.allowed_submitters))
+    iam = load_iam_config()
+    ciphertexts = {principal.principal_id: principal.ciphertext for principal in iam.principals}
+    client = kms_v1.KeyManagementServiceClient()
+    key_id = crypto_key_id(iam)
+    emails = {
+        reference: (
+            decrypt_member(client, key_id, ciphertexts[reference.removeprefix(PRINCIPAL_REFERENCE_PREFIX)]).removeprefix(
+                "user:"
+            )
+        )
+        for reference in identities
+        if reference.startswith(PRINCIPAL_REFERENCE_PREFIX)
+    }
+    if config.auth is not None:
+        config.auth.user_roles = {emails.get(user, user): role for user, role in config.auth.user_roles.items()}
+        config.auth.admin_users = [emails.get(user, user) for user in config.auth.admin_users]
+        config.auth.allowed_submitters = [emails.get(user, user) for user in config.auth.allowed_submitters]
+    for tier in config.user_budgets:
+        tier.user_ids = [emails.get(user, user) for user in tier.user_ids]
+    rendered = yaml.safe_dump(config_to_dict(config), sort_keys=False)
+    output_path.touch(mode=0o600, exist_ok=False)
+    output_path.write_text(rendered)
+
+
 def decrypt_diff() -> None:
     """Annotate changed YAML or Python principal references without printing unchanged people."""
     lines = sys.stdin.readlines()
@@ -92,7 +129,7 @@ def decrypt_diff() -> None:
     changed_records: dict[tuple[str, str], str] = {}
     changed_references: list[tuple[str, str]] = []
     for line in lines:
-        if line.startswith(("+++", "---")):
+        if not line.startswith(("+", "-")) or line.startswith(("+++", "---")):
             continue
         if match := _PRINCIPAL_RECORD_RE.match(line):
             changed_records[(line[0], match.group(1))] = match.group(2)
@@ -152,11 +189,17 @@ def main() -> None:
     decrypt_parser.add_argument("ciphertexts", nargs="*")
     decrypt_parser.add_argument("--diff", action="store_true", help="Read a unified YAML diff from stdin.")
 
+    render_parser = subparsers.add_parser("render-iris", help="Resolve encrypted identities for an Iris deployment.")
+    render_parser.add_argument("config", type=Path)
+    render_parser.add_argument("--output", type=Path, required=True, help="New private file outside the checkout")
+
     args = parser.parse_args()
     if args.command == "grant":
         grant(args.email, tuple(args.project_roles))
     elif args.command == "register":
         register(args.email)
+    elif args.command == "render-iris":
+        render_iris(args.config, args.output)
     elif args.diff:
         if args.ciphertexts:
             parser.error("pass either --diff (stdin) or positional ciphertexts, not both")
