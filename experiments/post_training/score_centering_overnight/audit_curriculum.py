@@ -17,9 +17,8 @@ from urllib.parse import urlparse
 import boto3
 import torch
 import yaml
-from botocore.config import Config
-
 from audit_skyrl import collect
+from botocore.config import Config
 
 
 def audit(config: dict, root: Path) -> dict:
