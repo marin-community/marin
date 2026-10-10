@@ -672,6 +672,10 @@ class GrugModelConfig:
     sublayer_gated_norm: bool = True
     """GatedNorm after the RMSNorm on every attention and MLP input (else the RMSNorm alone)."""
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
+    scan_offload_partials: bool = False
+    """With ``scan_layers``, keep the per-layer incoming AttnRes partials saved for the backward in pinned host
+    memory (one ``[B, S, D]`` per scanned layer, 33 GiB per GPU at hero width) and bring each unit's back to the
+    device in the reverse scan, as the GB200 hero offloads its layer carry. Same math."""
     scan_layers: bool = False
     """Run the AttnRes layer stack as a ``jax.lax.scan`` over ``global_every``-layer units on a fixed-shape
     history (``_AttnResHistory``), each layer rematerialized in the backward, instead of unrolling every layer.
@@ -4072,6 +4076,12 @@ class _ScanArgs(NamedTuple):
     token_ids: jax.Array
     eps: float
     route_key: jax.Array | None
+    offload_partials: bool
+
+
+def _to_memory_kind(x: jax.Array, memory_kind: str) -> jax.Array:
+    """``x`` moved to ``memory_kind`` (``pinned_host`` / ``device``), keeping its sharding."""
+    return jax.device_put(x, jax.typeof(x).sharding.with_memory_kind(memory_kind))
 
 
 def _unit_layer(units: dict[bool, Block], layer: _UnitLayer) -> Block:
@@ -4126,7 +4136,11 @@ def _scan_forward(
                 _unit_layer(units, unit_layer), history, queries, len(plan.unit) * u + j, unit_layer, args
             )
             stats.append(layer_stats)
-        return history, (tuple(stats), jnp.stack(partials) if save_partials else None)
+        if not save_partials:
+            return history, (tuple(stats), None)
+        saved = jnp.stack(partials)
+        # Offloaded per unit as the scan produces it, so the stacked residual lives in pinned host memory.
+        return history, (tuple(stats), _to_memory_kind(saved, "pinned_host") if args.offload_partials else saved)
 
     xs = (units_diff, args.units_static, jnp.arange(plan.num_units, dtype=jnp.int32))
     return jax.lax.scan(unit_step, history, xs)
@@ -4161,15 +4175,14 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
     plan = args.plan
     d_history, _ = grad_out
     d_history = _AttnResHistory(
-        *(
-            jnp.zeros_like(x) if d is None else d
-            for d, x in zip(d_history, (sources, logits, partials[0, 0]), strict=True)
-        )
+        *(jnp.zeros_like(x) if d is None else d for d, x in zip(d_history, (sources, logits, sources[0]), strict=True))
     )
 
     def unit_step(carry, xs):
         d_history, d_queries = carry
         unit_diff, unit_static, unit_partials, u = xs
+        if args.offload_partials:
+            unit_partials = _to_memory_kind(unit_partials, "device")
         d_unit: dict[bool, list[Block | None]] = {kind: [None] * plan.kind_count(kind) for kind in unit_diff}
         for j in reversed(range(len(plan.unit))):
             unit_layer = plan.unit[j]
@@ -4878,7 +4891,9 @@ class Transformer(eqx.Module):
             partial=hidden,
         )
         units_diff, units_static = eqx.partition(units, eqx.is_inexact_array)
-        args = _ScanArgs(scan, units_static, long_mask, short_mask, token_ids, eps, route_key)
+        args = _ScanArgs(
+            scan, units_static, long_mask, short_mask, token_ids, eps, route_key, self.config.scan_offload_partials
+        )
         return _scan_layers((units_diff, queries, history), args)
 
     def routing_assignments(
