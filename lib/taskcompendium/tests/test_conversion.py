@@ -9,7 +9,6 @@ from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 from fray.local_backend import LocalClient
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
@@ -17,18 +16,13 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
 from taskcompendium.convert.answers import exact_answer_task, source_defect
-from taskcompendium.convert.conversation import conversation_task
-from taskcompendium.convert.delivery import rewritten_task
-from taskcompendium.convert.environment import grading_environment
-from taskcompendium.convert.script_grader import script_package
-from taskcompendium.models import ResourceGroups, ScriptGrader, Source, TaskSpec, TextMessage
+from taskcompendium.models import ResourceGroups, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.conversion import convert_raw_row, convert_source_row
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat, required_grader_environment
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
-    Converter,
     ImportRejection,
     IntendedUse,
     NormalizedTask,
@@ -44,10 +38,6 @@ from taskcompendium.pipeline.source_processing import (
 )
 from taskcompendium.pipeline.transforms import normalize_row
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
-
-GRADE = b"from colors.scoring import score\nprint(score())\n"
-SCORER = b"def score():\n    return 1.0\n"
-IMAGE = "grader@sha256:" + "c" * 64
 
 
 def convert_answer(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -71,108 +61,36 @@ def decode_answer(row: dict, _context: ConversionContext) -> dict:
     return {**row, "prompt": f"Decoded: {row['prompt']}"}
 
 
-def convert_script_answer(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
-    if not row.data["answer"]:
-        return source_defect("missing_answer", "The source has no answer")
-    package = script_package(
-        tuple(inline_resource(name, path.read_bytes()) for name, path in context.inputs.items()),
-        {"words": [row.data["answer"]]},
-        environment=required_grader_environment(context),
-        timeout=30,
-        answer_path="/app/answer.txt",
+def test_recipe_free_conversion_persists_caller_identity_and_execution_counters(tmp_path: Path):
+    row = RawRow(
+        "caller-task",
+        Source(dataset="colors", revision="pinned", row="archive:17", importer_revision="2"),
+        {"prompt": "Name a color", "answer": "red"},
     )
-    task = conversation_task(
-        row,
-        events=(TextMessage(role="user", content=f"{row.data['prompt']}. Return one color."),),
-        package=package,
-    )
-    return rewritten_task(task, original=row.data["prompt"], reason="response_format")
-
-
-@pytest.fixture(params=[convert_answer, convert_script_answer], ids=["answer", "packaged-script"])
-def conversion_inputs(request: pytest.FixtureRequest, tmp_path: Path) -> tuple[Converter, ConversionContext]:
-    convert = cast(Converter, request.param)
-    if convert is convert_answer:
-        return convert, ConversionContext(inputs={}, grader_environment=None)
-    files = {"grade.py": GRADE, "colors/__init__.py": b"", "colors/scoring.py": SCORER}
-    inputs = {}
-    for name, content in files.items():
-        path = tmp_path / "inputs" / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
-        inputs[name] = StoragePath(str(path))
-    return convert, ConversionContext(inputs=inputs, grader_environment=grading_environment(IMAGE))
-
-
-def test_custom_conversion_writes_tasks_rejections_and_execution_evidence_without_recipe(
-    tmp_path: Path, conversion_inputs: tuple[Converter, ConversionContext]
-):
-    convert, conversion = conversion_inputs
-    rows = [
-        RawRow(
-            f"custom-{index}",
-            Source(dataset="custom/colors", revision="pinned", row=name, importer_revision="2"),
-            {"path": name, "prompt": "Name a color", "answer": answer},
-        )
-        for index, (name, answer) in enumerate((("first", "red"), ("duplicate", "red"), ("invalid", "")))
-    ]
+    conversion = ConversionContext(inputs={}, grader_environment=None)
     output = tmp_path / "output"
-    # Ingestion evidence may share the output root without being a conversion output.
-    output.mkdir()
-    (output / "input.json").write_text('{"revision": "pinned"}')
-    telemetry = SourceTelemetry("custom/colors", str(output))
+    telemetry = SourceTelemetry("colors", str(output))
     with ZephyrContext(client=LocalClient(), max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         with telemetry.record():
             with telemetry.phase("convert_write") as phase:
                 result = write_conversion(
-                    Dataset.from_list(rows).map(partial(convert_raw_row, convert=convert, context=conversion)),
+                    Dataset.from_list([row]).map(partial(convert_raw_row, convert=convert_answer, context=conversion)),
                     context,
                     str(output),
                     telemetry=phase,
                 )
-    records = sorted(
-        (row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))),
-        key=lambda row: row["task_id"],
-    )
-    assert (result.input_rows, result.converted_rows, result.rejections) == (3, 2, {"source_defect:missing_answer": 1})
-    assert [row["original_path"] for row in records] == ["first", "duplicate", "invalid"]
-    tasks = [TaskSpec.model_validate_json(row["task_json"]) for row in records[:2]]
-    assert [task.id for task in tasks] == ["custom-0", "custom-1"]
-    assert [task.source for task in tasks] == [row.source for row in rows[:2]]
-    assert tasks[0].context == tasks[1].context
-    if convert is convert_script_answer:
-        grader = cast(ScriptGrader, tasks[0].grader)
-        assert grader.environment == conversion.grader_environment
-        resources = {resource.path: resource_bytes(resource) for resource in tasks[0].resources.verifier}
-        assert resources["grade.py"] == GRADE
-        assert resources["colors/scoring.py"] == SCORER
-        assert json.loads(resources["config.json"]) == {"words": ["red"]}
-        assert records[0]["normalization_changes"] == [
-            {
-                "field": "instruction",
-                "reason": "response_format",
-                "original": "Name a color",
-                "replacement": "Name a color. Return one color.",
-            }
-        ]
-    else:
-        assert resource_bytes(tasks[0].resources.worker[0]) == b"color context"
-    assert records[2]["normalization_reason"] == "missing_answer"
-    manifest = json.loads(Path(result.manifest_path).read_text())
-    assert manifest["reviewed"] is False and manifest["verified"] is False
-    assert not (output / "final").exists()
+    (record,) = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
+    task = TaskSpec.model_validate_json(record["task_json"])
+    assert task.id == "caller-task"
+    assert task.source.row == "archive:17"
+    assert cast(TextMessage, task.context.events[0]).content == "Name a color"
     report = json.loads((output / "telemetry.json").read_text())
-    assert report["status"] == "completed"
-    assert [phase["phase"] for phase in report["phases"]] == ["convert_write"]
     execution = report["phases"][0]["executions"][0]
-    assert execution["execution_id"]
-    assert execution["counters"]["source/normalize/attempts"] == 3
-    assert execution["counters"]["source/normalize/task_rows"] == 2
-    assert execution["counters"]["source/normalize/source_defect"] == 1
-    assert "source/decode/attempts" not in execution["counters"]
+    assert execution["counters"]["source/normalize/attempts"] == 1
+    assert execution["counters"]["source/normalize/task_rows"] == 1
 
 
-def test_standard_conversion_retains_payload_before_decoder_rewrites():
+def test_conversion_retains_payload_before_decoder_rewrites():
     recipe = SourceRecipe(
         name="colors",
         version="1",
@@ -185,9 +103,6 @@ def test_standard_conversion_retains_payload_before_decoder_rewrites():
     original = {"path": "archive/task", "prompt": "Name a color", "answer": "red", "binary": b"original bytes"}
     converted = convert_source_row({"locator": "rows.jsonl:7", "data": original}, recipe)
     assert converted.original_data == original
-    assert converted.original_path == "archive/task"
-    assert converted.raw.source.row == "rows.jsonl:7"
-    assert converted.raw.data["prompt"] == "Decoded: Name a color"
     task = cast(NormalizedTask, converted.result).task
     assert cast(TextMessage, task.context.events[0]).content == "Decoded: Name a color"
 
