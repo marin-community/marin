@@ -74,17 +74,10 @@ def verified_execution_grading(config: dict, base: Path) -> dict | None:
         # ordinary native Gym workers only need the grading-code reader.
         from experiments.post_training.task_curation.grading_task_assets import (  # noqa: PLC0415
             swe_grading_asset_manifest,
+            swe_grading_assets,
         )
-        from experiments.post_training.task_curation.source import GradingDatasetFile, SweGradingAssets  # noqa: PLC0415
 
-        assets = snapshot["grading_task_assets"]
-        selection = SweGradingAssets(
-            blend=GradingDatasetFile(**assets["blend"]),
-            proxies=GradingDatasetFile(**assets["proxies"]),
-            membership=GradingDatasetFile(**assets["membership"]),
-            component=assets["component"],
-            partition=assets["partition"],
-        )
+        selection = swe_grading_assets(snapshot["grading_task_assets"])
         if swe_grading_asset_manifest(selection) != manifest["task_assets"]:
             raise ValueError("Selected native task verifier assets differ from the Atlas grading snapshot")
     runtime = config["runtime"]

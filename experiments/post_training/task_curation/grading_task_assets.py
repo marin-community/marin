@@ -26,6 +26,17 @@ ENVIRONMENT_DOCKERFILE = "environment/Dockerfile"
 TASK_CONFIG = "task.toml"
 
 
+def swe_grading_assets(values: Mapping[str, Any]) -> SweGradingAssets:
+    """Decode the pinned files and source selection in an Atlas snapshot."""
+    return SweGradingAssets(
+        blend=GradingDatasetFile(**values["blend"]),
+        proxies=GradingDatasetFile(**values["proxies"]),
+        membership=GradingDatasetFile(**values["membership"]),
+        component=values["component"],
+        partition=values["partition"],
+    )
+
+
 @dataclass(frozen=True)
 class SweTaskKey:
     trajectory_id: str
