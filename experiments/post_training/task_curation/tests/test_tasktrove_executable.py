@@ -12,20 +12,6 @@ from pathlib import Path
 
 import pytest
 from shellbox.machine import Backend, Command, DockerImage, ExitReason, HostImage, MachineFactory, MachineSpec, Result
-from verifyit.spec import StdioSpec
-
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
-    SOLUTION_PATHS,
-    converted_workspace_task,
-    python_delivery,
-    solve_script,
-    tasktrove_archive_task,
-)
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import INSTRUCTION, SOLUTION_DIR, TaskFiles
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertedTask
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio_cases import SOLUTION_COMMAND
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
-from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_record
 from taskcompendium.models import (
     ConversationTrace,
     EnvironmentRequirements,
@@ -49,7 +35,25 @@ from taskcompendium.pipeline.transforms import normalize_row
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import ShellFactory
+from verifyit.spec import StdioSpec
 
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    INSTRUCTION,
+    SOLUTION_DIR,
+    TaskFiles,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
+    SOLUTION_PATHS,
+    converted_workspace_task,
+    python_delivery,
+    solve_script,
+    tasktrove_archive_task,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertedTask
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio_cases import SOLUTION_COMMAND
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
+from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_record
 from lib.taskcompendium.tests.pipeline_stages import fixture_recipe
 
 IMAGE = "test@sha256:" + "a" * 64
@@ -387,9 +391,7 @@ def test_converter_language_survives_harbor_export_without_changing_payload(exec
     environment = ENVIRONMENT
     if execution == "shared":
         # This explicit recipe has no archived Dockerfile to fall back to.
-        build = verifyit_build_context(
-            "FROM python:3.12-slim\nWORKDIR /app\n", (), package=Path(__file__).resolve().parents[2] / "verifyit"
-        )
+        build = verifyit_build_context("FROM python:3.12-slim\nWORKDIR /app\n", (), package=VERIFYIT_PACKAGE)
         environment = EnvironmentRequirements(docker_build=build)
     records = []
     for declared_language in ("", language):

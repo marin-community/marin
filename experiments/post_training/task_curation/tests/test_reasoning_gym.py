@@ -13,7 +13,6 @@ import pytest
 import reasoning_gym
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
-from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_payload
 from taskcompendium.models import TaskSpec, TextMessage, verifyit_spec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
@@ -24,6 +23,7 @@ from experiments.post_training.task_curation.datasets.environments import VERIFY
 from experiments.post_training.task_curation.datasets.reasoning_gym import generate
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as declarations
 from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_payload
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,

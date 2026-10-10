@@ -10,14 +10,17 @@ source's ``solution/solve.sh``.
 """
 
 
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import solve_script, tasktrove_archive_task
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH, convert_nl2bash
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
+    solve_script,
+    tasktrove_archive_task,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH, convert_nl2bash
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo

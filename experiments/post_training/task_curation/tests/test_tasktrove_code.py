@@ -12,10 +12,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import solve_script
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import SOLVE_SH, TEST_SH, archive_files, unpack_task_binary
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH
-from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_record
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask
 from taskcompendium.runtime.resources import resource_bytes
@@ -28,7 +24,16 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     python_tests,
     structured_outputs,
 )
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    SOLVE_SH,
+    TEST_SH,
+    archive_files,
+    unpack_task_binary,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import solve_script
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH
 from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_record
 from experiments.post_training.task_curation.tests.conversion import (
     BASE_IMAGE,
     convert_row,

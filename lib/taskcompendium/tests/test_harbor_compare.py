@@ -1,27 +1,31 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import gzip
 import io
 import json
 import sqlite3
 import tarfile
 import zlib
 from dataclasses import replace
-from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.harbor.compare import ParityReport, compare_tasks, write_archive_diff
-from experiments.post_training.task_curation.tasktrove.harbor_export import archive_bytes, archive_file_mode, harbor_payload, harbor_record
 from taskcompendium.harbor.records import NormalizedIndex
-from taskcompendium.harbor.snapshots import file_map_snapshot, task_snapshot
-from taskcompendium.models import ResourceGroups, Source, TaskSpec
-from taskcompendium.pipeline.models import RawRow
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.harbor.snapshots import task_snapshot
+
+
+def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, data in files.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            member.mode = int(modes.get(name, "644"), 8)
+            archive.addfile(member, io.BytesIO(data))
+    return buffer.getvalue()
 
 
 @pytest.mark.parametrize(
@@ -191,48 +195,3 @@ def test_disk_index_matches_reordered_source_paths_and_reports_unmatched_rows(tm
         assert index.get("absent") is None
         remaining = list(index.unmatched())
     assert remaining == [row for position, row in enumerate(rows) if position not in {64, 0, 24, 25, 16, 40}]
-
-
-def test_file_map_snapshot_matches_actual_export_archives():
-    source = Source(dataset="fixture", revision="pinned", row="fixture/tasks.parquet:0", importer_revision="1")
-    task = exact_answer_task(RawRow("fixture", source, {}), prompt="Name a color", answers=("red",), ignore_case=False)
-    task = cast(TaskSpec, task)
-    task = task.model_copy(
-        update={
-            "resources": ResourceGroups(
-                worker=(inline_resource("app/input.txt", b"public input").model_copy(update={"mode": "600"}),),
-                verifier=(inline_resource("helper.sh", b"private helper").model_copy(update={"mode": "700"}),),
-                oracle=(inline_resource("solution/solve.sh", b"echo red").model_copy(update={"mode": "750"}),),
-            )
-        }
-    )
-    row = {"task_json": task.model_dump_json(), "source_row": source.row, "original_path": "fixture.tar.gz"}
-    options = {
-        "grader_image": "example.test/grader@sha256:" + "a" * 64,
-        "family": "fixture",
-        "fallback_actor_image": "python:3.12",
-    }
-    payload = harbor_payload(row, **options)
-    record = harbor_record(row, **options)
-    direct = {
-        **file_map_snapshot(
-            payload.files, {name: archive_file_mode(name, payload.modes) for name in payload.files}, "task"
-        ),
-        **file_map_snapshot(
-            payload.solution,
-            {name: archive_file_mode(name, payload.solution_modes) for name in payload.solution},
-            "oracle",
-        ),
-    }
-    archived = task_snapshot(
-        record.source,
-        record.path,
-        "converted",
-        task_binary=gzip.compress(gzip.decompress(record.task_binary), compresslevel=9, mtime=0),
-        solution_binary=record.solution_binary,
-    )
-    assert direct == archived.files
-    assert direct["task/environment/files/app/input.txt"].mode == 0o600
-    assert direct["task/tests/helper.sh"].mode == 0o700
-    assert direct["oracle/solution/solve.sh"].mode == 0o750
-    assert direct["task/tests/test.sh"].mode == 0o755

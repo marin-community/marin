@@ -16,7 +16,6 @@ import tomllib
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.delivery import rewritten_task
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -26,6 +25,7 @@ from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
 from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo

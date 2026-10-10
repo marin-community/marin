@@ -12,19 +12,21 @@ the grader packages include the same ones, so a submission that imports one ther
 
 from dataclasses import dataclass, field
 
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
-    SOLUTION_PATHS,
-    solve_script,
-    tasktrove_archive_task,
-    tasktrove_python_task,
-)
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import convert as convert_unit_tests
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
+    SOLUTION_PATHS,
+    solve_script,
+    tasktrove_archive_task,
+    tasktrove_python_task,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import (
+    convert as convert_unit_tests,
+)
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo

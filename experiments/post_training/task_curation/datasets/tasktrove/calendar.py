@@ -16,7 +16,6 @@ from typing import Any
 
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import rewritten_task
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH, archive_file, archive_resources, archive_script_grader
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -39,6 +38,12 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    ANSWER_PATH,
+    archive_file,
+    archive_resources,
+    archive_script_grader,
+)
 from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 

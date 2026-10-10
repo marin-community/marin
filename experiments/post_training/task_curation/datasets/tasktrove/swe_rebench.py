@@ -15,7 +15,11 @@ import json
 import re
 
 from taskcompendium.convert.answers import unsupported
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import swe_task
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import ImportRejection, NormalizationChange, NormalizedTask, RawRow
+from taskcompendium.runtime.resources import inline_resource
+from verifyit.spec import PytestSpec, ScriptSpec
+
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
     INSTRUCTION,
@@ -25,17 +29,13 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     TaskFiles,
     archive_files,
 )
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import swe_task
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
     Rejected,
     archive_conversion,
 )
-from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportRejection, NormalizationChange, NormalizedTask, RawRow
-from taskcompendium.runtime.resources import inline_resource
-from verifyit.spec import PytestSpec, ScriptSpec
-
 from experiments.post_training.task_curation.datasets.tasktrove.repository_build import WORKSPACE, repository_build_task
 from experiments.post_training.task_curation.datasets.tasktrove.repository_pytest import (
     ensure_pytest_json_report,

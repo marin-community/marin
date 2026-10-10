@@ -40,7 +40,6 @@ from taskcompendium.convert.nemotron_ultra import (
     text_request,
 )
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH
 from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,
@@ -71,6 +70,8 @@ from verifyit.candidate import grade_candidate
 from verifyit.grade import Status, positive_candidate
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import MathSpec
+
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH
 
 VERIFIER_REVISION = "d8b6e8c163def3660e9d3072c1c174226a1709fa"
 """The NeMo Gym revision whose agents grade the pinned Ultra blends."""

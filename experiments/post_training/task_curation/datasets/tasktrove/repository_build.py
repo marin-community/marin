@@ -4,8 +4,6 @@
 """Deferred repository images and private workspace graders."""
 
 from taskcompendium.convert.answers import unsupported
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TEST_SH_REWARD, TaskFiles
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT, verifyit_build_context
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -22,6 +20,15 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import Spec, render_spec
 
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    TEST_SH_REWARD,
+    TaskFiles,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import (
+    VERIFYIT_CONTEXT,
+    verifyit_build_context,
+)
 
 WORKSPACE = "/testbed"
 PUBLIC_CONTEXT = "taskcompendium-public"

@@ -16,7 +16,6 @@ from jsonschema.validators import validator_for
 from taskcompendium.convert.answers import ifeval_task, json_schema_task, source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import is_trivial
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
@@ -25,6 +24,7 @@ from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, SchemaFormat
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import is_trivial
 from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 

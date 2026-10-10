@@ -16,9 +16,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from taskcompendium.convert.answers import answer_task
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from taskcompendium.grader import verifyit_package
-from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, harbor_record
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -43,10 +41,12 @@ from verifyit.spec import ExactSpec, JsonSchemaSpec, McqSpec, PytestSpec, Script
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import qa
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tasktrove.export import main
+from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, harbor_record
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 
 GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64

@@ -7,8 +7,15 @@ from verifyit.spec import Spec
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
-    AnswerType, ConversationInput, EnvironmentRequirements, PlainText, ProviderRequirement,
-    ResourceGroups, TaskResource, TaskSpec, TextMessage,
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    PlainText,
+    ProviderRequirement,
+    ResourceGroups,
+    TaskResource,
+    TaskSpec,
+    TextMessage,
 )
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.shell import BASH, INTERFACE
@@ -60,5 +67,3 @@ def workspace_task(
         grader=package.grader,
         tags=tags,
     )
-
-

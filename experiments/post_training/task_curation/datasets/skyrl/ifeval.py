@@ -20,13 +20,13 @@ from pydantic import ValidationError
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 

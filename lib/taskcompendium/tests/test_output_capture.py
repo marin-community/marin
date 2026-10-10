@@ -21,9 +21,9 @@ from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellEnvironment, ShellFactory
 
-SOLUTION_PATHS = ("/app/solution.py", "/app/solution.cpp")
-
 from .test_runtime import EXITED, FileMachine, FileMachines, finished
+
+SOLUTION_PATHS = ("/app/solution.py", "/app/solution.cpp")
 
 IMAGE = "test@sha256:" + "a" * 64
 

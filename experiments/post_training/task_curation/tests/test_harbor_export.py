@@ -14,8 +14,6 @@ import yaml
 from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext, run
-from experiments.post_training.task_curation.tasktrove import harbor_export as harbor
-from experiments.post_training.task_curation.tasktrove.harbor_export import VerifierPayloadIdentity
 from taskcompendium.models import NoGrader
 from upath import UPath
 
@@ -23,7 +21,9 @@ from experiments.post_training.task_curation.datasets.environments import VERIFY
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.rl_smoke import smoke_step
+from experiments.post_training.task_curation.tasktrove import harbor_export as harbor
 from experiments.post_training.task_curation.tasktrove.export import harbor_export_step
+from experiments.post_training.task_curation.tasktrove.harbor_export import VerifierPayloadIdentity
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 
 GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64

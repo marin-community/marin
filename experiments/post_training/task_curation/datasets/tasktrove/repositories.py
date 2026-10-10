@@ -11,8 +11,6 @@ import json
 from pathlib import Path
 
 from taskcompendium.convert.answers import unsupported
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import swe_task
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_files
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     Converter,
@@ -25,6 +23,8 @@ from taskcompendium.pipeline.models import (
 
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_files
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import swe_task
 from experiments.post_training.task_curation.datasets.tasktrove.repository_build import (
     WORKSPACE,
     repository_build_task,

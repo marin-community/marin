@@ -17,11 +17,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
-from verifyit.spec import PytestSpec, Spec
-
 from taskcompendium.convert.answers import unsupported
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import SOLVE_SH, archive_files, archive_resources
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertedTask, ConvertFn, archive_conversion
 from taskcompendium.convert.executable import workspace_task
 from taskcompendium.models import (
     AnswerType,
@@ -30,8 +26,6 @@ from taskcompendium.models import (
     NoGrader,
     PlainText,
     ProviderRequirement,
-    ResourceGroups,
-    TaskResource,
     TaskSpec,
     TextMessage,
 )
@@ -44,6 +38,18 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import BASH, INTERFACE
+from verifyit.spec import PytestSpec
+
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    SOLVE_SH,
+    archive_files,
+    archive_resources,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
+    ConvertedTask,
+    ConvertFn,
+    archive_conversion,
+)
 
 SOLUTION_PATHS = ("/app/solution.py", "/app/solution.cpp")
 """The program files a competitive-programming grader runs, whichever language the agent chose."""

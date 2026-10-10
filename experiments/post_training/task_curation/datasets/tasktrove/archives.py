@@ -5,11 +5,16 @@
 
 from dataclasses import dataclass, replace
 
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import TASKS_FILE, TASKTROVE_REPO, archive_resource, unpack_task_binary
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    TASKS_FILE,
+    TASKTROVE_REPO,
+    archive_resource,
+    unpack_task_binary,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.source_defects import SOURCE_DEFECTS
 from experiments.post_training.task_curation.pipeline import HfSource
 
