@@ -81,9 +81,17 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/user/AGENTS.md
-      env: &loomIrisUser
+      env: &loomEnvironment
         IRIS_USER:
           value: loom
+        UV_CACHE_DIR:
+          value: /opt/uv/cache
+        UV_PYTHON_INSTALL_DIR:
+          value: /opt/uv/python
+        CARGO_TARGET_DIR:
+          value: /home/app/.cache/cargo-build
+        CODEX_CONFIG:
+          value: '{"sandbox_workspace_write":{"writable_roots":["/opt/uv/cache","/home/app/.cache/cargo-build"]}}'
       githubRepositories: &interactiveGithubRepositories
         - Open-Athena/*
         - marin-community/*
@@ -110,7 +118,7 @@ config:
       idleArchiveSeconds: 3000
       prelude: weaver
       instructionsFile: profiles/marina/AGENTS.md
-      env: *loomIrisUser
+      env: *loomEnvironment
       githubRepositories: *interactiveGithubRepositories
       mcpAccess:
         mode: groups
@@ -126,7 +134,7 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/github/AGENTS.md
-      env: *loomIrisUser
+      env: *loomEnvironment
       githubRepositories: *interactiveGithubRepositories
       mcpAccess: *builtinMcpAccess
     fork-ferry:
@@ -145,7 +153,7 @@ config:
       turnBudget: 100
       prelude: weaver
       instructionsFile: profiles/fork-ferry/AGENTS.md
-      env: *loomIrisUser
+      env: *loomEnvironment
       restricted: false
       githubRepositories:
         - marin-community/evalchemy
@@ -172,7 +180,7 @@ config:
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-review/AGENTS.md
-      env: *loomIrisUser
+      env: *loomEnvironment
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -194,7 +202,7 @@ config:
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/agentic-lint/AGENTS.md
-      env: *loomIrisUser
+      env: *loomEnvironment
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -216,7 +224,7 @@ config:
       turnBudget: 250
       prelude: weaver
       instructionsFile: profiles/github-automation/AGENTS.md
-      env: *loomIrisUser
+      env: *loomEnvironment
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -238,7 +246,7 @@ config:
       turnBudget: 40
       prelude: weaver
       instructionsFile: profiles/prose-cleanup/AGENTS.md
-      env: *loomIrisUser
+      env: *loomEnvironment
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -261,6 +269,7 @@ config:
       prelude: weaver
       instructionsFile: profiles/codehealth-refinement/AGENTS.md
       env:
+        <<: *loomEnvironment
         CLOUDSQL_CONNECTION:
           value: hai-gcp-models:us-central1:marin-metadata
         PGDATABASE:
@@ -288,7 +297,7 @@ config:
       turnBudget: 100
       prelude: weaver
       instructionsFile: profiles/ops/AGENTS.md
-      env: *loomIrisUser
+      env: *loomEnvironment
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -304,7 +313,7 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/slack/AGENTS.md
-      env: *loomIrisUser
+      env: *loomEnvironment
       githubRepositories: *interactiveGithubRepositories
       mcpAccess: *builtinMcpAccess
   marin-loom:workloads:
