@@ -21,7 +21,12 @@ import warnings
 
 from verifyit.spec import Compare, StdioSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, INSTRUCTION, SOLVE_SH, TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    INSTRUCTION,
+    SOLVE_SH,
+    TaskFiles,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,

@@ -113,7 +113,7 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     machines = CampaignMachines()
     requirements = environment_requirements(environment, artifact)
     factory, spec = machines.machine(requirements, 2048)
-    spec = prepare_machine_spec(requirements, factory, spec)
+    spec = prepare_machine_spec(requirements, factory, spec, {})
     runtime = local_runtime(artifact.lock_url)
     request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
     assert runtime.lock_sha256 == artifact.lock_sha256 and runtime.data == ("nltk:punkt_tab",)

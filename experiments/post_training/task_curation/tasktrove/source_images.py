@@ -7,6 +7,8 @@ import ast
 import re
 from pathlib import Path
 
+from taskcompendium.models import DockerBuildContext, TaskSpec, VerifyitGrader, verifyit_spec
+from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import Mode, PytestSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TASKTROVE_REPO
@@ -14,8 +16,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.pytho
     legacy_pytest_dockerfile,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
-from taskcompendium.models import DockerBuildContext, TaskSpec, VerifyitGrader, verifyit_spec
-from taskcompendium.runtime.resources import resource_bytes
 
 JUDGE_SOURCES = frozenset(
     {

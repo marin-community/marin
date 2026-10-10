@@ -7,14 +7,19 @@ import base64
 import json
 
 import pytest
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import INSTRUCTION, SOLVE_SH
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertedTask, archive_conversion
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.structured_outputs import convert_nemotron_structured_outputs
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import convert_nl2bash
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
+    ConvertedTask,
+    archive_conversion,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.structured_outputs import (
+    convert_nemotron_structured_outputs,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 
 DOCKERFILE = b"FROM python:3.12-slim\n"
 SUM_PROMPT = b"Read two integers and print their sum to stdout in /app/solution.py."

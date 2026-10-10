@@ -17,7 +17,11 @@ C++ case once and :data:`_COMMAND` runs whichever file the workspace has.
 
 from verifyit.spec import Compare, StdioSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, INSTRUCTION, TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    INSTRUCTION,
+    TaskFiles,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,

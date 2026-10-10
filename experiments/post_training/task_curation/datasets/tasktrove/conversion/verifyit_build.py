@@ -8,10 +8,11 @@ import shlex
 from functools import cache
 from pathlib import Path
 
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, UV_IMAGE
 from taskcompendium.models import DockerBuildContext, TaskResource
 from taskcompendium.runtime.local import context_paths
 from taskcompendium.runtime.resources import inline_resource
+
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, UV_IMAGE
 
 VERIFYIT_CONTEXT = "taskcompendium-verifyit"
 VERIFYIT_INSTALL_DIRECTORY = "/opt/taskcompendium-verifyit"

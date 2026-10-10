@@ -255,9 +255,9 @@ def test_python_directory_source_exports_shared_without_capture_and_rejects_isol
         "verifyit_package_root": VERIFYIT_PACKAGE,
     }
     payload = harbor_payload(row, **options)
-    config = TaskConfig.model_validate_toml(payload.files["task.toml"].decode())
-    assert config.verifier.environment_mode == "shared"
-    assert not config.artifacts and "tests/Dockerfile" not in payload.files
+    config = tomllib.loads(payload.files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert not config["artifacts"] and "tests/Dockerfile" not in payload.files
     assert payload.files["instruction.md"].decode() == task.context.events[0].content
     # Without TaskTrove's shared source recipe, Harbor needs an isolated transfer contract.
     isolated = task.model_copy(update={"source": task.source.model_copy(update={"dataset": "fixture"})})

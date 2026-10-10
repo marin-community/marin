@@ -4,7 +4,6 @@
 """Grade a finished rollout with the task's grader, outside the model's machine."""
 
 import asyncio
-import os
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from typing import Any

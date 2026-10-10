@@ -7,7 +7,14 @@ import ast
 
 from verifyit.spec import PytestSpec
 
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, INSTRUCTION, SOLUTION_DIR, SOLVE_SH, TESTS_MOUNT, TaskFiles
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    INSTRUCTION,
+    SOLUTION_DIR,
+    SOLVE_SH,
+    TESTS_MOUNT,
+    TaskFiles,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
