@@ -660,6 +660,10 @@ class GrugModelConfig:
     kda_state_grads: StateGrads = StateGrads.XLA
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
     kda_state_block_v: int = 32
+    moe_shared_unfused: bool = False
+    """Compute the shared experts apart from the fused router/latent input GEMM, so the scheduler can overlap the
+    shared MLP with the routed experts' all-to-all transports (the GB200 hero's shared/transport overlap). Same
+    math; one more GEMM launch per layer."""
     """d_v tile of the fused KDA state pass: 64 with ``kda_state_grads=xla`` is 8% faster on GB200 (same math)."""
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a learned per-sublayer
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
@@ -2498,8 +2502,10 @@ def moe_and_shared_fused(
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
     gate = None if shared_gate is None else unshard(shared_gate)
     overlap = None
-    weights = moe_weights
-    weights = moe_weights + shared_weights
+    # moe_shared_unfused: the shared experts' projections leave the fused input GEMM, so the shared MLP depends
+    # only on x and the scheduler can run it under the routed experts' dispatch and combine transports.
+    unfused = mlp.cfg.moe_shared_unfused and not part_inputs and mlp.cfg.fp8_recipe == Fp8Recipe.NONE
+    weights = moe_weights if unfused else moe_weights + shared_weights
     router_in_fused = bool(moe_weights)
     if not part_inputs and mlp.cfg.fp8_recipe != Fp8Recipe.NONE:
         # The router stays in high precision; the rest of the fused projection takes the low-precision recipe.
@@ -2537,6 +2543,8 @@ def moe_and_shared_fused(
     routed, stats = routed_mlp()
     if overlap is not None:
         return routed, stats
+    if unfused:
+        parts = [*parts, *(jnp.einsum("td,de->te", x_flat, w, out_sharding=_batch_spec()) for w in shared_weights)]
     if not gated:
         # Ungated shared experts: these parts are their pre-activations (``Transformer.neuron_inputs``).
         stats = {**stats, _SHARED_PRE: jnp.concatenate(parts[len(moe_weights) :], axis=-1)}
