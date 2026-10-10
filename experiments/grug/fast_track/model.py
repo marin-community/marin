@@ -84,8 +84,16 @@ from experiments.grug.moe.kda_state_pallas import StateGrads
 _GATED_NORM_RANK = 128
 _QB_HIST_BINS = 10_000
 _CE_TOKENS_PER_RANK = 65_536
-# A vocab tile of 8192 in the fused lm_head + cross-entropy loop measured ~3% faster than 4096 at d512.
-_CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=8192)
+# A vocab tile of 8192 in the fused lm_head + cross-entropy loop measured ~3% faster than 4096 at d512 on H100. On
+# GB200 the kernel's own defaults win (44 vs 53 ms forward+backward at 65k tokens x 6144 x 16k vocab).
+_CE_BLOCK_SIZES_H100 = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=8192)
+
+
+def _ce_block_sizes() -> BlockSizes | None:
+    """Fused CE block sizes for the current accelerator (None: the kernel's defaults)."""
+    return None if "GB200" in jax.devices()[0].device_kind else _CE_BLOCK_SIZES_H100
+
+
 # Axes the non-expert params FSDP-shard over.
 _FSDP_AXES: tuple[str, ...] = ("data", "expert")
 _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
@@ -4593,7 +4601,7 @@ class Transformer(eqx.Module):
                 logsumexp_weight=logsumexp_weight,
                 dtype=loss_dtype,
                 implementation="xla_fast_bwd",
-                block_sizes=_CE_BLOCK_SIZES,
+                block_sizes=_ce_block_sizes(),
                 logit_soft_cap=_logit_cap(self.config),
             )
             return ce(weight=loss_weight, reduction=reduction)
@@ -4615,7 +4623,7 @@ class Transformer(eqx.Module):
                 logsumexp_weight=logsumexp_weight,
                 dtype=loss_dtype,
                 implementation="xla_fast_bwd",
-                block_sizes=_CE_BLOCK_SIZES,
+                block_sizes=_ce_block_sizes(),
                 logit_soft_cap=_logit_cap(self.config),
             )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
