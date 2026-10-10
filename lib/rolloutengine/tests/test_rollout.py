@@ -493,7 +493,7 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
             self.machine = machine
 
         async def run(self, command):
-            if command.argv == ("sh", "-c", "hang"):
+            if command.argv == ("bash", "-c", "hang"):
                 try:
                     async with asyncio.timeout(command.timeout):
                         await asyncio.Future()
