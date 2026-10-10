@@ -413,7 +413,8 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
 
 
 @pytest.mark.asyncio
-async def test_shell_commands_use_required_directory_and_variables(shell_task):
+async def test_shell_commands_use_required_directory_and_variables(shell_task, monkeypatch):
+    monkeypatch.setenv("TASKCOMPENDIUM_TEST_SETTING", "required")
     task = shell_task.model_copy(
         update={
             "environment_requirements": shell_task.environment_requirements.model_copy(
@@ -421,7 +422,7 @@ async def test_shell_commands_use_required_directory_and_variables(shell_task):
                     "docker_image": None,
                     "command_semantics": CommandSemantics.SHELL_SIMULATOR,
                     "working_directory": "/task",
-                    "environment_variables": {"SETTING": "required"},
+                    "environment_variables": {"SETTING": "${TASKCOMPENDIUM_TEST_SETTING}"},
                 }
             )
         }

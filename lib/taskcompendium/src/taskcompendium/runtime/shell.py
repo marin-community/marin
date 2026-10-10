@@ -13,6 +13,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
+from harbor_config.env import resolve_env_vars
 from shellbox.machine import (
     Command,
     Machine,
@@ -232,7 +233,12 @@ class ShellFactory:
             raise ValueError("Shell factory cannot satisfy these environment requirements")
         async with asyncio.timeout(self.machine_spec.startup_timeout):
             prepared = await asyncio.to_thread(
-                prepare_machine_spec, requirements, self.machine_factory, self.machine_spec
+                prepare_machine_spec,
+                requirements.model_copy(
+                    update={"environment_variables": resolve_env_vars(requirements.environment_variables)}
+                ),
+                self.machine_factory,
+                self.machine_spec,
             )
             machine = await self.machine_factory.create(prepared)
         try:
