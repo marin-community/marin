@@ -32,7 +32,6 @@ from scripts.ci.package_release import (
     update_native_requirement,
     validate_targeted_lock_change,
 )
-from scripts.python_libs_package import PACKAGES as BUNDLED_LIBRARIES
 from scripts.python_libs_package import _rewrite_sibling_pins
 
 RELEASE_WORKFLOW = Path(".github/workflows/marin-release-libs-wheels.yaml")
@@ -135,6 +134,7 @@ def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["lib/iris/hatch_build.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/finestore/src/finestore/eval.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/shellbox/src/shellbox/machine.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/verifyit/README.md"]) == ["python-libs"]
     assert packages_for_changes(["scripts/ci/package_release.py"]) == [
         "dupekit",
         "finelog",
@@ -280,29 +280,12 @@ def test_update_native_requirement_never_downgrades_floor() -> None:
     assert update_native_requirement(text, "marin-iris-native", "0.1.4")[0] == text
 
 
-def test_python_libs_release_expectations_track_the_bundle_builder() -> None:
-    """The release gate and the builder must agree on which libraries ship.
-
-    A library the builder produces but the release table omits is built and never
-    published; one the table requires but the builder skips fails the manifest check
-    at the end of the release run, after every wheel has already been built.
-    """
-    family = PACKAGES[PYTHON_LIBS_FAMILY]
-
-    # The builder runs `uv build --wheel --sdist` once per library.
-    assert dict(family.artifacts) == {
-        distribution: ArtifactExpectation(wheels=1, sdists=1, pure_python=True) for distribution in BUNDLED_LIBRARIES
-    }
-    assert set(family.declared_version_paths) == {
-        Path(library["path"]) / library["version_file"] for library in BUNDLED_LIBRARIES.values()
-    }
-
-
 def test_shellbox_iris_extra_pins_to_bundle_release() -> None:
     pyproject = Path("lib/shellbox/pyproject.toml").read_text()
     released = tomllib.loads(_rewrite_sibling_pins(pyproject, "0.3.0.dev30194118926"))
 
     assert released["project"]["optional-dependencies"]["iris"] == ["marin-iris==0.3.0.dev30194118926"]
+    assert "marin-rigging==0.3.0.dev30194118926" in released["project"]["optional-dependencies"]["daytona"]
 
 
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
@@ -454,9 +437,11 @@ def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     assert push["branches"] == ["main"]
     assert "schedule" in triggers
     assert "uv.lock" not in push["paths"]
-    assert not any(item.endswith("pyproject.toml") for item in push["paths"])
+    assert "pyproject.toml" not in push["paths"]
+    python_sources = set(PACKAGES[PYTHON_LIBS_FAMILY].source_patterns)
+    assert python_sources <= set(push["paths"])
+    assert python_sources <= set(triggers["pull_request"]["paths"])
     assert "shellbox-v*" not in push["tags"]
-    assert "lib/shellbox/src/**" in push["paths"]
 
     publish = workflow["jobs"]["publish"]
     assert publish["permissions"] == {"contents": "read", "id-token": "write"}

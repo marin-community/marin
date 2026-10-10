@@ -67,8 +67,9 @@ test = [
     "pytest-json-report>=1.5",
     "pytest-xdist",
     "pytest-timeout",
-    "verifyit[answer,reasoning-gym,schema]",
-    "taskcompendium[pipeline]",
+    "marin-verifyit[math,reasoning-gym,schema]",
+    "marin-taskcompendium[pipeline]",
+    "universal-pathlib",
     # for scaling law plotting tests
     "plotly",
 ]

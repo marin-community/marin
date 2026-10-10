@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from harbor_config.env import resolve_env_vars
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
@@ -25,6 +24,7 @@ from shellbox.machine import (
     ShellSimBuiltins,
 )
 from taskcompendium.models import EnvironmentRequirements, TaskResource, require_resolved_environment
+from taskcompendium.runtime.environment import resolve_env_vars
 from taskcompendium.runtime.local import local_runtime
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -61,7 +61,9 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             await machine.upload(source, f"/{resource.path}")
 
 
-def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
+def _machine_spec(
+    requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec, host_environment: Mapping[str, str]
+) -> MachineSpec:
     require_resolved_environment(requirements)
     if requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
@@ -76,7 +78,7 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
             if requirements.working_directory is not None
             else "" if requirements.docker_image else "/workspace"
         ),
-        env=resolve_env_vars(requirements.environment_variables),
+        env=resolve_env_vars(requirements.environment_variables, host_environment),
         network=runtime.network,
         memory_mb=runtime.memory_mb,
         cpus=runtime.cpus,
@@ -138,7 +140,7 @@ async def _prepare_machine(
         return None
     async with asyncio.timeout(runtime.startup_timeout):
         machine = await _acquire_machine(
-            runtime, _machine_spec(requirements, runtime), factories, cleanup, owned, requirements
+            runtime, _machine_spec(requirements, runtime, dict(os.environ)), factories, cleanup, owned, requirements
         )
         await _install_resources(machine, resources)
         for command in requirements.setup_commands:

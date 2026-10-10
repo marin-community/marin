@@ -63,6 +63,14 @@ Export restores source actor recipes and bundles current Verifyit; use
 Export builds no images and runs no graders. Comparisons cover the emitted
 recipes, files and execution settings; image tags and build-time downloads
 retain the source's reproducibility limits.
+The exporter does not install Harbor or validate every generated `task.toml`
+against Harbor's schema. The manifest records this limit. After extracting a
+`task.toml` from `task_binary`, check it with the pinned external Harbor runtime:
+
+```bash
+uv run --project config/external/harbor --frozen python -c \
+  'from pathlib import Path; from harbor_config.models.task.config import TaskConfig; TaskConfig.model_validate_toml(Path("task.toml").read_text())'
+```
 
 [`harbor_export_step`](tasktrove/export.py) binds this export to a normalized
 artifact and records verifier payload identity. For the smoke input, first run

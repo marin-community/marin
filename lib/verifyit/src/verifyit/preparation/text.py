@@ -10,9 +10,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any, cast
 
-from harbor_config.errors import error_category
-
-from verifyit.grade import InvalidTask, Status, finalize_preparation_failure
+from verifyit.grade import InvalidTask, PreparationCategory, Status, finalize_preparation_failure
 from verifyit.preparation.errors import InvalidPreparation, PreparationError, PreparationFailure
 
 
@@ -45,7 +43,7 @@ class PreparedText:
 
 
 def _preparation_error(error: Exception, status: Status, stage: str) -> PreparationError:
-    failure = PreparationFailure(status, error_category(type(error).__name__), type(error).__name__, str(error), stage)
+    failure = PreparationFailure(status, PreparationCategory.UNKNOWN, type(error).__name__, str(error), stage)
     verdict = finalize_preparation_failure(**asdict(failure))
     exception = InvalidPreparation if status is Status.INVALID_TASK else PreparationError
     return exception(failure, verdict)

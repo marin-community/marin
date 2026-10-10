@@ -19,8 +19,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from harbor_config.errors import ErrorCategory
-
 from verifyit.file_ops.read import read_text
 from verifyit.numeric import MAX_NUMERIC_DIGITS, numeric_literal
 from verifyit.spec import (
@@ -51,6 +49,13 @@ class Status(StrEnum):
     SCORED = "scored"
     INVALID_TASK = "invalid_task"
     INFRA_ERROR = "infra_error"
+
+
+class PreparationCategory(StrEnum):
+    """Attribution of a failure before a grade exists."""
+
+    AGENT = "agent"
+    UNKNOWN = "unknown"
 
 
 class Aggregation(StrEnum):
@@ -197,15 +202,15 @@ def invalid_task(message: str) -> Reward:
 
 
 def finalize_preparation_failure(
-    *, status: Status, category: ErrorCategory, error_type: str, message: str, stage: str
+    *, status: Status, category: PreparationCategory, error_type: str, message: str, stage: str
 ) -> Reward:
     """Terminate failed preparation at minimum reward without grading partial data.
 
-    Task validity is separate from the imported framework error category.
-    PASSTHROUGH requires a completed grade; preparation has none to preserve.
+    Task validity is separate from error attribution. Only a candidate-attributed
+    failure can be a scored zero when preparation ends before grading.
     """
     source_status = status
-    if status != Status.INVALID_TASK and (status != Status.SCORED or category != ErrorCategory.AGENT):
+    if status != Status.INVALID_TASK and (status != Status.SCORED or category != PreparationCategory.AGENT):
         status = Status.INFRA_ERROR
     return _validated_reward(
         Reward(

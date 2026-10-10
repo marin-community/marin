@@ -5,9 +5,8 @@ import sys
 from dataclasses import asdict
 
 import pytest
-from harbor_config.errors import ErrorCategory, error_category
 from verifyit.adapters.harness_native import exact_match
-from verifyit.grade import InvalidTask, Status, finalize_preparation_failure
+from verifyit.grade import InvalidTask, PreparationCategory, Status, finalize_preparation_failure
 from verifyit.preparation.errors import PreparationError, PreparationFailure
 from verifyit.preparation.text import (
     TextInputs,
@@ -60,15 +59,13 @@ def test_preparation_raises_at_failure_with_original_metadata_and_minimum_verdic
 @pytest.mark.parametrize(
     "error_type,status,expected,category",
     [
-        ("AgentTimeoutError", Status.SCORED, Status.SCORED, ErrorCategory.AGENT),
-        ("SandboxBuildFailedError", Status.SCORED, Status.INFRA_ERROR, ErrorCategory.INFRASTRUCTURE),
-        ("OutputLengthExceededError", Status.SCORED, Status.INFRA_ERROR, ErrorCategory.PASSTHROUGH),
-        ("UnrecognizedFailure", Status.SCORED, Status.INFRA_ERROR, ErrorCategory.UNKNOWN),
-        ("AgentTimeoutError", Status.INFRA_ERROR, Status.INFRA_ERROR, ErrorCategory.AGENT),
+        ("CandidateFailure", Status.SCORED, Status.SCORED, PreparationCategory.AGENT),
+        ("UnrecognizedFailure", Status.SCORED, Status.INFRA_ERROR, PreparationCategory.UNKNOWN),
+        ("CandidateFailure", Status.INFRA_ERROR, Status.INFRA_ERROR, PreparationCategory.AGENT),
     ],
 )
-def test_failed_preparation_has_no_partial_grade_to_pass_through(error_type, status, expected, category):
-    failure = PreparationFailure(status, error_category(error_type), error_type, "interrupted", "tool")
+def test_failed_preparation_requires_candidate_attribution_for_scored_zero(error_type, status, expected, category):
+    failure = PreparationFailure(status, category, error_type, "interrupted", "tool")
     verdict = finalize_preparation_failure(**asdict(failure))
     assert (verdict.status, verdict.reward) == (expected, 0)
     assert verdict.detail["category"] == category
