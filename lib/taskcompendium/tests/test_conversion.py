@@ -3,6 +3,7 @@
 
 import json
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -11,14 +12,30 @@ import pyarrow.parquet as pq
 from fray.local_backend import LocalClient
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
 from taskcompendium.convert.answers import exact_answer_task, source_defect
-from taskcompendium.models import ResourceGroups, TaskSpec, TextMessage
+from taskcompendium.models import ResourceGroups, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
+from taskcompendium.pipeline.conversion import convert_raw_row, convert_source_row
+from taskcompendium.pipeline.execution_telemetry import SourceTelemetry
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
-from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, ReviewRubric, SourceRecipe
-from taskcompendium.pipeline.source_processing import ConversionResult, SourceProcessingMode, run_source_pipeline
+from taskcompendium.pipeline.models import (
+    Controls,
+    ImportRejection,
+    IntendedUse,
+    NormalizedTask,
+    RawRow,
+    ReviewRubric,
+    SourceRecipe,
+)
+from taskcompendium.pipeline.source_processing import (
+    ConversionResult,
+    SourceProcessingMode,
+    run_source_pipeline,
+    write_conversion,
+)
 from taskcompendium.pipeline.transforms import normalize_row
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
@@ -42,6 +59,52 @@ def selected_answer(row: dict, _context: ConversionContext) -> bool:
 
 def decode_answer(row: dict, _context: ConversionContext) -> dict:
     return {**row, "prompt": f"Decoded: {row['prompt']}"}
+
+
+def test_recipe_free_conversion_persists_caller_identity_and_execution_counters(tmp_path: Path):
+    row = RawRow(
+        "caller-task",
+        Source(dataset="colors", revision="pinned", row="archive:17", importer_revision="2"),
+        {"prompt": "Name a color", "answer": "red"},
+    )
+    conversion = ConversionContext(inputs={}, grader_environment=None)
+    output = tmp_path / "output"
+    telemetry = SourceTelemetry("colors", str(output))
+    with ZephyrContext(client=LocalClient(), max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        with telemetry.record():
+            with telemetry.phase("convert_write") as phase:
+                result = write_conversion(
+                    Dataset.from_list([row]).map(partial(convert_raw_row, convert=convert_answer, context=conversion)),
+                    context,
+                    str(output),
+                    telemetry=phase,
+                )
+    (record,) = [row for shard in Path(result.normalized_path).glob("*.parquet") for row in load_parquet(str(shard))]
+    task = TaskSpec.model_validate_json(record["task_json"])
+    assert task.id == "caller-task"
+    assert task.source.row == "archive:17"
+    assert cast(TextMessage, task.context.events[0]).content == "Name a color"
+    report = json.loads((output / "telemetry.json").read_text())
+    execution = report["phases"][0]["executions"][0]
+    assert execution["counters"]["source/normalize/attempts"] == 1
+    assert execution["counters"]["source/normalize/task_rows"] == 1
+
+
+def test_conversion_retains_payload_before_decoder_rewrites():
+    recipe = SourceRecipe(
+        name="colors",
+        version="1",
+        source=SourceFiles("colors", "pinned", ("rows.jsonl",), SourceFormat.JSONL, decode=decode_answer),
+        convert=convert_answer,
+        intended_use=IntendedUse.TRAIN,
+        rubric=None,
+        controls=None,
+    )
+    original = {"path": "archive/task", "prompt": "Name a color", "answer": "red", "binary": b"original bytes"}
+    converted = convert_source_row({"locator": "rows.jsonl:7", "data": original}, recipe)
+    assert converted.original_data == original
+    task = cast(NormalizedTask, converted.result).task
+    assert cast(TextMessage, task.context.events[0]).content == "Decoded: Name a color"
 
 
 def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(tmp_path: Path):
