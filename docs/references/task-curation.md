@@ -234,6 +234,13 @@ Sample and full modes run the reviewed procedure below.
    passes at a 95% pass fraction. Judge-graded sources skip this step.
 7. Admit rows and write the outputs.
 
+For a standalone task batch, call
+`review_tasks(tasks, rubric, reviewer, cached=None)` from
+`taskcompendium.pipeline.review`. It returns a `ReviewBatchResult` with `.reviews`
+and `.attempts`; `review_evidence(result)` makes the observations JSON-serializable.
+The caller's sink owns output. Pipeline sinks write one evidence record per batch
+alongside audit rows in the same execution, without repeating provider calls.
+
 Verification telemetry records `select`, `trials`, and `row_gate` executions.
 The gate writes the complete audit and accepted rows together and returns
 manifest counts, avoiding separate export and count executions. Control trials

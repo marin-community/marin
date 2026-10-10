@@ -16,6 +16,7 @@ from itertools import batched
 from typing import Any
 
 import msgspec
+import pyarrow as pa
 from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
@@ -24,7 +25,7 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.input_file import InputFileSpec
 from zephyr.plan import make_windows
 from zephyr.readers import load_jsonl, load_parquet
-from zephyr.writers import DEFAULT_TARGET_BUFFER_BYTES, write_jsonl_file, write_parquet_file
+from zephyr.writers import DEFAULT_TARGET_BUFFER_BYTES, write_jsonl_file
 
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
@@ -53,6 +54,7 @@ from taskcompendium.pipeline.review import (
     ChatReviewer,
     Reviewer,
     review_batch_id,
+    review_evidence,
     review_tasks,
 )
 from taskcompendium.pipeline.review_requests import DEFAULT_MAX_BATCH_BYTES
@@ -83,6 +85,8 @@ AUDIT_SHARDS = 64
 AUDIT_INPUT_PATTERN = "audit/*.parquet"
 AUDIT_SHARD_TEMPLATE = "audit/part-{shard:05d}.parquet"
 REVIEW_INPUT_PATTERN = "review-inputs/batch-*.jsonl.gz"
+REVIEW_EVIDENCE_TEMPLATE = "evidence/part-{shard:05d}.parquet"
+REVIEW_EVIDENCE_SCHEMA = pa.schema([("batch_id", pa.string()), ("evidence_json", pa.string())])
 ACCEPTED_SHARD_TEMPLATE = "accepted/part-{shard:05d}.parquet"
 UNAVAILABLE_REVIEW_STATUSES = frozenset({"invalid", "unavailable"})
 """Review statuses that leave a task without a usable verdict."""
@@ -201,7 +205,6 @@ def _audit_batch(
     records: list[dict[str, Any]],
     rubric: ReviewRubric,
     reviewer: Reviewer,
-    output_path: StoragePath,
     cached: Mapping[str, CachedRequests | None],
 ) -> Iterator[dict[str, Any]]:
     """Review the undecided tasks of one batch; ``cached`` holds cache entries read ahead, by batch ID."""
@@ -211,16 +214,27 @@ def _audit_batch(
         yield from (audit_columns(audit) for audit in audits)
         return
     batch_id = review_batch_id(task.id for task in candidates)
-    reviews = review_tasks(candidates, rubric, reviewer, output_path, cached=cached.get(batch_id))
-    reviews_by_id = {review.task_id: review for review in reviews}
-    for audit in audits:
+    result = review_tasks(candidates, rubric, reviewer, cached=cached.get(batch_id))
+    reviews_by_id = {review.task_id: review for review in result.reviews}
+    for index, audit in enumerate(audits):
         if audit.task_id in reviews_by_id:
             audit = audit.model_copy(
                 update={
                     "review": reviews_by_id[audit.task_id],
                 }
             )
-        yield audit_columns(audit)
+        row = audit_columns(audit)
+        if index == 0:
+            row["review_batch"] = {"batch_id": batch_id, "evidence_json": json.dumps(review_evidence(result))}
+        yield row
+
+
+def _batch_evidence(row: dict[str, Any]) -> dict[str, Any] | None:
+    return row.get("review_batch")
+
+
+def _audit_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in row.items() if key != "review_batch"}
 
 
 @dataclass
@@ -466,8 +480,15 @@ def _review_shard(
     cached: Mapping[str, CachedRequests | None],
 ) -> Iterator[ReviewRecord]:
     """Review one panel batch, write its audit rows, and return their reviews."""
-    rows = [row for batch in batches for row in _audit_batch(batch["records"], rubric, reviewer, output, cached)]
-    write_parquet_file(rows, format_shard_path(template, shard.shard_idx, shard.total_shards), schema=TASK_SCHEMA)
+    rows = [row for batch in batches for row in _audit_batch(batch["records"], rubric, reviewer, cached)]
+    write_shard_outputs(
+        rows,
+        shard,
+        [
+            ShardOutput(str(output / REVIEW_EVIDENCE_TEMPLATE), REVIEW_EVIDENCE_SCHEMA, _batch_evidence),
+            ShardOutput(template, TASK_SCHEMA, _audit_row),
+        ],
+    )
     yield from (review_record(row) for row in rows)
 
 
@@ -573,7 +594,6 @@ def _complete_audit_batch(
     quality_path: str | None,
     rubric: ReviewRubric | None,
     reviewer: Reviewer | None,
-    output: StoragePath,
 ) -> Iterator[dict[str, Any]]:
     remainder = []
     for record in records:
@@ -634,7 +654,7 @@ def _complete_audit_batch(
         return
     if rubric is None or reviewer is None:
         raise ValueError("Reviewing remaining tasks requires a rubric and a reviewer")
-    yield from _audit_batch(remainder, rubric, reviewer, output, cached={})
+    yield from _audit_batch(remainder, rubric, reviewer, cached={})
 
 
 def _audit_shard(
@@ -642,6 +662,7 @@ def _audit_shard(
     shard: ShardInfo,
     *,
     template: str,
+    evidence_template: str,
     complete: Callable[[list[dict[str, Any]]], Iterator[dict[str, Any]]],
 ) -> Iterator[_ManifestTally]:
     """Complete one review-input file's audit rows unless an earlier attempt wrote them; count them."""
@@ -653,7 +674,14 @@ def _audit_shard(
             tally.add(row)
     else:
         rows = (row for batch in batches for row in complete(batch["records"]))
-        write_parquet_file(tally.counted(rows), path, schema=TASK_SCHEMA)
+        write_shard_outputs(
+            tally.counted(rows),
+            shard,
+            [
+                ShardOutput(evidence_template, REVIEW_EVIDENCE_SCHEMA, _batch_evidence),
+                ShardOutput(template, TASK_SCHEMA, _audit_row),
+            ],
+        )
     yield tally
 
 
@@ -718,14 +746,20 @@ def audit_prepared_source(
         quality_path=quality_path,
         rubric=recipe.rubric,
         reviewer=reviewer,
-        output=output,
     )
     with _execution_context(context, execution, f"audit-{recipe.name}") as context:
         tallies = execute_phase(
             context,
             Dataset.from_files(str(prepared / REVIEW_INPUT_PATTERN))
             .load_jsonl()
-            .map_shard(partial(_audit_shard, template=str(output / AUDIT_SHARD_TEMPLATE), complete=complete)),
+            .map_shard(
+                partial(
+                    _audit_shard,
+                    template=str(output / AUDIT_SHARD_TEMPLATE),
+                    evidence_template=str(output / REVIEW_EVIDENCE_TEMPLATE),
+                    complete=complete,
+                )
+            ),
             map_task_resources=execution.review_task_resources,
             telemetry=telemetry,
             operation="review",
