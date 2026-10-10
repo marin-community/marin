@@ -10,6 +10,7 @@ vars like TPU_NAME or PATH that happen to be in os.environ.
 The parent's resolved setup is inherited via IRIS_JOB_SETUP_SCRIPTS.
 """
 
+import json
 from dataclasses import dataclass, field
 from unittest.mock import patch
 
@@ -17,7 +18,7 @@ import pytest
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.cluster.types import Entrypoint, EnvironmentInheritance, EnvironmentSpec, JobName, ResourceSpec
 from iris.rpc import job_pb2
 
 
@@ -110,6 +111,35 @@ def test_child_explicit_env_overrides_inherited(capturing_client, parent_context
     assert stub.captured_env["MY_VAR"] == "child_override"
     assert stub.captured_env["CHILD_ONLY"] == "yes"
     assert stub.captured_env["PARENT_ONLY"] == "yes"
+
+
+def test_child_explicit_environment_omits_cached_parent_and_submitter_vars(
+    capturing_client, parent_context, monkeypatch
+):
+    client, stub = capturing_client
+    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/parent-job/0:0")
+    monkeypatch.setenv("IRIS_JOB_ENV", json.dumps({"PARENT_SECRET": "cached"}))
+    monkeypatch.setenv("IRIS_JOB_SETUP_SCRIPTS", json.dumps(["uv sync"]))
+    monkeypatch.setenv("HF_TOKEN", "submitter-token")
+    monkeypatch.delenv("PARENT_SECRET", raising=False)
+
+    set_job_info(None)
+    try:
+        with iris_ctx_scope(parent_context):
+            client.submit(
+                Entrypoint.from_command("true"),
+                "explicit-env",
+                ResourceSpec(cpu=1, memory="1g"),
+                environment=EnvironmentSpec(
+                    env_vars={"CHILD_ONLY": "safe"},
+                    inheritance=EnvironmentInheritance.EXPLICIT,
+                ),
+            )
+    finally:
+        set_job_info(None)
+
+    assert stub.captured_env == {"CHILD_ONLY": "safe"}
+    assert stub.captured_setup_scripts == ["uv sync"]
 
 
 def test_no_env_inheritance_without_parent_context(capturing_client):
