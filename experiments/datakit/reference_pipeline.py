@@ -108,11 +108,15 @@ eval corpus a version tag.
 import argparse
 import logging
 import posixpath
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
+from typing import Any
 
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
+from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
 from marin.datakit.decon import (
     DeconAttributes,
     DropSetSource,
@@ -123,7 +127,7 @@ from marin.datakit.decon import (
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
-from marin.execution.remote import remote
+from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_dedup import ClusterDedupParams
@@ -149,6 +153,7 @@ from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
 )
+from marin.training.run_environment import dependency_groups_for_resources
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
@@ -223,6 +228,17 @@ TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
 
+DEFAULT_MAX_CONCURRENT = 8
+
+
+@dataclass(frozen=True)
+class TokenizerSpec:
+    """Tokenizer location and cache identity, not a revision enforced by the loader."""
+
+    name: str
+    identity: str
+
+
 # Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
 # hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
@@ -268,10 +284,51 @@ class ClusterConfig:
             )
 
 
-# Remote stage-driver jobs (embed / quality / assign / centroid-sample) submit a
-# pipeline to their own dedicated coordinator and block, so they need almost
-# nothing themselves.
+# Lightweight stage drivers submit shard work to Zephyr and wait for completion.
 DRIVER_RESOURCES = ResourceConfig(cpu=1, ram="2g")
+
+
+class DriverPlacement(StrEnum):
+    """Execution location for lightweight Zephyr stage drivers."""
+
+    COORDINATOR = "coordinator"
+    REMOTE = "remote"
+
+
+def stage_driver(fn: Callable[[str], Any], placement: DriverPlacement) -> Callable[[str], Any]:
+    """Select driver placement without changing its artifact identity."""
+    if placement is DriverPlacement.COORDINATOR:
+        return fn
+    return remote(fn, resources=DRIVER_RESOURCES, pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS))
+
+
+def coordinator_source_steps(sources: dict[str, StepSpec]) -> dict[str, StepSpec]:
+    """Run source-recipe drivers in the coordinator and retain their cache paths."""
+    placed: dict[int, StepSpec] = {}
+
+    def place(step: StepSpec) -> StepSpec:
+        if id(step) not in placed:
+            fn = step.fn
+            if isinstance(fn, RemoteCallable):
+                if fn.env_vars:
+                    raise ValueError(
+                        f"Cannot place source step {step.name!r} on coordinator: remote env_vars are unsupported"
+                    )
+                if fn.pip_packages:
+                    raise ValueError(
+                        f"Cannot place source step {step.name!r} on coordinator: remote pip_packages are unsupported"
+                    )
+                dependency_groups = dependency_groups_for_resources(fn.resources, fn.pip_dependency_groups)
+                if set(dependency_groups) - set(CPU_DATAKIT_DEPENDENCY_GROUPS):
+                    raise ValueError(
+                        f"Cannot place source step {step.name!r} on coordinator: "
+                        "remote dependency groups are unsupported"
+                    )
+                fn = fn.fn
+            placed[id(step)] = replace(step, fn=fn, resources=None, deps=[place(dep) for dep in step.deps])
+        return placed[id(step)]
+
+    return {name: place(step) for name, step in sources.items()}
 
 
 @dataclass(frozen=True)
@@ -442,7 +499,13 @@ def default_sources() -> dict[str, StepSpec]:
     return select_sources(None)
 
 
-def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale, output_prefix: str | None) -> StepSpec:
+def _build_embed_step(
+    name: str,
+    normalize_step: StepSpec,
+    scale: PipelineScale,
+    output_prefix: str | None,
+    driver_placement: DriverPlacement,
+) -> StepSpec:
     return StepSpec(
         name=f"datakit/embed/{name}",
         output_path_prefix=output_prefix,
@@ -457,7 +520,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale,
             "doc_sample_chars": EMBED_DOC_SAMPLE_CHARS,
             "v": EMBEDDING_ATTR_DATA_VERSION,
         },
-        fn=remote(
+        fn=stage_driver(
             lambda output_path, np=normalize_step.output_path: embed_source(
                 output_path=output_path,
                 normalized=read_artifact(np, NormalizedData),
@@ -467,14 +530,17 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale,
                 worker_resources=scale.pool.worker,
                 max_workers=scale.pool.n_workers,
             ),
-            resources=DRIVER_RESOURCES,
-            pip_dependency_groups=["datakit"],
+            placement=driver_placement,
         ),
     )
 
 
 def build_per_source_embed_steps(
-    sources: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE, output_prefix: str | None = None
+    sources: dict[str, StepSpec],
+    scale: PipelineScale = DEFAULT_SCALE,
+    output_prefix: str | None = None,
+    *,
+    driver_placement: DriverPlacement = DriverPlacement.REMOTE,
 ) -> dict[str, StepSpec]:
     """Build the Luxical embed StepSpec for each source.
 
@@ -483,11 +549,17 @@ def build_per_source_embed_steps(
     the domain training subgraph (via :func:`build_train_centroids_step`) can
     share the same embeds across both wirings.
     """
-    return {name: _build_embed_step(name, step, scale, output_prefix) for name, step in sources.items()}
+    return {
+        name: _build_embed_step(name, step, scale, output_prefix, driver_placement) for name, step in sources.items()
+    }
 
 
 def build_train_centroids_step(
-    embed_steps: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE, output_prefix: str | None = None
+    embed_steps: dict[str, StepSpec],
+    scale: PipelineScale = DEFAULT_SCALE,
+    output_prefix: str | None = None,
+    *,
+    driver_placement: DriverPlacement = DriverPlacement.REMOTE,
 ) -> StepSpec:
     """Build the K-means training StepSpec for the domain centroids.
 
@@ -507,7 +579,7 @@ def build_train_centroids_step(
             "format": "parquet",
             "v": 1,
         },
-        fn=remote(
+        fn=stage_driver(
             lambda output_path, es={n: s.output_path for n, s in embed_steps.items()}: sample_centroid_inputs(
                 output_path=output_path,
                 embeddings={n: read_artifact(p, EmbeddingAttrData) for n, p in es.items()},
@@ -517,8 +589,7 @@ def build_train_centroids_step(
                 max_workers=scale.pool.n_workers,
                 parallel_sources=scale.sample_parallel_sources,
             ),
-            resources=DRIVER_RESOURCES,
-            pip_dependency_groups=["datakit"],
+            placement=driver_placement,
         ),
     )
     # Pin the K-means/BLAS thread count to the allocated CPUs so centroid training
@@ -550,7 +621,7 @@ def build_train_centroids_step(
                 seed=cluster.train_seed,
             ),
             resources=scale.train_centroids_resources,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
         ),
     )
 
@@ -630,7 +701,7 @@ class DatakitSteps:
     """Result of :func:`reference_datakit_steps`."""
 
     sources: dict[str, StepSpec]
-    """Echo of the input sources mapping (``{name: normalize_step}``)."""
+    """Source recipes with the selected driver placement (``{name: normalize_step}``)."""
 
     output_buckets: StepSpec
     """Final store StepSpec. Its ``output_path`` is the per-(cluster, quality)
@@ -665,11 +736,15 @@ def zephyr_datakit_steps(
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
     output_prefix: str | None = None,
+    *,
+    tokenizer: TokenizerSpec | None = None,
 ) -> ZephyrDatakitSteps:
     """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages.
 
     ``output_prefix`` roots every stage output in place of ``MARIN_PREFIX``.
     """
+    if tokenizer is None:
+        tokenizer = TokenizerSpec(TOKENIZER, TOKENIZER_REVISION)
     source_names = sorted(sources)
     worker_resources = scale.pool.task if zephyr_context is not None else scale.pool.worker
     exact_dedup = StepSpec(
@@ -694,9 +769,9 @@ def zephyr_datakit_steps(
             name=f"datakit/tokenize/{name}",
             output_path_prefix=output_prefix,
             train_normalize=normalize_step,
-            tokenizer=TOKENIZER,
+            tokenizer=tokenizer.name,
             tokenizer_backend=TOKENIZER_BACKEND,
-            tokenizer_revision=TOKENIZER_REVISION,
+            tokenizer_revision=tokenizer.identity,
             max_workers=scale.pool.n_workers,
             worker_resources=worker_resources,
             zephyr_context=zephyr_context,
@@ -859,6 +934,8 @@ def reference_datakit_steps(
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
     output_prefix: str | None = None,
+    tokenizer: TokenizerSpec | None = None,
+    driver_placement: DriverPlacement = DriverPlacement.REMOTE,
 ) -> DatakitSteps:
     """Build the reference Datakit DAG over the given normalize steps.
 
@@ -898,7 +975,13 @@ def reference_datakit_steps(
         zephyr_context: Optional shared context for subprocess-compatible stages.
         output_prefix: Root for every step output, for example a temporary
             prefix below ``MARIN_PREFIX``. ``None`` uses ``MARIN_PREFIX``.
+        tokenizer: Tokenizer location and stable content identity. Uses the
+            pinned reference tokenizer by default. Its identity affects DataKit
+            cache keys; it does not enforce the revision loaded by the tokenizer.
+        driver_placement: Location of source-recipe and lightweight stage drivers. Centroid training remains remote.
     """
+    if driver_placement is DriverPlacement.COORDINATOR:
+        sources = coordinator_source_steps(sources)
     cluster = scale.cluster
     fuzzy = scale.fuzzy
     if fuzzy.plan.minimum_size > fuzzy.text.max_cluster_size:
@@ -909,11 +992,19 @@ def reference_datakit_steps(
     unknown_exempt = set(scale.store.fuzzy_exempt_sources) - (all_sources().keys() | sources.keys())
     if unknown_exempt:
         raise ValueError(f"Unknown fuzzy-exempt sources: {sorted(unknown_exempt)!r}")
-    zephyr_steps = zephyr_datakit_steps(sources, scale, zephyr_context, output_prefix)
+    zephyr_steps = zephyr_datakit_steps(
+        sources,
+        scale,
+        zephyr_context,
+        output_prefix=output_prefix,
+        tokenizer=tokenizer,
+    )
     exact_dedup = zephyr_steps.exact_dedup
-    embed_steps = build_per_source_embed_steps(sources, scale, output_prefix)
+    embed_steps = build_per_source_embed_steps(sources, scale, output_prefix, driver_placement=driver_placement)
     if domain_centroids is None:
-        domain_centroids = build_train_centroids_step(embed_steps, scale, output_prefix)
+        domain_centroids = build_train_centroids_step(
+            embed_steps, scale, output_prefix, driver_placement=driver_placement
+        )
 
     centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(
         domain_centroids, cluster, centroids_version
@@ -938,7 +1029,7 @@ def reference_datakit_steps(
             output_path_prefix=output_prefix,
             deps=[embed, *centroids_deps],
             hash_attrs=assign_hash_attrs(centroids_hash, cluster.k_train, cluster.k_views, scale.assign_batch_size),
-            fn=remote(
+            fn=stage_driver(
                 lambda output_path, ep=embed.output_path: _assign_embedding(
                     output_path=output_path,
                     embed_path=ep,
@@ -946,8 +1037,7 @@ def reference_datakit_steps(
                     lookup_uris=lookup_uris,
                     scale=scale,
                 ),
-                resources=DRIVER_RESOURCES,
-                pip_dependency_groups=["datakit"],
+                placement=driver_placement,
             ),
         )
 
@@ -956,7 +1046,7 @@ def reference_datakit_steps(
             output_path_prefix=output_prefix,
             deps=[normalize_step, tokenize],
             hash_attrs={"model_version": quality_model_hash, "v": 2},
-            fn=remote(
+            fn=stage_driver(
                 lambda output_path, np=normalize_step.output_path, tp=tokenize.output_path, src=name: score_normalized(
                     output_path=output_path,
                     normalized=read_artifact(np, NormalizedData),
@@ -967,7 +1057,7 @@ def reference_datakit_steps(
                     max_workers=scale.pool.n_workers,
                     worker_resources=scale.pool.worker,
                 ),
-                resources=DRIVER_RESOURCES,
+                placement=driver_placement,
             ),
         )
 
@@ -1131,6 +1221,25 @@ def reference_datakit_steps(
         all_steps += list(s.values())
     all_steps += [dedup, cluster_plan, cluster_text, verified_dedup, store, *reports]
     return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
+
+
+def materialize_reference_store(
+    sources: dict[str, StepSpec],
+    *,
+    quality_model: str,
+    quality_model_version: str,
+    scale: PipelineScale = DEFAULT_SCALE,
+    max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+) -> ClusteredStoreData:
+    """Run the reference DataKit DAG and return its clustered store."""
+    datakit = reference_datakit_steps(
+        sources,
+        quality_model=quality_model,
+        quality_model_version=quality_model_version,
+        scale=scale,
+    )
+    StepRunner().run(datakit.all_steps, max_concurrent=max_concurrent)
+    return read_artifact(datakit.output_buckets.output_path, ClusteredStoreData)
 
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
@@ -1358,7 +1467,13 @@ def main() -> None:
     parser.add_argument("--pool-task-disk", default=None, help="disk for each shared-pool task, e.g. 16g")
     parser.add_argument("--pool-coordinator-cpu", type=float, default=None, help="CPUs for the pool coordinator")
     parser.add_argument("--pool-coordinator-ram", default=None, help="RAM for the pool coordinator, e.g. 8g")
-    parser.add_argument("--max-concurrent", type=int, default=8, metavar="N", help="max steps StepRunner runs at once")
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=DEFAULT_MAX_CONCURRENT,
+        metavar="N",
+        help="max steps StepRunner runs at once",
+    )
     parser.add_argument(
         "--run-tag",
         default="",

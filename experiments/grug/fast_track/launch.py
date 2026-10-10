@@ -4,9 +4,9 @@
 """H100 dense-vs-MoE scaling ladder for the 16k-vocab BPE tokenizer study.
 
 Rungs d512 / d768 / d1024 / d1280 map the model, data, and optimizer onto Hopper nodes and train on
-the in-region 16k BPE flat cache. Each variant (dense / MoE) has a baseline recipe; a run either
-data-matches or compute-matches it (``--match``, default data), or sets ``--batch-size`` /
-``--num-steps`` explicitly. See README.md for the results table and launch commands.
+the in-region 16k BPE flat cache or a DataKit artifact from the same experiment. Each variant
+(dense / MoE) has a baseline recipe. A run data-matches or compute-matches it (``--match``, default
+data), or sets ``--batch-size`` / ``--num-steps`` explicitly. See README.md for launch commands.
 """
 
 import dataclasses
@@ -14,8 +14,10 @@ import math
 import os
 import shlex
 import sys
+from collections.abc import Sequence
 from datetime import timedelta
 from enum import StrEnum
+from typing import NoReturn, Protocol
 
 import click
 import jmp
@@ -24,21 +26,44 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.datasets import LmDataConfig
+from levanter.tokenizers import tokenizer_content_hash
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
-from marin.execution.artifact import Artifact
+from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
+from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.step_spec import StepSpec
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datakit.reference_pipeline import (
+    QUALITY_MODEL_VERSION,
+    TokenizerSpec,
+    quality_model_path,
+    sample_sources,
+    select_sources,
+)
+from experiments.datakit.store.mixture import FlatCacheComponent, MixtureWeighting, flat_cache_mixture
+from experiments.datakit.testbed.sampler import SampleManifest
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
+from experiments.grug.fast_track.contracts import (
+    FrozenBaselineComponent,
+    FrozenBaselineManifest,
+    ResolvedTrainingBudget,
+)
+from experiments.grug.fast_track.data_pipeline import (
+    FAST_TRACK_SAMPLE_PREFIX,
+    FastTrackDataStore,
+    build_fast_track_data,
+    store_mixture_for_step,
+)
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import GrugModelConfig
 from experiments.grug.fast_track.train import (
@@ -104,6 +129,21 @@ class MatchMode(StrEnum):
     COMPUTE = "compute"
 
 
+class SourceMode(StrEnum):
+    """Select the training-data source for a fast-track run."""
+
+    CACHE = "cache"
+    SAMPLE = "sample"
+    REGISTRY = "registry"
+
+
+class Stage(StrEnum):
+    """Select the last fast-track stage to run."""
+
+    DATAKIT = "datakit"
+    TRAIN = "train"
+
+
 # Data. In-region 16k BPE-ladder cache (train split), document-shuffled so sequential reads interleave domains.
 V16384_CACHE_DIR = "s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_shuf/train"
 V16384_TOKENIZER = "hero-bpe-v16384"
@@ -112,6 +152,10 @@ V16384_VOCAB = 16384
 PALOMA_DETOK_VERSION = "2026.09.17"
 # In-process read cache for the tensorstore data loader. 1 GB is ample for the flat cache.
 TENSORSTORE_CACHE_BYTES = 1_000_000_000
+FROZEN_BASELINE = FrozenBaselineManifest(
+    tokenizer=V16384_TOKENIZER,
+    components=(FrozenBaselineComponent(name="train", cache_dir=V16384_CACHE_DIR, weight=1.0),),
+)
 
 # Model geometry shared across rungs.
 SEQ_LEN = 4096
@@ -212,42 +256,160 @@ def _active_params(cfg: GrugModelConfig) -> int:
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)
 
 
-def _flat_cache_data_config(
+def _with_validation_components(
     *,
     ctx: StepContext,
-    validation,
-    tokenizer: str,
-    train_cache_dir: str,
+    training_data: LmDataConfig,
+    validation: Sequence[ArtifactStep[TokenizedCache]],
 ) -> LmDataConfig:
-    """Straight-through single-source training on one pre-built flat cache (tokenizer-ablation runs).
-
-    Mirrors the Harrier config's validation wiring, but trains on a single pre-tokenized cache at
-    constant weight -- no mixture phases, no simulated epoching. ``validation`` sets are folded in as
-    zero-weight components (built as executor deps, tokenized with the same ``tokenizer``).
-    """
-    components = {
-        "train": DatasetComponent(
-            source=None,
-            cache_dir=train_cache_dir,
-            format=TextLmDatasetFormat(),
-            tags=["train"],
-            flat_cache=True,
-        )
-    }
+    """Add zero-weight validation components to a training data configuration."""
     if ctx.is_fingerprint:
         val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
     else:
         val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
-    collisions = components.keys() & val_components.keys()
+    collisions = training_data.components.keys() & val_components.keys()
     if collisions:
-        raise ValueError(f"validation components collide with the training component: {sorted(collisions)}")
-    train_weights = {"train": 1.0, **{name: 0.0 for name in val_components}}
-    return LmDataConfig(
-        tokenizer=tokenizer,
-        cache_dir=None,
-        components={**components, **val_components},
-        train_weights=train_weights,
-        auto_build_caches=False,
+        raise ValueError(f"validation components collide with training components: {sorted(collisions)}")
+
+    zero_weights = {name: 0.0 for name in val_components}
+    weights = training_data.train_weights
+    if not isinstance(weights, dict):
+        raise ValueError("fast-track training data requires fixed dictionary weights")
+    return dataclasses.replace(
+        training_data,
+        components={**training_data.components, **val_components},
+        train_weights={**weights, **zero_weights},
+    )
+
+
+class TrainingSource(Protocol):
+    """Build the training data and list its artifact dependencies."""
+
+    def dependencies(self) -> tuple[ArtifactStep, ...]: ...
+
+    def data_config(
+        self,
+        *,
+        ctx: StepContext,
+        validation: Sequence[ArtifactStep[TokenizedCache]],
+        tokenizer: str,
+        budget: ResolvedTrainingBudget,
+    ) -> LmDataConfig: ...
+
+
+@dataclasses.dataclass(frozen=True)
+class FlatCacheTrainingSource:
+    """Train on a fixed mixture of prebuilt flat caches."""
+
+    manifest: FrozenBaselineManifest = FROZEN_BASELINE
+
+    def dependencies(self) -> tuple[ArtifactStep, ...]:
+        return ()
+
+    def data_config(
+        self,
+        *,
+        ctx: StepContext,
+        validation: Sequence[ArtifactStep[TokenizedCache]],
+        tokenizer: str,
+        budget: ResolvedTrainingBudget,
+    ) -> LmDataConfig:
+        if tokenizer != self.manifest.tokenizer:
+            raise ValueError(f"baseline tokenizer {self.manifest.tokenizer!r} does not match requested {tokenizer!r}")
+        training_data = flat_cache_mixture(
+            tokenizer=tokenizer,
+            caches={
+                component.name: FlatCacheComponent(cache_dir=component.cache_dir, weight=component.weight)
+                for component in self.manifest.components
+            },
+        )
+        return _with_validation_components(ctx=ctx, training_data=training_data, validation=validation)
+
+
+@dataclasses.dataclass(frozen=True)
+class DataKitTrainingSource:
+    """Train on a mixture from one cached DataKit store."""
+
+    store: ArtifactStep[FastTrackDataStore]
+    weighting: MixtureWeighting = MixtureWeighting.TOKEN_PROPORTIONAL
+
+    def dependencies(self) -> tuple[ArtifactStep, ...]:
+        return (self.store,)
+
+    def data_config(
+        self,
+        *,
+        ctx: StepContext,
+        validation: Sequence[ArtifactStep[TokenizedCache]],
+        tokenizer: str,
+        budget: ResolvedTrainingBudget,
+    ) -> LmDataConfig:
+        data = store_mixture_for_step(
+            ctx=ctx,
+            store_step=self.store,
+            weighting=self.weighting,
+            min_tokens_per_component=SEQ_LEN,
+            tokenizer=tokenizer,
+            training_tokens=budget.token_count,
+        )
+        return _with_validation_components(ctx=ctx, training_data=data, validation=validation)
+
+
+def resolve_h100_ladder_budget(
+    *,
+    size: str,
+    dense: bool,
+    match: MatchMode,
+    num_steps: int | None,
+    batch_size: int | None,
+    model: GrugModelConfig | None = None,
+) -> ResolvedTrainingBudget:
+    """Resolve the ladder budget, pricing the named baseline when no candidate model is supplied."""
+    rung = _h100_ladder_rung(size)
+    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
+        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
+    # Keep the recorded baseline active-parameter count fixed so a candidate model cannot move its reference.
+    baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
+    baseline_tpp = DENSE_TPP if dense else MOE_TPP
+    baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
+    baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
+    # Use the recorded FLOPs per example so compute-match holds the reference run's true total FLOPs.
+    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
+
+    resolved_batch_size = batch_size if batch_size is not None else rung.baseline_batch
+    if resolved_batch_size <= 0 or resolved_batch_size % rung.global_device_count != 0:
+        raise ValueError(
+            f"batch_size must be positive and divisible by {rung.global_device_count}, got {resolved_batch_size}"
+        )
+    if num_steps is None:
+        if match is MatchMode.DATA:
+            # Data-match keeps the fixed baseline token count.
+            resolved_steps = max(1, round(baseline_tokens / (resolved_batch_size * SEQ_LEN)))
+        else:
+            # Compute-match prices the candidate model against the fixed baseline FLOPs.
+            candidate_model = model if model is not None else _h100_ladder_model(rung, dense=dense)
+            candidate_flops_per_example, _ = _compute_flops(model_config=candidate_model)
+            resolved_steps = max(1, round(baseline_flops / (candidate_flops_per_example * resolved_batch_size)))
+    elif num_steps <= 0:
+        raise ValueError(f"--num-steps must be positive, got {num_steps}")
+    else:
+        resolved_steps = num_steps
+
+    return ResolvedTrainingBudget(
+        batch_size=resolved_batch_size,
+        num_steps=resolved_steps,
+        sequence_length=SEQ_LEN,
+    )
+
+
+def maximum_h100_ladder_tokens() -> int:
+    """Return the largest default data-match budget across the training ladder."""
+    return max(
+        resolve_h100_ladder_budget(
+            size=size, dense=dense, match=MatchMode.DATA, num_steps=None, batch_size=None
+        ).token_count
+        for size in H100_LADDER_SIZES
+        for dense in (False, True)
     )
 
 
@@ -261,11 +423,13 @@ def build_h100_ladder_run(
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     version: str | None = None,
     tokenizer: str = V16384_TOKENIZER,
-    train_cache_dir: str = V16384_CACHE_DIR,
+    training_source: TrainingSource | None = None,
     vocab_size: int = V16384_VOCAB,
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    seed: int = 0,
+    data_seed: int | None = None,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -278,6 +442,7 @@ def build_h100_ladder_run(
         raise ValueError("run_id must not be empty")
     if not wandb_project.strip():
         raise ValueError("wandb_project must not be empty")
+    resolved_training_source = training_source or FlatCacheTrainingSource()
 
     rung = _h100_ladder_rung(size)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
@@ -290,33 +455,16 @@ def build_h100_ladder_run(
             f"global_device_count ({rung.global_device_count})"
         )
 
-    # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
-    # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
-    # the candidate's FLOPs/token but never the budget it is compared against.
-    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
-        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
-    baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
-    baseline_tpp = DENSE_TPP if dense else MOE_TPP
-    baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
-    baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
-    # Baseline's true total training FLOPs (fixed): flops/example * examples, at the baseline batch.
-    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
-
-    batch_size = batch_size if batch_size is not None else rung.baseline_batch
-    if batch_size <= 0 or batch_size % rung.global_device_count != 0:
-        raise ValueError(f"batch_size must be positive and divisible by {rung.global_device_count}, got {batch_size}")
-    if num_steps is None:
-        if match is MatchMode.DATA:
-            # DATA holds the baseline's token budget.
-            num_steps = max(1, round(baseline_tokens / (batch_size * SEQ_LEN)))
-        else:
-            # COMPUTE holds the baseline's *true* training FLOPs, derived from the candidate's own
-            # flops/example (the trainer's `_compute_flops`, which counts the lm_head and attention that
-            # `_active_params` omits) -- so an architecture change never buys or loses compute.
-            candidate_flops_per_example, _ = _compute_flops(model_config=model)
-            num_steps = max(1, round(baseline_flops / (candidate_flops_per_example * batch_size)))
-    elif num_steps <= 0:
-        raise ValueError(f"--num-steps must be positive, got {num_steps}")
+    resolved_budget = resolve_h100_ladder_budget(
+        size=size,
+        dense=dense,
+        match=match,
+        num_steps=num_steps,
+        batch_size=batch_size,
+        model=model,
+    )
+    batch_size = resolved_budget.batch_size
+    num_steps = resolved_budget.num_steps
 
     # Eval at the midpoint and end; no_eval disables it entirely below (the forced final callback would
     # otherwise still run a full eval, so pushing the interval past the end is not enough).
@@ -328,7 +476,7 @@ def build_h100_ladder_run(
         seq_len=SEQ_LEN,
     )
     grug_trainer = GrugTrainerConfig(
-        data_seed=None,
+        data_seed=data_seed,
         log_every=1,
         z_loss_weight=1e-4,
         watch_mode=WatchMode.INLINE,
@@ -359,7 +507,7 @@ def build_h100_ladder_run(
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         trainer = TrainerConfig(
             id=run_id,
-            seed=0,
+            seed=seed,
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             jax_config=dict(DEFAULT_JAX_CONFIG),
@@ -396,8 +544,11 @@ def build_h100_ladder_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        data = _flat_cache_data_config(
-            ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir
+        data = resolved_training_source.data_config(
+            ctx=ctx,
+            validation=validation,
+            tokenizer=tokenizer,
+            budget=resolved_budget,
         )
         return GrugRunConfig(
             model=model,
@@ -429,7 +580,7 @@ def build_h100_ladder_run(
         artifact_type=ThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(*validation,),
+        deps=(*resolved_training_source.dependencies(), *validation),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -437,15 +588,32 @@ def build_h100_ladder_run(
 _WANDB_PROJECT = "marin_moe"
 
 
-def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
-    """Re-exec this launcher as an Iris H100 job: wrap the same launcher args in ``iris job run ... --
-    python -m ...launch <args> --run``. Replaces the old ``irun`` shell wrapper. Never returns."""
+class WandbPolicy(StrEnum):
+    """Select the W&B credentials policy for an Iris coordinator."""
+
+    REQUIRED = "required"
+    ALLOW_DISABLED = "allow_disabled"
+    NOT_REQUIRED = "not_required"
+
+
+def submit_to_cluster(
+    run_id: str,
+    *,
+    target_cluster: str | None = None,
+    dependency_groups: Sequence[str] = (),
+    coordinator_args: Sequence[str] = (),
+    wandb_policy: WandbPolicy = WandbPolicy.REQUIRED,
+) -> NoReturn:
+    """Run the current command in an Iris coordinator job."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
     if "--run" not in launch_args:
         launch_args.append("--run")
     wandb_key = os.environ.get("WANDB_API_KEY")
-    if not wandb_key:
-        raise click.ClickException("WANDB_API_KEY must be set in the environment to submit a cluster run.")
+    wandb_mode = os.environ.get("WANDB_MODE")
+    if wandb_policy is WandbPolicy.REQUIRED and not wandb_key:
+        raise click.ClickException("Set WANDB_API_KEY.")
+    if wandb_policy is WandbPolicy.ALLOW_DISABLED and not wandb_key and wandb_mode != "disabled":
+        raise click.ClickException("Set WANDB_API_KEY, or set WANDB_MODE=disabled for an untracked run.")
     placement_args = ["--target-cluster", target_cluster] if target_cluster else ["--reserve", "H100"]
     cmd = [
         "uv",
@@ -457,26 +625,79 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
         "run",
         "--no-wait",
         "--enable-extra-resources",
+        *[item for group in dependency_groups for item in ("--extra", group)],
+        *coordinator_args,
         *placement_args,
         "--priority",
         "interactive",
         "--job-name",
         f"{run_id}-coord",
-        "-e",
-        "WANDB_API_KEY",
-        wandb_key,
-        "-e",
-        "WANDB_PROJECT",
-        _WANDB_PROJECT,
-        "--",
-        "python",
-        "-m",
-        "experiments.grug.fast_track.launch",
-        *launch_args,
     ]
-    printable = " ".join(shlex.quote("$WANDB_API_KEY" if c == wandb_key else c) for c in cmd)
+    if wandb_policy is not WandbPolicy.NOT_REQUIRED and wandb_key:
+        cmd.extend(["-e", "WANDB_API_KEY", wandb_key, "-e", "WANDB_PROJECT", _WANDB_PROJECT])
+    if wandb_policy is not WandbPolicy.NOT_REQUIRED and wandb_mode:
+        cmd.extend(["-e", "WANDB_MODE", wandb_mode])
+    cmd.extend(["--", "python", "-m", "experiments.grug.fast_track.launch", *launch_args])
+    printable = " ".join(shlex.quote("$WANDB_API_KEY" if wandb_key and c == wandb_key else c) for c in cmd)
     click.echo(f"submitting: {printable}", err=True)
     os.execvp(cmd[0], cmd)
+
+
+def _data_source_from_options(
+    *,
+    source_mode: SourceMode,
+    sources: str | None,
+    sample_prefix: str,
+) -> dict[str, StepSpec] | None:
+    if source_mode is SourceMode.CACHE:
+        if sources is not None:
+            raise click.UsageError("--sources requires a non-cache --source-mode")
+        return None
+
+    source_option = sources.strip() if sources is not None else None
+    source_names = tuple(name.strip() for name in (source_option or "").split(",") if name.strip())
+    if source_option is not None and source_option != "all" and not source_names:
+        raise click.UsageError("--sources must contain at least one source name")
+    if source_option == "all" and source_mode is not SourceMode.SAMPLE:
+        raise click.UsageError("--sources all requires --source-mode sample")
+
+    if source_mode is SourceMode.SAMPLE:
+        sample = read_artifact(sample_prefix, SampleManifest)
+        selected = sample_sources(sample_prefix)
+        if set(selected) != set(sample.source_paths):
+            raise ValueError(f"Sample sources differ from the completion record at {sample_prefix}")
+        if source_option in (None, "all"):
+            return selected
+        unknown = sorted(set(source_names) - set(selected))
+        if unknown:
+            raise click.UsageError(f"Unknown sample sources: {unknown}. Available sources: {sorted(selected)}")
+        return {name: selected[name] for name in source_names}
+    if not source_names:
+        raise click.UsageError("--source-mode registry requires --sources")
+    return select_sources(list(source_names))
+
+
+def _submit_fast_track(
+    run_id: str,
+    *,
+    target_cluster: str | None,
+    source_mode: SourceMode,
+    stop_after: Stage,
+) -> NoReturn:
+    uses_datakit = source_mode is not SourceMode.CACHE
+    if stop_after is Stage.DATAKIT:
+        wandb_policy = WandbPolicy.NOT_REQUIRED
+    elif uses_datakit:
+        wandb_policy = WandbPolicy.ALLOW_DISABLED
+    else:
+        wandb_policy = WandbPolicy.REQUIRED
+    submit_to_cluster(
+        run_id,
+        target_cluster=target_cluster,
+        dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS if uses_datakit else (),
+        coordinator_args=("--cpu", "8", "--memory", "32GB", "--disk", "32GB") if uses_datakit else (),
+        wandb_policy=wandb_policy,
+    )
 
 
 @click.command()
@@ -502,6 +723,13 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
     help="Override the step budget directly (else derived from --match).",
 )
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
+@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed.")
+@click.option(
+    "--data-seed",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Training data order seed. Omit to derive it from --seed.",
+)
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
 @click.option(
     "--save-checkpoints",
@@ -517,8 +745,39 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
 )
 @click.option(
     "--target-cluster",
-    default=None,
-    help="Pin the submitted job to this Iris cluster. Omit to let Iris select an H100 cluster.",
+    default="cw-us-east-02a",
+    show_default=True,
+    help="Iris cluster for the submitted job and its data.",
+)
+@click.option(
+    "--source-mode",
+    type=click.Choice([mode.value for mode in SourceMode]),
+    default=SourceMode.CACHE.value,
+    show_default=True,
+    help="Training-data source. Non-cache modes add DataKit to this experiment.",
+)
+@click.option("--sample-prefix", default=FAST_TRACK_SAMPLE_PREFIX, show_default=True, help="Normalized sample root.")
+@click.option("--sources", help="Comma-separated source names. Use 'all' only with sample mode.")
+@click.option("--quality-model", default=quality_model_path, help="DataKit quality model directory.")
+@click.option(
+    "--quality-model-version",
+    default=QUALITY_MODEL_VERSION,
+    show_default=True,
+    help="Stable identity for the quality model bytes.",
+)
+@click.option(
+    "--weighting",
+    type=click.Choice([weighting.value for weighting in MixtureWeighting]),
+    default=MixtureWeighting.TOKEN_PROPORTIONAL.value,
+    show_default=True,
+    help="DataKit bucket weights for training.",
+)
+@click.option(
+    "--stop-after",
+    type=click.Choice([stage.value for stage in Stage]),
+    default=Stage.TRAIN.value,
+    show_default=True,
+    help="Last end-to-end stage to run.",
 )
 @build_options
 def main(
@@ -528,13 +787,50 @@ def main(
     batch_size: int | None,
     num_steps: int | None,
     no_eval: bool,
+    seed: int,
+    data_seed: int | None,
     dense: bool,
     save_checkpoints: bool,
     submit: bool,
     target_cluster: str | None,
-) -> ArtifactStep[ThroughputResult]:
+    source_mode: str,
+    sample_prefix: str,
+    sources: str | None,
+    quality_model: str,
+    quality_model_version: str,
+    weighting: str,
+    stop_after: str,
+) -> ArtifactStep[ThroughputResult] | ArtifactStep[FastTrackDataStore]:
+    selected_source_mode = SourceMode(source_mode)
+    selected_stage = Stage(stop_after)
+    if selected_source_mode is SourceMode.CACHE and selected_stage is Stage.DATAKIT:
+        raise click.UsageError("--stop-after datakit requires a non-cache --source-mode")
+
     if submit:
-        _submit_to_cluster(run_id, target_cluster)  # re-execs iris; never returns
+        _submit_fast_track(
+            run_id,
+            target_cluster=target_cluster,
+            source_mode=selected_source_mode,
+            stop_after=selected_stage,
+        )
+
+    data_sources = _data_source_from_options(
+        source_mode=selected_source_mode,
+        sources=sources,
+        sample_prefix=sample_prefix,
+    )
+    training_store = None
+    if data_sources is not None:
+        training_store = build_fast_track_data(
+            sources=data_sources,
+            quality_model=quality_model,
+            quality_model_version=quality_model_version,
+            tokenizer=TokenizerSpec(V16384_TOKENIZER, tokenizer_content_hash(V16384_TOKENIZER)),
+            tokenizer_vocab=V16384_VOCAB,
+        )
+        if selected_stage is Stage.DATAKIT:
+            return training_store
+
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
@@ -544,6 +840,13 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        seed=seed,
+        data_seed=data_seed,
+        training_source=(
+            DataKitTrainingSource(store=training_store, weighting=MixtureWeighting(weighting))
+            if training_store is not None
+            else None
+        ),
     )
 
 

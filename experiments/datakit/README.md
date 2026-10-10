@@ -217,6 +217,11 @@ source prefix must be readable for its artifact metadata; pass CoreWeave
 credentials when it is the legacy S3 sample. Regeneration can produce different
 bytes as source revisions or normalization code change.
 
+Omit `--source-prefix` in regenerate mode to include the full current registry.
+Completed normalized artifacts are reused. Copy mode requires `--source-prefix`.
+After every source succeeds, the command writes a root `.artifact.json` with the
+source paths and requested token target. The token target is an estimate.
+
 ```bash
 uv run iris --cluster=marin job run --no-wait \
   --region europe-west4 --memory=24G --disk=5G --cpu=4 --extra=cpu --enable-extra-resources \

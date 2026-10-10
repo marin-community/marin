@@ -20,6 +20,7 @@ import functools
 import json
 import logging
 import os
+import pathlib
 import re
 import shutil
 import tempfile
@@ -35,22 +36,21 @@ import jinja2.sandbox
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
+from rigging.cache import directory_content_hash
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.factory import filesystem, open_url
 from tokenizers import Encoding as HfEncoding
 from tokenizers import Tokenizer as HfBaseTokenizer
+from tokenizers.models import BPE as HfBPE
 
 logger = logging.getLogger(__name__)
 
 
-# Borrowed from meta-llama/llama3 tokenizer.py: bound the size of any single
-# string passed into the underlying tokenizer to avoid pathological inputs
-# (e.g. multi-MB runs of whitespace from broken HTML→text extraction) blowing
-# up Rust tokenizer working memory. We split on whitespace/non-whitespace
-# transitions and cap each homogeneous run.
-_MAX_ENCODE_CHARS = 400_000
+# Bound retained native Encoding objects without splitting canonical parts.
+_MAX_ENCODE_BATCH_CHARS = 400_000
 _MAX_HOMOGENEOUS_RUN_CHARS = 25_000
+_MAX_ENCODE_BATCH_PARTS = 64
 
 
 # Match runs of N+ whitespace OR N+ non-whitespace chars. These are the only
@@ -568,6 +568,17 @@ def _apply_chat_template_with_masks(
     return result
 
 
+def _encode_part_batch(
+    tokenizer: HfBaseTokenizer,
+    parts: list[str],
+    origins: list[int],
+    results: list[list[int]],
+) -> None:
+    encodings = tokenizer.encode_batch(parts, add_special_tokens=False)
+    for origin, encoding in zip(origins, encodings, strict=True):
+        results[origin].extend(encoding.ids)
+
+
 @dataclasses.dataclass(frozen=True)
 class HfMarinTokenizer:
     """MarinTokenizer backed by the HF tokenizers (Rust) library."""
@@ -624,43 +635,52 @@ class HfMarinTokenizer:
         parts = _safe_split_for_tokenizer(text)
         if len(parts) <= 1:
             return self._tokenizer.encode(text, add_special_tokens=add_special_tokens).ids
-        # Multi-chunk path: encode each chunk without specials and prepend BOS
-        # at the end. We don't append EOS — Llama-style BPE tokenizers used
-        # here don't add EOS via the post-processor, matching the llama3
-        # reference. If a future tokenizer's post-processor appends EOS, the
-        # multi-chunk path would silently drop it.
-        ids: list[int] = []
-        encodings = self._tokenizer.encode_batch(parts, add_special_tokens=False)
-        for enc in encodings:
-            ids.extend(enc.ids)
-        if add_special_tokens and self._bos_id is not None:
-            ids = [self._bos_id, *ids]
-        return ids
+        del parts
+        return self.encode_batch([text], add_special_tokens=add_special_tokens)[0]
 
     def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
         return self._tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
 
     def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
-        # Copy strings to release references to potentially large source buffers,
-        # mitigating memory retention from sliced strings.
-        texts = ["".join(s) for s in texts]
-
-        # Flatten all parts across all texts into one batch so the underlying
-        # Rust encoder can parallelize across them via rayon. ``origin[i]``
-        # tracks which original text part ``i`` belongs to so we can scatter
-        # the encoded ids back into per-text lists.
-        flat_parts: list[str] = []
-        origin: list[int] = []
-        for orig_idx, text in enumerate(texts):
-            for part in _safe_split_for_tokenizer(text):
-                flat_parts.append(part)
-                origin.append(orig_idx)
-
-        encodings = self._tokenizer.encode_batch(flat_parts, add_special_tokens=False)
-
         results: list[list[int]] = [[] for _ in texts]
-        for orig_idx, enc in zip(origin, encodings, strict=True):
-            results[orig_idx].extend(enc.ids)
+        model = self._tokenizer.model
+        native_dropout = isinstance(model, HfBPE) and model.dropout is not None and model.dropout > 0
+
+        # Padding is batch-wide, and dropout draws depend on native batch order.
+        # Keep the prior one-call behavior for these tokenizer configurations.
+        if self._tokenizer.padding is not None or native_dropout:
+            flat_parts: list[str] = []
+            origins: list[int] = []
+            for orig_idx, text in enumerate(texts):
+                for part in _safe_split_for_tokenizer(text):
+                    flat_parts.append(part)
+                    origins.append(orig_idx)
+            _encode_part_batch(self._tokenizer, flat_parts, origins, results)
+        else:
+            batch_parts: list[str] = []
+            batch_origins: list[int] = []
+            batch_chars = 0
+
+            def flush_batch() -> None:
+                nonlocal batch_chars
+                if not batch_parts:
+                    return
+                _encode_part_batch(self._tokenizer, batch_parts, batch_origins, results)
+                batch_parts.clear()
+                batch_origins.clear()
+                batch_chars = 0
+
+            for orig_idx, text in enumerate(texts):
+                for part in _safe_split_for_tokenizer(text):
+                    if batch_parts and (
+                        len(batch_parts) == _MAX_ENCODE_BATCH_PARTS
+                        or batch_chars + len(part) > _MAX_ENCODE_BATCH_CHARS
+                    ):
+                        flush_batch()
+                    batch_parts.append(part)
+                    batch_origins.append(orig_idx)
+                    batch_chars += len(part)
+            flush_batch()
 
         if add_special_tokens and self._bos_id is not None:
             results = [[self._bos_id, *r] for r in results]
@@ -736,6 +756,12 @@ class TokenizerBackend(StrEnum):
     HF = "hf"
 
 
+def _local_tokenizer_path(name_or_path: str) -> str:
+    if os.path.isdir(name_or_path):
+        return name_or_path
+    return _stage_tokenizer(name_or_path)
+
+
 @functools.lru_cache(maxsize=32)
 def load_tokenizer(
     name_or_path: str,
@@ -747,11 +773,19 @@ def load_tokenizer(
     Files are staged once via mirror://tokenizers/ (GCS/S3) before falling back
     to HF Hub. Cached per (name_or_path, backend).
     """
-    local_dir = _stage_tokenizer(name_or_path) if not os.path.isdir(name_or_path) else name_or_path
+    local_dir = _local_tokenizer_path(name_or_path)
     if backend == TokenizerBackend.HF:
         tok = _load_hf_tokenizer(local_dir)
         return dataclasses.replace(tok, _name_or_path=name_or_path)
     raise ValueError(f"Unknown backend: {backend}")
+
+
+def tokenizer_content_hash(
+    name_or_path: str,
+) -> str:
+    """Return a SHA-256 identity for the tokenizer files used by the loader."""
+    local_dir = _local_tokenizer_path(name_or_path)
+    return f"sha256:{directory_content_hash(pathlib.Path(local_dir))}"
 
 
 def _collect_special_ids(

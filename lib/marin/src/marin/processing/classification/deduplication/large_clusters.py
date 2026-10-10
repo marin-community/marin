@@ -167,7 +167,7 @@ def plan_large_clusters(
         # The aggregated sum is nullable while count files are not, so align before concat.
         table = table.cast(merged.schema)
         merged = pa.concat_tables([merged, table]).group_by("dup_cluster_id").aggregate([("n", "sum")])
-        merged = merged.rename_columns(["dup_cluster_id", "n"])
+        merged = merged.rename_columns(["dup_cluster_id", "n"]).cast(_COUNT_SCHEMA)
     logger.info("Aggregated %d sampled count rows", sampled_rows)
     sizes = pc.multiply(merged.column("n"), pa.scalar(params.stride, type=pa.int64()))
     keep = pc.greater_equal(sizes, pa.scalar(params.minimum_size, type=pa.int64()))

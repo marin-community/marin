@@ -115,8 +115,7 @@ def build_train_dataset(
     if isinstance(weights, list):
         weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
 
-    initial_batch_size = batch_schedule.batch_size_at_step(0)
-    datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+    datasets = data_config.train_sets(pos, key=shuffle_key)
     return MixtureDataset(
         datasets=datasets,
         weights=weights,
