@@ -244,6 +244,9 @@ class Fp8Recipe(StrEnum):
     MXFP8_SIM = "mxfp8_sim"
     """Simulated MXFP8 (``levanter.grug.mxfp8``): e4m3 operands with a just-in-time power-of-two scale per 32
     elements along each GEMM's contraction axis, gradients included. Numerics only; GEMMs still run in bf16."""
+    MXFP8_SIM_DENSE = "mxfp8_sim_dense"
+    """``MXFP8_SIM`` on the dense projection GEMMs only; the routed experts stay bf16 (the ragged EP backend has no
+    simulated-MXFP8 expert path)."""
 
 
 class NormGainFn(StrEnum):
@@ -897,7 +900,7 @@ class GrugModelConfig:
 
 def _proj(cfg: "GrugModelConfig", x: jax.Array, w: jax.Array, out_sharding: P | None = None) -> jax.Array:
     """``x[..., k] @ w[k, n]`` under ``cfg.fp8_recipe``."""
-    if cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM:
+    if cfg.fp8_recipe in (Fp8Recipe.MXFP8_SIM, Fp8Recipe.MXFP8_SIM_DENSE):
         return mx_dense(x, w, out_sharding)
     return jnp.einsum("...k,kn->...n", x, w, out_sharding=out_sharding)
 
