@@ -1,10 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["jsonschema", "filelock", "pyarrow"]
-# ///
 """Validate and attach a completed review and its evidence to the private Atlas."""
 
 import argparse
@@ -14,8 +10,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from make_review import validate_collection
-from native_revision_attestation import revision_attestation
+from experiments.rl_data_reviews.grading_identity import verified_execution_grading
+from experiments.rl_data_reviews.make_review import validate_collection
+from experiments.rl_data_reviews.native_revision_attestation import revision_attestation
 
 ROOT = Path(__file__).parent
 MARIN = ROOT.parents[1]
@@ -130,6 +127,18 @@ def validated_publication(root: Path, atlas_id: str) -> ReviewPublication:
     if len(live) != 1:
         raise ValueError("Atlas source is absent or inactive")
     payload = live[0]["payload"]
+    if payload.get("grading_revision"):
+        identity = json.loads((root / "run.json").read_text())
+        captured = identity.get("grading")
+        if not captured or captured["source_id"] != atlas_id:
+            raise ValueError("Native review lacks its source-specific executed grading identity")
+        if (
+            captured["grading_revision"] != payload["grading_revision"]
+            or provenance.get("grading_revision") != payload["grading_revision"]
+        ):
+            raise ValueError("Executed grading identity differs from the current Atlas source")
+        if verified_execution_grading(identity["config"], Path(identity["config_path"]).parent) != captured:
+            raise ValueError("Executed grading environment changed since the review")
     subjects = [s for s in collection["subjects"] if s["level"] == "source"]
     if len(subjects) != 1 or subjects[0]["source_id"] != atlas_id:
         raise ValueError("Review subject does not identify the requested Atlas population")
@@ -177,6 +186,46 @@ def archive_evidence(publication: ReviewPublication, review_id: str) -> None:
         upload_artifacts(batch)
 
 
+def publish_grading_applicability(publication: ReviewPublication, review_id: str) -> str | None:
+    """Archive an executed grading proof and request its guarded binding."""
+    root, payload, atlas_id = publication.root, publication.payload, publication.atlas_id
+    if not payload.get("grading_revision"):
+        return None
+    claim = {
+        "schema_version": 1,
+        "equivalent": True,
+        "source_id": atlas_id,
+        "review_id": review_id,
+        "source_revision": publication.subject["dataset_revision"],
+        "captured_verifier_revision": payload["verifier_revision"],
+        "grading_revision": payload["grading_revision"],
+        "evidence_kind": "current_native_execution",
+        "execution_grading": json.loads((root / "run.json").read_text())["grading"],
+    }
+    content = json.dumps(claim, sort_keys=True)
+    proof_path = "publication/grading-applicability.json"
+    sha = hashlib.sha256(content.encode()).hexdigest()
+    upload_artifacts([{"review_id": review_id, "path": proof_path, "content": content, "sha256": sha}])
+    sql(
+        """INSERT INTO catalog_grading_reviews
+        (source_id,review_id,source_revision,captured_verifier_revision,grading_revision,evidence_path,evidence_sha256)
+        SELECT :source,:review,:revision,:verifier,:grading,:path,:sha FROM catalog_sources
+        WHERE id=:source AND active AND review_id=:review AND payload->>'grading_revision'=:grading
+        AND review_source_revision=:revision AND review_verifier_revision=:verifier
+        ON CONFLICT DO NOTHING""",
+        {
+            "source": atlas_id,
+            "review": review_id,
+            "revision": claim["source_revision"],
+            "verifier": claim["captured_verifier_revision"],
+            "grading": claim["grading_revision"],
+            "path": proof_path,
+            "sha": sha,
+        },
+    )
+    return sha
+
+
 def publish_review(root: Path, atlas_id: str) -> dict:
     publication = validated_publication(root, atlas_id)
     collection, payload = publication.collection, publication.payload
@@ -194,17 +243,36 @@ def publish_review(root: Path, atlas_id: str) -> dict:
     native = [review for review in collection["reviews"] if review["method"] == "runtime_execution"]
     sql(
         """UPDATE catalog_sources SET quality=:quality,review_id=:review,review_date=:date,
-        review_source_revision=:revision,review_verifier_revision=:verifier,traces=:traces WHERE id=:source""",
+        review_source_revision=:revision,review_verifier_revision=:verifier,traces=:traces WHERE id=:source
+        AND active AND COALESCE(payload->>'dataset_revision',payload->>'revision')=:revision
+        AND COALESCE(payload->>'verifier_revision','')=:verifier_guard
+        AND COALESCE(payload->>'grading_revision','')=:grading_guard""",
         {
             "quality": rating,
             "review": review_id,
             "date": updated,
             "revision": publication.subject["dataset_revision"],
             "verifier": payload.get("verifier_revision"),
+            "verifier_guard": payload.get("verifier_revision") or "",
+            "grading_guard": payload.get("grading_revision") or "",
             "traces": len(native),
             "source": atlas_id,
         },
     )
+    sha = publish_grading_applicability(publication, review_id)
+    live = sql("SELECT review_id FROM catalog_sources WHERE id=:source AND active", {"source": atlas_id})["rows"]
+    if live != [{"review_id": review_id}]:
+        raise ValueError(
+            "Atlas source changed during publication; evidence archived without changing its current rating"
+        )
+    if payload.get("grading_revision"):
+        bindings = sql(
+            "SELECT evidence_sha256 FROM catalog_grading_reviews "
+            "WHERE source_id=:source AND review_id=:review AND grading_revision=:grading",
+            {"source": atlas_id, "review": review_id, "grading": payload["grading_revision"]},
+        )["rows"]
+        if bindings != [{"evidence_sha256": sha}]:
+            raise ValueError("Current native review did not acquire its matching grading applicability binding")
     result = {
         "atlas_id": atlas_id,
         "review_id": review_id,

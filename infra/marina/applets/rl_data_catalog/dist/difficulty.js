@@ -1,5 +1,6 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 window.AtlasDifficulty = (() => {
+  const cohortRewardMetric = "cohort_relative_reward";
   const titles = {small: "Small", large: "Large", hosted: "Hosted", followup: "Follow-up"};
   function modelLabel(model) {
     const name = model.model?.split("/").at(-1) || model.display_name || "Native verifier recheck";
@@ -14,11 +15,17 @@ window.AtlasDifficulty = (() => {
     return names[model.model] || model.display_name || titles[model.size] || model.model?.split("/").at(-1) || "Model";
   }
   function currentLarge(summary) {
-    return summary?.status === "current" ? summary.models.find(model => model.size === "large" && model.measurement_status === "current") : undefined;
+    return summary?.status === "current" && summary.metric_kind !== cohortRewardMetric ? summary.models.find(model => model.size === "large" && model.measurement_status === "current") : undefined;
   }
   function comparison(models, summary, compact = false) {
     const chart = document.createElement("div");
     chart.className = `difficulty-comparison${compact ? " difficulty-comparison-compact" : ""}`;
+    if (models.some(model => model.metric_kind === cohortRewardMetric)) {
+      const label = document.createElement("span");
+      label.className = "difficulty-evidence-status";
+      label.textContent = "Native cohort reward (relative)";
+      chart.append(label);
+    }
     if (summary && summary.status !== "current") {
       const status = document.createElement("span");
       status.className = "difficulty-evidence-status";
@@ -40,6 +47,18 @@ window.AtlasDifficulty = (() => {
       const name = document.createElement("span");
       name.className = "difficulty-model-label";
       name.textContent = compact ? compactModelLabel(model) : modelLabel(model);
+      if (model.metric_kind === cohortRewardMetric) {
+        row.classList.add("difficulty-model-relative");
+        const score = document.createElement("span");
+        score.className = "difficulty-score";
+        score.textContent = model.cohort_reward ? `${model.cohort_reward.mean.toFixed(3)} reward` : "Not recorded";
+        const interval = model.cohort_reward?.interval_95;
+        row.title = `${model.model} · ${model.verified} verified cohorts · ${model.unverified} unverified · relative reward${interval ? ` · 95% interval ${interval[0].toFixed(3)}–${interval[1].toFixed(3)}` : ""}`;
+        row.setAttribute("aria-label", `${name.textContent}: ${row.title}`);
+        row.append(name, score);
+        chart.append(row);
+        continue;
+      }
       const meter = document.createElement("span");
       meter.className = "difficulty-track";
       meter.setAttribute("aria-hidden", "true");

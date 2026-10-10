@@ -3,6 +3,7 @@
 
 """Generated task-curation inventory with persistent reviews and revision checks."""
 
+import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -20,6 +21,8 @@ from .verifier_policy import migrate_verifier_policy
 DIFFICULTY_PROTOCOL = "atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking"
 JUDGE_VERIFIER_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-judge-verifier-nonthinking"
 CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-checklist-judge"
+GENRM_COHORT_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-genrm-cohort"
+COHORT_REWARD_METRIC = "cohort_relative_reward"
 CHECKLIST_JUDGE_SOURCES = {
     "Task Trove:laion__nemotron-gym-safety-v3",
     "Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
@@ -51,8 +54,25 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
         DIFFICULTY_PROTOCOL,
         JUDGE_VERIFIER_DIFFICULTY_PROTOCOL,
         CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL,
+        GENRM_COHORT_DIFFICULTY_PROTOCOL,
     ):
         return "historical", "Earlier model identities or generation budgets; retained as historical evidence."
+    if protocol_id == GENRM_COHORT_DIFFICULTY_PROTOCOL:
+        cohort = report.get("cohort_comparison") or {}
+        if (
+            report.get("metric_kind") != COHORT_REWARD_METRIC
+            or cohort.get("cohort_size") != 16
+            or cohort.get("measured_responses_per_task") != 3
+            or cohort.get("reference_responses_per_task") != 13
+            or cohort.get("reference_model") != DIFFICULTY_MODELS["hosted"]
+            or any(
+                model.get("cohort_reward") is None
+                or model.get("solved") is not None
+                or model.get("solve_rate") is not None
+                for model in report["models"]
+            )
+        ):
+            return "invalid", "The GenRM comparison requires native cohort rewards without absolute solve counts."
     if protocol_id == JUDGE_VERIFIER_DIFFICULTY_PROTOCOL:
         judge = (report.get("verifier_configuration") or {}).get("tasktrove_judge") or {}
         if (
@@ -100,11 +120,13 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
         note += " The native TaskTrove verifier used Qwen3.5-9B with thinking disabled."
     if protocol_id == CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL:
         note += " The native TaskTrove checklist verifier used DeepSeek-V4-Pro through Together."
+    if protocol_id == GENRM_COHORT_DIFFICULTY_PROTOCOL:
+        note += " Native GenRM rewards are relative to the shared 16-response cohort and are not solve rates."
     return "current", note
 
 
 def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:
-    """Return measured solve counts for the catalog's visual comparison."""
+    """Return recorded solve counts or native cohort rewards for comparison."""
     fields = (
         "size",
         "model",
@@ -117,11 +139,13 @@ def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:
         "solve_rate",
         "wilson_95",
         "generation_parameters",
+        "cohort_reward",
     )
     status, note = difficulty_protocol_status(report)
     models = [{key: model.get(key) for key in fields} for model in report["models"]]
     for model in models:
         model["measurement_status"] = status
+        model["metric_kind"] = report.get("metric_kind", "solve_rate")
     for followup in report.get("protocol_followups", []):
         if followup["state"] == "complete":
             models.append(
@@ -144,11 +168,52 @@ def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:
         "models": models,
         "estimated_at": report["estimated_at"],
         "sampling": report["sampling"],
+        "metric_kind": report.get("metric_kind", "solve_rate"),
         "status": status,
         "status_note": note,
         "ordering_warning": report["limitations"][-1] if audited_ordering else None,
         "protocol": report.get("protocol"),
     }
+
+
+def difficulty_model_label(model: dict[str, Any]) -> str:
+    """Describe a measured result without projecting cohort rewards into solves."""
+    name = model["model"] or model.get("display_name") or "Native verifier recheck"
+    if model.get("metric_kind") == COHORT_REWARD_METRIC:
+        reward = model.get("cohort_reward")
+        if reward is None:
+            return f"{name} native cohort reward unavailable"
+        return f"{name} mean {reward['mean']:.3f} native cohort reward"
+    return f"{name} {model['solved']}/{model['verified']} solved"
+
+
+def grading_binding_valid(record: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Check the archived proof against the current source and historical review."""
+    grading_revision = row.get("grading_revision")
+    grading_binding = record.get("grading_binding")
+    proof = record.get("grading_proof")
+    if not grading_revision or not grading_binding or not proof:
+        return False
+    content = proof["content"]
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    try:
+        decoded = json.loads(content)
+    except json.JSONDecodeError:
+        decoded = None  # Invalid evidence keeps the source stale; other sources remain available.
+    claim = decoded if isinstance(decoded, dict) else {}
+    expected = {
+        "source_id": row["id"],
+        "review_id": row["review_id"],
+        "source_revision": row.get("dataset_revision") or row.get("revision"),
+        "captured_verifier_revision": row["review_verifier_revision"],
+        "grading_revision": grading_revision,
+    }
+    return (
+        digest == proof["sha256"] == grading_binding["evidence_sha256"]
+        and claim.get("schema_version") == 1
+        and claim.get("equivalent") is True
+        and all(grading_binding.get(key) == value and claim.get(key) == value for key, value in expected.items())
+    )
 
 
 def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
@@ -168,12 +233,19 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
         }
     )
     current_data = row.get("dataset_revision") or row.get("revision")
+    grading_revision = row.get("grading_revision")
+    binding_valid = grading_binding_valid(record, row)
+    grading_enrolled = record["grading_enrolled"]
+    row["grading_tracking"] = "source-specific" if grading_enrolled else "legacy"
+    row["review_grading_revision"] = grading_revision if binding_valid else None
+    verifier_changed = (
+        not binding_valid
+        if grading_enrolled
+        else row["review_verifier_revision"] is not None
+        and row["review_verifier_revision"] != row.get("verifier_revision")
+    )
     row["review_stale"] = bool(
-        (row["review_source_revision"] is not None and row["review_source_revision"] != current_data)
-        or (
-            row["review_verifier_revision"] is not None
-            and row["review_verifier_revision"] != row.get("verifier_revision")
-        )
+        (row["review_source_revision"] is not None and row["review_source_revision"] != current_data) or verifier_changed
     )
     row["review_applicability"] = (
         "stale" if row["review_stale"] else "unknown" if row["review_source_revision"] is None else "current"
@@ -189,11 +261,7 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     if row["quality"] == "good" and row["difficulty"] and record.get("difficulty_report"):
         row["difficulty_summary"] = difficulty_summary(json.loads(record["difficulty_report"]))
         summary = row["difficulty_summary"]
-        counts = "; ".join(
-            f"{model['model'] or model.get('display_name') or 'Native verifier recheck'} "
-            f"{model['solved']}/{model['verified']} solved"
-            for model in summary["models"]
-        )
+        counts = "; ".join(difficulty_model_label(model) for model in summary["models"])
         row["difficulty"] = f"{summary['status'].title()}: {counts}"
     return row
 
@@ -236,6 +304,19 @@ def migrate(connection: Connection, catalog_path: Path = CATALOG_PATH) -> None:
             sha256 TEXT NOT NULL, PRIMARY KEY (review_id, path)
         )
     """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS catalog_grading_reviews (
+                source_id TEXT NOT NULL, review_id TEXT NOT NULL,
+                source_revision TEXT NOT NULL, captured_verifier_revision TEXT NOT NULL,
+                grading_revision TEXT NOT NULL, evidence_path TEXT NOT NULL,
+                evidence_sha256 TEXT NOT NULL,
+                PRIMARY KEY (source_id, review_id, source_revision, grading_revision)
+            )
+            """
         )
     )
     connection.execute(
@@ -314,6 +395,42 @@ def refresh_catalog(connection: Connection, catalog_path: Path = CATALOG_PATH, f
     return {"busy": False, "results": results}
 
 
+def active_sources_with_review_state(connection: Connection) -> list[dict[str, Any]]:
+    """Read active sources with their review and grading applicability evidence."""
+    return [
+        source_with_review(dict(row))
+        for row in connection.execute(
+            text(
+                """
+                SELECT s.*, a.content AS difficulty_report,
+                EXISTS (SELECT 1 FROM catalog_grading_reviews h
+                    WHERE h.source_id = s.id) AS grading_enrolled,
+                to_jsonb(g) AS grading_binding,
+                CASE WHEN p.path IS NOT NULL THEN jsonb_build_object(
+                    'content', p.content, 'sha256', p.sha256
+                ) END AS grading_proof, COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'issue_url', i.issue_url, 'review_id', i.review_id,
+                        'status', i.status, 'created_at', i.created_at
+                    ) ORDER BY i.created_at)
+                    FROM catalog_verifier_issues i
+                    WHERE i.source_id = s.id AND i.status = 'open'
+                ), '[]'::jsonb) AS verifier_issues
+                FROM catalog_sources s LEFT JOIN review_artifacts a
+                ON a.review_id = s.review_id AND a.path = 'difficulty.json'
+                LEFT JOIN catalog_grading_reviews g ON g.source_id = s.id
+                AND g.review_id = s.review_id
+                AND g.source_revision = s.review_source_revision
+                AND g.grading_revision = s.payload->>'grading_revision'
+                LEFT JOIN review_artifacts p ON p.review_id = g.review_id
+                AND p.path = g.evidence_path
+                WHERE s.active ORDER BY s.origin, s.id
+            """
+            )
+        ).mappings()
+    ]
+
+
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
@@ -321,26 +438,7 @@ def create_api(services: AppletServices) -> FastAPI:
     @api.get("/sources")
     def sources() -> dict[str, Any]:
         with engine.connect() as connection:
-            rows = [
-                source_with_review(dict(row))
-                for row in connection.execute(
-                    text(
-                        """
-                        SELECT s.*, a.content AS difficulty_report, COALESCE((
-                            SELECT jsonb_agg(jsonb_build_object(
-                                'issue_url', i.issue_url, 'review_id', i.review_id,
-                                'status', i.status, 'created_at', i.created_at
-                            ) ORDER BY i.created_at)
-                            FROM catalog_verifier_issues i
-                            WHERE i.source_id = s.id AND i.status = 'open'
-                        ), '[]'::jsonb) AS verifier_issues
-                        FROM catalog_sources s LEFT JOIN review_artifacts a
-                        ON a.review_id = s.review_id AND a.path = 'difficulty.json'
-                        WHERE s.active ORDER BY s.origin, s.id
-                    """
-                    )
-                ).mappings()
-            ]
+            rows = active_sources_with_review_state(connection)
             refreshes = [
                 dict(row)
                 for row in connection.execute(text("SELECT * FROM catalog_refreshes ORDER BY origin")).mappings()

@@ -1,10 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["jsonschema", "filelock", "pyarrow"]
-# ///
 """Sample, solve, verify, independently judge, and coalesce RL task reviews."""
 
 import argparse
@@ -26,7 +22,9 @@ from typing import Any
 import pyarrow.parquet as pq
 from filelock import FileLock
 from jsonschema import Draft202012Validator, FormatChecker
-from review_runtime.review_io import digest, json_text, model_completion, utc_now, write_json
+
+from experiments.rl_data_reviews.grading_identity import verified_execution_grading
+from experiments.rl_data_reviews.review_runtime.review_io import digest, json_text, model_completion, utc_now, write_json
 
 HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = HERE / "quality-review.schema.json"
@@ -132,7 +130,7 @@ def candidates(source: dict, base: Path) -> Iterable[Task]:
         raise ValueError("format must be skyrl_prepared, harbor_directory, or task_manifest")
     for index, row in enumerate(read_rows(path)):
         if source["format"] == "task_manifest":
-            values = {**row, "route": Route(row["route"])}
+            values: dict[str, Any] = {**row, "route": Route(row["route"])}
             if values.get("task_dir"):
                 values["task_dir"] = str(local_path(values["task_dir"], path.parent))
             if values.get("packed_task"):
@@ -334,7 +332,7 @@ def judgment(model: dict, system: str, payload: dict, directory: Path, limit: in
             "additionalProperties": False,
             "properties": {"syntheses": {"type": "array", "items": item_schema}},
         }
-    wire_schema = copy.deepcopy(response_schema)
+    wire_schema: dict[str, Any] = copy.deepcopy(response_schema)
     if system == COALESCE_PROMPT:
         wire_schema["properties"]["syntheses"]["items"]["properties"]["derived_from_review_ids"].pop("uniqueItems")
     result = model_completion(
@@ -684,6 +682,7 @@ def independent_reviews(
             "marinskyrl_dirty": identity["marinskyrl"]["dirty"],
             "marinskyrl_python_tree_sha256": identity["marinskyrl"]["python_tree_sha256"],
             "harbor_commit": identity.get("harbor", {}).get("commit"),
+            "grading_revision": (identity.get("grading") or {}).get("grading_revision"),
         },
         "created_at": utc_now(),
         "subjects": [],
@@ -907,7 +906,8 @@ def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool
     api_key = os.environ[key_env] if key_env else None
     sample = sampled_tasks(config, base, n, seed)
     tasks, population = sample.tasks, sample.population_count
-    identity = {
+    identity: dict[str, Any] = {
+        "config_path": str(config_path),
         "config": config,
         "tasks": [asdict(task) for task in tasks],
         "n": n,
@@ -923,6 +923,7 @@ def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool
             ["skyrl-gym/skyrl_gym", "skyrl-train/skyrl_train/trajectory_runners", "marinskyrl"],
         ),
     }
+    identity["grading"] = verified_execution_grading(config, base)
     input_path = local_path(config["source"]["tasks_path"], base)
     identity["input_sha256"] = digest(input_path) if input_path.is_file() else None
     identity["selected_task_files"] = {
@@ -959,6 +960,8 @@ def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool
             validate_collection(result, output, schema)
             return result
         panel = independent_reviews(sample, config, output, snapshot_id, seed, limit, identity, schema, api_key)
+        if verified_execution_grading(config, base) != identity["grading"]:
+            raise ValueError("Native grading code or dependency versions changed during the review")
         bundle = panel.collection
         coalesce_reviews(panel, model, output, limit, schema, api_key)
         validate_collection(bundle, output, schema)

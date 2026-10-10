@@ -7,9 +7,13 @@ import argparse
 import hashlib
 import json
 from collections.abc import Iterable
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import httpx
+
+from experiments.post_training.task_curation.grading_catalog import annotate_catalog_grading
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
 
@@ -62,6 +66,15 @@ def source_row(source: RlDataSource) -> dict[str, Any]:
         "status": "Excluded" if "excluded" in tags else "Available",
         "pipeline": invocation,
     }
+    if verifier is not None and verifier.grading is not None:
+        grading = verifier.grading
+        row["grading_selection"] = {
+            "mode": grading.mode,
+            "agents": grading.agents,
+            "marinskyrl_revision": grading.marinskyrl_revision,
+            "harbor_revision": grading.harbor_revision,
+            "task_assets": asdict(grading.task_assets) if grading.task_assets is not None else None,
+        }
     review = source.review
     row.update(
         quality=review.grade,
@@ -88,10 +101,16 @@ def catalog_document(sources: Iterable[RlDataSource]) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--format", choices=("json", "python-literal"), default="json")
     args = parser.parse_args()
     document = catalog_document(all_sources().values())
+    with httpx.Client(timeout=60) as client:
+        annotate_catalog_grading(document, client)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    content = json.dumps(document, indent=2, sort_keys=True)
+    if args.format == "python-literal":
+        content = repr(content)
+    args.output.write_text(content + "\n")
 
 
 if __name__ == "__main__":

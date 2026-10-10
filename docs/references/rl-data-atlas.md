@@ -6,7 +6,10 @@ is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link opens the current rel
 
 The source definitions in `experiments/post_training/task_curation/` own dataset
 metadata, source reviews, and conversion pipelines. The applet build exports
-those definitions to `dist/catalog.json`. Publishing reconciles that complete
+those definitions to the generated `server/catalog_data.py` resource. Marina
+extracts only server Python files for backend execution, so the build stores the
+catalog JSON as a Python string literal. The backend parses that literal without
+executing it. Publishing reconciles that complete
 inventory with the applet's saved sources. Page refreshes use the packaged
 catalog; they do not query Hugging Face or GitHub. Updating a dataset revision,
 count, classification, or source definition requires rebuilding and publishing
@@ -32,6 +35,30 @@ Dataset and verifier references provide the revisions used for review applicabil
 A changed revision hides a rating that covers a different revision and preserves
 its review link and history. Counts and source information change through the
 repository definitions and a rebuilt applet.
+
+Native verifier references can declare `SourceReference.grading` with a
+`GradingSelection`: the execution mode, selected agents, and immutable MarinSkyRL
+and Harbor revisions. The exporter reads those pinned repositories at build time
+and fingerprints the selected grading code, resources, and runtime dependencies.
+Harbor-backed Nemotron SWE declarations also pin the blend, proxy archives
+containing native task definitions, and SWE-Gym membership input in
+`GradingSelection.task_assets`. The fingerprint
+covers the selected tasks' verifier files, executable permissions, judge settings,
+and grader environment. It excludes discovery metadata and unrelated tasks;
+Python comments and docstrings do not change the code identity. Native execution
+attestation checks the selected files and settings covered by the fingerprint
+before publication.
+The applet serves the generated identities without fetching upstream code.
+
+A source enrolls when its first grading applicability claim is archived in
+`review_artifacts` and bound in `catalog_grading_reviews`. After enrollment, any
+saved rating must match the current source's dataset revision and grading
+identity through that hash-verified claim. Replacing a review or omitting the
+grading identity does not bypass the requirement. Sources awaiting enrollment
+retain their existing dataset and verifier revision checks. Unrelated repository
+changes can retain the selected grading identity. A grading change requires
+native QC covering the current dataset and grading identity, or an archived and
+bound equivalence claim establishing applicability of the historical review.
 
 Quality links to a sample-based review: green Good, yellow Some issues, red Bad,
 or gray Unreviewed/Unrated. Review date records the latest actual judgment time.
@@ -131,6 +158,16 @@ historical Qwen3.5-9B runs are separate from the current Small model. Filters an
 sorting use only current Qwen3.5-122B-A10B solve rates; sources without a current
 measurement sort last. Archived reports retain their original settings and traces.
 Click the bars to open the source's Difficulty section.
+GenRM sources display mean native cohort rewards instead of solve percentages.
+Each measured task has one response from each comparison model and 13 Hosted
+reference responses shared by all three models, shuffled into the native
+16-response cohort. Rewards
+depend on that cohort and include the native bonuses and penalties; they can be
+negative or exceed one. They do not define an absolute pass threshold. The report
+records every response and native reward, the model and generation settings for
+the Hosted reference responses, and a confidence interval for each model's mean
+reward across sampled tasks. Solve-rate filters and ordering exclude these
+relative measurements.
 Each model has collapsible run settings and task attempts, including saved model
 requests, responses, and native verifier results and logs. These saved artifacts
 load when their sections open. Missing artifacts are identified explicitly.

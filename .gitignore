@@ -251,3 +251,6 @@ scr/*
 
 # Stamped into built artifacts by lib/iris/hatch_build.py; never tracked.
 lib/iris/src/iris/_build_info.py
+
+# Generated Atlas catalog bundled with the dynamic Python backend.
+infra/marina/applets/rl_data_catalog/server/catalog_data.py

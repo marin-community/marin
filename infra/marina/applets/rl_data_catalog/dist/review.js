@@ -143,7 +143,8 @@ function difficultyRun(model, identityPath, record) {
   const section = fold(`${model.measurement_status === "current" ? "" : model.measurement_status === "invalid" ? "Protocol mismatch · " : "Historical · "}${AtlasDifficulty.modelLabel(model)}`, () => {
     const content = node("div", undefined, "review-card-content difficulty-settings");
     content.append(AtlasDifficulty.comparison([model]));
-    const interval = model.wilson_95 ? `${(100 * model.wilson_95[0]).toFixed(1)}–${(100 * model.wilson_95[1]).toFixed(1)}%` : "Not recorded";
+    const rewardInterval = model.cohort_reward?.interval_95;
+    const interval = rewardInterval ? `${rewardInterval[0].toFixed(3)}–${rewardInterval[1].toFixed(3)} native reward` : model.wilson_95 ? `${(100 * model.wilson_95[0]).toFixed(1)}–${(100 * model.wilson_95[1]).toFixed(1)}%` : "Not recorded";
     content.append(node("p", `${model.attempted} attempts · ${model.verified} usable verifier results · ${model.unverified} unverified · 95% interval ${interval}`, "review-byline"));
     const paths = new Set(record.artifacts.map(item => item.path));
     if (!identityPath || !paths.has(identityPath)) {
