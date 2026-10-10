@@ -56,7 +56,7 @@ class ExecutionModules:
 
 
 def verified_execution_grading(config: dict, base: Path) -> dict | None:
-    """Return the verified grading identity as JSON, or None without a snapshot."""
+    """Return the verified grading identity as a dictionary, or None without a snapshot."""
     snapshot_path = config["source"].get("grading_snapshot")
     if snapshot_path is None:
         return None

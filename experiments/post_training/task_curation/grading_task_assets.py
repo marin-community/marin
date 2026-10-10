@@ -56,7 +56,7 @@ def swe_task_key(values: Mapping[str, Any]) -> SweTaskKey:
     if isinstance(trajectory, bool) or not isinstance(trajectory, (str, int)):
         raise ValueError("SWE trajectory identifier must be a string or integer")
     for field in ("step", "turn", "depth"):
-        if type(values[field]) is not int:
+        if isinstance(values[field], bool) or not isinstance(values[field], int):
             raise ValueError(f"SWE {field} must be an integer")
     for field in ("instance_id", "agent_cls"):
         if not isinstance(values[field], str) or not values[field]:

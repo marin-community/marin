@@ -185,7 +185,7 @@ def locked_grading_packages(imports: tuple[str, ...], lock: str) -> dict[str, li
 def source_grading_manifest(
     row: Mapping[str, Any], source: RepositoryGradingModules, agents: tuple[str, ...]
 ) -> dict[str, Any]:
-    """Resolve a source's grading routes, runtime declarations and prompt files."""
+    """Resolve a source's grading routes, runtime declarations and resource files."""
     routes = skyrl_grading_routes(row, source, agents)
     manifests = {}
     for route in routes:
