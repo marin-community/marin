@@ -104,6 +104,7 @@ nav:
       - RL Data Atlas: references/rl-data-atlas.md
       - Task rollouts: references/task-rollouts.md
       - Training Configuration: references/train-config.md
+      - GRPO offline learning: references/grpo-replay.md
       - HBM Optimization: references/hbm-optimization.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
       - Browsing Buckets with fsutil: references/fsutil.md
