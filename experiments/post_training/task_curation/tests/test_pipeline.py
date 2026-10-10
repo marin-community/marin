@@ -30,7 +30,8 @@ from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
-from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult
+from experiments.post_training.task_curation.config import ImageGraderExecution, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
@@ -38,20 +39,18 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
-from experiments.post_training.task_curation.invocation import PipelineOptions
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     DownloadRequest,
     HfSource,
     UrlSource,
+    campaign_machines,
     download_source,
     download_step,
     environment_requirements,
     process_rows,
     source_recipe,
 )
-from experiments.post_training.task_curation.results import PipelineResult
-from experiments.post_training.task_curation.settings import RecipeSettings, VerificationBackend, campaign_machines
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
     REPOSITORY,
@@ -74,7 +73,7 @@ def math500() -> CurationRecipe:
     return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
 
 
-def machines(backend: VerificationBackend) -> GradingMachines:
+def machines(backend: ImageGraderExecution) -> GradingMachines:
     return campaign_machines(backend, "fixture-worker", "http://controller.invalid")
 
 
@@ -88,7 +87,7 @@ def config() -> SourcePipelineConfig:
         execution=AuditExecution(),
         filter_policy=FilterPolicy(),
         normalized_shards=2,
-        machines=machines(VerificationBackend.GVISOR),
+        machines=machines(ImageGraderExecution.GVISOR),
     )
 
 
@@ -127,7 +126,7 @@ def test_review_settings_enter_identity_only_with_a_rubric(config):
 
 
 def test_verification_backend_enters_identity_only_with_controls(config):
-    iris = replace(config, machines=machines(VerificationBackend.IRIS))
+    iris = replace(config, machines=machines(ImageGraderExecution.IRIS))
     assert step_name(math500(), iris) != step_name(math500(), config)
     unchecked = replace(math500(), controls=None)
     assert step_name(unchecked, iris) == step_name(unchecked, config)

@@ -25,6 +25,7 @@ from zephyr.readers import load_parquet
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation import pipeline as processor
 from experiments.post_training.task_curation.campaign import CampaignPool
+from experiments.post_training.task_curation.config import ImageGraderExecution
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
@@ -32,12 +33,9 @@ from experiments.post_training.task_curation.images.build import environment_art
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     HfSource,
+    campaign_machines,
     environment_requirements,
     process_rows,
-)
-from experiments.post_training.task_curation.settings import (
-    VerificationBackend,
-    campaign_machines,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
@@ -117,7 +115,7 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     monkeypatch.setattr(
         LocalRuntime, "ensure_built", lambda self: (self.root.mkdir(parents=True), built.append(self.root))
     )
-    machines = campaign_machines(VerificationBackend.IRIS, PINNED_WORKER, CONTROLLER_URL)
+    machines = campaign_machines(ImageGraderExecution.IRIS, PINNED_WORKER, CONTROLLER_URL)
     factory, spec = machines.machine(environment_requirements(environment, artifact), 2048)
     runtime = local_runtime(artifact.lock_url)
     request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))

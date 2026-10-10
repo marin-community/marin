@@ -14,9 +14,8 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
-from experiments.post_training.task_curation.campaign import CampaignArtifact
-from experiments.post_training.task_curation.invocation import PipelineOptions
-from experiments.post_training.task_curation.results import PipelineResult
+from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
+from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 NUMBERS_DATASET = SourceReference("local-numbers", "pinned", "https://example.org/numbers")

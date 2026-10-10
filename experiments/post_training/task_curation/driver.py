@@ -15,9 +15,13 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
-from experiments.post_training.task_curation.invocation import InputOverrides, LocalPaths, PipelineOptions
+from experiments.post_training.task_curation.config import (
+    ImageGraderExecution,
+    InputOverrides,
+    PipelineOptions,
+    RecipeSettings,
+)
 from experiments.post_training.task_curation.local import run_local_steps
-from experiments.post_training.task_curation.settings import RecipeSettings, VerificationBackend
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import runnable_sources
 
@@ -60,9 +64,10 @@ def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
 )
 @click.option(
     "--verification-backend",
-    type=click.Choice([backend.value for backend in VerificationBackend]),
-    default=VerificationBackend.IRIS.value,
+    type=click.Choice([backend.value for backend in ImageGraderExecution]),
+    default=ImageGraderExecution.IRIS.value,
     show_default=True,
+    help="Where image graders run: Iris jobs or local gVisor. Local grader environments run in the worker.",
 )
 @click.option(
     "--controller-url",
@@ -139,13 +144,14 @@ def main(
         selected = {name: selected[name] for name in dict.fromkeys(sources)}
         download_cache = download_cache if download_cache is not None else Path.home() / ".cache/marin"
         max_workers = max_workers if max_workers is not None else QUICK_MAX_WORKERS
-        local = LocalPaths(output_root.resolve(), download_cache.expanduser().resolve())
+        output_root = output_root.resolve()
+        download_cache = download_cache.expanduser().resolve()
         inputs = InputOverrides(
             str(input_root.resolve()) if input_root is not None else None,
             {name: file.resolve() for name, file in local_files},
             {name: str(Path(path).resolve()) for name, path in auxiliary},
         )
-        options = PipelineOptions(processing_mode, runtime, inputs=inputs, local=local)
+        options = PipelineOptions(processing_mode, runtime, inputs=inputs)
         steps = {name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()}
         if not do_run:
             plan = {
@@ -157,15 +163,13 @@ def main(
                 "input_root": inputs.root,
                 "input_files": {name: str(file) for name, file in inputs.files.items()},
                 "inputs": dict(inputs.auxiliary),
-                "output_root": str(local.output_root),
-                "download_cache": str(local.download_cache),
+                "output_root": str(output_root),
+                "download_cache": str(download_cache),
                 "max_workers": max_workers,
             }
             click.echo(json.dumps(plan, indent=2))
             return
-        run_local_steps(
-            steps, local.output_root, runtime=runtime, max_workers=max_workers, download_cache=local.download_cache
-        )
+        run_local_steps(steps, output_root, runtime=runtime, max_workers=max_workers, download_cache=download_cache)
         return
     if input_root is not None or local_files or auxiliary or output_root is not None or download_cache is not None:
         raise click.UsageError("Local input, output, and download-cache options require --mode quick")
@@ -190,7 +194,7 @@ def main(
         relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=normalized_shards,
-        verification_backend=VerificationBackend(verification_backend),
+        verification_backend=ImageGraderExecution(verification_backend),
         controller_url=controller_url,
         seed=seed,
         verification_sample_size=verification_sample_size,

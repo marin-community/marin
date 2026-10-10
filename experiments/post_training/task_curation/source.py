@@ -9,7 +9,7 @@ from typing import Literal, Protocol
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
-from experiments.post_training.task_curation.invocation import PipelineOptions
+from experiments.post_training.task_curation.config import PipelineOptions
 
 
 class PinnedReference(Protocol):

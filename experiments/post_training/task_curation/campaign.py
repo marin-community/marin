@@ -20,11 +20,20 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.pipeline.models import SourceStatus
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.task_curation.results import PipelineResult
-
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PipelineResult:
+    """An execution outcome and the stages that actually ran."""
+
+    status: SourceStatus
+    outputs: dict[str, str]
+    evidence: dict[str, str]
+    stages: tuple[str, ...]
 
 
 class CampaignStatus(StrEnum):

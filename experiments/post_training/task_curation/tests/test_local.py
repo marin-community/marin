@@ -21,8 +21,8 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed, CampaignRuntime
+from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
-from experiments.post_training.task_curation.invocation import InputOverrides, LocalPaths, PipelineOptions
 from experiments.post_training.task_curation.local import run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -35,7 +35,6 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, down
         SourceProcessingMode.QUICK,
         runtime,
         inputs=InputOverrides(str(input_root) if input_root is not None else None, source_files_override or {}, inputs),
-        local=LocalPaths(output_root, download_cache),
     )
     sources = {
         name: RlDataSource(

@@ -25,8 +25,8 @@ def curate(source: RlDataSource[MyConfig], options: PipelineOptions) -> Artifact
 ```
 
 `PipelineOptions` contains an explicit QUICK, SAMPLE or FULL mode, the campaign
-runtime, input overrides, optional local output/cache paths and optional concrete
-recipe settings. Each dataset constructs its own dependencies and chooses its
+runtime, input overrides and optional concrete recipe settings. The executor
+receives output/cache paths separately. Each dataset constructs its own dependencies and chooses its
 conversion, validation, review and control stages. Its run closure accesses the
 active Zephyr context through the runtime. A pipeline can generate inputs or
 read local files without reviewer credentials, grader builds or sandbox setup.
@@ -61,6 +61,7 @@ directly. Atlas reads these facts without invoking or inspecting the callable.
 | `experiments/post_training/task_curation/environment_runtime.py` | The uv environments that local graders run in on the Zephyr worker |
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()` and `runnable_sources()` |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
+| `experiments/post_training/task_curation/config.py` | Invocation options and concrete recipe settings; service binding belongs to `process_rows` |
 | `experiments/post_training/task_curation/pipeline.py` | `CurationRecipe`, `process_rows` and its `data/rl/<name>-<hash>` artifact |
 | `experiments/post_training/task_curation/pipeline.py`, `local.py` | Source-level mode dispatch and local mechanical conversion |
 | `experiments/post_training/task_curation/driver.py`, `campaign.py` | Campaign options, shared pool and per-source results |

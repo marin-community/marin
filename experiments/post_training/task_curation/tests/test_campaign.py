@@ -21,10 +21,10 @@ from experiments.post_training.task_curation.campaign import (
     CampaignFailed,
     CampaignPool,
     CampaignRuntime,
+    PipelineResult,
     run_campaign,
 )
-from experiments.post_training.task_curation.invocation import InputOverrides, PipelineOptions
-from experiments.post_training.task_curation.results import PipelineResult
+from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
