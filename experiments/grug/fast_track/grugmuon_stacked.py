@@ -413,11 +413,17 @@ def _bucketed_newton_schulz(updates, params, mesh, steps: int, eps: float, coeff
             target = _target_named_sharding(param_leaves[i])
             out[i] = (reshard(part, target) if target is not None else part) * _muon_shape_scale(x.shape)
 
+    replicated = PartitionSpec(None, None, None)
     for indices in stack_buckets.values():
-        # One leaf at a time, distributed over its layer axis: concatenating the bucket needs every leaf replicated,
-        # a full copy of the bucket (18 GiB at hero width) on every device.
-        for i in indices:
-            piece = _to_wide((flat[i] if flat[i].ndim == 3 else flat[i][None]).astype(jnp.bfloat16))
+        pieces = [_to_wide((flat[i] if flat[i].ndim == 3 else flat[i][None]).astype(jnp.bfloat16)) for i in indices]
+        if sum(p.size for p in pieces) * 2 <= _NS_CHUNK_BYTES:
+            # Small buckets (the ladder rungs): one replicated stack, one batched Newton-Schulz.
+            stacked = jnp.concatenate([reshard(p, replicated) for p in pieces], axis=0)
+            scatter(indices, pieces, _newtonschulz_padded_stack_sharded(stacked, steps, eps, coefficient_type))
+            continue
+        # Large buckets: one leaf at a time, distributed over its layer axis. Concatenating needs every leaf
+        # replicated, a full copy of the bucket (18 GiB at hero width) on every device.
+        for i, piece in zip(indices, pieces, strict=True):
             updated = _newtonschulz_padded_stack_sharded(piece, steps, eps, coefficient_type, keep_distributed=True)
             scatter([i], [piece], updated)
 
