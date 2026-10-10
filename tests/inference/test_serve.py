@@ -29,6 +29,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
+from levanter.testing.cpu_devices import run_on_cpu_devices
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
 from marin.inference import iris_vllm
 from marin.inference.backend import ModelSpec
@@ -550,20 +551,52 @@ def test_validate_levanter_dtype_rejects_vllm_aliases():
             validate_levanter_dtype(alias)
 
 
-@pytest.mark.parametrize(
-    ("num_chips", "tensor_parallel_size", "expected"),
-    [
-        (8, 8, {"replica": 1, "data": 1, "model": 8}),  # the slice divides the head count: shard across it
-        (8, 2, {"replica": 1, "data": 4, "model": 2}),  # it does not: the leftover chips replicate
-    ],
-)
-def test_inference_mesh_covers_every_chip(num_chips, tensor_parallel_size, expected):
-    assert dict(inference_mesh(num_chips, tensor_parallel_size).axes) == expected
-
-
 def test_inference_mesh_rejects_a_tp_that_does_not_divide_the_slice():
     with pytest.raises(ValueError, match="does not divide"):
         inference_mesh(8, 3)
+
+
+def test_snowball_scores_on_the_levanter_serving_mesh():
+    run_on_cpu_devices(
+        """
+        import haliax as hax
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from haliax import Axis
+        from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
+        from levanter.grug.sharding import compact_grug_mesh
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+        from levanter.trainer import TrainerConfig
+        from marin.inference.levanter_backend import inference_mesh
+
+        config = SnowballConfig(
+            vocab_size=32, hidden_dim=16, intermediate_dim=16,
+            shared_expert_intermediate_dim=16, num_experts=8, num_experts_per_token=2,
+            num_layers=2, num_heads=2, num_kv_heads=1, head_dim=8,
+            max_seq_len=8, sliding_window=4, attention_implementation="reference",
+            moe_implementation="ring",
+        )
+        Vocab, Batch, Pos = Axis("vocab", 32), Axis("batch", 8), Axis("position", 4)
+        token_ids = np.arange(32, dtype=np.int32).reshape(8, 4)
+        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+            model = SnowballLMHeadModel.init(Vocab, config, key=jax.random.PRNGKey(0))
+            inputs = hax.named(jnp.asarray(token_ids), (Batch, Pos))
+            expected = np.asarray(hax.named_jit(lambda m, x: m(x))(model, inputs).array)
+            weights = {k: np.asarray(v) for k, v in to_torch_compatible_state_dict(model).items()}
+
+        trainer = TrainerConfig(
+            mesh=inference_mesh(8, 1), use_explicit_mesh_axes=config.requires_explicit_mesh_axes,
+        )
+        with trainer.use_device_mesh():
+            model = SnowballLMHeadModel.init(Vocab, config, key=jax.random.PRNGKey(1))
+            model = from_torch_compatible_state_dict(model, weights)
+            inputs = hax.named(jnp.asarray(token_ids), (Batch, Pos))
+            actual = np.asarray(hax.named_jit(lambda m, x: m(x))(model, inputs).array)
+        np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+        """,
+        device_count=8,
+    )
 
 
 def test_cli_rejects_vllm_flags_under_the_levanter_backend():
