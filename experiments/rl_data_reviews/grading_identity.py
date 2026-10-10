@@ -6,6 +6,7 @@
 import hashlib
 import json
 import subprocess
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from infra.marina.applets.rl_data_catalog.server.grading_code import python_grading_program
@@ -23,6 +24,16 @@ print(json.dumps(result))
 VERSION_LOCATOR = """import importlib.metadata,json,sys
 print(json.dumps({name:importlib.metadata.version(name) for name in json.loads(sys.argv[1])}))
 """
+
+
+@dataclass(frozen=True)
+class ExecutionGradingIdentity:
+    source_id: str
+    source_revision: str
+    grading_revision: str
+    grading_manifest: dict
+    selected_code_verified: bool
+    installed_dependency_versions: dict[str, str]
 
 
 class ExecutionModules:
@@ -45,7 +56,7 @@ class ExecutionModules:
 
 
 def verified_execution_grading(config: dict, base: Path) -> dict | None:
-    """Capture selected code, or return None when no grading snapshot is configured."""
+    """Return the verified grading identity as JSON, or None without a snapshot."""
     snapshot_path = config["source"].get("grading_snapshot")
     if snapshot_path is None:
         return None
@@ -99,11 +110,13 @@ def verified_execution_grading(config: dict, base: Path) -> dict | None:
         for relative, expected in manifest["routes"][route.name]["resources"].items():
             if hashlib.sha256((checkout / relative).read_bytes()).hexdigest() != expected:
                 raise ValueError(f"Executed grading resource differs at {relative}")
-    return {
-        "source_id": snapshot["id"],
-        "source_revision": snapshot.get("dataset_revision") or snapshot["revision"],
-        "grading_revision": digest,
-        "grading_manifest": manifest,
-        "selected_code_verified": True,
-        "installed_dependency_versions": versions,
-    }
+    return asdict(
+        ExecutionGradingIdentity(
+            source_id=snapshot["id"],
+            source_revision=snapshot.get("dataset_revision") or snapshot["revision"],
+            grading_revision=digest,
+            grading_manifest=manifest,
+            selected_code_verified=True,
+            installed_dependency_versions=versions,
+        )
+    )

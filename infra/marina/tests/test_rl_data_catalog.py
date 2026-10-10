@@ -122,7 +122,7 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
         "review_source_revision": "data1",
         "review_verifier_revision": "code1",
     }
-    record = {"payload": payload, "verifier_issues": []}
+    record = {"payload": payload, "verifier_issues": [], "grading_enrolled": False}
     if review_origin == "source":
         payload.update(review)
         record.update({key: None for key in review})
@@ -166,6 +166,7 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
             "review_source_revision": "data1",
             "review_verifier_revision": "code1",
             "verifier_issues": [],
+            "grading_enrolled": False,
         }
     )
     if quality != "good" or revision != "data1":
@@ -333,6 +334,7 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
             "review_source_revision": "data1",
             "review_verifier_revision": "code1",
             "verifier_issues": [],
+            "grading_enrolled": False,
         }
     )
     assert row["difficulty_summary"]["status"] == expected_status
@@ -401,6 +403,7 @@ def test_confirmed_verifier_defect_survives_publication_and_refresh(
         review_source_revision="data1",
         review_verifier_revision="code1",
         verifier_issues=[{"issue_url": "https://github.com/example/issues/1", "status": "open"}],
+        grading_enrolled=False,
     )
     displayed = source_with_review(record)
     assert displayed["review_stale"]
@@ -531,6 +534,7 @@ def test_grading_equivalence_preserves_ratings_only_for_matching_immutable_evide
         "review_source_revision": "data1",
         "review_verifier_revision": "old-package",
         "verifier_issues": [],
+        "grading_enrolled": True,
         "grading_binding": binding,
         "grading_proof": proof,
     }

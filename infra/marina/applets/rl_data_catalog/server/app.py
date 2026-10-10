@@ -200,7 +200,7 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     current_data = row.get("dataset_revision") or row.get("revision")
     grading_revision = row.get("grading_revision")
     binding_valid = grading_binding_valid(record, row)
-    grading_enrolled = record.get("grading_enrolled", bool(grading_revision))
+    grading_enrolled = record["grading_enrolled"]
     row["grading_tracking"] = "source-specific" if grading_enrolled else "legacy"
     row["review_grading_revision"] = grading_revision if binding_valid else None
     verifier_changed = (
