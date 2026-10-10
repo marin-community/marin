@@ -6,12 +6,12 @@
 import json
 import os
 import subprocess
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
-from harbor_config.models.task.config import TaskConfig
 from taskcompendium.convert.executable import solve_script
 from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH, archive_files, unpack_task_binary
 from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH
@@ -404,9 +404,9 @@ def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tm
         )
     ).files
     assert files["environment/Dockerfile"].decode().split("# --- verifyit ---")[0].strip() == recipe.decode().strip()
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.verifier.environment_mode == "shared"
-    assert not config.artifacts and "tests/Dockerfile" not in files
+    config = tomllib.loads(files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert not config["artifacts"] and "tests/Dockerfile" not in files
     assert not any(path.startswith(("environment/tests/", "environment/solution/", "solution/")) for path in files)
     tests = tmp_path / "tests"
     write_verifier(task, tests)

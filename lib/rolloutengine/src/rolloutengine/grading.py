@@ -4,6 +4,7 @@
 """Grade a finished rollout with the task's grader, outside the model's machine."""
 
 import asyncio
+import os
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from typing import Any
@@ -53,7 +54,7 @@ async def _grade_rollout(
         task,
         attempt,
         _AttemptMachineFactory(selection, factories, cleanup, resources, grader.environment),
-        _machine_spec(grader.environment, selection),
+        _machine_spec(grader.environment, selection, dict(os.environ)),
         task_machine=machine,
         timeout=timeout,
     )

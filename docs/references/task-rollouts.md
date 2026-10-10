@@ -189,14 +189,12 @@ The session's verifier deadline controls the full grading phase.
 | --- | --- | --- |
 | `StdoutReward` | Zero exit code and one finite number on standard output | Marin API choice: simple graders without reward files |
 | `ExitCodeReward` | Reward 1 for zero exit code, otherwise reward 0 | Marin API choice: pass/fail shell checks |
-| `FileReward` | The first existing file supplies the scalar grade | Harbor compatibility: existing Harbor task graders |
+| `FileReward` | The first existing file supplies the scalar grade | Verifiers that write reward files |
 
 `FileReward` accepts a number or a JSON object with the configured numeric key.
 A JSON object's `detail` object becomes the grade detail.
 A malformed first file is a grading failure. Grading does not try a lower-priority file.
 The optional `pass_above` threshold supplies a separate pass/fail result.
-Harbor task packages contain instructions, environment configuration, and hidden test scripts.
-Their reward files use `reward.json` before `reward.txt` and treat a positive reward as a pass.
 Grading removes existing reward files before the grader command executes.
 A valid reward file can supply a grade after a nonzero exit code. A command timeout has no grade.
 
@@ -204,13 +202,7 @@ A valid reward file can supply a grade after a nonzero exit code. A command time
 An incorrect answer receives a numeric grade. A grading failure has no reward.
 Score bounds describe the grader's native range.
 
-The Harbor importer converts the package environment and tests into a `ScriptGrader`.
-The caller selects backend settings, users, and deadlines during lowering.
-The Harbor importer accepts only separate verifier environments.
-An unset verifier mode without a separate environment selects shared mode and causes rejection.
 Script grading requires a separate machine: a sandbox of a prebuilt, digest-pinned grader image, or a local machine whose host builds the grader's packages lock.
-The Shellbox session's Harbor setup uses root-user overrides. The Iris backend rejects these overrides, so this Harbor path is unsupported on Iris.
-Other unsupported cases include multi-stage tasks, task-specific image builds, Harbor collect hooks, and healthchecks.
 Shellbox's generic image-builder API remains available outside this task path.
 SWE tasks require prebuilt images and initialize `refs/taskcompendium/base` before inference.
 Patch collection compares the final index with that revision, including agent commits and new files.
@@ -273,7 +265,7 @@ From the Marin repository root, with the test environment installed:
 ```bash
 task_test_prefix=$(mktemp -d -t taskcompendium-tests.XXXXXX)
 MARIN_PREFIX="$task_test_prefix" uv run --frozen --no-sync pytest lib/taskcompendium/tests -q -n 0
-uv run --project lib/rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
+uv run --package marin-rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
 ```
 
 CPU tests use ShellSim and model or HTTP fixtures. A live GPU run and a real container backend require separate validation.

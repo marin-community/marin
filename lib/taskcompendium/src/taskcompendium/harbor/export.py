@@ -12,6 +12,7 @@ import shlex
 import tarfile
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from functools import cache
 from pathlib import Path
 from typing import Any, cast
@@ -20,7 +21,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tomlkit
 from finestore.schema import arrow_schema
-from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.modes.extract import collapse_whitespace
 from verifyit.spec import (
@@ -61,6 +61,12 @@ from taskcompendium.models import (
 from taskcompendium.runtime.grading import DIAGNOSTIC_OUTPUT_BYTES
 from taskcompendium.runtime.local import RUNTIME_PACKAGES, context_paths
 from taskcompendium.runtime.resources import resource_bytes
+
+
+class VerifierEnvironmentMode(StrEnum):
+    SHARED = "shared"
+    SEPARATE = "separate"
+
 
 TASKS_FILENAME = "tasks.parquet"
 MANIFEST_FILENAME = "manifest.json"
@@ -518,7 +524,6 @@ def harbor_payload(
     if environment.working_directory is not None:
         config["environment"]["workdir"] = environment.working_directory
     files["task.toml"] = tomlkit.dumps(config).encode()
-    TaskConfig.model_validate_toml(files["task.toml"].decode())
     solution = {
         resource.path: resource_bytes(resource)
         for resource in task.resources.oracle
@@ -629,9 +634,11 @@ def export_harbor(
         "environment_build_required": True,
         "source": source.name,
         "source_id": source.source_id,
-        "harbor_config_validated": True,
         "runtime_verified": False,
-        "limitation": "Builds and execution have not run; base-image dependencies and source recipes remain unverified.",
+        "limitation": (
+            "Harbor schema, builds, and execution are unverified; "
+            "base-image dependencies and source recipes have not been checked."
+        ),
     }
     (output_root / MANIFEST_FILENAME).write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest

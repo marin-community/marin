@@ -7,6 +7,7 @@ import os
 import shlex
 import subprocess
 import tarfile
+import tomllib
 from pathlib import Path
 from typing import cast
 
@@ -14,7 +15,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.convert.verifyit_build import verifyit_build_context
 from taskcompendium.grader import verifyit_package
@@ -101,10 +101,10 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
         family="fixture",
     )
     files = archive_files(record.task_binary)
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    config = tomllib.loads(files["task.toml"].decode())
     assert files["environment/Dockerfile"].decode().startswith("FROM python:3.12-slim\nWORKDIR /app\n")
-    assert config.verifier.environment_mode == VerifierEnvironmentMode.SHARED
-    assert config.verifier.environment is None
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert "environment" not in config["verifier"]
     assert "tests/Dockerfile" not in files
     assert not any(path.startswith("tests/public/") for path in files)
     assert not any(path.startswith("solution/") for path in files)
@@ -114,7 +114,7 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     assert files["tests/private.txt"] == b"private reference"
     assert files["environment/files/app/input.txt"] == b"public input"
     assert b"/app/answer.txt" in files["instruction.md"]
-    assert not config.artifacts
+    assert not config["artifacts"]
     assert archive_files(record.solution_binary)["solution/solve.sh"] == b"echo gold > /app/answer.txt\n"
 
 
@@ -330,10 +330,10 @@ def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(no
     files = archive_files(exported[0]["task_binary"])
     assert {"instruction.md", "task.toml", "environment/Dockerfile", "tests/test.sh"} <= files.keys()
     assert not any(path.startswith("solution/") for path in files)
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.metadata["tasktrove_path"] == exported[0]["path"] == row["original_path"]
-    assert config.metadata["tasktrove_source"] == exported[0]["source"] == row["source_row"].split("/", 1)[0]
-    assert config.metadata["taskcompendium_id"] == converted.id
+    config = tomllib.loads(files["task.toml"].decode())
+    assert config["metadata"]["tasktrove_path"] == exported[0]["path"] == row["original_path"]
+    assert config["metadata"]["tasktrove_source"] == exported[0]["source"] == row["source_row"].split("/", 1)[0]
+    assert config["metadata"]["taskcompendium_id"] == converted.id
     assert report["source_id"] == source.info.id
 
 
@@ -371,7 +371,7 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
         family=source.info.family,
     )
     files = archive_files(record.task_binary)
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    config = tomllib.loads(files["task.toml"].decode())
     instruction = files["instruction.md"].decode()
     assert "/app/response.txt" not in instruction
     assert files["tests/source/test.sh"] == b"#!/bin/bash\nexit 99\n"
@@ -380,7 +380,7 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
     workspace = tmp_path / "app"
     workspace.mkdir()
     candidate = "Mars, with a complete explanation.\n"
-    assert not config.artifacts
+    assert not config["artifacts"]
     transferred = workspace / Path(answer_path).relative_to("/app")
     transferred.write_text(candidate)
     # Exercise the judge's file-read boundary without calling any judge model.
@@ -407,8 +407,8 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
         family=source.info.family,
     )
     files = archive_files(record.task_binary)
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert tuple(artifact.source for artifact in config.artifacts) == task.output_paths
+    config = tomllib.loads(files["task.toml"].decode())
+    assert tuple(artifact["source"] for artifact in config["artifacts"]) == task.output_paths
     assert not any(path.startswith("environment/files/tests/") for path in files)
     for path, content in files.items():
         target = tmp_path / path
@@ -545,10 +545,10 @@ def test_harbor_repository_uses_shared_actor_state(repository_task, tmp_path):
             row, fallback_actor_image=BASE_IMAGE, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe"
         ).task_binary
     )
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.verifier.environment_mode == "shared"
-    assert config.verifier.environment is None
-    assert not config.artifacts
+    config = tomllib.loads(files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert "environment" not in config["verifier"]
+    assert not config["artifacts"]
     assert "tests/Dockerfile" not in files and "tests/verifier.toml" not in files
     assert not any(path.startswith("tests/public/") for path in files)
     context = cast(DockerBuildContext, task.environment_requirements.docker_build)
@@ -649,9 +649,9 @@ print(float(answer == actor_dependency.expected))
             family="fixture",
         ).task_binary
     )
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.verifier.environment_mode == VerifierEnvironmentMode.SHARED
-    assert not config.artifacts
+    config = tomllib.loads(files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert not config["artifacts"]
     tests = tmp_path / "tests"
     for name, content in files.items():
         if name.startswith("tests/"):

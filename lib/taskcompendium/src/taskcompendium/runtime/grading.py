@@ -12,14 +12,15 @@ import errno
 import io
 import json
 import math
+import os
 import tarfile
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
-from harbor_config.env import resolve_env_vars
 from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.spec import Spec, render_spec
 
@@ -53,6 +54,7 @@ from taskcompendium.models import (
     verifyit_answer_file,
     verifyit_spec,
 )
+from taskcompendium.runtime.environment import resolve_env_vars
 from taskcompendium.runtime.output_capture import selected_directory_files, validate_output_directories
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import MISSING_CAPTURE_EXIT_CODE, require_environment_source
@@ -518,7 +520,9 @@ async def grade_in_sandbox(
         and not (task.answer_type == AnswerType.STATE and attempt.state is not None)
     ):
         return GradeResult(Outcome.GRADED, 0.0, "Missing submission")
-    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, task_machine)
+    return await _grade_staged(
+        task, attempt, grading, submissions, factory, machine_spec, task_machine, dict(os.environ)
+    )
 
 
 async def grade_empty_in_sandbox(
@@ -540,7 +544,7 @@ async def grade_empty_in_sandbox(
         answer_file = verifyit_answer_file(grading.spec)
     attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))))
     submissions = [] if answer_file is None else [_StagedFile(answer_file, b"")]
-    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, None)
+    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, None, dict(os.environ))
 
 
 async def _grade_staged(
@@ -551,6 +555,7 @@ async def _grade_staged(
     factory: MachineFactory,
     machine_spec: MachineSpec,
     task_machine: Machine | None,
+    host_environment: Mapping[str, str],
 ) -> GradeResult:
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
     files = _grading_files(task, attempt, grading, submissions)
@@ -560,7 +565,11 @@ async def _grade_staged(
             await _run_checked(
                 task_machine,
                 Command(
-                    command.argv, cwd=command.cwd, env=resolve_env_vars(command.env), timeout=grading.limit, user=ROOT
+                    command.argv,
+                    cwd=command.cwd,
+                    env=resolve_env_vars(command.env, host_environment),
+                    timeout=grading.limit,
+                    user=ROOT,
                 ),
                 "Cannot collect grading inputs",
             )
@@ -578,7 +587,10 @@ async def _grade_staged(
                 replace(
                     machine_spec,
                     workdir=grading.workspace,
-                    env={**machine_spec.env, **resolve_env_vars(grading.environment.environment_variables)},
+                    env={
+                        **machine_spec.env,
+                        **resolve_env_vars(grading.environment.environment_variables, host_environment),
+                    },
                 )
             )
             try:
