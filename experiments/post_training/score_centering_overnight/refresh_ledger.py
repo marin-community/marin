@@ -8,7 +8,7 @@ import csv
 import hashlib
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -88,7 +88,7 @@ def main() -> None:
         if state == 4 and run_id in audits:
             row["retained_audit"] = audits[run_id]
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     registry.update(observed_at=now.isoformat(), jobs=list(jobs.values()))
     costs = json.loads((campaign / "costs.json").read_text())
     attempts = {(row["task_id"], row["attempt_uid"]): row for row in costs["attempts"]}
@@ -111,7 +111,9 @@ def main() -> None:
             assert not start or finish >= start
             row["allocated_seconds"] = (finish - start) / 1000 if start else 0
             row["allocated_h100_hours"] = row["allocated_seconds"] * row["gpus"] / 3600
-            row.setdefault("outcome", "succeeded; audit pending" if int(row["state"]) == 4 else "failed engineering attempt")
+            row.setdefault(
+                "outcome", "succeeded; audit pending" if int(row["state"]) == 4 else "failed engineering attempt"
+            )
             if job.get("retained_audit"):
                 row.update(outcome="succeeded with retained audit", retained_audit=job["retained_audit"])
             attempts[key] = row
@@ -130,7 +132,11 @@ def main() -> None:
     )
     (campaign / "registry.json").write_text(json.dumps(registry, indent=2) + "\n")
     (campaign / "costs.json").write_text(json.dumps(costs, indent=2) + "\n")
-    print(json.dumps({"jobs": len(jobs), "terminal_attempts": len(attempts), "active_attempts": len(active), "hours": totals}))
+    print(
+        json.dumps(
+            {"jobs": len(jobs), "terminal_attempts": len(attempts), "active_attempts": len(active), "hours": totals}
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,34 @@
+{
+  "sources": [
+    {
+      "source": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.campaign-cache/transfer-inputs/2026.08.29.1/train.parquet",
+      "source_sha256": "b0397b09bc4e8dd2b01b96cdf729268ade10c7839ab4193f94479b016b1400b1",
+      "math_references": 8427,
+      "accepted": 8427,
+      "rejected": []
+    },
+    {
+      "source": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.campaign-cache/transfer-inputs/2026.08.29.1/validation.parquet",
+      "source_sha256": "e3b1ca83df0fb193413caad7396f35b4cd29d9f45f6f8561e761818e42e0f79b",
+      "math_references": 500,
+      "accepted": 500,
+      "rejected": []
+    },
+    {
+      "source": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.campaign-cache/transfer-inputs/2026.09.18/train.parquet",
+      "source_sha256": "6515e0315d30948375fe51a811dafb87c43a6fa3535066f6d595d6200627175f",
+      "math_references": 17665,
+      "accepted": 17665,
+      "rejected": []
+    },
+    {
+      "source": "/home/romain/work/marin-community/MarinSkyRL/score-centering-resume-01a126ce/.campaign-cache/transfer-inputs/2026.09.18/validation.parquet",
+      "source_sha256": "97d305a34496c36890e8320c5435a615ad8b058ed42f2ddc30c8eb72b0d413ef",
+      "math_references": 815,
+      "accepted": 815,
+      "rejected": []
+    }
+  ],
+  "validation": "reference acceptance; not response-quality evidence",
+  "source": "158c7f0ac5cd0c92b2aa8829ff8d733e0b6c0e04"
+}

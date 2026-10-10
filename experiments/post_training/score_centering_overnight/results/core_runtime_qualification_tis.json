@@ -1,0 +1,25 @@
+{
+  "run_id": "sc-core-runtime-qual-tis-s0-a0-01a126ce",
+  "source": "117d0598dd017749a301e0374ef9db530fd8d8de",
+  "score_centering": false,
+  "completed_updates": 2,
+  "valid_training_responses": 1024,
+  "captured_tokens": 362267,
+  "chosen_tokens_in_head": 362091,
+  "mean_omitted_mass": 0.0004560710855229755,
+  "source_task_failures": {
+    "InvalidTask": 32
+  },
+  "failed_source_instances": [
+    "46",
+    "52",
+    "59",
+    "130"
+  ],
+  "gradient_norms": [
+    0.17618030309677124,
+    0.25501009821891785
+  ],
+  "qualification_scope": "DP8 dense regular PPO/TIS2, natural K128 and two finite nonzero updates; native curriculum reference errors are retained and masked. No scientific effect claim.",
+  "audit_passed": true
+}
