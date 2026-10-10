@@ -96,6 +96,7 @@ PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
+    "ring_gather_combine",  # `ring` moving activations only by gather; ROCm runs scatter-adds slowly.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
@@ -107,6 +108,7 @@ MoeImplementation: TypeAlias = Literal[
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = (
     "ring",
+    "ring_gather_combine",
     "ragged_all_to_all",
     "fixed_all_to_all",
     "fixed_pooled_wave_all_to_all",

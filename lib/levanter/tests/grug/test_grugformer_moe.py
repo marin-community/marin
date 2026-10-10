@@ -47,6 +47,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _TransportBufferSite,
     _unpermute_from_global_expert,
 )
+from levanter.grug._moe.ep_ring import _gather_dispatch_combine
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -1027,7 +1028,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
 
 @pytest.mark.parametrize(
     "implementation",
-    ["ring", "ragged_all_to_all", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
+    ["ring", "ring_gather_combine", "ragged_all_to_all", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
 )
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
@@ -1403,7 +1404,9 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     assert int(overflow.receiver_dropped) == 3
 
 
-@pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])
+@pytest.mark.parametrize(
+    "implementation", ["ring", "ring_gather_combine", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"]
+)
 @pytest.mark.parametrize(
     "token_valid",
     [[True, True, True, True], [True, False, True, True]],
@@ -1522,6 +1525,144 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     )
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "token_valid",
+    [[True] * 16, [True, False, True, True] * 4],
+    ids=["all_valid", "padded"],
+)
+def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: list[bool]):
+    """`ring_gather_combine` gives `ring`'s values, drops and gradients without token-buffer scatter-adds."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import functools
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import moe_mlp
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 2, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        )
+        tokens, hidden, inter, experts, topk = 16, 10, 6, 8, 3
+        keys = jax.random.split(jax.random.key(0), 6)
+        x = jax.random.normal(keys[0], (tokens, hidden))
+        # Skewed routing so some shards run out of capacity.
+        logits = jax.random.normal(keys[1], (tokens, experts)) + jnp.linspace(2.0, 0.0, experts)
+        selected_experts = jax.lax.top_k(logits, topk)[1].astype(jnp.int32)
+        combine_weights = jax.nn.softmax(jax.random.normal(keys[2], (tokens, topk)), axis=-1)
+        token_valid = jnp.asarray(__TOKEN_VALID__)
+        w_up_gate = jax.random.normal(keys[3], (experts, hidden, 2 * inter))
+        w_down = jax.random.normal(keys[4], (experts, inter, hidden))
+        cotangent = jax.random.normal(keys[5], (tokens, hidden))
+
+        batch = NamedSharding(mesh, P(("data", "expert"), None))
+        expert = NamedSharding(mesh, P("expert", None, None))
+        x, selected_experts, combine_weights, cotangent = (
+            jax.device_put(a, batch) for a in (x, selected_experts, combine_weights, cotangent)
+        )
+        token_valid = jax.device_put(token_valid, NamedSharding(mesh, P(("data", "expert"))))
+        w_up_gate, w_down = jax.device_put(w_up_gate, expert), jax.device_put(w_down, expert)
+
+        def loss(implementation, x, combine_weights, w_up_gate, w_down):
+            out, counts = moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                token_valid=token_valid,
+                activation=jax.nn.silu,
+                implementation=implementation,
+                mesh=mesh,
+                capacity_factor=0.5,
+                report_capacity_overflow=True,
+            )
+            return jnp.sum(out * cotangent), counts.dropped
+
+        def token_row_scatter_adds(jaxpr):
+            # Scatter-adds that write [rows, hidden] token buffers, searched through nested jaxprs.
+            count = 0
+            for eqn in jaxpr.eqns:
+                shape = eqn.outvars[0].aval.shape if eqn.outvars else ()
+                count += eqn.primitive.name == "scatter-add" and len(shape) == 2 and shape[1] == hidden
+                for param in eqn.params.values():
+                    for sub in param if isinstance(param, (tuple, list)) else (param,):
+                        sub = getattr(sub, "jaxpr", sub)
+                        if hasattr(sub, "eqns"):
+                            count += token_row_scatter_adds(sub)
+            return count
+
+        results = {}
+        for implementation in ("ring", "ring_gather_combine"):
+            with jax.set_mesh(mesh):
+                grad_fn = jax.value_and_grad(
+                    functools.partial(loss, implementation), argnums=(0, 1, 2, 3), has_aux=True
+                )
+                args = (x, combine_weights, w_up_gate, w_down)
+                scatter_adds = token_row_scatter_adds(jax.make_jaxpr(grad_fn)(*args).jaxpr)
+                results[implementation] = (grad_fn(*args), scatter_adds)
+
+        ((ring_value, ring_dropped), ring_grads), ring_scatter_adds = results["ring"]
+        ((gather_value, gather_dropped), gather_grads), gather_scatter_adds = results["ring_gather_combine"]
+        assert ring_scatter_adds > 0, ring_scatter_adds
+        assert gather_scatter_adds == 0, gather_scatter_adds
+        assert int(ring_dropped) > 0, int(ring_dropped)
+        assert int(gather_dropped) == int(ring_dropped)
+        np.testing.assert_allclose(np.asarray(gather_value), np.asarray(ring_value), rtol=1e-5, atol=1e-5)
+        for gather_grad, ring_grad in zip(gather_grads, ring_grads, strict=True):
+            np.testing.assert_allclose(np.asarray(gather_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
+    """
+    script = script.replace("__TOKEN_VALID__", repr(token_valid))
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
+    """In bf16 the gather combine and the dispatch gradient sum each token's rows in float32, then round once."""
+    tokens, topk, hidden, slots = 6, 4, 32, 16
+    rng = np.random.default_rng(0)
+    # The slots hold the first four tokens' assignments in random order, and the last two slots are padding.
+    picked = rng.permutation(slots).astype(np.int32)
+    valid = np.arange(slots) < 14
+    token = picked // topk
+    # Integers below 256, and their products with powers of two, are exact in bf16, and float32 sums of four of
+    # them are exact. Each token sum's final rounding is then the only one, whatever order the adds run in.
+    # Summing in bf16 in k order instead would change 26 of the combined values and 16 of the gradient values.
+    rows = rng.integers(-255, 256, (slots, hidden)).astype(np.float32)
+    weights = np.exp2(rng.integers(-2, 2, slots)).astype(np.float32)
+    rows_cotangent = rng.integers(-255, 256, (slots, hidden)).astype(np.float32)
+
+    @jax.jit
+    def evaluate(x, rows, weights, rows_cotangent):
+        dispatch_combine = _gather_dispatch_combine(jnp.asarray(picked), jnp.asarray(valid), tokens, topk)
+        _, dispatch_vjp = jax.vjp(dispatch_combine.dispatch, x)
+        return dispatch_combine.combine(rows, weights), dispatch_vjp(rows_cotangent)[0]
+
+    x = jnp.zeros((tokens, hidden), jnp.bfloat16)
+    combined, x_gradient = evaluate(x, *(jnp.asarray(a, jnp.bfloat16) for a in (rows, weights, rows_cotangent)))
+
+    expected_combined = np.zeros((tokens, hidden), np.float32)
+    np.add.at(expected_combined, token[valid], (rows * weights[:, None])[valid])
+    expected_x_gradient = np.zeros((tokens, hidden), np.float32)
+    np.add.at(expected_x_gradient, token[valid], rows_cotangent[valid])
+    np.testing.assert_array_equal(np.asarray(combined), np.asarray(expected_combined, jnp.bfloat16))
+    np.testing.assert_array_equal(np.asarray(x_gradient), np.asarray(expected_x_gradient, jnp.bfloat16))
 
 
 def _simulate_ragged_a2a(operands, outputs, params):
