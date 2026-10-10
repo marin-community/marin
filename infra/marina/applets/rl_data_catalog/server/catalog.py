@@ -3,13 +3,14 @@
 
 """Read the catalog generated from the task-curation source registry."""
 
+import ast
 import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-CATALOG_PATH = Path(__file__).parents[1] / "dist" / "catalog.json"
+CATALOG_PATH = Path(__file__).with_name("catalog_data.py")
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,11 @@ class Snapshot:
 
 def catalog_snapshots(path: Path) -> list[Snapshot]:
     """Validate the complete artifact before any saved inventory is replaced."""
-    catalog = json.loads(path.read_text())
+    content = path.read_text()
+    if path.suffix == ".py":
+        # Marina extracts only server Python files for backend execution.
+        content = ast.literal_eval(content)
+    catalog = json.loads(content)
     if catalog["schema_version"] != 1:
         raise ValueError(f"Unsupported catalog schema version: {catalog['schema_version']}")
     revision = catalog["revision"]

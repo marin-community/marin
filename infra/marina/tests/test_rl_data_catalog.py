@@ -3,11 +3,13 @@
 
 import hashlib
 import json
+import shutil
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from marina.applets import load_backend_entrypoint, package_applet, read_applet_package, remove_backend_revision
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
@@ -74,6 +76,30 @@ def test_generated_catalog_reconciles_sources_and_preserves_reviews(
     assert not any(item["changed"] for item in refresh_catalog(connection, artifact)["results"])
     assert all(item["changed"] for item in refresh_catalog(connection, artifact, force=True)["results"])
     assert connection.execute(text("SELECT COUNT(*) FROM catalog_sources")).scalar_one() == 4
+
+
+def test_packaged_catalog_migration_reads_its_backend_resource(catalog_connection: Connection, tmp_path: Path) -> None:
+    applet = tmp_path / "applet"
+    server = Path(__file__).parents[1] / "applets" / "rl_data_catalog" / "server"
+    shutil.copytree(server, applet / "server", ignore=shutil.ignore_patterns("catalog_data.py", "__pycache__"))
+    (applet / "dist").mkdir()
+    (applet / "dist" / "index.html").write_text("<!doctype html><title>Atlas</title>")
+    (applet / "applet.toml").write_text(
+        'title = "Atlas"\ndescription = "Catalog migration regression"\npython_entrypoint = "server.app:create_api"\n'
+    )
+    source = {"id": "MarinSkyRL:math", "origin": "MarinSkyRL", "dataset_revision": "data1", "task_count": 7}
+    artifact = tmp_path / "catalog.json"
+    write_catalog(artifact, [source])
+    (applet / "server" / "catalog_data.py").write_text(repr(artifact.read_text()) + "\n")
+    package = read_applet_package(package_applet(applet))
+    applet_id = uuid.uuid4()
+    module, _ = load_backend_entrypoint(applet_id, 1, package)
+    try:
+        module.migrate(catalog_connection)
+        active = catalog_connection.execute(text("SELECT payload FROM catalog_sources WHERE active")).scalars().all()
+        assert active == [source]
+    finally:
+        remove_backend_revision(applet_id, 1, package.digest)
 
 
 @pytest.mark.parametrize("corruption", ["duplicate", "stale_revision"])

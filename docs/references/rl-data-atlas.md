@@ -6,7 +6,10 @@ is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link opens the current rel
 
 The source definitions in `experiments/post_training/task_curation/` own dataset
 metadata, source reviews, and conversion pipelines. The applet build exports
-those definitions to `dist/catalog.json`. Publishing reconciles that complete
+those definitions to the generated `server/catalog_data.py` resource. Marina
+extracts only server Python files for backend execution, so the build stores the
+catalog JSON as a Python string literal. The backend parses that literal without
+executing it. Publishing reconciles that complete
 inventory with the applet's saved sources. Page refreshes use the packaged
 catalog; they do not query Hugging Face or GitHub. Updating a dataset revision,
 count, classification, or source definition requires rebuilding and publishing

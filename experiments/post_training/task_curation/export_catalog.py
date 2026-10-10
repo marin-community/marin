@@ -101,12 +101,16 @@ def catalog_document(sources: Iterable[RlDataSource]) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--format", choices=("json", "python-literal"), default="json")
     args = parser.parse_args()
     document = catalog_document(all_sources().values())
     with httpx.Client(timeout=60) as client:
         annotate_catalog_grading(document, client)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    content = json.dumps(document, indent=2, sort_keys=True)
+    if args.format == "python-literal":
+        content = repr(content)
+    args.output.write_text(content + "\n")
 
 
 if __name__ == "__main__":
