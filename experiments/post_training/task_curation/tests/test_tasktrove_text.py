@@ -25,6 +25,7 @@ from taskcompendium.pipeline.controls import answer_reply, reference_reply
 from taskcompendium.pipeline.models import (
     ImportFailureKind,
     ImportRejection,
+    NormalizedTask,
     OracleCommand,
     Reply,
 )
@@ -287,7 +288,15 @@ def verifier_files(task: TaskSpec) -> dict[str, bytes]:
     ],
 )
 def test_math_uses_verifyit_in_the_sandbox_and_keeps_source_evidence_and_oracle(name, files, golden):
-    task = task_of(name, tasktrove_row(files))
+    converted = cast(NormalizedTask, convert_row(RECIPES[name], tasktrove_row(files)))
+    task = converted.task
+    original = files["instruction.md"].decode()
+    prompt = prompt_of(task)
+    assert "/app/answer.txt" not in prompt
+    assert converted.changes[0].original == original
+    if name == "tasktrove-math_gym":
+        problem = original.split("---\n\n", 1)[1].split("## Submitting", 1)[0].strip()
+        assert problem in prompt
     grader = task.grader
     assert isinstance(grader, VerifyitGrader)
     assert grader.environment == fixture_context(RECIPES[name]).grader_environment

@@ -16,7 +16,7 @@ from taskcompendium.grader import grader_config
 from taskcompendium.harbor.export import harbor_payload
 from taskcompendium.models import TaskSpec, TextMessage, verifyit_spec
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, Reply
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.grade import Status, grade
 
@@ -304,7 +304,12 @@ def test_generated_rows_use_the_declared_hash_seed_not_the_parents(noisy_generat
 
 def test_tasktrove_reasoning_gym_preserves_fractional_reward(tmp_path):
     pipeline = RECIPES["tasktrove-reasoning-gym"]
-    task = converted_task(pipeline, tasktrove_archive())
+    converted = cast(NormalizedTask, convert_row(pipeline, tasktrove_archive()))
+    task = converted.task
+    prompt = task.context.events[0].content
+    assert TASKTROVE_ENTRY["question"] in prompt
+    assert "/app/answer.txt" not in prompt
+    assert converted.changes[0].original == TASKTROVE_INSTRUCTION
     assert task.grader.environment == fixture_context(pipeline).grader_environment
     tests = tmp_path / "tests"
     tests.mkdir()
@@ -316,6 +321,15 @@ def test_tasktrove_reasoning_gym_preserves_fractional_reward(tmp_path):
     verdict = grade(verifyit_spec(task.grader), tests, workspace)
     assert (verdict.status, verdict.reward) == (Status.SCORED, 1 / 3)
     assert declarations.tasktrove_golden(task) == Reply(TextMessage(role="assistant", content="42"))
+
+
+def test_tasktrove_unrecognized_delivery_keeps_instruction_and_discloses_capture_path():
+    instruction = "Solve x + 8 = 50. Put x in /app/answer.txt."
+    converted = cast(NormalizedTask, convert_row(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive(instruction)))
+    prompt = converted.task.context.events[0].content
+    assert prompt.startswith(instruction)
+    assert "/app/answer.txt" in prompt[len(instruction) :]
+    assert converted.changes[0].original == instruction
 
 
 def test_tasktrove_reasoning_gym_exports_its_source_environment():
