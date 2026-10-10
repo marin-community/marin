@@ -1611,15 +1611,15 @@ def test_ring_gather_combine_matches_scatter_combine_with_drops(token_valid: lis
                 scatter_adds = token_row_scatter_adds(jax.make_jaxpr(grad_fn)(*args).jaxpr)
                 results[implementation] = (grad_fn(*args), scatter_adds)
 
-        ((value_s, dropped_s), grads_s), scatter_adds_s = results["ring"]
-        ((value_g, dropped_g), grads_g), scatter_adds_g = results["ring_gather_combine"]
-        assert scatter_adds_s > 0, scatter_adds_s
-        assert scatter_adds_g == 0, scatter_adds_g
-        assert int(dropped_s) > 0, int(dropped_s)
-        assert int(dropped_g) == int(dropped_s)
-        np.testing.assert_allclose(np.asarray(value_g), np.asarray(value_s), rtol=1e-5, atol=1e-5)
-        for g, s in zip(grads_g, grads_s, strict=True):
-            np.testing.assert_allclose(np.asarray(g), np.asarray(s), rtol=1e-5, atol=1e-5)
+        ((ring_value, ring_dropped), ring_grads), ring_scatter_adds = results["ring"]
+        ((gather_value, gather_dropped), gather_grads), gather_scatter_adds = results["ring_gather_combine"]
+        assert ring_scatter_adds > 0, ring_scatter_adds
+        assert gather_scatter_adds == 0, gather_scatter_adds
+        assert int(ring_dropped) > 0, int(ring_dropped)
+        assert int(gather_dropped) == int(ring_dropped)
+        np.testing.assert_allclose(np.asarray(gather_value), np.asarray(ring_value), rtol=1e-5, atol=1e-5)
+        for gather_grad, ring_grad in zip(gather_grads, ring_grads, strict=True):
+            np.testing.assert_allclose(np.asarray(gather_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
     """
     script = script.replace("__TOKEN_VALID__", repr(token_valid))
     result = subprocess.run(
