@@ -26,7 +26,6 @@ from taskcompendium.runtime.models import (
     Termination,
 )
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.shell import SHELL
 
 
 @dataclass
@@ -64,11 +63,7 @@ async def run_episode(
     detail = ""
     try:
         environment = await factory.create(task)
-        tools = task.interaction_tools
-        if "shell" in task.environment_requirements.capabilities:
-            if any(tool.name == SHELL.name for tool in (*task.final_tools, *tools)):
-                raise ValueError("The shell tool name is reserved for the shell runtime")
-            tools = (*tools, SHELL)
+        tools = environment.tools
         public = ActorTask(task.id, tools)
         for _ in range(max_steps):
             response = actor.respond(public, events)

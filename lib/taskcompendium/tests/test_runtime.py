@@ -42,6 +42,7 @@ from taskcompendium.models import (
     ExitCodeReward,
     FileReward,
     FunctionCall,
+    FunctionDefinition,
     GradingAttempt,
     NoGrader,
     PlainText,
@@ -49,6 +50,7 @@ from taskcompendium.models import (
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
+    ShellToolBinding,
     Source,
     TaskSpec,
     TextMessage,
@@ -59,7 +61,7 @@ from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
 from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH, ShellFactory
+from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH, ShellFactory, ShellToolConfig
 from taskcompendium.runtime.task_grading import grade_task
 
 GRADER_IMAGE = "fixture@sha256:" + "a" * 64
@@ -425,7 +427,10 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
 
 
 @pytest.mark.asyncio
-async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task):
+@pytest.mark.parametrize("task_owned", [False, True])
+async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task, task_owned):
+    binding = ShellToolConfig(name="terminal", command_parameter="cmd")
+    name, parameter = ("Bash", "script") if task_owned else (binding.name, binding.command_parameter)
     task = shell_task.model_copy(
         update={
             "environment_requirements": EnvironmentRequirements(
@@ -434,20 +439,37 @@ async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task
             "output_paths": ("/workspace/submission",),
         }
     )
+    if task_owned:
+        task = task.model_copy(
+            update={
+                "interaction_tools": (
+                    FunctionDefinition(
+                        name=name,
+                        parameters={
+                            "type": "object",
+                            "properties": {parameter: {"type": "string"}},
+                            "required": [parameter],
+                            "additionalProperties": False,
+                        },
+                    ),
+                ),
+                "tool_bindings": {name: ShellToolBinding(command_parameter=parameter)},
+            }
+        )
     actor = ScriptedActor(
         (
             AssistantToolCalls(
                 calls=(
                     ConversationToolCall(
                         call_id="write",
-                        name="shell",
-                        arguments={"command": "mkdir -p submission/nested; printf answer > submission/nested/result"},
+                        name=name,
+                        arguments={parameter: "mkdir -p submission/nested; printf answer > submission/nested/result"},
                     ),
                 )
             ),
         )
     )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024)
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024, shell_tool=binding)
     rollout = await run_episode(task, actor, factory, max_steps=2, control="fixture")
     assert rollout.termination == Termination.FINAL_MESSAGE
     assert rollout.evidence().files == {"/workspace/submission/nested/result": b"answer"}

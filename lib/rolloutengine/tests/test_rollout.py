@@ -46,12 +46,14 @@ from taskcompendium.models import (
     RewardFileFormat,
     ScriptGrader,
     SessionGrader,
+    ShellToolBinding,
     Source,
     TaskSpec,
     TextMessage,
     VerifierArtifact,
 )
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
 from verifyit.spec import FunctionCall, NumericSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
 
@@ -468,15 +470,45 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
     assert closed.is_set()
 
 
-async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations():
+@pytest.mark.parametrize("interface", ["default", "renamed", "task-owned"])
+async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(interface):
+    binding = ShellToolConfig() if interface == "default" else ShellToolConfig(name="terminal", command_parameter="cmd")
+    task = file_task()
+    name, parameter = binding.name, binding.command_parameter
+    if interface == "task-owned":
+        name, parameter = "Bash", "script"
+        definition = FunctionDefinition(
+            name=name,
+            description="Use Bash to write the answer file.",
+            parameters={
+                "type": "object",
+                "properties": {parameter: {"type": "string", "description": "Bash source"}},
+                "required": [parameter],
+                "additionalProperties": False,
+            },
+        )
+        task = file_task(
+            context=ConversationInput(
+                events=(TextMessage(role="user", content="Use Bash to write 12 to /workspace/answer."),)
+            ),
+            interaction_tools=(definition,),
+            tool_bindings={name: ShellToolBinding(command_parameter=parameter)},
+        )
+        task = TaskSpec.model_validate_json(task.model_dump_json())
+    command = "values=(12); [[ ! -f /tests/grade.sh ]] && echo ${values[0]} > /workspace/answer"
+    message = shell_call(command)
+    message["tool_calls"][0]["function"] = {
+        "name": name,
+        "arguments": json.dumps({parameter: command}),
+    }
     model = ReplayModel(
         [
-            shell_call("values=(12); [[ ! -f /tests/grade.sh ]] && echo ${values[0]} > /workspace/answer"),
+            message,
             {"role": "assistant", "content": "Done."},
         ]
     )
     result = await engine(model, {"local": FixtureImageFactory()}).run(
-        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime(), shell_tool=binding)
     )
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
@@ -485,6 +517,31 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
     assert result.logprobs == (-0.5, 0.0, 0.0, -0.5)
     assert model.requests[1].messages[-1]["tool_call_id"] == "write"
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
+    tools = model.requests[0].options["tools"]
+    assert [tool["function"]["name"] for tool in tools] == [name]
+    assert tools[0]["function"]["parameters"]["required"] == [parameter]
+    if interface == "task-owned":
+        assert tools[0]["function"] == task.interaction_tools[0].model_dump(exclude_none=True)
+        assert model.requests[0].messages[0]["content"] == "Use Bash to write 12 to /workspace/answer."
+    response = next(message for message in result.messages if message["role"] == "assistant")
+    assert response["tool_calls"][0]["function"]["name"] == name
+
+
+async def test_shell_binding_collision_rejects_before_machine_or_model_start():
+    task = file_task(final_tools=(FunctionDefinition(name="terminal", parameters={"type": "object"}),))
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([])
+    with pytest.raises(ValueError):
+        await engine(model, {"local": factory}).run(
+            lowered(
+                task,
+                machine=machine_runtime(),
+                verifier_machine=machine_runtime(),
+                shell_tool=ShellToolConfig(name="terminal"),
+            )
+        )
+    assert factory.machines == []
+    assert model.requests == []
 
 
 async def test_command_timeouts_return_observations_and_allow_the_model_to_finish():
@@ -617,7 +674,7 @@ async def test_workspace_state_receives_shell_presentation_without_answer_tools(
     )
     assert record.grade.reward == 1.0
     assert model.requests[0].messages[:-1] == ({"role": "user", "content": "What is six plus six?"},)
-    assert model.requests[0].messages[-1] == {"role": "user", "content": WORKSPACE_INSTRUCTION}
+    assert model.requests[0].messages[-1] == {"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name="shell")}
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
 
 

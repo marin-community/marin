@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from typing import Any
 
-from shellbox.machine import Command, Machine, MachineFactory
+from shellbox.machine import Machine, MachineFactory
 from taskcompendium.chat import assistant_message
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
@@ -18,10 +18,11 @@ from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     FinalAction,
+    FunctionCall,
     SessionGrader,
     TaskSpec,
 )
-from taskcompendium.runtime.shell import SHELL
+from taskcompendium.runtime.shell import BoundShellTool, resolve_shell_tool, run_shell_call
 from taskcompendium.submission import (
     answer_call_tool,
     conversation_messages,
@@ -34,14 +35,12 @@ from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart,
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.spec import LoweredTaskSpec
 
-SHELL_TOOL_NAME = SHELL.name
 WORKSPACE_INSTRUCTION = (
-    "Use the shell tool to inspect and change the workspace. Send a final response when the task is completed."
+    "Use the {tool_name} tool to inspect and change the workspace. Send a final response when the task is completed."
 )
-SHELL_TOOL = {"type": "function", "function": SHELL.model_dump(exclude_none=True)}
 
 
-def session_start(task: TaskSpec) -> SessionStart:
+def session_start(task: TaskSpec, shell_tool: BoundShellTool | None) -> SessionStart:
     """Render only public task fields, with the answer format's instruction and tools."""
     answer_format = task.answer_format
     messages = conversation_messages(task.context.events)
@@ -64,12 +63,13 @@ def session_start(task: TaskSpec) -> SessionStart:
                 options["tool_choice"] = "required"
             if answer_format.max_calls == 1:
                 options["parallel_tool_calls"] = False
-    if "shell" in task.environment_requirements.capabilities:
-        if any(function.name == SHELL_TOOL_NAME for function in (*task.final_tools, *task.interaction_tools)):
-            raise ValueError("The shell tool name is reserved for the Shellbox session")
-        tools.append(SHELL_TOOL)
+    if shell_tool is not None:
+        if not task.tool_bindings:
+            tools.append({"type": "function", "function": shell_tool.definition.model_dump(exclude_none=True)})
         if task.answer_type == AnswerType.WORKSPACE_STATE:
-            messages.append({"role": "user", "content": WORKSPACE_INSTRUCTION})
+            messages.append(
+                {"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name=shell_tool.definition.name)}
+            )
     if tools:
         options["tools"] = tools
     return SessionStart(tuple(messages), options)
@@ -91,9 +91,10 @@ class _ShellboxTaskSession:
         self.factories = factories
         self.cleanup = cleanup
         self.resources = resources
+        self.shell_tool = resolve_shell_tool(lowered.task, lowered.session.shell_tool)
 
     async def prepare(self) -> SessionStart:
-        return session_start(self.lowered.task)
+        return session_start(self.lowered.task, self.shell_tool)
 
     async def advance(self, turn: ModelTurn) -> Transition:
         try:
@@ -108,44 +109,20 @@ class _ShellboxTaskSession:
             answer_call = isinstance(self.lowered.task.answer_format, AnswerCall) and call.name == ANSWER_CALL_NAME
             if call.name in final_tools or answer_call:
                 return Transition(done=True)
-            if call.name != SHELL_TOOL_NAME or set(call.arguments) != {"command"}:
-                observations.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.call_id,
-                        "content": json.dumps({"error": "This session requires shell(command: string) calls"}),
-                    }
-                )
-                continue
-            command = call.arguments["command"]
-            if not isinstance(command, str):
-                observations.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.call_id,
-                        "content": json.dumps({"error": "Shell command must be a string"}),
-                    }
-                )
-                continue
-            result = await self.machine.run(
-                Command(
-                    argv=("bash", "-c", command),
+            if self.shell_tool is None:
+                observation = json.dumps({"error": "No shell tool is available"})
+            else:
+                observation = await run_shell_call(
+                    self.machine,
+                    FunctionCall(name=call.name, arguments=call.arguments),
+                    self.shell_tool,
                     timeout=self.lowered.session.command_timeout,
                 )
-            )
             observations.append(
                 {
                     "role": "tool",
                     "tool_call_id": call.call_id,
-                    "content": json.dumps(
-                        {
-                            "stdout": result.stdout.decode(errors="replace"),
-                            "stderr": result.stderr.decode(errors="replace"),
-                            "exit_code": result.exit_code,
-                            "reason": result.reason.value,
-                            "truncated": result.stdout_truncated or result.stderr_truncated,
-                        }
-                    ),
+                    "content": observation,
                 }
             )
         return Transition(done=False, observations=tuple(observations))
