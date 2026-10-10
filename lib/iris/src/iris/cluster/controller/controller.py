@@ -846,6 +846,7 @@ class Controller:
             iap_audience=auth.iap_audience if auth is not None else None,
             federation_keys=auth.federation_keys if auth is not None else {},
             admin_users=tuple(sorted(auth.role_policy.admins)) if auth is not None and auth.role_policy else (),
+            user_roles=dict(auth.role_policy.user_roles) if auth is not None and auth.role_policy else {},
             default_user_role=(
                 auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
             ),

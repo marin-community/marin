@@ -113,6 +113,7 @@ auth:
   # *@openathena.ai covers human operators. Machine submitters are admitted
   # explicitly; github-iris runs CI workloads through the marin hub.
   allowed_submitters:
+    - principal:human-079
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - contractor@hai-gcp-models.iam.gserviceaccount.com

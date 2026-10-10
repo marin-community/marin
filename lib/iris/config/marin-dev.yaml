@@ -1,6 +1,6 @@
 # Iris development cluster configuration
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
-# Usage: uv run iris --cluster=marin-dev cluster start
+# Render principal references before deploying with iris --config=<rendered-file>.
 
 # This cluster's identity. Used for token minting and for authenticating to peers.
 name: marin-dev
@@ -47,6 +47,8 @@ storage:
 # tunnels). Anything forwarded through the LB carries X-Forwarded-For and never
 # matches a CIDR.
 auth:
+  user_roles:
+    "principal:human-079": user
   iap:
     url: https://iris-dev.oa.dev
     # Same Marin desktop OAuth client as prod (rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT)
@@ -191,3 +193,6 @@ user_budgets:
   - user_ids: [power]
     budget_limit: 75000
     max_band: PRIORITY_BAND_PRODUCTION
+  - user_ids: [principal:human-079]
+    budget_limit: 0
+    max_band: PRIORITY_BAND_BATCH

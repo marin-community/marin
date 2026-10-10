@@ -12,8 +12,8 @@ audience discipline. Verification is fully stateless: a pure crypto check plus
 the audience/scope binding, with no database access at all. Tokens are never
 revoked. Authorization is config-driven and resolved entirely in memory: cluster
 config is the sole source of truth for roles. A :class:`RolePolicy` — a frozen map
-built from :class:`AuthConfig` at controller start (admins from ``auth.admin_users``,
-a provider-derived default for everyone else) — answers ``role_for`` with no DB
+built from :class:`AuthConfig` at controller start (explicit ``auth.user_roles``,
+``auth.admin_users``, and a provider-derived default) — answers ``role_for`` with no DB
 projection and no reconciliation. IAP users hold no minted token: their role is
 resolved per request from the verified assertion, so deprovisioning is
 edit-config-and-reload (rebuild the map) and takes effect on the next request.
@@ -57,7 +57,7 @@ from rigging.token_authority import (
     signing_key_from_private_pem,
 )
 
-from iris.cluster.config import AuthConfig, PeerConfig
+from iris.cluster.config import PRINCIPAL_REFERENCE_PREFIX, AuthConfig, PeerConfig
 from iris.cluster.types import JobName
 from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE, authorize_resource_owner
 
@@ -182,6 +182,7 @@ class NativeProxyAuthConfig:
     iap_audience: str | None = None
     federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
     admin_users: tuple[str, ...] = ()
+    user_roles: dict[str, str] = dataclasses.field(default_factory=dict)
     default_user_role: str = DEFAULT_USER_ROLE
 
 
@@ -462,18 +463,21 @@ class RolePolicy:
     no ``users`` table and no reconciliation, so deprovisioning is
     edit-config-and-reload (see module docstring).
 
-    ``admins`` are the ``auth.admin_users`` entries; ``default_role`` is the role of
-    an authenticated non-admin (the IAP ``unprovisioned_role`` for an iap provider,
-    ``"user"`` otherwise). null-auth/cidr identities are assigned by the auth chain
-    (anonymous/loopback admin) and never go through :meth:`role_for`.
+    ``user_roles`` overrides ``auth.admin_users`` and the provider-derived
+    ``default_role`` for exact authenticated identities. The internal worker
+    retains its reserved role. null-auth/cidr identities are assigned by the
+    auth chain (anonymous/loopback admin) and never go through :meth:`role_for`.
     """
 
     admins: frozenset[str]
     default_role: str
+    user_roles: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
     def role_for(self, user_id: str) -> str:
         if user_id == WORKER_USER:
             return WORKER_ROLE
+        if user_id in self.user_roles:
+            return self.user_roles[user_id]
         if user_id in self.admins:
             return ADMIN_ROLE
         return self.default_role
@@ -491,7 +495,8 @@ def _build_role_policy(auth_config: AuthConfig | None, provider: str | None) -> 
         default_role = auth_config.iap.unprovisioned_role
     else:
         default_role = DEFAULT_USER_ROLE
-    return RolePolicy(admins=admins, default_role=default_role)
+    user_roles = dict(auth_config.user_roles) if auth_config is not None else {}
+    return RolePolicy(admins=admins, default_role=default_role, user_roles=user_roles)
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +658,10 @@ def create_controller_auth(
     null-auth mode. ``trusted_cidrs`` alone enables auth: identity by network location
     for direct in-network peers, tokens for everything else.
     """
+    if auth_config is not None:
+        identities = (*auth_config.user_roles, *auth_config.admin_users, *auth_config.allowed_submitters)
+        if any(user.startswith(PRINCIPAL_REFERENCE_PREFIX) for user in identities):
+            raise ValueError("Resolve principal references with iam_principal.py render-iris before starting Iris")
     previous_public_keys = tuple(auth_config.previous_public_keys) if auth_config is not None else ()
     jwt_mgr = _build_jwt_token_manager(
         cluster_name=cluster_name,
@@ -693,8 +702,8 @@ def create_controller_auth(
     # GCLB authenticates every user request at the edge and forwards a signed
     # assertion the controller verifies. A tokenless request carrying a valid IAP
     # assertion is authenticated as the asserted email, resolved to its role by the
-    # in-memory RolePolicy (admins -> admin, everyone else -> the configured
-    # unprovisioned_role). No DB, no cache.
+    # in-memory RolePolicy (explicit roles, then admins, then unprovisioned_role).
+    # No DB, no cache.
     iap_assertion_verifier: IapAssertionVerifier | None = None
     if provider == "iap":
         signed_header_audience = auth_config.iap.signed_header_audience
