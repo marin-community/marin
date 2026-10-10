@@ -17,6 +17,7 @@ from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
+    CommandSemantics,
     ConversationInput,
     ConversationToolCall,
     ConversationTrace,
@@ -39,7 +40,7 @@ from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.task_grading import grade_task
 
 IMAGE = "fixture@sha256:" + "0" * 64
-GRADING_ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, compatible_backends=(Backend.DOCKER,))
+GRADING_ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)
 GRADING_MACHINE = MachineSpec(RegistryImage(IMAGE))
 
 

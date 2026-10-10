@@ -4,27 +4,28 @@
 """TaskTrove Python implementation tasks graded by one hidden pytest file.
 
 Each source ships one pytest file and, usually, a ``solution/solution.py`` oracle. The agent writes
-the Python files its instruction names; unitsyn's agent writes the fixed solution file instead. The
-hidden tests run with the grader packages (``GRADER_PACKAGES``). The sources differ only by
+files under ``/app``; unitsyn's agent writes the fixed solution file instead. The hidden tests run
+with the grader packages (``GRADER_PACKAGES``). The sources differ only by
 configuration, rubric and, for the Stack Overflow tasks, the agent image carrying their dependencies;
 the grader packages include the same ones, so a submission that imports one there grades here.
 """
 
 from dataclasses import dataclass, field
 
-from taskcompendium.convert.executable import (
-    SOLUTION_PATHS,
-    solve_script,
-    tasktrove_archive_task,
-    tasktrove_python_task,
-)
-from taskcompendium.convert.tasktrove_python_unit_tests import convert as convert_unit_tests
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
+    SOLUTION_PATHS,
+    solve_script,
+    tasktrove_archive_task,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import (
+    convert as convert_unit_tests,
+)
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -37,6 +38,7 @@ STACK_PYTEST_AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:97528e23c249c993641b0b5c6e7d05a978588f4be276f0fe61b1f3c3bcc6c622"
 )
 """The Python image with the Stack Overflow tasks' dependencies that their agent works in."""
+
 
 PYTHON_TESTS_CONTROLS = Controls(golden=solve_script)
 
@@ -171,22 +173,24 @@ tests.
 
 
 def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Capture the Python files the instruction names."""
-    return tasktrove_python_task(
+    """Capture the implementation and assets under the source workspace."""
+    return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
         environment=environment_requirements(AGENT_IMAGE),
         grader_environment=required_grader_environment(context),
+        output_paths=("/app",),
     )
 
 
 def convert_stack_pytest(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Capture the Python files the instruction names, written in the image with Stack Overflow dependencies."""
-    return tasktrove_python_task(
+    """Capture the workspace written in the image with Stack Overflow dependencies."""
+    return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
         environment=environment_requirements(STACK_PYTEST_AGENT_IMAGE),
         grader_environment=required_grader_environment(context),
+        output_paths=("/app",),
     )
 
 
@@ -205,7 +209,6 @@ def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask |
 class PythonTestsSource:
     config: str
     convert: Converter
-    image: Environment
     rubric: str
     info: SourceInfo = field(kw_only=True)
 
@@ -214,7 +217,6 @@ SOURCES = {
     "curriculum_easy": PythonTestsSource(
         "DCAgent__exp_rpt_curriculum-easy",
         convert_python_tests,
-        AGENT_IMAGE,
         CURRICULUM_EASY_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_curriculum-easy",
@@ -232,7 +234,6 @@ SOURCES = {
     "curriculum_medium": PythonTestsSource(
         "DCAgent__exp_rpt_curriculum-medium-v2",
         convert_python_tests,
-        AGENT_IMAGE,
         CURRICULUM_MEDIUM_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_curriculum-medium-v2",
@@ -250,7 +251,6 @@ SOURCES = {
     "e2egit": PythonTestsSource(
         "DCAgent__exp_rpt_e2egit-v2",
         convert_python_tests,
-        AGENT_IMAGE,
         E2EGIT_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_e2egit-v2",
@@ -268,7 +268,6 @@ SOURCES = {
     "e2egit_large": PythonTestsSource(
         "DCAgent__exp_rpt_e2egit-large",
         convert_python_tests,
-        AGENT_IMAGE,
         E2EGIT_LARGE_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_e2egit-large",
@@ -286,7 +285,6 @@ SOURCES = {
     "multifile": PythonTestsSource(
         "DCAgent__exp_rpt_multifile-v3",
         convert_python_tests,
-        AGENT_IMAGE,
         MULTIFILE_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_multifile-v3",
@@ -304,7 +302,6 @@ SOURCES = {
     "pymethods": PythonTestsSource(
         "DCAgent__exp_rpt_pymethods2test-v3",
         convert_python_tests,
-        AGENT_IMAGE,
         PYMETHODS_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_pymethods2test-v3",
@@ -322,7 +319,6 @@ SOURCES = {
     "pymethods_large": PythonTestsSource(
         "DCAgent__exp_rpt_pymethods2test-large-v2",
         convert_python_tests,
-        AGENT_IMAGE,
         PYMETHODS_LARGE_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_pymethods2test-large-v2",
@@ -340,7 +336,6 @@ SOURCES = {
     "unitsyn": PythonTestsSource(
         "DCAgent__exp_rpt_unitsyn-python-v4",
         convert_unitsyn,
-        AGENT_IMAGE,
         UNITSYN_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_unitsyn-python-v4",
@@ -358,7 +353,6 @@ SOURCES = {
     "unitsyn_large": PythonTestsSource(
         "DCAgent__exp_rpt_unitsyn-python-large-v2",
         convert_python_tests,
-        AGENT_IMAGE,
         UNITSYN_LARGE_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_unitsyn-python-large-v2",
@@ -376,7 +370,6 @@ SOURCES = {
     "stack_pytest": PythonTestsSource(
         "DCAgent__exp_rpt_stack-pytest-v2",
         convert_stack_pytest,
-        STACK_PYTEST_AGENT_IMAGE,
         STACK_PYTEST_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_stack-pytest-v2",
@@ -404,7 +397,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, source.convert),
                 version="1",
-                environment=source.image,
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=PYTHON_TESTS_CONTROLS,

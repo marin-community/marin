@@ -24,7 +24,7 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import (
     IDENTITY_FIELDS,

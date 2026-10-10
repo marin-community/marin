@@ -8,18 +8,17 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
 from verifyit.spec import Spec
 
-from taskcompendium.convert.tasktrove import SOLUTION_DIR, TaskFiles, archive_files
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    SOLUTION_DIR,
+    TaskFiles,
+    archive_files,
+)
 
 
 class ConvertStatus(StrEnum):
-    CONVERTED = "converted"
-    NO_CONVERTER = "no_converter"
-    CONVERTER_ERROR = "converter_error"
-    DROPPED_SOURCE = "dropped_source"
-    REVIEWED_DEFECT = "reviewed_defect"
     # Typed rejections a converter returns for a task its template cannot grade soundly.
     NULL_GRADER = "null_grader"
     TOO_FEW_CASES = "too_few_cases"
@@ -39,12 +38,6 @@ class ConvertedTask:
     """Files the spec references, keyed by path under the task root (``tests/cases/...``)."""
     solution_files: dict[str, bytes] = field(default_factory=dict)
     """Oracle solution; stored beside the task, never inside the binary the agent sees."""
-    metadata: dict = field(default_factory=dict)
-    """Source-specific metadata retained in the converted task."""
-    agent_timeout: float = 900.0
-    verifier_timeout: float = 600.0
-    verifier_extras: tuple[str, ...] = ()
-    """Optional verifier dependencies needed by a source-specific grading composition."""
 
 
 @dataclass(frozen=True)
@@ -57,10 +50,6 @@ ConvertFn = Callable[[TaskFiles], ConvertedTask | Rejected]
 
 
 REJECTION_KINDS = {
-    ConvertStatus.NO_CONVERTER: ImportFailureKind.UNSUPPORTED,
-    ConvertStatus.CONVERTER_ERROR: ImportFailureKind.CONVERTER_ERROR,
-    ConvertStatus.DROPPED_SOURCE: ImportFailureKind.UNSUPPORTED,
-    ConvertStatus.REVIEWED_DEFECT: ImportFailureKind.SOURCE_DEFECT,
     ConvertStatus.NULL_GRADER: ImportFailureKind.SOURCE_DEFECT,
     ConvertStatus.TOO_FEW_CASES: ImportFailureKind.SOURCE_DEFECT,
     ConvertStatus.GOLD_IN_INSTRUCTION: ImportFailureKind.SOURCE_DEFECT,

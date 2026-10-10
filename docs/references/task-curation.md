@@ -106,14 +106,12 @@ The `CurationRecipe` configuration has these fields:
 | `name` | Catalog key and artifact name. |
 | `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
-| `version` | Converter revision; bump it when conversion changes outside the hashed files. |
-| `environment` | `ShellSim()` for conversation tasks, or `Environment(image=...)` naming the digest-pinned image an agent works in. |
+| `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
 | `rubric` | Optional review rubric string, one criterion per paragraph. |
 | `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
-| `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
 | `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
 
 Families whose members differ only by data are tables: one module builds every
@@ -127,8 +125,8 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 
 ## Environments
 
-An `Environment` states what a machine must provide. A declaration never names
-a backend; the pipeline places each environment:
+An `Environment` declares grader build inputs. The converter records agent and
+grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
 
 | Field | Meaning |
 |---|---|
@@ -140,9 +138,9 @@ a backend; the pipeline places each environment:
 
 | Declaration | Placement | Recorded `EnvironmentRequirements` |
 |---|---|---|
-| `image` set | A sandbox of that image | `docker_image=image`, `compatible_backends=(gvisor, docker)` |
-| `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `docker_image=<built digest>`, `compatible_backends=(gvisor, docker)` |
-| Anything else | A bubblewrap sandbox on the Zephyr worker | `compatible_backends=(local,)`, `packages_lock=<lock URL>` |
+| `image` set | A sandbox of that image | `command_semantics=LINUX_PROCESS`, `docker_image=image` |
+| `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `command_semantics=LINUX_PROCESS`, `docker_image=<built digest>` |
+| Anything else | A bubblewrap sandbox on the Zephyr worker | `command_semantics=LINUX_PROCESS`, `packages_lock=<lock URL>` |
 
 `WORKER_IMAGE_APT` in `environment.py` lists the Debian packages the `task`
 stage of `lib/iris/Dockerfile` installs, such as `build-essential` and `git`.
@@ -151,8 +149,9 @@ lock every grade script in the catalog imports with the NLTK `punkt_tab` and
 `wordnet` data, runs in the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
-An agent environment must name its image, because converters record the
-agent's requirements on each task.
+Converters declare agent requirements independently. A simulated shell requires
+explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation.
+Conversation-only tasks need no machine. Memory settings are advisory sizing hints.
 
 ## Graders and controls
 
@@ -178,8 +177,7 @@ golden control answers when present.
 
 A source whose scorer is upstream code grades with a script. The script is a
 `<name>_grade.py` file next to the declaration, and the upstream scorer is
-vendored under `datasets/<family>/scorers/`, a directory listed in the
-declaration's `ships`. `taskcompendium.convert.script_grader` builds the
+vendored under `datasets/<family>/scorers/`. `taskcompendium.convert.script_grader` builds the
 package:
 
 - `grade_script` installs the script as `/tests/grade.py`, with the files it
@@ -304,6 +302,7 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --review-cache CACHE_PREFIX --mode sample \
   --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
   --normalized-shards 32 \
+  --image-backend gvisor \
   --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
@@ -339,10 +338,12 @@ self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
 `/tmp/task-curation-env-<identity>`, with the NLTK data and `verifyit`; the
 sandbox mounts only that directory and the system directories, and concurrent
 graders on one host build it once.
-`--verification-backend` is where sandbox graders run: `iris` (the default) or
-`gvisor`. Iris schedules each grader machine on the controller of the enclosing
-Iris job, or on `--controller-url` outside one; gVisor runs it on the worker's
-Docker daemon.
+Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
+The gVisor launcher uses the enclosing Iris job's controller, or `--controller-url`
+outside a job, to create sandbox jobs. Daytona creates remote sandboxes through its API.
+Neither path requires a Docker daemon in the Zephyr worker. Without an image backend,
+controls can still use package locks through Local or explicit simulator requirements
+through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
 the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
 `--base-url` overrides it. `--mode sample` is a test run that
@@ -372,10 +373,11 @@ Each source artifact `data/rl/<name>-<hash>` contains:
 Every row's `admission` is `admitted`, `rejected`, `deferred`, `no_grader` or
 `unverified`; `final/` holds the admitted rows. Sidecars
 join on `task_id`, `source_locator`, `raw_input_sha256` and decoded
-`raw_sha256`. The artifact name's hash covers the source pins, inputs, version,
-every `*.py` file in the converter module's directory, every file below `ships`,
-the grader's built environment (its identity and any built image digest), the agent image, the resource budget, rubric,
-controls and pipeline settings, so changing any of them produces a new artifact.
+`raw_sha256`. Artifact identities cover source pins, inputs, explicit code versions,
+grader environments, resource budgets, rubrics, controls and pipeline settings.
+Python source files are not hashed. Bump the recipe version for converter or bundled
+grader changes, the corresponding stage/control revision for shared pipeline changes,
+and the export version for Harbor lowering changes. Download versions are independent.
 The manifest counts rows deferred for `resources_over_budget` with the other
 normalization reasons.
 

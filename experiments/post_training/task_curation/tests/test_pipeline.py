@@ -2,10 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
-import importlib.util
 import json
-import re
-import sys
 import threading
 from dataclasses import replace
 from functools import partial
@@ -17,9 +14,8 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.machine import Backend
-from taskcompendium.convert.environment import IMAGE_BACKENDS
-from taskcompendium.pipeline.controls import GradingMachines
+from shellbox.backends.iris.machine import IrisMachineFactory
+from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
@@ -31,20 +27,19 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult
-from experiments.post_training.task_curation.config import ImageGraderExecution, PipelineOptions, RecipeSettings
+from experiments.post_training.task_curation.config import PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
-    MissingEnvironmentArtifact,
     built_environment,
     environment_artifact,
 )
 from experiments.post_training.task_curation.pipeline import (
+    CampaignMachines,
     CurationRecipe,
     DownloadRequest,
     HfSource,
     UrlSource,
-    campaign_machines,
     download_source,
     download_step,
     environment_requirements,
@@ -60,21 +55,9 @@ from experiments.post_training.task_curation.tests.image_builds import (
 
 AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
 
-CONVERTER_MODULE = """
-from taskcompendium.convert.answers import exact_answer_task
-
-
-def convert(row, _context):
-    return exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
-"""
-
 
 def math500() -> CurationRecipe:
     return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
-
-
-def machines(backend: ImageGraderExecution) -> GradingMachines:
-    return campaign_machines(backend, "fixture-worker", "http://controller.invalid")
 
 
 @pytest.fixture
@@ -87,7 +70,7 @@ def config() -> SourcePipelineConfig:
         execution=AuditExecution(),
         filter_policy=FilterPolicy(),
         normalized_shards=2,
-        machines=machines(ImageGraderExecution.GVISOR),
+        machines=CampaignMachines(),
     )
 
 
@@ -125,50 +108,11 @@ def test_review_settings_enter_identity_only_with_a_rubric(config):
     assert step_name(unreviewed, revised) == step_name(unreviewed, config)
 
 
-def test_verification_backend_enters_identity_only_with_controls(config):
-    iris = replace(config, machines=machines(ImageGraderExecution.IRIS))
+def test_image_factory_enters_identity_only_with_controls(config):
+    iris = replace(config, machines=CampaignMachines(IrisMachineFactory(controller_url="http://controller.invalid")))
     assert step_name(math500(), iris) != step_name(math500(), config)
     unchecked = replace(math500(), controls=None)
     assert step_name(unchecked, iris) == step_name(unchecked, config)
-
-
-@pytest.fixture
-def fixture_converter(tmp_path, monkeypatch):
-    """A converter module in its own directory, so tests can change the files beside it."""
-    directory = tmp_path / "fixture_family"
-    directory.mkdir()
-    (directory / "fixture_source.py").write_text(CONVERTER_MODULE)
-    spec = importlib.util.spec_from_file_location("fixture_source", directory / "fixture_source.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    # Identity finds the converter's files through sys.modules; each test registers its own module.
-    monkeypatch.setitem(sys.modules, "fixture_source", module)
-    spec.loader.exec_module(module)
-    return directory, module.convert
-
-
-def test_python_files_beside_the_converter_rename_the_artifact(fixture_converter, config):
-    directory, convert = fixture_converter
-    script = directory / "fixture_grade.py"
-    script.write_text("print(1)\n")
-    pipeline = replace(math500(), name="fixture", convert=convert)
-    original = step_name(pipeline, config)
-    script.write_text("print(0)\n")
-    assert step_name(pipeline, config) != original
-
-
-def test_shipped_scorer_bytes_rename_the_artifact(fixture_converter, config):
-    directory, convert = fixture_converter
-    scorer = directory / "scorers" / "upstream" / "score.py"
-    scorer.parent.mkdir(parents=True)
-    scorer.write_text("REWARD = 1\n")
-    pipeline = replace(math500(), name="fixture", convert=convert, ships=(directory / "scorers",))
-    original = step_name(pipeline, config)
-    scorer.write_text("REWARD = 0\n")
-    assert step_name(pipeline, config) != original
-    unshipped = replace(pipeline, ships=())
-    scorer.write_text("REWARD = 1\n")
-    assert step_name(unshipped, config) != original
 
 
 @pytest.fixture
@@ -191,29 +135,12 @@ def test_a_changed_grader_environment_renames_the_artifact(grader_lock, config):
     assert step_name(pipeline, config) != original.name
 
 
-def test_a_grader_environment_without_a_built_artifact_names_the_build_command(grader_lock, config):
-    pipeline = replace(math500(), grader=Environment(lock=grader_lock))
-    with pytest.raises(
-        MissingEnvironmentArtifact,
-        match=re.escape("run: uv run python -m experiments.post_training.task_curation.images --identity "),
-    ):
-        source_step(
-            pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
-        )
-
-
-def test_an_environment_image_runs_as_declared_in_a_sandbox():
-    requirements = environment_requirements(Environment(image=AGENT_IMAGE))
-    assert (requirements.docker_image, requirements.compatible_backends) == (AGENT_IMAGE, IMAGE_BACKENDS)
-    assert requirements.packages_lock is None
-
-
 def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_image(grader_lock):
     environment = Environment(lock=grader_lock, apt=("build-essential", "jq"))
     (built,) = run(environment_artifact(environment, REPOSITORY))
     requirements = environment_requirements(environment, built_environment(environment))
     assert built.image is not None and built.image.startswith(f"{REPOSITORY}@sha256:")
-    assert (requirements.docker_image, requirements.compatible_backends) == (built.image, IMAGE_BACKENDS)
+    assert requirements.docker_image == built.image
     assert requirements.packages_lock is None
 
 
@@ -229,7 +156,6 @@ def test_environments_the_worker_image_covers_run_in_the_worker_from_their_lock(
     environment = declare(grader_lock)
     (built,) = run(environment_artifact(environment, REPOSITORY))
     requirements = environment_requirements(environment, built_environment(environment))
-    assert requirements.compatible_backends == (Backend.LOCAL,)
     assert requirements.docker_image is None
     assert requirements.packages_lock == built.lock_url
     assert hashlib.sha256(StoragePath(requirements.packages_lock).read_bytes()).hexdigest() == built.lock_sha256
@@ -251,11 +177,6 @@ def test_environment_declarations_reject_contradictory_or_unpinned_needs(grader_
         declare(grader_lock)
 
 
-def test_an_agent_environment_must_name_its_image(grader_lock):
-    with pytest.raises(ValueError, match="agent environment's image"):
-        replace(math500(), environment=Environment(lock=grader_lock))
-
-
 def test_rubric_paragraphs_become_review_criteria():
     pipeline = replace(math500(), rubric="\nFirst criterion\nspans two lines.\n\nSecond criterion.\n")
     assert source_recipe(pipeline, {}, None).rubric == ReviewRubric(
@@ -269,15 +190,18 @@ def test_declarations_with_the_same_pinned_files_share_one_download():
     assert download_step(selected, CampaignRuntime()).name == download_step(pipeline.source, CampaignRuntime()).name
 
 
-def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, fixture_converter, config, monkeypatch):
-    _, convert = fixture_converter
+def convert_fixture(row, _context):
+    return exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
+
+
+def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, config, monkeypatch):
     primary = tmp_path / "source"
     primary.mkdir()
     (primary / "rows.jsonl").write_text('{"prompt": "Two plus two?", "answer": "4"}\n')
     pipeline = replace(
         math500(),
         source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
-        convert=convert,
+        convert=convert_fixture,
         rubric=None,
         controls=None,
         grader=None,

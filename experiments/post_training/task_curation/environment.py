@@ -1,13 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""What a machine must provide, and where the pipeline runs it.
-
-A declaration states needs, never a backend. ``placement`` decides: a digest-pinned image runs as-is
-in a sandbox; packages the worker image lacks need an image built for them; everything else runs as a
-bubblewrap sandbox on the Zephyr worker, in a uv environment built from the declared packages.
-``images.build`` builds whatever a declaration needs.
-"""
+"""Grader build inputs and their packaging in an image or worker package lock."""
 
 import re
 from dataclasses import dataclass
@@ -46,8 +40,8 @@ class Environment:
 
     ``pypi`` holds exact ``name==version`` pins, compiled to a hash lock at build time; ``lock`` is a
     uv-compiled requirements lock with hashes, used verbatim instead. ``apt`` names Debian packages and
-    ``data`` downloads such as ``nltk:punkt_tab``. ``image`` is a digest-pinned image used as-is, such
-    as an agent workspace, and excludes every other field.
+    ``data`` downloads such as ``nltk:punkt_tab``. ``image`` is a digest-pinned image used as-is and
+    excludes every other field.
     """
 
     pypi: tuple[str, ...] = ()
@@ -89,6 +83,10 @@ class Placement(StrEnum):
 
 
 def placement(environment: Environment) -> Placement:
+    """Use an explicit image, build for missing system packages, or prepare a lock in Local.
+
+    Local assumes the worker provides WORKER_IMAGE_APT; it does not probe the host.
+    """
     if environment.image is not None:
         return Placement.IMAGE
     if set(environment.apt) - WORKER_IMAGE_APT:

@@ -22,10 +22,10 @@ from shellbox.machine import (
     MachineSpec,
     Result,
     ShellSimBuiltins,
+    UnsupportedMachineSpec,
 )
-from taskcompendium.models import EnvironmentRequirements, TaskResource, require_resolved_environment
-from taskcompendium.runtime.environment import resolve_env_vars
-from taskcompendium.runtime.local import local_runtime
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, require_resolved_environment
+from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.resources import resource_bytes
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
@@ -61,16 +61,16 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
             await machine.upload(source, f"/{resource.path}")
 
 
-def _machine_spec(
-    requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec, host_environment: Mapping[str, str]
-) -> MachineSpec:
+def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
     require_resolved_environment(requirements)
     if requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
         source = HostImage()
-    else:
+    elif requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
         source = ShellSimBuiltins()
+    else:
+        raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
     return MachineSpec(
         source=source,
         workdir=(
@@ -78,7 +78,6 @@ def _machine_spec(
             if requirements.working_directory is not None
             else "" if requirements.docker_image else "/workspace"
         ),
-        env=resolve_env_vars(requirements.environment_variables, host_environment),
         network=runtime.network,
         memory_mb=runtime.memory_mb,
         cpus=runtime.cpus,
@@ -99,24 +98,12 @@ async def _acquire_machine(
     factories: Mapping[str, MachineFactory],
     cleanup: _Cleanup,
     owned: AsyncExitStack,
-    requirements: EnvironmentRequirements,
 ) -> Machine:
     """Create a machine closed by ``owned``, retaining ownership if creation outlives cancellation."""
-    require_resolved_environment(requirements)
     machine_cleanup = cleanup
     if runtime.cleanup_timeout is not None:
         machine_cleanup = _Cleanup(runtime.cleanup_timeout, cleanup.errors)
     factory = factories[runtime.backend]
-    if requirements.packages_lock is not None and requirements.docker_image is None:
-        if factory.backend != Backend.LOCAL:
-            raise ValueError("Lock-only graders require a local machine factory")
-        environment = await asyncio.to_thread(local_runtime, requirements.packages_lock)
-        await asyncio.to_thread(environment.ensure_built)
-        spec = replace(
-            spec,
-            source=HostImage(read_only=(environment.root,), bin_dirs=(environment.bin_dir,)),
-            env={**environment.variables, **spec.env},
-        )
     creation = asyncio.create_task(factory.create(spec))
     try:
         machine = await asyncio.shield(creation)
@@ -139,9 +126,14 @@ async def _prepare_machine(
     if runtime is None:
         return None
     async with asyncio.timeout(runtime.startup_timeout):
-        machine = await _acquire_machine(
-            runtime, _machine_spec(requirements, runtime, dict(os.environ)), factories, cleanup, owned, requirements
+        prepared = await asyncio.to_thread(
+            prepare_machine_spec,
+            requirements,
+            factories[runtime.backend],
+            _machine_spec(requirements, runtime),
+            dict(os.environ),
         )
+        machine = await _acquire_machine(runtime, prepared, factories, cleanup, owned)
         await _install_resources(machine, resources)
         for command in requirements.setup_commands:
             result = await machine.run(Command(("sh", "-c", command), timeout=runtime.startup_timeout, user="0"))
@@ -185,7 +177,6 @@ class _AttemptMachineFactory:
     factories: Mapping[str, MachineFactory]
     cleanup: _Cleanup
     owned: AsyncExitStack
-    environment: EnvironmentRequirements
 
     @property
     def backend(self) -> Backend:
@@ -193,7 +184,5 @@ class _AttemptMachineFactory:
 
     async def create(self, spec: MachineSpec) -> Machine:
         async with asyncio.timeout(self.runtime.startup_timeout):
-            machine = await _acquire_machine(
-                self.runtime, spec, self.factories, self.cleanup, self.owned, self.environment
-            )
+            machine = await _acquire_machine(self.runtime, spec, self.factories, self.cleanup, self.owned)
         return _OwnedMachine(machine)

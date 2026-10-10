@@ -43,8 +43,7 @@ See [offline parquet counts](../README.md#declaring-a-dataset) for count regener
 ## Script graders
 
 If the grader needs a script, put it next to the module as `<name>_grade.py`;
-vendor an upstream scorer under `<family>/scorers/` and list that directory
-in the declaration's `ships`. Build the grader with `grade_script`,
+vendor an upstream scorer under `<family>/scorers/`. Build the grader with `grade_script`,
 `shipped_files` and `script_package` from
 `taskcompendium.convert.script_grader`, which ship the script, the scorer
 files and the row's `config.json` in the task's verifier resources. Set

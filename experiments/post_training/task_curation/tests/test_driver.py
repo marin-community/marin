@@ -19,21 +19,21 @@ from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import HostImage, NetworkPolicy
 from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation import pipeline as processor
 from experiments.post_training.task_curation.campaign import CampaignPool
-from experiments.post_training.task_curation.config import ImageGraderExecution
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.post_training.task_curation.pipeline import (
+    CampaignMachines,
     CurationRecipe,
     HfSource,
-    campaign_machines,
     environment_requirements,
     process_rows,
 )
@@ -45,7 +45,6 @@ from experiments.post_training.task_curation.tests.image_builds import (
 )
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
-PINNED_WORKER = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
 CONTROLLER_URL = "http://controller.invalid"
 
 
@@ -83,7 +82,6 @@ def arguments(tmp_path) -> list[str]:
         "--coordinator-memory": "16g",
         "--normalized-shards": "1",
         "--worker-image": "fixture-image",
-        "--verification-backend": "gvisor",
         "--report-path": str(tmp_path / "report.json"),
     }
     return [item for pair in options.items() for item in pair]
@@ -111,32 +109,35 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     monkeypatch.setattr("shellbox.backends.local.machine._working_bwrap", lambda candidates: Path("/usr/bin/bwrap"))
     environment = Environment(lock=tracked_lock(tmp_path), data=("nltk:punkt_tab",))
     (artifact,) = run(environment_artifact(environment, REPOSITORY))
-    built = []
-    monkeypatch.setattr(
-        LocalRuntime, "ensure_built", lambda self: (self.root.mkdir(parents=True), built.append(self.root))
-    )
-    machines = campaign_machines(ImageGraderExecution.IRIS, PINNED_WORKER, CONTROLLER_URL)
-    factory, spec = machines.machine(environment_requirements(environment, artifact), 2048)
+    monkeypatch.setattr(LocalRuntime, "ensure_built", lambda self: self.root.mkdir(parents=True))
+    machines = CampaignMachines()
+    requirements = environment_requirements(environment, artifact)
+    factory, spec = machines.machine(requirements, 2048)
+    spec = prepare_machine_spec(requirements, factory, spec, {})
     runtime = local_runtime(artifact.lock_url)
     request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
     assert runtime.lock_sha256 == artifact.lock_sha256 and runtime.data == ("nltk:punkt_tab",)
-    assert built == [runtime.root]
-    assert factory.read_only == (runtime.root,) and factory.bin_dirs == (runtime.root / "env" / "venv" / "bin",)
-    assert spec.source == HostImage() and spec.network == NetworkPolicy.DENY and spec.workdir == "/app"
+    assert runtime.root.is_dir()
+    assert spec.source == HostImage(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,))
+    assert spec.memory_mb is None and spec.network == NetworkPolicy.DENY and spec.workdir == "/app"
     assert spec.env == {"NLTK_DATA": str(runtime.root / "share" / "nltk_data")}
 
 
-def iris_arguments(tmp_path) -> list[str]:
-    """The fixture options with the verification backend left at its default, Iris."""
-    options = arguments(tmp_path)
-    index = options.index("--verification-backend")
-    return options[:index] + options[index + 2 :]
-
-
-def test_iris_backend_planning_does_not_require_a_controller(tmp_path, catalog):
-    result = CliRunner().invoke(main, iris_arguments(tmp_path))
+def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog):
+    result = CliRunner().invoke(main, arguments(tmp_path))
     assert result.exit_code == 0, result.output
     assert not (tmp_path / "report.json").exists()
+
+
+def test_gvisor_image_backend_requires_a_controller_outside_an_iris_job(tmp_path, catalog, monkeypatch):
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.get_job_info", lambda: None)
+    options = [*arguments(tmp_path), "--image-backend", "gvisor"]
+    missing = CliRunner().invoke(main, options)
+    assert missing.exit_code == 2
+    assert not (tmp_path / "report.json").exists()
+    configured = CliRunner().invoke(main, [*options, "--controller-url", CONTROLLER_URL])
+    assert configured.exit_code == 0, configured.output
+    assert len(json.loads(configured.output)["sources"]) == len(catalog) + 1
 
 
 def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch):

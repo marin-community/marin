@@ -16,7 +16,6 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 from taskcompendium.convert.answers import unsupported
@@ -40,6 +39,7 @@ INSTRUCTION = "instruction.md"
 TASK_TOML = "task.toml"
 DOCKERFILE = "environment/Dockerfile"
 TEST_SH = "tests/test.sh"
+VERIFIER_DATA = "tests/verifier_data.json"
 SOLUTION_DIR = "solution/"
 SOLVE_SH = "solution/solve.sh"
 TESTS_MOUNT = "/tests"
@@ -47,8 +47,6 @@ TESTS_MOUNT = "/tests"
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
 TEST_SH_REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
 """The numeric reward file a Harbor ``tests/test.sh`` writes."""
-ANSWER_PATH = "/app/answer.txt"
-"""Where archived answer checkers read the answer; the runtime stages a conversation task's reply there."""
 
 
 @dataclass
@@ -64,19 +62,8 @@ class TaskFiles:
         blob = self.files.get(path)
         return None if blob is None else blob.decode("utf-8", errors="replace")
 
-    @property
-    def has_solution(self) -> bool:
-        return any(p.startswith(SOLUTION_DIR) for p in self.files)
-
     def under(self, prefix: str) -> dict[str, bytes]:
         return {p: b for p, b in self.files.items() if p.startswith(prefix)}
-
-    def write_to(self, root: Path) -> None:
-        """Materialize every file under ``root``, creating directories as needed."""
-        for path, data in self.files.items():
-            target = root / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
 
 
 def unpack_task_binary(row: dict[str, Any], _context: ConversionContext) -> dict[str, Any]:
@@ -108,8 +95,8 @@ def unpack_task_binary(row: dict[str, Any], _context: ConversionContext) -> dict
         "file_metadata": file_metadata,
         "archive_links": archive_links,
     }
-    if "tests/verifier_data.json" in files:
-        prepared["verifier_data"] = json.loads(files["tests/verifier_data.json"])
+    if VERIFIER_DATA in files:
+        prepared["verifier_data"] = json.loads(files[VERIFIER_DATA])
     return prepared
 
 

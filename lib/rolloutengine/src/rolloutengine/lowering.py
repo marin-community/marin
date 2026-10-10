@@ -5,9 +5,10 @@
 
 from collections.abc import Callable, Mapping
 
-from shellbox.machine import Backend, Machine, MachineFactory
+from shellbox.machine import Machine, MachineFactory
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     EnvironmentRequirements,
     NoGrader,
     ScriptGrader,
@@ -16,8 +17,10 @@ from taskcompendium.models import (
     VerifyitGrader,
     require_resolved_environment,
 )
+from taskcompendium.runtime.environment import validate_machine_spec
 
 from rolloutengine.contracts import TaskSession
+from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec, TaskSessionSpec
 
 SHELLBOX_SESSION = "shellbox"
@@ -66,10 +69,10 @@ def validate_lowered_task(
             continue
         if selection.backend not in factories:
             raise ValueError(f"Unknown Shellbox factory: {selection.backend!r}")
-        if requirements.packages_lock is not None and requirements.docker_image is None:
-            if factories[selection.backend].backend != Backend.LOCAL:
-                raise ValueError("Lock-only graders require a local machine factory")
-        if requirements.docker_image is None and any(resource.mtime_ns is not None for resource in resources):
+        validate_machine_spec(requirements, factories[selection.backend], _machine_spec(requirements, selection))
+        if requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR and any(
+            resource.mtime_ns is not None for resource in resources
+        ):
             raise NotImplementedError("The built-in filesystem cannot preserve resource timestamps")
     if lowered.session.task_session != SHELLBOX_SESSION:
         if lowered.session.task_session not in sessions:

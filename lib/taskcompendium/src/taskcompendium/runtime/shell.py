@@ -3,57 +3,43 @@
 
 """Bind shell tasks to Shellbox machines without exposing private resources."""
 
-import base64
+import asyncio
 import hashlib
 import json
+import os
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
-from shellbox.image import RegistryImage
 from shellbox.machine import (
-    Backend,
     Command,
-    DockerImage,
-    HostImage,
     Machine,
     MachineFactory,
     MachineSpec,
     QemuBundle,
-    UnsupportedMachineSpec,
 )
 
 from taskcompendium.models import (
-    EnvironmentRequirements,
+    DEFAULT_WORKSPACE,
     FunctionCall,
     FunctionDefinition,
-    OutputDirectory,
     TaskResource,
     TaskSpec,
-    grader_workspace,
-    require_compatible_backend,
-    require_resolved_environment,
+    validate_output_paths,
 )
+from taskcompendium.runtime.environment import prepare_machine_spec, validate_machine_spec
 from taskcompendium.runtime.models import RuntimeEvidence
-from taskcompendium.runtime.output_capture import (
-    CAPTURE_METADATA_BYTES,
-    DIRECTORY_CAPTURE_PROBE,
-    DIRECTORY_CAPTURE_SCRIPT,
-    selected_directory_files,
-    validate_output_directories,
-)
+from taskcompendium.runtime.output_capture import captured_output_files
 from taskcompendium.runtime.resources import resource_bytes
 
-INTERFACE = "shell:v1"
 OUTPUT_PATH = "/output/command_capture.txt"
 CONTROL_PATH = "/controls/reference.sh"
-MISSING_CAPTURE_EXIT_CODE = 44
 
-BASH = FunctionDefinition(
-    name="Bash",
-    description="Run a shell command in /workspace",
+SHELL = FunctionDefinition(
+    name="shell",
+    description="Run a shell command in the task workspace. Files persist between commands.",
     parameters={
         "type": "object",
         "properties": {"command": {"type": "string"}},
@@ -69,28 +55,6 @@ def machine_spec_identity(machine_spec: MachineSpec) -> dict[str, Any]:
     if isinstance(machine_spec.source, QemuBundle):
         identity["source"] = {"path": str(machine_spec.source.path)}
     return identity
-
-
-def require_environment_source(machine_spec: MachineSpec, environment: EnvironmentRequirements) -> None:
-    """Check the machine against the environment: the host for a local environment, otherwise its pinned image."""
-    require_resolved_environment(environment)
-    if isinstance(machine_spec.source, HostImage) and Backend.LOCAL in environment.compatible_backends:
-        return
-    if environment.docker_image is None:
-        raise ValueError("The environment names no image for the machine to use")
-    require_image(machine_spec, environment.docker_image)
-
-
-def require_image(machine_spec: MachineSpec, image: str) -> None:
-    """Check the task image against a direct reference or staged guest metadata."""
-    source = machine_spec.source
-    if source in (DockerImage(image), RegistryImage(image)):
-        return
-    if isinstance(source, QemuBundle):
-        metadata = json.loads((source.path / "image.json").read_text())
-        if metadata.get("image_reference") == image:
-            return
-    raise ValueError("Machine must use the task's pinned image")
 
 
 async def upload_resources(machine: Machine, resources: Sequence[TaskResource], timeout: float) -> None:
@@ -109,54 +73,22 @@ async def upload_resources(machine: Machine, resources: Sequence[TaskResource], 
                     raise RuntimeError(f"Could not set resource permissions: {target}")
 
 
-async def captured_output_files(
-    machine: Machine, paths: tuple[str, ...], *, timeout: float | None, limit_bytes: int, user: str | None = None
-) -> dict[str, bytes]:
-    """The regular files at ``paths`` on ``machine``, omitting missing ones.
-
-    Reading through the machine keeps capture sizes bounded, including symlinks. A file that is
-    unreadable or larger than ``limit_bytes`` raises ``RuntimeError``.
-    """
-    files = {}
-    for path in paths:
-        result = await machine.run(
-            Command(
-                (
-                    "sh",
-                    "-c",
-                    f'if [ -f "$1" ]; then head -c "$2" -- "$1"; else exit {MISSING_CAPTURE_EXIT_CODE}; fi',
-                    "capture-output",
-                    path,
-                    str(limit_bytes + 1),
-                ),
-                timeout=timeout,
-                user=user,
-                output_limit_bytes=limit_bytes + 1,
-            )
-        )
-        if result.exit_code == MISSING_CAPTURE_EXIT_CODE:
-            continue
-        if result.exit_code != 0 or result.stdout_truncated or len(result.stdout) > limit_bytes:
-            raise RuntimeError(f"Capture unavailable or exceeds budget: {path}")
-        files[path] = result.stdout
-    return files
-
-
 @dataclass
 class ShellEnvironment:
     machine: Machine
     output_paths: tuple[str, ...]
     command_timeout: float
     output_limit_bytes: int
-    output_directories: tuple[OutputDirectory, ...] = ()
+    workdir: str = DEFAULT_WORKSPACE
 
     async def step(self, call: FunctionCall) -> str:
         command = call.arguments.get("command")
-        if call.name != "Bash" or set(call.arguments) != {"command"} or not isinstance(command, str):
-            return json.dumps({"error": "Bash requires one string command"})
+        if call.name != SHELL.name or set(call.arguments) != {"command"} or not isinstance(command, str):
+            return json.dumps({"error": "shell requires one string command"})
         result = await self.machine.run(
             Command(
-                ("/bin/bash", "-lc", command),
+                ("bash", "-c", command),
+                cwd=self.workdir,
                 timeout=self.command_timeout,
                 output_limit_bytes=self.output_limit_bytes,
             )
@@ -176,36 +108,6 @@ class ShellEnvironment:
         files = await captured_output_files(
             self.machine, self.output_paths, timeout=self.command_timeout, limit_bytes=self.output_limit_bytes
         )
-        for selection in self.output_directories:
-            result = await self.machine.run(
-                Command(
-                    (
-                        "python3",
-                        "-c",
-                        DIRECTORY_CAPTURE_SCRIPT,
-                        selection.model_dump_json(),
-                        str(self.output_limit_bytes),
-                        str(CAPTURE_METADATA_BYTES),
-                    ),
-                    timeout=self.command_timeout,
-                    output_limit_bytes=selection.max_bytes * 2 + CAPTURE_METADATA_BYTES,
-                )
-            )
-            if result.exit_code != 0 or result.stdout_truncated:
-                raise RuntimeError(
-                    f"Directory capture unavailable: {selection.root}; {result.stderr.decode(errors='replace')[-2000:]}"
-                )
-            captured = {
-                path: base64.b64decode(encoded, validate=True) for path, encoded in json.loads(result.stdout).items()
-            }
-            selected = selected_directory_files(selection, captured)
-            if selected != captured:
-                raise RuntimeError(f"Directory capture returned files outside selection: {selection.root}")
-            # Exact paths retain their existing values and precedence. Unsorted
-            # directory insertion order is retained for source discovery.
-            for path, data in selected.items():
-                files.setdefault(path, data)
-            selected_directory_files(selection, files)
         return RuntimeEvidence(files, "{}")
 
     async def close(self) -> None:
@@ -236,37 +138,27 @@ class ShellFactory:
         }
 
     async def create(self, task: TaskSpec) -> ShellEnvironment:
-        require_compatible_backend(task.environment_requirements, self.machine_factory.backend)
-        validate_output_directories(task.output_directories, grader_workspace(task.grader))
-        if task.output_directories and (
-            "python3" not in task.environment_requirements.capabilities
-            or self.machine_factory.backend == Backend.SHELLSIM
-        ):
-            raise UnsupportedMachineSpec("Directory capture requires a real POSIX Python 3 runtime")
-        provider = task.environment_requirements.tool_providers.get("shell")
-        if provider is None or provider.action_interface != INTERFACE or provider.initial_state != {}:
-            raise ValueError("Unsupported shell fixture")
+        validate_machine_spec(task.environment_requirements, self.machine_factory, self.machine_spec)
+        validate_output_paths(task.output_paths)
         requirements = task.environment_requirements
-        if requirements.docker_image is not None:
-            require_image(self.machine_spec, requirements.docker_image)
         if (
-            set(requirements.capabilities) - {"shell", "filesystem", "python3"}
-            or requirements.working_directory is not None
-            or requirements.setup_commands
-            or requirements.environment_variables
-            or set(requirements.tool_providers) != {"shell"}
+            set(requirements.capabilities) - {"shell", "filesystem"}
+            or requirements.tool_providers
+            or task.interaction_tools
         ):
             raise ValueError("Shell factory cannot satisfy these environment requirements")
-        machine = await self.machine_factory.create(self.machine_spec)
+        async with asyncio.timeout(self.machine_spec.startup_timeout):
+            prepared = await asyncio.to_thread(
+                prepare_machine_spec,
+                requirements,
+                self.machine_factory,
+                self.machine_spec,
+                dict(os.environ),
+            )
+            machine = await self.machine_factory.create(prepared)
         try:
-            if task.output_directories:
-                probe = await machine.run(
-                    Command(("python3", "-c", DIRECTORY_CAPTURE_PROBE), timeout=self.command_timeout)
-                )
-                if probe.exit_code != 0:
-                    raise UnsupportedMachineSpec("Directory capture requires a real POSIX Python 3 runtime")
             initialized = await machine.run(
-                Command(("mkdir", "-p", self.machine_spec.workdir, "/output"), timeout=self.command_timeout)
+                Command(("mkdir", "-p", prepared.workdir, "/output"), timeout=self.command_timeout)
             )
             if initialized.exit_code != 0:
                 raise RuntimeError("Could not initialize shell workspace")
@@ -278,9 +170,17 @@ class ShellFactory:
             for role in self.mounted_roles:
                 resources.extend(roles[role])
             await upload_resources(machine, resources, self.command_timeout)
+            for setup in requirements.setup_commands:
+                result = await machine.run(Command(("sh", "-c", setup), timeout=self.command_timeout, user="0"))
+                if result.exit_code != 0:
+                    raise RuntimeError("Shell environment setup failed")
         except BaseException:
             await machine.close()
             raise
         return ShellEnvironment(
-            machine, task.output_paths, self.command_timeout, self.output_limit_bytes, task.output_directories
+            machine,
+            task.output_paths,
+            self.command_timeout,
+            self.output_limit_bytes,
+            prepared.workdir,
         )

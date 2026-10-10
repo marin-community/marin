@@ -73,9 +73,16 @@ uv run --project config/external/harbor --frozen python -c \
 ```
 
 [`harbor_export_step`](tasktrove/export.py) binds this export to a normalized
-artifact and records verifier payload identity. For the smoke input, first run
-QUICK with `--source tasktrove-nl2bash --output-root /tmp/curation-quick`. Then
-adopt that output and plan export plus training:
+artifact and records verifier payload identity.
+
+Artifact reuse follows explicit versions. Bump the source recipe version when
+conversion or bundled grader code changes, the affected pipeline stage revision
+for shared processing changes, and the export version for Harbor lowering or
+bundled verifier changes. Download identities still follow pinned source bytes.
+
+For the smoke input, first run QUICK with
+`--source tasktrove-nl2bash --output-root /tmp/curation-quick`. Then adopt that
+output and plan export plus training:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \

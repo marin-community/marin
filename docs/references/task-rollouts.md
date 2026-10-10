@@ -55,8 +55,8 @@ A grader with an environment requires a `verifier_machine` selection. Every othe
 Each attempt creates a fresh verifier machine from that selection.
 
 The engine validates factory identifiers and supported requirements before machine acquisition.
-The selected factory applies network and hardware settings and rejects settings that it cannot enforce.
-The engine does not change those settings to match a backend.
+The selected factory applies network and hardware settings. Memory is advisory on Local;
+preparation omits that allocation because bubblewrap cannot enforce it.
 
 An environment with `docker_image` uses that prebuilt image. The reference must contain a SHA-256 digest.
 An environment with `packages_lock` and no image requires a `LocalMachineFactory`.
@@ -67,9 +67,11 @@ but each gets a fresh sandbox. The selected factory's mounts, executable paths, 
 Building the runtime is included in the startup deadline and, for graders, the verifier deadline.
 The host needs `uv`, download access for an uncached build, and a working bubblewrap setup.
 Grader staging runs as root, so local grading requires a host process running as root.
-Local machines reject CPU, memory, storage, and GPU allocations; leave those fields unset and `gpus=0`.
+Local machines reject CPU, storage, and GPU allocations; leave those fields unset and `gpus=0`.
 
-An environment with neither an image nor a lock uses `ShellSimBuiltins` and requires a compatible factory.
+Native environments explicitly declare `CommandSemantics.LINUX_PROCESS`.
+`CommandSemantics.SHELL_SIMULATOR` selects built-in shell and virtual filesystem semantics,
+which require `ShellSimBuiltins` and a ShellSim factory. Missing native dependencies do not imply simulation.
 The default workdir is the image's workdir, or `/workspace` for the built-in filesystem.
 An explicit `working_directory` overrides that selection.
 

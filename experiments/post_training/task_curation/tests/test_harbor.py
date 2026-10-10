@@ -16,12 +16,11 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from taskcompendium.convert.answers import answer_task
-from taskcompendium.convert.verifyit_build import verifyit_build_context
 from taskcompendium.grader import verifyit_package
-from taskcompendium.harbor.export import UnsupportedHarborTask, harbor_record
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
+    CommandSemantics,
     DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
@@ -43,10 +42,12 @@ from verifyit.spec import ExactSpec, JsonSchemaSpec, McqSpec, PytestSpec, Script
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import qa
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tasktrove.export import main
+from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, harbor_record
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 
 GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64
@@ -154,17 +155,33 @@ def test_harbor_mcqa_file_format_matches_its_grader(normalized_row, tmp_path, le
     assert grade(spec, tmp_path, tmp_path).reward == reward
 
 
+def test_harbor_rejects_simulated_shell_semantics(normalized_row):
+    row, task = normalized_row
+    requirements = task.environment_requirements.model_copy(
+        update={"docker_image": None, "command_semantics": CommandSemantics.SHELL_SIMULATOR}
+    )
+    task = task.model_copy(update={"environment_requirements": requirements})
+    with pytest.raises(UnsupportedHarborTask, match="shell simulator semantics"):
+        harbor_record(
+            {**row, "task_json": task.model_dump_json()},
+            grader_image=GRADER_IMAGE,
+            family="qa",
+            fallback_actor_image=BASE_IMAGE,
+        )
+
+
 @pytest.mark.parametrize("role", ["actor", "grader"])
 def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(normalized_row, role):
     row, converted = normalized_row
     converted = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "generic"})})
     environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=DockerBuildContext(
             files=(
                 inline_resource("Dockerfile", b"FROM source:latest\nCOPY required.bin /required.bin\n"),
                 inline_resource("required.bin", b"source environment data"),
             )
-        )
+        ),
     )
     if role == "actor":
         task = converted.model_copy(update={"environment_requirements": environment})
@@ -180,8 +197,11 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
         )
 
 
-@pytest.mark.parametrize("answer_type", [AnswerType.TEXT, AnswerType.FILE])
-def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path, answer_type) -> None:
+@pytest.mark.parametrize(
+    "answer_type,output_path",
+    [(AnswerType.TEXT, None), (AnswerType.FILE, "/app/solution.py"), (AnswerType.FILE, "/app")],
+)
+def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path, answer_type, output_path) -> None:
     row, converted = normalized_row
     task = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "generic"})})
     output = "app/answer.txt"
@@ -190,11 +210,13 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
         task = task.model_copy(
             update={
                 "answer_type": AnswerType.FILE,
-                "output_paths": ("/app/solution.py",),
+                "output_paths": (output_path,),
                 "grader": ScriptGrader(
                     argv=("bash", "/tests/test.sh"),
                     answer_path=None,
-                    environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                    ),
                     reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format="number"),)),
                 ),
                 "resources": task.resources.model_copy(
@@ -207,7 +229,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
             "worker": (
                 *task.resources.worker,
                 inline_resource(output, b"initial contents"),
-                inline_resource("app/staging-input.txt", b"public input"),
+                inline_resource("inputs/staging-input.txt", b"public input"),
             )
         }
     )
@@ -234,7 +256,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
     command[-2:] = [str(public) + "/.", str(workspace)]
     subprocess.run(command, check=True)
     assert submitted.read_text() == "agent's edited contents"
-    assert (workspace / "app/staging-input.txt").read_text() == "public input"
+    assert (workspace / "inputs/staging-input.txt").read_text() == "public input"
     submitted.unlink()
     subprocess.run(command, check=True)
     assert not submitted.exists()
@@ -451,7 +473,9 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
             "grader": ScriptGrader(
                 argv=("python3", "/tests/grade.py"),
                 answer_path=None,
-                environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+                environment=EnvironmentRequirements(
+                    command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                ),
                 reward=StdoutReward(),
             ),
         }
@@ -484,6 +508,7 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
 def repository_task(normalized_row) -> TaskSpec:
     _, task = normalized_row
     environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
         capabilities=("git_repository",),
         docker_build=verifyit_build_context("FROM python:3.12-slim\nWORKDIR /testbed\n", (), package=VERIFYIT_PACKAGE),
     )
@@ -632,7 +657,7 @@ print(float(answer == actor_dependency.expected))
     package = verifyit_package(
         ScriptSpec(path="check.py", workspace=str(workspace)),
         (inline_resource("check.py", checker),),
-        environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+        environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE),
     )
     task = original.model_copy(
         update={

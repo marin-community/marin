@@ -23,7 +23,7 @@ from typing import Annotated, ClassVar, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
-from shellbox.machine import Backend, UnsupportedMachineSpec
+from shellbox.machine import UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
@@ -40,7 +40,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.25"
+SCHEMA_VERSION = "0.26"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 
@@ -323,13 +323,22 @@ def validate_workspace_path(path: str) -> PurePosixPath:
     return workspace
 
 
+class CommandSemantics(StrEnum):
+    """The execution behavior a task's commands require."""
+
+    LINUX_PROCESS = "linux_process"
+    """Real Linux processes, installed executables, and a native filesystem."""
+    SHELL_SIMULATOR = "shell_simulator"
+    """A built-in shell language and virtual filesystem, without native executables or guest networking."""
+
+
 class EnvironmentRequirements(BaseModel):
     """Operations, initial workspace or unresolved recipe, and tool-provider contracts."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
-    compatible_backends: tuple[Backend, ...] = ()
+    command_semantics: CommandSemantics | None = None
     docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
     docker_build: DockerBuildContext | None = None
     working_directory: str | None = None
@@ -342,17 +351,14 @@ class EnvironmentRequirements(BaseModel):
     def validate_environment(self) -> "EnvironmentRequirements":
         if sum(value is not None for value in (self.docker_image, self.docker_build, self.packages_lock)) > 1:
             raise ValueError("Docker image, build context, and packages lock are mutually exclusive")
-        if self.docker_build is not None and {Backend.LOCAL, Backend.SHELLSIM}.intersection(self.compatible_backends):
-            raise ValueError("Local and ShellSim backends cannot satisfy a Docker build context")
-        if len(set(self.compatible_backends)) != len(self.compatible_backends):
-            raise ValueError("Compatible backends must be unique")
-        if Backend.SHELLSIM in self.compatible_backends and self.docker_image is not None:
-            raise ValueError("ShellSim cannot satisfy a required Docker image")
-        # A local environment runs on a host that builds its packages from the lock; an image carries its own.
-        if Backend.LOCAL in self.compatible_backends and self.packages_lock is None:
-            raise ValueError("A local environment requires the packages lock the host builds")
-        if Backend.LOCAL not in self.compatible_backends and self.packages_lock is not None:
-            raise ValueError("Only a local environment carries a packages lock")
+        if any(value is not None for value in (self.docker_image, self.docker_build, self.packages_lock)):
+            if self.command_semantics != CommandSemantics.LINUX_PROCESS:
+                raise ValueError("Native environment dependencies require Linux process semantics")
+        if self.command_semantics == CommandSemantics.SHELL_SIMULATOR and set(self.capabilities) - {
+            "shell",
+            "filesystem",
+        }:
+            raise ValueError("The shell simulator provides only shell and filesystem capabilities")
         if any(not capability for capability in self.capabilities):
             raise ValueError("Capabilities must be nonempty names")
         if len(set(self.capabilities)) != len(self.capabilities):
@@ -372,13 +378,6 @@ def require_resolved_environment(requirements: EnvironmentRequirements) -> None:
         raise UnsupportedMachineSpec("Unresolved Docker build context must be built and pinned before execution")
 
 
-def require_compatible_backend(requirements: EnvironmentRequirements, backend: Backend) -> None:
-    """Reject a runtime that the source has not declared semantically compatible."""
-    require_resolved_environment(requirements)
-    if backend not in requirements.compatible_backends:
-        raise UnsupportedMachineSpec(f"Backend {backend.value} is not declared compatible with this environment")
-
-
 GRADER_ROOTS = ("/tests", "/logs/verifier")
 """Paths the grading machine reserves for grader files and verdicts."""
 
@@ -393,6 +392,15 @@ def normalized_absolute_path(value: str) -> str:
 
 def under_grader_root(path: str) -> bool:
     return any(PurePosixPath(path).is_relative_to(root) for root in GRADER_ROOTS)
+
+
+def validate_output_paths(paths: tuple[str, ...]) -> None:
+    """Require normalized output selections disjoint from private grading roots."""
+    private_roots = (*GRADER_ROOTS, "/solution")
+    for path in paths:
+        root = PurePosixPath(normalized_absolute_path(path))
+        if any(root.is_relative_to(private) or PurePosixPath(private).is_relative_to(root) for private in private_roots):
+            raise ValueError(f"Output paths overlap private mounts: {path}")
 
 
 def _absolute_file_path(value: str) -> str:
@@ -819,26 +827,6 @@ AnswerFormat = Annotated[
 ]
 
 
-class OutputDirectory(BaseModel):
-    """Bounded regular files selected by relative fnmatch patterns, including subdirectories."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    root: str
-    patterns: tuple[str, ...] = Field(min_length=1)
-    max_files: int = Field(gt=0)
-    max_bytes: int = Field(gt=0)
-
-    @model_validator(mode="after")
-    def validate_selection(self) -> "OutputDirectory":
-        if not self.root.startswith("/"):
-            raise ValueError("Output directory must be absolute")
-        validate_relative_file_path(self.root[1:])
-        for pattern in self.patterns:
-            validate_relative_file_path(pattern)
-        return self
-
-
 class TaskSpec(BaseModel):
     """The complete semantic definition of one task, its grader, and its final result."""
 
@@ -850,7 +838,6 @@ class TaskSpec(BaseModel):
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     output_paths: tuple[str, ...] = ()
-    output_directories: tuple[OutputDirectory, ...] = ()
     answer_type: AnswerType
     answer_format: AnswerFormat
     grader: Grader
@@ -865,16 +852,13 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
-        if self.output_directories and "python3" not in self.environment_requirements.capabilities:
-            raise ValueError("Directory capture requires the actor's python3 capability")
         if len({function.name for function in self.final_tools}) != len(self.final_tools):
             raise ValueError("Advertised function names must be unique")
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools:
             raise ValueError("Native-action tasks require advertised functions")
         if self.answer_type in CONVERSATION_ANSWERS and not self.answer_format.supports(self.answer_type):
             raise ValueError(f"Answer format {self.answer_format.kind} cannot carry a {self.answer_type} answer")
-        if any(under_grader_root(path) for path in (*self.output_paths, *(d.root for d in self.output_directories))):
-            raise ValueError("Output paths must lie outside /tests and /logs/verifier")
+        validate_output_paths(self.output_paths)
         if grades_in_process(self.grader) and self.answer_type in (AnswerType.FILE, AnswerType.WORKSPACE_STATE):
             raise ValueError(f"A {self.answer_type} answer requires a grading environment")
         if isinstance(self.grader, VerifyitGrader) and self.grader.environment is not None:
