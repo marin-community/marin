@@ -21,22 +21,7 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     CapacityDrops,
 )
-from levanter.grug._moe.ep_common import _prefix_cap_counts
-
-
-def _assignment_slots(
-    slot_assignment: Int[Array, "P"],
-    slot_valid: Bool[Array, "P"],
-    *,
-    tokens: int,
-    topk: int,
-) -> Int[Array, "T K"]:
-    """Invert the dispatch: the slot holding each (token, k) assignment, or ``P`` where no valid slot does."""
-    capacity = slot_assignment.shape[0]
-    target = jnp.where(slot_valid, slot_assignment, tokens * topk)
-    slots = jnp.full((tokens * topk,), capacity, dtype=jnp.int32)
-    slots = slots.at[target].set(jnp.arange(capacity, dtype=jnp.int32), mode="drop")
-    return slots.reshape(tokens, topk)
+from levanter.grug._moe.ep_common import _assignment_sources, _prefix_cap_counts
 
 
 def _gather_sum_slots(rows: Float[Array, "P H"], slots: Int[Array, "T K"]) -> Float[Array, "T H"]:
@@ -127,7 +112,9 @@ def _gather_dispatch_combine(
 ) -> _DispatchCombine:
     """Dispatch and combine, forward and backward, as gathers through the inverse map from assignments to slots."""
     token = jnp.floor_divide(picked, topk)
-    slots = _assignment_slots(picked, valid, tokens=tokens, topk=topk)
+    # The slot holding each (token, k) assignment, or `P` where no valid slot does.
+    assignments = tokens * topk
+    slots = _assignment_sources(jnp.where(valid, picked, assignments), send_size=assignments).reshape(tokens, topk)
     return _DispatchCombine(
         dispatch=lambda x: _dispatch_rows(x, token, valid, slots),
         combine=lambda rows, weights: _combine_rows(rows * weights[:, None], token, valid, slots),
