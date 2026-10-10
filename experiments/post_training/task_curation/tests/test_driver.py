@@ -26,15 +26,14 @@ from zephyr.readers import load_parquet
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation import pipeline as processor
 from experiments.post_training.task_curation.campaign import CampaignPool
-from experiments.post_training.task_curation.config import ImageGraderPlacement
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import environment_artifact
 from experiments.post_training.task_curation.pipeline import (
+    CampaignMachines,
     CurationRecipe,
     HfSource,
-    campaign_machines,
     environment_requirements,
     process_rows,
 )
@@ -46,7 +45,6 @@ from experiments.post_training.task_curation.tests.image_builds import (
 )
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
-PINNED_WORKER = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
 CONTROLLER_URL = "http://controller.invalid"
 
 
@@ -84,7 +82,6 @@ def arguments(tmp_path) -> list[str]:
         "--coordinator-memory": "16g",
         "--normalized-shards": "1",
         "--worker-image": "fixture-image",
-        "--image-grader-placement": "worker",
         "--report-path": str(tmp_path / "report.json"),
     }
     return [item for pair in options.items() for item in pair]
@@ -113,7 +110,7 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     environment = Environment(lock=tracked_lock(tmp_path), data=("nltk:punkt_tab",))
     (artifact,) = run(environment_artifact(environment, REPOSITORY))
     monkeypatch.setattr(LocalRuntime, "ensure_built", lambda self: self.root.mkdir(parents=True))
-    machines = campaign_machines(ImageGraderPlacement.IRIS, PINNED_WORKER, CONTROLLER_URL)
+    machines = CampaignMachines()
     requirements = environment_requirements(environment, artifact)
     factory, spec = machines.machine(requirements, 2048)
     spec = prepare_machine_spec(requirements, factory, spec)
@@ -126,17 +123,21 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     assert spec.env == {"NLTK_DATA": str(runtime.root / "share" / "nltk_data")}
 
 
-def iris_arguments(tmp_path) -> list[str]:
-    """The fixture options with the verification backend left at its default, Iris."""
-    options = arguments(tmp_path)
-    index = options.index("--image-grader-placement")
-    return options[:index] + options[index + 2 :]
-
-
-def test_iris_backend_planning_does_not_require_a_controller(tmp_path, catalog):
-    result = CliRunner().invoke(main, iris_arguments(tmp_path))
+def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog):
+    result = CliRunner().invoke(main, arguments(tmp_path))
     assert result.exit_code == 0, result.output
     assert not (tmp_path / "report.json").exists()
+
+
+def test_gvisor_image_backend_requires_a_controller_outside_an_iris_job(tmp_path, catalog, monkeypatch):
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.get_job_info", lambda: None)
+    options = [*arguments(tmp_path), "--image-backend", "gvisor"]
+    missing = CliRunner().invoke(main, options)
+    assert missing.exit_code == 2
+    assert not (tmp_path / "report.json").exists()
+    configured = CliRunner().invoke(main, [*options, "--controller-url", CONTROLLER_URL])
+    assert configured.exit_code == 0, configured.output
+    assert len(json.loads(configured.output)["sources"]) == len(catalog) + 1
 
 
 def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch):

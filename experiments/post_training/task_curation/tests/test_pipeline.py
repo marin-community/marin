@@ -16,7 +16,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.pipeline.controls import GradingMachines
+from shellbox.backends.iris.machine import IrisMachineFactory
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
@@ -28,7 +28,7 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult
-from experiments.post_training.task_curation.config import ImageGraderPlacement, PipelineOptions, RecipeSettings
+from experiments.post_training.task_curation.config import PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
@@ -36,11 +36,11 @@ from experiments.post_training.task_curation.images.build import (
     environment_artifact,
 )
 from experiments.post_training.task_curation.pipeline import (
+    CampaignMachines,
     CurationRecipe,
     DownloadRequest,
     HfSource,
     UrlSource,
-    campaign_machines,
     download_source,
     download_step,
     environment_requirements,
@@ -69,10 +69,6 @@ def math500() -> CurationRecipe:
     return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
 
 
-def machines(backend: ImageGraderPlacement) -> GradingMachines:
-    return campaign_machines(backend, "fixture-worker", "http://controller.invalid")
-
-
 @pytest.fixture
 def config() -> SourcePipelineConfig:
     return SourcePipelineConfig(
@@ -83,7 +79,7 @@ def config() -> SourcePipelineConfig:
         execution=AuditExecution(),
         filter_policy=FilterPolicy(),
         normalized_shards=2,
-        machines=machines(ImageGraderPlacement.WORKER),
+        machines=CampaignMachines(),
     )
 
 
@@ -121,8 +117,8 @@ def test_review_settings_enter_identity_only_with_a_rubric(config):
     assert step_name(unreviewed, revised) == step_name(unreviewed, config)
 
 
-def test_image_grader_placement_enters_identity_only_with_controls(config):
-    iris = replace(config, machines=machines(ImageGraderPlacement.IRIS))
+def test_image_factory_enters_identity_only_with_controls(config):
+    iris = replace(config, machines=CampaignMachines(IrisMachineFactory(controller_url="http://controller.invalid")))
     assert step_name(math500(), iris) != step_name(math500(), config)
     unchecked = replace(math500(), controls=None)
     assert step_name(unchecked, iris) == step_name(unchecked, config)

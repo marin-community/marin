@@ -59,6 +59,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import environment_artifact
+from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_record
 from experiments.post_training.task_curation.tests.image_builds import REPOSITORY, install_fake_build_tools, tracked_lock
 from lib.taskcompendium.tests.pipeline_stages import fixture_recipe
@@ -258,6 +259,16 @@ async def test_agent_machine_receives_only_public_files(executable_task):
         assert (await environment.evidence()).files == {"/app/solution.py": b"print(7)\n"}
     finally:
         await environment.close()
+
+
+def test_campaign_controls_use_the_supplied_factory_for_oracle_and_grader(executable_task):
+    factory = GradingMachines()
+    report = run_controls(executable_task, controls=CONTROLS, machines=CampaignMachines(image_factory=factory))
+    assert checks(report) == {"golden": CheckStatus.PASS}
+    oracle, grader = factory.machines
+    assert "/solution/solve.sh" in oracle.files and "/solution/solve.sh" not in grader.files
+    assert grader.files["/app/solution.py"] == b"print(7)\n"
+    assert oracle.closed and grader.closed
 
 
 def test_linux_file_names_survive_conversion_and_traversal_cannot_produce_task():

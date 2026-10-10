@@ -25,7 +25,6 @@ from typing import Any, cast
 import click
 import requests
 from fray.types import ResourceConfig
-from iris.cluster.client.job_info import get_job_info
 from marin.datakit.download.huggingface import (
     DownloadConfig,
     finish_download,
@@ -38,10 +37,15 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.backends.gvisor.machine import GvisorMachineFactory
-from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import DockerImage, MachineFactory, MachineSpec, NetworkPolicy
+from shellbox.machine import (
+    Backend,
+    MachineFactory,
+    MachineSpec,
+    NetworkPolicy,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, require_resolved_environment
 from taskcompendium.pipeline.controls import GradingMachines, controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
@@ -76,7 +80,7 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
-from experiments.post_training.task_curation.config import ImageGraderPlacement, PipelineOptions, RecipeSettings
+from experiments.post_training.task_curation.config import PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
@@ -90,8 +94,7 @@ QUICK_VERSION = "2026.10.09.1"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 REVIEW_REQUEST_TIMEOUT = 60
-IRIS_MACHINE_CPUS = 4
-IRIS_JOB_TTL = 1800
+IMAGE_MACHINE_CPUS = 4
 
 type RowSelector = Callable[[dict[str, Any], ConversionContext], bool]
 type RowDecoder = Callable[[dict[str, Any], ConversionContext], dict[str, Any]]
@@ -231,101 +234,54 @@ class CurationRecipe:
         return self.source.files
 
 
-def machines_identity(placement: ImageGraderPlacement, worker_image: str, controller: bool) -> dict[str, Any]:
-    """The settings every backend's grading machines share; the worker image carries the grading code."""
-    return {
-        "backend": "gvisor" if placement == ImageGraderPlacement.WORKER else "iris",
-        "worker_image": worker_image,
-        # Local graders run in bubblewrap sandboxes on the worker; recorded so a backend change reverifies.
-        "local_backend": "bubblewrap",
-        "network": NetworkPolicy.DENY.value,
-        "controller": controller,
-    }
-
-
-@dataclass(frozen=True)
-class IrisMachines:
-    """Schedule each sandbox image as a task on the Iris controller at ``controller_url``."""
-
-    worker_image: str
-    controller_url: str | None
-
-    def identity(self) -> dict[str, Any]:
-        return machines_identity(ImageGraderPlacement.IRIS, self.worker_image, controller=True)
-
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        image = _sandbox_image(environment)
-        factory = IrisMachineFactory(
-            controller_url=_controller_url(self.controller_url),
-            job_ttl=IRIS_JOB_TTL,
-            secret_env=None,
-        )
-        # Kueue packs each pod onto the fullest node that still fits it; a larger CPU request fills a
-        # node after fewer machines, so grading spreads across nodes instead of queueing behind one.
-        return factory, MachineSpec(
-            RegistryImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb, cpus=IRIS_MACHINE_CPUS
-        )
-
-
-@dataclass(frozen=True)
-class WorkerMachines:
-    """Run each sandbox image under gVisor on the local Docker daemon."""
-
-    worker_image: str
-
-    def identity(self) -> dict[str, Any]:
-        return machines_identity(ImageGraderPlacement.WORKER, self.worker_image, controller=False)
-
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        image = _sandbox_image(environment)
-        return GvisorMachineFactory(), MachineSpec(DockerImage(image), network=NetworkPolicy.DENY, memory_mb=memory_mb)
-
-
-def _sandbox_image(environment: EnvironmentRequirements) -> str:
-    require_resolved_environment(environment)
-    if environment.docker_image is None:
-        raise ValueError("A sandbox machine requires an environment with a digest-pinned image")
-    return environment.docker_image
-
-
 @dataclass(frozen=True)
 class CampaignMachines:
-    """Grading machines for a campaign: local environments grade in the worker, images on ``sandbox``."""
+    """Bind declared software and semantics to caller-selected Shellbox factories."""
 
-    sandbox: IrisMachines | WorkerMachines
-    local: LocalGraderMachines
+    image_factory: MachineFactory | None = None
+    image_cpus: int = IMAGE_MACHINE_CPUS
+    local: LocalGraderMachines = field(default_factory=LocalGraderMachines)
 
     def identity(self) -> dict[str, Any]:
-        return {**self.sandbox.identity(), "local": self.local.identity()}
+        factory = self.image_factory
+        return {
+            "image": (
+                {
+                    "backend": factory.backend.value,
+                    "factory": f"{type(factory).__module__}.{type(factory).__qualname__}",
+                    "cpus": self.image_cpus,
+                }
+                if factory is not None
+                else None
+            ),
+            "local": self.local.identity(),
+            "simulator": {
+                "backend": Backend.SHELLSIM.value,
+                "factory": "shellbox.backends.shellsim.machine.ShellSimMachineFactory",
+            },
+            "network": NetworkPolicy.DENY.value,
+        }
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         require_resolved_environment(environment)
+        if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+            try:
+                from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
+            except ImportError as error:
+                raise UnsupportedMachineSpec("Simulator controls require the Shellbox shellsim extra") from error
+            return ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins(), network=NetworkPolicy.DENY)
         if environment.packages_lock is not None:
             return self.local.machine(environment, memory_mb)
-        return self.sandbox.machine(environment, memory_mb)
-
-
-def campaign_machines(placement: ImageGraderPlacement, worker_image: str, controller_url: str | None) -> GradingMachines:
-    """Grading machines for every source in a campaign: image graders on ``placement``, local graders in the worker."""
-    if placement == ImageGraderPlacement.IRIS:
-        return CampaignMachines(IrisMachines(worker_image, controller_url), LocalGraderMachines())
-    return CampaignMachines(WorkerMachines(worker_image), LocalGraderMachines())
-
-
-def job_controller_url() -> str | None:
-    """The controller of the Iris job this process runs in, or ``None`` outside an Iris job."""
-    info = get_job_info()
-    return info.controller_address if info is not None else None
-
-
-def _controller_url(controller_url: str | None) -> str:
-    """The explicit Iris controller, or the controller of this process's job."""
-    if controller_url is not None:
-        return controller_url
-    job_url = job_controller_url()
-    if job_url is None:
-        raise click.UsageError("--image-grader-placement iris outside an Iris job requires --controller-url")
-    return job_url
+        if environment.docker_image is None:
+            raise UnsupportedMachineSpec("Native campaign execution requires a pinned image or package lock")
+        if self.image_factory is None:
+            raise UnsupportedMachineSpec("Image controls require a supplied image factory or --image-backend")
+        return self.image_factory, MachineSpec(
+            RegistryImage(environment.docker_image),
+            network=NetworkPolicy.DENY,
+            memory_mb=memory_mb,
+            cpus=self.image_cpus,
+        )
 
 
 def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_concurrency: int) -> Reviewer:
@@ -396,13 +352,7 @@ def _source_config(
         mode,
         review,
         None,
-        (
-            campaign_machines(
-                settings.image_grader_placement, settings.execution.worker_resources.image, settings.controller_url
-            )
-            if controls is not None
-            else None
-        ),
+        settings.machines if controls is not None else None,
         seed=settings.seed,
         verification_sample_size=settings.verification_sample_size,
         max_workers=settings.execution.max_workers,

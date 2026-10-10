@@ -5,22 +5,15 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
 
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
+from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB
 from experiments.post_training.task_curation.campaign import CampaignRuntime
-
-
-class ImageGraderPlacement(StrEnum):
-    """Where image graders run; both choices use Shellbox gVisor machines."""
-
-    IRIS = "iris"
-    WORKER = "worker"
 
 
 @dataclass(frozen=True)
@@ -34,8 +27,7 @@ class RecipeSettings:
     relay_job: str = DEFAULT_GLM_RELAY_JOB
     review_concurrency: int = MAX_DIRECT_CONCURRENT_REQUESTS
     normalized_shards: int | None = None
-    image_grader_placement: ImageGraderPlacement = ImageGraderPlacement.IRIS
-    controller_url: str | None = None
+    machines: GradingMachines | None = None
     seed: int = 0
     verification_sample_size: int = 20
     execution: AuditExecution = field(default_factory=AuditExecution)
