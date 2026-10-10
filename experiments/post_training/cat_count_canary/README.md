@@ -8,16 +8,16 @@ Held-out and extrapolation results do not determine the learning verdict.
 
 The canary uses two Megatron data-parallel ranks on one H100 host and two
 vLLM engines on another. Each task requests two H100s and 65 CPUs; the CPU
-request places our tasks on separate 128-CPU hosts. Four Gym rollout workers
-on the policy host reserve 32 CPUs. Gym uses token requests; the HTTP
-endpoint serves Harbor and is off in this recipe. Training metrics and
+request places tasks on separate 128-CPU hosts. Four task rollout workers
+on the policy host reserve 32 CPUs and use token requests. The model HTTP
+endpoint is off in this recipe. Training metrics and
 policy-training and rollout spans are enabled explicitly.
 
 `--lane async` uses behavior clipping, permits two steps of rollout staleness
 and applies two update epochs per batch. `--lane sync` is a manual experiment
 outside the canary and CI. It uses zero staleness,
-the regular policy objective and TIS with a cap of 2. Both use the same
-trainer loop, 64 prompts with eight samples each, a full-batch mini-batch,
+the regular policy objective and truncated importance sampling (TIS) with a cap of 2.
+The two lanes use the same trainer loop, 64 prompts with eight samples each, a full-batch mini-batch,
 matching training and forward micro-batches of 16 per GPU, and learning
 rate 2e-6.
 
@@ -31,7 +31,7 @@ uv run python -m experiments.post_training.cat_count_canary \
 ```
 
 Inspect the model, dataset and training artifact versions and the pinned
-MarinSkyRL `launcher_requirement`. Use a fresh calendar version and owned
+MarinSkyRL `runtime.launcher_commit`. Use a fresh calendar version and owned
 job name for every measured run and after any runtime repin.
 
 Check live capacity before submitting:
@@ -112,6 +112,10 @@ count at temperature 1. The async gate requires step 0 sampled reward in
 `--eval-minimum-score` selects an exploratory sampled-score stopping threshold.
 The checked-in gate preset and async spec use 0.65. A stopping step ends
 training; checkpoints and HF export require their explicit flags.
+The 0.65 threshold comes from a [calibration run](https://wandb.ai/dogml/marin-cat-count-canary/runs/1jr0tjpg)
+with a different runtime. This evidence does not establish the threshold for the TaskSession runtime.
+The [TaskSession validation](../task_sessions/validation.py) checks training and exports,
+but does not recalibrate the canary gate.
 Megatron logs `policy/dp_weight_checksum_mismatch` after every optimizer step;
 any mismatch fails the spec. The grouped step metric keeps the maximum across
 optimizer windows. Greedy, held-out and extrapolation scores are reported only.
@@ -124,7 +128,13 @@ one sampled response is exact; the environment exact rate is the fraction of
 responses that are exact. `eval/sampled/train/avg_score` is the stopping signal. Training logs also report `environment/exact_n{N}` and
 `reward/zero_std_group_fraction`.
 
-`--model` selects the instruct model, `qwen2.5-0.5b`, or `qwen3-0.6b`.
+Exact responses contain lowercase `cat` words separated by single spaces,
+with no punctuation or extra text. The scorer removes outer whitespace and
+trailing end-of-turn markers. `avg_score` is the shaped reward, not the exact
+rate. The [scorer](https://github.com/marin-community/MarinSkyRL/blob/c96f6d25f59959096c3b179a51e67c0af6c99536/skyrl-gym/skyrl_gym/envs/cat_count/reward.py)
+defines partial-count rewards and penalties.
+
+`--model` selects `qwen2.5-0.5b-instruct`, `qwen2.5-0.5b`, or `qwen3-0.6b`.
 `--batch-size`, `--group-size`, `--micro-train-batch-size`, repeated
 `--train-n` and `--seed` select experiment inputs. Sampled evaluation always
 uses eight responses, independently of the training group size. `--set`
@@ -160,7 +170,7 @@ evaluation and the training-completion marker. Use the actual child duration
 for `CHILD_DURATION_SECONDS`.
 
 Check out the exact MarinSkyRL commit named by the marin plan's
-`launcher_requirement`. From that checkout's `skyrl-train` directory, select
+`runtime.launcher_commit`. From that checkout's `skyrl-train` directory, select
 `ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async.json`, then run:
 
 ```bash
@@ -174,48 +184,10 @@ learning. The async gate checks sampled reward and the required training
 metrics; synchronous runs are available for manual comparisons.
 
 A pass demonstrates task learning through Iris launch, model staging,
-Megatron DP=2, separate-host vLLM, NCCL weight synchronization, Gym rollout
+Megatron DP=2, separate-host vLLM, NCCL weight synchronization, task rollout
 workers, the policy objective, two-epoch reuse and evaluation. Parameter
 checksum comparisons detect reported differences between training ranks.
 The canary does not establish loss-scale parity, exported-output equivalence,
 GPU checkpoint-resume correctness, or coverage of TP/PP/CP/EP, MoE, multi-turn
 tools, Harbor, LoRA or long contexts. Subtle clipping, probability, template
 or partial weight-sync errors can still learn.
-
-## Calibration results
-
-The canary uses seed 17 and learning rate 2e-6. Native historical replay at the
-0.65 sampled-score threshold passes six healthy async runs. Their smallest
-peak margin by step 30 is +0.0953. Sign reversal, rollout-probability corruption
-and learning rates 5e-6/1e-5 fail; the closest control margin is −0.1153.
-Historical replay checks existing metric rows. Current GPU validation covers
-the post-step checksum and the 20-minute deadline with checkpoints/export off.
-
-Model staging, Ray and vLLM startup happen once per invocation. With checkpoints enabled, the measured dry step took 72 seconds, including
-5.7 seconds of policy training and 49 seconds of checkpoint work. Checkpoint work recurs at save intervals;
-it is not an ordinary-step cost. Evaluation also recurs every five steps.
-HF export runs after training when `--export` is set.
-
-Sampled policy-GPU memory maxima in seven completed runs ranged from 17.1
-to 30.5 GiB per device. These are node telemetry samples, not CUDA allocation
-peaks; sync seed 31 has no joined memory receipt.
-
-The final async run on Marin `d368eb93aceef2194cdf60b234620e5d4aa4162e`
-used MarinSkyRL main `2859b70463fe3e581917094c6672b85427e4b2c8`, seed 17,
-and the gate preset without checkpoint or export flags.
-[Its sampled evaluation reward on training prompts](https://wandb.ai/dogml/marin-cat-count-canary/runs/1jr0tjpg)
-was 0.2454 at step 0, 0.6202 at step 5 and 0.6845 at step 10, where it
-stopped. The complete async spec passed. The grouped checksum mismatch
-was zero at every training step. The coordinator took 10 minutes 35.58
-seconds; both GPU tasks took 8 minutes 31.12 seconds. The run had zero
-preemptions, and all tasks received interactive priority. Training
-steps had a median of 5.59 seconds; the sum of step times was 82.77 seconds.
-Invocation time also includes data preparation, model/runtime startup,
-scheduling and teardown.
-
-The completed-step divergence control reached sampled reward 0.7218 at
-step 10 but failed only on checksum observations at steps 1–10. Both ranks
-completed optimizer updates. Its GPU tasks took 8 minutes 39.53 seconds
-and 8 minutes 17.22 seconds. This control applies each rank's local gradients
-with replicated optimizer state, while the healthy recipe uses the default
-distributed optimizer.

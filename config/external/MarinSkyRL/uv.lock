@@ -16,7 +16,7 @@ required-markers = [
 prerelease-mode = "allow"
 
 [manifest]
-overrides = [{ name = "marin-rigging", extras = ["secrets"], specifier = ">=0.2.139.dev37117265303" }]
+overrides = [{ name = "marin-rigging", extras = ["secrets", "prometheus"], specifier = ">=0.2.144.dev37540375919" }]
 
 [[package]]
 name = "absl-py"
@@ -1436,7 +1436,7 @@ dependencies = [
     { name = "duckdb" },
     { name = "fsspec" },
     { name = "gcsfs" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "protobuf" },
     { name = "pyarrow" },
     { name = "pyyaml" },
@@ -1479,7 +1479,7 @@ name = "marin-finestore"
 version = "0.2.149.dev37775727576"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "pyarrow" },
     { name = "pydantic" },
 ]
@@ -1508,7 +1508,7 @@ dependencies = [
     { name = "marin-finelog-server", version = "0.2.55.dev35451177481", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "marin-finestore" },
     { name = "marin-iris-native" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyqwest" },
@@ -1567,6 +1567,9 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+prometheus = [
+    { name = "prometheus-client" },
+]
 secrets = [
     { name = "google-cloud-secret-manager" },
 ]
@@ -1594,10 +1597,10 @@ dependencies = [
 [package.optional-dependencies]
 daytona = [
     { name = "daytona" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
 ]
 shellsim = [
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "shellsim" },
 ]
 
@@ -1629,7 +1632,7 @@ dependencies = [
     { name = "marin-finestore" },
     { name = "marin-iris" },
     { name = "marin-iris-native" },
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "math-verify" },
@@ -2199,6 +2202,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/5a/2deb8eac70e9a2ac26d88a66ae7cf52612865026f4f4a5e7ab11ad9d52bf/polars_runtime_32-1.43.2-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:452b400e59e7f56e4c6437f435e796903272a9388feee12de2bea049ae87025e", size = 55204471, upload-time = "2026-08-01T06:27:33.886Z" },
     { url = "https://files.pythonhosted.org/packages/29/9e/647401ae8a607bc0cc40ed7b8592d5b1be90ded0dc9b9d6d3aeb03f9524b/polars_runtime_32-1.43.2-cp310-abi3-win_amd64.whl", hash = "sha256:00e33c28e321410c8d66e814a90043101e3bdd9ed2c6dabda07565aa8adbbdf1", size = 52572176, upload-time = "2026-08-01T06:27:37.048Z" },
     { url = "https://files.pythonhosted.org/packages/96/8d/60a50c3f36c85218a7ffcb48c6fe2ce1f7bec799152d68b8658ebed2179c/polars_runtime_32-1.43.2-cp310-abi3-win_arm64.whl", hash = "sha256:350a4868cae85bf8b3f81b33ba47927c15256bd9264dfc8c0753f1b927eac9d3", size = 46582513, upload-time = "2026-08-01T06:27:40.025Z" },
+]
+
+[[package]]
+name = "prometheus-client"
+version = "0.26.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/73/f1334c29c2af4cd9dba6c7817e61b611bd0215e2eb5565c6064a4de18802/prometheus_client-0.26.0.tar.gz", hash = "sha256:04a91bcf94e2cf74a44a1a874d651a2e853ed354b6e822f3b7487751465d5c2b", size = 92910, upload-time = "2026-07-24T19:36:41.893Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/a3/b69efbf4143b5b9859b977770bbbabcc2796b702fa69dc40271e45cd5a56/prometheus_client-0.26.0-py3-none-any.whl", hash = "sha256:fa93d06737aa02bacd05794768508bb97d2fbee28cb3bca04eaae92f0ca953d6", size = 64494, upload-time = "2026-07-24T19:36:40.854Z" },
 ]
 
 [[package]]
@@ -2923,7 +2935,7 @@ name = "taskcompendium"
 version = "0.1.0"
 source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=2ef4786903053025ca7fcee40ea76476276ca872#2ef4786903053025ca7fcee40ea76476276ca872" }
 dependencies = [
-    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-shellbox" },
     { name = "pydantic" },
     { name = "verifyit", extra = ["answer", "judge", "reasoning-gym", "schema"] },
