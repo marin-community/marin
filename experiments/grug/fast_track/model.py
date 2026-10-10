@@ -157,7 +157,9 @@ _KDA_ERASE_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}kda_erase_"
 _MEMORY_BAG_CHUNK_ELEMS = 1 << 26
 # Bound on one chunk's FSDP-group-gathered ``[tokens, dim]`` rows in ``_row_sharded_embedding_gather``: 256 MiB
 # in float32 (the backward's cotangent), so d1024's 2^30-element group batch walks in 16 chunks.
-_ROW_GATHER_CHUNK_ELEMS = 1 << 26
+# 2**30 elements (2 GiB bf16) per chunk: at hero width a 2**26 bound split each lookup into 512 latency-bound
+# all-gather / reduce-scatter pairs.
+_ROW_GATHER_CHUNK_ELEMS = 1 << 30
 # Metrics-dict keys carrying the AttnRes z-loss term (with gradient) from the forward to the loss.
 _ATTN_RES_Z = "attn_res_z_term"
 # Per-gate token-mean AttnRes source weights (variable length per gate), popped into logging scalars.
@@ -687,9 +689,9 @@ class GrugModelConfig:
     attention forward per layer; needed for memory at d1280."""
     value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
     value_embed_fsdp: bool = False
-    """Store each MLA layer's value-embedding table row-sharded over the FSDP axes and look rows up in place
-    (``_row_sharded_embedding_gather``) instead of replicating it. Same math; at hero width the replicated tables,
-    their gradients and casts take ~30 GiB per GPU."""
+    """Store each MLA layer's value-embedding table row-sharded over the FSDP axes (all-gathered once per use)
+    instead of replicating it. Same math; at hero width the replicated tables, their gradients and casts take
+    ~30 GiB per GPU."""
     router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
     routing_renorm_sum: float = 2.5
     """Total combine weight of a token's K routed experts (``RouterCombine``)."""
@@ -1196,8 +1198,10 @@ class CausalSelfAttention(eqx.Module):
             v = rearrange(_proj(self.cfg, v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
         if self.value_embed is not None:
             assert self.ve_lambda is not None and token_ids is not None
-            gather = _row_sharded_embedding_gather if self.cfg.value_embed_fsdp else _embedding_gather
-            ve = gather(self.value_embed.astype(x.dtype), token_ids)
+            table = self.value_embed.astype(x.dtype)
+            # A sharded table is all-gathered once per use (16k rows: ~200 MB bf16 per MLA layer at hero width) and
+            # its gradient reduce-scattered back; the chunked row lookup issued ~500 tiny collectives per use.
+            ve = _embedding_gather(reshard(table, P(None, None)) if self.cfg.value_embed_fsdp else table, token_ids)
             ve = rearrange(ve, "... (n d) -> ... n d", d=head_dim)
             lam = self.ve_lambda.astype(x.dtype)
             ve_weight = _value_embed_weight(self.cfg.value_embeds, x, self.ve_gate, lam)
