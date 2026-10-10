@@ -8,7 +8,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, Machine, MachineSpec, Result, UnsupportedMachineSpec
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import (
+    Backend,
+    Command,
+    DockerImage,
+    Machine,
+    MachineSpec,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from verifyit.spec import SchemaFormat
 
 from taskcompendium.convert.answers import (
@@ -233,3 +243,45 @@ def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_
     oracles = [machine for machine in images.created if "/solution/solve.sh" in machine.uploads]
     assert [machine.image for machine in oracles] == [oracle_image]
     assert {machine.image for machine in images.created if machine not in oracles} == {GRADER_IMAGE}
+
+
+class OracleMachines(FixtureGradingMachines):
+    """Provide image machines and a simulator, leaving lock preparation unsupported."""
+
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int):
+        if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+            return ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins(), memory_mb=memory_mb)
+        return self.factory, MachineSpec(DockerImage(environment.docker_image or GRADER_IMAGE), memory_mb=memory_mb)
+
+
+def test_oracle_uses_simulator_directory_and_setup_before_native_grading(monkeypatch):
+    monkeypatch.setenv("ORACLE_READY_NAME", "ready.txt")
+    task = answer_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.SHELL_SIMULATOR,
+                working_directory="/agent",
+                setup_commands=('cp /data/expected.txt "$ANSWER_FILE"',),
+                environment_variables={"ANSWER_FILE": "${ORACLE_READY_NAME}"},
+            )
+        }
+    )
+    controls = Controls(
+        golden=lambda _: OracleCommand('test "$PWD" = /agent && cat ready.txt > answer.out', answer_file="answer.out")
+    )
+    assert checks(task, controls, OracleMachines()) == {"golden": PASS}
+
+
+def test_lock_backed_oracle_rejects_image_only_provider_before_acquisition():
+    task = file_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="unbuilt/requirements.lock"
+            )
+        }
+    )
+    images = RecordingImages()
+    suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), OracleMachines(images))
+    with pytest.raises(UnsupportedMachineSpec):
+        suite.run(task)
+    assert images.created == []

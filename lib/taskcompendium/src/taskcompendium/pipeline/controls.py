@@ -4,11 +4,11 @@
 """Grade a source's control submissions through the same grading path rollouts use."""
 
 import asyncio
-import shlex
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Protocol
 
+from harbor_config.env import resolve_env_vars
 from shellbox.machine import Command, MachineFactory, MachineSpec
 from verifyit.grade import positive_candidate
 from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec
@@ -140,7 +140,7 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
         require_resolved_environment(environment)
         if machines is None:
             raise ValueError("Sandbox controls require grading machines")
-        sandbox = _Sandbox(machines, controls.memory_mb, _image_machine(machines, environment, controls.memory_mb))
+        sandbox = _Sandbox(machines, controls.memory_mb, _selected_machine(machines, environment, controls.memory_mb))
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is not None:
         check = await _control(task, "golden", golden, 1.0, sandbox)
@@ -151,7 +151,7 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
     return VerificationReport([check])
 
 
-def _image_machine(
+def _selected_machine(
     machines: GradingMachines, environment: EnvironmentRequirements, memory_mb: int
 ) -> tuple[MachineFactory, MachineSpec]:
     """Validate a selected machine without building its environment."""
@@ -170,19 +170,15 @@ class _Sandbox:
     grader: tuple[MachineFactory, MachineSpec]
 
     def oracle(self, task: TaskSpec) -> tuple[MachineFactory, MachineSpec, EnvironmentRequirements]:
-        """The agent's image, whose tools and directories an oracle expects; the grader's machine when there is none.
-
-        The agent's environment chooses the oracle's backend, so a grader that runs locally still gets its
-        golden from a sandbox of the agent's image.
-        """
+        """Use the agent's requirements, falling back to the grader only for an empty agent environment."""
         require_resolved_environment(task.environment_requirements)
-        if task.environment_requirements.docker_image is None:
+        if task.environment_requirements == EnvironmentRequirements():
             grader = task.grader
             if not isinstance(grader, VerifyitGrader | ScriptGrader) or grader.environment is None:
                 raise ValueError("An oracle requires a grader environment")
             return (*self.grader, grader.environment)
         return (
-            *_image_machine(self.machines, task.environment_requirements, self.memory_mb),
+            *_selected_machine(self.machines, task.environment_requirements, self.memory_mb),
             task.environment_requirements,
         )
 
@@ -236,29 +232,44 @@ async def _oracle_attempt(
     environment: EnvironmentRequirements,
 ) -> GradingAttempt:
     """Run the oracle in a fresh machine from ``factory`` with the worker and oracle files mounted."""
-    workspace = grader_workspace(task.grader)
+    workspace = environment.working_directory or grader_workspace(task.grader)
     async with asyncio.timeout(spec.startup_timeout):
-        prepared = await asyncio.to_thread(prepare_machine_spec, environment, factory, spec)
+        prepared = await asyncio.to_thread(
+            prepare_machine_spec,
+            environment.model_copy(
+                update={"environment_variables": resolve_env_vars(environment.environment_variables)}
+            ),
+            factory,
+            spec,
+        )
         machine = await factory.create(prepared)
     try:
         await upload_resources(
             machine, (*task.resources.all, *task.resources.worker, *task.resources.oracle), ORACLE_TIMEOUT
         )
-        result = await machine.run(
+        commands = [Command(("mkdir", "-p", workspace), timeout=ORACLE_TIMEOUT)]
+        commands.extend(
+            Command(("sh", "-c", setup), cwd=workspace, timeout=ORACLE_TIMEOUT, user="0")
+            for setup in environment.setup_commands
+        )
+        commands.append(
             Command(
                 (
                     "/bin/bash",
                     "-lc",
-                    f"mkdir -p {shlex.quote(workspace)} && cd {shlex.quote(workspace)} && {command.command}",
+                    command.command,
                 ),
+                cwd=workspace,
                 timeout=ORACLE_TIMEOUT,
                 output_limit_bytes=ORACLE_OUTPUT_LIMIT_BYTES,
             )
         )
-        if result.exit_code != 0:
-            raise OracleFailed(
-                f"Oracle command exited {result.exit_code}: {result.stderr.decode(errors='replace')[-2000:]}"
-            )
+        for step in commands:
+            result = await machine.run(step)
+            if result.exit_code != 0:
+                raise OracleFailed(
+                    f"Oracle command exited {result.exit_code}: {result.stderr.decode(errors='replace')[-2000:]}"
+                )
         if command.answer_file is None:
             evidence = await ShellEnvironment(
                 machine, task.output_paths, ORACLE_TIMEOUT, ORACLE_OUTPUT_LIMIT_BYTES, task.output_directories
