@@ -447,8 +447,17 @@ def _to_dropless_local(
     return eqx.tree_at(stack_expert_mlps, model, dropless)
 
 
+def _layer_stacks(model: Transformer):
+    return (model.stacked_blocks, model.kda_blocks, model.stacked_blocks_tail, model.kda_blocks_tail)
+
+
 def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:
-    return mp.cast_to_compute(model)
+    """The compute-dtype model. Under ``scan_layers`` the layer stacks stay in the param dtype: the scan casts one
+    unit's weights at a time, so the step never holds a compute copy (or its gradient) of every layer's weights."""
+    compute = mp.cast_to_compute(model)
+    if not model.config.scan_layers:
+        return compute
+    return eqx.tree_at(_layer_stacks, compute, replace=_layer_stacks(model), is_leaf=lambda x: x is None)
 
 
 def build_tagged_evaluator(

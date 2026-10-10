@@ -4099,7 +4099,7 @@ def _run_unit_layer(
 
 def _layer_history(layer_diff, sources, logits, partial, queries, *, layer_static, layer_index, unit_layer, args):
     """``_run_unit_layer``'s history as a function of the differentiable inputs (the backward's ``jax.vjp``)."""
-    layer = eqx.combine(layer_diff, layer_static)
+    layer = eqx.combine(_cast_floats(layer_diff, sources.dtype), layer_static)
     history, _ = _run_unit_layer(
         layer, _AttnResHistory(sources, logits, partial), queries, layer_index, unit_layer, args
     )
@@ -4114,7 +4114,8 @@ def _scan_forward(
 
     def unit_step(history: _AttnResHistory, xs):
         unit_diff, unit_static, u = xs
-        units = {kind: eqx.combine(unit_diff[kind], unit_static[kind]) for kind in unit_diff}
+        dtype = history.sources.dtype
+        units = {kind: eqx.combine(_cast_floats(unit_diff[kind], dtype), unit_static[kind]) for kind in unit_diff}
         partials, stats = [], []
         for j, unit_layer in enumerate(plan.unit):
             partials.append(history.partial)
@@ -4195,6 +4196,11 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
     xs = (units_diff, args.units_static, partials, jnp.arange(plan.num_units, dtype=jnp.int32))
     (d_history, d_queries), d_units = jax.lax.scan(unit_step, (d_history, jnp.zeros_like(queries)), xs, reverse=True)
     return d_units, d_queries, d_history
+
+
+def _cast_floats(tree, dtype: jnp.dtype):
+    """Cast the floating leaves of ``tree`` to ``dtype`` (``scan_layers`` casts each layer's fp32 weights at use)."""
+    return jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) and x.dtype != dtype else x, tree)
 
 
 def _unit_queries(scan: _LayerScan | None, units: dict[bool, Block], *names: str) -> jax.Array:
@@ -4600,12 +4606,17 @@ class Transformer(eqx.Module):
         block_cap = cfg.attn_res_num_blocks * passes
         schedule = _BlockSchedule(len(extra_sources), seg_size, block_cap)
         scan = _layer_scan(cfg, schedule) if cfg.scan_layers else None
+        dtype = self.token_embed.dtype
         if scan is not None and scan.num_units:
             units, layers = self._split_scanned_units(scan)
         else:
             units, layers = {}, self.layers()
         # Every query in gate order [pass 0: attn_0, mlp_0, ..., mlp_{L-1}; pass 1: ...; final].
-        gate_queries = [_unit_queries(scan, units, "attn_res_query_attn", "attn_res_query_mlp")] if units else []
+        gate_queries = (
+            [_cast_floats(_unit_queries(scan, units, "attn_res_query_attn", "attn_res_query_mlp"), dtype)]
+            if units
+            else []
+        )
         for layer in layers[scan.num_layers if units else 0 :]:
             assert layer.attn_res_query_attn is not None and layer.attn_res_query_mlp is not None
             gate_queries.append(jnp.stack([layer.attn_res_query_attn, layer.attn_res_query_mlp]))
@@ -4613,7 +4624,7 @@ class Transformer(eqx.Module):
         # logits (scored against queries[2i:]) cover them; V gate of layer i is row 2 * L * passes + i.
         v_queries = []
         if cfg.attn_res_shared_query:
-            v_queries = [_unit_queries(scan, units, "attn_res_query_shared")] if units else []
+            v_queries = [_cast_floats(_unit_queries(scan, units, "attn_res_query_shared"), dtype)] if units else []
             v_queries += [layer.attn_res_query_shared[None] for layer in layers[scan.num_layers if units else 0 :]]
         queries_flat = jnp.concatenate([*gate_queries, *v_queries, self.attn_res_query_final[None]])
         queries = queries_flat
@@ -4825,7 +4836,8 @@ class Transformer(eqx.Module):
                 prefix, *parts = parts
                 units[is_kda] = jax.tree.map(lambda x, c=count: x.reshape(scan.num_units, c, *x.shape[1:]), prefix)
             for i, part in zip(remaining, parts, strict=True):
-                layers[i] = jax.tree.map(lambda x: x[0], part)
+                # The stacks stay fp32 under scan_layers (see _cast_to_compute); unrolled layers cast here.
+                layers[i] = _cast_floats(jax.tree.map(lambda x: x[0], part), self.token_embed.dtype)
         return units, layers
 
     def _run_scanned_units(
