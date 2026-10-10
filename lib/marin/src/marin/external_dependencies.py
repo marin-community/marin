@@ -40,6 +40,7 @@ class VllmGpuWheel:
     sm_targets: tuple[str, ...]
     url: str
     sha256: str
+    constraints_url: str | None = None
 
 
 @dataclass(frozen=True)

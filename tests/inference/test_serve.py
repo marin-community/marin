@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import click
+import marin.inference.vllm_server as vllm_server
 import pytest
 import requests
 from click.testing import CliRunner
@@ -387,6 +388,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert indexes == [
         f"https://download.pytorch.org/whl/{VLLM_GPU_RELEASE.torch_backend}",
         "https://download.pytorch.org/whl/cpu",
+        "https://flashinfer.ai/whl/",
     ]
     assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
     assert "--torch-backend" not in cmd
@@ -421,7 +423,8 @@ def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypa
         IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
 
 
-def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
+@pytest.mark.parametrize("source", [VllmType.UPSTREAM, VllmType.MARIN_FORK])
+def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path, source):
     site_packages = tmp_path / "site-packages"
     nvcc = site_packages / "nvidia" / "cu13" / "bin" / "nvcc"
     nvcc.parent.mkdir(parents=True)
@@ -446,28 +449,34 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
         "#!/usr/bin/env python3\n"
         "import json, os, pathlib, sys\n"
         "pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({"
-        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH']}))\n"
+        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH'],"
+        "'compilers': {key:os.environ.get(key) for key in "
+        "['NVRTC_HOME','FLASHINFER_NVCC','TRITON_PTXAS_PATH','TRITON_PTXAS_BLACKWELL_PATH']}}))\n"
     )
     vllm.chmod(0o755)
 
-    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
+    launcher = IsolatedCudaVllm(source=source, version=DEFAULT_CUDA_VLLM_VERSION)
     command = launcher.command()
     requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
-    assert set(requirements) >= {
-        "nvidia-cuda-nvcc==13.0.88",
-        "nvidia-cuda-crt==13.0.88",
-        "nvidia-nvvm==13.0.88",
-    }
+    backend = "cu130" if source is VllmType.UPSTREAM else VLLM_GPU_RELEASE.torch_backend
+    version = CUDA_TOOLCHAIN_VERSION_BY_BACKEND[backend]
+    assert set(requirements) >= {f"{name}=={version}" for name in ("nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm")}
     assert not any(requirement.startswith("nvidia-cuda-nvrtc==") for requirement in requirements)
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]
     wrapped_command = command[bootstrap_index + 2 :]
+    if source is VllmType.MARIN_FORK:
+        # Replace the separately tested wheel entrypoint with the environment capture target.
+        wrapped_command = ["vllm"]
     environment = {
         **os.environ,
         "CAPTURE": str(capture),
         "PATH": os.pathsep.join((str(tool_bin), os.environ["PATH"])),
         "PYTHONPATH": str(site_packages),
+        "FLASHINFER_NVCC": "/old/nvcc",
+        "TRITON_PTXAS_PATH": "/old/ptxas",
+        "TRITON_PTXAS_BLACKWELL_PATH": "/old/ptxas-blackwell",
     }
     subprocess.run([sys.executable, "-c", bootstrap, *wrapped_command, "serve", "model"], env=environment, check=True)
 
@@ -478,6 +487,33 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert (nvcc.parent.parent / "lib64").resolve() == cuda_lib.resolve()
     assert (cuda_lib / "libcudart.so").resolve() == cudart.resolve()
     assert (cuda_lib / "libnvrtc.so").resolve() == nvrtc.resolve()
+    if source is VllmType.MARIN_FORK:
+        assert observed["compilers"] == {
+            "NVRTC_HOME": str(nvcc.parent.parent.resolve()),
+            "FLASHINFER_NVCC": str(nvcc.resolve()),
+            "TRITON_PTXAS_PATH": str(nvcc.parent.resolve() / "ptxas"),
+            "TRITON_PTXAS_BLACKWELL_PATH": str(nvcc.parent.resolve() / "ptxas"),
+        }
+
+
+@pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
+def test_isolated_cuda_vllm_uses_the_selected_architecture_constraints(monkeypatch, architecture):
+    monkeypatch.setattr("platform.machine", lambda: architecture)
+    urls = {wheel.architecture: f"https://example.test/{wheel.architecture}.txt" for wheel in VLLM_GPU_RELEASE.wheels}
+    release = dataclasses.replace(
+        VLLM_GPU_RELEASE,
+        wheels=tuple(
+            dataclasses.replace(wheel, constraints_url=urls[wheel.architecture]) for wheel in VLLM_GPU_RELEASE.wheels
+        ),
+    )
+    monkeypatch.setattr(vllm_server, "VLLM_GPU_RELEASE", release)
+
+    command = IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
+
+    assert command[command.index("--constraint") + 1] == urls[architecture]
+    requirements = [command[index + 1] for index, argument in enumerate(command) if argument == "--with"]
+    assert "cuda-toolkit[nvcc,cccl,nvrtc]" in requirements
+    assert "flashinfer-cubin" in requirements
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():
