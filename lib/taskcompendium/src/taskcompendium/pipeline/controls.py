@@ -169,18 +169,15 @@ class _Sandbox:
     memory_mb: int
     grader: tuple[MachineFactory, MachineSpec]
 
-    def oracle(self, task: TaskSpec) -> tuple[MachineFactory, MachineSpec, EnvironmentRequirements]:
-        """Use the agent's requirements, falling back to the grader only for an empty agent environment."""
-        require_resolved_environment(task.environment_requirements)
-        if task.environment_requirements == EnvironmentRequirements():
-            grader = task.grader
-            if not isinstance(grader, VerifyitGrader | ScriptGrader) or grader.environment is None:
-                raise ValueError("An oracle requires a grader environment")
-            return (*self.grader, grader.environment)
-        return (
-            *_selected_machine(self.machines, task.environment_requirements, self.memory_mb),
-            task.environment_requirements,
-        )
+
+def _oracle_environment(task: TaskSpec) -> EnvironmentRequirements:
+    """Use the agent's requirements, falling back to the grader only for an empty agent environment."""
+    if task.environment_requirements != EnvironmentRequirements():
+        return task.environment_requirements
+    grader = task.grader
+    if not isinstance(grader, VerifyitGrader | ScriptGrader) or grader.environment is None:
+        raise ValueError("An oracle requires a grader environment")
+    return grader.environment
 
 
 async def _control(
@@ -193,9 +190,10 @@ async def _control(
     if isinstance(submission, OracleCommand):
         if sandbox is None:
             raise ValueError("An oracle command requires a sandbox grader")
-        oracle_machine = sandbox.oracle(task)
+        environment = _oracle_environment(task)
+        factory, spec = _selected_machine(sandbox.machines, environment, sandbox.memory_mb)
         try:
-            attempt = await _oracle_attempt(task, submission, *oracle_machine)
+            attempt = await _oracle_attempt(task, submission, factory, spec, environment)
         except OracleFailed as error:
             return CheckResult(check=name, status=CheckStatus.FAIL, detail=str(error))
         except (RuntimeError, OSError) as error:

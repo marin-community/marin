@@ -194,7 +194,7 @@ def local_runtime(lock_url: str) -> LocalRuntime:
 
 @cache
 def local_factory() -> MachineFactory:
-    """Create a local factory; required software is mounted by machine preparation."""
+    """Return the shared bubblewrap machine factory."""
     from shellbox.backends.local.machine import LocalMachineFactory  # noqa: PLC0415
 
     return LocalMachineFactory()
