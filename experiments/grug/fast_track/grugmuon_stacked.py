@@ -370,6 +370,13 @@ def _from_wide(result: jax.Array, like: jax.Array) -> jax.Array:
     return jnp.swapaxes(result, -1, -2) if like.shape[-2] > like.shape[-1] else result
 
 
+_NS_CHUNK_BYTES = 1 << 30
+
+
+def _largest_divisor_at_most(n: int, limit: int) -> int:
+    return max(d for d in range(1, min(n, limit) + 1) if n % d == 0)
+
+
 def _bucketed_newton_schulz(updates, params, mesh, steps: int, eps: float, coefficient_type: CoefficientType):
     """Muon directions of every 2D/3D/4D leaf, batching same-shaped matrices across leaves.
 
@@ -406,21 +413,24 @@ def _bucketed_newton_schulz(updates, params, mesh, steps: int, eps: float, coeff
             target = _target_named_sharding(param_leaves[i])
             out[i] = (reshard(part, target) if target is not None else part) * _muon_shape_scale(x.shape)
 
-    replicated = PartitionSpec(None, None, None)
     for indices in stack_buckets.values():
-        pieces = [
-            reshard(_to_wide((flat[i] if flat[i].ndim == 3 else flat[i][None]).astype(jnp.bfloat16)), replicated)
-            for i in indices
-        ]
-        stacked = jnp.concatenate(pieces, axis=0)
-        scatter(indices, pieces, _newtonschulz_padded_stack_sharded(stacked, steps, eps, coefficient_type))
+        # One leaf at a time, distributed over its layer axis: concatenating the bucket needs every leaf replicated,
+        # a full copy of the bucket (18 GiB at hero width) on every device.
+        for i in indices:
+            piece = _to_wide((flat[i] if flat[i].ndim == 3 else flat[i][None]).astype(jnp.bfloat16))
+            updated = _newtonschulz_padded_stack_sharded(piece, steps, eps, coefficient_type, keep_distributed=True)
+            scatter([i], [piece], updated)
 
     expert_spec = PartitionSpec(None, "expert", None, None)
 
     def local_syrk(stack):
         local_layers, local_experts, local_d, local_last = stack.shape
-        matrices = jax.lax.reshape(stack, (local_layers * local_experts, local_d, local_last))
-        result = _newtonschulz_batched_syrk(matrices, steps, eps, coefficient_type)
+        count = local_layers * local_experts
+        # Chunk the batch so the Newton-Schulz temporaries (X, X X^T, its square) stay ~_NS_CHUNK_BYTES per operand
+        # instead of spanning every expert matrix of every layer at once. Same per-matrix math.
+        chunk = _largest_divisor_at_most(count, max(1, _NS_CHUNK_BYTES // (local_d * local_last * 2)))
+        matrices = jax.lax.reshape(stack, (count // chunk, chunk, local_d, local_last))
+        result = jax.lax.map(lambda m: _newtonschulz_batched_syrk(m, steps, eps, coefficient_type), matrices)
         return jax.lax.reshape(result, stack.shape)
 
     for indices in expert_buckets.values():
@@ -645,8 +655,10 @@ def _newtonschulz_padded_stack_sharded(
     coefficient_type: CoefficientType = "quintic",
     *,
     target_sharding: NamedSharding | None = None,
+    keep_distributed: bool = False,
 ) -> jax.Array:
-    """Distribute a matrix stack over the intra-rack batch axes, zero-padding the leading axis."""
+    """Distribute a matrix stack over the intra-rack batch axes, zero-padding the leading axis. ``keep_distributed``
+    returns the result still sharded over that axis (the caller reshards each leaf to its parameter's layout)."""
     P = PartitionSpec
     assert X.ndim == 3
 
@@ -676,5 +688,11 @@ def _newtonschulz_padded_stack_sharded(
             raise ValueError("padded stack Newton-Schulz requires a replicated parameter layer axis")
         updated = reshard(updated, target_sharding)
         return updated[:layers] if pad else updated
+    if keep_distributed:
+        if not pad:
+            return updated
+        # Explicit sharding cannot slice the padded leading axis while it is sharded; move the shards to the rows.
+        rows_spec = P(None, batch_axis, None) if X.shape[1] % batch_shards == 0 else P(None, None, None)
+        return reshard(updated, rows_spec)[:layers]
     updated = reshard(updated, P(None, None, None))
     return updated[:layers] if pad else updated
