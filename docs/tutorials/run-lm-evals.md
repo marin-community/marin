@@ -1,9 +1,8 @@
 # Running Evaluations with Marin
 
 The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model or a
-file-backed model configuration. It starts one OpenAI-compatible model server, runs every selected
-evaluation against that endpoint, writes one durable record per evaluation, and tears the server
-down.
+file-backed model configuration. Each selected evaluation starts its own OpenAI-compatible model
+server, writes a durable record, and tears its server down.
 
 Use the launcher for routine post-hoc evaluations. Use the composable APIs later in this page when
 an evaluation must be part of a Marin pipeline or consume an `ArtifactStep[LevanterCheckpoint]`.
@@ -260,6 +259,8 @@ documents how to register a Hugging Face model or object-store checkpoint.
   for multiple files.
 - `--harbor-config path.yaml` adds one Harbor policy. Repeat the option for multiple files.
 - `--limit N` overrides the configured instance cap for every selected evaluation.
+- `--max-concurrent N` caps simultaneous evaluation steps (default 8). Each step serves one
+  candidate and, when configured, one judge.
 - `--no-wait` returns after Iris submission. Without it, the command waits for terminal records and
   prints their metrics.
 - `--platform tpu|gpu` overrides the model's default platform when the model resource hint supports
@@ -272,9 +273,10 @@ documents how to register a Hugging Face model or object-store checkpoint.
 - `--version` and `--description` attach run metadata.
 - `--records-prefix` changes the result store.
 
-Each invocation serves the model once and evaluates the selected keys in order. An evaluation
-failure gets its own terminal record and does not skip later evaluations. An inference failure
-records the current and remaining evaluations as infrastructure failures.
+Each selected evaluation runs as its own step with its own model server. The orchestrator starts up
+to eight steps at once by default; `--max-concurrent N` limits simultaneous evaluations. An
+evaluation or inference failure gets a record for that eval; other steps continue.
+On restart, completed steps are skipped.
 
 ### Harbor credentials
 

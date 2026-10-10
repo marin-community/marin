@@ -43,7 +43,6 @@ from typing import Protocol
 import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_measurements import measurements_from_records
 from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_MIN_COVERAGE,
@@ -77,10 +76,12 @@ from .metrics import (
     build_meta,
     build_model_detail,
     build_panel,
+    dashboard_measurements,
+    display_status,
     panel_request,
     record_headline,
 )
-from .record_reconciliation import VerificationSchedule, inspect_record_paths
+from .record_reconciliation import VerificationSchedule, inspect_record_paths, step_status_for_record
 from .results_db import (
     catalog_generation,
     configure_prefixes,
@@ -356,7 +357,8 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "platform": record.hardware.platform,
         "accelerator": record.hardware.accelerator,
         "region": record.hardware.region_or_cluster,
-        "status": record.status.value,
+        "status": display_status(record),
+        "step_status": record.step_status,
         "results_path": record.results_path,
         "git_sha": record.provenance.git_sha,
         "image_digest": record.provenance.eval_runtime,
@@ -372,7 +374,7 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
         "model_name": comparison_model_name(record.model),
-        "status": record.status.value,
+        "status": display_status(record),
         "created_at": record.created_at,
     }
 
@@ -508,7 +510,7 @@ class RecordStore:
         for group_id, members in by_group.items():
             ordered = sorted(members, key=lambda record: record.created_at or "")
             newest = ordered[-1]
-            statuses = {record.status.value for record in members}
+            statuses = {display_status(record) for record in members}
             groups.append(
                 {
                     "group_id": group_id,
@@ -520,7 +522,7 @@ class RecordStore:
                     "created_at": newest.created_at,
                     "status": _status_rollup(statuses),
                     "n_evals": len(members),
-                    "n_succeeded": sum(1 for record in members if record.status.value == "succeeded"),
+                    "n_succeeded": sum(1 for record in members if display_status(record) == "succeeded"),
                     "evals": [_group_member(record) for record in ordered],
                 }
             )
@@ -544,7 +546,7 @@ class RecordStore:
         protocol_records = [
             record for record in records if record.evaluation.name == task and not record_policy_violations(record)
         ]
-        protocols = declared_protocols(measurements_from_records(protocol_records))
+        protocols = declared_protocols(dashboard_measurements(protocol_records))
         points = []
         for record in task_records:
             headline = record_headline(record, protocols.get(task))
@@ -785,7 +787,10 @@ class Ingestor:
                 probe.last_probe_time = _utcnow_iso()
                 try:
                     scan = await asyncio.to_thread(scan_records, prefix, self._record_cache[prefix])
-                    found = list(scan.records)
+                    found = [
+                        record.model_copy(update={"step_status": step_status_for_record(path)})
+                        for path, record in scan.records_by_path.items()
+                    ]
                     failures = list(scan.failures)
                 except Exception as exc:
                     # One unreachable store (missing CW keys, transient outage) must not hide the
@@ -1056,7 +1061,8 @@ def _group_member(record: EvalRunRecord) -> dict:
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
-        "status": record.status.value,
+        "status": display_status(record),
+        "step_status": record.step_status,
         "created_at": record.created_at,
         "headline": _run_headline(record),
     }

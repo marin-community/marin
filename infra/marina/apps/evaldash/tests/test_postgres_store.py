@@ -13,6 +13,7 @@ from evaldash import app as evaldash_app
 from evaldash import fixtures, ingest, results_db
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRunRecord, list_records, write_record
+from marin.execution.step_status import STATUS_RUNNING, STATUS_SUCCESS, StatusFile
 from sqlalchemy.pool import StaticPool
 
 
@@ -131,6 +132,30 @@ def test_reconciler_discovers_new_paths_and_only_rereads_known_paths_when_due(tm
     clock.now += timedelta(seconds=2)
     asyncio.run(ingestor.run_once())
     assert _stored(store, record.run_id)["description"] == "rewritten"
+
+
+def test_step_completion_updates_a_cataloged_run_without_rewriting_its_record(tmp_path):
+    engine = _engine()
+    results_db.migrate_schema(engine)
+    clock = Clock()
+    prefix = tmp_path / "records"
+    record = _record(tmp_path)
+    write_record(record, str(prefix))
+    status_file = StatusFile(str(prefix / record.run_id), worker_id="test")
+    status_file.write_status(STATUS_RUNNING)
+    store = _store(engine)
+    ingestor = evaldash_app.PostgresIngestor(engine, (str(prefix),), 600, 86400, now=clock)
+
+    asyncio.run(ingestor.run_once())
+    assert _stored(store, record.run_id)["step_status"] == STATUS_RUNNING
+    assert store.fetch_runs()[0]["status"] == "running"
+
+    status_file.write_status(STATUS_SUCCESS)
+    state = next(iter(results_db.source_states(engine, str(prefix)).values()))
+    clock.now = state.next_verify_at.replace(tzinfo=UTC) + timedelta(seconds=1)
+    asyncio.run(ingestor.run_once())
+    assert _stored(store, record.run_id)["step_status"] == STATUS_SUCCESS
+    assert store.fetch_runs()[0]["status"] == record.status.value
 
 
 def test_reconciler_promotes_duplicate_only_after_two_successful_absences(tmp_path):
