@@ -45,6 +45,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     qa,
 )
 from experiments.post_training.task_curation.datasets.tasktrove import math as math_sources
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
@@ -53,11 +54,10 @@ from experiments.post_training.task_curation.tests.conversion import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-PIPELINES = {
-    source.name: source.pipeline
+RECIPES = {
+    source.name: cast(CurationRecipe, source.config)
     for module in (math_sources, judged, qa, calendar_sources, instruction_following, multichallenge, puzzles)
     for source in module.sources()
-    if source.pipeline is not None
 }
 
 
@@ -273,7 +273,7 @@ ROWS: dict[str, dict] = {
 }
 
 GRADER_MODES = {
-    **{name: "math" for name in PIPELINES if name.startswith("tasktrove-math_")},
+    **{name: "math" for name in RECIPES if name.startswith("tasktrove-math_")},
     **{f"tasktrove-{name}": "judge" for name in ("codereview", "glaive_code", "safety", "stack_overflow")},
     **{f"tasktrove-{name}": "judge" for name in ("superuser", "tezos", "unix", "wizard_orca")},
     "knowledge-openqa": "judge",
@@ -290,11 +290,11 @@ GRADER_MODES = {
 
 
 def task_of(name: str, row: dict) -> TaskSpec:
-    return converted_task(PIPELINES[name], row)
+    return converted_task(RECIPES[name], row)
 
 
 def rejection_of(name: str, row: dict) -> ImportRejection:
-    result = convert_row(PIPELINES[name], row)
+    result = convert_row(RECIPES[name], row)
     assert isinstance(result, ImportRejection), result
     return result
 
@@ -316,12 +316,12 @@ def verifier_files(task: TaskSpec) -> dict[str, bytes]:
 
 
 def test_rows_cover_the_family():
-    assert set(ROWS) == set(PIPELINES) == set(GRADER_MODES)
+    assert set(ROWS) == set(RECIPES) == set(GRADER_MODES)
 
 
 @pytest.mark.parametrize("name", sorted(ROWS))
 def test_rows_become_conversation_tasks_with_the_source_grader(name):
-    result = convert_row(PIPELINES[name], ROWS[name])
+    result = convert_row(RECIPES[name], ROWS[name])
     task = task_of(name, ROWS[name])
     grader = task.grader
     if isinstance(grader, ScriptGrader):
@@ -347,7 +347,7 @@ def test_math_uses_verifyit_in_the_sandbox_and_keeps_source_evidence_and_oracle(
     task = task_of(name, tasktrove_row(files))
     grader = task.grader
     assert isinstance(grader, VerifyitGrader)
-    assert grader.environment == fixture_context(PIPELINES[name]).grader_environment
+    assert grader.environment == fixture_context(RECIPES[name]).grader_environment
     verifier = verifier_files(task)
     assert verifier["source/verifier.py"] == files["tests/verifier.py"]
     assert verifier["source/test.sh"] == files["tests/test.sh"]

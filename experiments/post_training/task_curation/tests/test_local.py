@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -14,15 +15,35 @@ import pytest
 from taskcompendium.convert.answers import answer_task, exact_answer_task
 from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from verifyit.spec import ExactSpec
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
-from experiments.post_training.task_curation.campaign import CampaignFailed
-from experiments.post_training.task_curation.local import run_local_sources
-from experiments.post_training.task_curation.pipeline import HfSource
-from experiments.post_training.task_curation.sources import all_pipelines
+from experiments.post_training.task_curation.campaign import CampaignFailed, CampaignRuntime
+from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.datasets.tasktrove import calendar
+from experiments.post_training.task_curation.local import run_local_steps
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
+
+
+def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, download_cache, source_files_override=None):
+    runtime = CampaignRuntime()
+    options = PipelineOptions(
+        SourceProcessingMode.QUICK,
+        runtime,
+        inputs=InputOverrides(str(input_root) if input_root is not None else None, source_files_override or {}, inputs),
+    )
+    sources = {
+        name: RlDataSource(
+            pipeline=process_rows, info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), config=pipeline
+        )
+        for name, pipeline in pipelines.items()
+    }
+    steps = {name: source.pipeline(source, options) for name, source in sources.items()}
+    return run_local_steps(steps, output_root, runtime=runtime, max_workers=max_workers, download_cache=download_cache)
 
 
 def convert_local_answer(row, context):
@@ -34,7 +55,7 @@ def convert_local_answer(row, context):
 
 @pytest.fixture
 def local_source():
-    source = all_pipelines()["tasktrove-calendar"]
+    source = cast(CurationRecipe, calendar.sources()[0].config)
     return replace(
         source,
         source=HfSource("fixture/questions", "a" * 40, ("rows.parquet",), SourceFormat.PARQUET),
@@ -51,7 +72,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     pq.write_table(pa.Table.from_pylist([{"path": "original-row", "prompt": "One plus one?", "answer": "two"}]), staged)
     output = tmp_path / "output"
     with pytest.raises(CampaignFailed):
-        run_local_sources(
+        run_recipes(
             {missing.name: missing, source.name: source},
             input_root,
             output,
@@ -87,6 +108,8 @@ def converted_task(output: Path, name: str) -> TaskSpec:
 
 
 def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_path, monkeypatch):
+    ambient = str(tmp_path / "ambient")
+    monkeypatch.setenv("MARIN_PREFIX", ambient)
     remote = tmp_path / "remote"
     revision = "a" * 40
     primary = remote / "fixture/questions" / revision
@@ -97,7 +120,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     auxiliary = remote / "fixture/answers" / revision
     auxiliary.mkdir(parents=True)
     (auxiliary / "answer.txt").write_text("two")
-    source = all_pipelines()["tasktrove-calendar"]
+    source = cast(CurationRecipe, calendar.sources()[0].config)
     source = replace(
         source,
         source=HfSource("fixture/questions", revision, ("rows.jsonl",), SourceFormat.JSONL),
@@ -114,7 +137,7 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     monkeypatch.setattr(pipeline_module, "plan_download", local_plan)
     cache = tmp_path / "downloads"
     cold = tmp_path / "cold"
-    run_local_sources({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
+    run_recipes({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
     task = converted_task(cold, source.name)
     assert verifyit_spec(cast(VerifyitGrader, task.grader)) == ExactSpec(("two",), ignore_case=False)
     assert not list(cache.rglob("unselected.jsonl"))
@@ -123,16 +146,30 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     assert staged.is_relative_to(cache)
     assert json.loads(staged.read_text()) == {"prompt": "What is one plus one?"}
 
+    assert os.environ["MARIN_PREFIX"] == ambient
+    payloads = {file: file.read_bytes() for file in (cold / source.name).rglob("*.parquet")}
+    manifest_bytes = (cold / source.name / "manifest.json").read_bytes()
+    with pytest.raises(CampaignFailed):
+        run_recipes({source.name: source}, None, cold, inputs={}, max_workers=1, download_cache=cache)
+    assert os.environ["MARIN_PREFIX"] == ambient
+    assert {file: file.read_bytes() for file in payloads} == payloads
+    assert (cold / source.name / "manifest.json").read_bytes() == manifest_bytes
+    assert json.loads((cold / "campaign.json").read_text())["counts"] == {"failed": 1}
+
     shutil.rmtree(remote)
     warm = tmp_path / "warm"
-    run_local_sources({source.name: source}, None, warm, inputs={}, max_workers=1, download_cache=cache)
+    run_recipes({source.name: source}, None, warm, inputs={}, max_workers=1, download_cache=cache)
     assert converted_task(warm, source.name) == task
 
+    # Remove the test-owned auxiliary cache after taking the remote offline.
+    # An override must suppress that dependency, not merely hit its old cache.
+    auxiliary_cache = next(cache.rglob("answer.txt")).parent
+    shutil.rmtree(auxiliary_cache)
     override = tmp_path / "override"
     override.mkdir()
     (override / "answer.txt").write_text("explicit answer")
     overridden = tmp_path / "overridden"
-    run_local_sources(
+    run_recipes(
         {source.name: source},
         None,
         overridden,
@@ -145,13 +182,15 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
         ("explicit answer",), ignore_case=False
     )
 
+    auxiliary.mkdir(parents=True)
+    (auxiliary / "answer.txt").write_text("two")
     next_revision = "b" * 40
     updated = remote / "fixture/questions" / next_revision
     updated.mkdir(parents=True)
     (updated / "rows.jsonl").write_text('{"prompt": "The next pinned question"}\n')
     source = replace(source, source=replace(cast(HfSource, source.source), revision=next_revision))
     next_output = tmp_path / "next"
-    run_local_sources({source.name: source}, None, next_output, inputs={}, max_workers=1, download_cache=cache)
+    run_recipes({source.name: source}, None, next_output, inputs={}, max_workers=1, download_cache=cache)
     next_task = converted_task(next_output, source.name)
     assert next_task.source.revision == next_revision
     assert cast(TextMessage, next_task.context.events[0]).content == "The next pinned question"
@@ -165,7 +204,7 @@ def test_explicit_local_file_preserves_logical_identity_and_records_actual_bytes
         pa.Table.from_pylist([{"path": "original-row", "prompt": "One plus one?", "answer": "two"}]), local_file
     )
     output = tmp_path / "output"
-    run_local_sources(
+    run_recipes(
         {source.name: source},
         None,
         output,

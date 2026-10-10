@@ -2,10 +2,10 @@
 
 Every RL dataset is one `RlDataSource` declared here, and every declaring module
 exports `sources()`, which [sources.py](../sources.py) collects into the catalog.
-Each source combines source information and an optional `RlDataPipeline` recipe.
-A declaration names the pinned source, the converter that builds each task with
-its grader, the agent environment, and an optional review rubric and grader
-controls. See the [reference](../../../../docs/references/task-curation.md#declarations)
+Each source combines source information, its typed `config` and one optional
+pipeline callable. The callable owns ingestion and stages. The reusable
+`process_rows` callable accepts `CurationRecipe` for pinned row conversion,
+optional review and grader controls. See the [reference](../../../../docs/references/task-curation.md#declarations)
 for declaration fields and artifact outputs.
 
 ## Adding a dataset
@@ -15,8 +15,10 @@ for declaration fields and artifact outputs.
    Set `SourceInfo`'s stable `id`, display `title`, `origin`, family and tags.
    Leave `count=None` unless the pinned input population has been counted.
    Keep an existing ID when updating a source so its Atlas reviews remain linked.
-2. For a runnable source, define its pinned files and converter in
-   `RlDataPipeline`; [skyrl/math.py](skyrl/math.py) is an example. Reuse
+2. For a runnable source, supply `config` and a callable accepting the source
+   and `PipelineOptions`. To use the common row processor, set
+   `config=CurationRecipe(...)` and `pipeline=process_rows`;
+   [skyrl/math.py](skyrl/math.py) is an example. Reuse
    `taskcompendium.convert` helpers where they fit. Inventory-only sources use
    `info.dataset=SourceReference(...)` and no pipeline. Use the `excluded` tag
    when the entry should be hidden by default.
@@ -53,7 +55,8 @@ needs more declares its own `Environment` (see
 [environment.py](../environment.py)), such as `COMPILER_GRADER_PACKAGES`,
 which adds a C++ toolchain. The packages live in [grader.in](grader.in) and
 its compiled lock [grader.lock](grader.lock); regenerate the lock after
-changing `grader.in` (see [images/](../images/README.md)).
+changing `grader.in`. For a new buildable environment, follow the
+[registration instruction](../images/README.md#building).
 
 A rubric and controls can come later: without a rubric rows are kept
 unreviewed, and without controls sandbox-graded rows other than judge-graded

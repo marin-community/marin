@@ -16,3 +16,6 @@ GRADER_PACKAGES = Environment(lock=HERE / "grader.lock", data=("nltk:punkt_tab",
 
 COMPILER_GRADER_PACKAGES = replace(GRADER_PACKAGES, apt=("build-essential",))
 """The grader packages with a C++ toolchain, for graders that compile submissions."""
+
+BUILDABLE_ENVIRONMENTS = (GRADER_PACKAGES, COMPILER_GRADER_PACKAGES)
+"""Explicit environment registrations for the images build CLI."""

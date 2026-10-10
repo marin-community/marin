@@ -4,6 +4,7 @@
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -20,8 +21,8 @@ from upath import UPath
 
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.rl_smoke import smoke_step
-from experiments.post_training.task_curation.sources import all_pipelines
 from experiments.post_training.task_curation.tasktrove.export import harbor_export_step
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 
@@ -32,7 +33,7 @@ GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64
 def normalized_rows():
     source = nl2bash.sources()[0]
     task = converted_task(
-        all_pipelines()[source.name],
+        cast(CurationRecipe, source.config),
         tasktrove_row(
             {
                 "instruction.md": b"List /workspace and save output to /output/command_capture.txt.",

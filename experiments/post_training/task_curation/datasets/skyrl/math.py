@@ -21,7 +21,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim, UrlSource
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, UrlSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 AIME_VERIFIER = SourceReference(
@@ -538,10 +538,11 @@ SOURCES = (
 )
 
 
-def math_source(source: MathSource) -> RlDataSource:
+def math_source(source: MathSource) -> RlDataSource[CurationRecipe]:
     return RlDataSource(
+        pipeline=process_rows,
         info=source.info,
-        pipeline=RlDataPipeline(
+        config=CurationRecipe(
             name=source.name,
             source=source.source,
             convert=source.convert,
@@ -554,5 +555,5 @@ def math_source(source: MathSource) -> RlDataSource:
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [math_source(source) for source in SOURCES]

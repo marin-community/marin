@@ -5,6 +5,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -47,7 +48,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     REASONING_GYM_CONTROLS,
     TOOL_ACTION_CONTROLS,
 )
-from experiments.post_training.task_curation.pipeline import source_files
+from experiments.post_training.task_curation.pipeline import CurationRecipe, source_files
 from experiments.post_training.task_curation.tests.conversion import (
     convert_row,
     converted_task,
@@ -55,7 +56,7 @@ from experiments.post_training.task_curation.tests.conversion import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures/nemotron_ultra"
-PIPELINES = {source.name: source.pipeline for source in sources() if source.pipeline is not None}
+RECIPES = {source.name: cast(CurationRecipe, source.config) for source in sources()}
 SWE_GYM_INSTANCE = "gym-1"
 SWE_REBENCH_INSTANCE = "rebench-1"
 DAPO_QUESTION = "What is 2 + 3?"
@@ -371,7 +372,7 @@ def component_path(name: str) -> str:
 
 @pytest.mark.parametrize("name", sorted(ROWS))
 def test_every_component_row_converts_with_its_grader(name, staged):
-    task = converted_task(PIPELINES[name], ROWS[name], inputs=staged)
+    task = converted_task(RECIPES[name], ROWS[name], inputs=staged)
     path = component_path(name)
     if path in IN_PROCESS:
         assert grades_in_process(task.grader)
@@ -382,7 +383,7 @@ def test_every_component_row_converts_with_its_grader(name, staged):
         assert grader_config(task)["contract"]["agent_ref"] == ROWS[name]["agent_ref"]
         return
     assert isinstance(task.grader, ScriptGrader)
-    assert task.grader.environment == fixture_context(PIPELINES[name]).grader_environment
+    assert task.grader.environment == fixture_context(RECIPES[name]).grader_environment
     assert (task.answer_type == AnswerType.NATIVE_ACTION) == (path in ACTION_ANSWERS)
     contract = grader_config(task)["contract"]
     assert "responses_create_params" not in contract
@@ -399,7 +400,7 @@ def test_swe_components_split_by_swe_gym_membership(tmp_path, staged):
             for record in staged_raw_file_rows(
                 str(tmp_path),
                 SourceShard("mopd.jsonl", 0, 1, None),
-                source_files(PIPELINES[f"nemotron_ultra_mopd_swe_pivot_len40k_{split}"].source),
+                source_files(RECIPES[f"nemotron_ultra_mopd_swe_pivot_len40k_{split}"].source),
                 ConversionContext(staged, None),
             )
         ]
@@ -421,7 +422,7 @@ def test_math_placeholder_restores_question_and_answer(tmp_path, ground_truth, e
         **COMPONENT_ROWS["ultra_sft_step3200_math_cot"],
         "_hf_question_placeholder": {"dataset": DAPO, "split": "train", "row": 0, "mode": "canonical"},
     }
-    result = convert_row(PIPELINES["nemotron_ultra_rlvr1_ultra_sft_step3200_math_cot"], row, inputs=inputs)
+    result = convert_row(RECIPES["nemotron_ultra_rlvr1_ultra_sft_step3200_math_cot"], row, inputs=inputs)
     assert isinstance(result, NormalizedTask)
     assert result.task.context.events == (TextMessage(role="user", content=DAPO_QUESTION),)
     contract = grader_config(result.task)["contract"]
@@ -506,13 +507,13 @@ def test_math_placeholder_restores_question_and_answer(tmp_path, ground_truth, e
 )
 def test_converter_rejects_rows_its_grader_cannot_score(path, changes, kind, reason):
     name = pipeline_name("rlvr2", path)
-    result = convert_row(PIPELINES[name], {**COMPONENT_ROWS[path], **changes})
+    result = convert_row(RECIPES[name], {**COMPONENT_ROWS[path], **changes})
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (ImportFailureKind(kind), reason)
 
 
 def task_for(path: str, staged, **changes) -> TaskSpec:
-    return converted_task(PIPELINES[pipeline_name("rlvr2", path)], {**COMPONENT_ROWS[path], **changes}, inputs=staged)
+    return converted_task(RECIPES[pipeline_name("rlvr2", path)], {**COMPONENT_ROWS[path], **changes}, inputs=staged)
 
 
 def reply_text(reply: object) -> str:
@@ -582,7 +583,7 @@ def math_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
 
 @pytest.mark.parametrize("path", ["ultra_sft_step3200_math_cot", "ultra_sft_step3200_math_tir"])
 def test_math_golden_scores_the_boxed_reference_one(staged, path):
-    controls = PIPELINES[pipeline_name("rlvr2", path)].controls
+    controls = RECIPES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
     report = run_controls(task_for(path, staged), controls=controls, machines=None)
     statuses = {check.check: check.status for check in report.checks}

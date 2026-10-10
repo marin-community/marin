@@ -22,6 +22,7 @@ from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, R
 from verifyit.grade import grade
 
 from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import (
     FIXTURE_GRADER_ENVIRONMENT,
     convert_row,
@@ -29,7 +30,7 @@ from experiments.post_training.task_curation.tests.conversion import (
     tasktrove_row,
 )
 
-PIPELINES = {source.name: source.pipeline for source in arc.sources() if source.pipeline is not None}
+RECIPES = {source.name: cast(CurationRecipe, source.config) for source in arc.sources()}
 # The Nemotron Ultra declarations that use convert_ultra_arc name the grader packages.
 ULTRA_CONTEXT = ConversionContext({}, FIXTURE_GRADER_ENVIRONMENT)
 GRID = [[0, 1], [2, 9]]
@@ -82,7 +83,7 @@ TASKTROVE = {
 def test_tasktrove_arc_grades_the_agents_files_with_nvarc():
     name = "tasktrove-arc_inductive"
     output_paths, config, golden = TASKTROVE[name]
-    task = converted_task(PIPELINES[name], ROWS[name])
+    task = converted_task(RECIPES[name], ROWS[name])
     grader = task.grader
     assert isinstance(grader, ScriptGrader)
     assert (grader.argv, grader.cwd, grader.answer_path, grader.reward) == (
@@ -95,7 +96,7 @@ def test_tasktrove_arc_grades_the_agents_files_with_nvarc():
     assert (task.answer_type, task.output_paths) == (AnswerType.FILE, output_paths)
     assert {resource.path for resource in task.resources.verifier} == SHIPPED
     assert grader_config(task) == config
-    controls = PIPELINES[name].controls
+    controls = RECIPES[name].controls
     assert controls is not None and controls.golden is not None
     assert controls.golden(task) == WorkspaceFiles(golden)
 
@@ -111,7 +112,7 @@ def test_tasktrove_arc_grades_the_agents_files_with_nvarc():
     ],
 )
 def test_tasktrove_transductive_preserves_the_release_grid_comparison(answer, reward, tmp_path):
-    task = converted_task(PIPELINES["tasktrove-arc_transductive"], ROWS["tasktrove-arc_transductive"])
+    task = converted_task(RECIPES["tasktrove-arc_transductive"], ROWS["tasktrove-arc_transductive"])
     (tmp_path / "answer.txt").write_text(answer)
     result = grade(verifyit_spec(cast(VerifyitGrader, task.grader)), tmp_path, tmp_path)
     assert result.reward == reward
@@ -154,7 +155,7 @@ def test_tasktrove_transductive_preserves_the_release_grid_comparison(answer, re
     ],
 )
 def test_tasktrove_arc_rejects_rows_nvarc_cannot_score(name, row, kind, reason):
-    result = convert_row(PIPELINES[name], row)
+    result = convert_row(RECIPES[name], row)
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (kind, reason)
 

@@ -56,8 +56,12 @@ uv run python -m experiments.post_training.task_curation.images \
   (--all | --identity IDENTITY_PREFIX ...) [--repository ghcr.io/marin-community/iris-task]
 ```
 
-`--all` builds every environment the catalog declares; `--identity` selects
-declared environments by a prefix of their identity, as printed by
+Register a new buildable grader environment in `BUILDABLE_ENVIRONMENTS` in
+[`datasets/environments.py`](../datasets/environments.py), and use that same
+declaration in the dataset's config. Prebuilt images need no registration.
+
+`--all` builds every registered environment; `--identity` selects
+registered environments by a prefix of their identity, as printed by
 `MissingEnvironmentArtifact`. Run the build with the `MARIN_PREFIX` the
 campaign uses; it writes the artifacts there. A CoreWeave prefix needs the
 `CW_KEY_ID` and `CW_KEY_SECRET` pair in the environment.

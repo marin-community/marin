@@ -62,7 +62,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     TaskTroveConverter,
     tasktrove_source,
 )
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim, UrlSource
+from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, UrlSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 HERE = Path(__file__).parent
@@ -344,9 +344,10 @@ GENERATED_CONTROLS = Controls(golden=generated_golden)
 TASKTROVE_CONTROLS = Controls(golden=tasktrove_golden)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:reasoning_gym",
                 title="open-thought/reasoning-gym",
@@ -362,7 +363,7 @@ def sources() -> list[RlDataSource]:
                     ),
                 ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="reasoning_gym_generated",
                 source=UrlSource(
                     GENERATOR_URL,
@@ -381,6 +382,7 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-reasoning-gym-v2",
                 title="laion/nemotron-gym-reasoning-gym-v2",
@@ -390,7 +392,7 @@ def sources() -> list[RlDataSource]:
                 count=14259,
                 notes="reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-reasoning-gym",
                 source=tasktrove_source(TASKTROVE_CONFIG),
                 convert=TaskTroveConverter(TASKTROVE_CONFIG, convert_tasktrove),

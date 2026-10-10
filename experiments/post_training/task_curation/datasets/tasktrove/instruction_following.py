@@ -25,7 +25,7 @@ from verifyit.modes.grade_ifeval import resolve_checks
 from verifyit.spec import Constraint, SchemaFormat
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
@@ -211,9 +211,10 @@ def convert_structured(row: RawRow, _context: ConversionContext) -> TaskSpec | N
     return rewritten_task(task, original=instruction, reason=STRUCTURED_REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id=f"Task Trove:{IFEVAL_CONFIG}",
                 title="laion/nemotron-gym-instruction-following-v3",
@@ -226,7 +227,7 @@ def sources() -> list[RlDataSource]:
                     "(vacuous pass) at conversion."
                 ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-ifeval",
                 source=tasktrove_source(IFEVAL_CONFIG),
                 convert=TaskTroveConverter(IFEVAL_CONFIG, convert_ifeval),
@@ -237,6 +238,7 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id=f"Task Trove:{STRUCTURED_CONFIG}",
                 title="laion/nemotron-gym-instruction-following-structured-v3",
@@ -246,7 +248,7 @@ def sources() -> list[RlDataSource]:
                 count=9437,
                 notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-structured",
                 source=tasktrove_source(STRUCTURED_CONFIG),
                 convert=TaskTroveConverter(STRUCTURED_CONFIG, convert_structured),
