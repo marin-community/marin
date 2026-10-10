@@ -48,6 +48,9 @@ Nontrivial differences from upstream FA4/CuTe:
   score tile before exponentiation.
 - ``mQOffset`` shifts every causal bound by the global position of local query 0.
   The segment mask replaces upstream's right-aligned causal mask.
+- With ``use_rel_bias`` the banded Inkling bias (``_inkling_relpos``) is added to the
+  recomputed scores of in-band tiles, and dS of those tiles is written to the banded
+  bias-gradient output (the bias is additive, so dBand = dS).
 - Global-to-shared copies use ``CopyUniversalOp`` where JAX ``cutlass_call``
   exposes generic memrefs that upstream cp.async copy atoms reject.
 """
@@ -73,6 +76,8 @@ from flash_attn.cute.tile_scheduler import SingleTileScheduler, SingleTileVarlen
 from quack import layout_utils
 from quack.cute_dsl_utils import ParamsBase
 
+from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK
+
 
 class SegmentedFlashAttentionBackwardSm80:
     def __init__(
@@ -97,6 +102,7 @@ class SegmentedFlashAttentionBackwardSm80:
         V_in_regs: bool = False,
         score_mod: cutlass.Constexpr | None = None,
         score_mod_bwd: cutlass.Constexpr | None = None,
+        use_rel_bias: bool = False,
     ):
         """Initializes the configuration for a flash attention v2 kernel.
 
@@ -144,6 +150,14 @@ class SegmentedFlashAttentionBackwardSm80:
         self.share_QV_smem = V_in_regs
         self.score_mod = score_mod
         self.score_mod_bwd = score_mod_bwd
+        self.use_rel_bias = use_rel_bias
+        if use_rel_bias and SdP_swapAB:
+            raise NotImplementedError("the banded bias tiles assume the unswapped (query, key) score layout")
+        if use_rel_bias and (REL_BIAS_BLOCK % m_block_size != 0 or REL_BIAS_BLOCK % n_block_size != 0):
+            raise ValueError(
+                f"banded bias needs m_block_size={m_block_size} and n_block_size={n_block_size} to divide "
+                f"{REL_BIAS_BLOCK}"
+            )
 
     @staticmethod
     def can_implement(
@@ -466,6 +480,7 @@ class SegmentedFlashAttentionBackwardSm80:
         mValid: cute.Tensor,
         mQOffset: cute.Tensor,
         mRelBias: cute.Tensor,
+        mdRelBias: cute.Tensor,
         softmax_scale: cutlass.Float32,
         mCuSeqlensQ: Optional[cute.Tensor] = None,
         mCuSeqlensK: Optional[cute.Tensor] = None,
@@ -568,6 +583,7 @@ class SegmentedFlashAttentionBackwardSm80:
             mValid,
             mQOffset,
             mRelBias,
+            mdRelBias,
             mCuSeqlensQ,
             mCuSeqlensK,
             mSeqUsedQ,
@@ -616,6 +632,7 @@ class SegmentedFlashAttentionBackwardSm80:
         mValid: cute.Tensor,
         mQOffset: cute.Tensor,
         mRelBias: cute.Tensor,
+        mdRelBias: cute.Tensor,
         mCuSeqlensQ: Optional[cute.Tensor],
         mCuSeqlensK: Optional[cute.Tensor],
         mSeqUsedQ: Optional[cute.Tensor],
@@ -944,8 +961,12 @@ class SegmentedFlashAttentionBackwardSm80:
                 tLSEcLSE,
                 seqlen=seqlen.seqlen_q,
             )
+            rel_bias_params = SimpleNamespace(
+                mRelBias=mRelBias, mdRelBias=mdRelBias, n_block=n_block, head_idx=head_idx, batch_idx=batch_idx
+            )
             compute_one_m_block = partial(
                 self.compute_one_m_block,
+                rel_bias_params=rel_bias_params,
                 mma_params=mma_params,
                 smem_copy_params=smem_copy_params,
                 gmem_copy_params=gmem_copy_params,
@@ -1008,10 +1029,7 @@ class SegmentedFlashAttentionBackwardSm80:
                     acc_S,
                     mLowerBounds,
                     mValid,
-                    mRelBias,
                     batch_idx,
-                    head_idx,
-                    softmax_scale,
                     m_block,
                     n_block,
                     thr_mma_sdp,
@@ -1092,10 +1110,7 @@ class SegmentedFlashAttentionBackwardSm80:
         acc_S: cute.Tensor,
         mLowerBounds: cute.Tensor,
         mValid: cute.Tensor,
-        mRelBias: cute.Tensor,
         batch_idx: cutlass.Int32,
-        head_idx: cutlass.Int32,
-        softmax_scale: cutlass.Float32,
         m_block: cutlass.Int32,
         n_block: cutlass.Int32,
         thr_mma: cute.TiledMma,
@@ -1130,18 +1145,69 @@ class SegmentedFlashAttentionBackwardSm80:
                 keep = query_in_bounds and query_valid and key_in_bounds and key_after_lower_bound and key_before_query
                 if not keep:
                     acc_S_mn[r, c] = -cutlass.Float32.inf
-                # Inkling relative-position bias in the bwd S-recompute (mirrors the forward): add
-                # A[query, delta=query-key]/softmax_scale to the raw qk logit for kept in-band positions,
-                # so the recomputed P includes the bias and dq/dk/dv are correct. mRelBias is [S,L,Hq,B];
-                # non-Inkling callers pass a zero [.,1] bias.
-                rel_extent = mRelBias.shape[1]
-                # Distance in global positions: local query i sits at i + q_offset.
-                delta = query_idx + q_offset - key_idx
-                delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
-                bias_val = mRelBias[query_meta_idx, delta_safe, head_idx, batch_idx]
-                in_band = keep and cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
-                if in_band:
-                    acc_S_mn[r, c] = acc_S_mn[r, c] + bias_val.to(cutlass.Float32) / softmax_scale
+
+    @cute.jit
+    def _rel_bias_tile_in_band(self, m_block: cutlass.Int32, n_block: cutlass.Int32, band_width: cutlass.Int32):
+        """Whether key tile ``n_block`` lies in the banded-bias window of ``m_block``'s query block.
+
+        The bias uses the banded layout of ``levanter.grug.attention._inkling_relpos``: all rows of a query tile
+        share the block start ``q0``, key ``k`` reads band column ``k - q0 + rel_extent``, and the window's key
+        tiles ``[q0 - rel_extent, q0 + REL_BIAS_BLOCK)`` map to dense sub-tiles of the band.
+        """
+        rel_extent = band_width - REL_BIAS_BLOCK
+        q0 = m_block * self.m_block_size // REL_BIAS_BLOCK * REL_BIAS_BLOCK
+        n0 = n_block * self.n_block_size
+        return cute.elem_less(q0 - rel_extent - 1, n0) and cute.elem_less(n0, q0 + REL_BIAS_BLOCK)
+
+    @cute.jit
+    def _band_tile(self, band: cute.Tensor, thr_mma: cute.TiledMma, m_block: cutlass.Int32, p: SimpleNamespace):
+        """This thread's MMA-C partition of the band sub-tile for the in-band (m_block, n_block) score tile.
+
+        ``band`` is the kernel view ``[S, W, Hq, B]``; the tile's rows are its query rows and its columns are
+        band columns ``n0 - q0 + rel_extent + [0, n_block_size)``, a whole aligned tile since both block sizes
+        divide ``REL_BIAS_BLOCK`` and ``rel_extent``.
+        """
+        rel_extent = band.shape[1] - REL_BIAS_BLOCK
+        q0 = m_block * self.m_block_size // REL_BIAS_BLOCK * REL_BIAS_BLOCK
+        column_tile = (p.n_block * self.n_block_size - q0 + rel_extent) // self.n_block_size
+        # The band can exceed 2**31 elements: offset its (batch, head) plane in Int64.
+        plane = band[None, None, cutlass.Int64(p.head_idx), cutlass.Int64(p.batch_idx)]
+        tile = cute.local_tile(plane, (self.m_block_size, self.n_block_size), (m_block, column_tile))
+        return thr_mma.partition_C(tile)
+
+    @cute.jit
+    def load_rel_bias(self, rBias: cute.Tensor, thr_mma: cute.TiledMma, m_block: cutlass.Int32, p: SimpleNamespace):
+        """Load this thread's banded-bias elements of the (m_block, n_block) score tile (in-band tiles only).
+
+        Issued before the S MMA so the gmem latency overlaps it.
+        """
+        if self._rel_bias_tile_in_band(m_block, p.n_block, p.mRelBias.shape[1]):
+            cute.autovec_copy(self._band_tile(p.mRelBias, thr_mma, m_block, p), rBias)
+
+    @cute.jit
+    def apply_rel_bias(
+        self,
+        acc_S: cute.Tensor,
+        rBias: cute.Tensor,
+        m_block: cutlass.Int32,
+        softmax_scale: cutlass.Float32,
+        p: SimpleNamespace,
+    ):
+        """Add the prefetched bias to the raw qk scores, in raw-qk units ``A / softmax_scale``."""
+        if self._rel_bias_tile_in_band(m_block, p.n_block, p.mRelBias.shape[1]):
+            acc_S.store(acc_S.load() + rBias.load().to(cutlass.Float32) * (cutlass.Float32(1.0) / softmax_scale))
+
+    @cute.jit
+    def store_rel_bias_grad(
+        self, rdS: cute.Tensor, thr_mma: cute.TiledMma, m_block: cutlass.Int32, p: SimpleNamespace
+    ):
+        """Write dS (the bias is additive in the logits, so dBand = dS) at the band positions the bias was read.
+
+        Each (query, key) pair maps to a unique band column, so the stores never race. Band entries no tile
+        writes (keys before 0, pruned query tiles) keep the launcher's zero fill.
+        """
+        if self._rel_bias_tile_in_band(m_block, p.n_block, p.mdRelBias.shape[1]):
+            cute.autovec_copy(rdS, self._band_tile(p.mdRelBias, thr_mma, m_block, p))
 
     @cute.jit
     def compute_one_m_block(
@@ -1159,6 +1225,7 @@ class SegmentedFlashAttentionBackwardSm80:
         m_block_max: cutlass.Int32,
         softmax_scale: cutlass.Float32,
         softmax_scale_log2: cutlass.Float32,
+        rel_bias_params: SimpleNamespace,
         mask_fn: Optional[Callable] = None,
     ):
         def load_Q_next():
@@ -1180,6 +1247,9 @@ class SegmentedFlashAttentionBackwardSm80:
         )
         acc_S = cute.make_rmem_tensor(acc_shape_SdP, cutlass.Float32)
         acc_S.fill(0.0)
+        if cutlass.const_expr(self.use_rel_bias):
+            rBias = cute.make_rmem_tensor(acc_shape_SdP, rel_bias_params.mRelBias.element_type)
+            self.load_rel_bias(rBias, mma_params.thr_mma_sdp, m_block, rel_bias_params)
         cute.arch.cp_async_wait_group(1 if cutlass.const_expr(self.num_stages_Q > 1) else 0)
         cute.arch.barrier()
         sm80_utils.gemm(
@@ -1217,6 +1287,8 @@ class SegmentedFlashAttentionBackwardSm80:
                         [],
                     )
                 )
+        if cutlass.const_expr(self.use_rel_bias):
+            self.apply_rel_bias(acc_S, rBias, m_block, softmax_scale, rel_bias_params)
         if cutlass.const_expr(mask_fn is not None):
             mask_fn(acc_S, m_block=m_block)
         bidx = 0
@@ -1278,6 +1350,8 @@ class SegmentedFlashAttentionBackwardSm80:
             cute.copy(smem_copy_params.r2s_thr_copy_PdS, tPrP, smem_copy_params.tPsP)
         rdS = cute.make_fragment_like(acc_dP, self.dtype)
         rdS.store(acc_dP.load().to(self.dtype))
+        if cutlass.const_expr(self.use_rel_bias):
+            self.store_rel_bias_grad(rdS, mma_params.thr_mma_sdp, m_block, rel_bias_params)
         if cutlass.const_expr(not self.Mma_dKV_is_RS):
             cute.arch.barrier()  # Make sure P is written
         # For hdim 64, It's faster to write to smem_dS first before the dV gemm

@@ -194,7 +194,7 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
         return q
 
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim, rel_extent=None: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_forward)
     mesh = AbstractMesh(
         axis_sizes=(1, 2, 8, 1),
@@ -225,7 +225,7 @@ def _fake_unsharded_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_co
 
 def test_fa4_rejects_kv_batch_sharded_over_query_sequence_axis(monkeypatch):
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim, rel_extent=None: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_unsharded_forward)
     mesh = AbstractMesh(
         axis_sizes=(1, 2, 8, 1),
@@ -252,7 +252,7 @@ def test_fa4_rejects_kv_batch_sharded_over_query_sequence_axis(monkeypatch):
 @pytest.mark.parametrize("context_entry", ["context", ("context", "model")])
 def test_fa4_accepts_unit_context_axis(monkeypatch, context_entry):
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim, rel_extent=None: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_unsharded_forward)
     mesh = AbstractMesh(
         axis_sizes=(1, 2, 1, 8, 1),
@@ -281,7 +281,7 @@ def test_fa4_accepts_unit_context_axis(monkeypatch, context_entry):
 
 def test_fa4_precomputed_bounds_reject_mismatched_context_lengths(monkeypatch):
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim, rel_extent=None: object())
     mesh = AbstractMesh((2,), ("context",), axis_types=(AxisType.Explicit,))
     q = jax.ShapeDtypeStruct((1, 8, 2, 8), jnp.bfloat16, sharding=NamedSharding(mesh, P(None, "context")))
     k = jax.ShapeDtypeStruct((1, 4, 1, 8), jnp.bfloat16, sharding=NamedSharding(mesh, P()))
@@ -440,21 +440,26 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
 
 
-@pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (4, 4)])
+@pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (4, 4), (12, 1)])
 @pytest.mark.parametrize("sliding_window", [None, 192])
-def test_real_gpu_fa4_cute_inkling_bias_matches_reference(q_heads, kv_heads, sliding_window):
-    """Fused forward + sm90 backward with the banded Inkling bias (incl. in-kernel bias grad) vs reference.
+@pytest.mark.parametrize("rel_extent", [128, 64])
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_pallas_fa4"])
+def test_real_gpu_fa4_cute_inkling_bias_matches_reference(
+    q_heads, kv_heads, sliding_window, rel_extent, implementation
+):
+    """Forward + backward with the banded Inkling bias (incl. the in-kernel bias grad) vs reference.
 
     Covers GQA and MHA (the MLA layout), packed segments, and a band (rel_extent) shorter than both the
-    window and the sequence so in-band, out-of-band, and masked tiles all occur. Gradients are taken
-    w.r.t. the compact distance-indexed bias, which is how the model parameterizes the band.
+    window and the sequence so in-band, out-of-band, and masked tiles all occur. On SM100 a 128 extent runs
+    the native backward and 64 the segmented one. Gradients are taken w.r.t. the compact distance-indexed
+    bias, which is how the model parameterizes the band.
     """
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
-    batch, seq_len, head_dim, rel_extent = 2, 512, 128, 128
+    batch, seq_len, head_dim = 2, 512, 128
     key = jax.random.PRNGKey(11)
     q_key, k_key, v_key, a_key, cotangent_key = jax.random.split(key, 5)
     q = jax.random.normal(q_key, (batch, seq_len, q_heads, head_dim), dtype=jnp.bfloat16)
@@ -472,7 +477,7 @@ def test_real_gpu_fa4_cute_inkling_bias_matches_reference(q_heads, kv_heads, sli
         return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
 
     args = (q, k, v, compact_bias)
-    actual = jax.jit(jax.grad(lambda *a: loss("gpu_fa4_cute", *a), argnums=(0, 1, 2, 3)))(*args)
+    actual = jax.jit(jax.grad(lambda *a: loss(implementation, *a), argnums=(0, 1, 2, 3)))(*args)
     expected = jax.jit(jax.grad(lambda *a: loss("reference", *a), argnums=(0, 1, 2, 3)))(*args)
 
     for name, actual_grad, expected_grad in zip(("dq", "dk", "dv", "dA"), actual, expected, strict=True):
@@ -660,7 +665,7 @@ def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sli
         np.testing.assert_allclose(actual[:1, :40], expected, atol=7e-2, rtol=7e-2)
 
 
-@pytest.mark.parametrize(("query_heads", "kv_heads"), [(48, 6), (48, 12), (6, 1)])
+@pytest.mark.parametrize(("query_heads", "kv_heads"), [(48, 6), (48, 12), (6, 1), (6, 6)])
 @pytest.mark.parametrize(("sequence_length", "sliding_window"), [(257, None), (257, 31), (2305, 2048)])
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_sm100"])
@@ -669,6 +674,8 @@ def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(
 ):
     if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
         pytest.skip("Native SM100 backward correctness requires an SM100 GPU.")
+    if implementation == "gpu_fa4_cute_sm100" and query_heads // kv_heads not in SM100_GQA_RATIOS:
+        pytest.skip("The native SM100 forward supports GQA ratios 4, 6 and 8 only.")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_sm100")
 

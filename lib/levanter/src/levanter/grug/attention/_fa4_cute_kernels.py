@@ -974,12 +974,14 @@ def segmented_flash_attention_forward_launcher(
             rel_extent = basic_params.mRelBias.shape[1] - REL_BIAS_BLOCK
             q0 = basic_params.m_block * self._m_block_size // REL_BIAS_BLOCK * REL_BIAS_BLOCK
             column_offset = rel_extent - q0
+            # The band can exceed 2**31 elements: offset its (head, batch) plane in Int64.
+            band = basic_params.mRelBias[
+                None, None, cutlass.Int64(basic_params.q_head), cutlass.Int64(basic_params.batch_idx)
+            ]
             for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
                 query_meta_idx = cutlass.min(tScS_mn[r, 0][1], basic_params.mQ.shape[0] - 1)
                 for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
-                    rBias_mn[r, c] = basic_params.mRelBias[
-                        query_meta_idx, tScS_mn[0, c][3] + column_offset, basic_params.q_head, basic_params.batch_idx
-                    ]
+                    rBias_mn[r, c] = band[query_meta_idx, tScS_mn[0, c][3] + column_offset]
 
         def _make_acc_tensor_mn_view(self, acc: cute.Tensor) -> cute.Tensor:
             acc_layout_col_major = cute.make_layout(acc.layout.shape)
@@ -1048,6 +1050,7 @@ def segmented_flash_attention_backward_launcher(
     tile_n: int = 64,
     num_threads: int = 128,
     compute_arch: int | None = None,
+    use_rel_bias: bool = False,
 ) -> Any:
     """Build the FA4/CuTe segmented backward launcher.
 
@@ -1055,6 +1058,10 @@ def segmented_flash_attention_backward_launcher(
     preprocess computes dPsum/LSE-log2 and zeros dQ accumulators, the main
     tiled kernel accumulates dQ/dK/dV, then postprocess converts accumulators
     to the requested BF16/FP16 gradients.
+
+    With ``use_rel_bias``, ``rel_bias`` is the banded Inkling bias (kernel layout ``[S, W, Hq, B]``) added to
+    the recomputed scores, and ``rel_bias_grad`` (same layout) receives its gradient, written in-kernel from
+    dS; it is zero-filled first so band entries no tile visits stay zero.
 
     The ``q_offset[1]`` int32 tensor gives local query 0's global position, matching
     forward. Unpartitioned queries use zero.
@@ -1164,9 +1171,11 @@ def segmented_flash_attention_backward_launcher(
         V_in_regs=False,
         score_mod=None,
         score_mod_bwd=None,
+        use_rel_bias=use_rel_bias,
     )
 
     zero_fill = _float32_zero_fill(modules, num_threads=postprocess_threads)
+    rel_bias_grad_zero_fill = _vectorized_zero_fill(modules, num_threads=postprocess_threads)
     _as_gmem_tensor = _native_gmem_tensor_view(modules)
 
     @cute.jit
@@ -1190,9 +1199,14 @@ def segmented_flash_attention_backward_launcher(
         dq_accum: cute.Tensor,
         dk_accum: cute.Tensor,
         dv_accum: cute.Tensor,
+        rel_bias_grad: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
+        if cutlass.const_expr(use_rel_bias):
+            rel_bias_grad_zero_fill(rel_bias_grad, stream)
+        rel_bias_grad_gmem = _as_gmem_tensor(rel_bias_grad)
+        rel_bias = _as_gmem_tensor(rel_bias)
         preprocess(
             out,  # mO
             dout,  # mdO
@@ -1224,6 +1238,7 @@ def segmented_flash_attention_backward_launcher(
                 valid,
                 q_offset,
                 rel_bias,
+                rel_bias_grad_gmem,
                 softmax_scale,
                 None,
                 None,
@@ -1258,6 +1273,7 @@ def segmented_flash_attention_backward_launcher(
             valid,
             q_offset,
             rel_bias,
+            rel_bias_grad_gmem,
             softmax_scale,
             None,
             None,
@@ -1460,7 +1476,8 @@ def _vectorized_zero_fill(modules: Any, *, num_threads: int) -> Any:
         def kernel(self, flat: cute.Tensor):
             tidx, _, _ = cute.arch.thread_idx()
             bidx, _, _ = cute.arch.block_idx()
-            idx = bidx * self._num_threads + tidx
+            # Int64: offsets of buffers past 2**31 elements (the banded bias gradient at large batch) overflow Int32.
+            idx = cutlass.Int64(bidx) * self._num_threads + cutlass.Int64(tidx)
             if idx < cute.size(flat) // self._VEC:
                 zeros = cute.make_rmem_tensor((self._VEC,), flat.element_type)
                 zeros.fill(0.0)
@@ -1674,25 +1691,46 @@ def _validate_sm100_backward_config(config: Flash4CuteSm100BackwardConfig) -> No
 
 @cute_launcher_factory
 def segmented_flash_attention_backward_sm100_launcher(
-    modules: Any, *, head_dim: int, head_dim_v: int, qhead_per_kvhead: int, config: Flash4CuteSm100BackwardConfig
+    modules: Any,
+    *,
+    head_dim: int,
+    head_dim_v: int,
+    qhead_per_kvhead: int,
+    config: Flash4CuteSm100BackwardConfig,
+    use_rel_bias: bool = False,
 ) -> Any:
-    """Build the native SM100 packed backward launcher with one CTA per cluster."""
+    """Build the native SM100 packed backward launcher with one CTA per cluster.
+
+    With ``use_rel_bias``, ``rel_bias`` is the banded Inkling bias (kernel layout ``[S, W, Hq, B]``) added to
+    the recomputed scores, and ``rel_bias_grad`` (same layout, zero-filled first) receives its gradient.
+    """
     _validate_sm100_backward_config(config)
+    if use_rel_bias and config.tile[0] != REL_BIAS_BLOCK:
+        raise ValueError(
+            f"the banded bias needs the SM100 backward query tile to be {REL_BIAS_BLOCK}, got {config.tile}"
+        )
     deps = _import_cute_dependencies(modules)
     cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
     native_module = importlib.import_module("flash_attn.cute.flash_bwd_sm100")
     sparsity_module = importlib.import_module("flash_attn.cute.block_sparsity")
     utils_module = importlib.import_module("flash_attn.cute.utils")
-    FlashAttentionBackwardSm100 = native_module.FlashAttentionBackwardSm100
+    if use_rel_bias:
+        inkling_module = importlib.import_module("levanter.grug.attention._fa4_cute_inkling_bwd_sm100")
+        backward_cls = inkling_module.InklingFlashAttentionBackwardSm100
+    else:
+        backward_cls = native_module.FlashAttentionBackwardSm100
     BlockSparseTensors = sparsity_module.BlockSparseTensors
     _patch_jax_array_list_tvm_ffi_converter()
     AuxData = utils_module.AuxData
 
     _grug_segment_mask_mod = _native_segment_mask_mod(modules)
     zero_fill = _float32_zero_fill(modules, num_threads=config.zero_fill_threads)
+    rel_bias_grad_zero_fill = _vectorized_zero_fill(modules, num_threads=config.zero_fill_threads)
     _as_gmem_tensor = _native_gmem_tensor_view(modules)
 
-    backward = FlashAttentionBackwardSm100(
+    # Non-None sentinels select the score-mod paths the Inkling subclass overrides.
+    inkling_score_mod = "inkling_inline" if use_rel_bias else None
+    backward = backward_cls(
         head_dim,
         head_dim_v,
         is_causal=False,
@@ -1703,6 +1741,8 @@ def segmented_flash_attention_backward_sm100_launcher(
         cluster_size=1,
         use_2cta_instrs=False,
         deterministic=False,
+        score_mod=inkling_score_mod,
+        score_mod_bwd=inkling_score_mod,
         mask_mod=_grug_segment_mask_mod,
         has_aux_tensors=True,
         kv_subtile_factor=1,
@@ -1726,9 +1766,11 @@ def segmented_flash_attention_backward_sm100_launcher(
         mask_block_idx: cute.Tensor,
         full_block_cnt: cute.Tensor,
         full_block_idx: cute.Tensor,
+        rel_bias: cute.Tensor,
         dq_accum: cute.Tensor,
         dk_accum: cute.Tensor,
         dv_accum: cute.Tensor,
+        rel_bias_grad: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
@@ -1742,11 +1784,18 @@ def segmented_flash_attention_backward_sm100_launcher(
         if cutlass.const_expr(qhead_per_kvhead > 1):
             zero_fill(dk_accum, stream)
             zero_fill(dv_accum, stream)
+        if cutlass.const_expr(use_rel_bias):
+            rel_bias_grad_zero_fill(rel_bias_grad, stream)
         lse_log2_gmem = _as_gmem_tensor(lse_log2)
         dpsum_gmem = _as_gmem_tensor(dpsum)
         dq_accum_gmem = _as_gmem_tensor(dq_accum)
         dk_accum_gmem = _as_gmem_tensor(dk_accum)
         dv_accum_gmem = _as_gmem_tensor(dv_accum)
+        aux_tensors = (
+            (lower_bounds, valid, q_offset, _as_gmem_tensor(rel_bias), _as_gmem_tensor(rel_bias_grad))
+            if use_rel_bias
+            else (lower_bounds, valid, q_offset)
+        )
         backward(
             q,
             k,
@@ -1758,7 +1807,7 @@ def segmented_flash_attention_backward_sm100_launcher(
             dk_accum_gmem,
             dv_accum_gmem,
             softmax_scale,
-            aux_data=AuxData(tensors=(lower_bounds, valid, q_offset)),
+            aux_data=AuxData(tensors=aux_tensors),
             blocksparse_tensors=blocksparse_tensors,
             stream=stream,
         )

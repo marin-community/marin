@@ -334,7 +334,11 @@ def _segmented_kernel_config(head_dim: int, rel_extent: int | None = None) -> Fl
     # segmented fork. On B200 d5120 Grug shapes, 64x64 fwd/bwd is consistently
     # faster than both the prior 128x64/64x64 config and dense-upstream 128x128.
     if arch // 10 == 10 and head_dim == 128:
-        return replace(kernel_config, forward_tile=(64, 64), backward_tile=(64, 64), num_threads=128)
+        kernel_config = replace(kernel_config, forward_tile=(64, 64), backward_tile=(64, 64), num_threads=128)
+    if arch == 100 and head_dim == SM100_HEAD_DIM:
+        # The native SM100 backward (1.6x the segmented one at the MLA shape on GB200) serves the shapes it is
+        # validated for; segmented_flash_attention_backward falls back to the segmented kernel otherwise.
+        kernel_config = replace(kernel_config, sm100_backward=sm100_flash4_cute_kernel_config().sm100_backward)
     return kernel_config
 
 

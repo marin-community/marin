@@ -7,8 +7,9 @@ On H100 our FA4 port's forward is the 128-thread segmented kernel, which runs we
 the Pallas Triton softmax forward (``levanter.kernels.pallas.parallax.pallas_gpu.softmax_forward``) is about twice as
 fast at head dim 128. This backend pairs the two under one ``custom_vjp``: the forward produces ``(out, lse)`` in the
 FlashAttention convention and the FA4 backward consumes them, with the same per-query key bounds (causal masks,
-segments, sliding windows) and the optional banded Inkling bias, whose gradient the SM90 backward computes in-kernel.
-Batch/head sharding only.
+segments, sliding windows) and the optional banded Inkling bias, whose gradient the FA4 backward computes in-kernel.
+The backward config is ``gpu_fa4_cute``'s (on SM100 the native SM100 backward where validated, else the segmented
+kernel). Batch/head sharding only.
 """
 
 import functools
@@ -79,12 +80,11 @@ def _attention_bwd(scale, kernel_config, plain_causal, residuals, dout):
         kernel_config=kernel_config,
         q_offset=jnp.zeros((1,), dtype=jnp.int32),
     )
-    dq, dk, dv = grads[:3]
     if rel_bias is None:
+        dq, dk, dv = grads
         return dq, dk, dv, None, None, None
-    if len(grads) != 4:
-        raise NotImplementedError("gpu_pallas_fa4 needs the native SM90 FA4 backward for the rel_bias gradient")
-    return dq, dk, dv, None, None, grads[3].astype(rel_bias.dtype)
+    dq, dk, dv, d_rel_bias = grads
+    return dq, dk, dv, None, None, d_rel_bias.astype(rel_bias.dtype)
 
 
 _attention.defvjp(_attention_fwd, _attention_bwd)
