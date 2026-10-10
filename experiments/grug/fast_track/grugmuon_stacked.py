@@ -441,9 +441,16 @@ def _bucketed_newton_schulz(updates, params, mesh, steps: int, eps: float, coeff
 
     for indices in expert_buckets.values():
         pieces = [reshard(_to_wide(flat[i].astype(jnp.bfloat16)), expert_spec) for i in indices]
-        stacked = jnp.concatenate(pieces, axis=0)
-        updated = shard_map(local_syrk, mesh=mesh, in_specs=expert_spec, out_specs=expert_spec, check_vma=False)(stacked)
-        scatter(indices, pieces, updated)
+        if sum(p.size for p in pieces) * 2 <= _NS_CHUNK_BYTES * jax.device_count():
+            stacked = jnp.concatenate(pieces, axis=0)
+            run = shard_map(local_syrk, mesh=mesh, in_specs=expert_spec, out_specs=expert_spec, check_vma=False)
+            scatter(indices, pieces, run(stacked))
+            continue
+        # Large buckets: one leaf at a time. Concatenating every layer's up and down matrices makes the bf16 input
+        # and output stacks (15 GiB each per GPU at hero width) live together; per leaf they are half that.
+        for i, piece in zip(indices, pieces, strict=True):
+            run = shard_map(local_syrk, mesh=mesh, in_specs=expert_spec, out_specs=expert_spec, check_vma=False)
+            scatter([i], [piece], run(piece))
     return treedef.unflatten(out)
 
 
