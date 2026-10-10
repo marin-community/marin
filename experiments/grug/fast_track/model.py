@@ -14,7 +14,7 @@ import dataclasses
 import functools
 import itertools
 import math
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -669,6 +669,11 @@ class GrugModelConfig:
     sublayer_gated_norm: bool = True
     """GatedNorm after the RMSNorm on every attention and MLP input (else the RMSNorm alone)."""
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
+    scan_layers: bool = False
+    """Run the AttnRes layer stack as a ``jax.lax.scan`` over ``global_every``-layer units on a fixed-shape
+    history (``_AttnResHistory``), each layer rematerialized in the backward, instead of unrolling every layer.
+    Same math; the layers after the leading run of identical units (e.g. ``latent_out_full_layers``) stay
+    unrolled. Needed to compile deep models (48 layers)."""
     attn_res_remat_attention: bool = False
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
     the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
@@ -789,6 +794,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
+        if self.scan_layers and (not self.attn_res or self.attn_res_layer_backward != AttnResLayerBackward.RECOMPUTE):
+            raise ValueError("scan_layers needs attn_res with attn_res_layer_backward=recompute")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
         if self.moe_drop_renorm and self.moe_implementation != "fixed_pooled_wave_all_to_all":
@@ -3649,6 +3656,10 @@ def _gate_z(logits: list[jax.Array]) -> jax.Array:
     return jnp.mean(jnp.square(jax.nn.logsumexp(jnp.stack(logits), axis=0)))
 
 
+GateMix = Callable[[jax.Array | None, Any, bool], tuple[jax.Array, jax.Array, jax.Array]]
+"""``mix(partial, gate_index, attn_gate) -> (h, z, mean_weights)``: one AttnRes gate over a layer's history."""
+
+
 def _attn_res_layer(
     diff_args: tuple[Block, tuple[jax.Array, ...], tuple[jax.Array, ...], jax.Array | None, jax.Array, jax.Array | None],
     mask: AttentionMask,
@@ -3665,15 +3676,33 @@ def _attn_res_layer(
     case this layer starts a fresh partial sum.
     """
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
+
+    def mix(p: jax.Array | None, gate_index: int, attn_gate: bool):
+        del attn_gate
+        return _attn_res_mix(blocks, block_logits, p, queries, gate_index, eps, logit_bias)
+
+    return _attn_res_sublayers(
+        layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, kv_share, logit_bias
+    )
+
+
+def _attn_res_sublayers(
+    layer: Block,
+    partial: jax.Array | None,
+    mix: GateMix,
+    mask: AttentionMask,
+    token_ids: Int[Array, "B S"],
+    use_long: bool,
+    layer_index: int | jax.Array,
+    noise_key: jax.Array | None,
+    kv_share: dict[str, jax.Array] | None,
+    logit_bias: dict[str, jax.Array | None] | None,
+) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    """The attention and MLP sublayers of one AttnRes layer, each reading its gate's ``mix`` of the history.
+
+    ``layer_index`` is a Python int in the unrolled loop and a traced int under ``scan_layers``."""
     cfg = layer.attn.cfg
-    opts = {
-        "head_norm": False,
-        "additive": False,
-        "stream_source": False,
-        "source_delta": False,
-        "soft_cap": None,
-    }
-    h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias, **opts)
+    h, z_attn, w_attn = mix(partial, 2 * layer_index, True)
     attn_in = h
     attn_branch = type(layer).attn_branch
     if cfg.attn_res_remat_attention:
@@ -3702,15 +3731,11 @@ def _attn_res_layer(
     partial_attn = attn_out if scale_attn is None else scale_attn * attn_out
     partial = partial_attn if partial is None else partial + partial_attn
     mlp_partial = partial
-    h, z_mlp, w_mlp = _attn_res_mix(
-        blocks, block_logits, mlp_partial, queries, 2 * layer_index + 1, eps, logit_bias, **opts
-    )
+    h, z_mlp, w_mlp = mix(mlp_partial, 2 * layer_index + 1, False)
     shared_kwargs: dict[str, Any] = {}
     if layer.attn_res_query_shared is not None:
         # Shared-gate rows follow the per-layer gates, ahead of the final gate.
-        h_shared, z_shared, _ = _attn_res_mix(
-            blocks, block_logits, mlp_partial, queries, 2 * cfg.num_layers + layer_index, eps, logit_bias, **opts
-        )
+        h_shared, z_shared, _ = mix(mlp_partial, 2 * cfg.num_layers + layer_index, False)
         z_mlp = z_mlp + z_shared
         shared_kwargs = {"sum_stream": h_shared, "sum_parts": ("shared",)}
     mlp_out, router_stats = layer.mlp_branch(
@@ -3885,10 +3910,308 @@ def _kda_layer_indices(cfg: GrugModelConfig) -> tuple[int, ...]:
 
 def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
     """Split the stacked layer params into per-layer modules (split, so the grad is one concatenate)."""
-    num_layers = stacked.num_layers
-    leaves, treedef = jax.tree.flatten(stacked.stacked)
-    split_leaves = [jax.lax.split(leaf, (1,) * num_layers, axis=0) for leaf in leaves]
-    return [treedef.unflatten([parts[i][0] for parts in split_leaves]) for i in range(num_layers)]
+    return _split_leading(stacked.stacked, (1,) * stacked.num_layers, squeeze=True)
+
+
+def _split_leading(tree, sizes: tuple[int, ...], *, squeeze: bool = False) -> list:
+    """Split every leaf of ``tree`` along axis 0 into ``sizes`` (``squeeze``: size-1 parts lose the axis)."""
+    leaves, treedef = jax.tree.flatten(tree)
+    split_leaves = [jax.lax.split(leaf, sizes, axis=0) for leaf in leaves]
+    return [
+        treedef.unflatten([parts[i][0] if squeeze else parts[i] for parts in split_leaves]) for i in range(len(sizes))
+    ]
+
+
+class _BlockSchedule(NamedTuple):
+    """Where Block AttnRes rolls the running partial into a new block: at every ``seg_size``-th layer, for at
+    most ``block_cap`` blocks, stored after the ``num_extra`` extra sources."""
+
+    num_extra: int
+    seg_size: int
+    block_cap: int
+
+    def num_sources(self, layer_index: int) -> int:
+        """History sources (extra sources, embedding, completed blocks) that layer ``layer_index`` reads."""
+        return self.num_extra + min(layer_index // self.seg_size + 1, self.block_cap)
+
+    def is_boundary(self, layer_index: int) -> bool:
+        return layer_index % self.seg_size == 0 and layer_index // self.seg_size < self.block_cap
+
+
+class _AttnResHistory(NamedTuple):
+    """The fixed-shape Block AttnRes history threaded through the ``scan_layers`` scan.
+
+    ``sources[n]`` is source ``n`` in the unrolled loop's order (extra sources, the embedding, then the
+    completed blocks) and stays zero until it is rolled in; ``logits[n]`` holds its float32 logits against
+    every gate's query; ``partial`` is the running partial sum (zero right after a block boundary).
+    """
+
+    sources: Float[Array, "N B S D"]
+    logits: Float[Array, "N G B S"]
+    partial: Float[Array, "B S D"]
+
+
+class _UnitLayer(NamedTuple):
+    """Layer ``j`` of the scanned layer unit: slice ``index`` of its mixer kind's stack (``is_kda``)."""
+
+    is_kda: bool
+    index: int
+    use_long: bool
+
+
+class _LayerScan(NamedTuple):
+    """``scan_layers``: the first ``num_units`` units of ``len(unit)`` layers run as one ``jax.lax.scan``."""
+
+    unit: tuple[_UnitLayer, ...]
+    num_units: int
+    schedule: _BlockSchedule
+
+    @property
+    def num_layers(self) -> int:
+        return len(self.unit) * self.num_units
+
+    def kind_count(self, is_kda: bool) -> int:
+        return sum(layer.is_kda == is_kda for layer in self.unit)
+
+
+def _layer_scan(cfg: GrugModelConfig, schedule: _BlockSchedule) -> _LayerScan:
+    """The scanned prefix of ``scan_layers``: the leading run of ``global_every``-layer units whose layers
+    match unit 0's mixer kinds and masks and are not tail layers (whose stacks differ in shape)."""
+    unit_size = cfg.global_every
+    kda, tail = set(_kda_layer_indices(cfg)), set(_tail_layers(cfg))
+
+    def signature(i: int) -> tuple[bool, bool, bool]:
+        return i in kda, _is_long_layer(i, cfg.num_layers, cfg.global_every, None), i in tail
+
+    unit0 = [signature(j) for j in range(min(unit_size, cfg.num_layers))]
+    num_units = 0
+    while unit_size * (num_units + 1) <= cfg.num_layers and all(
+        signature(unit_size * num_units + j) == unit0[j] and not unit0[j][2] for j in range(unit_size)
+    ):
+        num_units += 1
+    unit = tuple(
+        _UnitLayer(is_kda, sum(other[0] == is_kda for other in unit0[:j]), use_long)
+        for j, (is_kda, use_long, _) in enumerate(unit0)
+    )
+    return _LayerScan(unit, num_units, schedule)
+
+
+def _scan_history_layer(
+    layer: Block,
+    history: _AttnResHistory,
+    queries: Float[Array, "G D"],
+    layer_index: jax.Array,
+    use_long: bool,
+    schedule: _BlockSchedule,
+    mask: AttentionMask,
+    token_ids: Int[Array, "B S"],
+    eps: float,
+    route_key: jax.Array | None,
+) -> tuple[_AttnResHistory, dict[str, jax.Array]]:
+    """``_attn_res_layer`` on the fixed-shape history, at a traced ``layer_index``.
+
+    A block boundary writes the partial into its slot with its logits against every query and resets the
+    partial to zero; off a boundary the slot write is a no-op. Unfilled sources get ``-inf`` logits (zero
+    weight) and a fresh partial is masked out of the attention gate, so every gate mixes exactly the
+    unrolled loop's sources."""
+    num_sources = history.sources.shape[0]
+    block = layer_index // schedule.seg_size
+    boundary = (layer_index % schedule.seg_size == 0) & (block < schedule.block_cap)
+    slot = schedule.num_extra + jnp.minimum(block, schedule.block_cap - 1)
+
+    def roll(buffer: jax.Array, new: jax.Array) -> jax.Array:
+        old = jax.lax.dynamic_index_in_dim(buffer, slot, axis=0, keepdims=False)
+        return jax.lax.dynamic_update_index_in_dim(buffer, jnp.where(boundary, new, old), slot, axis=0)
+
+    sources = roll(history.sources, history.partial)
+    logits = roll(history.logits, _attn_res_source_logits(history.partial, queries, eps))
+    partial = jnp.where(boundary, jnp.zeros_like(history.partial), history.partial)
+    valid = jnp.arange(num_sources) < schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
+    source_rows = list(_logit_rows(sources))
+
+    def mix(p: jax.Array | None, gate_index: jax.Array, attn_gate: bool):
+        assert p is not None
+        rows = _logit_rows(jax.lax.dynamic_index_in_dim(logits, gate_index, axis=1, keepdims=False))
+        gate_logits = [jnp.where(valid[n], rows[n], -jnp.inf) for n in range(num_sources)]
+        query = jax.lax.dynamic_index_in_dim(queries, gate_index, axis=0, keepdims=True)
+        partial_logit = _attn_res_source_logits(p, query, eps)[0]
+        gate_logits.append(jnp.where(boundary, -jnp.inf, partial_logit) if attn_gate else partial_logit)
+        weights, mixed = _softmax_mix(gate_logits, [*source_rows, p])
+        mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
+        return reshard(mixed.astype(sources.dtype), _batch_spec()), _gate_z(gate_logits), mean_weights
+
+    noise_key = None if route_key is None else jax.random.fold_in(route_key, layer_index)
+    partial, stats = _attn_res_sublayers(
+        layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, None, None
+    )
+    if unsupported := set(stats) & set(_DIFFERENTIABLE_STATS):
+        raise ValueError(f"scan_layers does not carry the differentiable layer stats {sorted(unsupported)}")
+    return _AttnResHistory(sources, logits, partial), stats
+
+
+class _ScanArgs(NamedTuple):
+    """The non-differentiable inputs of ``_scan_layers``."""
+
+    plan: _LayerScan
+    units_static: dict[bool, Block]
+    long_mask: AttentionMask
+    short_mask: AttentionMask
+    token_ids: jax.Array
+    eps: float
+    route_key: jax.Array | None
+
+
+def _unit_layer(units: dict[bool, Block], layer: _UnitLayer) -> Block:
+    return jax.tree.map(lambda x: x[layer.index], units[layer.is_kda])
+
+
+def _run_unit_layer(
+    layer: Block,
+    history: _AttnResHistory,
+    queries: jax.Array,
+    layer_index: jax.Array,
+    unit_layer: _UnitLayer,
+    args: _ScanArgs,
+) -> tuple[_AttnResHistory, dict[str, jax.Array]]:
+    return _scan_history_layer(
+        layer,
+        history,
+        queries,
+        layer_index,
+        unit_layer.use_long,
+        args.plan.schedule,
+        args.long_mask if unit_layer.use_long else args.short_mask,
+        args.token_ids,
+        args.eps,
+        args.route_key,
+    )
+
+
+def _layer_history(layer_diff, sources, logits, partial, queries, *, layer_static, layer_index, unit_layer, args):
+    """``_run_unit_layer``'s history as a function of the differentiable inputs (the backward's ``jax.vjp``)."""
+    layer = eqx.combine(layer_diff, layer_static)
+    history, _ = _run_unit_layer(
+        layer, _AttnResHistory(sources, logits, partial), queries, layer_index, unit_layer, args
+    )
+    return history
+
+
+def _scan_forward(
+    units_diff: dict[bool, Block], queries: jax.Array, history: _AttnResHistory, args: _ScanArgs, save_partials: bool
+):
+    """The scanned layers' forward; with ``save_partials`` also every layer's incoming partial ``[U, g, B, S, D]``."""
+    plan = args.plan
+
+    def unit_step(history: _AttnResHistory, xs):
+        unit_diff, unit_static, u = xs
+        units = {kind: eqx.combine(unit_diff[kind], unit_static[kind]) for kind in unit_diff}
+        partials, stats = [], []
+        for j, unit_layer in enumerate(plan.unit):
+            partials.append(history.partial)
+            history, layer_stats = _run_unit_layer(
+                _unit_layer(units, unit_layer), history, queries, len(plan.unit) * u + j, unit_layer, args
+            )
+            stats.append(layer_stats)
+        return history, (tuple(stats), jnp.stack(partials) if save_partials else None)
+
+    xs = (units_diff, args.units_static, jnp.arange(plan.num_units, dtype=jnp.int32))
+    return jax.lax.scan(unit_step, history, xs)
+
+
+@eqx.filter_custom_vjp
+def _scan_layers(diff, args: _ScanArgs):
+    """The ``scan_layers`` prefix: ``diff = (units_diff, queries, history)`` -> ``(history, per-unit stats)``.
+
+    A custom VJP saves only the final history and each layer's incoming partial. Completed blocks never
+    change, so the final history (masked to the blocks filled so far) is every layer's history input;
+    the backward is a reverse scan that rematerializes one layer at a time (``AttnResLayerBackward.RECOMPUTE``)
+    and threads the history's cotangents from layer to layer. Layer stats carry no cotangent."""
+    units_diff, queries, history = diff
+    history, (stats, _) = _scan_forward(units_diff, queries, history, args, save_partials=False)
+    return history, stats
+
+
+@_scan_layers.def_fwd
+def _scan_layers_fwd(perturbed, diff, args: _ScanArgs):
+    del perturbed
+    units_diff, queries, history = diff
+    history, (stats, partials) = _scan_forward(units_diff, queries, history, args, save_partials=True)
+    return (history, stats), (history.sources, history.logits, partials)
+
+
+@_scan_layers.def_bwd
+def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
+    del perturbed
+    sources, logits, partials = residuals
+    units_diff, queries, _ = diff
+    plan = args.plan
+    d_history, _ = grad_out
+    d_history = _AttnResHistory(
+        *(
+            jnp.zeros_like(x) if d is None else d
+            for d, x in zip(d_history, (sources, logits, partials[0, 0]), strict=True)
+        )
+    )
+
+    def unit_step(carry, xs):
+        d_history, d_queries = carry
+        unit_diff, unit_static, unit_partials, u = xs
+        d_unit: dict[bool, list[Block | None]] = {kind: [None] * plan.kind_count(kind) for kind in unit_diff}
+        for j in reversed(range(len(plan.unit))):
+            unit_layer = plan.unit[j]
+            layer_diff = _unit_layer(unit_diff, unit_layer)
+            layer_static = _unit_layer(unit_static, unit_layer)
+            layer_index = len(plan.unit) * u + j
+
+            with jax.named_scope(f"attn_res_scan_bwd_j{j}"):
+                # Barriers as in _attn_res_layer_remat_bwd: one layer's backward, weight gradients included,
+                # finishes before the next one's starts.
+                layer_diff, partial_in, d_history = jax.lax.optimization_barrier(
+                    (layer_diff, unit_partials[j], d_history)
+                )
+                layer_fn = functools.partial(
+                    _layer_history, layer_static=layer_static, layer_index=layer_index, unit_layer=unit_layer, args=args
+                )
+                _, vjp_fn = jax.vjp(layer_fn, layer_diff, sources, logits, partial_in, queries)
+                d_layer, d_sources, d_logits, d_partial, d_q = vjp_fn(d_history)
+                d_layer, d_history, d_q = jax.lax.optimization_barrier(
+                    (d_layer, _AttnResHistory(d_sources, d_logits, d_partial), d_q)
+                )
+            d_queries = d_queries + d_q
+            d_unit[unit_layer.is_kda][unit_layer.index] = d_layer
+        stacked = {kind: jax.tree.map(lambda *xs: jnp.stack(xs), *layers) for kind, layers in d_unit.items()}
+        return (d_history, d_queries), stacked
+
+    xs = (units_diff, args.units_static, partials, jnp.arange(plan.num_units, dtype=jnp.int32))
+    (d_history, d_queries), d_units = jax.lax.scan(unit_step, (d_history, jnp.zeros_like(queries)), xs, reverse=True)
+    return d_units, d_queries, d_history
+
+
+def _unit_queries(scan: _LayerScan | None, units: dict[bool, Block], *names: str) -> jax.Array:
+    """The scanned layers' pseudo-queries ``names`` in gate order (layer-major): ``[U * g * len(names), D]``."""
+    assert scan is not None
+    per_layer = [
+        jnp.stack([getattr(units[layer.is_kda], name)[:, layer.index] for name in names], axis=1) for layer in scan.unit
+    ]
+    stacked = jnp.stack(per_layer, axis=1)  # [U, g, len(names), D]
+    return stacked.reshape(-1, stacked.shape[-1])
+
+
+def _index_leading(x: jax.Array, index: int) -> jax.Array:
+    """``x[index]`` keeping the trailing dims' sharding (plain indexing drops it on size-1 sharded dims)."""
+    return reshard(x[index], P(*jax.typeof(x).sharding.spec[1:]))
+
+
+def _strip_unread_weights(stats: dict[str, jax.Array], schedule: _BlockSchedule, eff: int, num_sources: int) -> None:
+    """Drop a scanned layer's zero gate weights on sources it cannot read yet (and on the partial right after a
+    boundary), so its weight logs match the unrolled loop's."""
+    filled = schedule.num_sources(eff)
+    for name in (_ATTN_RES_W_ATTN, _ATTN_RES_W_MLP, _ATTN_RES_W_V):
+        if name not in stats:
+            continue
+        has_partial = name == _ATTN_RES_W_MLP or not schedule.is_boundary(eff)
+        weights = stats[name]
+        stats[name] = jnp.concatenate([weights[:filled], weights[num_sources:]]) if has_partial else weights[:filled]
 
 
 class Transformer(eqx.Module):
@@ -4250,6 +4573,9 @@ class Transformer(eqx.Module):
         by reference, so block memory is one copy per block. With ``AttnResLayerBackward.RECOMPUTE``
         each layer is rematerialized by ``_attn_res_layer_remat``, which saves only its inputs.
 
+        With ``scan_layers`` the leading run of identical ``global_every``-layer units runs as one scan on the
+        fixed-shape history instead (``_scan_layers``, same math), and the remaining layers continue unrolled.
+
         ``ple_rows`` (``ple_dim``) holds every layer's per-layer-embedding rows side by side; layer ``i``
         gets its RMS-normed slice through its ``extras["ple"]``.
 
@@ -4262,21 +4588,24 @@ class Transformer(eqx.Module):
         num_layers, passes = cfg.num_layers, (1)
         seg_size = max(1, num_layers // cfg.attn_res_num_blocks)
         block_cap = cfg.attn_res_num_blocks * passes
-        layers = self.layers()
+        schedule = _BlockSchedule(len(extra_sources), seg_size, block_cap)
+        scan = _layer_scan(cfg, schedule) if cfg.scan_layers else None
+        if scan is not None and scan.num_units:
+            units, layers = self._split_scanned_units(scan)
+        else:
+            units, layers = {}, self.layers()
         # Every query in gate order [pass 0: attn_0, mlp_0, ..., mlp_{L-1}; pass 1: ...; final].
-        gate_queries = []
-        for layer in layers:
+        gate_queries = [_unit_queries(scan, units, "attn_res_query_attn", "attn_res_query_mlp")] if units else []
+        for layer in layers[scan.num_layers if units else 0 :]:
             assert layer.attn_res_query_attn is not None and layer.attn_res_query_mlp is not None
-            gate_queries += [layer.attn_res_query_attn, layer.attn_res_query_mlp]
-        loop_queries = []
+            gate_queries.append(jnp.stack([layer.attn_res_query_attn, layer.attn_res_query_mlp]))
         # V-gate queries sit between the per-layer gates and the final gate, so every block's precomputed
         # logits (scored against queries[2i:]) cover them; V gate of layer i is row 2 * L * passes + i.
         v_queries = []
         if cfg.attn_res_shared_query:
-            v_queries = [jnp.stack([layer.attn_res_query_shared for layer in layers])]
-        queries_flat = jnp.concatenate(
-            [jnp.stack(gate_queries), *loop_queries, *v_queries, self.attn_res_query_final[None]]
-        )
+            v_queries = [_unit_queries(scan, units, "attn_res_query_shared")] if units else []
+            v_queries += [layer.attn_res_query_shared[None] for layer in layers[scan.num_layers if units else 0 :]]
+        queries_flat = jnp.concatenate([*gate_queries, *v_queries, self.attn_res_query_final[None]])
         queries = queries_flat
         logit_bias = _gate_extras(self, queries.shape[0])
         allowed = {"q", "k", "v", "mlp", "mlp_shared", "mlp_routed", "mlp_router"}
@@ -4296,16 +4625,32 @@ class Transformer(eqx.Module):
         kv_inputs = None
         nitp_logs: dict[str, jax.Array] = {}
 
-        def run_pass(state, pass_index):
-            """One pass over the physical layers, extending the history; returns the new state, the
-            per-layer router stats and the pass's gate z terms."""
+        def absorb(eff: int, stats: dict[str, jax.Array], has_partial_attn: bool) -> None:
+            """Move layer ``eff``'s z term, gate weights and per-layer logs out of its stats."""
+            z_out.append(stats.pop(_ATTN_RES_Z))
+            stats.pop(ROUTER_PROBS_KEY, None)
+            if _LM_HEAD_EXTRA in stats:
+                nitp_logs[_LM_HEAD_EXTRA] = stats.pop(_LM_HEAD_EXTRA)
+            for name in [k for k in stats if k.startswith(_LAYER_KNOB_PREFIX)]:
+                layer_logs[f"{name}_L{eff}"] = stats.pop(name)
+            weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn)
+            weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), True)
+            if _ATTN_RES_W_V in stats:
+                # V-gate query rows follow the per-layer gates (loop_passes == 1).
+                weight_logs[2 * num_layers + eff] = (stats.pop(_ATTN_RES_W_V), has_partial_attn)
+            stats_out.append(stats)
+
+        stats_out: list[dict[str, jax.Array]] = []
+        z_out: list[jax.Array] = []
+
+        def run_pass(state, pass_index, start=0):
+            """One pass over the physical layers from ``start``, extending the history; returns the new state."""
             blocks, block_logits, partial = state
-            stats_out, z_out = [], []
-            hist_probs: list[jax.Array] = []
             kv_share: dict[str, jax.Array] | None = None
-            for i, layer in enumerate(layers):
+            for i in range(start, num_layers):
+                layer = layers[i]
                 eff = pass_index * num_layers + i
-                if eff % seg_size == 0 and eff // seg_size < block_cap:
+                if schedule.is_boundary(eff):
                     assert partial is not None
                     blocks = (*blocks, partial)
                     # Score the new block only against the gates that can read it (this layer's onwards).
@@ -4335,22 +4680,8 @@ class Transformer(eqx.Module):
                     partial, blocks, block_logits, stats = layer_fn(*layer_args)
                 else:
                     partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
-                z_out.append(stats.pop(_ATTN_RES_Z))
-                layer_probs = stats.pop(ROUTER_PROBS_KEY, None)
-                if layer_probs is not None:
-                    hist_probs.append(layer_probs)
-                if _LM_HEAD_EXTRA in stats:
-                    nitp_logs[_LM_HEAD_EXTRA] = stats.pop(_LM_HEAD_EXTRA)
-                for name in [k for k in stats if k.startswith(_LAYER_KNOB_PREFIX)]:
-                    layer_logs[f"{name}_L{eff}"] = stats.pop(name)
-                has_partial_attn = partial_before is not None
-                weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn)
-                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), True)
-                if _ATTN_RES_W_V in stats:
-                    # V-gate query rows follow the per-layer gates (loop_passes == 1).
-                    weight_logs[2 * num_layers + i] = (stats.pop(_ATTN_RES_W_V), has_partial_attn)
-                stats_out.append(stats)
-            return (blocks, block_logits, partial), stats_out, z_out
+                absorb(eff, stats, partial_before is not None)
+            return blocks, block_logits, partial
 
         def final_gate(state):
             blocks, block_logits, partial = state
@@ -4395,26 +4726,32 @@ class Transformer(eqx.Module):
             z_total = (sum(z_terms) + z_final) / (len(z_terms) + 1)
             return mixed, merge_passes(per_pass_stats), z_total, max_weight, entropy
 
-        state = (
-            extra_sources,
-            tuple(_attn_res_source_logits(src, queries, eps, (False)) for src in extra_sources),
-            hidden,
-        )
-        state, pass0_stats, pass0_z = run_pass(state, 0)
-
-        def all_passes(state):
-            per_pass, z_terms = [pass0_stats], list(pass0_z)
-            for pass_index in range(1, passes):
-                state, stats, z = run_pass(state, pass_index)
-                per_pass.append(stats)
-                z_terms += z
-            return finish(state, per_pass, z_terms)
-
-        def one_pass(state):
-            # Same structure as all_passes: the pass-0 stats stand in for every pass.
-            return finish(state, [pass0_stats] * passes, list(pass0_z))
-
-        mixed, layer_stats, z_total, max_weight, entropy = all_passes(state)
+        if units:
+            assert scan is not None
+            history, unit_stats = self._run_scanned_units(
+                scan, units, queries, hidden, extra_sources, long_layer_mask, short_layer_mask, token_ids, route_key
+            )
+            for u in range(scan.num_units):
+                for j in range(len(scan.unit)):
+                    eff = len(scan.unit) * u + j
+                    stats = jax.tree.map(lambda x, u=u: _index_leading(x, u), unit_stats[j])
+                    _strip_unread_weights(stats, schedule, eff, history.sources.shape[0])
+                    absorb(eff, stats, not schedule.is_boundary(eff))
+            # The rest of the layers run unrolled on the history as tuples (every block's logits cover all gates).
+            state = (
+                _logit_rows(history.sources),
+                tuple(_logit_rows(rows) for rows in _logit_rows(history.logits)),
+                history.partial,
+            )
+            state = run_pass(state, 0, start=scan.num_layers)
+        else:
+            state = (
+                extra_sources,
+                tuple(_attn_res_source_logits(src, queries, eps, (False)) for src in extra_sources),
+                hidden,
+            )
+            state = run_pass(state, 0)
+        mixed, layer_stats, z_total, max_weight, entropy = finish(state, [stats_out], z_out)
         final_stats = {"attn_res_final_max_weight": max_weight, "attn_res_final_entropy": entropy}
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
@@ -4423,7 +4760,7 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_w_g{gate:02d}_b{n:02d}"] = mean_weights[n]
             if has_partial:
                 final_stats[f"attn_res_w_g{gate:02d}_p"] = mean_weights[-1]
-        for i, layer in enumerate(layers):
+        for i, layer in enumerate(self.layers() if units else layers):
             if isinstance(layer.attn, CausalSelfAttention) and layer.attn.qk_mult is not None:
                 qk_mult = jax.lax.stop_gradient(layer.attn.qk_mult)
                 final_stats[f"attn_res_qk_mult_L{i}"] = jnp.mean(qk_mult)
@@ -4459,6 +4796,65 @@ class Transformer(eqx.Module):
             lambda *xs: jnp.stack(xs), *[{k: v for k, v in stats.items() if k not in widths} for stats in layer_stats]
         )
         return hidden, {**stacked, **{k: tuple(v) for k, v in widths.items()}}, final_stats
+
+    def _split_scanned_units(self, scan: _LayerScan) -> tuple[dict[bool, Block], list[Block | None]]:
+        """Split each mixer kind's stack into the scanned units (leaves ``[U, per-unit count, ...]``) and the
+        remaining layers; returns the units and every layer in order, None where scanned."""
+        units: dict[bool, Block] = {}
+        layers: list[Block | None] = [None] * self.config.num_layers
+        for stack, indices in zip(self.layer_stacks(), self.stack_layer_indices(), strict=True):
+            is_kda = isinstance(stack.stacked.attn, KimiDeltaAttention)
+            scanned = sum(i < scan.num_layers for i in indices)
+            remaining = indices[scanned:]
+            assert all(i >= scan.num_layers for i in remaining), indices
+            # One split per stack (never slices), so each stack's gradient is one concatenate.
+            parts = _split_leading(stack.stacked, ((scanned,) if scanned else ()) + (1,) * len(remaining))
+            if scanned:
+                count = scan.kind_count(is_kda)
+                assert scanned == count * scan.num_units and is_kda not in units, (indices, scan)
+                prefix, *parts = parts
+                units[is_kda] = jax.tree.map(lambda x, c=count: x.reshape(scan.num_units, c, *x.shape[1:]), prefix)
+            for i, part in zip(remaining, parts, strict=True):
+                layers[i] = jax.tree.map(lambda x: x[0], part)
+        return units, layers
+
+    def _run_scanned_units(
+        self,
+        scan: _LayerScan,
+        units: dict[bool, Block],
+        queries: Float[Array, "G D"],
+        hidden: Float[Array, "B S D"],
+        extra_sources: tuple[jax.Array, ...],
+        long_mask: AttentionMask,
+        short_mask: AttentionMask,
+        token_ids: Int[Array, "B S"],
+        route_key: jax.Array | None,
+    ) -> tuple[_AttnResHistory, tuple[dict[str, jax.Array], ...]]:
+        """Run the scanned layer units from the embedding; returns the history and each unit layer's stats
+        stacked over units."""
+        eps = self.config.layer_norm_eps
+        if any(src.dtype != hidden.dtype for src in extra_sources):
+            raise ValueError("scan_layers stacks the AttnRes sources, so they must share the embedding's dtype")
+        num_sources = scan.schedule.num_sources(scan.num_layers - 1)
+        zeros = [jnp.zeros_like(hidden)] * (num_sources - len(extra_sources))
+        zero_logits = jnp.zeros((queries.shape[0], *hidden.shape[:2]), jnp.float32)
+        batch_spec = _batch_spec()
+        history = _AttnResHistory(
+            sources=jnp.stack([reshard(src, batch_spec) for src in (*extra_sources, *zeros)]),
+            logits=jnp.stack(
+                [
+                    reshard(src_logits, P(None, *batch_spec))
+                    for src_logits in (
+                        *(_attn_res_source_logits(src, queries, eps) for src in extra_sources),
+                        *[zero_logits] * len(zeros),
+                    )
+                ]
+            ),
+            partial=hidden,
+        )
+        units_diff, units_static = eqx.partition(units, eqx.is_inexact_array)
+        args = _ScanArgs(scan, units_static, long_mask, short_mask, token_ids, eps, route_key)
+        return _scan_layers((units_diff, queries, history), args)
 
     def routing_assignments(
         self,
