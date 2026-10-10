@@ -37,6 +37,14 @@ Native verifier references can declare `SourceReference.grading` with a
 `GradingSelection`: the execution mode, selected agents, and immutable MarinSkyRL
 and Harbor revisions. The exporter reads those pinned repositories at build time
 and fingerprints the selected grading code, resources, and runtime dependencies.
+Harbor-backed Nemotron SWE declarations also pin the blend, proxy archives
+containing native task definitions, and SWE-Gym membership input in
+`GradingSelection.task_assets`. The fingerprint
+covers the selected tasks' verifier files, executable permissions, judge settings,
+and grader environment. It excludes discovery metadata and unrelated tasks;
+Python comments and docstrings do not change the code identity. Native execution
+attestation checks the selected files and settings covered by the fingerprint
+before publication.
 The applet serves the generated identities without fetching upstream code.
 
 A source enrolls when its first grading applicability claim is archived in

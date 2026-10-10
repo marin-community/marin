@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
@@ -70,10 +70,12 @@ from experiments.post_training.task_curation.pipeline import (
 from experiments.post_training.task_curation.source import (
     HARBOR_GRADING_REVISION,
     MARINSKYRL_GRADING_REVISION,
+    GradingDatasetFile,
     GradingSelection,
     RlDataSource,
     SourceInfo,
     SourceReference,
+    SweGradingAssets,
 )
 
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
@@ -85,6 +87,11 @@ ULTRA_VERIFIER_URL = (
 )
 HARBOR_VERIFIER_URL = (
     "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598f3/src/harbor/verifier"
+)
+SWE_PROXY = GradingDatasetFile(
+    "open-thoughts/TaskTrove",
+    "131d8a8470c7a81113baac898c0c232db3f5ae31",
+    "laion__nemotron-gym-agentic-swe-pivot-v4/tasks.parquet",
 )
 
 
@@ -1751,9 +1758,20 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
     name, _, split = path.partition("/")
     select = SweRows(name, SweSplit(split)) if split else ComponentRows(name)
     inputs = {SWE_GYM.repo: SWE_GYM} if split else dict(component.inputs)
+    info = BLENDS[blend][path]
+    if split:
+        assert info.verifier is not None and info.verifier.grading is not None
+        assets = SweGradingAssets(
+            blend=GradingDatasetFile(ULTRA_REPO, ULTRA_REVISION, f"{blend}.jsonl"),
+            proxies=SWE_PROXY,
+            membership=GradingDatasetFile(SWE_GYM.repo, SWE_GYM.revision, SWE_GYM.files[0]),
+            component=name,
+            partition="swe_gym" if SweSplit(split) == SweSplit.SWE_GYM else "swe_rebench",
+        )
+        info = replace(info, verifier=replace(info.verifier, grading=replace(info.verifier.grading, task_assets=assets)))
     return RlDataSource(
         pipeline=process_rows,
-        info=BLENDS[blend][path],
+        info=info,
         config=CurationRecipe(
             name=pipeline_name(blend, path),
             source=HfSource(

@@ -69,6 +69,24 @@ def verified_execution_grading(config: dict, base: Path) -> dict | None:
     digest = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
     if digest != snapshot["grading_revision"]:
         raise ValueError("The grading snapshot manifest does not match its revision")
+    if snapshot["verifier_mode"] == GradingMode.HARBOR:
+        # Harbor asset checks need the optional catalog/TaskCompendium dependencies;
+        # ordinary native Gym workers only need the grading-code reader.
+        from experiments.post_training.task_curation.grading_task_assets import (  # noqa: PLC0415
+            swe_grading_asset_manifest,
+        )
+        from experiments.post_training.task_curation.source import GradingDatasetFile, SweGradingAssets  # noqa: PLC0415
+
+        assets = snapshot["grading_task_assets"]
+        selection = SweGradingAssets(
+            blend=GradingDatasetFile(**assets["blend"]),
+            proxies=GradingDatasetFile(**assets["proxies"]),
+            membership=GradingDatasetFile(**assets["membership"]),
+            component=assets["component"],
+            partition=assets["partition"],
+        )
+        if swe_grading_asset_manifest(selection) != manifest["task_assets"]:
+            raise ValueError("Selected native task verifier assets differ from the Atlas grading snapshot")
     runtime = config["runtime"]
     if snapshot["verifier_mode"] != GradingMode.HARBOR:
         environment = snapshot["environment"]

@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from collections.abc import Iterable
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,7 @@ def source_row(source: RlDataSource) -> dict[str, Any]:
             "agents": grading.agents,
             "marinskyrl_revision": grading.marinskyrl_revision,
             "harbor_revision": grading.harbor_revision,
+            "task_assets": asdict(grading.task_assets) if grading.task_assets is not None else None,
         }
     review = source.review
     row.update(

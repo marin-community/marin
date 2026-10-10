@@ -46,6 +46,24 @@ HARBOR_GRADING_REVISION = "8abc63e3bdb37af1d345fcac123ef7d2122598f3"
 
 
 @dataclass(frozen=True)
+class GradingDatasetFile:
+    repository: str
+    revision: str
+    filename: str
+
+
+@dataclass(frozen=True)
+class SweGradingAssets:
+    """Identify the exact proxy verifier population used by a SWE source."""
+
+    blend: GradingDatasetFile
+    proxies: GradingDatasetFile
+    membership: GradingDatasetFile
+    component: str
+    partition: Literal["swe_gym", "swe_rebench"]
+
+
+@dataclass(frozen=True)
 class GradingSelection:
     """Select the native verifier behavior an assessment covers."""
 
@@ -53,6 +71,7 @@ class GradingSelection:
     agents: tuple[str, ...]
     marinskyrl_revision: str
     harbor_revision: str
+    task_assets: SweGradingAssets | None = None
 
 
 @dataclass(frozen=True)

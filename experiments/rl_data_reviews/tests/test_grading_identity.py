@@ -3,9 +3,15 @@
 
 import hashlib
 import json
+from dataclasses import asdict
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
+from experiments.post_training.task_curation.grading_task_assets import swe_grading_asset_manifest
+from experiments.post_training.task_curation.source import GradingDatasetFile, SweGradingAssets
+from experiments.post_training.task_curation.tests.conversion import tasktrove_row
 from experiments.rl_data_reviews.grading_identity import ExecutionModules, verified_execution_grading
 from infra.marina.applets.rl_data_catalog.server.grading_code import python_grading_program
 from infra.marina.applets.rl_data_catalog.server.grading_routes import skyrl_grading_routes
@@ -76,7 +82,7 @@ def test_execution_identity_detects_current_grader_changes_before_publication(tm
         verified_execution_grading(config, tmp_path)
 
 
-def test_harbor_execution_ignores_unrelated_gym_packages(tmp_path) -> None:
+def test_harbor_execution_ignores_unrelated_gym_packages(tmp_path, monkeypatch) -> None:
     checkout = tmp_path / "harbor"
     package = checkout / "src/harbor"
     module = package / "verifier/verifier.py"
@@ -93,8 +99,36 @@ def test_harbor_execution_ignores_unrelated_gym_packages(tmp_path) -> None:
     }
     route = skyrl_grading_routes(row, source, ())[0]
     program = python_grading_program(source, route.roots, ("harbor",), route.bindings)
+    task_key = {"trajectory_id": "task", "step": 1, "turn": 0, "depth": 1, "instance_id": "task", "agent_cls": "swe"}
+    (tmp_path / "blend.jsonl").write_text(
+        json.dumps({"dataset": "pivot", "trajectory_id": "task", "info": {}, "metadata": task_key}) + "\n"
+    )
+    pq.write_table(pa.table({"instance_id": ["task"]}), tmp_path / "membership.parquet")
+    files = {
+        "instruction.md": b"Act.",
+        "metadata.json": json.dumps(task_key).encode(),
+        "task.toml": b"[verifier]\ntimeout_sec = 30\n",
+        "tests/verifier.py": b"def score():\n return 1\n",
+    }
+    pq.write_table(pa.Table.from_pylist([tasktrove_row(files)]), tmp_path / "before.parquet")
+    files["tests/verifier.py"] = b"def score():\n return 0\n"
+    pq.write_table(pa.Table.from_pylist([tasktrove_row(files)]), tmp_path / "after.parquet")
+
+    def download(*, filename, revision, **_kwargs):
+        return str(tmp_path / (f"{revision}.parquet" if filename == "proxy.parquet" else filename))
+
+    monkeypatch.setattr("experiments.post_training.task_curation.grading_task_assets.hf_hub_download", download)
+    assets = SweGradingAssets(
+        blend=GradingDatasetFile(str(tmp_path), "before", "blend.jsonl"),
+        proxies=GradingDatasetFile(str(tmp_path), "before", "proxy.parquet"),
+        membership=GradingDatasetFile(str(tmp_path), "before", "membership.parquet"),
+        component="pivot",
+        partition="swe_gym",
+    )
+    row["grading_task_assets"] = asdict(assets)
     manifest = {
         "schema_version": 1,
+        "task_assets": swe_grading_asset_manifest(assets),
         "routes": {
             "harbor": {
                 "program_revision": program.digest,
@@ -118,3 +152,7 @@ def test_harbor_execution_ignores_unrelated_gym_packages(tmp_path) -> None:
     }
     proof = verified_execution_grading(config, tmp_path)
     assert proof is not None and proof["selected_code_verified"]
+    row["grading_task_assets"]["proxies"]["revision"] = "after"
+    (tmp_path / "snapshot.json").write_text(json.dumps(row))
+    with pytest.raises(ValueError, match="Selected native task verifier assets differ"):
+        verified_execution_grading(config, tmp_path)

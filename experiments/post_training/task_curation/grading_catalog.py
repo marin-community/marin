@@ -6,10 +6,13 @@
 import ast
 import hashlib
 import json
+from dataclasses import asdict
 from typing import Any
 
 import httpx
 
+from experiments.post_training.task_curation.grading_task_assets import swe_grading_asset_manifest
+from experiments.post_training.task_curation.source import GradingDatasetFile, SweGradingAssets
 from infra.marina.applets.rl_data_catalog.server.grading_dependencies import (
     annotate_grading_revision,
     grading_modules,
@@ -50,6 +53,22 @@ def annotate_catalog_grading(document: dict[str, Any], client: httpx.Client) -> 
             "verifier_mode": selection["mode"],
         }
         annotate_grading_revision(descriptor, readers[key], tuple(selection["agents"]))
+        assets = selection["task_assets"]
+        if selection["mode"] == "harbor":
+            if assets is None:
+                raise ValueError("Harbor grading declarations must identify their native task verifier assets")
+            asset_selection = SweGradingAssets(
+                blend=GradingDatasetFile(**assets["blend"]),
+                proxies=GradingDatasetFile(**assets["proxies"]),
+                membership=GradingDatasetFile(**assets["membership"]),
+                component=assets["component"],
+                partition=assets["partition"],
+            )
+            descriptor["grading_manifest"]["task_assets"] = swe_grading_asset_manifest(asset_selection)
+            descriptor["grading_revision"] = hashlib.sha256(
+                json.dumps(descriptor["grading_manifest"], sort_keys=True).encode()
+            ).hexdigest()
+            row["grading_task_assets"] = asdict(asset_selection)
         for field in ("grading_revision", "grading_manifest", "grading_scope", "grading_repositories"):
             row[field] = descriptor[field]
     document["revision"] = hashlib.sha256(
