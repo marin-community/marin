@@ -8,12 +8,14 @@ import hashlib
 import json
 import os
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import (
+    DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     Command,
     Machine,
     MachineFactory,
@@ -22,7 +24,9 @@ from shellbox.machine import (
 )
 
 from taskcompendium.models import (
+    ANSWER_CALL_NAME,
     DEFAULT_WORKSPACE,
+    AnswerCall,
     FunctionCall,
     FunctionDefinition,
     TaskResource,
@@ -37,16 +41,65 @@ from taskcompendium.runtime.resources import resource_bytes
 OUTPUT_PATH = "/output/command_capture.txt"
 CONTROL_PATH = "/controls/reference.sh"
 
-SHELL = FunctionDefinition(
-    name="shell",
-    description="Run a shell command in the task workspace. Files persist between commands.",
-    parameters={
-        "type": "object",
-        "properties": {"command": {"type": "string"}},
-        "required": ["command"],
-        "additionalProperties": False,
-    },
-)
+
+class ShellToolConfig(BaseModel):
+    """Harness presentation of command execution, independent of task semantics."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(default="shell", min_length=1)
+    command_parameter: str = Field(default="command", min_length=1)
+
+
+def shell_tools(task: TaskSpec, config: ShellToolConfig) -> tuple[FunctionDefinition, ...]:
+    """Bind the shell capability, rejecting collisions with task-owned tools."""
+    if "shell" not in task.environment_requirements.capabilities:
+        return ()
+    names = {tool.name for tool in (*task.final_tools, *task.interaction_tools)}
+    if isinstance(task.answer_format, AnswerCall):
+        names.add(ANSWER_CALL_NAME)
+    if config.name in names:
+        raise ValueError(f"Shell tool collides with a task-owned tool: {config.name}")
+    return (
+        FunctionDefinition(
+            name=config.name,
+            description="Run a Bash command in the task workspace. Files persist between commands.",
+            parameters={
+                "type": "object",
+                "properties": {config.command_parameter: {"type": "string"}},
+                "required": [config.command_parameter],
+                "additionalProperties": False,
+            },
+        ),
+    )
+
+
+async def run_shell_call(
+    machine: Machine,
+    call: FunctionCall,
+    config: ShellToolConfig,
+    *,
+    timeout: float | None,
+    output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+    cwd: str | None = None,
+) -> str:
+    """Decode a harness call and return the Bash command's observation."""
+    command = call.arguments.get(config.command_parameter)
+    if call.name != config.name or set(call.arguments) != {config.command_parameter} or not isinstance(command, str):
+        return json.dumps({"error": f"{config.name} requires one string {config.command_parameter}"})
+    result = await machine.run(
+        Command(("bash", "-c", command), cwd=cwd, timeout=timeout, output_limit_bytes=output_limit_bytes)
+    )
+    return json.dumps(
+        {
+            "exit_code": result.exit_code,
+            "reason": result.reason.value,
+            "stdout": result.stdout.decode(errors="replace"),
+            "stderr": result.stderr.decode(errors="replace"),
+            "stdout_truncated": result.stdout_truncated,
+            "stderr_truncated": result.stderr_truncated,
+        }
+    )
 
 
 def machine_spec_identity(machine_spec: MachineSpec) -> dict[str, Any]:
@@ -80,28 +133,17 @@ class ShellEnvironment:
     command_timeout: float
     output_limit_bytes: int
     workdir: str = DEFAULT_WORKSPACE
+    shell_tool: ShellToolConfig = field(default_factory=ShellToolConfig)
+    tools: tuple[FunctionDefinition, ...] = ()
 
     async def step(self, call: FunctionCall) -> str:
-        command = call.arguments.get("command")
-        if call.name != SHELL.name or set(call.arguments) != {"command"} or not isinstance(command, str):
-            return json.dumps({"error": "shell requires one string command"})
-        result = await self.machine.run(
-            Command(
-                ("bash", "-c", command),
-                cwd=self.workdir,
-                timeout=self.command_timeout,
-                output_limit_bytes=self.output_limit_bytes,
-            )
-        )
-        return json.dumps(
-            {
-                "exit_code": result.exit_code,
-                "reason": result.reason.value,
-                "stdout": result.stdout.decode(errors="replace"),
-                "stderr": result.stderr.decode(errors="replace"),
-                "stdout_truncated": result.stdout_truncated,
-                "stderr_truncated": result.stderr_truncated,
-            }
+        return await run_shell_call(
+            self.machine,
+            call,
+            self.shell_tool,
+            timeout=self.command_timeout,
+            output_limit_bytes=self.output_limit_bytes,
+            cwd=self.workdir,
         )
 
     async def evidence(self) -> RuntimeEvidence:
@@ -122,6 +164,7 @@ class ShellFactory:
     command_timeout: float
     output_limit_bytes: int
     mounted_roles: tuple[Literal["worker", "oracle"], ...] = ("worker",)
+    shell_tool: ShellToolConfig = field(default_factory=ShellToolConfig)
 
     @property
     def identity(self) -> dict:
@@ -135,9 +178,11 @@ class ShellFactory:
             "command_timeout": self.command_timeout,
             "output_limit_bytes": self.output_limit_bytes,
             "mounted_roles": self.mounted_roles,
+            "shell_tool": self.shell_tool.model_dump(),
         }
 
     async def create(self, task: TaskSpec) -> ShellEnvironment:
+        tools = shell_tools(task, self.shell_tool)
         validate_machine_spec(task.environment_requirements, self.machine_factory, self.machine_spec)
         validate_output_paths(task.output_paths)
         requirements = task.environment_requirements
@@ -183,4 +228,6 @@ class ShellFactory:
             self.command_timeout,
             self.output_limit_bytes,
             prepared.workdir,
+            self.shell_tool,
+            tools,
         )

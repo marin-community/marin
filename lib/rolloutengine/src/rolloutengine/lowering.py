@@ -18,6 +18,7 @@ from taskcompendium.models import (
     require_resolved_environment,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
+from taskcompendium.runtime.shell import shell_tools
 
 from rolloutengine.contracts import TaskSession
 from rolloutengine.machines import _machine_spec
@@ -78,6 +79,7 @@ def validate_lowered_task(
         if lowered.session.task_session not in sessions:
             raise ValueError(f"Unknown task session: {lowered.session.task_session!r}")
         return
+    shell_tools(task, lowered.session.shell_tool)
     limits = lowered.session
     if (
         limits.command_timeout is not None

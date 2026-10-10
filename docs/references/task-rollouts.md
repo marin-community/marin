@@ -35,13 +35,14 @@ Lowering preserves the task definition and adds these deployment settings:
 | --- | --- |
 | `MachineRuntimeSpec` | `backend`, `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`, `user`, `startup_timeout`, `cleanup_timeout` |
 | `TaskRuntimeSpec` | Optional `task_machine` and `verifier_machine` selections |
-| `TaskSessionSpec` | `task_session`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
+| `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
 | `LoweredTaskSpec` | `task: TaskSpec`, `runtime: TaskRuntimeSpec`, `session: TaskSessionSpec` |
 
 `rolloutengine.lowering.lower_task(task, runtime, session, factories=..., sessions=...)` constructs and validates the lowered record.
 The engine validates a directly constructed `LoweredTaskSpec` before execution.
 
-All runtime fields require explicit values. Optional fields accept `None`.
+Runtime fields require explicit values except `shell_tool`, which defaults to `shell(command)`.
+Optional fields accept `None`.
 `TaskSessionSpec.cleanup_timeout` requires a finite, positive value.
 Other deadlines accept `None` or a finite, positive value.
 
@@ -96,8 +97,35 @@ Each model request returns one turn, then `advance` executes that turn's operati
 Completion, a generation limit, the turn limit, or the cumulative turn deadline starts final grading.
 A session does not call the model.
 The default session exposes `shell(command: string)` when the task declares the shell capability.
-Each command starts a fresh shell. Files persist between commands.
+Each command runs through `bash -c`. Files persist between commands; shell variables do not.
 Native interaction tools and tool-provider contracts require a registered custom session.
+
+TaskSpec owns task-specific interaction and final-answer tools. The harness owns the shell
+tool's name and argument name: set `TaskSessionSpec(shell_tool=ShellToolConfig(name="terminal",
+command_parameter="cmd"), ...)` to expose `terminal(cmd)`. Import `ShellToolConfig` from
+`taskcompendium.runtime.shell`; curation's `ShellFactory` accepts the same `shell_tool` option.
+Names that collide with task-owned tools are rejected before machine acquisition.
+
+```mermaid
+flowchart LR
+    Task[TaskSpec requirements] --> Binding[Shell tool binding]
+    Harness[Harness names] --> Binding
+    Binding --> Tools[Advertised definition]
+    Tools --> Model
+    Model --> Call[Tool call]
+    Call --> Execute[Shared decoder and Bash executor]
+    Binding --> Execute
+    Execute --> Machine[Shellbox agent machine]
+    Machine --> Observation[Tool observation]
+    Observation --> Model
+    Machine --> Submission[Output capture]
+    Submission --> Grader[TaskSpec grader]
+```
+
+RolloutEngine and curation share call decoding, execution, and JSON observations: stdout,
+stderr, exit code, reason, and separate stdout/stderr truncation flags. The episode runner
+advertises the tools its environment supplies. Trajectories retain the chosen names and call
+IDs; task records and graders remain unchanged. Different tool sets use a custom session.
 
 The model receives only public context, answer-format instructions, tool definitions, and task observations.
 The serialized task and lowered record contain the grader and verifier resources. Do not send them to the model.
