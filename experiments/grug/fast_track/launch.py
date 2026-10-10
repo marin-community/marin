@@ -54,6 +54,7 @@ from experiments.grug.fast_track.train import (
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
+    MasterParamMode,
     RaggedTransport,
     WatchMode,
     _compute_flops,
@@ -64,6 +65,9 @@ from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 
 # Run defaults.
 H100_LADDER_SIZES = ("d512", "d768", "d1024", "d1280")
+# Hero-shaped validation rung on one GB200 rack as the hero uses it: 16 nodes x 4 GPUs, expert parallel over all 64.
+GB200_SIZES = ("gb200-d6144",)
+LADDER_SIZES = H100_LADDER_SIZES + GB200_SIZES
 DEFAULT_WANDB_PROJECT = "marin_moe"
 # Default tokens-per-active-param budgets defining each variant's baseline: dense compute-optimal, MoE 3x.
 DENSE_TPP = 20
@@ -178,10 +182,14 @@ class H100LadderRung:
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
     kda_save_chunk_states: bool = False
     attn_res_remat_attention: bool = False
+    device: str = "H100"
+    nodes: int = 1
+    # Hero-scale memory: bf16 device params with a pinned-host fp32 master and offloaded optimizer state.
+    hero_memory: bool = False
 
     @property
     def global_device_count(self) -> int:
-        return self.gpus_per_task
+        return self.gpus_per_task * self.nodes
 
 
 def _h100_ladder_rung(size: str) -> H100LadderRung:
@@ -204,7 +212,16 @@ def _h100_ladder_rung(size: str) -> H100LadderRung:
             baseline_batch=256,
             attn_res_remat_attention=True,  # KMA d1280 OOMs without it
         )
-    raise ValueError(f"size must be one of {list(H100_LADDER_SIZES)}, got {size!r}")
+    if size == "gb200-d6144":
+        return H100LadderRung(
+            SmallShape(6144, 48, 48, 1, 1),
+            gpus_per_task=4,
+            nodes=16,
+            baseline_batch=1024,
+            device="GB200",
+            hero_memory=True,
+        )
+    raise ValueError(f"size must be one of {list(LADDER_SIZES)}, got {size!r}")
 
 
 def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelConfig:
@@ -385,8 +402,12 @@ def build_h100_ladder_run(
             raise ValueError("attn_res_remat_attention requires the kma recipe")
         model = dataclasses.replace(model, attn_res_remat_attention=True)
     model = _apply_settings(model, model_settings or {})
-    mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
-    expert_axis_size = 1 if dense else rung.gpus_per_task
+    mp_policy = (
+        "params=bfloat16,compute=bfloat16,output=bfloat16"
+        if rung.hero_memory
+        else "params=float32,compute=bfloat16,output=bfloat16"
+    )
+    expert_axis_size = 1 if dense else rung.global_device_count
     if rung.global_device_count % (expert_axis_size * (1)) != 0:
         raise ValueError(
             f"expert_axis ({expert_axis_size}) * replica_axis ({(1)}) must divide "
@@ -396,14 +417,8 @@ def build_h100_ladder_run(
     # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
     # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
     # the candidate's FLOPs/token but never the budget it is compared against.
-    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
-        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
-    baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
-    baseline_tpp = DENSE_TPP if dense else MOE_TPP
-    baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
-    baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
-    # Baseline's true total training FLOPs (fixed): flops/example * examples, at the baseline batch.
-    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
+    if (size, dense) not in _BASELINE_ACTIVE_PARAMS and num_steps is None:
+        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense}); pass --num-steps")
 
     batch_size = batch_size if batch_size is not None else rung.baseline_batch
     if batch_size <= 0 or batch_size % rung.global_device_count != 0:
@@ -414,6 +429,12 @@ def build_h100_ladder_run(
             f"{rung.global_device_count} devices"
         )
     if num_steps is None:
+        baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
+        baseline_tpp = DENSE_TPP if dense else MOE_TPP
+        baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
+        baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
+        # Baseline's true total training FLOPs (fixed): flops/example * examples, at the baseline batch.
+        baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
         if match is MatchMode.DATA:
             # DATA holds the baseline's token budget.
             num_steps = max(1, round(baseline_tokens / (batch_size * SEQ_LEN)))
@@ -445,17 +466,21 @@ def build_h100_ladder_run(
         save_checkpoints=save_checkpoints,
         expert_axis_size=expert_axis_size,
         replica_axis_size=(1),
+        offload_opt_state=rung.hero_memory,
+        master_param_mode=MasterParamMode.FP32_PINNED_HOST if rung.hero_memory else MasterParamMode.DEVICE,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
         grad_accum_microbatches=grad_accum_microbatches,
     )
+    # GB200 nodes as the hero requests them (moe_hero_ep.hero_recipe); H100 nodes as the ladder always has.
+    cpu, ram, disk = (120, "890g", "1t") if rung.device == "GB200" else (32, "600g", "900g")
     train_resources = ResourceConfig.with_gpu(
-        "H100",
+        rung.device,
         count=rung.gpus_per_task,
-        cpu=32,
-        ram="600g",
-        disk="900g",
-        replicas=1,
+        cpu=cpu,
+        ram=ram,
+        disk=disk,
+        replicas=rung.nodes,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -627,7 +652,9 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
-@click.option("--size", required=True, type=click.Choice(H100_LADDER_SIZES), help="H100 ladder rung width.")
+@click.option(
+    "--size", required=True, type=click.Choice(LADDER_SIZES), help="Ladder rung (H100 widths or the GB200 rack)."
+)
 @click.option(
     "--match",
     type=click.Choice([m.value for m in MatchMode]),
