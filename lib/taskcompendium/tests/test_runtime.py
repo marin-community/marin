@@ -42,6 +42,7 @@ from taskcompendium.models import (
     ExitCodeReward,
     FileReward,
     FunctionCall,
+    FunctionDefinition,
     GradingAttempt,
     NoGrader,
     PlainText,
@@ -49,6 +50,7 @@ from taskcompendium.models import (
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
+    ShellToolBinding,
     Source,
     TaskSpec,
     TextMessage,
@@ -425,8 +427,10 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("binding", [ShellToolConfig(), ShellToolConfig(name="terminal", command_parameter="cmd")])
-async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task, binding):
+@pytest.mark.parametrize("task_owned", [False, True])
+async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task, task_owned):
+    binding = ShellToolConfig(name="terminal", command_parameter="cmd")
+    name, parameter = ("Bash", "script") if task_owned else (binding.name, binding.command_parameter)
     task = shell_task.model_copy(
         update={
             "environment_requirements": EnvironmentRequirements(
@@ -435,18 +439,31 @@ async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task
             "output_paths": ("/workspace/submission",),
         }
     )
+    if task_owned:
+        task = task.model_copy(
+            update={
+                "interaction_tools": (
+                    FunctionDefinition(
+                        name=name,
+                        parameters={
+                            "type": "object",
+                            "properties": {parameter: {"type": "string"}},
+                            "required": [parameter],
+                            "additionalProperties": False,
+                        },
+                    ),
+                ),
+                "tool_bindings": {name: ShellToolBinding(command_parameter=parameter)},
+            }
+        )
     actor = ScriptedActor(
         (
             AssistantToolCalls(
                 calls=(
                     ConversationToolCall(
                         call_id="write",
-                        name=binding.name,
-                        arguments={
-                            binding.command_parameter: (
-                                "mkdir -p submission/nested; printf answer > submission/nested/result"
-                            )
-                        },
+                        name=name,
+                        arguments={parameter: "mkdir -p submission/nested; printf answer > submission/nested/result"},
                     ),
                 )
             ),

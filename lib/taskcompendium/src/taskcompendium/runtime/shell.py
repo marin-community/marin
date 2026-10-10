@@ -51,16 +51,54 @@ class ShellToolConfig(BaseModel):
     command_parameter: str = Field(default="command", min_length=1)
 
 
-def shell_tools(task: TaskSpec, config: ShellToolConfig) -> tuple[FunctionDefinition, ...]:
-    """Bind the shell capability, rejecting collisions with task-owned tools."""
-    if "shell" not in task.environment_requirements.capabilities:
-        return ()
-    names = {tool.name for tool in (*task.final_tools, *task.interaction_tools)}
+@dataclass(frozen=True)
+class BoundShellTool:
+    """The advertised definition and the argument the Bash executor consumes."""
+
+    definition: FunctionDefinition
+    command_parameter: str
+
+
+def resolve_shell_tool(task: TaskSpec, config: ShellToolConfig) -> BoundShellTool | None:
+    """Preserve an explicit task interface, or bind the harness shell capability."""
+    names = {tool.name for tool in task.final_tools}
     if isinstance(task.answer_format, AnswerCall):
         names.add(ANSWER_CALL_NAME)
+    if task.tool_bindings:
+        if len(task.tool_bindings) != 1:
+            raise ValueError("The shell session requires exactly one shell binding")
+        name, binding = next(iter(task.tool_bindings.items()))
+        definitions = [tool for tool in task.interaction_tools if tool.name == name]
+        if len(definitions) != 1 or name in names:
+            raise ValueError(f"Shell binding must name one unambiguous interaction tool: {name}")
+        definition = definitions[0]
+        parameters = definition.parameters
+        properties = parameters.get("properties")
+        parameter = binding.command_parameter
+        allowed_annotations = {"title", "description"}
+        if (
+            parameters.get("type") != "object"
+            or parameters.get("required") != [parameter]
+            or parameters.get("additionalProperties") is not False
+            or set(parameters) - {"type", "properties", "required", "additionalProperties"} - allowed_annotations
+            or not isinstance(properties, dict)
+            or set(properties) != {parameter}
+        ):
+            raise ValueError("Shell tools require exactly one required string argument and no additional properties")
+        argument = properties[parameter]
+        if (
+            not isinstance(argument, dict)
+            or argument.get("type") != "string"
+            or set(argument) - {"type"} - allowed_annotations
+        ):
+            raise ValueError("Shell command arguments must be unconstrained strings")
+        return BoundShellTool(definition, parameter)
+    if "shell" not in task.environment_requirements.capabilities:
+        return None
+    names.update(tool.name for tool in task.interaction_tools)
     if config.name in names:
         raise ValueError(f"Shell tool collides with a task-owned tool: {config.name}")
-    return (
+    return BoundShellTool(
         FunctionDefinition(
             name=config.name,
             description="Run a Bash command in the task workspace. Files persist between commands.",
@@ -71,22 +109,27 @@ def shell_tools(task: TaskSpec, config: ShellToolConfig) -> tuple[FunctionDefini
                 "additionalProperties": False,
             },
         ),
+        config.command_parameter,
     )
 
 
 async def run_shell_call(
     machine: Machine,
     call: FunctionCall,
-    config: ShellToolConfig,
+    tool: BoundShellTool,
     *,
     timeout: float | None,
     output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     cwd: str | None = None,
 ) -> str:
     """Decode a harness call and return the Bash command's observation."""
-    command = call.arguments.get(config.command_parameter)
-    if call.name != config.name or set(call.arguments) != {config.command_parameter} or not isinstance(command, str):
-        return json.dumps({"error": f"{config.name} requires one string {config.command_parameter}"})
+    command = call.arguments.get(tool.command_parameter)
+    if (
+        call.name != tool.definition.name
+        or set(call.arguments) != {tool.command_parameter}
+        or not isinstance(command, str)
+    ):
+        return json.dumps({"error": f"{tool.definition.name} requires one string {tool.command_parameter}"})
     result = await machine.run(
         Command(("bash", "-c", command), cwd=cwd, timeout=timeout, output_limit_bytes=output_limit_bytes)
     )
@@ -133,10 +176,15 @@ class ShellEnvironment:
     command_timeout: float
     output_limit_bytes: int
     workdir: str = DEFAULT_WORKSPACE
-    shell_tool: ShellToolConfig = field(default_factory=ShellToolConfig)
-    tools: tuple[FunctionDefinition, ...] = ()
+    shell_tool: BoundShellTool | None = None
+
+    @property
+    def tools(self) -> tuple[FunctionDefinition, ...]:
+        return () if self.shell_tool is None else (self.shell_tool.definition,)
 
     async def step(self, call: FunctionCall) -> str:
+        if self.shell_tool is None:
+            return json.dumps({"error": "No shell tool is available"})
         return await run_shell_call(
             self.machine,
             call,
@@ -182,14 +230,14 @@ class ShellFactory:
         }
 
     async def create(self, task: TaskSpec) -> ShellEnvironment:
-        tools = shell_tools(task, self.shell_tool)
+        tool = resolve_shell_tool(task, self.shell_tool)
         validate_machine_spec(task.environment_requirements, self.machine_factory, self.machine_spec)
         validate_output_paths(task.output_paths)
         requirements = task.environment_requirements
         if (
             set(requirements.capabilities) - {"shell", "filesystem"}
             or requirements.tool_providers
-            or task.interaction_tools
+            or any(tool is None or definition.name != tool.definition.name for definition in task.interaction_tools)
         ):
             raise ValueError("Shell factory cannot satisfy these environment requirements")
         async with asyncio.timeout(self.machine_spec.startup_timeout):
@@ -228,6 +276,5 @@ class ShellFactory:
             self.command_timeout,
             self.output_limit_bytes,
             prepared.workdir,
-            self.shell_tool,
-            tools,
+            tool,
         )

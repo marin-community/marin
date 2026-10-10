@@ -40,7 +40,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.26"
+SCHEMA_VERSION = "0.27"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 
@@ -95,6 +95,15 @@ class FunctionDefinition(BaseModel):
     parameters: dict[str, JsonValue]
     description: str | None = None
     strict: bool | None = None
+
+
+class ShellToolBinding(BaseModel):
+    """Execute a declared interaction tool's string argument as a Bash command."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["shell"] = "shell"
+    command_parameter: str = Field(min_length=1)
 
 
 class TextMessage(BaseModel):
@@ -837,6 +846,7 @@ class TaskSpec(BaseModel):
     environment_requirements: EnvironmentRequirements
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
+    tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
     output_paths: tuple[str, ...] = ()
     answer_type: AnswerType
     answer_format: AnswerFormat

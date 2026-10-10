@@ -46,6 +46,7 @@ from taskcompendium.models import (
     RewardFileFormat,
     ScriptGrader,
     SessionGrader,
+    ShellToolBinding,
     Source,
     TaskSpec,
     TextMessage,
@@ -469,13 +470,36 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
     assert closed.is_set()
 
 
-@pytest.mark.parametrize("binding", [ShellToolConfig(), ShellToolConfig(name="terminal", command_parameter="cmd")])
-async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(binding):
+@pytest.mark.parametrize("interface", ["default", "renamed", "task-owned"])
+async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(interface):
+    binding = ShellToolConfig() if interface == "default" else ShellToolConfig(name="terminal", command_parameter="cmd")
+    task = file_task()
+    name, parameter = binding.name, binding.command_parameter
+    if interface == "task-owned":
+        name, parameter = "Bash", "script"
+        definition = FunctionDefinition(
+            name=name,
+            description="Use Bash to write the answer file.",
+            parameters={
+                "type": "object",
+                "properties": {parameter: {"type": "string", "description": "Bash source"}},
+                "required": [parameter],
+                "additionalProperties": False,
+            },
+        )
+        task = file_task(
+            context=ConversationInput(
+                events=(TextMessage(role="user", content="Use Bash to write 12 to /workspace/answer."),)
+            ),
+            interaction_tools=(definition,),
+            tool_bindings={name: ShellToolBinding(command_parameter=parameter)},
+        )
+        task = TaskSpec.model_validate_json(task.model_dump_json())
     command = "values=(12); [[ ! -f /tests/grade.sh ]] && echo ${values[0]} > /workspace/answer"
     message = shell_call(command)
     message["tool_calls"][0]["function"] = {
-        "name": binding.name,
-        "arguments": json.dumps({binding.command_parameter: command}),
+        "name": name,
+        "arguments": json.dumps({parameter: command}),
     }
     model = ReplayModel(
         [
@@ -484,7 +508,7 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
         ]
     )
     result = await engine(model, {"local": FixtureImageFactory()}).run(
-        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), shell_tool=binding)
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime(), shell_tool=binding)
     )
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
@@ -494,10 +518,13 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
     assert model.requests[1].messages[-1]["tool_call_id"] == "write"
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
     tools = model.requests[0].options["tools"]
-    assert [tool["function"]["name"] for tool in tools] == [binding.name]
-    assert tools[0]["function"]["parameters"]["required"] == [binding.command_parameter]
+    assert [tool["function"]["name"] for tool in tools] == [name]
+    assert tools[0]["function"]["parameters"]["required"] == [parameter]
+    if interface == "task-owned":
+        assert tools[0]["function"] == task.interaction_tools[0].model_dump(exclude_none=True)
+        assert model.requests[0].messages[0]["content"] == "Use Bash to write 12 to /workspace/answer."
     response = next(message for message in result.messages if message["role"] == "assistant")
-    assert response["tool_calls"][0]["function"]["name"] == binding.name
+    assert response["tool_calls"][0]["function"]["name"] == name
 
 
 async def test_shell_binding_collision_rejects_before_machine_or_model_start():

@@ -3,6 +3,7 @@
 
 """Shellbox task operations and public model request preparation."""
 
+import json
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from typing import Any
@@ -21,7 +22,7 @@ from taskcompendium.models import (
     SessionGrader,
     TaskSpec,
 )
-from taskcompendium.runtime.shell import ShellToolConfig, run_shell_call, shell_tools
+from taskcompendium.runtime.shell import BoundShellTool, resolve_shell_tool, run_shell_call
 from taskcompendium.submission import (
     answer_call_tool,
     conversation_messages,
@@ -39,7 +40,7 @@ WORKSPACE_INSTRUCTION = (
 )
 
 
-def session_start(task: TaskSpec, shell_tool: ShellToolConfig) -> SessionStart:
+def session_start(task: TaskSpec, shell_tool: BoundShellTool | None) -> SessionStart:
     """Render only public task fields, with the answer format's instruction and tools."""
     answer_format = task.answer_format
     messages = conversation_messages(task.context.events)
@@ -62,11 +63,13 @@ def session_start(task: TaskSpec, shell_tool: ShellToolConfig) -> SessionStart:
                 options["tool_choice"] = "required"
             if answer_format.max_calls == 1:
                 options["parallel_tool_calls"] = False
-    bound_tools = shell_tools(task, shell_tool)
-    if bound_tools:
-        tools.extend({"type": "function", "function": tool.model_dump(exclude_none=True)} for tool in bound_tools)
+    if shell_tool is not None:
+        if not task.tool_bindings:
+            tools.append({"type": "function", "function": shell_tool.definition.model_dump(exclude_none=True)})
         if task.answer_type == AnswerType.WORKSPACE_STATE:
-            messages.append({"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name=shell_tool.name)})
+            messages.append(
+                {"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name=shell_tool.definition.name)}
+            )
     if tools:
         options["tools"] = tools
     return SessionStart(tuple(messages), options)
@@ -88,9 +91,10 @@ class _ShellboxTaskSession:
         self.factories = factories
         self.cleanup = cleanup
         self.resources = resources
+        self.shell_tool = resolve_shell_tool(lowered.task, lowered.session.shell_tool)
 
     async def prepare(self) -> SessionStart:
-        return session_start(self.lowered.task, self.lowered.session.shell_tool)
+        return session_start(self.lowered.task, self.shell_tool)
 
     async def advance(self, turn: ModelTurn) -> Transition:
         try:
@@ -105,12 +109,15 @@ class _ShellboxTaskSession:
             answer_call = isinstance(self.lowered.task.answer_format, AnswerCall) and call.name == ANSWER_CALL_NAME
             if call.name in final_tools or answer_call:
                 return Transition(done=True)
-            observation = await run_shell_call(
-                self.machine,
-                FunctionCall(name=call.name, arguments=call.arguments),
-                self.lowered.session.shell_tool,
-                timeout=self.lowered.session.command_timeout,
-            )
+            if self.shell_tool is None:
+                observation = json.dumps({"error": "No shell tool is available"})
+            else:
+                observation = await run_shell_call(
+                    self.machine,
+                    FunctionCall(name=call.name, arguments=call.arguments),
+                    self.shell_tool,
+                    timeout=self.lowered.session.command_timeout,
+                )
             observations.append(
                 {
                     "role": "tool",
