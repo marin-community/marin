@@ -136,6 +136,7 @@ class VllmBackend:
                 extra_args=self._serve_args(spec, chat_template_args, extra_args),
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
+                expected_model_id=spec.api_model,
                 extra_metric_families=self.config.extra_metric_families,
                 wait_for_ready=False,
             ) as environment:

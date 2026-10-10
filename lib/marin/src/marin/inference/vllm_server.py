@@ -709,18 +709,23 @@ def _poll_until_ready(
     server_url: str,
     *,
     timeout_seconds: float,
+    expected_model_id: str | None = None,
     poll_interval_seconds: float = 5,
     check_alive: Callable[[], None] | None = None,
-) -> None:
-    """Block until ``GET {server_url}/models`` returns 200.
+) -> str:
+    """Block until ``GET {server_url}/models`` advertises the expected model.
 
     Args:
         server_url: The vLLM ``/v1`` base URL (e.g. ``http://127.0.0.1:8000/v1``).
         timeout_seconds: Maximum seconds to wait before raising ``TimeoutError``.
+        expected_model_id: Served model ID, when the caller sets one explicitly.
         poll_interval_seconds: Seconds between consecutive polls.
         check_alive: Optional callable invoked each iteration *before* the HTTP
             probe. Should raise if the underlying server process is
             no longer alive (the exception propagates directly to the caller).
+
+    Returns:
+        The expected model ID, or the first advertised ID when no ID was specified.
     """
     models_url = f"{server_url}/models"
     start_time = time.time()
@@ -732,7 +737,15 @@ def _poll_until_ready(
         try:
             response = requests.get(models_url, timeout=5)
             if response.status_code == 200:
-                return
+                payload = response.json()
+                model_ids = [str(model["id"]) for model in payload.get("data", []) if model.get("id")]
+                if not model_ids:
+                    raise RuntimeError(f"No models returned from {models_url}: {str(payload)[:2000]}")
+                if expected_model_id is not None and expected_model_id not in model_ids:
+                    raise RuntimeError(
+                        f"vLLM server at {models_url} advertised {model_ids}, expected {expected_model_id!r}"
+                    )
+                return expected_model_id or model_ids[0]
         except (requests.ConnectionError, requests.Timeout):
             pass  # Server not ready yet.
 
@@ -743,19 +756,6 @@ def _poll_until_ready(
             )
 
         time.sleep(poll_interval_seconds)
-
-
-def _get_first_model_id(server_url: str) -> str:
-    response = requests.get(f"{server_url}/models", timeout=30)
-    response.raise_for_status()
-    payload = response.json()
-    data = payload.get("data", [])
-    if not data:
-        raise RuntimeError(f"No models returned from {server_url}/models: {str(payload)[:2000]}")
-    model_id = data[0].get("id")
-    if not model_id:
-        raise RuntimeError(f"Missing model id in {server_url}/models response: {str(payload)[:2000]}")
-    return str(model_id)
 
 
 class VllmEnvironment:
@@ -771,6 +771,7 @@ class VllmEnvironment:
         extra_args: list[str] | None = None,
         launcher: VllmLauncher | None = None,
         compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
+        expected_model_id: str | None = None,
         extra_metric_families: frozenset[str] = frozenset(),
         wait_for_ready: bool = True,
     ) -> None:
@@ -784,6 +785,7 @@ class VllmEnvironment:
         # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or PreinstalledVllm()
         self.compilation_cache_mode = compilation_cache_mode
+        self.expected_model_id = expected_model_id
         self.extra_metric_families = extra_metric_families
         self._ready_on_enter = wait_for_ready
 
@@ -835,10 +837,11 @@ class VllmEnvironment:
         command = self._command
         assert command is not None
         try:
-            _wait_for_vllm_server(
+            model_id = _wait_for_vllm_server(
                 handle,
                 command=command,
                 timeout_seconds=self.timeout_seconds,
+                expected_model_id=self.expected_model_id,
                 poll_interval_seconds=poll_interval_seconds,
             )
             handle.compilation_cache.publish()
@@ -848,7 +851,7 @@ class VllmEnvironment:
                 launcher=self.launcher,
                 extra_metric_families=self.extra_metric_families,
             )
-            self.model_id = _get_first_model_id(self.vllm_server.server_url)
+            self.model_id = model_id
         except Exception:
             self._report_failure_and_close("Failed to make vLLM environment ready")
             raise
@@ -1049,8 +1052,10 @@ def _wait_for_vllm_server(
     *,
     command: list[str],
     timeout_seconds: float,
+    expected_model_id: str | None = None,
     poll_interval_seconds: float = 5,
-) -> None:
+) -> str:
+    """Wait for the native process to advertise the expected model and return its ID."""
     process = handle.process
     assert handle.log_pump is not None
 
@@ -1081,9 +1086,10 @@ def _wait_for_vllm_server(
         )
         raise RuntimeError(message)
 
-    _poll_until_ready(
+    return _poll_until_ready(
         handle.server_url,
         timeout_seconds=timeout_seconds,
+        expected_model_id=expected_model_id,
         poll_interval_seconds=poll_interval_seconds,
         check_alive=_check_process_alive,
     )

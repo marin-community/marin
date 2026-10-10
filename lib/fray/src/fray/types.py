@@ -716,6 +716,7 @@ class JobRequest:
             fails (0 = fail on the first failure). Counts across retries.
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
+        ports: Named task ports to allocate on Iris.
         timeout: Backend-enforced execution deadline, if supported.
     """
 
@@ -729,6 +730,7 @@ class JobRequest:
     max_retries_preemption: int = 100
     max_task_failures: int = 0
     priority: int = 0
+    ports: tuple[str, ...] = ()
     timeout: Duration | None = None
 
     def __post_init__(self):
