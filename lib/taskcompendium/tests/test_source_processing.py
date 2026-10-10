@@ -366,7 +366,7 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     assert len(list(Path(result.normalize_path).glob("*.parquet"))) == 2
     assert all("raw_json" not in row for row in raw)
     assert read_json(Path(result.download_path) / "manifest.json")["source_input"] == str(source)
-    assert not list((tmp_path / "output/work").rglob("*.parquet"))
+    assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]
     assert not list((tmp_path / "output/work").rglob("batch-*.jsonl.gz"))
     assert {row["task_id"] for row in raw} == {row["task_id"] for row in review}
     assert all("task_json" not in row and "raw_json" not in row for row in review)
@@ -468,14 +468,14 @@ def test_completed_source_rerun_reuses_inference_cache_without_scratch(tmp_path)
     config = pipeline_config(SourceProcessingMode.SAMPLE, reviewer)
     first = run_pipeline(recipe, source, tmp_path / "output", config)
     first_review = parquet_rows(first.review_path)
-    assert not list((tmp_path / "output/work").rglob("*.parquet"))
+    assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]
     resumed = BatchService(interrupted=True)
     second_reviewer = replace(reviewer, client=resumed)
     config = replace(config, execution=replace(config.execution, reviewer=second_reviewer))
     second = run_pipeline(recipe, source, tmp_path / "output", config)
     assert parquet_rows(second.review_path) == first_review
     assert not resumed.files and not resumed.batches
-    assert list((tmp_path / "output/work/quality/evidence").glob("*/attempt-*/reviews.json"))
+    assert list((tmp_path / "output/work/quality/evidence").glob("*.parquet"))
 
 
 @pytest.mark.parametrize("failure", ["quality_panel", "verification"])
@@ -505,7 +505,7 @@ def test_incomplete_source_retry_reuses_successful_reviews(tmp_path, failure):
     failed_ids = [row["custom_id"] for row in service.batches["batch-0"]] if failure == "quality_panel" else []
     assert sorted(retried_ids) == sorted(failed_ids)
     assert submitted == (100 if failure == "quality_panel" else population)
-    assert not list((tmp_path / "output/work").rglob("*.parquet"))
+    assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]
     review = parquet_rows(second.review_path)
     assert len(review) == len({row["task_id"] for row in review}) == population
     assert all(row["review_status"] not in {"invalid", "unavailable"} for row in review)
@@ -575,7 +575,7 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
     final = parquet_rows(result.final_path)
     assert len(final) == (0 if verification == "rejected" else processed - bad_count - 1)
     assert deferred[0]["task_id"] not in {row["task_id"] for row in final}
-    assert list((tmp_path / "output/work/quality/evidence").glob("*/attempt-*/reviews.json"))
+    assert list((tmp_path / "output/work/quality/evidence").glob("*.parquet"))
 
 
 @pytest.mark.parametrize(
@@ -684,7 +684,7 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
     assert list((tmp_path / "output/work/sample/review-inputs").glob("batch-*.jsonl.gz"))
     assert report["phases"][-1]["executions"] == []
     assert report["phases"][-1]["status"] == "failed"
-    assert not list((tmp_path / "output/work/quality").glob("**/reviews.json"))
+    assert not list((tmp_path / "output/work/quality/evidence").glob("*.parquet"))
 
 
 @pytest.mark.parametrize(

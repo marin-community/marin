@@ -1,18 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submit model batches and retain the provider request and response evidence."""
+"""Submit model batches and return provider request and response observations."""
 
 import json
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from pydantic import JsonValue
 from zephyr import counters
-from zephyr.writers import write_jsonl_file
 
 from taskcompendium.chat import assistant_message
 from taskcompendium.models import AssistantToolCalls
@@ -20,9 +18,34 @@ from taskcompendium.pipeline.models import ReviewStatus
 
 DEFAULT_MAX_BATCH_REQUESTS = 64
 DEFAULT_MAX_BATCH_BYTES = 4 * 1024 * 1024
-RAW_OUTPUT_FILENAME = "raw-output.jsonl"
-REQUEST_EVIDENCE_FILENAME = "requests.jsonl"
-SUBMISSION_EVIDENCE_FILENAME = "batch-submission.json"
+BATCH_UPLOAD_FILENAME = "task-curation.jsonl"
+
+
+@dataclass(frozen=True)
+class RequestObservation:
+    """The response and provider identifiers observed for one request group."""
+
+    request_ids: tuple[str, ...]
+    output: str
+    errors: str | None = None
+    file_id: str | None = None
+    batch_id: str | None = None
+    batch_result: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class RequestOutput:
+    """Combined completions for parsing, with the observations that produced them."""
+
+    requests: tuple[Mapping[str, Any], ...]
+    observations: list[RequestObservation]
+    cache_keys: dict[str, str] = field(default_factory=dict)
+    cache_hits: tuple[str, ...] = ()
+    model_revision: str | None = None
+
+    @property
+    def output(self) -> str:
+        return "\n".join(observation.output.rstrip("\n") for observation in self.observations if observation.output)
 
 
 @dataclass(frozen=True)
@@ -175,32 +198,33 @@ def request_batches[T: Mapping[str, Any]](
 def batch_output(
     client: BatchClient,
     requests: Sequence[Mapping[str, Any]],
-    output_path: Path,
     *,
-    filename: str,
     poll_seconds: float,
     max_batch_requests: int = DEFAULT_MAX_BATCH_REQUESTS,
     max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
-) -> str:
-    """Submit ``requests`` as provider batches and return their combined raw JSONL output.
+) -> RequestOutput:
+    """Submit ``requests`` as provider batches and return request and response observations.
 
     Each output line is one provider response keyed by ``custom_id``. Batches stay within
     ``max_batch_requests`` and ``max_batch_bytes``. A request over the byte budget, or in a batch
     whose submission fails, gets an error line instead while the other requests continue; the
-    reviewer owns retries. Requests, submissions and raw outputs are retained below ``output_path``.
+    reviewer owns retries.
     """
     if max_batch_requests < 1 or max_batch_bytes < 1:
         raise ValueError("Inference batch budgets must be positive")
     metrics = counters.current_stage()
-    outputs = []
+    observations = []
 
     def oversized(request: Mapping[str, Any], request_bytes: int) -> None:
         metrics.update_counter("review/requests/oversized_requests", 1)
-        outputs.append(
-            _unavailable_output(
-                [request],
-                "batch_request_too_large",
-                f"Request requires {request_bytes} bytes; batch budget is {max_batch_bytes}",
+        observations.append(
+            RequestObservation(
+                (request["custom_id"],),
+                _unavailable_output(
+                    [request],
+                    "batch_request_too_large",
+                    f"Request requires {request_bytes} bytes; batch budget is {max_batch_bytes}",
+                ),
             )
         )
 
@@ -210,31 +234,13 @@ def batch_output(
         max_bytes=max_batch_bytes,
         oversized=oversized,
     )
-    output_path.mkdir(parents=True, exist_ok=True)
-    write_jsonl_file(requests, str(output_path / REQUEST_EVIDENCE_FILENAME))
-    for index, part in enumerate(parts):
-        directory = output_path if len(parts) == 1 else output_path / f"part-{index:05d}"
+    for part in parts:
         started = time.monotonic()
         try:
-            outputs.append(
-                _submitted_batch_output(
-                    client,
-                    part,
-                    directory,
-                    filename=filename,
-                    poll_seconds=poll_seconds,
-                )
-            )
-        except (ConnectionError, TimeoutError, FileNotFoundError) as error:
-            metrics.update_counter("review/requests/unavailable_requests", len(part))
-            failure = _unavailable_output(part, "batch_request_failed", str(error))
-            (directory / RAW_OUTPUT_FILENAME).write_text(failure)
-            outputs.append(failure)
+            observations.append(_submitted_batch_output(client, part, poll_seconds=poll_seconds))
         finally:
             metrics.update_counter("review/requests/provider_seconds", time.monotonic() - started)
-    output = "\n".join(part.rstrip("\n") for part in outputs if part)
-    (output_path / RAW_OUTPUT_FILENAME).write_text(output)
-    return output
+    return RequestOutput(tuple(requests), observations)
 
 
 def _unavailable_output(requests: Sequence[Mapping[str, Any]], code: str, message: str) -> str:
@@ -247,29 +253,33 @@ def _unavailable_output(requests: Sequence[Mapping[str, Any]], code: str, messag
 def _submitted_batch_output(
     client: BatchClient,
     requests: Sequence[Mapping[str, Any]],
-    output_path: Path,
     *,
-    filename: str,
     poll_seconds: float,
-) -> str:
-    output_path.mkdir(parents=True, exist_ok=True)
-    write_jsonl_file(requests, str(output_path / REQUEST_EVIDENCE_FILENAME))
-    file_id = client.upload(requests, filename)
-    submission = client.create(file_id)
-    (output_path / SUBMISSION_EVIDENCE_FILENAME).write_text(
-        json.dumps({"file_id": submission.file_id, "batch_id": submission.batch_id}, indent=2)
-    )
+) -> RequestObservation:
+    file_id = batch_id = None
+    batch = None
     metrics = counters.current_stage()
-    metrics.update_counter("review/requests/submitted_batches", 1)
-    metrics.update_counter("review/requests/submitted_requests", len(requests))
-    metrics.update_counter(
-        "review/requests/submitted_bytes",
-        sum(len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode()) + 1 for row in requests),
-    )
-    batch = client.wait(submission.batch_id, poll_seconds)
-    (output_path / "batch-result.json").write_text(json.dumps(batch, indent=2))
-    result = client.output(batch)
-    if result.errors is not None:
-        (output_path / "raw-errors.jsonl").write_text(result.errors)
-    (output_path / RAW_OUTPUT_FILENAME).write_text(result.output)
-    return result.output
+    request_ids = tuple(request["custom_id"] for request in requests)
+    try:
+        file_id = client.upload(requests, BATCH_UPLOAD_FILENAME)
+        submission = client.create(file_id)
+        batch_id = submission.batch_id
+        file_id = submission.file_id
+        metrics.update_counter("review/requests/submitted_batches", 1)
+        metrics.update_counter("review/requests/submitted_requests", len(requests))
+        metrics.update_counter(
+            "review/requests/submitted_bytes",
+            sum(len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode()) + 1 for row in requests),
+        )
+        batch = client.wait(batch_id, poll_seconds)
+        result = client.output(batch)
+    except (ConnectionError, TimeoutError, FileNotFoundError) as error:
+        metrics.update_counter("review/requests/unavailable_requests", len(requests))
+        return RequestObservation(
+            request_ids,
+            _unavailable_output(requests, "batch_request_failed", str(error)),
+            file_id=file_id,
+            batch_id=batch_id,
+            batch_result=batch,
+        )
+    return RequestObservation(request_ids, result.output, result.errors, file_id, batch_id, batch)

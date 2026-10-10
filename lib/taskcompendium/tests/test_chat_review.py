@@ -10,6 +10,7 @@ from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow, ReviewRubric, ReviewStatus
 from taskcompendium.pipeline.query_cache import cached_request_output
 from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, valid_review_completion
+from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 
 from .pipeline_stages import svamp_row_task
 from .test_pipeline import response
@@ -82,10 +83,10 @@ def test_direct_review_reuses_exact_cache_across_modes_and_source_ids(tmp_path):
     abandoned.write_text('{"state": "reserved", "attempts": ["missing.json"]}')
     original = abandoned.read_bytes()
     direct = ChatReviewer(chat, "fixture", "deployment", query_cache_root=cache)
-    first = direct.review([task], rubric, tmp_path / "first")
-    second = direct.review([task.model_copy(update={"id": "source-b"})], rubric, tmp_path / "second")
+    first = direct.review([task], rubric).reviews
+    second = direct.review([task.model_copy(update={"id": "source-b"})], rubric).reviews
     batch = BatchReviewer(batches, "fixture", "deployment", query_cache_root=cache)
-    third = batch.review([task.model_copy(update={"id": "source-c"})], rubric, tmp_path / "third")
+    third = batch.review([task.model_copy(update={"id": "source-c"})], rubric).reviews
     assert [row.status for row in first + second + third] == [ReviewStatus.REVIEWED] * 3
     assert [row.task_id for row in first + second + third] == ["source-a", "source-b", "source-c"]
     assert len(chat.requests) == 1
@@ -98,9 +99,9 @@ def test_invalid_cache_entry_does_not_block_inference(tmp_path, corruption):
     requests = [{"custom_id": "task", "body": {"prompt": "Count apples."}}]
     raw = json.dumps(response("task"))
 
-    def submit(selected, _output_path):
+    def submit(selected):
         calls.append(selected)
-        return raw
+        return RequestOutput(tuple(selected), [RequestObservation(("task",), raw)])
 
     cache_root = str(tmp_path / "cache")
     options = dict(
@@ -109,9 +110,12 @@ def test_invalid_cache_entry_does_not_block_inference(tmp_path, corruption):
         valid_completion=valid_review_completion,
         submit=submit,
     )
-    assert cached_request_output(requests, tmp_path / "first", **options) == raw
-    evidence = next((tmp_path / "first/query-cache").glob("*.json"))
-    envelope = json.loads(evidence.read_bytes())
+    first = cached_request_output(requests, **options)
+    assert first.output == raw
+    key = first.cache_keys["task"]
+    cache = PersistentKvCache.at(cache_root)
+    envelope = json.loads(cache.load_many([key])[key])
+    cache.close()
     if corruption == "malformed":
         corrupted = b"invalid JSON"
     else:
@@ -123,12 +127,12 @@ def test_invalid_cache_entry_does_not_block_inference(tmp_path, corruption):
             envelope["raw_output"] = "invalid response"
         corrupted = json.dumps(envelope).encode()
     cache = PersistentKvCache.at(cache_root)
-    cache.store(evidence.stem, corrupted)
+    cache.store(key, corrupted)
     cache.close()
 
-    assert cached_request_output(requests, tmp_path / "second", **options) == raw
+    assert cached_request_output(requests, **options).output == raw
     assert calls == [requests, requests]
-    assert cached_request_output(requests, tmp_path / "third", **options) == raw
+    assert cached_request_output(requests, **options).output == raw
     assert len(calls) == 2
 
 
@@ -155,11 +159,13 @@ def test_direct_provider_failures_have_finite_neutral_retries(tmp_path, recover)
 
     chat = TransientChat()
     reviewer = ChatReviewer(chat, "fixture", "deployment", query_cache_root=str(tmp_path / "cache"))
-    record = reviewer.review([task], rubric, tmp_path / "review")[0]
+    result = reviewer.review([task], rubric)
+    record = result.reviews[0]
     assert chat.attempts == 3
     assert record.status == (ReviewStatus.REVIEWED if recover else ReviewStatus.UNAVAILABLE)
     assert (record.verdict is not None) == recover
-    assert len(list((tmp_path / "review").rglob("requests.jsonl"))) == 3
+    assert len(result.attempts) == 3
+    assert all(attempt.requests.observations for attempt in result.attempts)
 
 
 @pytest.mark.parametrize("failure", ["unreadable", "store", "close"])
@@ -177,18 +183,17 @@ def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monk
     raw = json.dumps({"custom_id": "task", "answer": "2"})
     submitted = []
 
-    def submit(selected, _output_path):
+    def submit(selected):
         submitted.extend(selected)
-        return raw
+        return RequestOutput(tuple(selected), [RequestObservation(("task",), raw)])
 
     result = cached_request_output(
         requests,
-        tmp_path / "review",
         cache_root=str(cache_root),
         model_revision="pinned",
         valid_completion=lambda result, _task_id: result == raw,
         submit=submit,
     )
-    assert result == raw
+    assert result.output == raw
     assert submitted == requests
-    assert json.loads(next((tmp_path / "review/query-cache").glob("*.json")).read_text())["raw_output"] == raw
+    assert result.observations[0].output == raw

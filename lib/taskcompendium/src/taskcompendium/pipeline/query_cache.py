@@ -10,13 +10,18 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 from finestore.cache import PersistentKvCache
 from zephyr import counters
 
-from taskcompendium.pipeline.review_requests import DEFAULT_MAX_BATCH_BYTES, BatchClient, batch_output
+from taskcompendium.pipeline.review_requests import (
+    DEFAULT_MAX_BATCH_BYTES,
+    BatchClient,
+    RequestObservation,
+    RequestOutput,
+    batch_output,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +43,6 @@ class CachedRequests:
 def cached_batch_output(
     client: BatchClient,
     requests: Sequence[dict[str, Any]],
-    output_path: Path,
     *,
     cache_root: str,
     model_revision: str,
@@ -46,17 +50,15 @@ def cached_batch_output(
     valid_completion: Callable[[str, str], bool],
     max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
     cached: CachedRequests | None = None,
-) -> str:
+) -> RequestOutput:
     return cached_request_output(
         requests,
-        output_path,
         cache_root=cache_root,
         model_revision=model_revision,
         valid_completion=valid_completion,
         submit=partial(
             batch_output,
             client,
-            filename="task-curation.jsonl",
             poll_seconds=poll_seconds,
             max_batch_bytes=max_batch_bytes,
         ),
@@ -140,9 +142,8 @@ def _cached_completions(
     *,
     model_revision: str,
     valid_completion: Callable[[str, str], bool],
-    evidence: Path,
 ) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
-    """Valid cached outputs by task ID, copied to ``evidence``, and the requests the cache cannot answer."""
+    """Valid cached outputs by task ID and the requests the cache cannot answer."""
     metrics = counters.current_stage()
     completed = {}
     misses = {}
@@ -162,33 +163,28 @@ def _cached_completions(
             metrics.update_counter("review/cache/invalid_entries", 1)
             misses[task_id] = request
             continue
-        (evidence / f"{key}.json").write_bytes(saved)
     return completed, misses
 
 
 def _submitted_completions(
     misses: dict[str, dict[str, Any]],
-    output_path: Path,
     *,
-    model_revision: str,
-    submit: Callable[[Sequence[dict[str, Any]], Path], str],
-) -> dict[str, str]:
+    submit: Callable[[Sequence[dict[str, Any]]], RequestOutput],
+) -> tuple[dict[str, str], list[RequestObservation]]:
     """Submit the missed requests together and return each one's raw output lines, empty when it has none."""
     missing_requests = list(misses.values())
-    batch_identity = {"model_revision": model_revision, "requests": missing_requests}
-    batch_key = hashlib.sha256(json.dumps(batch_identity, sort_keys=True).encode()).hexdigest()
-    raw = submit(missing_requests, output_path / "submitted" / batch_key)
+    result = submit(missing_requests)
     rows = {}
-    for line in raw.splitlines():
+    for line in result.output.splitlines():
         task_id = json.loads(line)["custom_id"]
         if task_id not in misses:
             raise ValueError(f"Unexpected batch response ID: {task_id}")
         rows.setdefault(task_id, []).append(line)
-    return {task_id: "\n".join(rows.get(task_id, [])) for task_id in misses}
+    return {task_id: "\n".join(rows.get(task_id, [])) for task_id in misses}, result.observations
 
 
-def _store_completion(cache: PersistentKvCache, key: str, identity: dict[str, Any], output: str, evidence: Path) -> None:
-    """Cache a valid completion on a best-effort basis and retain it as evidence."""
+def _store_completion(cache: PersistentKvCache, key: str, identity: dict[str, Any], output: str) -> None:
+    """Cache a valid completion on a best-effort basis."""
     metrics = counters.current_stage()
     metrics.update_counter("review/cache/valid_completions", 1)
     saved = json.dumps({"identity": identity, "raw_output": output}).encode()
@@ -200,7 +196,6 @@ def _store_completion(cache: PersistentKvCache, key: str, identity: dict[str, An
         metrics.update_counter("review/cache/store_failures", 1)
     finally:
         metrics.update_counter("review/cache/store_seconds", time.monotonic() - started)
-    (evidence / f"{key}.json").write_bytes(saved)
 
 
 def _close_cache(cache: PersistentKvCache) -> None:
@@ -217,23 +212,20 @@ def _close_cache(cache: PersistentKvCache) -> None:
 
 def cached_request_output(
     requests: Sequence[dict[str, Any]],
-    output_path: Path,
     *,
     cache_root: str,
     model_revision: str,
     valid_completion: Callable[[str, str], bool],
-    submit: Callable[[Sequence[dict[str, Any]], Path], str],
+    submit: Callable[[Sequence[dict[str, Any]]], RequestOutput],
     cached: CachedRequests | None = None,
-) -> str:
-    """Submit uncached queries and retain successful raw completions as evidence.
+) -> RequestOutput:
+    """Submit uncached queries and return the completion and cache observations.
 
     ``cached`` answers the lookup when it covers every request; otherwise the cache is read here.
     """
     metrics = counters.current_stage()
     metrics.update_counter("review/cache/request_observations", len(requests))
     cache = PersistentKvCache.at(cache_root)
-    evidence = output_path / "query-cache"
-    evidence.mkdir(parents=True, exist_ok=True)
     try:
         keys = {request["custom_id"]: _cache_key(_request_identity(request, model_revision)) for request in requests}
         if cached is not None and cached.keys.issuperset(keys.values()):
@@ -248,17 +240,20 @@ def cached_request_output(
             keys,
             model_revision=model_revision,
             valid_completion=valid_completion,
-            evidence=evidence,
         )
         metrics.update_counter("review/cache/hits", len(completed))
         metrics.update_counter("review/cache/misses", len(misses))
+        hits = tuple(completed)
+        observations = []
+        if hits:
+            observations.append(RequestObservation(hits, "\n".join(completed[task_id] for task_id in hits)))
         if misses:
-            submitted = _submitted_completions(misses, output_path, model_revision=model_revision, submit=submit)
+            submitted, observed = _submitted_completions(misses, submit=submit)
+            observations.extend(observed)
             for task_id, output in submitted.items():
-                completed[task_id] = output
                 if valid_completion(output, task_id):
                     identity = _request_identity(misses[task_id], model_revision)
-                    _store_completion(cache, keys[task_id], identity, output, evidence)
-        return "\n".join(completed[task_id] for task_id in dict.fromkeys(row["custom_id"] for row in requests))
+                    _store_completion(cache, keys[task_id], identity, output)
+        return RequestOutput(tuple(requests), observations, keys, hits, model_revision)
     finally:
         _close_cache(cache)
