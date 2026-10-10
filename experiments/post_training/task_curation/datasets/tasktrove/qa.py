@@ -12,8 +12,8 @@ multiple-choice source grades the option letter in process.
 import re
 
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply

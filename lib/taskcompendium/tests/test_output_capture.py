@@ -21,9 +21,16 @@ from shellbox.machine import (
 )
 from verifyit.spec import StdioSpec
 
-from taskcompendium.convert.environment import grading_environment
-from taskcompendium.convert.executable import workspace_task
-from taskcompendium.models import CommandSemantics, GradingAttempt, OutputDirectory, Source, TaskSpec, VerifyitGrader
+from taskcompendium.convert.tasks import workspace_task
+from taskcompendium.models import (
+    CommandSemantics,
+    EnvironmentRequirements,
+    GradingAttempt,
+    OutputDirectory,
+    Source,
+    TaskSpec,
+    VerifyitGrader,
+)
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
@@ -43,8 +50,8 @@ def executable_task():
         row,
         instruction="Read two integers and print their sum in /app/solution.py.",
         spec=StdioSpec(command="python3 /app/solution.py"),
-        environment=grading_environment(IMAGE),
-        grader_environment=grading_environment(IMAGE),
+        environment=EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS),
+        grader_environment=EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS),
         output_paths=SOLUTION_PATHS,
         verifier=(inline_resource("cases/input_1.txt", b"3 4\n"), inline_resource("cases/output_1.txt", b"7\n")),
         worker=(inline_resource("setup_files/readme.txt", b"Public setup"),),

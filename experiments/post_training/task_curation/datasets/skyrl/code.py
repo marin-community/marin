@@ -19,8 +19,8 @@ from typing import Any
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB, THREAD_ENVIRONMENT, python_reply
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import grader_config
 from taskcompendium.models import TaskResource, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply

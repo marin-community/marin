@@ -1,13 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shell workspace tasks graded against captured output files."""
+"""Construct conversation and shell workspace tasks with packaged graders."""
+
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from verifyit.spec import Spec
 
-from taskcompendium.grader import verifyit_package
+from taskcompendium.convert.answers import evidence_resource
+from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.models import (
     AnswerType,
+    ConversationEvent,
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
@@ -65,4 +70,28 @@ def workspace_task(
         answer_format=PlainText(),
         grader=package.grader,
         tags=tags,
+    )
+
+
+def conversation_task(
+    row: RawRow,
+    *,
+    events: Sequence[ConversationEvent],
+    package: GraderPackage,
+    evidence: Mapping[str, Any] | None = None,
+) -> TaskSpec:
+    """A task whose plain-text reply to ``events`` the packaged grader scores.
+
+    ``evidence`` is source material kept beside the grader for review, never shown to the solver.
+    """
+    verifier = (*package.resources, *((evidence_resource(evidence),) if evidence else ()))
+    return TaskSpec(
+        id=row.id,
+        source=row.source,
+        context=ConversationInput(events=tuple(events)),
+        environment_requirements=EnvironmentRequirements(),
+        resources=ResourceGroups(verifier=verifier),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=package.grader,
     )

@@ -15,8 +15,8 @@ import re
 from dataclasses import dataclass, field
 
 from taskcompendium.convert.answers import source_defect, unsupported
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.delivery import rewritten_task
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment

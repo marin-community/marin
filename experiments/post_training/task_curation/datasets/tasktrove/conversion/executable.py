@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.executable import workspace_task
+from taskcompendium.convert.tasks import workspace_task
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,

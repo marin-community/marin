@@ -83,6 +83,10 @@ class Placement(StrEnum):
 
 
 def placement(environment: Environment) -> Placement:
+    """Use an explicit image, build for missing system packages, or prepare a lock in Local.
+
+    Local assumes the worker provides WORKER_IMAGE_APT; it does not probe the host.
+    """
     if environment.image is not None:
         return Placement.IMAGE
     if set(environment.apt) - WORKER_IMAGE_APT:
