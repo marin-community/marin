@@ -15,6 +15,9 @@ def test_ragged_limit_defaults_to_one_and_can_be_overridden(monkeypatch, overrid
     # A private copy: the defaults also set process-wide env (LD_PRELOAD, allocator) other tests must not inherit.
     monkeypatch.setattr(os, "environ", {**os.environ, "XLA_FLAGS": ""})
     _apply_runtime_defaults(
-        inline_watch_enabled=False, ragged_transport=RaggedTransport.ONE_SHOT, collective_overlap_limit=override
+        inline_watch_enabled=False,
+        ragged_transport=RaggedTransport.ONE_SHOT,
+        collective_overlap_limit=override,
+        processes_per_task=1,
     )
     assert f"{XLA_COLLECTIVE_OVERLAP_FLAG}={expected}" in os.environ["XLA_FLAGS"].split()
