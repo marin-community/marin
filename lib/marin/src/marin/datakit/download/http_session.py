@@ -14,6 +14,7 @@ def build_retrying_session(
     *,
     total: int = 5,
     backoff_factor: float = 1.0,
+    backoff_jitter: float = 0.0,
     status_forcelist: tuple[int, ...] = DEFAULT_STATUS_FORCELIST,
 ) -> requests.Session:
     """Return a ``requests.Session`` that retries idempotent GETs on transient HTTP errors.
@@ -23,6 +24,7 @@ def build_retrying_session(
     retries = Retry(
         total=total,
         backoff_factor=backoff_factor,
+        backoff_jitter=backoff_jitter,
         status_forcelist=status_forcelist,
         allowed_methods=frozenset({"GET"}),
     )
