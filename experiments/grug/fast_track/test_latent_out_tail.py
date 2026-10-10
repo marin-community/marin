@@ -8,13 +8,38 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard
 
 import experiments.grug.fast_track.test_kda_local as t
-import experiments.grug.fast_track.test_optimizer_group_knobs as knobs
 from experiments.grug.fast_track.model import CausalSelfAttention, KimiDeltaAttention
 from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
 
 _HIDDEN, _LATENT = 32, 16
+
+
+def _two_steps(config: GrugMoeMuonHConfig, params):
+    """The second step's updates after two independent random gradients."""
+    opt = config.build(10)
+
+    @eqx.filter_jit
+    def run(params):
+        # Replicated leaves: the tiny test model's layouts are ambiguous for the stacked Newton-Schulz contraction.
+        params = jax.tree.map(lambda p: reshard(p, P(*(None,) * p.ndim)), params)
+        leaves, treedef = jax.tree.flatten(params)
+        keys = jax.random.split(jax.random.PRNGKey(0), 2 * len(leaves))
+        first = jax.tree.unflatten(
+            treedef, [0.01 * jax.random.normal(k, p.shape) for k, p in zip(keys[::2], leaves, strict=True)]
+        )
+        second = jax.tree.unflatten(
+            treedef, [0.01 * jax.random.normal(k, p.shape) for k, p in zip(keys[1::2], leaves, strict=True)]
+        )
+        state = opt.init(params)
+        _, state = opt.update(first, state, params)
+        updates, _ = opt.update(second, state, params)
+        return updates
+
+    return run(params)
 
 
 def _tokens():
@@ -52,11 +77,11 @@ def test_tail_model_trains_end_to_end():
 def test_tail_layers_join_the_same_optimizer_groups():
     mesh, model = t._model(latent_out_full_layers=(4, 5))
     params = eqx.filter(model, eqx.is_inexact_array)
-    mask = GrugMoeMuonHConfig(eig_families=("kda",), eig_mode="muon").create_mask(params)
-    assert mask.kda_blocks_tail.stacked.attn.w_q == mask.kda_blocks.stacked.attn.w_q == "eig"
+    mask = GrugMoeMuonHConfig().create_mask(params)
+    assert mask.kda_blocks_tail.stacked.attn.w_q == mask.kda_blocks.stacked.attn.w_q == "muonh"
     assert mask.stacked_blocks_tail.stacked.mlp.expert_mlp.w_down == "muonh"
     with jax.set_mesh(mesh):
-        updates = knobs._two_steps(GrugMoeMuonHConfig(), params)
+        updates = _two_steps(GrugMoeMuonHConfig(), params)
     assert np.all(np.isfinite(np.asarray(updates.stacked_blocks_tail.stacked.mlp.expert_mlp.w_down)))
 
 
@@ -65,48 +90,3 @@ def test_tail_settings_are_validated():
         t._config(latent_out_full_layers=(5, 5))
     with pytest.raises(ValueError):
         t._config(latent_out_full_layers=(5,), attn_res=False)
-
-
-def test_latent_free_layer_matches_the_latent_layers_expert_parameters():
-    mesh, model = t._model(latent_free_layers=(5,))
-    layers = model.layers()
-    free, latent = layers[5].mlp, layers[3].mlp
-    assert free.w_latent_down is None and free.w_latent_up is None
-    assert free.expert_mlp.w_up.shape[-2:] == (_HIDDEN, 8) and free.expert_mlp.w_down.shape[-2:] == (8, _HIDDEN)
-    # Half the width over twice the in/out dims: the same expert parameters (and FLOPs) as a latent layer.
-    assert free.expert_mlp.w_up.size + free.expert_mlp.w_down.size == (
-        latent.expert_mlp.w_up.size + latent.expert_mlp.w_down.size
-    )
-    tokens = _tokens()
-    with jax.set_mesh(mesh):
-        loss = eqx.filter_jit(lambda m, x: m.next_token_loss(x, jnp.ones(x.shape, jnp.float32)))(model, tokens)
-    assert np.isfinite(float(loss))
-
-
-def test_tail_modes_cannot_be_combined():
-    with pytest.raises(ValueError):
-        t._config(latent_out_full_layers=(5,), latent_free_layers=(4,))
-
-
-def test_wide_expert_layer_keeps_the_latent_and_widens_only_its_experts():
-    mesh, model = t._model(wide_expert_layers=(5,), wide_expert_intermediate_dim=24)
-    layers = model.layers()
-    assert layers[5].mlp.expert_mlp.w_up.shape[-2:] == (_LATENT, 24)
-    assert layers[5].mlp.w_latent_up is not None and layers[3].mlp.expert_mlp.w_up.shape[-1] == 16
-    with jax.set_mesh(mesh):
-        loss = eqx.filter_jit(lambda m, x: m.next_token_loss(x, jnp.ones(x.shape, jnp.float32)))(model, _tokens())
-    assert np.isfinite(float(loss))
-    with pytest.raises(ValueError):
-        t._config(wide_expert_layers=(5,))
-
-
-def test_topk_layer_routes_more_experts_in_that_layer_only():
-    mesh, model = t._model(topk_layers=(5,), topk_layer_k=3)
-    assert model.layers()[5].mlp.cfg.num_experts_per_token == 3
-    assert model.layers()[3].mlp.cfg.num_experts_per_token == 2
-    with jax.set_mesh(mesh):
-        loss, grads = eqx.filter_jit(
-            eqx.filter_value_and_grad(lambda m, x: m.next_token_loss(x, jnp.ones(x.shape, jnp.float32)))
-        )(model, _tokens())
-    assert np.isfinite(float(loss))
-    assert np.abs(np.asarray(grads.stacked_blocks_tail.stacked.mlp.expert_mlp.w_up)).sum() > 0

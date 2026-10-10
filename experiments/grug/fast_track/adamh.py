@@ -28,19 +28,10 @@ def _pin_sharding(x, ref):
     return x
 
 
-class _StepWithStats(NamedTuple):
-    """One leaf's hyperball update and its per-sphere stats (a distinct type: optax's MaskedNode is a tuple too)."""
-
-    update: jax.Array
-    stats: jax.Array
-
-
 class ScaleByAdamHState(NamedTuple):
     count: chex.Array
     mu: optax.Updates
     nu: optax.Updates
-    hyperball: optax.Updates | None = None
-    """Last step's per-matrix ``[decay, cos, rescale]`` (``log_hyperball``; as ``optimizer.HYPERBALL_STATS``)."""
 
 
 def scale_by_adamh(
@@ -49,23 +40,14 @@ def scale_by_adamh(
     eps: float = 1e-8,
     learning_rate: float = 0.02,
     mu_dtype: Any | None = None,
-    log_hyperball: bool = False,
 ) -> optax.GradientTransformation:
-    """AdamH: the Adam direction taken as a hyperball step (fixed Frobenius norm per matrix). ``log_hyperball`` keeps
-    each matrix's step ``[decay, cos, rescale]`` in the state: ``1 - decay = |W| / |W + u|`` is the re-projection's
-    shrink, ``cos`` the step's radial cosine and ``rescale = lr |W| / |d|`` the factor on the Adam direction ``d``."""
+    """AdamH: the Adam direction taken as a hyperball step (fixed Frobenius norm per matrix)."""
     mu_dtype = jax.dtypes.canonicalize_dtype(mu_dtype)
-
-    def stats_init(p):
-        if p is None:
-            return None
-        return jnp.zeros((3, *p.shape[:-2], 1, 1), jnp.float32)
 
     def init_fn(params):
         mu = otu.tree_zeros_like(params, dtype=mu_dtype)
         nu = otu.tree_zeros_like(params)
-        hyperball = jax.tree.map(stats_init, params, is_leaf=lambda x: x is None) if log_hyperball else None
-        return ScaleByAdamHState(count=jnp.zeros([], jnp.int32), mu=mu, nu=nu, hyperball=hyperball)
+        return ScaleByAdamHState(count=jnp.zeros([], jnp.int32), mu=mu, nu=nu)
 
     def update_fn(updates, state, params):
         mu = otu.tree_update_moment(updates, state.mu, b1, 1)
@@ -88,39 +70,23 @@ def scale_by_adamh(
             return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32))))
 
         def _scale_invariant_2d(p, u):
-            """Core update for a 2-D (matrix) parameter, and its ``[decay, cos, rescale]``."""
+            """Core update for a 2-D (matrix) parameter."""
             p_norm = _norm(p)
             u_norm = _norm(u)
-            rescale = learning_rate * p_norm / jnp.maximum(u_norm, 1e-10)
-            new_p = p - u * rescale
+            new_p = p - u * (learning_rate * p_norm / jnp.maximum(u_norm, 1e-10))
             new_p = _pin_sharding(new_p, p)
-            new_p_norm = _norm(new_p)
-            step = new_p.astype(jnp.float32) - p.astype(jnp.float32)
-            decay = 1.0 - p_norm / jnp.maximum(new_p_norm, 1e-10)
-            cos = jnp.sum(p.astype(jnp.float32) * step) / jnp.maximum(p_norm * _norm(step), 1e-20)
-            stats = jax.lax.stop_gradient(jnp.stack([decay, cos, rescale]))
-            return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p, stats
+            return new_p / jnp.maximum(_norm(new_p), 1e-10) * p_norm - p
 
         def scale_invariant_update(p, u):
             if p is None:
                 return None
             if p.ndim <= 2:
-                update, stats = _scale_invariant_2d(p, u)
-                return _StepWithStats(update, stats.reshape(3, 1, 1))
+                return _scale_invariant_2d(p, u)
             # For higher-rank tensors, vmap the 2-D logic over the leading axis.
-            update, stats = jax.vmap(_scale_invariant_2d)(p, u)
-            return _StepWithStats(update, jnp.moveaxis(stats, -1, 0)[..., None, None])
+            return jax.vmap(_scale_invariant_2d)(p, u)
 
-        out = jax.tree_util.tree_map(scale_invariant_update, params, adam_updates, is_leaf=lambda x: x is None)
-        is_pair = lambda x: x is None or isinstance(x, _StepWithStats)  # noqa: E731
-        adamh_updates = jax.tree.map(lambda x: x.update if isinstance(x, _StepWithStats) else x, out, is_leaf=is_pair)
-        hyperball = (
-            jax.tree.map(lambda x: x.stats if isinstance(x, _StepWithStats) else x, out, is_leaf=is_pair)
-            if log_hyperball
-            else None
-        )
-
-        return adamh_updates, ScaleByAdamHState(count=count_inc, mu=mu, nu=nu, hyperball=hyperball)
+        adamh_updates = jax.tree_util.tree_map(scale_invariant_update, params, adam_updates, is_leaf=lambda x: x is None)
+        return adamh_updates, ScaleByAdamHState(count=count_inc, mu=mu, nu=nu)
 
     return optax.GradientTransformation(init_fn, update_fn)
 

@@ -395,24 +395,11 @@ def sparse_index_attention(
     segment_ids: Int[Array, "B S"] | None,
     index: Float[Array, "B S G R"],
     lam: Float[Array, " H"],
-    lightning: Lightning | None = None,
-    tap_weights: jax.Array | None = None,
-    compose: Compose | None = None,
-    dcmha: DcmhaWeights | None = None,
-    gauss: GaussValues | None = None,
     *,
     window: int,
     topk: int,
-    dsa_topk: int = 0,
     spec: IndexSpec = IndexSpec(),
-    tap_offsets: tuple[int, ...] = (),
     dcmha_mode: DcmhaMode = DcmhaMode(),
-    far_half: str = "",
-    far_window: int = 128,
-    select_match: bool = False,
-    block: int = 32,
-    compress: bool = False,
-    block_select: bool = False,
 ) -> Float[Array, "B S H E"]:
     """Attention over each query's local ``window``, its document start and its ``topk`` index-matched followers."""
     if segment_ids is None:
@@ -421,23 +408,23 @@ def sparse_index_attention(
         *a,
         window=window,
         topk=topk,
-        dsa_topk=dsa_topk,
+        dsa_topk=(0),
         spec=spec,
-        tap_offsets=tap_offsets,
+        tap_offsets=(),
         dcmha_mode=dcmha_mode,
-        far_half=far_half,
-        far_window=far_window,
-        select_match=select_match,
-        block=block,
-        compress=compress,
-        block_select=block_select,
+        far_half=(""),
+        far_window=(128),
+        select_match=False,
+        block=(32),
+        compress=False,
+        block_select=False,
     )
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
-        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose, dcmha, gauss)
+        return math_fn(q, k, v, rel_bias, segment_ids, index, lam, None, None, None, None, None)
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., jax.Array] = auto_axes(math_fn, out_sharding=out_sharding)
-    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, lightning, tap_weights, compose, dcmha, gauss)
+    return wrapped(q, k, v, rel_bias, segment_ids, index, lam, None, None, None, None, None)
 
 
 def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, project):
@@ -458,27 +445,14 @@ def mla_sparse_attention(attn, x, q, k, v, rel_bias, segment_ids, rms_norm, proj
         segment_ids,
         idx,
         lam,
-        (None),
-        None,
-        (None),
-        None,
-        (None),
         window=(0),
         spec=spec,
-        tap_offsets=(),
-        far_half=(""),
-        far_window=(128),
         dcmha_mode=DcmhaMode(
             pre=True,
             post=True,
             terms=_dcmha_terms(("pre", "post", "dynamic")),
         ),
         topk=(0),
-        dsa_topk=(0),
-        select_match=(False),
-        block=(32),
-        compress=(False),
-        block_select=False,
     )
 
 

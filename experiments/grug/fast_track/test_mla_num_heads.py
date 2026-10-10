@@ -12,7 +12,7 @@ import experiments.grug.fast_track.test_kda_local as t
 
 
 def test_mla_layers_get_their_own_head_count_and_train():
-    mesh, model = t._model(ngram_stat_rows=0, mla=True, mla_kv_latent_dim=16, mla_num_heads=3)
+    mesh, model = t._model(mla=True, mla_kv_latent_dim=16, mla_num_heads=3)
     head_dim = model.config.inferred_head_dim
     assert model.stacked_blocks.stacked.attn.w_q.shape[-1] == 3 * head_dim
     assert model.stacked_blocks.stacked.attn.w_o.shape[-2] == 3 * head_dim

@@ -29,9 +29,8 @@ def _state():
     )
 
 
-def _step(state, batch, loop_active=None, router_tie_active=None):
-    scale = 2.0 if loop_active else 1.0
-    inner = tuple(eqx.tree_at(lambda m: m.w, m, m.w * batch * scale) for m in state.inner)
+def _step(state, batch):
+    inner = tuple(eqx.tree_at(lambda m: m.w, m, m.w * batch) for m in state.inner)
     return _State(step=state.step + 1, inner=inner), {"loss": jnp.sum(inner[0].w)}, None
 
 
@@ -39,9 +38,9 @@ def test_flat_step_matches_the_tree_step_over_several_steps():
     leaves, treedef = jax.tree.flatten(_state())
     flat = _flat_train_step(_step, treedef)
     expected = _state()
-    for i in range(3):
-        leaves, metrics, _ = flat(leaves, jnp.float32(1.5), loop_active=i == 1)
-        expected, expected_metrics, _ = _step(expected, jnp.float32(1.5), loop_active=i == 1)
+    for _ in range(3):
+        leaves, metrics, _ = flat(leaves, jnp.float32(1.5))
+        expected, expected_metrics, _ = _step(expected, jnp.float32(1.5))
     got = jax.tree.unflatten(treedef, leaves)
     assert int(got.step) == 3 and got.inner[0].b is None
     for a, b in zip(jax.tree.leaves(got), jax.tree.leaves(expected), strict=True):

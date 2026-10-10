@@ -250,7 +250,7 @@ def test_kma_optimizer_groups(mesh):
 
     # KDA local layers.
     assert labels_where(kda_leaf("w_q", "w_k", "w_v", "w_o", "w_g")) == {"muonh"}
-    assert labels_where(kda_leaf("w_a_down", "w_a_up", "a_log", "dt_bias")) == {"adam"}
+    assert labels_where(kda_leaf("w_a_down", "w_a_up", "a_log", "dt_bias")) == {"kda_decay"}
     assert labels_where(kda_leaf("w_beta")) == {"kda_beta"}
     assert labels_where(lambda n: "kda_blocks" in n and (".attn.sconv_" in n or ".attn.o_norm" in n)) == {"adam"}
     # MLA + Inkling global layers.
@@ -315,10 +315,11 @@ def check_kma_train_steps() -> None:
         new = np.asarray(new)
         assert np.isfinite(new).all(), jax.tree_util.keystr(path)
         moved[label] = moved.get(label, False) or bool(np.abs(new - old).max() > 0)
-    assert set(moved) == {"muonh", "adamh", "adam", "attn_res_query", "kda_beta"}, sorted(moved)
+    assert set(moved) == {"muonh", "adamh", "adam", "attn_res_query", "kda_beta", "kda_decay"}, sorted(moved)
     assert all(moved.values()), moved
 
 
+@pytest.mark.slow
 def test_kma_train_steps_are_finite():
     run_on_cpu_devices(
         f"import sys; sys.path.insert(0, {str(Path(__file__).parent)!r}); "

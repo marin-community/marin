@@ -66,12 +66,6 @@ from experiments.grug.fast_track.model import (
     GrugModelConfig,
     Transformer,
 )
-from experiments.grug.fast_track.optimizer import (
-    expert_consistency_metrics,
-    hyperball_metrics,
-    magma_metrics,
-    optimizer_diagnostics,
-)
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -817,11 +811,6 @@ def _make_train_step(
         else:
             with jax.named_scope("opt_update"):
                 updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
-            with jax.named_scope("opt_metrics"):
-                metrics.update(optimizer_diagnostics(opt_state))
-                metrics.update(magma_metrics(opt_state))
-                metrics.update(hyperball_metrics(opt_state))
-                metrics.update(expert_consistency_metrics(opt_state))
             with jax.named_scope("apply_updates"):
                 params = optax.apply_updates(qb_params, updates)
             master_params = None
