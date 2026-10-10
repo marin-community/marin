@@ -873,7 +873,9 @@ def cluster_create_slice(ctx, scale_group_name: str):
     # Verify the controller is reachable before creating the slice. The
     # returned URL may be a tunnel endpoint that's only reachable from the CLI
     # host; workers need the cluster-internal address instead, resolved below.
-    require_controller_url(ctx)
+    controller_url = require_controller_url(ctx)
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
+        worker_token = client.renew_worker_token(controller_pb2.Controller.RenewWorkerTokenRequest()).token
     bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
 
     # Resolve the address workers will connect to. Prefer an explicit value in
@@ -892,12 +894,12 @@ def cluster_create_slice(ctx, scale_group_name: str):
     # Build the worker config through the same helper the controller uses, so a
     # manually created slice matches its autoscaler-provisioned peers.
     # ``with_injected_task_env`` folds operator-injected env (defaults.inject_env)
-    # into task_env; the worker token is minted controller-side, hence the empty one.
+    # into task_env.
     base_worker_config = build_base_worker_config(
         with_injected_task_env(config),
         controller_address=worker_controller_address,
         storage_prefix=config.storage.remote_state_dir,
-        auth_token="",
+        auth_token=worker_token,
     )
 
     worker_config = build_worker_config_for_group(base_worker_config, sg_config)
@@ -1621,18 +1623,16 @@ def worker_restart(
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
 
-    # Same helper and empty-token rationale as cluster_create_slice, so a
-    # restarted worker matches its autoscaler-provisioned peers.
-    base_worker_config = build_base_worker_config(
-        with_injected_task_env(config),
-        controller_address=worker_controller_address,
-        storage_prefix=config.storage.remote_state_dir,
-        auth_token="",
-    )
-
     scale_groups = dict(config.scale_groups)
 
     with rpc_client_for_ctx(ctx, url=controller_url) as client:
+        worker_token = client.renew_worker_token(controller_pb2.Controller.RenewWorkerTokenRequest()).token
+        base_worker_config = build_base_worker_config(
+            with_injected_task_env(config),
+            controller_address=worker_controller_address,
+            storage_prefix=config.storage.remote_state_dir,
+            auth_token=worker_token,
+        )
         workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
         all_workers = workers_resp.workers
 

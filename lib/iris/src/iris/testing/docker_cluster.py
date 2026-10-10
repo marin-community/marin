@@ -173,7 +173,7 @@ class E2ECluster:
             log_service_address="",
             local_log_dir=temp_path / "local" / "log-server",
             host="127.0.0.1",
-            worker_token=None,
+            worker_token_provider=None,
         )
         backend = RpcTaskBackend(
             descriptor=BackendDescriptor(
