@@ -49,7 +49,6 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import tasktrove_row
 from experiments.post_training.task_curation.tests.test_tasktrove_grading import BROKEN_PACKAGE, TYPER_PACKAGE
 from experiments.post_training.task_curation.tests.test_tasktrove_text import fixture_files
-from lib.rolloutengine.tests.test_rollout import ReplayModel, engine, lowered, machine_runtime, shell_call
 
 pytestmark = [pytest.mark.manual, pytest.mark.asyncio]
 IMAGE = "fixture/prepared-python@sha256:" + "0" * 64
@@ -124,6 +123,15 @@ def file_write_command(files):
 
 @pytest.mark.parametrize("case", ["math500", "tasktrove-codeforces", "tasktrove-stack_pytest"])
 async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_path, monkeypatch, machines):
+    # RolloutEngine is optional in Marin CI; import it only when this manual test is selected.
+    from lib.rolloutengine.tests.test_rollout import (  # noqa: PLC0415
+        ReplayModel,
+        engine,
+        lowered,
+        machine_runtime,
+        shell_call,
+    )
+
     source = next(source for module in (math, code, python_tests) for source in module.sources() if source.name == case)
     recipe = cast(CurationRecipe, source.config)
     tool_name = "Bash" if case == "tasktrove-codeforces" else None
