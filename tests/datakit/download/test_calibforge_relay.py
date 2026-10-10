@@ -3,6 +3,7 @@
 
 import json
 
+import pytest
 from marin.datakit.chat_normalize import validate_chat_messages
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.calibforge_relay import row_to_chat_doc
@@ -60,7 +61,8 @@ def test_relay_episode_keeps_teacher_reasoning_and_marks_trained_turns():
     assert '"keystrokes": "echo done > /app/out.txt\\n"' in rendered
 
 
-def test_trained_reply_without_command_drops_the_episode():
+@pytest.mark.parametrize("trained", [False, True])
+def test_assistant_reply_without_command_drops_the_episode(trained):
     row = _row(
         [
             {"role": "user", "owner": "environment", "content": PROMPT, "trained": False},
@@ -68,9 +70,50 @@ def test_trained_reply_without_command_drops_the_episode():
                 "role": "assistant",
                 "owner": "teacher",
                 "content": "<|start_think|>Out of tokens.<|end_think|>",
-                "trained": True,
+                "trained": trained,
             },
         ]
     )
 
     assert row_to_chat_doc(row) == []
+
+
+@pytest.mark.parametrize("close_action", [False, True])
+def test_reasoning_example_keeps_the_actual_command(close_action):
+    example = json.dumps(_reply("Example only.", "echo example\n"))
+    action = _reply("Write the file.", "echo done > /app/out.txt\n", task_complete=True)
+    action_json = json.dumps(action)
+    content = (
+        "<|start_think|>An example would be "
+        + example
+        + ". Use the actual action.<|end_think|>"
+        + (action_json if close_action else action_json[:-1])
+    )
+    [doc] = row_to_chat_doc(
+        _row(
+            [
+                {"role": "user", "content": PROMPT, "trained": False},
+                {"role": "assistant", "content": content, "trained": True},
+            ]
+        )
+    )
+    final = doc["messages"][-1]
+    assert json.loads(final["content"][0]["text"]) == action
+    assert doc["messages"][-2]["content"][0]["text"] == ("An example would be " + example + ". Use the actual action.")
+
+
+def test_command_payload_wrapped_in_reasoning_is_retained():
+    action = _reply("Finish.", "echo done > /app/out.txt\n", task_complete=True)
+    [doc] = row_to_chat_doc(
+        _row(
+            [
+                {"role": "user", "content": PROMPT, "trained": False},
+                {
+                    "role": "assistant",
+                    "content": "<|start_think|>" + json.dumps(action) + "<|end_think|>",
+                    "trained": True,
+                },
+            ]
+        )
+    )
+    assert json.loads(doc["messages"][-1]["content"][0]["text"]) == action

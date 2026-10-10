@@ -37,7 +37,7 @@ from marin.execution.step_spec import StepSpec
 HF_DATASET_ID = "laion/calibforge-relay-traces"
 HF_REVISION = "66feab4d24bfc37af4c38d95a6a26187b5648308"
 SOURCE_NAME = "calibforge-relay/terminus2"
-TRANSFORM_VERSION = "2026.10.10.1"
+TRANSFORM_VERSION = "2026.10.10.2"
 THINK_TOKENS = ThinkTokens("<|start_think|>", "<|end_think|>")
 COUNTER_PREFIX = "calibforge_relay/chat"
 SOURCE_CHAT_SCHEMA = pa.schema(
@@ -57,8 +57,20 @@ _CLOSING_SUFFIXES = ("", "}", "]}", "}]}")
 
 def _command_payload(text: str) -> tuple[dict, str] | None:
     decoder = json.JSONDecoder()
+    stripped = text.strip()
+    if stripped.startswith(THINK_TOKENS.start) and stripped.endswith(THINK_TOKENS.end):
+        wrapped = stripped[len(THINK_TOKENS.start) : -len(THINK_TOKENS.end)].strip()
+        try:
+            payload = decoder.decode(wrapped)
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(payload, dict) and isinstance(payload.get("commands"), list):
+                return payload, ""
+    # Closed reasoning spans can contain example commands that were never executed.
+    reasoning_spans = list(re.finditer(r"<\|start_think\|>.*?<\|end_think\|>", text, re.DOTALL))
     for index, char in enumerate(text):
-        if char != "{":
+        if char != "{" or any(span.start() <= index < span.end() for span in reasoning_spans):
             continue
         body = text[index:].rstrip()
         for suffix in _CLOSING_SUFFIXES:
