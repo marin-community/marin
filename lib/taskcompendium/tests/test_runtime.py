@@ -13,7 +13,17 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, ExitReason, MachineSpec, Result, UnsupportedMachineSpec
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import (
+    Backend,
+    Command,
+    DockerImage,
+    ExitReason,
+    MachineSpec,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from verifyit.spec import ScriptSpec, render_spec, spec_from_table
 
 from taskcompendium.grader import verifyit_package
@@ -22,11 +32,13 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     ConversationInput,
     ConversationTrace,
     DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
+    FunctionCall,
     GradingAttempt,
     NoGrader,
     PlainText,
@@ -49,7 +61,7 @@ from taskcompendium.runtime.shell import BASH, CONTROL_PATH, INTERFACE, OUTPUT_P
 from taskcompendium.runtime.task_grading import grade_task
 
 GRADER_IMAGE = "fixture@sha256:" + "a" * 64
-GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, compatible_backends=(Backend.DOCKER,))
+GRADER_ENVIRONMENT = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE)
 GRADER_MACHINE = MachineSpec(DockerImage(GRADER_IMAGE))
 EXITED = Result(0, b"", b"", False, False, ExitReason.EXITED)
 
@@ -64,7 +76,8 @@ def shell_task():
             events=(TextMessage(role="user", content="Read people.csv and save the selected names."),)
         ),
         environment_requirements=EnvironmentRequirements(
-            compatible_backends=(Backend.DOCKER,),
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image=GRADER_IMAGE,
             capabilities=("shell", "filesystem"),
             tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
         ),
@@ -146,7 +159,8 @@ def test_unresolved_actor_build_never_creates_a_machine(shell_task, entrypoint):
 @pytest.mark.parametrize("entrypoint", ["grade", "empty", "no_machine_spec"])
 def test_unresolved_grader_build_never_creates_a_machine(shell_task, entrypoint):
     environment = EnvironmentRequirements(
-        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),)),
     )
     task = shell_task.model_copy(
         update={"grader": ScriptGrader(argv=("true",), answer_path=None, environment=environment)}
@@ -384,7 +398,7 @@ def test_no_grader_task_is_unavailable_without_a_grading_machine(shell_task):
 async def test_shell_uploads_public_files_without_oracle_and_captures_submission(shell_task):
     task = shell_task
     machines = FileMachines()
-    factory = ShellFactory(machines, MachineSpec(DockerImage("test")), {"backend": "file-machine"}, 1, 1024)
+    factory = ShellFactory(machines, GRADER_MACHINE, {"backend": "file-machine"}, 1, 1024)
     env = await factory.create(task)
     assert "/workspace/people.csv" in machines.machines[0].files
     assert CONTROL_PATH not in machines.machines[0].files
@@ -396,6 +410,38 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
     assert (await fresh.evidence()).files == {}
     await fresh.close()
     assert all(machine.closed for machine in machines.machines)
+
+
+@pytest.mark.asyncio
+async def test_shell_commands_use_required_directory_and_variables(shell_task):
+    task = shell_task.model_copy(
+        update={
+            "environment_requirements": shell_task.environment_requirements.model_copy(
+                update={
+                    "docker_image": None,
+                    "command_semantics": CommandSemantics.SHELL_SIMULATOR,
+                    "working_directory": "/task",
+                    "environment_variables": {"SETTING": "required"},
+                }
+            )
+        }
+    )
+    factory = ShellFactory(
+        ShellSimMachineFactory(),
+        MachineSpec(ShellSimBuiltins(), workdir="/incoming", env={"SETTING": "incoming", "RETAINED": "kept"}),
+        {},
+        1,
+        1024,
+    )
+    environment = await factory.create(task)
+    try:
+        result = json.loads(
+            await environment.step(FunctionCall(name="Bash", arguments={"command": 'pwd; echo "$SETTING:$RETAINED"'}))
+        )
+        assert result["exit_code"] == 0
+        assert result["stdout"] == "/task\nrequired:kept\n"
+    finally:
+        await environment.close()
 
 
 @dataclass(frozen=True)

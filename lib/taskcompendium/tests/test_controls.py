@@ -17,6 +17,7 @@ from taskcompendium.convert.answers import (
 )
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     DockerBuildContext,
     EnvironmentRequirements,
     NoGrader,
@@ -140,7 +141,8 @@ def test_graders_without_offline_grading_have_unsupported_controls(grader):
 def test_controls_reject_unresolved_build_before_machine_selection_or_oracle_fallback(role):
     task = file_task()
     build = EnvironmentRequirements(
-        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),)),
     )
     if role == "actor":
         task = task.model_copy(update={"environment_requirements": build})
@@ -221,7 +223,9 @@ def test_unavailable_grading_machines_are_infrastructure_errors(golden, check):
 def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_image, oracle_image):
     task = file_task()
     if agent_image is not None:
-        requirements = EnvironmentRequirements(docker_image=agent_image, compatible_backends=(Backend.DOCKER,))
+        requirements = EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=agent_image
+        )
         task = TaskSpec.model_validate(task.model_copy(update={"environment_requirements": requirements}).model_dump())
     images = RecordingImages()
     controls = Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh"))

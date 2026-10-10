@@ -23,6 +23,7 @@ from shellbox.machine import (
 )
 
 from taskcompendium.models import (
+    DEFAULT_WORKSPACE,
     CommandSemantics,
     FunctionCall,
     FunctionDefinition,
@@ -123,6 +124,7 @@ class ShellEnvironment:
     command_timeout: float
     output_limit_bytes: int
     output_directories: tuple[OutputDirectory, ...] = ()
+    workdir: str = DEFAULT_WORKSPACE
 
     async def step(self, call: FunctionCall) -> str:
         command = call.arguments.get("command")
@@ -131,6 +133,7 @@ class ShellEnvironment:
         result = await self.machine.run(
             Command(
                 ("/bin/bash", "-lc", command),
+                cwd=self.workdir,
                 timeout=self.command_timeout,
                 output_limit_bytes=self.output_limit_bytes,
             )
@@ -223,9 +226,7 @@ class ShellFactory:
         requirements = task.environment_requirements
         if (
             set(requirements.capabilities) - {"shell", "filesystem", "python3"}
-            or requirements.working_directory is not None
             or requirements.setup_commands
-            or requirements.environment_variables
             or set(requirements.tool_providers) != {"shell"}
         ):
             raise ValueError("Shell factory cannot satisfy these environment requirements")
@@ -242,7 +243,7 @@ class ShellFactory:
                 if probe.exit_code != 0:
                     raise UnsupportedMachineSpec("Directory capture requires a real POSIX Python 3 runtime")
             initialized = await machine.run(
-                Command(("mkdir", "-p", self.machine_spec.workdir, "/output"), timeout=self.command_timeout)
+                Command(("mkdir", "-p", prepared.workdir, "/output"), timeout=self.command_timeout)
             )
             if initialized.exit_code != 0:
                 raise RuntimeError("Could not initialize shell workspace")
@@ -258,5 +259,10 @@ class ShellFactory:
             await machine.close()
             raise
         return ShellEnvironment(
-            machine, task.output_paths, self.command_timeout, self.output_limit_bytes, task.output_directories
+            machine,
+            task.output_paths,
+            self.command_timeout,
+            self.output_limit_bytes,
+            task.output_directories,
+            prepared.workdir,
         )

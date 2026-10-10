@@ -444,7 +444,7 @@ class _SandboxGrading:
 
 
 def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: float | None) -> _SandboxGrading:
-    """The task's sandbox grader, checked against the grading machine and the task machine it collects from."""
+    """The task's sandbox grader and the task machine inputs it needs to collect."""
     grader = task.grader
     if isinstance(grader, VerifyitGrader) and grader.environment is not None:
         limit = GRADING_TIMEOUT if timeout is None else timeout
