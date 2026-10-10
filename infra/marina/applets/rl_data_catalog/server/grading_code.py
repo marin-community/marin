@@ -11,6 +11,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+DECLARATION_SUFFIX = ".__declaration__"
+
 VERIFYIT_MODES_BINDING = "__verifyit_modes__"
 DEFINITION_BINDINGS = "__definition_bindings__"
 
@@ -221,7 +223,7 @@ def python_grading_code(
                 declaration.body = [
                     item for item in declaration.body if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
                 ]
-                definitions[node.name + ".__declaration__"] = declaration
+                definitions[node.name + DECLARATION_SUFFIX] = declaration
                 for item in node.body:
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         definitions[node.name + "." + item.name] = item
@@ -289,7 +291,7 @@ def python_grading_code(
         normalized = ast.Module(body=node, type_ignores=[]) if isinstance(node, list) else node
         selected[name] = normalized
         node_imports = dict(imports)
-        if name.endswith(".__declaration__") and isinstance(normalized, ast.ClassDef):
+        if name.endswith(DECLARATION_SUFFIX) and isinstance(normalized, ast.ClassDef):
             for base in normalized.bases:
                 parent = base.value if isinstance(base, ast.Subscript) else base
                 if isinstance(parent, ast.Name) and parent.id in imports:
@@ -310,7 +312,7 @@ def python_grading_code(
         pending.extend(sorted(referenced & definitions.keys() - selected.keys()))
         if "." in name:
             owner = name.split(".")[0]
-            declaration = owner + ".__declaration__"
+            declaration = owner + DECLARATION_SUFFIX
             if declaration not in selected:
                 pending.append(declaration)
             pending.extend(
@@ -443,7 +445,7 @@ def python_grading_program(
                         symbols.add(symbol)
                         pending.append(imported)
                     continue
-                names = [symbol + ".__declaration__"]
+                names = [symbol + DECLARATION_SUFFIX]
                 names.extend(
                     symbol + ".__init__"
                     for node in base.body

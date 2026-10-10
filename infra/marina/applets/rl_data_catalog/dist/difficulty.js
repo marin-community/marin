@@ -1,5 +1,6 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 window.AtlasDifficulty = (() => {
+  const cohortRewardMetric = "cohort_relative_reward";
   const titles = {small: "Small", large: "Large", hosted: "Hosted", followup: "Follow-up"};
   function modelLabel(model) {
     const name = model.model?.split("/").at(-1) || model.display_name || "Native verifier recheck";
@@ -14,12 +15,12 @@ window.AtlasDifficulty = (() => {
     return names[model.model] || model.display_name || titles[model.size] || model.model?.split("/").at(-1) || "Model";
   }
   function currentLarge(summary) {
-    return summary?.status === "current" && summary.metric_kind !== "cohort_relative_reward" ? summary.models.find(model => model.size === "large" && model.measurement_status === "current") : undefined;
+    return summary?.status === "current" && summary.metric_kind !== cohortRewardMetric ? summary.models.find(model => model.size === "large" && model.measurement_status === "current") : undefined;
   }
   function comparison(models, summary, compact = false) {
     const chart = document.createElement("div");
     chart.className = `difficulty-comparison${compact ? " difficulty-comparison-compact" : ""}`;
-    if (models.some(model => model.metric_kind === "cohort_relative_reward")) {
+    if (models.some(model => model.metric_kind === cohortRewardMetric)) {
       const label = document.createElement("span");
       label.className = "difficulty-evidence-status";
       label.textContent = "Native cohort reward (relative)";
@@ -46,7 +47,7 @@ window.AtlasDifficulty = (() => {
       const name = document.createElement("span");
       name.className = "difficulty-model-label";
       name.textContent = compact ? compactModelLabel(model) : modelLabel(model);
-      if (model.metric_kind === "cohort_relative_reward") {
+      if (model.metric_kind === cohortRewardMetric) {
         row.classList.add("difficulty-model-relative");
         const score = document.createElement("span");
         score.className = "difficulty-score";

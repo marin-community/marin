@@ -22,6 +22,7 @@ DIFFICULTY_PROTOCOL = "atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking"
 JUDGE_VERIFIER_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-judge-verifier-nonthinking"
 CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-checklist-judge"
 GENRM_COHORT_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-genrm-cohort"
+COHORT_REWARD_METRIC = "cohort_relative_reward"
 CHECKLIST_JUDGE_SOURCES = {
     "Task Trove:laion__nemotron-gym-safety-v3",
     "Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
@@ -59,7 +60,7 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
     if protocol_id == GENRM_COHORT_DIFFICULTY_PROTOCOL:
         cohort = report.get("cohort_comparison") or {}
         if (
-            report.get("metric_kind") != "cohort_relative_reward"
+            report.get("metric_kind") != COHORT_REWARD_METRIC
             or cohort.get("cohort_size") != 16
             or cohort.get("measured_responses_per_task") != 3
             or cohort.get("reference_responses_per_task") != 13
@@ -178,7 +179,7 @@ def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:
 def difficulty_model_label(model: dict[str, Any]) -> str:
     """Describe a measured result without projecting cohort rewards into solves."""
     name = model["model"] or model.get("display_name") or "Native verifier recheck"
-    if model.get("metric_kind") == "cohort_relative_reward":
+    if model.get("metric_kind") == COHORT_REWARD_METRIC:
         reward = model.get("cohort_reward")
         if reward is None:
             return f"{name} native cohort reward unavailable"
