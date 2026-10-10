@@ -232,8 +232,8 @@ def save_hf_shards(
     """Replicate tensors on every rank; copy to CPU and write only on process zero.
 
     One writer supports host-local paths and process-zero HF upload callbacks.
-    All ranks use matching shard/key order, shapes and dtypes. tensor_names names
-    slices along each tensor's first axis. Device staging needs one full tensor.
+    All ranks match shard/key order, shapes and dtypes. tensor_names[key] names
+    first-axis slices; (key,) keeps the tensor whole. Devices stage one full tensor.
     Reserve twice each shard's payload; oversized shards run alone. With one worker,
     finish each shard before loading the next. Local destinations are written directly;
     remote shards stage under TMPDIR. upload_to_hf(directory, filename) runs on a worker,
