@@ -54,6 +54,7 @@ from levanter.grug._moe.ep_common import (
     _sort_activations,
 )
 from levanter.kernels.pallas.relu2_mlp import fused_relu2
+from levanter.utils.activation import ActivationFunctionEnum
 from levanter.kernels.pallas.relu2_ragged_mlp import (
     Implementation as Relu2RaggedImplementation,
     relu2_ragged_mlp_backward,
@@ -294,6 +295,9 @@ def _quack_grouped_gemm_available() -> bool:
     return True
 
 
+_RELU2_FNS = (fused_relu2, ActivationFunctionEnum.relu2.to_jax_fn())
+
+
 def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungated: bool) -> _ExpertMlp:
     """Pick the fastest expert-MLP kernel this process can actually run.
 
@@ -303,9 +307,11 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungat
     build without the GPU extra -- runs the portable `ragged_dot` path, which computes the same
     function.
     """
+    # QuACK takes any ungated ReLU^2, including the plain ``ActivationFunctionEnum.relu2`` function that
+    # ``moe_mlp`` resolves the enum to; the Pallas kernels stay opt-in through ``fused_relu2``.
+    if ungated and activation_fn in _RELU2_FNS and _quack_grouped_gemm_available():
+        return _CuteRelu2ExpertMlp()
     if ungated and activation_fn is fused_relu2:
-        if _quack_grouped_gemm_available():
-            return _CuteRelu2ExpertMlp()
         return _FusedRelu2ExpertMlp("pallas_gpu" if jax.default_backend() == "gpu" else "reference")
     if not ungated and activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
         return _CuteExpertMlp()
