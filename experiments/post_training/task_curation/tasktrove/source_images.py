@@ -10,7 +10,9 @@ from pathlib import Path
 from verifyit.spec import Mode, PytestSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TASKTROVE_REPO
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import pytest_dockerfile
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import (
+    legacy_pytest_dockerfile,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from taskcompendium.models import DockerBuildContext, TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.runtime.resources import resource_bytes
@@ -65,7 +67,7 @@ def source_actor_build(task: TaskSpec, *, source: str, mode: str, package: Path 
         assert isinstance(spec, PytestSpec)
         resources = {resource.path: resource for resource in task.resources.verifier}
         test = resources[spec.paths[0].removeprefix("/tests/")]
-        dockerfile = pytest_dockerfile(dockerfile, ast.parse(resource_bytes(test)))
+        dockerfile = legacy_pytest_dockerfile(dockerfile, ast.parse(resource_bytes(test)))
     # Legacy text converters retained only the source Dockerfile.
     # Declared executable build contexts are handled before this compatibility path.
     extras = ("schema", "judge") if source == "laion__nemotron-gym-structured-outputs-v4" else MODE_EXTRAS.get(mode, ())

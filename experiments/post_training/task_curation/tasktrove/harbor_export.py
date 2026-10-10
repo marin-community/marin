@@ -252,8 +252,10 @@ def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentM
         raise UnsupportedHarborTask(f"Unsupported answer type: {task.answer_type}")
     if task.answer_type == AnswerType.TEXT and not isinstance(task.answer_format, PlainText):
         raise UnsupportedHarborTask("Text extraction beyond plain text requires dedicated Harbor lowering")
-    if task.output_directories or task.final_tools:
-        raise UnsupportedHarborTask("Directory capture and final tool calls require dedicated Harbor lowering")
+    if task.output_directories and environment_mode != VerifierEnvironmentMode.SHARED:
+        raise UnsupportedHarborTask("Directory capture requires dedicated isolated Harbor lowering")
+    if task.final_tools:
+        raise UnsupportedHarborTask("Final tool calls require dedicated Harbor lowering")
     if environment.setup_commands or environment.packages_lock:
         raise UnsupportedHarborTask("Agent setup commands and package locks require an environment build")
     if set(environment.tool_providers) - {"shell"}:

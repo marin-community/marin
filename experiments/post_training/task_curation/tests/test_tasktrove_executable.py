@@ -29,7 +29,6 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     CheckStatus,
     Controls,
-    ImportFailureKind,
     ImportRejection,
     NormalizedTask,
     RawRow,
@@ -50,7 +49,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     SOLUTION_PATHS,
     converted_workspace_task,
-    python_delivery,
     solve_script,
     tasktrove_archive_task,
 )
@@ -367,51 +365,6 @@ def test_grader_controls_reject_simulation_of_linux_processes_before_start(execu
     with pytest.raises(ValueError, match="native Linux processes"):
         run_controls(executable_task, controls=CONTROLS, machines=machines)
     assert not machines.factory.machines
-
-
-@pytest.mark.parametrize(
-    "instruction, tests, output_paths",
-    [
-        ("Write the parser to `/app/parser.py`.", {}, ("/app/parser.py",)),
-        (
-            "Build the package at /app/shapes with `area.py` and `volume.py`.",
-            {},
-            ("/app/shapes/area.py", "/app/shapes/volume.py"),
-        ),
-        ("Implement /app/lib.py; the grader runs test_lib.py.", {}, ("/app/lib.py",)),
-        (
-            "Implement `add(a, b)` returning the sum of two integers.",
-            {"tests/test_add.py": b"import json\nfrom collections import Counter\nfrom calculator import add\n"},
-            ("/app/calculator.py",),
-        ),
-    ],
-)
-def test_python_delivery_captures_the_files_the_task_names(instruction, tests, output_paths):
-    delivery = python_delivery(instruction, tests)
-    assert not isinstance(delivery, ImportRejection)
-    assert delivery.output_paths == output_paths
-    assert delivery.instruction.startswith(instruction)
-
-
-def test_python_delivery_names_an_inferred_module_in_the_instruction():
-    delivery = python_delivery("Implement `add(a, b)`.", {"tests/test_add.py": b"from calculator import add\n"})
-    assert not isinstance(delivery, ImportRejection)
-    assert delivery.instruction.endswith("Delivery: write the requested implementation to `/app/calculator.py`.\n")
-    assert [change.field for change in delivery.changes] == ["instruction", "output_paths"]
-
-
-@pytest.mark.parametrize(
-    "tests",
-    [
-        {"tests/test_add.py": b"from calculator import add, subtract\n"},
-        {"tests/test_add.py": b"from calculator import add\n", "tests/test_mul.py": b"from multiply import add\n"},
-    ],
-    ids=["unmentioned_name", "two_modules"],
-)
-def test_python_delivery_rejects_an_unstated_output_contract(tests):
-    rejection = python_delivery("Implement `add(a, b)`.", tests)
-    assert isinstance(rejection, ImportRejection)
-    assert (rejection.kind, rejection.reason) == (ImportFailureKind.UNSUPPORTED, "unsupported_public_output_contract")
 
 
 @pytest.mark.parametrize("language,execution", [("python", "shared"), ("cpp", "separate")])

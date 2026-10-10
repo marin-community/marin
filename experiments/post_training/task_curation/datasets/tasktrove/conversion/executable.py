@@ -9,13 +9,10 @@ files in a fresh machine of the grader image, with the hidden tests under ``/tes
 stay with the oracle role, which only grader controls mount.
 """
 
-import ast
 import hashlib
 import json
 import re
-import sys
-from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.tasks import workspace_task
@@ -25,6 +22,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     NoGrader,
+    OutputDirectory,
     PlainText,
     ProviderRequirement,
     TaskSpec,
@@ -56,9 +54,6 @@ SOLUTION_PATHS = ("/app/solution.py", "/app/solution.cpp")
 """The program files a competitive-programming grader runs, whichever language the agent chose."""
 ORACLE_COMMAND = f"bash /{SOLVE_SH}"
 
-PYTHON_FILE = re.compile(r"(?<![\w/])(?:/app/|app/)?[A-Za-z_]\w*(?:/[A-Za-z_]\w*)*\.py\b")
-PACKAGE = re.compile(r"(?:package (?:at|under)|package[^\n]{0,30} at) /app/([A-Za-z_]\w*)")
-
 REPOSITORY_CAPABILITIES = ("shell", "filesystem", "git_repository")
 REPOSITORY_FILES = ("tests/config.json", "tests/test.sh", "environment/Dockerfile")
 CHECKOUT = re.compile(r"\bgit checkout\s+([^\s;&]+)")
@@ -74,6 +69,7 @@ def converted_workspace_task(
     environment: EnvironmentRequirements,
     grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
+    output_directories: tuple[OutputDirectory, ...] = (),
 ) -> TaskSpec:
     """A workspace task from a TaskTrove converter's result.
 
@@ -102,6 +98,7 @@ def converted_workspace_task(
         environment=environment,
         grader_environment=grader_environment,
         output_paths=output_paths,
+        output_directories=output_directories,
         verifier=tuple(verifier),
         worker=tuple(worker),
         oracle=tuple(oracle),
@@ -130,6 +127,7 @@ def tasktrove_archive_task(
     environment: EnvironmentRequirements,
     grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
+    output_directories: tuple[OutputDirectory, ...] = (),
 ) -> NormalizedTask | ImportRejection:
     """Convert an unpacked TaskTrove archive with ``convert`` into a workspace task."""
     converted = archive_conversion(row.data, convert)
@@ -142,105 +140,9 @@ def tasktrove_archive_task(
         environment=environment,
         grader_environment=grader_environment,
         output_paths=output_paths,
+        output_directories=output_directories,
     )
     return NormalizedTask(task, _converter_changes(row, converted))
-
-
-def submission_paths(instruction: str) -> tuple[str, ...]:
-    """The Python files the public instruction asks the agent to write, under ``/app``."""
-    packages = set(PACKAGE.findall(instruction))
-    paths = set()
-    for match in PYTHON_FILE.finditer(instruction):
-        filename = match.group()
-        public_workspace_path = filename.startswith("/app/")
-        filename = filename.removeprefix("/app/") if filename.startswith("/app/") else filename.removeprefix("app/")
-        if not public_workspace_path and (filename.startswith("test_") or filename.startswith("tests/")):
-            continue
-        if "/" not in filename and len(packages) == 1 and filename.removesuffix(".py") not in packages:
-            filename = f"{next(iter(packages))}/{filename}"
-        paths.add(f"/app/{filename}")
-    return tuple(sorted(paths))
-
-
-@dataclass(frozen=True)
-class Delivery:
-    """The instruction and output files of a Python task, with the repairs that produced them."""
-
-    instruction: str
-    output_paths: tuple[str, ...]
-    changes: tuple[NormalizationChange, ...]
-
-
-def python_delivery(instruction: str, data_files: Mapping[str, bytes]) -> Delivery | ImportRejection:
-    """Capture the Python files the instruction names.
-
-    When it names none and every hidden test imports from one module whose imported names the
-    instruction mentions, the instruction gains a delivery line naming that module's file.
-    """
-    paths = submission_paths(instruction)
-    changes = []
-    if not paths:
-        tests = [
-            data.decode() for path, data in data_files.items() if path.startswith("tests/") and path.endswith(".py")
-        ]
-        imports = [
-            node
-            for text in tests
-            for node in ast.walk(ast.parse(text))
-            if isinstance(node, ast.ImportFrom)
-            and node.module is not None
-            and node.module.split(".")[0] not in sys.stdlib_module_names | {"pytest", "numpy"}
-        ]
-        modules = {node.module for node in imports}
-        if len(modules) == 1 and all(alias.name in instruction for node in imports for alias in node.names):
-            module = next(iter(modules))
-            assert module is not None
-            paths = (f"/app/{module.replace('.', '/')}.py",)
-            replacement = instruction + f"\n\nDelivery: write the requested implementation to `{paths[0]}`.\n"
-            changes.append(
-                NormalizationChange(
-                    field="instruction",
-                    reason="Make the grader's module filename explicit without changing the requested API",
-                    original=instruction,
-                    replacement=replacement,
-                )
-            )
-            instruction = replacement
-    if not paths:
-        return unsupported(
-            "unsupported_public_output_contract",
-            "No explicit public Python filename and hidden test imports require APIs absent from the request",
-        )
-    changes.append(
-        NormalizationChange(
-            field="output_paths",
-            reason="Capture the Python filenames declared in the public instruction",
-            original=json.dumps(SOLUTION_PATHS),
-            replacement=json.dumps(paths),
-        )
-    )
-    return Delivery(instruction, paths, tuple(changes))
-
-
-def tasktrove_python_task(
-    row: RawRow, *, convert: ConvertFn, environment: EnvironmentRequirements, grader_environment: EnvironmentRequirements
-) -> NormalizedTask | ImportRejection:
-    """Convert a TaskTrove archive into a workspace task capturing the Python files its instruction names."""
-    converted = archive_conversion(row.data, convert)
-    if isinstance(converted, ImportRejection):
-        return converted
-    delivery = python_delivery(converted.instruction, converted.data_files)
-    if isinstance(delivery, ImportRejection):
-        return delivery
-    task = converted_workspace_task(
-        row,
-        converted,
-        instruction=delivery.instruction,
-        environment=environment,
-        grader_environment=grader_environment,
-        output_paths=delivery.output_paths,
-    )
-    return NormalizedTask(task, (*_converter_changes(row, converted), *delivery.changes))
 
 
 def solve_script(task: TaskSpec) -> OracleCommand | None:

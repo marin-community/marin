@@ -32,7 +32,7 @@ PYTEST_INSTALL = (
 )
 
 
-def _test_module(task: TaskFiles, test_files: tuple[str, ...]) -> tuple[str, ast.Module] | Rejected:
+def _validated_test_module(task: TaskFiles, test_files: tuple[str, ...]) -> tuple[str, ast.Module] | Rejected:
     candidates = [path for path in test_files if path in task.files]
     if len(candidates) != 1:
         return Rejected(
@@ -53,7 +53,7 @@ def _test_module(task: TaskFiles, test_files: tuple[str, ...]) -> tuple[str, ast
     return path, tree
 
 
-def _solution_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
+def _validated_oracle_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
     files = task.under(SOLUTION_DIR)
     if not files:
         return {}
@@ -66,7 +66,7 @@ def _solution_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
     return {**files, SOLVE_SH: ORACLE_SCRIPT.encode()}
 
 
-def pytest_dockerfile(dockerfile: str, tree: ast.Module) -> str:
+def legacy_pytest_dockerfile(dockerfile: str, tree: ast.Module) -> str:
     """Install the legacy isolated pytest interpreter and its test-import dependencies."""
     modules = {
         alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
@@ -77,11 +77,11 @@ def pytest_dockerfile(dockerfile: str, tree: ast.Module) -> str:
 
 def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> ConvertedTask | Rejected:
     """Convert one self-contained Python task without preserving its legacy shell grader."""
-    module = _test_module(task, test_files)
+    module = _validated_test_module(task, test_files)
     if isinstance(module, Rejected):
         return module
     test_file, tree = module
-    solution_files = _solution_files(task)
+    solution_files = _validated_oracle_files(task)
     if isinstance(solution_files, Rejected):
         return solution_files
 
@@ -92,7 +92,7 @@ def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> Con
             paths=(f"{TESTS_MOUNT}/{test_file.removeprefix('tests/')}",),
             python=PYTEST_PYTHON,
         ),
-        dockerfile=pytest_dockerfile(task.text(DOCKERFILE), tree),
+        dockerfile=legacy_pytest_dockerfile(task.text(DOCKERFILE), tree),
         tags=("code", "python", "unit-test", "kata"),
         language="python",
         data_files=data_files,

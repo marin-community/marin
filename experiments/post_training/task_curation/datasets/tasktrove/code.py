@@ -31,7 +31,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
     converted_workspace_task,
     solve_script,
     tasktrove_archive_task,
-    tasktrove_python_task,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nemotron_data import verifier_data
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
@@ -182,11 +181,12 @@ def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
 
 
 def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    return tasktrove_python_task(
+    return tasktrove_archive_task(
         row,
         convert=convert_competitive_coding,
         environment=environment_requirements(AGENT_IMAGE),
         grader_environment=required_grader_environment(context),
+        output_paths=SOLUTION_PATHS,
     )
 
 

@@ -4,14 +4,15 @@
 """TaskTrove Python implementation tasks graded by one hidden pytest file.
 
 Each source ships one pytest file and, usually, a ``solution/solution.py`` oracle. The agent writes
-the Python files its instruction names; unitsyn's agent writes the fixed solution file instead. The
-hidden tests run with the grader packages (``GRADER_PACKAGES``). The sources differ only by
+files under ``/app``; unitsyn's agent writes the fixed solution file instead. The hidden tests run
+with the grader packages (``GRADER_PACKAGES``). The sources differ only by
 configuration, rubric and, for the Stack Overflow tasks, the agent image carrying their dependencies;
 the grader packages include the same ones, so a submission that imports one there grades here.
 """
 
 from dataclasses import dataclass, field
 
+from taskcompendium.models import OutputDirectory
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
@@ -22,7 +23,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
     SOLUTION_PATHS,
     solve_script,
     tasktrove_archive_task,
-    tasktrove_python_task,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import (
     convert as convert_unit_tests,
@@ -39,6 +39,13 @@ STACK_PYTEST_AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:97528e23c249c993641b0b5c6e7d05a978588f4be276f0fe61b1f3c3bcc6c622"
 )
 """The Python image with the Stack Overflow tasks' dependencies that their agent works in."""
+
+PYTHON_WORKSPACE_OUTPUT = OutputDirectory(root="/app", patterns=("*",), max_files=1024, max_bytes=16 * 1024 * 1024)
+"""Capture regular files recursively, including non-Python assets and incidental workspace files.
+
+Isolated capture skips symlinks and fails above these budgets or the runtime's per-file limit.
+Harbor's shared workspace needs no transfer and does not apply capture budgets.
+"""
 
 PYTHON_TESTS_CONTROLS = Controls(golden=solve_script)
 
@@ -173,22 +180,26 @@ tests.
 
 
 def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Capture the Python files the instruction names."""
-    return tasktrove_python_task(
+    """Capture the implementation and assets under the source workspace."""
+    return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=environment_requirements(AGENT_IMAGE).model_copy(update={"capabilities": ("python3",)}),
         grader_environment=required_grader_environment(context),
+        output_paths=(),
+        output_directories=(PYTHON_WORKSPACE_OUTPUT,),
     )
 
 
 def convert_stack_pytest(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Capture the Python files the instruction names, written in the image with Stack Overflow dependencies."""
-    return tasktrove_python_task(
+    """Capture the workspace written in the image with Stack Overflow dependencies."""
+    return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment_requirements(STACK_PYTEST_AGENT_IMAGE),
+        environment=environment_requirements(STACK_PYTEST_AGENT_IMAGE).model_copy(update={"capabilities": ("python3",)}),
         grader_environment=required_grader_environment(context),
+        output_paths=(),
+        output_directories=(PYTHON_WORKSPACE_OUTPUT,),
     )
 
 

@@ -15,6 +15,7 @@ from taskcompendium.models import (
     ConversationEvent,
     ConversationInput,
     EnvironmentRequirements,
+    OutputDirectory,
     PlainText,
     ProviderRequirement,
     ResourceGroups,
@@ -46,12 +47,13 @@ def workspace_task(
     environment: EnvironmentRequirements,
     grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
+    output_directories: tuple[OutputDirectory, ...] = (),
     verifier: tuple[TaskResource, ...] = (),
     worker: tuple[TaskResource, ...] = (),
     oracle: tuple[TaskResource, ...] = (),
     tags: tuple[str, ...] = (),
 ) -> TaskSpec:
-    """A shell task in the ``environment`` image whose ``spec`` grades the agent's ``output_paths``.
+    """A shell task in the declared environment whose ``spec`` grades the declared files and directories.
 
     The grader runs in a fresh machine of ``grader_environment``. ``verifier`` files are installed
     under ``/tests`` for the grader only; ``worker`` files are mounted for the agent and ``oracle``
@@ -66,6 +68,7 @@ def workspace_task(
         interaction_tools=(BASH,),
         resources=ResourceGroups(worker=worker, oracle=oracle, verifier=package.resources),
         output_paths=output_paths,
+        output_directories=output_directories,
         answer_type=AnswerType.FILE,
         answer_format=PlainText(),
         grader=package.grader,
