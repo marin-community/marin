@@ -208,7 +208,7 @@ class LocalGraderMachines:
         return {"backend": Backend.LOCAL.value, "python": LOCAL_PYTHON_VERSION}
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        """A bubblewrap sandbox with the environment's packages; ``memory_mb`` is not enforced."""
+        """Return an unprepared bubblewrap spec; ``memory_mb`` is advisory."""
         require_resolved_environment(environment)
         if environment.packages_lock is None:
             raise ValueError("A local grader requires a packages lock")

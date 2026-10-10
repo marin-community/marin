@@ -26,7 +26,7 @@ from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import VERIFIER_DATA, archive_file
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -169,7 +169,7 @@ def convert_judged(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
     instruction = row.data["instruction"]
     if not instruction.strip():
         return source_defect("missing_instruction", "Public instruction is required")
-    verifier_data = archive_file(row.data, "tests/verifier_data.json")
+    verifier_data = archive_file(row.data, VERIFIER_DATA)
     assert verifier_data is not None
     package = verifyit_package(
         JudgeSpec(criteria=criteria, question=question, rubric=RUBRIC_CHECKLIST),

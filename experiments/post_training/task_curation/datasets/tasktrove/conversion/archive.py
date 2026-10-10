@@ -39,6 +39,7 @@ INSTRUCTION = "instruction.md"
 TASK_TOML = "task.toml"
 DOCKERFILE = "environment/Dockerfile"
 TEST_SH = "tests/test.sh"
+VERIFIER_DATA = "tests/verifier_data.json"
 SOLUTION_DIR = "solution/"
 SOLVE_SH = "solution/solve.sh"
 TESTS_MOUNT = "/tests"
@@ -94,8 +95,8 @@ def unpack_task_binary(row: dict[str, Any], _context: ConversionContext) -> dict
         "file_metadata": file_metadata,
         "archive_links": archive_links,
     }
-    if "tests/verifier_data.json" in files:
-        prepared["verifier_data"] = json.loads(files["tests/verifier_data.json"])
+    if VERIFIER_DATA in files:
+        prepared["verifier_data"] = json.loads(files[VERIFIER_DATA])
     return prepared
 
 

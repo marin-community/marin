@@ -494,8 +494,8 @@ async def grade_in_sandbox(
 ) -> GradeResult:
     """Grade with a verifyit grader that has an environment, or with a script grader.
 
-    The grading machine comes from ``factory`` with ``machine_spec``, its working directory set to
-    the grader's workspace and the environment's variables added. ``task_machine`` is the agent's
+    The grading machine comes from ``factory`` with ``machine_spec``, applying the environment's
+    working directory and variables. ``task_machine`` is the agent's
     machine; graders that collect inputs or copy artifacts require it. Machine failures propagate.
     """
     grading = _sandbox_grading(task, task_machine, timeout)

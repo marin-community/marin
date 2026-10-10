@@ -21,6 +21,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
     INSTRUCTION,
+    VERIFIER_DATA,
     TaskFiles,
     archive_resources,
 )
@@ -158,7 +159,7 @@ def convert_taco_task(row: RawRow, _context: ConversionContext) -> NormalizedTas
 
 def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
     """The source's aligned input/output pairs, run with the solution command and compared exactly."""
-    data = json.loads(task.text("tests/verifier_data.json"))
+    data = json.loads(task.text(VERIFIER_DATA))
     inputs, outputs = data.get("inputs"), data.get("outputs")
     if not isinstance(inputs, list) or not isinstance(outputs, list) or len(inputs) != len(outputs) or not inputs:
         return Rejected(ConvertStatus.NULL_GRADER, "At least one aligned input/output case is required")

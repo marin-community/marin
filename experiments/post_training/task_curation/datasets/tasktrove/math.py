@@ -43,6 +43,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     SOLVE_SH,
+    VERIFIER_DATA,
     archive_files,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
@@ -144,7 +145,7 @@ class MathConverter:
         expected_runner = SCORER_RUNNERS.get(hashlib.sha256(scorer).hexdigest())
         if expected_runner is None or hashlib.sha256(runner).hexdigest() != expected_runner:
             return unsupported("unsupported_math_scorer", "Unrecognized original math scorer/runner")
-        if "tests/verifier_data.json" not in files:
+        if VERIFIER_DATA not in files:
             return source_defect("missing_verifier_data", "Original math verifier data is required")
         instruction, data = row.data["instruction"], row.data.get("verifier_data")
         if not instruction.strip() or not isinstance(data, dict):
@@ -170,7 +171,7 @@ class MathConverter:
             MathSpec(expected=expected, math_type=math_type),
             resources=(
                 inline_resource("source/verifier.py", scorer),
-                inline_resource("verifier_data.json", files["tests/verifier_data.json"]),
+                inline_resource("verifier_data.json", files[VERIFIER_DATA]),
                 inline_resource("source/test.sh", runner),
             ),
             environment=required_grader_environment(context),
