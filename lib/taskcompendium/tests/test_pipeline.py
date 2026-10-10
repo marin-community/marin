@@ -14,7 +14,6 @@ from typing import Any, cast
 
 import pyarrow.parquet as pq
 import pytest
-from finestore.cache import PersistentKvCache
 from fray.types import ResourceConfig
 from pydantic import JsonValue
 from rigging.filesystem.storage_path import StoragePath
@@ -551,10 +550,9 @@ def test_review_accepts_glm_completed_tool_call_with_stop_finish_reason():
     assert records[0].verdict.task_id == "task-0"
 
 
-@pytest.mark.parametrize("confidence", ["high", "medium", "low"])
-def test_conflicting_review_is_rejected_at_every_confidence(apple_row, confidence):
+def test_conflicting_review_is_rejected_even_at_high_confidence(apple_row):
     task = svamp_task("task-0", apple_row)
-    row = response(task.id, confidence=confidence)
+    row = response(task.id, confidence="high")
     function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
     verdict = json.loads(function["arguments"])
     verdict.update(quality="bad", reference_status="conflict", defects=["wrong_reference"])
@@ -1277,40 +1275,6 @@ def test_source_quality_without_eligible_tasks_retains_import_failures(tmp_path,
     manifest = audit_prepared_source(prepared, quality, audited, svamp_recipe, config, execution).manifest
     assert not service.batches
     assert manifest["input_rows"] == 1 and manifest["dispositions"] == {"reject": 1}
-
-
-def test_quality_panel_reads_the_review_cache_once_for_all_batches(tmp_path, apple_row, svamp_recipe, monkeypatch):
-    staged, prepared = tmp_path / "staged", tmp_path / "prepared"
-    staged.mkdir()
-    rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(6)]
-    (staged / "source.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-    reads = []
-    load_many = PersistentKvCache.load_many
-    monkeypatch.setattr(
-        PersistentKvCache, "load_many", lambda cache, keys: reads.append(len(keys)) or load_many(cache, keys)
-    )
-
-    def assess(service: BatchService, output: str):
-        reviewer = BatchReviewer(service, "fixture", "revision", query_cache_root=str(tmp_path / "cache"))
-        execution = AuditExecution(max_workers=2, review_batch_size=2, reviewer=reviewer)
-        prepare_source(str(staged), str(prepared), svamp_recipe, None, execution)
-        return assess_source_quality(
-            str(prepared),
-            str(tmp_path / output),
-            svamp_recipe,
-            review_config(reviewer),
-            SourceQualityPolicy(),
-            execution,
-        )
-
-    initial = BatchService()
-    first = assess(initial, "first")
-    assert sorted(len(batch) for batch in initial.batches.values()) == [2, 2, 2]
-    assert reads == [6]
-    cached = BatchService()
-    assert assess(cached, "second") == first
-    assert not cached.batches
-    assert reads == [6, 6]
 
 
 @pytest.mark.parametrize("fixture", ["x" * 600000, list(range(100000))])

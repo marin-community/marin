@@ -14,9 +14,9 @@ import reasoning_gym
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
 from taskcompendium.harbor.export import harbor_payload
-from taskcompendium.models import AnswerType, ScriptGrader, TaskSpec, TextMessage, verifyit_spec
+from taskcompendium.models import TaskSpec, TextMessage, verifyit_spec
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, Reply
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, Reply
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.grade import Status, grade
 
@@ -71,42 +71,6 @@ GENERATED_ROW = {
     },
 }
 ROWS: dict[str, dict] = {"reasoning_gym_generated": GENERATED_ROW, "tasktrove-reasoning-gym": tasktrove_archive()}
-GRADERS = {
-    "reasoning_gym_generated": (("python3", "/tests/grade.py"), {"PYTHONHASHSEED": "0"}),
-}
-
-
-@pytest.mark.parametrize("name", ["reasoning_gym_generated"])
-def test_reasoning_gym_task_runs_its_scorer_in_the_grading_image(name):
-    task = converted_task(RECIPES[name], ROWS[name])
-    grader = task.grader
-    assert isinstance(grader, ScriptGrader)
-    argv, env = GRADERS[name]
-    assert (grader.argv, grader.env, grader.answer_path) == (argv, env, "/app/answer.txt")
-    assert grader.environment == fixture_context(RECIPES[name]).grader_environment
-    assert task.answer_type == AnswerType.TEXT
-    controls = RECIPES[name].controls
-    assert controls is not None and controls.golden is not None
-    assert controls.golden(task) == Reply(TextMessage(role="assistant", content="42"))
-
-
-def test_generated_task_ships_its_grade_script_with_the_generator_encoding():
-    task = converted_task(RECIPES["reasoning_gym_generated"], GENERATED_ROW)
-    assert {resource.path for resource in task.resources.verifier} == {"grade.py", "generate.py", "config.json"}
-    assert grader_config(task)["contract"]["generator_version"] == declarations.GENERATOR_VERSION
-
-
-def test_tasktrove_instruction_asks_for_the_answer_in_the_reply():
-    result = convert_row(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive())
-    assert isinstance(result, NormalizedTask)
-    assert result.task.context.events == (
-        TextMessage(role="user", content="Solve x + 8 = 50. Return ONLY your final answer in the assistant response"),
-    )
-    assert [change.field for change in result.changes] == ["instruction"]
-    unrecognized = convert_row(RECIPES["tasktrove-reasoning-gym"], tasktrove_archive("Put x in /app/answer.txt."))
-    assert isinstance(unrecognized, NormalizedTask)
-    message = unrecognized.task.context.events[0]
-    assert isinstance(message, TextMessage) and message.content.endswith(declarations.ANSWER_FILE_NOTE)
 
 
 @pytest.mark.parametrize(

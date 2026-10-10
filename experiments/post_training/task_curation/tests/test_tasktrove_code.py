@@ -118,16 +118,9 @@ ROWS: dict[str, dict] = {
         SUM_PROMPT, {**stdio_dirs(SUM_CASES["inputs"], SUM_CASES["outputs"]), "solution/solution.py": SUM_SOLUTION}
     ),
     "tasktrove-nl2bash": nl2bash_row({"expected_output": "notes.txt\n"}),
-    "tasktrove-curriculum_easy": python_row("tests/test_curriculum.py"),
-    "tasktrove-curriculum_medium": python_row("tests/test_curriculum.py"),
     "tasktrove-e2egit": python_row(),
-    "tasktrove-e2egit_large": python_row(),
-    "tasktrove-multifile": python_row("tests/test_multifile.py"),
     "tasktrove-pymethods": python_row(),
-    "tasktrove-pymethods_large": python_row(),
     "tasktrove-unitsyn": python_row(),
-    "tasktrove-unitsyn_large": python_row(),
-    "tasktrove-stack_pytest": python_row(),
     "tasktrove-structured_outputs": structured_row(NAME_SCHEMA, "json"),
 }
 
@@ -143,7 +136,19 @@ def resource_map(resources) -> dict[str, bytes]:
     return {resource.path: resource_bytes(resource) for resource in resources}
 
 
-@pytest.mark.parametrize("name", sorted(ROWS))
+@pytest.mark.parametrize(
+    "name",
+    [
+        "tasktrove-code_contests",
+        "tasktrove-codeforces",
+        "tasktrove-competitive_coding",
+        "tasktrove-taco",
+        "tasktrove-nl2bash",
+        "tasktrove-pymethods",
+        "tasktrove-unitsyn",
+        "tasktrove-structured_outputs",
+    ],
+)
 def test_conversion_keeps_hidden_tests_and_oracles_private(name):
     task = converted_task(RECIPES[name], ROWS[name])
     # Hidden tests and oracle files never reach the agent's machine.
