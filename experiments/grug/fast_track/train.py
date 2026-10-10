@@ -84,9 +84,7 @@ RUNTIME_ENV = {
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
-XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
-XLA_DISABLE_ASYNC_COLLECTIVES_FLAG = "--xla_gpu_disable_async_collectives"
-HERO_MEM_FRACTION = "0.75"
+XLA_SHARD_AUTOTUNING_FLAG = "--xla_gpu_shard_autotuning"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
@@ -175,25 +173,17 @@ def _apply_runtime_defaults(
         overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
     else:
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
-    hero_runtime = processes_per_task > 1 and ragged_transport is not None
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
+        "--xla_gpu_enable_latency_hiding_scheduler=true",
         # Size the jit_train_step temp arena below the allocator limit, leaving slack for fragmentation.
         "--xla_gpu_memory_limit_slop_factor=85",
+        XLA_GPU_COMMAND_BUFFER_FLAG,
     )
-    if hero_runtime:
-        # The multi-process GB200 rack runs the ragged transport the way the hero (experiments/grug/moe_hero_ep)
-        # does: no latency-hiding scheduler, no command buffers, and every collective synchronous. With the
-        # scheduler or async collectives, two ragged transports end up in flight at once, which hangs or
-        # corrupts on GB200 (moe_hero_ep/train.py); fast_track's first steps hung with GPUs spinning.
-        os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", HERO_MEM_FRACTION)
-        flag_defaults += (
-            "--xla_gpu_enable_latency_hiding_scheduler=false",
-            XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
-            f"{XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}=ALLCOLLECTIVES",
-        )
-    else:
-        flag_defaults += ("--xla_gpu_enable_latency_hiding_scheduler=true", XLA_GPU_COMMAND_BUFFER_FLAG)
+    if processes_per_task > 1:
+        # Sharded autotuning splits the fusions across processes and exchanges results; on the 64-process GB200
+        # rack the 48-layer train step's compile waited on it for 30+ minutes with every rank idle.
+        flag_defaults += (f"{XLA_SHARD_AUTOTUNING_FLAG}=false",)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     if ragged_transport is not None:
