@@ -183,29 +183,6 @@ def apple_row():
     }
 
 
-def test_review_tasks_returns_attempts_and_reuses_prefetched_cache(tmp_path, apple_row):
-    tasks = [svamp_task("task-b", apple_row), svamp_task("task-a", {**apple_row, "Body": "Bea has 2 apples."})]
-    originals = [task.model_dump_json() for task in tasks]
-    service = BatchService()
-    reviewer = BatchReviewer(service, "fixture", "revision", query_cache_root=str(tmp_path / "cache"))
-    first = review_tasks(tasks, SVAMP_RUBRIC, reviewer, cached=None)
-    cached = reviewer.read_cache([tasks], SVAMP_RUBRIC)[0]
-    second = review_tasks(tasks, SVAMP_RUBRIC, reviewer, cached=cached)
-    assert [record.task_id for record in first.reviews] == ["task-b", "task-a"]
-    assert [record.status for record in first.reviews] == [ReviewStatus.REVIEWED] * 2
-    assert second.reviews == first.reviews
-    assert [task.model_dump_json() for task in tasks] == originals
-    assert len(service.batches) == 1
-    initial, reused = first.attempts[0], second.attempts[0]
-    assert initial.task_ids == ("task-b", "task-a")
-    assert initial.requests.cache_hits == ()
-    assert set(reused.requests.cache_hits) == set(initial.requests.cache_keys)
-    assert reused.requests.cache_keys == initial.requests.cache_keys
-    assert initial.requests.observations[0].batch_id == "batch-0"
-    assert reused.requests.observations[0].batch_id is None
-    assert review_records(reused.requests.output, list(reused.query_task_ids))[0].status == ReviewStatus.REVIEWED
-
-
 def test_review_tasks_propagates_unexpected_response_membership(apple_row, monkeypatch):
     service = BatchService()
     monkeypatch.setattr(service, "output", lambda _batch: Output(json.dumps(response("unexpected"))))
@@ -1074,14 +1051,21 @@ def test_query_cache_fetches_only_missing_completions_on_repeated_review(tmp_pat
         assert isinstance(task, TaskSpec)
         tasks.append(task)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
-    first = reviewer.review(tasks, SVAMP_RUBRIC).reviews
-    assert [record.status for record in first] == [ReviewStatus.UNAVAILABLE, ReviewStatus.REVIEWED]
+    first = reviewer.review(tasks, SVAMP_RUBRIC)
+    assert [record.status for record in first.reviews] == [ReviewStatus.UNAVAILABLE, ReviewStatus.REVIEWED]
     resumed = replace(reviewer).review(tasks, SVAMP_RUBRIC)
     assert all(record.status == ReviewStatus.REVIEWED for record in resumed.reviews)
     assert [len(requests) for requests in service.batches.values()] == [2, 1]
     assert [record.task_id for record in resumed.reviews] == ["first", "second"]
     query_ids = list(resumed.attempts[0].query_task_ids)
-    assert resumed.attempts[0].requests.cache_hits == (query_ids[1],)
+    reused = resumed.attempts[0].requests
+    assert reused.cache_keys == first.attempts[0].requests.cache_keys
+    assert reused.cache_hits == (query_ids[1],)
+    cached, submitted = reused.observations
+    assert cached.request_ids == reused.cache_hits
+    assert cached.batch_id is None
+    assert submitted.request_ids == (query_ids[0],)
+    assert submitted.batch_id == "batch-1"
     assert [request["custom_id"] for request in service.batches["batch-1"]] == [query_ids[0]]
 
 
