@@ -87,7 +87,7 @@ class ShellEnvironment:
             return json.dumps({"error": "shell requires one string command"})
         result = await self.machine.run(
             Command(
-                ("sh", "-c", command),
+                ("bash", "-c", command),
                 cwd=self.workdir,
                 timeout=self.command_timeout,
                 output_limit_bytes=self.output_limit_bytes,

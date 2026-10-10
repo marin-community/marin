@@ -471,7 +471,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
 async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations():
     model = ReplayModel(
         [
-            shell_call("test ! -f /tests/grade.sh && echo 12 > /workspace/answer"),
+            shell_call("values=(12); [[ ! -f /tests/grade.sh ]] && echo ${values[0]} > /workspace/answer"),
             {"role": "assistant", "content": "Done."},
         ]
     )

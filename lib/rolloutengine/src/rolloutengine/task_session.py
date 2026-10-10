@@ -129,7 +129,7 @@ class _ShellboxTaskSession:
                 continue
             result = await self.machine.run(
                 Command(
-                    argv=("sh", "-c", command),
+                    argv=("bash", "-c", command),
                     timeout=self.lowered.session.command_timeout,
                 )
             )
