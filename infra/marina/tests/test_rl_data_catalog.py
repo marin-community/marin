@@ -342,6 +342,78 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
     assert [model["solved"] for model in row["difficulty_summary"]["models"]] == [11, 17, 21]
 
 
+@pytest.mark.parametrize("projected_solves,expected_status", [(None, "current"), (0, "invalid")])
+def test_cohort_rewards_preserve_native_scale_and_reject_projected_solves(projected_solves, expected_status) -> None:
+    parameters = {
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "repetition_penalty": 1,
+        "presence_penalty": 0,
+        "frequency_penalty": 0,
+        "max_tokens": 16384,
+    }
+    identities = [
+        ("small", "Qwen/Qwen3-Coder-30B-A3B-Instruct", 0.0, {}),
+        (
+            "large",
+            "Qwen/Qwen3.5-122B-A10B",
+            -0.75,
+            {"top_p": 0.8, "presence_penalty": 1.5, "chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        ("hosted", "zai-org/GLM-5.3", 6.25, {"reasoning_effort": "low"}),
+    ]
+    report = {
+        "estimated_at": "2026-10-10",
+        "sampling": {"task_count": 32, "method": "uniform"},
+        "metric_kind": "cohort_relative_reward",
+        "cohort_comparison": {
+            "cohort_size": 16,
+            "measured_responses_per_task": 3,
+            "reference_responses_per_task": 13,
+            "reference_model": "zai-org/GLM-5.3",
+        },
+        "protocol": {
+            "id": "atlas-difficulty-v4-genrm-cohort",
+            "context_window": 65536,
+            "max_input_tokens": 49152,
+            "max_output_tokens": 16384,
+        },
+        "models": [
+            {
+                "size": size,
+                "model": name,
+                "solved": projected_solves,
+                "verified": 32,
+                "cohort_reward": {"mean": reward, "interval_95": [reward - 0.1, reward + 0.1]},
+                "generation_parameters": {**parameters, **overrides},
+            }
+            for size, name, reward, overrides in identities
+        ],
+    }
+    row = source_with_review(
+        {
+            "payload": {"id": "MarinSkyRL:genrm", "dataset_revision": "data1", "verifier_revision": "code1"},
+            "quality": "good",
+            "difficulty": "Native cohort comparison",
+            "difficulty_report": json.dumps(report),
+            "traces": None,
+            "review_id": "review1",
+            "review_date": "2026-10-10",
+            "review_source_revision": "data1",
+            "review_verifier_revision": "code1",
+            "verifier_issues": [],
+            "grading_enrolled": False,
+        }
+    )
+    summary = row["difficulty_summary"]
+    assert summary["status"] == expected_status
+    assert [model["cohort_reward"]["mean"] for model in summary["models"]] == [0.0, -0.75, 6.25]
+    assert all(model["solve_rate"] is None for model in summary["models"])
+    assert "solved" not in row["difficulty"]
+
+
 def test_difficulty_summary_surfaces_ordering_audit() -> None:
     report = {
         "estimated_at": "2026-09-30",

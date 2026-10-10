@@ -147,6 +147,16 @@ historical Qwen3.5-9B runs are separate from the current Small model. Filters an
 sorting use only current Qwen3.5-122B-A10B solve rates; sources without a current
 measurement sort last. Archived reports retain their original settings and traces.
 Click the bars to open the source's Difficulty section.
+GenRM sources display mean native cohort rewards instead of solve percentages.
+Each measured task has one response from each comparison model and 13 Hosted
+reference responses shared by all three models, shuffled into the native
+16-response cohort. Rewards
+depend on that cohort and include the native bonuses and penalties; they can be
+negative or exceed one. They do not define an absolute pass threshold. The report
+records every response and native reward, the model and generation settings for
+the Hosted reference responses, and a confidence interval for each model's mean
+reward across sampled tasks. Solve-rate filters and ordering exclude these
+relative measurements.
 Each model has collapsible run settings and task attempts, including saved model
 requests, responses, and native verifier results and logs. These saved artifacts
 load when their sections open. Missing artifacts are identified explicitly.
