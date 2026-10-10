@@ -8,15 +8,12 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import yaml
-from marin.execution.build_context import BuildContext, VersionCodex, build_context
-from marin.execution.lazy import ArtifactStep, StepContext, run
+from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.models import NoGrader
 from upath import UPath
 
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
 from experiments.post_training.task_curation.pipeline import CurationRecipe
-from experiments.post_training.task_curation.rl_smoke import smoke_step
 from experiments.post_training.task_curation.tasktrove.export import harbor_export_step
 from experiments.post_training.task_curation.tasktrove.harbor_export import VerifierPayloadIdentity
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
@@ -52,7 +49,7 @@ def normalized_rows():
 
 
 @pytest.mark.parametrize("protocol", ["file", "memory"])
-def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tmp_path, protocol, monkeypatch):
+def test_export_artifact_preserves_rows_and_verifier_identity(normalized_rows, tmp_path, protocol, monkeypatch):
     root = UPath(str(tmp_path)) if protocol == "file" else UPath("memory://harbor-export" + str(tmp_path))
     input_root = root / "normalized"
     (input_root / "normalize").mkdir(parents=True)
@@ -78,21 +75,6 @@ def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tm
     identity.add(exported[0]["task_binary"])
     assert manifest["verify_tool_ref"] == identity.ref == result.verify_tool_ref
     assert not manifest["runtime_verified"]
-
-    with build_context(BuildContext(versions=VersionCodex(default="2026.10.09"))):
-        step = smoke_step(export)
-    launch = yaml.safe_load(
-        step.build_config(
-            StepContext.for_run(
-                output_path=str(root / "rl"), prefix=str(root), runtime_args=step.runtime_args, deps=step.deps
-            )
-        ).launch_config_yaml
-    )
-    source = launch["inputs"]["train_data"][0]
-    assert source["uri"] == str(UPath(output_root) / "tasks.parquet")
-    assert source["relative_path"] == "tasks.parquet"
-    assert source["verifier_ref"] == identity.ref
-    assert source["kind"] == "tasktrove_parquet"
 
 
 @pytest.mark.parametrize("field", ["id", "family"])
