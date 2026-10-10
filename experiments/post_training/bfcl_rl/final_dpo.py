@@ -41,15 +41,16 @@ class DPOParallelism:
     pipeline: int
     context: int
     expert: int
-    first_stage_layers: int
-    last_stage_layers: int
+    first_stage_layers: int | None
+    last_stage_layers: int | None
+    pipeline_layout: str | None
 
 
-POLICY_PARALLELISM = DPOParallelism(1, 13, 1, 8, 2, 2)
-REFERENCE_PARALLELISM = DPOParallelism(1, 8, 1, 8, 4, 4)
+POLICY_PARALLELISM = DPOParallelism(1, 15, 1, 8, None, None, "E|(tt|)*13L")
+REFERENCE_PARALLELISM = DPOParallelism(1, 8, 1, 8, 4, 4, None)
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
-    policy_num_nodes=13,
+    policy_num_nodes=15,
     policy_num_gpus_per_node=8,
     colocate_policy_ref=False,
     reference_num_nodes=8,
@@ -72,16 +73,21 @@ POLICY_FILE = "final_dpo_pi_policy.yaml"
 
 
 def megatron_config(parallel: DPOParallelism) -> dict[str, object]:
+    layers = (
+        {"pipeline_model_parallel_layout": parallel.pipeline_layout}
+        if parallel.pipeline_layout is not None
+        else {
+            "num_layers_in_first_pipeline_stage": parallel.first_stage_layers,
+            "num_layers_in_last_pipeline_stage": parallel.last_stage_layers,
+        }
+    )
     return {
         "tensor_model_parallel_size": parallel.tensor,
         "pipeline_model_parallel_size": parallel.pipeline,
         "context_parallel_size": parallel.context,
         "expert_model_parallel_size": parallel.expert,
         "expert_tensor_parallel_size": 1,
-        "transformer_config_kwargs": {
-            "num_layers_in_first_pipeline_stage": parallel.first_stage_layers,
-            "num_layers_in_last_pipeline_stage": parallel.last_stage_layers,
-        },
+        "transformer_config_kwargs": layers,
     }
 
 
@@ -204,7 +210,7 @@ def final_dpo_spec(input_version: str, scale: RunScale) -> SkyRLSpec:
         model=ArtifactHfModel(checkpoint, tokenizer.model, tokenizer.revision, relative_path="hf/step-1"),
         train_data=(ArtifactDataSource(inputs, relative_path=data_file),),
         validation_data=(ArtifactDataSource(inputs, relative_path="bfcl_parity"),),
-        topology=SkyRLTopology(num_nodes=22, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
+        topology=SkyRLTopology(num_nodes=24, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=14),
         seed=42,
     )
