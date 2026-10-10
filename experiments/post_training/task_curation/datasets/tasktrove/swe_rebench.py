@@ -93,6 +93,12 @@ _EXIT_CODE_READER = """def _read_exit_code(path="/logs/test_exit_code.txt"):
 """
 _TEST_STATE_CALL = 'report = evaluate_test_results("/logs/test_output.log")'
 _NORMALIZED_TEST_STATE_CALL = 'report = evaluate_test_results("/logs/verifier/test_output.log")'
+_PARSER_DISPATCH = "    fn = PARSERS.get(parser_name, parse_log_pytest)\n"
+_ELIXIR_PARSER_DISPATCH = """\
+    if parser_name == "parse_log_elixir":
+        test_output = re.sub(r"(?m)^([ \\t]*)\\*[ \\t]+(?=test[ \\t])", r"\\1", test_output)
+    fn = PARSERS.get(parser_name, parse_log_pytest)
+"""
 _SOURCE_REWARD_PATH = "/logs/verifier/reward.txt"
 _NORMALIZED_REWARD_PATH = '"$VERIFYIT_LOGS_DIR/reward.txt"'
 _SOURCE_TEST_OUTPUT_PATH = "/logs/test_output.log"
@@ -183,6 +189,10 @@ def _legacy_script_task(
         .replace(_EXIT_CODE_READER, "")
         .replace(_TEST_STATE_CALL, _NORMALIZED_TEST_STATE_CALL)
     )
+    if language == "elixir":
+        if _PARSER_DISPATCH not in normalized_test_state:
+            return Rejected(ConvertStatus.UNSUPPORTED_VARIANT, "tests/test_state.py has an unknown parser dispatch")
+        normalized_test_state = normalized_test_state.replace(_PARSER_DISPATCH, _ELIXIR_PARSER_DISPATCH)
 
     data_files = task.under("tests/")
     data_files.pop(TEST_SH)

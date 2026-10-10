@@ -81,6 +81,19 @@ def go_source() -> dict[str, bytes]:
     }
 
 
+def elixir_source() -> dict[str, bytes]:
+    files = go_source()
+    config = json.loads(files["tests/config.json"])
+    config.update(
+        language="elixir",
+        FAIL_TO_PASS=["issue #63"],
+        PASS_TO_PASS=["handles arbitrary properties"],
+        install_config={"log_parser": "parse_log_elixir"},
+    )
+    files["tests/config.json"] = json.dumps(config).encode()
+    return files
+
+
 @pytest.mark.parametrize("language", ["python", "go"])
 def test_source_contract_keeps_private_graders_and_deferred_dependencies(language):
     files = python_source("abcdef0") if language == "python" else go_source()
@@ -157,6 +170,35 @@ def test_non_python_parser_requires_named_test_results(tmp_path, log, resolved):
     output.write_text(log)
     report = namespace["evaluate_test_results"](str(output), str(config))
     assert report["resolved"] is resolved
+
+
+@pytest.mark.parametrize(
+    "log, resolved",
+    [
+        (
+            "  * test issue #63 (0.1ms) [L#217]\n" "  * test handles arbitrary properties (0.1ms) [L#528]\n",
+            True,
+        ),
+        (
+            "  1) test issue #63 (Tailwind.FormatterTest)\n" "  * test handles arbitrary properties (0.1ms) [L#528]\n",
+            False,
+        ),
+    ],
+)
+def test_elixir_trace_grades_named_tests(tmp_path, log, resolved):
+    files = elixir_source()
+    task = converted_task(RECIPES["tasktrove-swe_rebench"], tasktrove_row(files))
+    parser = next(resource_bytes(resource) for resource in task.resources.verifier if resource.path == "test_state.py")
+    namespace = {}
+    exec(compile(parser, "test_state.py", "exec"), namespace)
+    config = tmp_path / "config.json"
+    config.write_bytes(files["tests/config.json"])
+    output = tmp_path / "output.log"
+    output.write_text(log)
+    report = namespace["evaluate_test_results"](str(output), str(config))
+    assert report["resolved"] is resolved
+    assert report["PASS_TO_PASS"]["success"] == ["handles arbitrary properties"]
+    assert report["FAIL_TO_PASS"]["success"] == (["issue #63"] if resolved else [])
 
 
 def git(workspace: Path, *args: str) -> str:
