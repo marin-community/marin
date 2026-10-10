@@ -673,9 +673,9 @@ class GrugModelConfig:
     """GatedNorm after the RMSNorm on every attention and MLP input (else the RMSNorm alone)."""
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
     scan_offload_partials: bool = False
-    """With ``scan_layers``, keep the per-layer incoming AttnRes partials saved for the backward in pinned host
-    memory (one ``[B, S, D]`` per scanned layer, 33 GiB per GPU at hero width) and bring each unit's back to the
-    device in the reverse scan, as the GB200 hero offloads its layer carry. Same math."""
+    """With ``scan_layers``, keep the scan's backward residuals in pinned host memory: the per-layer incoming AttnRes
+    partials (one ``[B, S, D]`` per scanned layer, 33 GiB per GPU at hero width, brought back one unit at a time in
+    the reverse scan) and the final history sources. As the GB200 hero offloads its layer carry. Same math."""
     scan_layers: bool = False
     """Run the AttnRes layer stack as a ``jax.lax.scan`` over ``global_every``-layer units on a fixed-shape
     history (``_AttnResHistory``), each layer rematerialized in the backward, instead of unrolling every layer.
@@ -4170,13 +4170,16 @@ def _scan_layers_fwd(perturbed, diff, args: _ScanArgs):
     del perturbed
     units_diff, queries, history = diff
     history, (stats, partials) = _scan_forward(units_diff, queries, history, args, save_partials=True)
-    return (history, stats), (history.sources, history.logits, partials)
+    sources = _to_memory_kind(history.sources, "pinned_host") if args.offload_partials else history.sources
+    return (history, stats), (sources, history.logits, partials)
 
 
 @_scan_layers.def_bwd
 def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
     del perturbed
     sources, logits, partials = residuals
+    if args.offload_partials:
+        sources = _to_memory_kind(sources, "device")
     units_diff, queries, _ = diff
     plan = args.plan
     d_history, _ = grad_out
