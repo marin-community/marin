@@ -8,6 +8,7 @@ Grader inputs cross into the grading machine as one archive: verifier resources 
 state, the conversation, and copied artifacts. The agent's own machine never grades.
 """
 
+import asyncio
 import errno
 import io
 import json
@@ -54,10 +55,10 @@ from taskcompendium.models import (
     verifyit_answer_file,
     verifyit_spec,
 )
-from taskcompendium.runtime.environment import resolve_env_vars
+from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, validate_machine_spec
 from taskcompendium.runtime.output_capture import selected_directory_files, validate_output_directories
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.runtime.shell import MISSING_CAPTURE_EXIT_CODE, require_environment_source
+from taskcompendium.runtime.shell import MISSING_CAPTURE_EXIT_CODE
 from taskcompendium.submission import conversation_messages, require_submission_compatibility
 
 GRADING_TIMEOUT = 600.0
@@ -442,9 +443,7 @@ class _SandboxGrading:
     artifacts: tuple[VerifierArtifact, ...]
 
 
-def _sandbox_grading(
-    task: TaskSpec, machine_spec: MachineSpec, task_machine: Machine | None, timeout: float | None
-) -> _SandboxGrading:
+def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: float | None) -> _SandboxGrading:
     """The task's sandbox grader, checked against the grading machine and the task machine it collects from."""
     grader = task.grader
     if isinstance(grader, VerifyitGrader) and grader.environment is not None:
@@ -459,7 +458,6 @@ def _sandbox_grading(
         raise TypeError(
             f"Sandbox grading requires a verifyit grader with an environment or a script grader, not {grader.kind}"
         )
-    require_environment_source(machine_spec, grading.environment)
     if (grading.collect or grading.artifacts) and task_machine is None:
         raise ValueError("Collecting grader inputs requires the task machine")
     validate_output_directories(task.output_directories, grading.workspace)
@@ -501,7 +499,8 @@ async def grade_in_sandbox(
     the grader's workspace and the environment's variables added. ``task_machine`` is the agent's
     machine; graders that collect inputs or copy artifacts require it. Machine failures propagate.
     """
-    grading = _sandbox_grading(task, machine_spec, task_machine, timeout)
+    grading = _sandbox_grading(task, task_machine, timeout)
+    validate_machine_spec(grading.environment, factory, machine_spec)
     answer_file = None if grading.spec is None else verifyit_answer_file(grading.spec)
     submissions = _captured_files(task, attempt, (*task.output_paths, *([answer_file] if answer_file else [])))
     try:
@@ -536,7 +535,8 @@ async def grade_empty_in_sandbox(
     them, so its result shows whether the grader runs and what it awards an empty answer. Graders
     that collect inputs from the task machine are unsupported. Machine failures propagate.
     """
-    grading = _sandbox_grading(task, machine_spec, None, timeout)
+    grading = _sandbox_grading(task, None, timeout)
+    validate_machine_spec(grading.environment, factory, machine_spec)
     if isinstance(grading.grader, ScriptGrader):
         answer_file = grading.grader.answer_path
     else:
@@ -583,16 +583,16 @@ async def _grade_staged(
                     downloaded.append((local, artifact.target))
             archive_path = root / "grading.tar"
             _write_archive(archive_path, files, downloaded)
-            machine = await factory.create(
-                replace(
+            async with asyncio.timeout(machine_spec.startup_timeout):
+                prepared = await asyncio.to_thread(
+                    prepare_machine_spec,
+                    grading.environment.model_copy(
+                        update={"environment_variables": resolve_env_vars(grading.environment.environment_variables, host_environment)}
+                    ),
+                    factory,
                     machine_spec,
-                    workdir=grading.workspace,
-                    env={
-                        **machine_spec.env,
-                        **resolve_env_vars(grading.environment.environment_variables, host_environment),
-                    },
                 )
-            )
+                machine = await factory.create(replace(prepared, workdir=grading.workspace))
             try:
                 return await _grade_on(
                     machine,

@@ -20,13 +20,13 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     GradingAttempt,
     NoGrader,
+    ScriptGrader,
     SessionGrader,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
     grader_workspace,
     grades_in_process,
-    require_compatible_backend,
     require_resolved_environment,
     verifyit_spec,
 )
@@ -43,6 +43,7 @@ from taskcompendium.pipeline.models import (
     WorkspaceFiles,
 )
 from taskcompendium.pipeline.verification import answer_event, control_result
+from taskcompendium.runtime.environment import prepare_machine_spec, validate_machine_spec
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
@@ -62,7 +63,7 @@ class GradingMachines(Protocol):
         ...
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        """A factory and specification for ``environment``, on a backend it declares, with network access denied."""
+        """A selected factory and specification for ``environment``, with network access denied."""
         ...
 
 
@@ -153,10 +154,10 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
 def _image_machine(
     machines: GradingMachines, environment: EnvironmentRequirements, memory_mb: int
 ) -> tuple[MachineFactory, MachineSpec]:
-    """A machine for ``environment``, on a backend the environment declares compatible."""
+    """Validate a selected machine without building its environment."""
     require_resolved_environment(environment)
     factory, spec = machines.machine(environment, memory_mb)
-    require_compatible_backend(environment, factory.backend)
+    validate_machine_spec(environment, factory, spec)
     return factory, spec
 
 
@@ -168,7 +169,7 @@ class _Sandbox:
     memory_mb: int
     grader: tuple[MachineFactory, MachineSpec]
 
-    def oracle(self, task: TaskSpec) -> tuple[MachineFactory, MachineSpec]:
+    def oracle(self, task: TaskSpec) -> tuple[MachineFactory, MachineSpec, EnvironmentRequirements]:
         """The agent's image, whose tools and directories an oracle expects; the grader's machine when there is none.
 
         The agent's environment chooses the oracle's backend, so a grader that runs locally still gets its
@@ -176,8 +177,14 @@ class _Sandbox:
         """
         require_resolved_environment(task.environment_requirements)
         if task.environment_requirements.docker_image is None:
-            return self.grader
-        return _image_machine(self.machines, task.environment_requirements, self.memory_mb)
+            grader = task.grader
+            if not isinstance(grader, VerifyitGrader | ScriptGrader) or grader.environment is None:
+                raise ValueError("An oracle requires a grader environment")
+            return (*self.grader, grader.environment)
+        return (
+            *_image_machine(self.machines, task.environment_requirements, self.memory_mb),
+            task.environment_requirements,
+        )
 
 
 async def _control(
@@ -222,11 +229,17 @@ async def _empty_sandbox_control(task: TaskSpec, sandbox: _Sandbox) -> CheckResu
 
 
 async def _oracle_attempt(
-    task: TaskSpec, command: OracleCommand, factory: MachineFactory, spec: MachineSpec
+    task: TaskSpec,
+    command: OracleCommand,
+    factory: MachineFactory,
+    spec: MachineSpec,
+    environment: EnvironmentRequirements,
 ) -> GradingAttempt:
     """Run the oracle in a fresh machine from ``factory`` with the worker and oracle files mounted."""
     workspace = grader_workspace(task.grader)
-    machine = await factory.create(spec)
+    async with asyncio.timeout(spec.startup_timeout):
+        prepared = await asyncio.to_thread(prepare_machine_spec, environment, factory, spec)
+        machine = await factory.create(prepared)
     try:
         await upload_resources(
             machine, (*task.resources.all, *task.resources.worker, *task.resources.oracle), ORACLE_TIMEOUT

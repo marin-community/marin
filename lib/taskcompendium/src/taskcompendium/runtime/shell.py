@@ -3,6 +3,7 @@
 
 """Bind shell tasks to Shellbox machines without exposing private resources."""
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -12,12 +13,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
-from shellbox.image import RegistryImage
 from shellbox.machine import (
-    Backend,
     Command,
-    DockerImage,
-    HostImage,
     Machine,
     MachineFactory,
     MachineSpec,
@@ -26,16 +23,15 @@ from shellbox.machine import (
 )
 
 from taskcompendium.models import (
-    EnvironmentRequirements,
+    CommandSemantics,
     FunctionCall,
     FunctionDefinition,
     OutputDirectory,
     TaskResource,
     TaskSpec,
     grader_workspace,
-    require_compatible_backend,
-    require_resolved_environment,
 )
+from taskcompendium.runtime.environment import prepare_machine_spec, validate_machine_spec
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.output_capture import (
     CAPTURE_METADATA_BYTES,
@@ -69,28 +65,6 @@ def machine_spec_identity(machine_spec: MachineSpec) -> dict[str, Any]:
     if isinstance(machine_spec.source, QemuBundle):
         identity["source"] = {"path": str(machine_spec.source.path)}
     return identity
-
-
-def require_environment_source(machine_spec: MachineSpec, environment: EnvironmentRequirements) -> None:
-    """Check the machine against the environment: the host for a local environment, otherwise its pinned image."""
-    require_resolved_environment(environment)
-    if isinstance(machine_spec.source, HostImage) and Backend.LOCAL in environment.compatible_backends:
-        return
-    if environment.docker_image is None:
-        raise ValueError("The environment names no image for the machine to use")
-    require_image(machine_spec, environment.docker_image)
-
-
-def require_image(machine_spec: MachineSpec, image: str) -> None:
-    """Check the task image against a direct reference or staged guest metadata."""
-    source = machine_spec.source
-    if source in (DockerImage(image), RegistryImage(image)):
-        return
-    if isinstance(source, QemuBundle):
-        metadata = json.loads((source.path / "image.json").read_text())
-        if metadata.get("image_reference") == image:
-            return
-    raise ValueError("Machine must use the task's pinned image")
 
 
 async def upload_resources(machine: Machine, resources: Sequence[TaskResource], timeout: float) -> None:
@@ -236,19 +210,17 @@ class ShellFactory:
         }
 
     async def create(self, task: TaskSpec) -> ShellEnvironment:
-        require_compatible_backend(task.environment_requirements, self.machine_factory.backend)
+        validate_machine_spec(task.environment_requirements, self.machine_factory, self.machine_spec)
         validate_output_directories(task.output_directories, grader_workspace(task.grader))
         if task.output_directories and (
             "python3" not in task.environment_requirements.capabilities
-            or self.machine_factory.backend == Backend.SHELLSIM
+            or task.environment_requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR
         ):
             raise UnsupportedMachineSpec("Directory capture requires a real POSIX Python 3 runtime")
         provider = task.environment_requirements.tool_providers.get("shell")
         if provider is None or provider.action_interface != INTERFACE or provider.initial_state != {}:
             raise ValueError("Unsupported shell fixture")
         requirements = task.environment_requirements
-        if requirements.docker_image is not None:
-            require_image(self.machine_spec, requirements.docker_image)
         if (
             set(requirements.capabilities) - {"shell", "filesystem", "python3"}
             or requirements.working_directory is not None
@@ -257,7 +229,11 @@ class ShellFactory:
             or set(requirements.tool_providers) != {"shell"}
         ):
             raise ValueError("Shell factory cannot satisfy these environment requirements")
-        machine = await self.machine_factory.create(self.machine_spec)
+        async with asyncio.timeout(self.machine_spec.startup_timeout):
+            prepared = await asyncio.to_thread(
+                prepare_machine_spec, requirements, self.machine_factory, self.machine_spec
+            )
+            machine = await self.machine_factory.create(prepared)
         try:
             if task.output_directories:
                 probe = await machine.run(

@@ -14,9 +14,9 @@ from taskcompendium.models import (
     NoGrader,
     SessionGrader,
     TaskSpec,
-    require_compatible_backend,
     require_resolved_environment,
 )
+from taskcompendium.runtime.environment import validate_machine_spec
 from taskcompendium.runtime.grading import grade_in_sandbox
 
 
@@ -42,7 +42,7 @@ def grade_task(
     require_resolved_environment(grader.environment)
     if machine_factory is None or machine_spec is None:
         return GradeResult(Outcome.INFRA_ERROR, None, "Sandbox grading requires a machine factory and specification")
-    require_compatible_backend(grader.environment, machine_factory.backend)
+    validate_machine_spec(grader.environment, machine_factory, machine_spec)
     return asyncio.run(sandbox_grade(task, attempt, machine_factory, machine_spec))
 
 
