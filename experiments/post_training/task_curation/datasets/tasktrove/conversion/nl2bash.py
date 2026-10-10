@@ -27,7 +27,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     SOLVE_SH,
     TaskFiles,
 )
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.nemotron_data import verifier_data
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
@@ -149,7 +148,7 @@ CHECKER_PY = _CHECKER_TEMPLATE.replace("__DATA_NAME__", DATA_NAME)
 
 def convert_nl2bash(task: TaskFiles) -> ConvertedTask | Rejected:
     """NL-to-bash: ``{"expected_output": "..."}`` captured from the oracle command's stdout+stderr."""
-    data = verifier_data(task)
+    data = json.loads(task.text("tests/verifier_data.json"))
     expected = data.get("expected_output")
     if not isinstance(expected, str):
         return Rejected(ConvertStatus.NULL_GRADER, f"expected_output missing or not a string: {type(expected)}")

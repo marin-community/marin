@@ -69,9 +69,7 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.candidate import grade_candidate
 from verifyit.grade import Status, positive_candidate
 from verifyit.modes.extract import extract_boxed
-from verifyit.spec import MathSpec
-
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH
+from verifyit.spec import DEFAULT_OUTPUT, MathSpec
 
 VERIFIER_REVISION = "d8b6e8c163def3660e9d3072c1c174226a1709fa"
 """The NeMo Gym revision whose agents grade the pinned Ultra blends."""
@@ -83,9 +81,6 @@ CODE_SCORER_TIMEOUT = 330.0
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
 SKYRL_SCORERS = HERE.parent / "skyrl" / "scorers"
-SHIPS = (SCORERS,)
-CODE_SHIPS = (SCORERS, SKYRL_SCORERS)
-"""The vendored directories a component's tasks ship files from; code tasks also ship LiveCodeBench."""
 ULTRA_ENVS = "skyrl_gym/envs/nemotron_ultra"
 ULTRA_BASE = shipped_files(
     SCORERS,
@@ -153,7 +148,7 @@ def _scored(
         {"contract": request.contract},
         environment=required_grader_environment(context),
         timeout=timeout,
-        answer_path=ANSWER_PATH,
+        answer_path=DEFAULT_OUTPUT,
         env=env,
     )
     return blend_task(row, request, package, answer_type)

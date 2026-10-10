@@ -6,14 +6,13 @@
 import base64
 import io
 import json
-import shutil
 import tarfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import cast
 
 import pytest
-from marin.execution.lazy import run
-from shellbox.machine import Backend, Command, DockerImage, ExitReason, HostImage, MachineFactory, MachineSpec, Result
+from shellbox.machine import Backend, Command, DockerImage, ExitReason, MachineFactory, MachineSpec, Result
 from taskcompendium.models import (
     CommandSemantics,
     ConversationTrace,
@@ -22,7 +21,6 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
-    VerifyitGrader,
 )
 from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -35,7 +33,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.transforms import normalize_row
 from taskcompendium.runtime.grading import grade_in_sandbox
-from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import ShellFactory
 from verifyit.spec import StdioSpec
@@ -55,11 +52,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import ConvertedTask
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio_cases import SOLUTION_COMMAND
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
-from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.images.build import environment_artifact
-from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_record
-from experiments.post_training.task_curation.tests.image_builds import REPOSITORY, install_fake_build_tools, tracked_lock
 from lib.taskcompendium.tests.pipeline_stages import fixture_recipe
 
 IMAGE = "test@sha256:" + "a" * 64
@@ -119,8 +112,7 @@ def executable_row():
 
 @pytest.fixture
 def executable_task(executable_row):
-    result = archive_task(executable_row)
-    assert isinstance(result, NormalizedTask)
+    result = cast(NormalizedTask, archive_task(executable_row))
     return TaskSpec.model_validate_json(result.task.model_dump_json())
 
 
@@ -147,10 +139,6 @@ class GradingMachine:
                     assert stream is not None
                     self.files["/" + member.name] = stream.read()
             return EXITED
-        if program == "/bin/bash" and "/solution/solve.sh" in self.files:
-            # The oracle command runs the fixture's solve.sh, which writes the reference program.
-            self.files["/app/solution.py"] = b"print(7)\n"
-            return EXITED
         if program == "python3":
             # The verdict depends on the submitted program, never on a verdict an agent supplied.
             reward = {b"print(7)\n": 1.0, b"partial": 0.25}.get(self.files.get("/app/solution.py", b""), 0.0)
@@ -158,7 +146,7 @@ class GradingMachine:
                 {"status": self.verdict_status, "reward": reward, "detail": {}}
             ).encode()
             return EXITED
-        # A capture read: ``bash -c <script> capture <path> <limit>``.
+        # Read the verifier's result file through the machine boundary.
         data = self.files.get(command.argv[4])
         if data is None:
             return MISSING_FILE
@@ -201,31 +189,6 @@ class ControlMachines:
         return self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
 
 
-@dataclass
-class RoutedMachines:
-    """A campaign that grades local environments on the host and runs every image in a sandbox."""
-
-    local: GradingMachines = field(default_factory=lambda: GradingMachines(backend=Backend.LOCAL))
-    sandbox: GradingMachines = field(default_factory=GradingMachines)
-
-    def identity(self) -> dict:
-        return {"backend": "fixture"}
-
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        if environment.packages_lock is not None:
-            return self.local, MachineSpec(HostImage())
-        assert environment.docker_image is not None
-        return self.sandbox, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
-
-
-def grading_spec(task: TaskSpec) -> MachineSpec:
-    """The machine specification for the task's grading image."""
-    assert isinstance(task.grader, VerifyitGrader) and task.grader.environment is not None
-    image = task.grader.environment.docker_image
-    assert image is not None
-    return MachineSpec(DockerImage(image))
-
-
 def without_oracle(task: TaskSpec) -> TaskSpec:
     return task.model_copy(update={"resources": task.resources.model_copy(update={"oracle": ()})})
 
@@ -244,29 +207,6 @@ def test_archive_files_take_their_resource_roles(executable_task):
         "tests/setup_files/seed.txt": b"oracle seed",
         "solution/solve.sh": ARCHIVE["solution/solve.sh"],
     }
-
-
-@pytest.mark.asyncio
-async def test_agent_machine_receives_only_public_files(executable_task):
-    machines = GradingMachines()
-    factory = ShellFactory(machines, MachineSpec(DockerImage(IMAGE)), {}, 30.0, 1024)
-    environment = await factory.create(executable_task)
-    try:
-        assert machines.machines[0].files == {"/setup_files/readme.txt": b"Public setup"}
-        machines.machines[0].files["/app/solution.py"] = b"print(7)\n"
-        assert (await environment.evidence()).files == {"/app/solution.py": b"print(7)\n"}
-    finally:
-        await environment.close()
-
-
-def test_campaign_controls_use_the_supplied_factory_for_oracle_and_grader(executable_task):
-    factory = GradingMachines()
-    report = run_controls(executable_task, controls=CONTROLS, machines=CampaignMachines(image_factory=factory))
-    assert checks(report) == {"golden": CheckStatus.PASS}
-    oracle, grader = factory.machines
-    assert "/solution/solve.sh" in oracle.files and "/solution/solve.sh" not in grader.files
-    assert grader.files["/app/solution.py"] == b"print(7)\n"
-    assert oracle.closed and grader.closed
 
 
 def test_linux_file_names_survive_conversion_and_traversal_cannot_produce_task():
@@ -313,7 +253,7 @@ async def test_captured_submission_cannot_supply_its_own_reward(executable_task,
         ConversationTrace(events=(*executable_task.context.events, TextMessage(role="assistant", content="done"))),
         files,
     )
-    grade = await grade_in_sandbox(executable_task, attempt, machines, grading_spec(executable_task), timeout=10)
+    grade = await grade_in_sandbox(executable_task, attempt, machines, MachineSpec(DockerImage(IMAGE)), timeout=10)
     assert grade.reward == reward
     assert machines.machines[0].files["/tests/cases/output_1.txt"] == b"7\n"
     assert machines.machines[0].closed
@@ -335,29 +275,6 @@ async def test_agent_machine_rejects_incompatible_command_semantics_before_start
     with pytest.raises(ValueError, match="semantics"):
         await factory.create(simulator_task(executable_task))
     assert not machines.machines
-
-
-def test_a_local_grader_grades_the_oracle_output_of_a_sandbox_of_the_agent_image(
-    executable_task, tmp_path, monkeypatch, request
-):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
-    install_fake_build_tools(tmp_path, monkeypatch)
-    lock = tracked_lock(tmp_path)
-    lock.write_text(lock.read_text() + f"\n# {tmp_path}\n")
-    (artifact,) = run(environment_artifact(Environment(lock=lock), REPOSITORY))
-    runtime = local_runtime(artifact.lock_url)
-    request.addfinalizer(lambda: shutil.rmtree(runtime.root, ignore_errors=True))
-    monkeypatch.setattr(LocalRuntime, "ensure_built", lambda self: self.root.mkdir(parents=True))
-    data = executable_task.model_dump(mode="json")
-    data["grader"]["environment"] = {"command_semantics": "linux_process", "packages_lock": artifact.lock_url}
-    machines = RoutedMachines()
-    report = run_controls(TaskSpec.model_validate_json(json.dumps(data)), controls=CONTROLS, machines=machines)
-    assert checks(report) == {"golden": CheckStatus.PASS}
-    (oracle,) = machines.sandbox.machines
-    (grader,) = machines.local.machines
-    assert "/solution/solve.sh" in oracle.files and "/solution/solve.sh" not in grader.files
-    assert grader.files["/app/solution.py"] == b"print(7)\n"
-    assert oracle.closed and grader.closed
 
 
 def test_grader_controls_reject_simulation_of_linux_processes_before_start(executable_task):

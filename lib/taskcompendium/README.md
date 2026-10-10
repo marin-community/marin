@@ -37,8 +37,7 @@ flowchart LR
 | `environment_requirements` | Required capabilities, pinned initial workspace, and named tool-provider contracts. |
 | `final_tools` | An ordered list of functions that terminate a chat. They are not backed by a tool provider. |
 | `interaction_tools` | Executable function declarations used by the optional episode runtime. |
-| `output_paths` | Absolute output paths captured by the optional episode runtime, outside `/tests` and `/logs/verifier`. |
-| `output_directories` | Workspace roots, relative fnmatch patterns and explicit file-count/aggregate-byte capture budgets. |
+| `output_paths` | Absolute submission files or recursive directory roots collected by the runtime, outside private grading mounts. |
 | `answer_type` | The semantic result: `text`, `number`, `json`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
@@ -49,14 +48,12 @@ flowchart LR
 
 A task has one final result. TaskSpec does not define ordered task stages or stage-reward aggregation.
 
-Directory capture requires the actor's `python3` capability and a real POSIX
-Python interpreter; ShellSim does not support it. Selection patterns use
-case-sensitive fnmatch semantics, where `*` includes `/` and hidden paths.
-Capture preserves unsorted depth-first filesystem order, skips symlinks in
-directory selections, and fails the whole capture on file or byte overflow.
-Existing named `output_paths` retain their file/symlink behavior. Roots must stay
-inside the grader's workspace and outside `/tests`, `/logs/verifier` and
-`/solution`. Membership and budgets are checked again before files are staged for grading.
+Shellbox transfers the regular files selected by `output_paths`, recursively
+expanding directories. Missing paths are omitted; explicitly selected symlinks
+are rejected and symlinks inside directories are skipped. The runtime limits the
+submission to 1,024 files and 16 MiB total, with a per-file limit from its output
+budget. Overflow fails the whole transfer. Selections cannot overlap `/tests`,
+`/logs/verifier` or `/solution`. The grader receives only declared submission paths.
 
 `context.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; a runtime preserves this history when presenting the task to the model. `answer_type` does not prescribe a wrapper such as JSON; `answer_format` does.
 
@@ -129,7 +126,7 @@ through the current adapters. Memory settings are advisory sizing hints.
 
 The [Harbor exporter](../../experiments/post_training/task_curation/tasktrove/harbor_export.py) emits build inputs;
 see the [campaign quickstart](../../experiments/post_training/task_curation/README.md#harbor-compatibility-view)
-for execution limits. The Harbor-to-TaskSpec importer requires a prebuilt image.
+for execution limits.
 
 ## Resource mounts
 

@@ -22,7 +22,6 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     NoGrader,
-    OutputDirectory,
     PlainText,
     ProviderRequirement,
     TaskSpec,
@@ -36,7 +35,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.shell import BASH, INTERFACE
 from verifyit.spec import PytestSpec
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
@@ -69,7 +67,6 @@ def converted_workspace_task(
     environment: EnvironmentRequirements,
     grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
-    output_directories: tuple[OutputDirectory, ...] = (),
 ) -> TaskSpec:
     """A workspace task from a TaskTrove converter's result.
 
@@ -98,7 +95,6 @@ def converted_workspace_task(
         environment=environment,
         grader_environment=grader_environment,
         output_paths=output_paths,
-        output_directories=output_directories,
         verifier=tuple(verifier),
         worker=tuple(worker),
         oracle=tuple(oracle),
@@ -127,7 +123,6 @@ def tasktrove_archive_task(
     environment: EnvironmentRequirements,
     grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
-    output_directories: tuple[OutputDirectory, ...] = (),
 ) -> NormalizedTask | ImportRejection:
     """Convert an unpacked TaskTrove archive with ``convert`` into a workspace task."""
     converted = archive_conversion(row.data, convert)
@@ -140,7 +135,6 @@ def tasktrove_archive_task(
         environment=environment,
         grader_environment=grader_environment,
         output_paths=output_paths,
-        output_directories=output_directories,
     )
     return NormalizedTask(task, _converter_changes(row, converted))
 
@@ -198,12 +192,11 @@ def swe_task(row: RawRow, *, workspace: str) -> TaskSpec | ImportRejection:
             capabilities=REPOSITORY_CAPABILITIES,
             tool_providers={
                 "shell": ProviderRequirement(
-                    action_interface=INTERFACE,
+                    action_interface="shell:v1",
                     initial_state={"repository": repository, "source_ref": checkout[1], "workspace": workspace},
                 )
             },
         ),
-        interaction_tools=(BASH,),
         resources=archive_resources(row.data),
         answer_type=AnswerType.STATE,
         answer_format=PlainText(),

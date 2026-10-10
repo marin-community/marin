@@ -394,6 +394,15 @@ def under_grader_root(path: str) -> bool:
     return any(PurePosixPath(path).is_relative_to(root) for root in GRADER_ROOTS)
 
 
+def validate_output_paths(paths: tuple[str, ...]) -> None:
+    """Require normalized output selections disjoint from private grading roots."""
+    private_roots = (*GRADER_ROOTS, "/solution")
+    for path in paths:
+        root = PurePosixPath(normalized_absolute_path(path))
+        if any(root.is_relative_to(private) or PurePosixPath(private).is_relative_to(root) for private in private_roots):
+            raise ValueError(f"Output paths overlap private mounts: {path}")
+
+
 def _absolute_file_path(value: str) -> str:
     if not PurePosixPath(value).is_absolute():
         raise ValueError(f"Grader paths must be absolute: {value!r}")
@@ -818,26 +827,6 @@ AnswerFormat = Annotated[
 ]
 
 
-class OutputDirectory(BaseModel):
-    """Bounded regular files selected by relative fnmatch patterns, including subdirectories."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    root: str
-    patterns: tuple[str, ...] = Field(min_length=1)
-    max_files: int = Field(gt=0)
-    max_bytes: int = Field(gt=0)
-
-    @model_validator(mode="after")
-    def validate_selection(self) -> "OutputDirectory":
-        if not self.root.startswith("/"):
-            raise ValueError("Output directory must be absolute")
-        validate_relative_file_path(self.root[1:])
-        for pattern in self.patterns:
-            validate_relative_file_path(pattern)
-        return self
-
-
 class TaskSpec(BaseModel):
     """The complete semantic definition of one task, its grader, and its final result."""
 
@@ -849,7 +838,6 @@ class TaskSpec(BaseModel):
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     output_paths: tuple[str, ...] = ()
-    output_directories: tuple[OutputDirectory, ...] = ()
     answer_type: AnswerType
     answer_format: AnswerFormat
     grader: Grader
@@ -864,16 +852,13 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
-        if self.output_directories and "python3" not in self.environment_requirements.capabilities:
-            raise ValueError("Directory capture requires the actor's python3 capability")
         if len({function.name for function in self.final_tools}) != len(self.final_tools):
             raise ValueError("Advertised function names must be unique")
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools:
             raise ValueError("Native-action tasks require advertised functions")
         if self.answer_type in CONVERSATION_ANSWERS and not self.answer_format.supports(self.answer_type):
             raise ValueError(f"Answer format {self.answer_format.kind} cannot carry a {self.answer_type} answer")
-        if any(under_grader_root(path) for path in (*self.output_paths, *(d.root for d in self.output_directories))):
-            raise ValueError("Output paths must lie outside /tests and /logs/verifier")
+        validate_output_paths(self.output_paths)
         if grades_in_process(self.grader) and self.answer_type in (AnswerType.FILE, AnswerType.WORKSPACE_STATE):
             raise ValueError(f"A {self.answer_type} answer requires a grading environment")
         if isinstance(self.grader, VerifyitGrader) and self.grader.environment is not None:

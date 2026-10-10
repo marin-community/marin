@@ -14,12 +14,10 @@ import hashlib
 import json
 import os
 import re
-import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from functools import partial
-from pathlib import Path
 from typing import Any, cast
 
 import click
@@ -48,7 +46,7 @@ from shellbox.machine import (
 )
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, require_resolved_environment
 from taskcompendium.pipeline.controls import GradingMachines, controls_identity
-from taskcompendium.pipeline.fingerprints import callable_identity, callable_module, recipe_code_identity
+from taskcompendium.pipeline.fingerprints import callable_identity, recipe_code_identity
 from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFileOverride, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     RESOURCE_BUDGET_BYTES,
@@ -73,7 +71,7 @@ from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION, Sour
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION, SourceVerificationPolicy
 from taskcompendium.pipeline.sources import conversion_shards, source_files_identity
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
-from taskcompendium.runtime.local import LocalGraderMachines, context_paths
+from taskcompendium.runtime.local import LocalGraderMachines
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
@@ -90,7 +88,7 @@ from experiments.post_training.task_curation.images.build import (
 from experiments.post_training.task_curation.source import RlDataSource
 
 PIPELINE_VERSION = "2026.10.07.1"
-QUICK_VERSION = "2026.10.09.1"
+QUICK_VERSION = "2026.10.10.1"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 REVIEW_REQUEST_TIMEOUT = 60
@@ -195,17 +193,14 @@ class CurationRecipe:
     """One RL data source and how its rows become tasks.
 
     ``name`` is the catalog key and artifact name. ``version`` is the converter revision; bump it
-    when conversion changes in a way the hashed files do not capture. ``rubric=None`` skips model
+    whenever conversion or bundled grader code changes. ``rubric=None`` skips model
     review and ``controls=None`` skips grader verification. ``inputs`` are auxiliary pinned files
     staged before conversion; the source callables and converter find them in ``context.inputs``.
 
     Converters record each task's agent requirements. ``grader`` is what the source's grader
     scripts need; the pipeline builds it and passes the requirements to the
-    converter as ``context.grader_environment``. ``ships`` are directories, such as
-    ``datasets/<family>/scorers``, whose files the converter packages into tasks. The artifact
-    identity hashes the converter module's directory, every file below ``ships`` and the grader's
-    built environment. A task whose decoded resources exceed ``resource_budget_bytes`` is deferred as
-    ``resources_over_budget``.
+    converter as ``context.grader_environment``. A task whose decoded resources exceed
+    ``resource_budget_bytes`` is deferred as ``resources_over_budget``.
     """
 
     name: str
@@ -217,13 +212,7 @@ class CurationRecipe:
     controls: Controls | None = None
     inputs: Mapping[str, HfSource | UrlSource] = field(default_factory=dict)
     grader: Environment | None = None
-    ships: tuple[Path, ...] = ()
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
-
-    def __post_init__(self) -> None:
-        missing = [str(path) for path in self.ships if not path.is_dir()]
-        if missing:
-            raise ValueError(f"{self.name} ships directories that do not exist: {missing}")
 
     @property
     def dataset(self) -> HfSource | UrlSource:
@@ -529,30 +518,6 @@ def _run_curation(
     )
 
 
-def _file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def converter_identity(pipeline: CurationRecipe, grader: EnvironmentArtifact | None) -> dict[str, Any]:
-    """The converter, every file it can package into a task, and the environment its graders run in.
-
-    Files are the converter module's directory's ``*.py`` and everything below ``ships``, keyed
-    by path relative to the module's directory. Library code the converter calls, such as
-    ``taskcompendium.convert.script_grader``, is not hashed: as for every ``taskcompendium.convert``
-    helper, a library change that alters tasks bumps the normalization stage revision or the
-    declaration's ``version``.
-    """
-    module = sys.modules[callable_module(pipeline.convert)]
-    assert module.__file__ is not None
-    directory = Path(module.__file__).parent
-    files = {*directory.glob("*.py"), *(path for root in pipeline.ships for path in context_paths(root))}
-    return {
-        "function": callable_identity(pipeline.convert),
-        "files": {os.path.relpath(path, directory): _file_sha256(path) for path in sorted(files)},
-        "grader": environment_record(pipeline.grader, grader) if pipeline.grader is not None else None,
-    }
-
-
 def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
     """The pinned bytes a source download stages; reader callables do not change them."""
     if isinstance(source, HfSource):
@@ -573,7 +538,8 @@ def pipeline_identity(
         "source": {**download_identity(pipeline.source), "files": source_files_identity(recipe.source)},
         "inputs": {name: download_identity(source) for name, source in sorted(pipeline.inputs.items())},
         "code": recipe_code_identity(recipe),
-        "converter": converter_identity(pipeline, grader),
+        "converter": callable_identity(pipeline.convert),
+        "grader": environment_record(pipeline.grader, grader) if pipeline.grader is not None else None,
         "resource_budget_bytes": pipeline.resource_budget_bytes,
         "rubric": pipeline.rubric,
         "review": asdict(config.review) if pipeline.rubric is not None else None,

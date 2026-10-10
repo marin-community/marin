@@ -26,10 +26,10 @@ from taskcompendium.models import TaskResource, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
+from verifyit.spec import DEFAULT_OUTPUT
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import ANSWER_PATH
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
@@ -109,7 +109,7 @@ def scored_task(
         config,
         environment=required_grader_environment(context),
         timeout=GRADER_TIMEOUT,
-        answer_path=ANSWER_PATH,
+        answer_path=DEFAULT_OUTPUT,
         env=THREAD_ENVIRONMENT,
     )
     return conversation_task(row, events=_with_instruction(events, instruction), package=package, evidence=evidence)
@@ -316,7 +316,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 rubric=APPS_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
@@ -344,7 +343,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 rubric=EURUS2_CODE_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
@@ -371,7 +369,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 rubric=VERIFIABLE_CODE_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
@@ -405,7 +402,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 rubric=GRETEL_TEXT_TO_SQL_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
     ]

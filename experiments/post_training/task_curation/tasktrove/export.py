@@ -3,7 +3,6 @@
 
 """Bind normalized curation artifacts to the packed Harbor consumer contract."""
 
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,11 +13,6 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
-from experiments.post_training.task_curation.datasets.tasktrove.conversion import archive as tasktrove
-from experiments.post_training.task_curation.datasets.tasktrove.conversion import (
-    python_unit_tests as tasktrove_python_unit_tests,
-)
-from experiments.post_training.task_curation.datasets.tasktrove.conversion import verifyit_build
 from experiments.post_training.task_curation.environment import PINNED_IMAGE
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.source import RlDataSource
@@ -41,7 +35,6 @@ class HarborExportConfig:
     fallback_actor_image: str
     verifyit_package_root: Path
     source: HarborSourceMetadata
-    recipe: dict[str, str]
 
 
 def run_harbor_export(config: HarborExportConfig) -> HarborExportArtifact:
@@ -70,25 +63,9 @@ def harbor_export_step(
     grader_image: str | None,
     verifyit_package_root: Path = VERIFYIT_PACKAGE,
 ) -> ArtifactStep[HarborExportArtifact]:
-    """Export one normalized source; artifact identity includes the bundled verifier implementation."""
+    """Export one normalized source; bump the explicit version when lowering or bundled code changes."""
     if grader_image is not None and PINNED_IMAGE.fullmatch(grader_image) is None:
         raise ValueError("The verifier image must be explicitly pinned by digest")
-    recipe = {__name__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
-    source_file = harbor.__file__
-    assert source_file is not None
-    for path in Path(source_file).parent.glob("*.py"):
-        recipe[f"harbor/{path.name}"] = hashlib.sha256(path.read_bytes()).hexdigest()
-    for module in (verifyit_build, tasktrove_python_unit_tests, tasktrove):
-        assert module.__file__ is not None
-        recipe[module.__name__] = hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
-    # The build uses package metadata and README as well as the runtime Python files.
-    recipe.update(
-        {
-            f"build/{path.relative_to(verifyit_package_root)}": hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in verifyit_build.verifyit_source_paths(verifyit_package_root)
-        }
-    )
-    recipe.update({name: hashlib.sha256(content).hexdigest() for name, content in harbor.verifier_runtime().items()})
     metadata = HarborSourceMetadata(source.name, source.info.id, source.info.family)
 
     def build_config(ctx: StepContext) -> HarborExportConfig:
@@ -99,7 +76,6 @@ def harbor_export_step(
             BASE_IMAGE,
             verifyit_package_root,
             metadata,
-            recipe,
         )
 
     return ArtifactStep(

@@ -115,7 +115,9 @@ def file_task() -> TaskSpec:
             "output_paths": ("/app/solution.txt",),
             "resources": ResourceGroups(
                 worker=(inline_resource("data/expected.txt", b"7"),),
-                oracle=(inline_resource("solution/solve.sh", b"cp /data/expected.txt solution.txt\n"),),
+                oracle=(
+                    inline_resource("solution/solve.sh", b"mkdir -p /app; cp /data/expected.txt /app/solution.txt\n"),
+                ),
             ),
         }
     )

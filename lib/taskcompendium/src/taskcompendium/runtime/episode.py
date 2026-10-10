@@ -26,6 +26,7 @@ from taskcompendium.runtime.models import (
     Termination,
 )
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.shell import SHELL
 
 
 @dataclass
@@ -63,7 +64,12 @@ async def run_episode(
     detail = ""
     try:
         environment = await factory.create(task)
-        public = ActorTask(task.id, task.interaction_tools)
+        tools = task.interaction_tools
+        if "shell" in task.environment_requirements.capabilities:
+            if any(tool.name == SHELL.name for tool in (*task.final_tools, *tools)):
+                raise ValueError("The shell tool name is reserved for the shell runtime")
+            tools = (*tools, SHELL)
+        public = ActorTask(task.id, tools)
         for _ in range(max_steps):
             response = actor.respond(public, events)
             if isinstance(response, TextMessage) and response.role != "assistant":
@@ -73,7 +79,7 @@ async def run_episode(
                 termination = Termination.FINAL_MESSAGE
                 break
             for call in response.calls:
-                if call.name not in {tool.name for tool in task.interaction_tools}:
+                if call.name not in {tool.name for tool in tools}:
                     observation = json.dumps({"error": "Tool is not advertised"})
                 else:
                     observation = await environment.step(FunctionCall(name=call.name, arguments=call.arguments))

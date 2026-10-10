@@ -106,13 +106,12 @@ The `CurationRecipe` configuration has these fields:
 | `name` | Catalog key and artifact name. |
 | `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
-| `version` | Converter revision; bump it when conversion changes outside the hashed files. |
+| `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
 | `rubric` | Optional review rubric string, one criterion per paragraph. |
 | `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
-| `ships` | Directories, such as `datasets/<family>/scorers/`, whose files the converter packages into tasks. |
 | `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
 
 Families whose members differ only by data are tables: one module builds every
@@ -178,8 +177,7 @@ golden control answers when present.
 
 A source whose scorer is upstream code grades with a script. The script is a
 `<name>_grade.py` file next to the declaration, and the upstream scorer is
-vendored under `datasets/<family>/scorers/`, a directory listed in the
-declaration's `ships`. `taskcompendium.convert.script_grader` builds the
+vendored under `datasets/<family>/scorers/`. `taskcompendium.convert.script_grader` builds the
 package:
 
 - `grade_script` installs the script as `/tests/grade.py`, with the files it
@@ -375,10 +373,11 @@ Each source artifact `data/rl/<name>-<hash>` contains:
 Every row's `admission` is `admitted`, `rejected`, `deferred`, `no_grader` or
 `unverified`; `final/` holds the admitted rows. Sidecars
 join on `task_id`, `source_locator`, `raw_input_sha256` and decoded
-`raw_sha256`. The artifact name's hash covers the source pins, inputs, version,
-every `*.py` file in the converter module's directory, every file below `ships`,
-the grader's built environment (its identity and any built image digest), the agent image, the resource budget, rubric,
-controls and pipeline settings, so changing any of them produces a new artifact.
+`raw_sha256`. Artifact identities cover source pins, inputs, explicit code versions,
+grader environments, resource budgets, rubrics, controls and pipeline settings.
+Python source files are not hashed. Bump the recipe version for converter or bundled
+grader changes, the corresponding stage/control revision for shared pipeline changes,
+and the export version for Harbor lowering changes. Download versions are independent.
 The manifest counts rows deferred for `resources_over_budget` with the other
 normalization reasons.
 

@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
-import importlib.util
 import json
-import sys
 import threading
 from dataclasses import replace
 from functools import partial
@@ -17,6 +15,7 @@ from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.iris.machine import IrisMachineFactory
+from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
@@ -55,14 +54,6 @@ from experiments.post_training.task_curation.tests.image_builds import (
 )
 
 AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
-
-CONVERTER_MODULE = """
-from taskcompendium.convert.answers import exact_answer_task
-
-
-def convert(row, _context):
-    return exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
-"""
 
 
 def math500() -> CurationRecipe:
@@ -122,45 +113,6 @@ def test_image_factory_enters_identity_only_with_controls(config):
     assert step_name(math500(), iris) != step_name(math500(), config)
     unchecked = replace(math500(), controls=None)
     assert step_name(unchecked, iris) == step_name(unchecked, config)
-
-
-@pytest.fixture
-def fixture_converter(tmp_path, monkeypatch):
-    """A converter module in its own directory, so tests can change the files beside it."""
-    directory = tmp_path / "fixture_family"
-    directory.mkdir()
-    (directory / "fixture_source.py").write_text(CONVERTER_MODULE)
-    spec = importlib.util.spec_from_file_location("fixture_source", directory / "fixture_source.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    # Identity finds the converter's files through sys.modules; each test registers its own module.
-    monkeypatch.setitem(sys.modules, "fixture_source", module)
-    spec.loader.exec_module(module)
-    return directory, module.convert
-
-
-def test_python_files_beside_the_converter_rename_the_artifact(fixture_converter, config):
-    directory, convert = fixture_converter
-    script = directory / "fixture_grade.py"
-    script.write_text("print(1)\n")
-    pipeline = replace(math500(), name="fixture", convert=convert)
-    original = step_name(pipeline, config)
-    script.write_text("print(0)\n")
-    assert step_name(pipeline, config) != original
-
-
-def test_shipped_scorer_bytes_rename_the_artifact(fixture_converter, config):
-    directory, convert = fixture_converter
-    scorer = directory / "scorers" / "upstream" / "score.py"
-    scorer.parent.mkdir(parents=True)
-    scorer.write_text("REWARD = 1\n")
-    pipeline = replace(math500(), name="fixture", convert=convert, ships=(directory / "scorers",))
-    original = step_name(pipeline, config)
-    scorer.write_text("REWARD = 0\n")
-    assert step_name(pipeline, config) != original
-    unshipped = replace(pipeline, ships=())
-    scorer.write_text("REWARD = 1\n")
-    assert step_name(unshipped, config) != original
 
 
 @pytest.fixture
@@ -238,15 +190,18 @@ def test_declarations_with_the_same_pinned_files_share_one_download():
     assert download_step(selected, CampaignRuntime()).name == download_step(pipeline.source, CampaignRuntime()).name
 
 
-def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, fixture_converter, config, monkeypatch):
-    _, convert = fixture_converter
+def convert_fixture(row, _context):
+    return exact_answer_task(row, prompt=row.data["prompt"], answers=(row.data["answer"],), ignore_case=False)
+
+
+def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, config, monkeypatch):
     primary = tmp_path / "source"
     primary.mkdir()
     (primary / "rows.jsonl").write_text('{"prompt": "Two plus two?", "answer": "4"}\n')
     pipeline = replace(
         math500(),
         source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
-        convert=convert,
+        convert=convert_fixture,
         rubric=None,
         controls=None,
         grader=None,

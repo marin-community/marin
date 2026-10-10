@@ -197,8 +197,11 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
         )
 
 
-@pytest.mark.parametrize("answer_type", [AnswerType.TEXT, AnswerType.FILE])
-def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path, answer_type) -> None:
+@pytest.mark.parametrize(
+    "answer_type,output_path",
+    [(AnswerType.TEXT, None), (AnswerType.FILE, "/app/solution.py"), (AnswerType.FILE, "/app")],
+)
+def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path, answer_type, output_path) -> None:
     row, converted = normalized_row
     task = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "generic"})})
     output = "app/answer.txt"
@@ -207,7 +210,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
         task = task.model_copy(
             update={
                 "answer_type": AnswerType.FILE,
-                "output_paths": ("/app/solution.py",),
+                "output_paths": (output_path,),
                 "grader": ScriptGrader(
                     argv=("bash", "/tests/test.sh"),
                     answer_path=None,
@@ -226,7 +229,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
             "worker": (
                 *task.resources.worker,
                 inline_resource(output, b"initial contents"),
-                inline_resource("app/staging-input.txt", b"public input"),
+                inline_resource("inputs/staging-input.txt", b"public input"),
             )
         }
     )
@@ -253,7 +256,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
     command[-2:] = [str(public) + "/.", str(workspace)]
     subprocess.run(command, check=True)
     assert submitted.read_text() == "agent's edited contents"
-    assert (workspace / "app/staging-input.txt").read_text() == "public input"
+    assert (workspace / "inputs/staging-input.txt").read_text() == "public input"
     submitted.unlink()
     subprocess.run(command, check=True)
     assert not submitted.exists()

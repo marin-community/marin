@@ -35,11 +35,11 @@ from taskcompendium.pipeline.models import (
     Reply,
 )
 from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import DEFAULT_OUTPUT
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
-    ANSWER_PATH,
     archive_file,
     archive_resources,
     archive_script_grader,
@@ -128,7 +128,7 @@ def convert_calendar(row: RawRow, context: ConversionContext) -> TaskSpec | Norm
     if defect is not None:
         return source_defect("invalid_witness", defect)
     grader = archive_script_grader(
-        row.data, required=GRADER_FILES, environment=required_grader_environment(context), answer_path=ANSWER_PATH
+        row.data, required=GRADER_FILES, environment=required_grader_environment(context), answer_path=DEFAULT_OUTPUT
     )
     if isinstance(grader, ImportRejection):
         return grader

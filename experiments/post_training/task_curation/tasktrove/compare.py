@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 import click
-import verifyit
 from taskcompendium.harbor import snapshots
 from taskcompendium.harbor.compare import ParityReport, write_archive_diff
 from taskcompendium.harbor.records import NormalizedIndex
@@ -329,14 +328,6 @@ def main(
         "package_versions": {
             name: importlib.metadata.version(name) for name in ("pyarrow", "pydantic", "tomlkit", "tomli-w")
         },
-        "implementation_files": [
-            file_identity(path)
-            for path in sorted(
-                {Path(__file__), Path(__file__).with_name("reference.py")}
-                | set(Path(snapshots.__file__).parent.glob("*.py"))
-                | set(Path(verifyit.__file__).parent.rglob("*.py"))
-            )
-        ],
         "grader_image": grader_image,
         "sources": names,
         "results": {},

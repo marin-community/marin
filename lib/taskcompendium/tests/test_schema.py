@@ -284,7 +284,7 @@ VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "environment": {"docker_image": IMAG
             {
                 "answer_type": "file",
                 "environment_requirements": {"capabilities": ["python3"]},
-                "output_directories": [{"root": "/logs/verifier", "patterns": ["*"], "max_files": 1, "max_bytes": 1}],
+                "output_paths": ["/logs/verifier"],
                 "grader": SCRIPT | {"answer_path": None},
             },
             id="output-directory-under-verifier-logs",

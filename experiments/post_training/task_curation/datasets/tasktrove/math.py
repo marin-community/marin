@@ -37,12 +37,11 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
-from verifyit.spec import MathSpec, MathType
+from verifyit.spec import DEFAULT_OUTPUT, MathSpec, MathType
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
-    ANSWER_PATH,
     SOLVE_SH,
     archive_files,
 )
@@ -204,7 +203,7 @@ convert_openreasoning = MathConverter(sections=(SUBMISSION,), phrases=ANSWER_DEL
 def math_golden(task: TaskSpec) -> ControlSubmission:
     """The source's ``solution/solve.sh`` when it ships one, else its typed reference in a box."""
     if any(resource.path == SOLVE_SH for resource in task.resources.oracle):
-        return OracleCommand(f"bash /{SOLVE_SH}", answer_file=ANSWER_PATH)
+        return OracleCommand(f"bash /{SOLVE_SH}", answer_file=DEFAULT_OUTPUT)
     data = next(resource for resource in task.resources.verifier if resource.path == "verifier_data.json")
     expected = json.loads(resource_bytes(data))["expected_answer"]
     return answer_reply(task, rf"\boxed{{{expected}}}")

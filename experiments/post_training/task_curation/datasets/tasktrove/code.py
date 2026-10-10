@@ -9,7 +9,7 @@ an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
 """
 
 
-from pathlib import Path
+import json
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -32,7 +32,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
     solve_script,
     tasktrove_archive_task,
 )
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.nemotron_data import verifier_data
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertFn,
@@ -159,7 +158,7 @@ def convert_taco_task(row: RawRow, _context: ConversionContext) -> NormalizedTas
 
 def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
     """The source's aligned input/output pairs, run with the solution command and compared exactly."""
-    data = verifier_data(task)
+    data = json.loads(task.text("tests/verifier_data.json"))
     inputs, outputs = data.get("inputs"), data.get("outputs")
     if not isinstance(inputs, list) or not isinstance(outputs, list) or len(inputs) != len(outputs) or not inputs:
         return Rejected(ConvertStatus.NULL_GRADER, "At least one aligned input/output case is required")
@@ -199,7 +198,6 @@ def stdio_source(
     *,
     version: str = "1",
     grader: Environment | None = COMPILER_GRADER_PACKAGES,
-    ships: tuple[Path, ...] = (),
 ) -> RlDataSource[CurationRecipe]:
     return RlDataSource(
         pipeline=process_rows,
@@ -209,7 +207,6 @@ def stdio_source(
             source=tasktrove_source(config),
             convert=TaskTroveConverter(config, convert),
             version=version,
-            ships=ships,
             intended_use=IntendedUse.TRAIN,
             rubric=rubric,
             controls=EXECUTABLE_CONTROLS,
@@ -227,7 +224,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             CODE_CONTESTS_RUBRIC,
             version="2",
             grader=None,
-            ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:DCAgent__code-contests-noblock",
                 title="DCAgent/code-contests-noblock",
@@ -278,7 +274,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             TACO_RUBRIC,
             version="2",
             grader=None,
-            ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:laion__exp_rpt_taco-v2",
                 title="laion/exp_rpt_taco-v2",

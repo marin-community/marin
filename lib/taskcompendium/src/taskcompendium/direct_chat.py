@@ -28,8 +28,6 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
         features.append("interaction_tools")
     if specification.output_paths:
         features.append("output_paths")
-    if specification.output_directories:
-        features.append("output_directories")
     grader = specification.grader
     if isinstance(grader, ScriptGrader | VerifyitGrader) and grader.environment is not None:
         features.append("grader.environment")

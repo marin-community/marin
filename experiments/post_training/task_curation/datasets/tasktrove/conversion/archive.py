@@ -46,8 +46,6 @@ TESTS_MOUNT = "/tests"
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
 TEST_SH_REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
 """The numeric reward file a Harbor ``tests/test.sh`` writes."""
-ANSWER_PATH = "/app/answer.txt"
-"""Where archived answer checkers read the answer; the runtime stages a conversation task's reply there."""
 
 
 @dataclass

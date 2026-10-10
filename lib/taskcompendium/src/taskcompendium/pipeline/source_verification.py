@@ -3,8 +3,6 @@
 
 """Sample completed source outputs and gate publication on repeated controls."""
 
-import hashlib
-import inspect
 import json
 import re
 import sys
@@ -15,12 +13,9 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from functools import partial
 from importlib.metadata import distributions
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import shellbox
-import verifyit
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.storage_path import StoragePath
@@ -29,10 +24,10 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
-import taskcompendium
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, execute_phase
+from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     CheckResult,
@@ -51,7 +46,7 @@ from taskcompendium.pipeline.transforms import is_accepted
 from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.runtime.models import RolloutRecord
 
-SOURCE_VERIFICATION_REVISION = "9"
+SOURCE_VERIFICATION_REVISION = "10"
 VERIFICATION_REPORT_FILENAME = "verification.json"
 """The verified stage's report; a rerun at the same output reuses its matching control trials."""
 INFRA_ERROR_RETRIES = 2
@@ -136,26 +131,15 @@ class VerifiedSample:
 
 
 def verification_identity(suite: CheckSuite, policy: SourceVerificationPolicy) -> str:
-    """Identify control code, dependencies, configured runtime and repetition policy."""
+    """Identify control revisions, dependencies, configured runtime and repetition policy."""
     function = suite.run
     while isinstance(function, partial):
         function = function.func
-    source_file = inspect.getsourcefile(function)
-    assert source_file is not None, "Verification controls require inspectable implementation code"
-    digest = hashlib.sha256()
-    for module in (taskcompendium, verifyit, shellbox):
-        assert module.__file__ is not None
-        root = Path(module.__file__).parent
-        for path in sorted(root.rglob("*.py")):
-            digest.update(str(path.relative_to(root)).encode())
-            digest.update(path.read_bytes())
     return canonical_sha256(
         {
             "revision": SOURCE_VERIFICATION_REVISION,
             "suite": {"id": suite.id, "revision": suite.revision, "parameters": suite.parameters},
-            "function": {"name": function.__qualname__, "module": function.__module__},
-            "source_sha256": hashlib.sha256(Path(source_file).read_bytes()).hexdigest(),
-            "grading_code_sha256": digest.hexdigest(),
+            "function": callable_identity(function),
             "python": sys.version,
             "dependencies": sorted(
                 (distribution.metadata["Name"], distribution.version) for distribution in distributions()

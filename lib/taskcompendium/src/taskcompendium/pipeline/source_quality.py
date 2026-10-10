@@ -147,7 +147,6 @@ def contract_signature(audit: TaskAudit) -> str:
             "environment": task.environment_requirements.model_dump(mode="json"),
             "grader_environment": None if environment is None else environment.model_dump(mode="json"),
             "output_paths": task.output_paths,
-            "output_directories": [directory.model_dump(mode="json") for directory in task.output_directories],
         }
     )
 

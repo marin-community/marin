@@ -12,7 +12,6 @@ the grader packages include the same ones, so a submission that imports one ther
 
 from dataclasses import dataclass, field
 
-from taskcompendium.models import OutputDirectory
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
@@ -40,12 +39,6 @@ STACK_PYTEST_AGENT_IMAGE = Environment(
 )
 """The Python image with the Stack Overflow tasks' dependencies that their agent works in."""
 
-PYTHON_WORKSPACE_OUTPUT = OutputDirectory(root="/app", patterns=("*",), max_files=1024, max_bytes=16 * 1024 * 1024)
-"""Capture regular files recursively, including non-Python assets and incidental workspace files.
-
-Isolated capture skips symlinks and fails above these budgets or the runtime's per-file limit.
-Harbor's shared workspace needs no transfer and does not apply capture budgets.
-"""
 
 PYTHON_TESTS_CONTROLS = Controls(golden=solve_script)
 
@@ -184,10 +177,9 @@ def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment_requirements(AGENT_IMAGE).model_copy(update={"capabilities": ("python3",)}),
+        environment=environment_requirements(AGENT_IMAGE),
         grader_environment=required_grader_environment(context),
-        output_paths=(),
-        output_directories=(PYTHON_WORKSPACE_OUTPUT,),
+        output_paths=("/app",),
     )
 
 
@@ -196,10 +188,9 @@ def convert_stack_pytest(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment_requirements(STACK_PYTEST_AGENT_IMAGE).model_copy(update={"capabilities": ("python3",)}),
+        environment=environment_requirements(STACK_PYTEST_AGENT_IMAGE),
         grader_environment=required_grader_environment(context),
-        output_paths=(),
-        output_directories=(PYTHON_WORKSPACE_OUTPUT,),
+        output_paths=("/app",),
     )
 
 

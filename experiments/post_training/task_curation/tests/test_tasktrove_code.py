@@ -15,7 +15,6 @@ import pytest
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.runtime.shell import ShellEnvironment
 from verifyit.grade import Status, grade
 from verifyit.spec import ScriptSpec, StdioSpec
 
@@ -36,7 +35,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tasktrove.harbor_export import (
-    UnsupportedHarborTask,
     harbor_payload,
     harbor_record,
 )
@@ -47,7 +45,6 @@ from experiments.post_training.task_curation.tests.conversion import (
     fixture_context,
     tasktrove_row,
 )
-from lib.taskcompendium.tests.test_output_capture import DirectoryMachine
 
 pytest_plugins = ("lib.verifyit.tests.test_judge",)
 
@@ -216,8 +213,7 @@ def test_ungradable_archives_are_rejected_with_typed_cause(name, row, kind, reas
     assert (rejection.kind, rejection.reason) == (kind, reason)
 
 
-@pytest.mark.asyncio
-async def test_python_source_preserves_prompt_and_captures_nested_assets(tmp_path):
+def test_python_source_preserves_prompt():
     instruction = "Implement the requested helper.\n"
     result = cast(
         NormalizedTask,
@@ -231,21 +227,9 @@ async def test_python_source_preserves_prompt_and_captures_nested_assets(tmp_pat
     )
     assert result.task.context.events[0].content == instruction
     assert not result.changes
-    package = tmp_path / "helpers"
-    package.mkdir()
-    implementation = package / "__init__.py"
-    implementation.write_bytes(b"def add(a, b): return a + b\n")
-    asset = package / "values.json"
-    asset.write_bytes(b'{"offset": 0}')
-    selection = result.task.output_directories[0].model_copy(update={"root": str(tmp_path)})
-    environment = ShellEnvironment(DirectoryMachine(), result.task.output_paths, 10, 1024, (selection,))
-    assert (await environment.evidence()).files == {
-        str(implementation): implementation.read_bytes(),
-        str(asset): asset.read_bytes(),
-    }
 
 
-def test_python_directory_source_exports_shared_without_capture_and_rejects_isolated():
+def test_python_directory_source_exports_shared_without_capture_and_isolated_with_capture():
     task = converted_task(RECIPES["tasktrove-e2egit"], python_row())
     row = {"task_json": task.model_dump_json(), "source_row": "fixture/tasks.parquet:0", "original_path": "fixture"}
     options = {
@@ -261,8 +245,10 @@ def test_python_directory_source_exports_shared_without_capture_and_rejects_isol
     assert payload.files["instruction.md"].decode() == task.context.events[0].content
     # Without TaskTrove's shared source recipe, Harbor needs an isolated transfer contract.
     isolated = task.model_copy(update={"source": task.source.model_copy(update={"dataset": "fixture"})})
-    with pytest.raises(UnsupportedHarborTask, match="Directory capture"):
-        harbor_payload({**row, "task_json": isolated.model_dump_json()}, **options)
+    payload = harbor_payload({**row, "task_json": isolated.model_dump_json()}, **options)
+    config = tomllib.loads(payload.files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "separate"
+    assert config["artifacts"] == [{"source": "/app", "destination": "app"}]
 
 
 def local_stdio(task: TaskSpec, workspace: Path) -> StdioSpec:

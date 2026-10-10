@@ -3,25 +3,20 @@
 
 import json
 from dataclasses import replace
-from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import verifyit
 import yaml
-from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from taskcompendium.models import NoGrader
 from upath import UPath
 
-from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.rl_smoke import smoke_step
-from experiments.post_training.task_curation.tasktrove import harbor_export as harbor
 from experiments.post_training.task_curation.tasktrove.export import harbor_export_step
 from experiments.post_training.task_curation.tasktrove.harbor_export import VerifierPayloadIdentity
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
@@ -98,39 +93,6 @@ def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tm
     assert source["relative_path"] == "tasks.parquet"
     assert source["verifier_ref"] == identity.ref
     assert source["kind"] == "tasktrove_parquet"
-
-
-@pytest.mark.parametrize(
-    "changed_file",
-    [
-        Path(verifyit.__file__).with_name("candidate_file.py"),
-        Path(harbor.__file__).with_name("source_images.py"),
-        VERIFYIT_PACKAGE / "pyproject.toml",
-    ],
-)
-def test_export_dependency_edit_invalidates_fingerprint_pin(changed_file, tmp_path, monkeypatch):
-    normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(tmp_path / "not-materialized"))
-    original_read = Path.read_bytes
-    harbor.verifier_runtime.cache_clear()
-    before = harbor_export_step(
-        normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
-    )
-
-    # Change one filesystem input, without editing the checkout or materializing the source.
-    def edited_read(path):
-        content = original_read(path)
-        return content + b"\n# changed export input\n" if path == changed_file else content
-
-    monkeypatch.setattr(Path, "read_bytes", edited_read)
-    harbor.verifier_runtime.cache_clear()
-    after = harbor_export_step(
-        normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
-    )
-    harbor.verifier_runtime.cache_clear()
-    assert after.fingerprint() != before.fingerprint()
-    with pytest.raises(FingerprintMismatchError):
-        replace(after, expected_fingerprint=before.fingerprint()).lower()
-    assert not (tmp_path / "not-materialized").exists()
 
 
 @pytest.mark.parametrize("field", ["id", "family"])

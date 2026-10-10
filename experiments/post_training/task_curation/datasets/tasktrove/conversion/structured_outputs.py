@@ -50,7 +50,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_
     normalize_schema,
     usable_schema,
 )
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.nemotron_data import verifier_data
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
     ConvertedTask,
     ConvertStatus,
@@ -250,7 +249,7 @@ def graded_by(schema_type: SchemaType, schema: object) -> tuple[Spec, dict[str, 
 
 def convert_nemotron_structured_outputs(task: TaskFiles) -> ConvertedTask | Rejected:
     """Structured-output schema tasks: ``{"schema": ..., "schema_type": "json" | "xml" | ...}``."""
-    data = verifier_data(task)
+    data = json.loads(task.text("tests/verifier_data.json"))
     raw_type = data.get("schema_type")
     try:
         schema_type = SchemaType(raw_type)

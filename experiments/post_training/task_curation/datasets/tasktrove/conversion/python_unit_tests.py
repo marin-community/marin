@@ -31,15 +31,9 @@ ORACLE_SCRIPT = """#!/bin/bash
 set -e
 cp /solution/solution.py /app/solution.py
 """
-PYTEST_ENV = "/opt/tasktrove-pytest"
-PYTEST_PYTHON = f"{PYTEST_ENV}/bin/python"
-PYTEST_INSTALL = (
-    f"RUN python3 -m venv --system-site-packages {PYTEST_ENV}"
-    f" && {PYTEST_ENV}/bin/pip install --no-cache-dir pytest pytest-json-report{{dependencies}}\n"
-)
 
 
-def _validated_test_module(task: TaskFiles, test_files: tuple[str, ...]) -> tuple[str, ast.Module] | Rejected:
+def _validated_test_file(task: TaskFiles, test_files: tuple[str, ...]) -> str | Rejected:
     candidates = [path for path in test_files if path in task.files]
     if len(candidates) != 1:
         return Rejected(
@@ -57,7 +51,7 @@ def _validated_test_module(task: TaskFiles, test_files: tuple[str, ...]) -> tupl
     )
     if not has_test:
         return Rejected(ConvertStatus.NULL_GRADER, f"{path} defines no local test function")
-    return path, tree
+    return path
 
 
 def _validated_oracle_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
@@ -73,21 +67,11 @@ def _validated_oracle_files(task: TaskFiles) -> dict[str, bytes] | Rejected:
     return {**files, SOLVE_SH: ORACLE_SCRIPT.encode()}
 
 
-def legacy_pytest_dockerfile(dockerfile: str, tree: ast.Module) -> str:
-    """Install the legacy isolated pytest interpreter and its test-import dependencies."""
-    modules = {
-        alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
-    } | {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
-    dependencies = " mock" if "mock" in modules else ""
-    return dockerfile.rstrip() + "\n" + PYTEST_INSTALL.format(dependencies=dependencies)
-
-
 def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> ConvertedTask | Rejected:
     """Convert one self-contained Python task without preserving its legacy shell grader."""
-    module = _validated_test_module(task, test_files)
-    if isinstance(module, Rejected):
-        return module
-    test_file, tree = module
+    test_file = _validated_test_file(task, test_files)
+    if isinstance(test_file, Rejected):
+        return test_file
     solution_files = _validated_oracle_files(task)
     if isinstance(solution_files, Rejected):
         return solution_files
@@ -97,9 +81,9 @@ def convert(task: TaskFiles, *, test_files: tuple[str, ...] = TEST_FILES) -> Con
         instruction=task.text(INSTRUCTION),
         spec=PytestSpec(
             paths=(f"{TESTS_MOUNT}/{test_file.removeprefix('tests/')}",),
-            python=PYTEST_PYTHON,
+            python="python3",
         ),
-        dockerfile=legacy_pytest_dockerfile(task.text(DOCKERFILE), tree),
+        dockerfile=task.text(DOCKERFILE),
         tags=("code", "python", "unit-test", "kata"),
         language="python",
         data_files=data_files,

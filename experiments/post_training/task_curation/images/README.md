@@ -46,8 +46,8 @@ uv --directory experiments/post_training/task_curation/datasets pip compile \
 Every built environment also puts `verifyit` from this repository on the
 grader's import path, because verifyit graders import it. Scorer code is not
 installed. A family vendors upstream scorers under `datasets/<family>/scorers/`,
-lists that directory in its declaration's `ships`, and its converter packages
-the files into each task.
+and its converter packages the files into each task. Bump the recipe version
+when converter or bundled scorer code changes.
 
 ## Building
 

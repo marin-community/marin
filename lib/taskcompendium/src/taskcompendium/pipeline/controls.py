@@ -25,12 +25,11 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
     VerifyitGrader,
-    grader_workspace,
     grades_in_process,
     require_resolved_environment,
     verifyit_spec,
 )
-from taskcompendium.pipeline.fingerprints import function_code_identity
+from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -48,7 +47,7 @@ from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "6"
+CONTROLS_REVISION = "7"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -96,7 +95,7 @@ def controls_identity(controls: Controls) -> dict[str, Any]:
     """The control code and machine size that can change a control's outcome."""
     return {
         "revision": CONTROLS_REVISION,
-        "golden": function_code_identity(controls.golden) if controls.golden is not None else None,
+        "golden": callable_identity(controls.golden) if controls.golden is not None else None,
         "memory_mb": controls.memory_mb,
     }
 
@@ -230,7 +229,6 @@ async def _oracle_attempt(
     environment: EnvironmentRequirements,
 ) -> GradingAttempt:
     """Run the oracle in a fresh machine from ``factory`` with the worker and oracle files mounted."""
-    workspace = environment.working_directory or grader_workspace(task.grader)
     async with asyncio.timeout(spec.startup_timeout):
         prepared = await asyncio.to_thread(
             prepare_machine_spec,
@@ -240,6 +238,7 @@ async def _oracle_attempt(
             dict(os.environ),
         )
         machine = await factory.create(prepared)
+    workspace = prepared.workdir
     try:
         await upload_resources(
             machine, (*task.resources.all, *task.resources.worker, *task.resources.oracle), ORACLE_TIMEOUT
@@ -269,7 +268,7 @@ async def _oracle_attempt(
                 )
         if command.answer_file is None:
             evidence = await ShellEnvironment(
-                machine, task.output_paths, ORACLE_TIMEOUT, ORACLE_OUTPUT_LIMIT_BYTES, task.output_directories
+                machine, task.output_paths, ORACLE_TIMEOUT, ORACLE_OUTPUT_LIMIT_BYTES
             ).evidence()
             return GradingAttempt(
                 ConversationTrace(events=(*task.context.events, FILE_SUBMISSION_MESSAGE)), evidence.files

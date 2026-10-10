@@ -16,7 +16,7 @@ import math
 import os
 import tarfile
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -52,13 +52,13 @@ from taskcompendium.models import (
     VerifyitGrader,
     grader_workspace,
     under_grader_root,
+    validate_output_paths,
     verifyit_answer_file,
     verifyit_spec,
 )
 from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, validate_machine_spec
-from taskcompendium.runtime.output_capture import selected_directory_files, validate_output_directories
+from taskcompendium.runtime.output_capture import selected_output_files
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.runtime.shell import MISSING_CAPTURE_EXIT_CODE
 from taskcompendium.submission import conversation_messages, require_submission_compatibility
 
 GRADING_TIMEOUT = 600.0
@@ -68,6 +68,7 @@ STATE_PATH = "/app/state.json"
 STAGING_ARCHIVE = "/tmp/taskcompendium-grading.tar"
 DIAGNOSTIC_OUTPUT_BYTES = 16_384
 ROOT = "0"
+MISSING_CAPTURE_EXIT_CODE = 44
 LINKED_ARTIFACT_EXIT = 45
 MAX_ARTIFACT_EXPANDED_BYTES = 1024**3
 MAX_ARTIFACT_MEMBERS = 100_000
@@ -108,10 +109,8 @@ def _script_answer_bytes(submission: Submission) -> bytes:
 
 
 def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, ...]) -> list[_StagedFile]:
-    selected = {path: attempt.files[path] for path in paths if path in attempt.files}
-    for selection in task.output_directories:
-        for path, data in selected_directory_files(selection, attempt.files).items():
-            selected.setdefault(path, data)
+    selected = selected_output_files(task.output_paths, attempt.files)
+    selected.update({path: attempt.files[path] for path in paths if path in attempt.files})
     for path in selected:
         candidate = PurePosixPath(path)
         if not candidate.is_absolute() or ".." in candidate.parts or under_grader_root(path):
@@ -460,7 +459,7 @@ def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: floa
         )
     if (grading.collect or grading.artifacts) and task_machine is None:
         raise ValueError("Collecting grader inputs requires the task machine")
-    validate_output_directories(task.output_directories, grading.workspace)
+    validate_output_paths(task.output_paths)
     return grading
 
 
@@ -591,7 +590,7 @@ async def _grade_staged(
                     machine_spec,
                     host_environment,
                 )
-                machine = await factory.create(replace(prepared, workdir=grading.workspace))
+                machine = await factory.create(prepared)
             try:
                 return await _grade_on(
                     machine,
@@ -639,7 +638,7 @@ async def _grade_on(
     for setup in environment.setup_commands:
         await _run_checked(
             machine,
-            Command(("sh", "-c", setup), cwd="/", timeout=timeout, user=ROOT),
+            Command(("sh", "-c", setup), timeout=timeout, user=ROOT),
             "Grading environment setup failed",
         )
     if spec is not None:

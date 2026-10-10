@@ -14,7 +14,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from functools import cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 import pyarrow as pa
@@ -252,8 +252,6 @@ def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentM
         raise UnsupportedHarborTask(f"Unsupported answer type: {task.answer_type}")
     if task.answer_type == AnswerType.TEXT and not isinstance(task.answer_format, PlainText):
         raise UnsupportedHarborTask("Text extraction beyond plain text requires dedicated Harbor lowering")
-    if task.output_directories and environment_mode != VerifierEnvironmentMode.SHARED:
-        raise UnsupportedHarborTask("Directory capture requires dedicated isolated Harbor lowering")
     if task.final_tools:
         raise UnsupportedHarborTask("Final tool calls require dedicated Harbor lowering")
     if environment.setup_commands or environment.packages_lock:
@@ -486,7 +484,11 @@ def harbor_payload(
     grader_public = (
         []
         if environment_mode == VerifierEnvironmentMode.SHARED
-        else [resource for resource in public if "/" + resource.path not in outputs]
+        else [
+            resource
+            for resource in public
+            if not any(PurePosixPath("/" + resource.path).is_relative_to(path) for path in outputs)
+        ]
     )
     if grader_public:
         for resource in grader_public:

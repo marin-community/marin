@@ -15,16 +15,13 @@ from taskcompendium.models import (
     ConversationEvent,
     ConversationInput,
     EnvironmentRequirements,
-    OutputDirectory,
     PlainText,
-    ProviderRequirement,
     ResourceGroups,
     TaskResource,
     TaskSpec,
     TextMessage,
 )
 from taskcompendium.pipeline.models import RawRow
-from taskcompendium.runtime.shell import BASH, INTERFACE
 
 SHELL_CAPABILITIES = ("shell", "filesystem")
 
@@ -34,7 +31,6 @@ def shell_environment(environment: EnvironmentRequirements) -> EnvironmentRequir
     return environment.model_copy(
         update={
             "capabilities": tuple(dict.fromkeys((*environment.capabilities, *SHELL_CAPABILITIES))),
-            "tool_providers": {"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
         }
     )
 
@@ -47,7 +43,6 @@ def workspace_task(
     environment: EnvironmentRequirements,
     grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
-    output_directories: tuple[OutputDirectory, ...] = (),
     verifier: tuple[TaskResource, ...] = (),
     worker: tuple[TaskResource, ...] = (),
     oracle: tuple[TaskResource, ...] = (),
@@ -65,10 +60,8 @@ def workspace_task(
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=shell_environment(environment),
-        interaction_tools=(BASH,),
         resources=ResourceGroups(worker=worker, oracle=oracle, verifier=package.resources),
         output_paths=output_paths,
-        output_directories=output_directories,
         answer_type=AnswerType.FILE,
         answer_format=PlainText(),
         grader=package.grader,
