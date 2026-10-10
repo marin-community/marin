@@ -654,6 +654,8 @@ class GrugModelConfig:
     """Form the erase gate ``2 sigmoid(z)`` (``kda_erase_gate``) inside the fused kernels from its bf16 logits."""
     kda_state_grads: StateGrads = StateGrads.XLA
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
+    kda_state_block_v: int = 32
+    """d_v tile of the fused KDA state pass: 64 with ``kda_state_grads=xla`` is 8% faster on GB200 (same math)."""
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a learned per-sublayer
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
@@ -1542,6 +1544,7 @@ class KdaKernelOptions(NamedTuple):
     chunk_size: int  # fused (GPU) kernels' chunk length, see KDA_CHUNK_TILES
     save_chunk_states: bool
     state_grads: StateGrads
+    state_block_v: int
 
 
 def _kda_kernel_rotating(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaKernelOptions):
@@ -1578,6 +1581,7 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaK
             sub_chunk_size=KDA_CHUNK_TILES[options.chunk_size],
             save_chunk_states=options.save_chunk_states,
             state_grads=options.state_grads,
+            state_block_v=options.state_block_v,
         )
     if gate is not None:
         g = gate_log_decay(gate_fn, g.astype(jnp.float32), gate[0], gate[1])
@@ -1756,7 +1760,9 @@ class KimiDeltaAttention(eqx.Module):
             kernel_fn = _kda_kernel_rotating
         else:
             kernel_fn = _kda_kernel
-        options = KdaKernelOptions(cfg.kda_chunk_size, cfg.kda_save_chunk_states, cfg.kda_state_grads)
+        options = KdaKernelOptions(
+            cfg.kda_chunk_size, cfg.kda_save_chunk_states, cfg.kda_state_grads, cfg.kda_state_block_v
+        )
         run = functools.partial(kernel_fn, options=options)
         args = (q, k, v, g, beta, extras)
         in_specs = (spec4,) * 4 + (spec3, extra_specs)

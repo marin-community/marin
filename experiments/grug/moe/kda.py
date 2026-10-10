@@ -642,6 +642,7 @@ def kda_fused(
     interpret: bool = False,
     save_chunk_states: bool = False,
     state_grads: StateGrads = StateGrads.XLA,
+    state_block_v: int = 32,
 ) -> Float[Array, "B L H Dv"]:
     """Fused-kernel KDA in the model's ``(batch, seq, heads, head_dim)`` layout (GPU).
 
@@ -669,6 +670,7 @@ def kda_fused(
     the -5 per-token log-decay floor, ``chunk_size=32, sub_chunk_size=32`` (the fastest exact setting
     on H100) and ``chunk_size=64, sub_chunk_size=32`` are as exact as ``chunk_size=16``.
     ``state_grads`` picks where the state pass's backward forms its d_v-contracting cotangents.
+    ``state_block_v`` is the state pass's d_v tile (64 is fastest on GB200, 32 on H100).
     """
     b, length, heads, _ = q.shape
     pad = (-length) % chunk_size
@@ -710,6 +712,7 @@ def kda_fused(
         num_heads=heads,
         out_dtype=v.dtype,
         interpret=interpret,
+        block_v=state_block_v,
         save_states=save_chunk_states,
         grads=state_grads,
     )
