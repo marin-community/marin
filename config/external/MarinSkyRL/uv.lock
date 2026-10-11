@@ -1578,18 +1578,17 @@ secrets = [
 [[package]]
 name = "marin-rolloutengine"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=2ef4786903053025ca7fcee40ea76476276ca872#2ef4786903053025ca7fcee40ea76476276ca872" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=78009f9f23f97abb6add6843273e8120a1aae83d#78009f9f23f97abb6add6843273e8120a1aae83d" }
 dependencies = [
-    { name = "harbor-config" },
     { name = "marin-shellbox" },
+    { name = "marin-taskcompendium" },
     { name = "pydantic" },
-    { name = "taskcompendium" },
 ]
 
 [[package]]
 name = "marin-shellbox"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=2ef4786903053025ca7fcee40ea76476276ca872#2ef4786903053025ca7fcee40ea76476276ca872" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=78009f9f23f97abb6add6843273e8120a1aae83d#78009f9f23f97abb6add6843273e8120a1aae83d" }
 dependencies = [
     { name = "bubblewrap-bin", marker = "sys_platform == 'linux'" },
     { name = "httpx" },
@@ -1606,9 +1605,45 @@ shellsim = [
 ]
 
 [[package]]
+name = "marin-taskcompendium"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=78009f9f23f97abb6add6843273e8120a1aae83d#78009f9f23f97abb6add6843273e8120a1aae83d" }
+dependencies = [
+    { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-shellbox" },
+    { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
+    { name = "pydantic" },
+    { name = "tomlkit" },
+]
+
+[[package]]
+name = "marin-verifyit"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=78009f9f23f97abb6add6843273e8120a1aae83d#78009f9f23f97abb6add6843273e8120a1aae83d" }
+dependencies = [
+    { name = "tomli-w" },
+]
+
+[package.optional-dependencies]
+judge = [
+    { name = "openai" },
+]
+math = [
+    { name = "math-verify" },
+    { name = "sympy" },
+]
+reasoning-gym = [
+    { name = "reasoning-gym" },
+]
+schema = [
+    { name = "jsonschema" },
+    { name = "pyyaml" },
+]
+
+[[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#65ada5bdced4f9f6ef48ee323323fdac397663c5" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#7ac9ecfa471d812f7f63bad60b6cf76500d43eb4" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -1636,6 +1671,8 @@ dependencies = [
     { name = "marin-rigging", extra = ["secrets"] },
     { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
+    { name = "marin-taskcompendium" },
+    { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
     { name = "math-verify" },
     { name = "ninja" },
     { name = "nvidia-ml-py" },
@@ -1653,14 +1690,12 @@ dependencies = [
     { name = "requests" },
     { name = "s3fs" },
     { name = "smart-open" },
-    { name = "taskcompendium" },
     { name = "tensorboard" },
     { name = "tokenizers" },
     { name = "tqdm" },
     { name = "transformers" },
     { name = "uvicorn" },
     { name = "verifiable-instructions" },
-    { name = "verifyit", extra = ["answer", "judge", "reasoning-gym", "schema"] },
     { name = "wandb" },
     { name = "xmltodict" },
 ]
@@ -2924,17 +2959,6 @@ wheels = [
 ]
 
 [[package]]
-name = "taskcompendium"
-version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=2ef4786903053025ca7fcee40ea76476276ca872#2ef4786903053025ca7fcee40ea76476276ca872" }
-dependencies = [
-    { name = "marin-rigging", extra = ["secrets"] },
-    { name = "marin-shellbox" },
-    { name = "pydantic" },
-    { name = "verifyit", extra = ["answer", "judge", "reasoning-gym", "schema"] },
-]
-
-[[package]]
 name = "tensorboard"
 version = "2.21.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2998,6 +3022,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
+]
+
+[[package]]
+name = "tomli-w"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/75/241269d1da26b624c0d5e110e8149093c759b7a286138f4efd61a60e75fe/tomli_w-1.2.0.tar.gz", hash = "sha256:2dd14fac5a47c27be9cd4c976af5a12d87fb1f0b4512f81d69cce3b35ae25021", size = 7184, upload-time = "2025-01-15T12:07:24.262Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl", hash = "sha256:188306098d013b691fcadc011abd66727d3c414c571bb01b1a174ba8c983cf90", size = 6675, upload-time = "2025-01-15T12:07:22.074Z" },
 ]
 
 [[package]]
@@ -3163,31 +3196,6 @@ dependencies = [
     { name = "immutabledict" },
     { name = "langdetect" },
     { name = "nltk" },
-]
-
-[[package]]
-name = "verifyit"
-version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=2ef4786903053025ca7fcee40ea76476276ca872#2ef4786903053025ca7fcee40ea76476276ca872" }
-dependencies = [
-    { name = "harbor-config" },
-    { name = "tomlkit" },
-]
-
-[package.optional-dependencies]
-answer = [
-    { name = "math-verify" },
-    { name = "sympy" },
-]
-judge = [
-    { name = "openai" },
-]
-reasoning-gym = [
-    { name = "reasoning-gym" },
-]
-schema = [
-    { name = "jsonschema" },
-    { name = "pyyaml" },
 ]
 
 [[package]]
