@@ -234,13 +234,13 @@ def _doc_lower_mask(starts_ref):
     return ((_iota2(c, 1) <= _iota2(c, 0)) & (idx[:, None] == idx[None, :])).astype(jnp.bfloat16)
 
 
-def _cum_log_decay(g_ref, gate_refs, starts_ref, cols=slice(None)):
-    """The chunk's cumulative log-decay G (C x cols): the cumsum of the (gated) log-decay, restarted at every
-    document start when ``starts_ref`` is given (an exact masked matmul, ``_doc_lower_mask``)."""
-    decay = _log_decay(g_ref[:, cols].astype(f32), gate_refs, cols)
-    if starts_ref is not None:
-        return _exact_mask_matmul(_doc_lower_mask(starts_ref), decay)
-    return jnp.cumsum(decay, axis=0)
+def _cum_log_decay(g_ref, gate_refs, docs: _DocMasks | None, cols=slice(None)):
+    """The chunk's cumulative log-decay G (C x cols). Unsegmented: cumsum of the (gated)
+    log-decay. With documents, ``g_ref`` already holds G restarted at every document start
+    (``_seg_decay_fwd_kernel``), which keeps the heavy kernels free of that work."""
+    if docs is not None:
+        return g_ref[:, cols].astype(f32)
+    return jnp.cumsum(_log_decay(g_ref[:, cols].astype(f32), gate_refs, cols), axis=0)
 
 
 def _gates(gcum, docs: _DocMasks | None = None):
@@ -277,7 +277,7 @@ def _prep_fwd_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm,
     k, _ = _norm_qk(k_ref[...].astype(f32), l2norm, 1.0)
     beta = b_ref[...].astype(f32)[:, None]
 
-    _, gt, eg, eng, w = _gates(_cum_log_decay(g_ref, gate_refs, starts_ref), docs)
+    _, gt, eg, eng, w = _gates(_cum_log_decay(g_ref, gate_refs, docs), docs)
     kw = k * w
     decay = jnp.exp(gt)
     if docs is not None:  # only the last document's keys, and the old state only if no start
@@ -403,7 +403,7 @@ def _prep_fwd_sub_kernel(
     k, _ = _norm_qk(k_ref[...].astype(f32), l2norm, 1.0)
     beta = b_ref[...].astype(f32)[:, None]
 
-    gcum, gt, eg, _, w = _gates(_cum_log_decay(g_ref, gate_refs, starts_ref), docs)
+    gcum, gt, eg, _, w = _gates(_cum_log_decay(g_ref, gate_refs, docs), docs)
     kw = k * w
     decay = jnp.exp(gt)
     if docs is not None:
@@ -466,7 +466,7 @@ def _wy_bwd_sub_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2nor
     dt = _mm(dvp, v * beta, mm_dtype, trans_b=True)
 
     k, _ = _norm_qk(k_ref[...].astype(f32), l2norm, 1.0)
-    gcum = _cum_log_decay(g_ref, gate_refs, starts_ref)
+    gcum = _cum_log_decay(g_ref, gate_refs, docs)
     eg = jnp.exp(gcum)
     xa = _erase_key(k, erase_ref) * beta
     kbe_state = xa * eg
@@ -527,7 +527,7 @@ def _wy_bwd_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm, g
     dt = _mm(dvp, v * beta, mm_dtype, trans_b=True)
 
     k, _ = _norm_qk(k_ref[...].astype(f32), l2norm, 1.0)
-    gcum = _cum_log_decay(g_ref, gate_refs, starts_ref)
+    gcum = _cum_log_decay(g_ref, gate_refs, docs)
     eg = jnp.exp(gcum)
     kbe = _erase_key(k, erase_ref) * beta * eg
     kd = k * jnp.exp(jnp.minimum(-gcum, DEFLATE_EXP_CAP))
@@ -588,7 +588,7 @@ def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, 
     q_dot = jnp.zeros((c,), f32)
     k_dot = jnp.zeros((c,), f32)
     for blk in blocks:
-        gcum, gt, eg, eng, w = _gates(_cum_log_decay(g_ref, gate_refs, starts_ref, blk), docs)
+        gcum, gt, eg, eng, w = _gates(_cum_log_decay(g_ref, gate_refs, docs, blk), docs)
         k_raw = k_ref[:, blk].astype(f32)
         q_raw = q_ref[:, blk].astype(f32)
         k = k_raw * rk[:, None]
@@ -631,9 +631,8 @@ def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, 
 
         ddecay = ddecay_ref[blk] if docs is None else ddecay_ref[blk] * docs.carry_through
         dgt = jnp.sum(kw_grad, axis=0) + ddecay * jnp.exp(gt)
-        if docs is not None:  # dL/dG (gt is G's last row), then through the within-document cumsum
-            dcum = jnp.where(_iota2_rows(c, dgc.shape[1]) == c - 1, dgc + dgt[None, :], dgc)
-            dg = _exact_mask_matmul(_doc_lower_mask(starts_ref), dcum, trans_mask=True)
+        if docs is not None:  # emit dL/dG (gt is G's last row); _seg_decay_bwd_kernel takes it to g
+            dg = jnp.where(_iota2_rows(c, dgc.shape[1]) == c - 1, dgc + dgt[None, :], dgc)
         else:  # G = cumsum(g), gt = sum(g): dg_t = sum_{r >= t} dG_r + dgt (reverse cumsum via a forward one)
             dg = jnp.sum(dgc, axis=0)[None, :] - jnp.cumsum(dgc, axis=0) + dgc + dgt[None, :]
         dg_ref[:, blk] = dg.astype(dg_ref.dtype)
@@ -646,6 +645,33 @@ def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, 
             dkn = rk[:, None] * dkn - k_ref[:, blk].astype(f32) * (rk * rk * rk * k_dot)[:, None]
         dq_ref[:, blk] = dqn.astype(dq_ref.dtype)
         dk_ref[:, blk] = dkn.astype(dk_ref.dtype)
+
+
+def _seg_decay_fwd_kernel(g_ref, *refs, gated):
+    """G = the (gated) log-decay's within-document cumsum for one chunk (restarted at each
+    document start), so the heavy prep kernels read G instead of recomputing it."""
+    gate_refs, (starts_ref, cum_ref) = ((gated, *refs[:2]), refs[2:]) if gated else ((), refs)
+    decay = _log_decay(g_ref[...].astype(f32), gate_refs)
+    cum_ref[...] = _exact_mask_matmul(_doc_lower_mask(starts_ref), decay)
+
+
+def _seg_decay_bwd_kernel(g_ref, *refs, gated):
+    """dL/dg from dL/dG: within-document suffix sums, then (fused gate) the chain through the
+    gate (``gate_grads``) with this chunk's column sums of d/d(p), d/d(bias)."""
+    gate_refs, refs = (refs[:2], refs[2:]) if gated else ((), refs)
+    starts_ref, dcum_ref, dg_ref, *dgate_refs = refs
+    d_decay = _exact_mask_matmul(_doc_lower_mask(starts_ref), dcum_ref[...].astype(f32), trans_mask=True)
+    if not gated:
+        dg_ref[...] = d_decay.astype(dg_ref.dtype)
+        return
+    p_ref, bias_ref = gate_refs
+    da, dp, dbias = gate_grads(
+        gated, g_ref[...].astype(f32), p_ref[...].astype(f32)[None, :], bias_ref[...].astype(f32)[None, :], d_decay
+    )
+    dp_ref, dbias_ref = dgate_refs
+    dp_ref[...] = jnp.sum(dp, axis=0)
+    dbias_ref[...] = jnp.sum(dbias, axis=0)
+    dg_ref[...] = da.astype(dg_ref.dtype)
 
 
 def _specs(c: int, *dims: int):
@@ -682,7 +708,58 @@ def _gate_fn(gate, cfg: PrepConfig) -> GateFn | None:
     return None if gate is None else GateFn(GateKind(cfg.gate_kind), cfg.gate_floor)
 
 
+def _seg_decay_fwd_call(g, gate, starts, cfg: PrepConfig):
+    b, length, heads, dk = g.shape
+    c = cfg.chunk_size
+    gated = _gate_fn(gate, cfg)
+    return pl.pallas_call(
+        functools.partial(_seg_decay_fwd_kernel, gated=gated),
+        grid=(b * heads, length // c),
+        in_specs=[*_seq_specs(c, heads, dk), *(_head_row_specs(heads, dk) if gated else []), _starts_spec(c, heads)],
+        out_specs=_seq_specs(c, heads, dk)[0],
+        out_shape=jax.ShapeDtypeStruct(g.shape, f32),
+        compiler_params=plt.CompilerParams(num_warps=4, num_stages=1),  # Triton, not Mosaic GPU
+        interpret=cfg.interpret,
+        name="kda_seg_decay_fwd",
+    )(g, *(gate or ()), starts)
+
+
+def _seg_decay_bwd_call(g, gate, starts, dcum, cfg: PrepConfig):
+    b, length, heads, dk = g.shape
+    c = cfg.chunk_size
+    gb, n = b * heads, length // c
+    gated = _gate_fn(gate, cfg)
+    part = [pl.BlockSpec((None, None, dk), lambda gi, ni: (gi, ni, 0)) for _ in range(2)] if gated else []
+    outs = pl.pallas_call(
+        functools.partial(_seg_decay_bwd_kernel, gated=gated),
+        grid=(gb, n),
+        in_specs=[
+            *_seq_specs(c, heads, dk),
+            *(_head_row_specs(heads, dk) if gated else []),
+            _starts_spec(c, heads),
+            *_seq_specs(c, heads, dk),
+        ],
+        out_specs=[*_seq_specs(c, heads, dk), *part],
+        out_shape=[
+            jax.ShapeDtypeStruct(g.shape, g.dtype),
+            *([jax.ShapeDtypeStruct((gb, n, dk), f32)] * 2 if gated else []),
+        ],
+        compiler_params=plt.CompilerParams(num_warps=4, num_stages=1),  # Triton, not Mosaic GPU
+        interpret=cfg.interpret,
+        name="kda_seg_decay_bwd",
+    )(g, *(gate or ()), starts, dcum)
+    if not gated:
+        return outs[0], None
+    # per-chunk column sums -> per-head (H, d_k)
+    dgate = tuple(
+        x.reshape(b, heads, n, dk).sum(axis=(0, 2)).astype(p.dtype) for x, p in zip(outs[1:], gate, strict=True)
+    )
+    return outs[0], dgate
+
+
 def _prep_fwd_call(q, k, v, g, beta, gate, starts, erase, cfg: PrepConfig, save_t: bool):
+    if starts is not None:  # packed documents: the heavy kernel reads the restarted cumsum G
+        g, gate = _seg_decay_fwd_call(g, gate, starts, cfg), None
     b, length, heads, dk = q.shape
     dv = v.shape[-1]
     group = heads // k.shape[2]
@@ -749,6 +826,9 @@ def _group_sum(x: jax.Array, group: int, dtype) -> jax.Array:
 
 
 def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg: PrepConfig):
+    if starts is not None:  # heavy kernels on the restarted cumsum G; dL/dG -> dL/dg after
+        g_in, gate_in = g, gate
+        g, gate = _seg_decay_fwd_call(g, gate, starts, cfg), None
     b, length, heads, dk = q.shape
     dv_dim = v.shape[-1]
     group = heads // k.shape[2]
@@ -840,7 +920,9 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
         name="kda_prep_bwd_tail",
     )(q, k, g, beta, *extra, dqi, cts.kw, cts.decay, dkbe, dkd, dbeta_v)
     dgate = None
-    if gated:  # dg is d/d(log-decay); chain through the gate in XLA
+    if segmented:
+        dg, dgate = _seg_decay_bwd_call(g_in, gate_in, starts, dg, cfg)
+    elif gated:  # dg is d/d(log-decay); chain through the gate in XLA
         p, bias = gate
         da, dp, dbias = gate_grads(gated, g.astype(f32), p.astype(f32), bias.astype(f32), dg)
         dgate = (jnp.sum(dp, axis=(0, 1)).astype(p.dtype), jnp.sum(dbias, axis=(0, 1)).astype(bias.dtype))
