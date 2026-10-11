@@ -2,13 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+import hashlib
 import json
+import tomllib
 import zipfile
+from dataclasses import asdict
 
 import pytest
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 
+from experiments.post_training.bfcl_rl.data import task_identity
 from experiments.post_training.skill_acquisition.data import build_diagnostic, diagnostic_task_split, replay_prefixes
+from experiments.post_training.skill_acquisition.native_tasks import materialize_native_tasks
+from experiments.post_training.skill_acquisition.training_data import materialize_training_tasks
 
 
 @pytest.fixture
@@ -88,4 +94,82 @@ def test_build_replay_audits_partition_and_preserves_immutable_output(tmp_path, 
         build_diagnostic([archive, forbidden], partition_file, tokenizer_file, tmp_path / "invalid", **arguments)
     errors = json.loads(str(failure.value))["conversion_failures"]
     assert {error["record"] for error in errors} == {"heldout", "unknown"}
+    assert not (tmp_path / "invalid").exists()
+
+
+def test_native_conversion_preserves_task_content_and_reports_all_unknown_images(tmp_path):
+    source = tmp_path / "source"
+    identities = []
+    dockerfile = b"FROM python:3.10-slim\nWORKDIR /app\n"
+    for name in ("a", "b"):
+        task = source / name
+        (task / "environment").mkdir(parents=True)
+        (task / "tests").mkdir()
+        (task / "environment/Dockerfile").write_bytes(dockerfile)
+        (task / "instruction.md").write_text("Write the answer to /app/result.json.\n")
+        (task / "tests/test.sh").write_text("python3 /tests/evaluate.py\n")
+        (task / "task.toml").write_text(
+            f'version = "1.0"\n[metadata]\nsource_id = "{name}"\n'
+            '[verifier]\ntimeout_sec = 300\n[environment]\ntype = "docker"\n'
+        )
+        identities.append(task_identity(task))
+    output = tmp_path / "native-v1"
+    image = "example.test/bfcl@sha256:" + "a" * 64
+    manifest = materialize_native_tasks(
+        source, tuple(identities), {hashlib.sha256(dockerfile).hexdigest(): image}, output
+    )
+    assert manifest["source_tasks"] == [asdict(task) for task in identities]
+    for identity in identities:
+        original = source / identity.name
+        converted = output / identity.name
+        assert task_identity(original) == identity
+        assert task_identity(converted).digest != identity.digest
+        for file in original.rglob("*"):
+            if file.is_file() and file.name != "task.toml":
+                assert (converted / file.relative_to(original)).read_bytes() == file.read_bytes()
+        config = tomllib.loads((converted / "task.toml").read_text())
+        assert config["artifacts"] == ["/app/result.json"]
+        assert config["verifier"] == {"timeout_sec": 300, "environment_mode": "separate"}
+        assert config["environment"] == {"type": "docker", "docker_image": image, "workdir": "/app"}
+    with pytest.raises(ValueError) as failure:
+        materialize_native_tasks(source, tuple(identities), {}, tmp_path / "unknown")
+    assert {item["task"] for item in json.loads(str(failure.value))["conversion_failures"]} == {"a", "b"}
+    assert not (tmp_path / "unknown").exists()
+
+
+def test_training_subset_preserves_files_and_audits_all_changed_tasks(tmp_path):
+    source = tmp_path / "source"
+    identities = []
+    for name in ("train-a", "train-b", "diagnostic"):
+        task = source / name
+        task.mkdir(parents=True)
+        (task / "task.toml").write_text(f'[metadata]\nsource_id = "{name}"\n')
+        (task / "instruction.md").write_text(f"Original task {name}\n")
+        identities.append(asdict(task_identity(task)))
+    partition = tmp_path / "partition.json"
+    partition.write_text(json.dumps({"dataset_commit": "pinned", "complement": identities, "parity": []}))
+    diagnostic = tmp_path / "diagnostic.json"
+    diagnostic.write_text(
+        json.dumps(
+            {
+                "version": "split-v1",
+                "source_partition_sha256": hashlib.sha256(partition.read_bytes()).hexdigest(),
+                "train_task_ids": ["train-a", "train-b"],
+                "diagnostic_reserved_task_ids": ["diagnostic"],
+                "parity_task_ids": [],
+            }
+        )
+    )
+    output = tmp_path / "train-v1"
+    manifest = materialize_training_tasks(source, partition, diagnostic, output)
+    assert manifest["training_tasks"] == 2
+    assert {path.name for path in (output / "tasks").iterdir()} == {"train-a", "train-b"}
+    for name in ("train-a", "train-b"):
+        assert task_identity(output / "tasks" / name) == task_identity(source / name)
+        (source / name / "instruction.md").write_text("Changed task\n")
+    with pytest.raises(FileExistsError):
+        materialize_training_tasks(source, partition, diagnostic, output)
+    with pytest.raises(ValueError) as failure:
+        materialize_training_tasks(source, partition, diagnostic, tmp_path / "invalid")
+    assert {item["task"] for item in json.loads(str(failure.value))["conversion_failures"]} == {"train-a", "train-b"}
     assert not (tmp_path / "invalid").exists()
