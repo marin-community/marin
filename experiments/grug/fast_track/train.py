@@ -1624,11 +1624,13 @@ def _token_dump_step(
     skip_layers: tuple[int, ...],
     mid_head: bool,
     final_conf: bool,
+    skip_probe: bool,
 ):
     """Jitted ``(params, qb_betas, tokens, segment_ids) -> dict`` of per-token ``[B, S]`` arrays (``[L, B, S]`` for
     ``null_slots``): ``next_token_loss``, with ``null_layers`` each token's ``null_slots`` per layer, with
-    ``skip_layers`` ``skipped_loss``, the loss with every token skipping those layers, and with ``mid_head`` the
-    ``Transformer.mid_head_diagnostics``, and with ``final_conf`` the ``Transformer.final_conf_diagnostics``."""
+    ``skip_layers`` ``skipped_loss``, the loss with every token skipping those layers, and the ``Transformer``
+    diagnostics: ``mid_head_diagnostics`` with ``mid_head``, ``final_conf_diagnostics`` with ``final_conf``, and
+    ``skip_probe_diagnostics`` with ``skip_probe`` (over ``skip_layers``)."""
 
     @jax.jit
     def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
@@ -1646,6 +1648,8 @@ def _token_dump_step(
             out.update(model.mid_head_diagnostics(tokens, mask))
         if final_conf:
             out.update(model.final_conf_diagnostics(tokens, mask))
+        if skip_probe:
+            out.update(model.skip_probe_diagnostics(tokens, mask, skip_layers))
         return out
 
     return run
@@ -1671,6 +1675,7 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
         skip_layers,
         cfg.mid_head_layer is not None,
         bool(cfg.final_conf_layers),
+        cfg.skip_probe_layer is not None,
     )
     parts: list[dict[str, np.ndarray]] = []
     for start in range(0, num_sequences, batch_size):

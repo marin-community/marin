@@ -507,7 +507,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "kda_beta"
             if kda_leaf in _KDA_ADAM_LEAVES:
                 return "kda_decay"
-            if re.search(r"null_gain|extra_mlp_gain|entropy_head|mid_conf|final_conf|skip_router", path_lower):
+            if re.search(
+                r"null_gain|extra_mlp_gain|entropy_head|mid_conf|final_conf|skip_probe|skip_router", path_lower
+            ):
                 return "null_gain"
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if "attn_res_query" in path_lower:
