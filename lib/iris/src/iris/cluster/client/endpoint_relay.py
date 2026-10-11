@@ -287,12 +287,16 @@ class EndpointRelay:
                     if response.status != 404 or time.monotonic() >= deadline:
                         return upstream, response
                     answered_404.add(address)
-                    # Untrack the short 404 body first so the lookup's move cannot abort it.
+                    # Untrack the 404 during the lookup so a move it causes cannot abort a
+                    # response this request may still return.
                     self._release(upstream)
                     moved_to = self.refresh(newer_than=time.monotonic(), failed=address)
                     if moved_to == address or moved_to in answered_404:
+                        with self._lock:
+                            self._in_flight.add(upstream)
                         return upstream, response
-                    response.read()
+                    # Close without reading the stale body, which may never finish arriving.
+                    self._drop_upstream()
                     logger.warning("%s at %s answered 404 from a stale address", self._name, address)
                     continue
             if time.monotonic() >= deadline:

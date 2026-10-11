@@ -53,7 +53,7 @@ class Upstream:
                 upstream.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
                 if truncated:
                     # Promise 100 bytes, send one, then stall (with ``hang``) or close.
-                    self.send_response(200)
+                    self.send_response(status)
                     self.send_header("Content-Length", "100")
                     self.end_headers()
                     self.wfile.write(b"x")
@@ -245,6 +245,24 @@ def test_relay_drops_a_stalled_body_when_the_endpoint_moves(upstreams):
     assert elapsed < 5
     # The response had started, so the request is not replayed on the new address.
     assert serve.requests == []
+
+
+def test_relay_does_not_wait_on_the_body_of_a_stale_404(upstreams):
+    release = threading.Event()
+    stale, serve = upstreams("stale", status=404, truncated=True, hang=release), upstreams("serve")
+    registry = FakeRegistry(stale.address)
+    try:
+        with EndpointRelay(registry.resolve, refresh_interval=60) as relay:
+            # The serve moved; the relay learns of it only from the stale 404.
+            registry.move_to(serve.address)
+            started = time.monotonic()
+            status, body = _post(f"{relay.url}/v1/completions", {"prompt": "a"})
+            elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert (status, json.loads(body)["served_by"]) == (200, "serve")
+    assert elapsed < 5
 
 
 def test_relay_passes_a_404_through_when_every_registered_address_answers_404(upstreams):
