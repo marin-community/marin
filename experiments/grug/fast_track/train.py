@@ -297,6 +297,8 @@ class GrugTrainerConfig:
     xla_autotune_cache_path: str | None = None
     # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
     layer_skip: LayerSkipRule | None = None
+    # When the extra_mlp_layers MLPs switch on, as a fraction of training (0: from the start).
+    extra_mlp_start_frac: float = 0.5
     # Train steps dispatched before the previous step's host work: 1 overlaps that work (logging, callbacks) with
     # the devices; 0 finishes every step before dispatching the next. 1 crashes the devices around step 515
     # (CUDA_ERROR_ILLEGAL_ADDRESS, with or without PGLE; batch 160), so it is opt-in until that is understood.
@@ -1148,8 +1150,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
         layer_skip=config.trainer.layer_skip,
-        # The extra MLPs switch on half-way, once the entropy head has learned something.
-        extra_mlp_start_step=trainer.num_train_steps // 2,
+        # Late by default, once the entropy head has learned something.
+        extra_mlp_start_step=int(trainer.num_train_steps * config.trainer.extra_mlp_start_frac),
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)

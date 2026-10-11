@@ -363,6 +363,7 @@ def build_h100_ladder_run(
     dump_hlo: bool = False,
     null_routing_dump: bool = False,
     layer_skip: LayerSkipRule | None = None,
+    extra_mlp_start_frac: float = 0.5,
     resume_from: str | None = None,
     xla_memory_report: bool = False,
     master_param_mode: MasterParamMode | None = None,
@@ -569,6 +570,7 @@ def build_h100_ladder_run(
                 null_routing_dump_path=(prefix_join(ctx.output_path, "null_routing.npz") if null_routing_dump else None),
                 xla_autotune_cache_path=_xla_autotune_cache_path(model, rung) if rung.device == "GB200" else None,
                 layer_skip=layer_skip,
+                extra_mlp_start_frac=extra_mlp_start_frac,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
                 pipeline_depth=pipeline_depth,
                 loader_buffer_batches=loader_buffer_batches,
@@ -751,6 +753,9 @@ def _layer_skip_rule(
     help="Capture a JAX profile of a few steps from this step (uploaded to the run's xprof directory).",
 )
 @click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
+@click.option(
+    "--extra-mlp-start-frac", type=float, default=0.5, show_default=True, help="extra_mlp_layers turn on here."
+)
 @click.option("--layer-skip-layers", default=None, help="Comma-separated layers some tokens skip (LayerSkipRule).")
 @click.option("--layer-skip-rate", type=float, default=1.0, show_default=True, help="Skip probability of a match.")
 @click.option("--layer-skip-positions", default=None, help="LO:HI document positions that skip (HI empty: open).")
@@ -901,6 +906,7 @@ def main(
     profile_start_step: int | None,
     dump_hlo: bool,
     null_routing_dump: bool,
+    extra_mlp_start_frac: float,
     layer_skip_layers: str | None,
     layer_skip_rate: float,
     layer_skip_positions: str | None,
@@ -945,6 +951,7 @@ def main(
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
         null_routing_dump=null_routing_dump,
+        extra_mlp_start_frac=extra_mlp_start_frac,
         layer_skip=_layer_skip_rule(layer_skip_layers, layer_skip_rate, layer_skip_positions, layer_skip_token_ids_file),
         resume_from=resume_from,
         xla_memory_report=xla_memory_report,
