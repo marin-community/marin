@@ -20,6 +20,7 @@ and point the client at ``http://127.0.0.1:<port>``.
 import argparse
 import http.client
 import logging
+import re
 import socket
 import threading
 import time
@@ -41,6 +42,8 @@ DEFAULT_RESPONSE_TIMEOUT_SECONDS = 1800.0
 # How often a request waiting for the endpoint to come back looks it up again.
 _RECOVERY_POLL_SECONDS = 2.0
 _STREAM_CHUNK_BYTES = 64 * 1024
+# Upstream header lines carrying CR or LF are dropped so they cannot split the response.
+_CRLF = re.compile(r"[\r\n]")
 _HOP_BY_HOP_HEADERS = frozenset(
     {
         "connection",
@@ -57,6 +60,26 @@ _HOP_BY_HOP_HEADERS = frozenset(
 )
 
 
+class _Connection(http.client.HTTPConnection):
+    """An HTTP connection that stays closed once aborted.
+
+    ``HTTPConnection.request`` reconnects a closed connection on its own, which
+    would send a request to an address the relay has already moved away from.
+    """
+
+    aborted = False
+
+    def connect(self) -> None:
+        if self.aborted:
+            raise ConnectionAbortedError("upstream address was replaced")
+        super().connect()
+        # abort() sets the flag before it reads the socket, so a connect that
+        # finishes after this check is shut down by abort().
+        if self.aborted:
+            self.close()
+            raise ConnectionAbortedError("upstream address was replaced")
+
+
 class _Upstream:
     """One upstream HTTP connection, tagged with the address it was opened to."""
 
@@ -66,7 +89,7 @@ class _Upstream:
             raise ValueError(f"endpoint relay only forwards plain http addresses, got {address!r}")
         self.address = address
         self.base_path = parts.path.rstrip("/")
-        self.connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=connect_timeout)
+        self.connection = _Connection(parts.hostname, parts.port or 80, timeout=connect_timeout)
         self.reused = False
         self._response_timeout = response_timeout
 
@@ -78,8 +101,13 @@ class _Upstream:
         self.reused = True
         return response
 
+    @property
+    def aborted(self) -> bool:
+        return self.connection.aborted
+
     def abort(self) -> None:
-        """Unblock a thread waiting on this connection and close it."""
+        """Unblock a thread waiting on this connection and close it for good."""
+        self.connection.aborted = True
         sock = self.connection.sock
         if sock is not None:
             try:
@@ -209,7 +237,7 @@ class EndpointRelay:
     def _upstream(self, address: str) -> _Upstream:
         """This handler thread's pooled connection to ``address``."""
         upstream: _Upstream | None = getattr(self._local, "upstream", None)
-        if upstream is None or upstream.address != address:
+        if upstream is None or upstream.address != address or upstream.aborted:
             if upstream is not None:
                 upstream.connection.close()
             upstream = _Upstream(address, self._connect_timeout, self._response_timeout)
@@ -222,12 +250,21 @@ class EndpointRelay:
             upstream.connection.close()
             self._local.upstream = None
 
-    def open(self, method: str, path: str, body: bytes, headers: dict[str, str]) -> http.client.HTTPResponse | None:
+    def _release(self, upstream: _Upstream) -> None:
+        with self._lock:
+            self._in_flight.discard(upstream)
+
+    def open(
+        self, method: str, path: str, body: bytes, headers: dict[str, str]
+    ) -> tuple[_Upstream, http.client.HTTPResponse] | None:
         """Send one request to the current address, following moves until it gets a response.
 
         Returns None when the endpoint stays unreachable for ``recovery_timeout`` seconds.
+        The returned upstream stays in flight, so a move aborts its body, until the
+        caller passes it to :meth:`_release`.
         """
         deadline = time.monotonic() + self._recovery_timeout
+        answered_404: set[str] = set()
         while True:
             address = self.address
             if address is not None:
@@ -239,20 +276,25 @@ class EndpointRelay:
                 try:
                     response = upstream.send(method, path, body, headers)
                 except (OSError, http.client.HTTPException) as exc:
+                    self._release(upstream)
                     self._drop_upstream()
-                    if upstream.reused:
-                        # The server closed an idle keep-alive connection; retry on a fresh one.
+                    if upstream.reused or upstream.aborted:
+                        # An idle keep-alive connection the server closed, or an address the
+                        # relay moved away from: retry at once on a fresh connection.
                         continue
                     logger.warning("Request to %s at %s failed: %s", self._name, address, exc)
                 else:
-                    if response.status != 404 or self.refresh(newer_than=time.monotonic(), failed=address) == address:
-                        return response
+                    if response.status != 404 or time.monotonic() >= deadline:
+                        return upstream, response
+                    answered_404.add(address)
+                    # Untrack the short 404 body first so the lookup's move cannot abort it.
+                    self._release(upstream)
+                    moved_to = self.refresh(newer_than=time.monotonic(), failed=address)
+                    if moved_to == address or moved_to in answered_404:
+                        return upstream, response
                     response.read()
                     logger.warning("%s at %s answered 404 from a stale address", self._name, address)
                     continue
-                finally:
-                    with self._lock:
-                        self._in_flight.discard(upstream)
             if time.monotonic() >= deadline:
                 return None
             failed_at = time.monotonic()
@@ -271,25 +313,44 @@ class EndpointRelay:
             def _forward(self) -> None:
                 body = self._read_body()
                 headers = {key: value for key, value in self.headers.items() if key.lower() not in _HOP_BY_HOP_HEADERS}
-                response = relay.open(self.command, self.path, body, headers)
-                if response is None:
+                opened = relay.open(self.command, self.path, body, headers)
+                if opened is None:
                     self._reply_unavailable()
                     return
+                upstream, response = opened
+                try:
+                    self._relay_response(upstream, response)
+                finally:
+                    relay._release(upstream)
+
+            def _relay_response(self, upstream: _Upstream, response: http.client.HTTPResponse) -> None:
+                # The body length http.client will read: None for chunked or close-delimited
+                # bodies, 0 for HEAD and bodiless statuses.
+                expected = response.length
                 self.send_response(response.status, response.reason)
                 for key, value in response.getheaders():
-                    if key.lower() not in _HOP_BY_HOP_HEADERS:
+                    if key.lower() not in _HOP_BY_HOP_HEADERS and not _CRLF.search(key + value):
                         self.send_header(key, value)
-                length = response.getheader("content-length")
-                chunked = length is None and self.command != "HEAD"
-                if length is not None:
-                    self.send_header("Content-Length", length)
+                chunked = expected is None
                 if chunked:
                     self.send_header("Transfer-Encoding", "chunked")
+                elif self.command == "HEAD":
+                    length = response.getheader("content-length", "")
+                    if length.isdigit():
+                        self.send_header("Content-Length", length)
+                elif response.status not in (204, 304):
+                    self.send_header("Content-Length", str(expected))
                 self.end_headers()
+                sent = 0
                 try:
                     while chunk := response.read1(_STREAM_CHUNK_BYTES):
                         self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n" if chunked else chunk)
                         self.wfile.flush()
+                        sent += len(chunk)
+                    if upstream.aborted:
+                        raise ConnectionAbortedError("upstream address was replaced")
+                    if expected is not None and sent < expected:
+                        raise http.client.IncompleteRead(b"", expected - sent)
                 except (OSError, http.client.HTTPException) as exc:
                     # The response started, so replaying could duplicate work; let the client retry.
                     logger.warning("Response from %s broke mid-stream: %s", relay._name, exc)

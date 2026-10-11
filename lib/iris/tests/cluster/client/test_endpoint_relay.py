@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import http.client
 import json
 import threading
 import time
@@ -9,7 +10,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from iris.cluster.client.endpoint_relay import EndpointRelay
+from iris.cluster.client.endpoint_relay import EndpointRelay, _Upstream
 
 
 class FakeRegistry:
@@ -36,6 +37,7 @@ class Upstream:
         hang: threading.Event | None = None,
         chunks: int = 0,
         drop_idle: bool = False,
+        truncated: bool = False,
     ):
         upstream = self
         self.name = name
@@ -49,6 +51,17 @@ class Upstream:
 
             def do_POST(self) -> None:
                 upstream.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                if truncated:
+                    # Promise 100 bytes, send one, then stall (with ``hang``) or close.
+                    self.send_response(200)
+                    self.send_header("Content-Length", "100")
+                    self.end_headers()
+                    self.wfile.write(b"x")
+                    self.wfile.flush()
+                    if hang is not None:
+                        hang.wait()
+                    self.close_connection = True
+                    return
                 if hang is not None:
                     hang.wait()
                     return
@@ -201,3 +214,53 @@ def test_relay_reports_503_when_endpoint_never_returns():
 
     assert status == 503
     assert b"unreachable" in body
+
+
+def test_relay_closes_the_client_connection_when_a_fixed_length_body_ends_early(upstreams):
+    serve = upstreams("serve", truncated=True)
+    with EndpointRelay(FakeRegistry(serve.address).resolve) as relay:
+        # A keep-alive client, as lm-eval uses; urllib would close the connection itself.
+        client = http.client.HTTPConnection("127.0.0.1", relay.port, timeout=5)
+        client.request("POST", "/v1/completions", body=b'{"prompt": "a"}', headers={"Content-Type": "application/json"})
+        response = client.getresponse()
+        with pytest.raises(http.client.IncompleteRead):
+            response.read()
+        client.close()
+
+
+def test_relay_drops_a_stalled_body_when_the_endpoint_moves(upstreams):
+    release = threading.Event()
+    stuck, serve = upstreams("stuck", truncated=True, hang=release), upstreams("serve")
+    registry = FakeRegistry(stuck.address)
+    try:
+        with EndpointRelay(registry.resolve, refresh_interval=0.5) as relay:
+            threading.Timer(1.0, lambda: registry.move_to(serve.address)).start()
+            started = time.monotonic()
+            with pytest.raises(http.client.IncompleteRead):
+                _post(f"{relay.url}/v1/completions", {"prompt": "a"})
+            elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert elapsed < 5
+    # The response had started, so the request is not replayed on the new address.
+    assert serve.requests == []
+
+
+def test_relay_passes_a_404_through_when_every_registered_address_answers_404(upstreams):
+    first, second = upstreams("first", status=404), upstreams("second", status=404)
+    with EndpointRelay(FakeRegistry(first.address, second.address).resolve, refresh_interval=60) as relay:
+        status, _ = _post(f"{relay.url}/v1/completions", {"prompt": "a"})
+
+    assert status == 404
+    assert (len(first.requests), len(second.requests)) == (1, 1)
+
+
+def test_an_aborted_upstream_does_not_reconnect_to_its_old_address(upstreams):
+    old = upstreams("old")
+    upstream = _Upstream(old.address, connect_timeout=5, response_timeout=5)
+    upstream.abort()
+
+    with pytest.raises(ConnectionAbortedError):
+        upstream.send("POST", "/v1/completions", b'{"prompt": "a"}', {"Content-Type": "application/json"})
+    assert old.requests == []
