@@ -68,7 +68,7 @@ from experiments.grug.fast_track.train import (
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 
 # Run defaults.
-H100_LADDER_SIZES = ("d512", "d768", "d1024", "d1280")
+H100_LADDER_SIZES = ("d512", "d768", "d1024", "d1280", "d1536")
 # Hero-shaped validation rung on one GB200 rack as the hero uses it: 16 nodes x 4 GPUs, expert parallel over all 64.
 GB200_SIZES = ("gb200-d6144",)
 LADDER_SIZES = H100_LADDER_SIZES + GB200_SIZES
@@ -216,6 +216,9 @@ def _h100_ladder_rung(size: str) -> H100LadderRung:
             baseline_batch=256,
             attn_res_remat_attention=True,  # KMA d1280 OOMs without it
         )
+    if size == "d1536":
+        # 24 layers, 12 heads x 128, GQA 3:1; no recorded baseline budget (pass --num-steps).
+        return H100LadderRung(SmallShape(1536, 24, 12, 4, 4), gpus_per_task=8, baseline_batch=256)
     if size == "gb200-d6144":
         return H100LadderRung(
             SmallShape(6144, 48, 48, 1, 1),

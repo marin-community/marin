@@ -5909,7 +5909,12 @@ class Transformer(eqx.Module):
             }
             if not router_metrics:
                 # Dense model: no router to summarize.
-                return loss, {"train/cross_entropy_loss": cross_entropy_loss, **final_gate_metrics}
+                return loss, {
+                    "train/cross_entropy_loss": cross_entropy_loss,
+                    **final_gate_metrics,
+                    **entropy_metrics,
+                    **mid_metrics,
+                }
             summarized_metrics = summarize_router_metrics(router_metrics)
             summarized_metrics.update(final_gate_metrics)
             summarized_metrics.update(entropy_metrics)
