@@ -78,7 +78,7 @@ def native_prompt_sha256(messages: list[dict], tools: list[dict], assistant_pref
 
 
 def native_assistant_body(message: Mapping[str, Any]) -> dict:
-    """Compare captured messages independently of transport metadata and JSON serialization."""
+    """Normalize one captured message for transport-independent comparisons."""
     body = {key: value for key, value in message.items() if key != "provider_specific_fields"}
     if not body.get("tool_calls"):
         return body

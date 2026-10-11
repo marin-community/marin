@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from verifyit.json_objects import unique_object
+
 TOOL_OPEN = "<tool_call>"
 TOOL_CLOSE = "</tool_call>"
 THINK_OPEN = "<|start_think|>"
@@ -32,20 +34,11 @@ class ToolCallRegion:
     status: ToolCallStatus
 
 
-def _json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"Duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
 def _reject_constant(value: str) -> Any:
     raise ValueError(f"Non-JSON constant: {value}")
 
 
-_JSON = json.JSONDecoder(object_pairs_hook=_json_object, parse_constant=_reject_constant)
+_JSON = json.JSONDecoder(object_pairs_hook=unique_object, parse_constant=_reject_constant)
 
 
 def _call_region(text: str, start: int) -> ToolCallRegion:
