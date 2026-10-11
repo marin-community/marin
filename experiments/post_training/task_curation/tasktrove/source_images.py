@@ -11,12 +11,11 @@ from taskcompendium.models import DockerBuildContext, TaskSpec, VerifyitGrader, 
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import Mode, PytestSpec
 
+from experiments.post_training.task_curation.datasets.arc.arc import INDUCTIVE_CONFIG, TRANSDUCTIVE_CONFIG
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TASKTROVE_REPO
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 
-ARC_SOURCES = frozenset(
-    {"laion__nemotron-gym-arc-agi-python-inductive-v2", "laion__nemotron-gym-arc-agi-transductive-v3"}
-)
+ARC_SOURCES = frozenset({INDUCTIVE_CONFIG, TRANSDUCTIVE_CONFIG})
 
 JUDGE_SOURCES = frozenset(
     {
