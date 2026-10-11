@@ -715,7 +715,10 @@ class GrugModelConfig:
     entropy_skip_layers: tuple[int, ...] = ()
     """Layers the entropy head's chosen tokens (``extra_mlp_select``, ``extra_mlp_frac``) skip, as in ``LayerSkip``,
     from when ``extra_mlp_active`` turns on. The head reads the stream entering the first of these and
-    ``extra_mlp_layers``."""
+    ``extra_mlp_layers`` unless ``entropy_head_input_layer`` is set."""
+    entropy_head_input_layer: int | None = None
+    """The layer whose input stream the entropy head reads (0: the embedding sources); at most the first of
+    ``entropy_head_layers``. None: the first of ``entropy_head_layers``."""
     extra_mlp_select: ExtraMlpSelect = ExtraMlpSelect.HIGH
     extra_mlp_frac: float = 0.25
     attn_res_kv_source_layers: int | None = None
@@ -870,6 +873,10 @@ class GrugModelConfig:
         if self.entropy_head_layers:
             if not self.attn_res or self.scan_layers:
                 raise ValueError("extra_mlp_layers and entropy_skip_layers need attn_res and the unrolled layer loop")
+            if self.entropy_head_input_layer is not None and not (
+                0 <= self.entropy_head_input_layer <= min(self.entropy_head_layers)
+            ):
+                raise ValueError("entropy_head_input_layer must be in [0, min(entropy_head_layers)]")
             if not 0.0 < self.extra_mlp_frac < 1.0:
                 raise ValueError(f"extra_mlp_frac must be in (0, 1), got {self.extra_mlp_frac}")
         if self.attn_res_kv_layers:
@@ -951,6 +958,12 @@ class GrugModelConfig:
     def entropy_head_layers(self) -> tuple[int, ...]:
         """The layers the entropy head's selection serves; it reads the stream entering the first."""
         return (*self.extra_mlp_layers, *self.entropy_skip_layers)
+
+    @property
+    def entropy_head_read_layer(self) -> int:
+        if self.entropy_head_input_layer is not None:
+            return self.entropy_head_input_layer
+        return min(self.entropy_head_layers)
 
     @property
     def kv_source_layers(self) -> int:
@@ -5032,7 +5045,7 @@ class Transformer(eqx.Module):
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
                 if kv_inputs is not None:
                     layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
-                if cfg.entropy_head_layers and i == min(cfg.entropy_head_layers) and pass_index == 0:
+                if cfg.entropy_head_layers and i == cfg.entropy_head_read_layer and pass_index == 0:
                     stream = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
                     extra_state["pred"], extra_state["keep"] = self._extra_mlp_selection(
                         stream, token_ids, extra_mlp_active
