@@ -554,11 +554,8 @@ def _task_is_placed(task: TaskStatus) -> bool:
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
     """Wait for the serving job to register its endpoint.
 
-    ``timeout_seconds`` budgets server startup and counts only while a task of
-    the serving job has an assigned worker, a pod bound to a node, or a running
-    task; queue time is bounded separately, and requeue resets the startup clock.
-    Iris keeps a started job RUNNING while a preempted task requeues, so
-    placement is read from current task and attempt status.
+    ``timeout_seconds`` budgets server startup after placement. Queue time is
+    bounded separately, and requeue resets the startup clock.
     """
     ctx = iris_ctx()
     job_name = JobName.from_string(str(job.job_id))
@@ -572,6 +569,7 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
         if job_state.value in {"succeeded", "failed", "stopped"}:
             raise RuntimeError(f"Inference job {job.job_id} finished before registering {endpoint_name!r}")
         placed = False
+        # Iris keeps the job RUNNING after a task requeues.
         if job_state is JobStatus.RUNNING:
             placed = any(_task_is_placed(task) for task in ctx.client.list_tasks(job_name))
         if placed:
