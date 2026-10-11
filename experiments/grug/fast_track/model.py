@@ -601,6 +601,11 @@ class GrugModelConfig:
     token takes the top ``2 * num_experts_per_token`` over all ``2 * num_experts`` columns, so a token can spend
     some of its slots on "nothing". A null slot adds zero and has no weights to train. The other layers keep
     top-``num_experts_per_token`` over the real experts (their null router columns are never read)."""
+    moe_null_renorm_scale: float = 1.0
+    """``moe_null_layers`` combine with ``routing_renorm_sum`` times this, so the real slots can keep the routed
+    output's magnitude when part of the top-2K weight goes to null (2.0: the full sum on half the slots)."""
+    moe_null_learned_gain: bool = False
+    """A learnable scalar (init 1) on each ``moe_null_layers`` layer's routed output."""
     moe_null_target_frac: float | None = None
     """QB treatment of the null experts on ``moe_null_layers``. None: free (bias 0, the router picks the split);
     a float ``f``: QB sends ``f`` of the slots to them on average (``2K f`` null and ``2K (1 - f)`` real slots per
@@ -841,6 +846,8 @@ class GrugModelConfig:
                 raise ValueError(f"attn_res_kv_source_layers must be in 1..{self.num_layers - 1}, got {cutoff}")
             if bad := [i for i in self.attn_res_kv_layers if not cutoff <= i < self.num_layers]:
                 raise ValueError(f"attn_res_kv_layers {bad} must read only earlier layers (>= {cutoff})")
+        if (self.moe_null_renorm_scale != 1.0 or self.moe_null_learned_gain) and not self.moe_null_layers:
+            raise ValueError("moe_null_renorm_scale / moe_null_learned_gain need moe_null_layers")
         if self.moe_null_target_frac is not None:
             if not self.moe_null_layers or not 0.0 < self.moe_null_target_frac < 1.0:
                 raise ValueError(
@@ -2014,6 +2021,7 @@ class MoEMLP(eqx.Module):
     latent_width_gate: Float[Array, "D B"] | None  # cfg.latent_matryoshka_blocks: per-token latent width gate
     latent_width_bias: Float[Array, " B"] | None  # sign-SGD selection bias balancing the widths
     latent_mix_out_gate: Float[Array, "D E"] | None  # mixture of latents on the experts' output latent
+    null_gain: Float[Array, ""] | None  # cfg.moe_null_learned_gain (every layer carries it; null layers read it)
     cfg: GrugModelConfig = eqx.field(static=True)
     latent_selects: bool = eqx.field(static=True, default=False)
     """This layer forms its expert input by ``latent_select`` (see ``latent_select_layers``)."""
@@ -2120,6 +2128,7 @@ class MoEMLP(eqx.Module):
                 if mix_out
                 else None
             ),
+            null_gain=jnp.ones((), jnp.float32) if cfg.moe_null_learned_gain else None,
             expert_mlp=_expert_mlp_init(
                 _bank_config(cfg, 1),
                 expert_width,
@@ -2345,7 +2354,7 @@ class MoEMLP(eqx.Module):
             )(table, flat_ids)
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        renorm_sum = self.cfg.routing_renorm_sum
+        renorm_sum = self.cfg.routing_renorm_sum * (self.cfg.moe_null_renorm_scale if null_layer else 1.0)
         if self.cfg.router_combine == RouterCombine.SOFTMAX_RENORM:
             combine_weights_f = renorm_sum * jax.nn.softmax(unbiased_topk, axis=-1)
         elif self.cfg.router_combine == RouterCombine.SIGMOID_RAW:
@@ -2466,6 +2475,8 @@ class MoEMLP(eqx.Module):
             overflows.append(overflow)
             col += bank_k
         routed_flat = functools.reduce(jnp.add, outputs)
+        if null_layer and self.null_gain is not None:
+            routed_flat = routed_flat * self.null_gain.astype(routed_flat.dtype)
         if null_out is not None:
             routed_flat = routed_flat + null_out.astype(routed_flat.dtype)
         if bank_keeps:

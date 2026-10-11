@@ -480,6 +480,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "kda_beta": muonh_at(learning_rate * KDA_BETA_LR_MULT),
                 "kda_beta_adam": adam_at(adam_lr, decay=True),
                 "kda_decay": adam_at(adam_lr),
+                # moe_null_learned_gain: a multiplier initialized at 1, so no decay toward 0.
+                "null_gain": adam_at(adam_lr),
                 "embed2": adam_at(adam_lr * self.embed2_lr_mult),
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
             }
@@ -505,6 +507,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "kda_beta"
             if kda_leaf in _KDA_ADAM_LEAVES:
                 return "kda_decay"
+            if "null_gain" in path_lower:
+                return "null_gain"
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
