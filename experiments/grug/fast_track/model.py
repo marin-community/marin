@@ -678,10 +678,12 @@ class GrugModelConfig:
     """A third zero-init pseudo-query per layer whose AttnRes mix feeds the shared experts only; the router and
     routed experts keep the MLP gate's mix."""
     attn_res_kv_layers: tuple[int, ...] = ()
-    """Layers (second half only) whose attention K/V projections read their own AttnRes mix: a separate zero-init
-    pseudo-query per layer that mixes only the sources the first half produced (the extra sources, the embedding
-    and the blocks completed by layer ``num_layers // 2``), normed like the attention input. Q and everything
+    """Layers whose attention K/V projections read their own AttnRes mix: a separate zero-init pseudo-query per
+    layer that mixes only the sources the first ``attn_res_kv_source_layers`` layers produced (the extra sources,
+    the embedding and the blocks completed by that layer), normed like the attention input. Q and everything
     else keep the attention gate's mix."""
+    attn_res_kv_source_layers: int | None = None
+    """How many leading layers' outputs ``attn_res_kv_layers`` may read (None: ``num_layers // 2``)."""
     attn_res_partial_scale: bool = False
     """Learned scalars ``(a_attn, a_mlp)`` per layer, init 1: each sublayer adds ``a * out`` to its block's partial,
     so a block (and the MLP gate's in-layer partial) weights its attention and MLP outputs."""
@@ -830,8 +832,11 @@ class GrugModelConfig:
         if self.attn_res_kv_layers:
             if not self.attn_res or self.scan_layers:
                 raise ValueError("attn_res_kv_layers needs attn_res and the unrolled layer loop (scan_layers=false)")
-            if bad := [i for i in self.attn_res_kv_layers if not self.num_layers // 2 <= i < self.num_layers]:
-                raise ValueError(f"attn_res_kv_layers {bad} must be second-half layers (>= {self.num_layers // 2})")
+            cutoff = self.kv_source_layers
+            if not 0 < cutoff < self.num_layers:
+                raise ValueError(f"attn_res_kv_source_layers must be in 1..{self.num_layers - 1}, got {cutoff}")
+            if bad := [i for i in self.attn_res_kv_layers if not cutoff <= i < self.num_layers]:
+                raise ValueError(f"attn_res_kv_layers {bad} must read only earlier layers (>= {cutoff})")
         if self.moe_null_layers:
             if self.scan_layers:
                 raise ValueError("moe_null_layers needs the unrolled layer loop (scan_layers=false)")
@@ -891,6 +896,11 @@ class GrugModelConfig:
     def kv_in_dim(self) -> int:
         """Input width of the attention K/V projections: the side stream (``kv_stream_dim``) or the main stream."""
         return self.hidden_dim
+
+    @property
+    def kv_source_layers(self) -> int:
+        """The leading layers whose outputs ``attn_res_kv_layers`` read (``attn_res_kv_source_layers``)."""
+        return self.num_layers // 2 if self.attn_res_kv_source_layers is None else self.attn_res_kv_source_layers
 
     @property
     def num_null_experts(self) -> int:
@@ -3727,8 +3737,8 @@ def _gate_z(logits: list[jax.Array]) -> jax.Array:
 
 
 GateMix = Callable[..., tuple[jax.Array, jax.Array, jax.Array]]
-"""``mix(partial, gate_index, attn_gate, first_half_only=False) -> (h, z, mean_weights)``: one AttnRes gate over a
-layer's history (``first_half_only``: only the sources the first half produced, no partial)."""
+"""``mix(partial, gate_index, attn_gate, leading_sources_only=False) -> (h, z, mean_weights)``: one AttnRes gate over a
+layer's history (``leading_sources_only``: only the ``attn_res_kv_source_layers`` sources, no partial)."""
 
 
 def _attn_res_layer(
@@ -3748,17 +3758,17 @@ def _attn_res_layer(
     """
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
 
-    def mix(p: jax.Array | None, gate_index: int, attn_gate: bool, first_half_only: bool = False):
+    def mix(p: jax.Array | None, gate_index: int, attn_gate: bool, leading_sources_only: bool = False):
         del attn_gate
-        if not first_half_only:
+        if not leading_sources_only:
             return _attn_res_mix(blocks, block_logits, p, queries, gate_index, eps, logit_bias)
-        # The first half's sources: the extra sources, then the blocks rolled at layers 0, seg, ... <= L // 2
-        # (each holds only earlier layers); the partial and later blocks are second-half work.
+        # The leading layers' sources: the extra sources, then the blocks rolled at layers 0, seg, ... <= the
+        # cutoff (each holds only earlier layers); the partial and later blocks are later layers' work.
         cfg = layer.attn.cfg
         seg = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
         cap = cfg.attn_res_num_blocks
         num_extra = len(blocks) - min(layer_index // seg + 1, cap)
-        keep = num_extra + min(cfg.num_layers // 2 // seg + 1, cap)
+        keep = num_extra + min(cfg.kv_source_layers // seg + 1, cap)
         return _attn_res_mix(blocks[:keep], block_logits[:keep], None, queries, gate_index, eps, logit_bias)
 
     return _attn_res_sublayers(
@@ -3793,7 +3803,7 @@ def _attn_res_sublayers(
     kv_input = _kv_stream_input(logit_bias)
     if physical in cfg.attn_res_kv_layers:
         kv_gate = 2 * cfg.num_layers + (cfg.num_layers if cfg.attn_res_shared_query else 0) + layer_index
-        h_kv, z_kv, _ = mix(None, kv_gate, False, first_half_only=True)
+        h_kv, z_kv, _ = mix(None, kv_gate, False, leading_sources_only=True)
         z_attn = z_attn + z_kv
         kv_input = layer._attn_input(h_kv)
     attn_out, attn_stats = attn_branch(
