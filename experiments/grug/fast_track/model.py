@@ -601,6 +601,10 @@ class GrugModelConfig:
     token takes the top ``2 * num_experts_per_token`` over all ``2 * num_experts`` columns, so a token can spend
     some of its slots on "nothing". A null slot adds zero and has no weights to train. The other layers keep
     top-``num_experts_per_token`` over the real experts (their null router columns are never read)."""
+    moe_null_target_frac: float | None = None
+    """QB treatment of the null experts on ``moe_null_layers``. None: free (bias 0, the router picks the split);
+    a float ``f``: QB sends ``f`` of the slots to them on average (``2K f`` null and ``2K (1 - f)`` real slots per
+    token), so the router decides which tokens use fewer real experts, not how many on average."""
     # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
     latent_dim: int | None = 256
     latent_out_dim: int | None = None
@@ -837,6 +841,11 @@ class GrugModelConfig:
                 raise ValueError(f"attn_res_kv_source_layers must be in 1..{self.num_layers - 1}, got {cutoff}")
             if bad := [i for i in self.attn_res_kv_layers if not cutoff <= i < self.num_layers]:
                 raise ValueError(f"attn_res_kv_layers {bad} must read only earlier layers (>= {cutoff})")
+        if self.moe_null_target_frac is not None:
+            if not self.moe_null_layers or not 0.0 < self.moe_null_target_frac < 1.0:
+                raise ValueError(
+                    f"moe_null_target_frac needs moe_null_layers and to be in (0, 1), got {self.moe_null_target_frac}"
+                )
         if self.moe_null_layers:
             if self.scan_layers:
                 raise ValueError("moe_null_layers needs the unrolled layer loop (scan_layers=false)")
@@ -2213,13 +2222,27 @@ class MoEMLP(eqx.Module):
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """QB ``(beta, margin_min, margin_max)`` over the real plus zero-computation router columns.
 
-        With ``moe_null_target_frac`` every column is balanced: the real experts share ``K (1 - f)`` slots per
-        token, the zero-computation experts ``K f``. Without it the zero-computation columns get beta 0 (no bias,
+        With ``moe_null_target_frac`` every column is balanced: the real experts share ``2K (1 - f)`` slots per
+        token, the zero-computation experts ``2K f``. Without it the zero-computation columns get beta 0 (no bias,
         free to use) and the real experts are balanced at this step's measured real load, with their mean beta
         removed so QB never moves the real-vs-null split.
         """
         num_real, num_null = self.cfg.num_experts, self.cfg.num_null_experts
         margins = reshard(margins, P(_BATCH_AXES, None))
+        frac = self.cfg.moe_null_target_frac
+        if frac is not None:
+            k = selected_experts.shape[-1]
+            share = jnp.concatenate(
+                [jnp.full((num_real,), k * (1.0 - frac) / num_real), jnp.full((num_null,), k * frac / num_null)]
+            )
+            return qb_beta_hist(
+                margins,
+                mesh,
+                target_share=share,
+                num_experts=num_real + num_null,
+                n_bins=_QB_HIST_BINS,
+                batch_axes=_BATCH_AXES,
+            )
         real_slots = jax.lax.stop_gradient(jnp.mean(jnp.sum(selected_experts < num_real, axis=-1, dtype=jnp.float32)))
         beta, lo, hi = qb_beta_hist(
             margins[:, :num_real],
