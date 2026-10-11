@@ -717,6 +717,12 @@ class GrugModelConfig:
     """Layers the entropy head's chosen tokens (``extra_mlp_select``, ``extra_mlp_frac``) skip, as in ``LayerSkip``,
     from when ``extra_mlp_active`` turns on. The head reads the stream entering the first of these and
     ``extra_mlp_layers`` unless ``entropy_head_input_layer`` is set."""
+    skip_router_layers: tuple[int, ...] = ()
+    """Layers a learned router lets some tokens skip (mixture-of-depths): a linear score of the rms-normed stream
+    entering the first of them; the ``skip_router_frac`` of the batch with the lowest score skips them (as in
+    ``LayerSkip``), and the kept tokens' sublayer outputs are scaled by ``2 sigmoid(score)``, which trains the
+    router. The threshold is the batch quantile of the scores."""
+    skip_router_frac: float = 0.2
     mid_head_layer: int | None = None
     """A second lm_head (own weights, initialized like the lm_head) reads the rms-normed stream entering this layer
     and adds its next-token loss (``mid_head_loss_weight``) in training. A confidence head (``mid_confidence_dim``
@@ -890,6 +896,9 @@ class GrugModelConfig:
                 raise ValueError("entropy_head_input_layer must be in [0, min(entropy_head_layers)]")
             if not 0.0 < self.extra_mlp_frac < 1.0:
                 raise ValueError(f"extra_mlp_frac must be in (0, 1), got {self.extra_mlp_frac}")
+        if self.skip_router_layers:
+            if not self.attn_res or self.scan_layers or not 0.0 < self.skip_router_frac < 1.0:
+                raise ValueError("skip_router_layers needs attn_res, the unrolled layer loop and 0 < frac < 1")
         if self.mid_head_layer is not None:
             if not self.attn_res or self.scan_layers or not 0 < self.mid_head_layer < self.num_layers:
                 raise ValueError("mid_head_layer needs attn_res, the unrolled layer loop and 0 < layer < num_layers")
@@ -4635,6 +4644,8 @@ class Transformer(eqx.Module):
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     entropy_head: Float[Array, " D"] | None  # cfg.entropy_head_layers: predicts the next-token entropy
     entropy_head_bias: Float[Array, ""] | None
+    skip_router: Float[Array, " D"] | None  # cfg.skip_router_layers: the skip router's score
+    skip_router_bias: Float[Array, ""] | None
     mid_output_proj: jax.Array | None  # cfg.mid_head_layer: the mid lm_head
     mid_conf_w1: Float[Array, "F H"] | None  # the confidence head: features (2D + 2) -> H -> 1
     mid_conf_b1: Float[Array, " H"] | None
@@ -4728,6 +4739,15 @@ class Transformer(eqx.Module):
                 reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None)) if cfg.entropy_head_layers else None
             ),
             entropy_head_bias=jnp.zeros((), jnp.float32) if cfg.entropy_head_layers else None,
+            skip_router=(
+                reshard(
+                    random.normal(random.fold_in(key, 6), (cfg.hidden_dim,), jnp.float32) * cfg.initializer_std,
+                    P(None),
+                )
+                if cfg.skip_router_layers
+                else None
+            ),
+            skip_router_bias=jnp.zeros((), jnp.float32) if cfg.skip_router_layers else None,
             **_mid_head_params(cfg, output_proj.shape, random.fold_in(key, 5)),
             token_embed2=(
                 reshard(
@@ -5116,6 +5136,9 @@ class Transformer(eqx.Module):
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
                 if kv_inputs is not None:
                     layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
+                if cfg.skip_router_layers and i == min(cfg.skip_router_layers) and pass_index == 0:
+                    stream = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
+                    extra_state["router_keep"], extra_state["router_frac"] = self._skip_router_keep(stream)
                 if i == cfg.mid_head_layer and pass_index == 0:
                     extra_state["mid"] = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
                 if cfg.entropy_head_layers and i == cfg.entropy_head_read_layer and pass_index == 0:
@@ -5125,12 +5148,14 @@ class Transformer(eqx.Module):
                     )
                 if i in cfg.extra_mlp_layers:
                     layer_extras = {**(layer_extras or {}), _EXTRA_KEEP: extra_state["keep"]}
-                skip_keep = None
+                keeps = []
                 if layer_skip is not None and i in layer_skip.layers:
-                    skip_keep = layer_skip.keep
+                    keeps.append(layer_skip.keep.astype(jnp.float32))
                 if i in cfg.entropy_skip_layers:
-                    chosen_keep = ~extra_state["keep"]
-                    skip_keep = chosen_keep if skip_keep is None else skip_keep & chosen_keep
+                    keeps.append((~extra_state["keep"]).astype(jnp.float32))
+                if i in cfg.skip_router_layers:
+                    keeps.append(extra_state["router_keep"])
+                skip_keep = functools.reduce(jnp.multiply, keeps) if keeps else None
                 if skip_keep is not None:
                     layer_extras = {**(layer_extras or {}), _SKIP_KEEP: skip_keep}
                 layer_args = (
@@ -5223,6 +5248,8 @@ class Transformer(eqx.Module):
             final_stats[_ENTROPY_PRED] = extra_state["pred"]
         if "mid" in extra_state:
             final_stats[_MID_HIDDEN] = extra_state["mid"]
+        if "router_frac" in extra_state:
+            final_stats["attn_res_skip_router_frac"] = extra_state["router_frac"]
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
             num_blocks = mean_weights.shape[0] - int(has_partial)
@@ -5415,6 +5442,17 @@ class Transformer(eqx.Module):
         loss = -jnp.take_along_axis(logp, targets[:, None], axis=-1)[:, 0]
         top_logp, top_ids = jax.lax.top_k(logp, k)
         return loss, top_ids, jnp.exp(top_logp), probe
+
+    def _skip_router_keep(self, stream: Float[Array, "B S D"]) -> tuple[Float[Array, "B S"], jax.Array]:
+        """Per-token output scale for ``skip_router_layers`` (0: skip) and the skipped fraction."""
+        cfg = self.config
+        assert self.skip_router is not None and self.skip_router_bias is not None
+        score = jnp.einsum("bsd,d->bs", rms_norm(stream.astype(jnp.float32), cfg.layer_norm_eps), self.skip_router)
+        score = score + self.skip_router_bias
+        chosen = jax.lax.stop_gradient(score)
+        threshold = jnp.quantile(reshard(chosen, P(None, None)), cfg.skip_router_frac)
+        keep = chosen > threshold
+        return keep * 2.0 * jax.nn.sigmoid(score), 1.0 - jnp.mean(keep.astype(jnp.float32))
 
     def _extra_mlp_selection(
         self, stream: Float[Array, "B S D"], token_ids: Int[Array, "B S"], active: jax.Array | bool
