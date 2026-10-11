@@ -288,17 +288,18 @@ def test_direct_inference_session_reports_backend_state(
 
 
 @pytest.mark.parametrize(
-    ("task_state", "worker_id", "node_name", "placed"),
+    ("task_state", "display_worker", "attempt_worker", "node_name", "placed"),
     [
-        (TaskState.PENDING, "", "node-1", False),
-        (TaskState.BUILDING, "", "", False),
-        (TaskState.BUILDING, "", "node-1", True),
-        (TaskState.ASSIGNED, "worker-1", "", True),
-        (TaskState.RUNNING, "", "node-1", True),
+        (TaskState.PENDING, "peer-label", "", "node-1", False),
+        (TaskState.BUILDING, "", "", "", False),
+        (TaskState.BUILDING, "peer-label", "", "", False),
+        (TaskState.BUILDING, "peer-label", "", "node-1", True),
+        (TaskState.ASSIGNED, "worker-1", "worker-1", "", True),
+        (TaskState.RUNNING, "", "", "", True),
     ],
 )
 def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
-    task_state: TaskState, worker_id: str, node_name: str, placed: bool, monkeypatch
+    task_state: TaskState, display_worker: str, attempt_worker: str, node_name: str, placed: bool, monkeypatch
 ) -> None:
     class FixedDeadline:
         def __init__(self, seconds: float) -> None:
@@ -327,9 +328,9 @@ def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
                 list_tasks=lambda _job_id: [
                     SimpleNamespace(
                         state=task_state,
-                        worker_id=worker_id,
+                        worker_id=display_worker,
                         current_attempt_number=0,
-                        attempts=(SimpleNamespace(attempt_number=0, node_name=node_name),),
+                        attempts=(SimpleNamespace(attempt_number=0, worker_id=attempt_worker, node_name=node_name),),
                     ),
                 ],
             )
@@ -360,7 +361,9 @@ def test_inference_endpoint_wait_preserves_startup_budget_across_gate_and_requeu
             state=state,
             worker_id="",
             current_attempt_number=current_attempt,
-            attempts=tuple(SimpleNamespace(attempt_number=i, node_name=node) for i, node in enumerate(nodes)),
+            attempts=tuple(
+                SimpleNamespace(attempt_number=i, worker_id="", node_name=node) for i, node in enumerate(nodes)
+            ),
         )
 
     snapshots = iter(
@@ -411,7 +414,7 @@ def test_inference_endpoint_wait_requeue_preserves_placement_deadline(monkeypatc
                 state=TaskState.BUILDING,
                 worker_id="",
                 current_attempt_number=0,
-                attempts=(SimpleNamespace(attempt_number=0, node_name="node-a"),),
+                attempts=(SimpleNamespace(attempt_number=0, worker_id="", node_name="node-a"),),
             ),
             SimpleNamespace(state=TaskState.PENDING, worker_id="", current_attempt_number=0, attempts=()),
         )

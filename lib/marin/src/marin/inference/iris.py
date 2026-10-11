@@ -543,11 +543,12 @@ _PLACED_TASK_STATES = frozenset({TaskState.ASSIGNED, TaskState.BUILDING, TaskSta
 def _task_is_placed(task: TaskStatus) -> bool:
     if task.state not in _PLACED_TASK_STATES:
         return False
-    if task.state is TaskState.RUNNING or task.worker_id:
+    if task.state is TaskState.RUNNING:
         return True
-    # Earlier attempts retain their node name after a preemption requeue.
+    # Task worker_id can be a peer label, and earlier attempts retain placement details.
     return any(
-        attempt.attempt_number == task.current_attempt_number and bool(attempt.node_name) for attempt in task.attempts
+        attempt.attempt_number == task.current_attempt_number and bool(attempt.worker_id or attempt.node_name)
+        for attempt in task.attempts
     )
 
 
