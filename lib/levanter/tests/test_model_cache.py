@@ -53,7 +53,7 @@ def test_concurrent_callers_populate_once(tmp_path):
         results = list(pool.map(lambda _: run(), range(8)))
 
     assert len(calls) == 1, f"expected a single populate, got {len(calls)}"
-    assert Path(cache_path, DEFAULT_COMPLETE_MARKER).exists()
+    assert Path(f"{cache_path}{DEFAULT_COMPLETE_MARKER}").exists()
     # Every caller returns the cache path holding the populated snapshot.
     for path in results:
         assert path == cache_path.rstrip("/")
@@ -83,15 +83,37 @@ def test_custom_complete_marker(tmp_path):
     populate = _make_populate(calls, count_lock)
 
     cache_to_prefix(cache_path, populate, complete_marker=".done")
-    assert Path(cache_path, ".done").exists()
+    assert Path(f"{cache_path}.done").exists()
 
     cache_to_prefix(cache_path, populate, complete_marker=".done")
     assert len(calls) == 1
 
 
+def test_source_metadata_does_not_complete_an_interrupted_mirror(tmp_path):
+    cache_path = str(tmp_path / "cache" / "model")
+
+    def interrupted(fs: fsspec.AbstractFileSystem, dest: str) -> None:
+        with fs.open(f"{dest}/.cache_metadata.json", "w") as handle:
+            handle.write('{"source_revision":"parent"}')
+        raise RuntimeError("download interrupted")
+
+    with pytest.raises(RuntimeError, match="download interrupted"):
+        cache_to_prefix(cache_path, interrupted)
+
+    def finish(fs: fsspec.AbstractFileSystem, dest: str) -> None:
+        with fs.open(f"{dest}/weights.bin", "w") as handle:
+            handle.write("complete weights")
+
+    cache_to_prefix(cache_path, finish)
+
+    assert Path(cache_path, ".cache_metadata.json").read_text() == '{"source_revision":"parent"}'
+    assert Path(cache_path, "weights.bin").read_text() == "complete weights"
+    assert Path(f"{cache_path}{DEFAULT_COMPLETE_MARKER}").exists()
+
+
 def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
     """cache_hf_model mirrors every repo file and keeps only one on local disk at a time."""
-    repo_files = ["config.json", "model.safetensors", "tokenizer.json"]
+    repo_files = [".cache_metadata.json", "config.json", "model.safetensors", "tokenizer.json"]
     max_local_files = 0
 
     def fake_list_repo_files(model_id, revision=None):
@@ -119,7 +141,7 @@ def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
     assert max_local_files == 1, f"expected at most one staged file, saw {max_local_files}"
     for filename in repo_files:
         assert Path(cache_path, filename).read_text() == f"contents of {filename}"
-    assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": None}
+    assert json.loads(Path(f"{cache_path}{DEFAULT_COMPLETE_MARKER}").read_text()) == {"source_revision": None}
 
 
 @pytest.mark.parametrize(
@@ -173,7 +195,7 @@ def test_resolve_pinned_commit_skips_hf_lookup(tmp_path, monkeypatch):
 
     assert first == second
     assert Path(second, "config.json").read_text() == commit
-    assert json.loads(Path(second, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": commit}
+    assert json.loads(Path(f"{second}{DEFAULT_COMPLETE_MARKER}").read_text()) == {"source_revision": commit}
 
 
 def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
@@ -239,8 +261,10 @@ def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
     second_path = resolve_cached_model_path("org/model", cache_ttl_days=7, cache_prefix="models")
 
     assert first_path != second_path
-    assert json.loads(Path(first_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": first_commit}
-    assert json.loads(Path(second_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": second_commit}
+    assert json.loads(Path(f"{first_path}{DEFAULT_COMPLETE_MARKER}").read_text()) == {"source_revision": first_commit}
+    assert json.loads(Path(f"{second_path}{DEFAULT_COMPLETE_MARKER}").read_text()) == {
+        "source_revision": second_commit
+    }
     for filename in repo_files:
         assert Path(first_path, filename).read_text() == first_commit
         assert Path(second_path, filename).read_text() == second_commit
