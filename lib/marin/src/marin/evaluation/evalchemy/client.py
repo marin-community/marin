@@ -6,7 +6,8 @@
 Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG``; the parent builds it in
 :mod:`marin.evaluation.evalchemy.runner`. Each task runs through the evalchemy fork's ``evalchemy``
 CLI once (one invocation per task so each carries its own ``num_fewshot``) with lm-eval's
-``local-completions`` (or ``local-chat-completions``) API model pointed at the served URL. Evalchemy
+``local-completions`` (or ``local-chat-completions``) API model pointed at a loopback Iris endpoint relay,
+which follows the serve endpoint when a preempted serve task re-registers on another host. Evalchemy
 writes its aggregate JSON, sample JSONL, and normalized sample rows directly to the FineStore archive
 at ``out_path``. The ordinary ``--output_path`` is a temporary directory used for Evalchemy's local
 completion check and is discarded after each task.
@@ -20,13 +21,20 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from importlib.util import find_spec
 from pathlib import Path
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 EVALCHEMY_RESULTS_PREFIX = "results_"
 EVALCHEMY_RESULTS_SUFFIX = ".json"
+
+# The relay runs in the task's Iris venv; this script runs in the separate uvx Evalchemy environment.
+_RELAY_MODULE = "iris.cluster.client.endpoint_relay"
+_RELAY_START_TIMEOUT_SECONDS = 120.0
 
 # Without a configured cap, an lm-eval-native generation task gets the served context minus this
 # prompt reserve, so the model config's context window sets its budget the way Evalchemy's own
@@ -103,6 +111,29 @@ def budget_arguments(config: dict, task: dict, max_length: int | None) -> tuple[
         return [], []
     print(f"native task {task['name']}: max_gen_toks={native_budget} from served context {max_length}", flush=True)
     return [f"max_gen_toks={native_budget}"], []
+
+
+@contextmanager
+def endpoint_relay(endpoint_name: str) -> Iterator[str]:
+    """Run the Iris endpoint relay for ``endpoint_name`` and yield its loopback origin."""
+    python = Path(os.environ["IRIS_VENV"]) / "bin" / "python"
+    with tempfile.TemporaryDirectory() as tmp:
+        port_file = Path(tmp) / "port"
+        relay = subprocess.Popen([str(python), "-m", _RELAY_MODULE, endpoint_name, "--port-file", str(port_file)])
+        try:
+            deadline = time.monotonic() + _RELAY_START_TIMEOUT_SECONDS
+            while not port_file.exists():
+                if relay.poll() is not None:
+                    raise SystemExit(f"endpoint relay for {endpoint_name} exited {relay.returncode} before listening")
+                if time.monotonic() > deadline:
+                    raise SystemExit(
+                        f"endpoint relay for {endpoint_name} did not start in {_RELAY_START_TIMEOUT_SECONDS}s"
+                    )
+                time.sleep(0.2)
+            yield f"http://127.0.0.1:{port_file.read_text().strip()}"
+        finally:
+            relay.terminate()
+            relay.wait()
 
 
 def served_max_length(base_url: str) -> int | None:
@@ -242,10 +273,19 @@ def scored_results(local_out: str) -> bool:
 
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
-    tasks = config["tasks"]
-    if not tasks:
+    if not config["tasks"]:
         raise SystemExit("run_evalchemy_client requires at least one task")
+    with endpoint_relay(config["endpoint_name"]) as origin:
+        run_tasks(relayed_config(config, origin))
 
+
+def relayed_config(config: dict, relay_origin: str) -> dict:
+    """``config`` with ``base_url`` set to the OpenAI API under the endpoint relay at ``relay_origin``."""
+    return {**config, "base_url": f"{relay_origin.rstrip('/')}{config['api_path']}"}
+
+
+def run_tasks(config: dict) -> None:
+    tasks = config["tasks"]
     out_path = config["out_path"].rstrip("/")
     served = served_max_length(config["base_url"])
     available_context = served - _CONTEXT_MARGIN if served is not None else None
