@@ -3472,7 +3472,8 @@ def _predictive_entropy(
     head_in = jax.lax.stop_gradient(head_in)
     vocab = lm_head.shape[1]
     chunk = math.gcd(vocab, _ENTROPY_CHUNK)
-    weights = rearrange(jax.lax.stop_gradient(lm_head), "e (n c) -> n e c", c=chunk)
+    # Scanned chunks must be unsharded along the scan axis: gather the (FSDP / model-sharded) head first.
+    weights = rearrange(reshard(jax.lax.stop_gradient(lm_head), P(None, None)), "e (n c) -> n e c", c=chunk)
     b, s_len, _ = head_in.shape
     init = tuple(reshard(jnp.full((b, s_len), v, jnp.float32), P(_BATCH_AXES, None)) for v in (-jnp.inf, 0.0, 0.0))
 
