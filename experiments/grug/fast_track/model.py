@@ -677,6 +677,11 @@ class GrugModelConfig:
     attn_res_shared_query: bool = False
     """A third zero-init pseudo-query per layer whose AttnRes mix feeds the shared experts only; the router and
     routed experts keep the MLP gate's mix."""
+    attn_res_kv_layers: tuple[int, ...] = ()
+    """Layers (second half only) whose attention K/V projections read their own AttnRes mix: a separate zero-init
+    pseudo-query per layer that mixes only the sources the first half produced (the extra sources, the embedding
+    and the blocks completed by layer ``num_layers // 2``), normed like the attention input. Q and everything
+    else keep the attention gate's mix."""
     attn_res_partial_scale: bool = False
     """Learned scalars ``(a_attn, a_mlp)`` per layer, init 1: each sublayer adds ``a * out`` to its block's partial,
     so a block (and the MLP gate's in-layer partial) weights its attention and MLP outputs."""
@@ -822,6 +827,11 @@ class GrugModelConfig:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
         if self.moe_drop_renorm and self.moe_implementation != "fixed_pooled_wave_all_to_all":
             raise ValueError("moe_drop_renorm needs moe_implementation=fixed_pooled_wave_all_to_all")
+        if self.attn_res_kv_layers:
+            if not self.attn_res or self.scan_layers:
+                raise ValueError("attn_res_kv_layers needs attn_res and the unrolled layer loop (scan_layers=false)")
+            if bad := [i for i in self.attn_res_kv_layers if not self.num_layers // 2 <= i < self.num_layers]:
+                raise ValueError(f"attn_res_kv_layers {bad} must be second-half layers (>= {self.num_layers // 2})")
         if self.moe_null_layers:
             if self.scan_layers:
                 raise ValueError("moe_null_layers needs the unrolled layer loop (scan_layers=false)")
@@ -2893,6 +2903,7 @@ class Block(eqx.Module):
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
     attn_res_query_shared: Float[Array, " D"] | None  # cfg.attn_res_shared_query
+    attn_res_query_kv: Float[Array, " D"] | None  # cfg.attn_res_kv_layers (every layer carries one; those read it)
     attn_res_partial_scale: Float[Array, " 2"] | None  # cfg.attn_res_partial_scale: (a_attn, a_mlp)
 
     @staticmethod
@@ -2953,6 +2964,7 @@ class Block(eqx.Module):
             attn_res_query_attn=attn_res_query,
             attn_res_query_mlp=attn_res_query,
             attn_res_query_shared=attn_res_query if cfg.attn_res_shared_query else None,
+            attn_res_query_kv=attn_res_query if cfg.attn_res_kv_layers else None,
             attn_res_partial_scale=(
                 reshard(jnp.ones((2,), jnp.float32), P(None)) if cfg.attn_res and cfg.attn_res_partial_scale else None
             ),
@@ -3714,8 +3726,9 @@ def _gate_z(logits: list[jax.Array]) -> jax.Array:
     return jnp.mean(jnp.square(jax.nn.logsumexp(jnp.stack(logits), axis=0)))
 
 
-GateMix = Callable[[jax.Array | None, Any, bool], tuple[jax.Array, jax.Array, jax.Array]]
-"""``mix(partial, gate_index, attn_gate) -> (h, z, mean_weights)``: one AttnRes gate over a layer's history."""
+GateMix = Callable[..., tuple[jax.Array, jax.Array, jax.Array]]
+"""``mix(partial, gate_index, attn_gate, first_half_only=False) -> (h, z, mean_weights)``: one AttnRes gate over a
+layer's history (``first_half_only``: only the sources the first half produced, no partial)."""
 
 
 def _attn_res_layer(
@@ -3735,9 +3748,18 @@ def _attn_res_layer(
     """
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
 
-    def mix(p: jax.Array | None, gate_index: int, attn_gate: bool):
+    def mix(p: jax.Array | None, gate_index: int, attn_gate: bool, first_half_only: bool = False):
         del attn_gate
-        return _attn_res_mix(blocks, block_logits, p, queries, gate_index, eps, logit_bias)
+        if not first_half_only:
+            return _attn_res_mix(blocks, block_logits, p, queries, gate_index, eps, logit_bias)
+        # The first half's sources: the extra sources, then the blocks rolled at layers 0, seg, ... <= L // 2
+        # (each holds only earlier layers); the partial and later blocks are second-half work.
+        cfg = layer.attn.cfg
+        seg = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
+        cap = cfg.attn_res_num_blocks
+        num_extra = len(blocks) - min(layer_index // seg + 1, cap)
+        keep = num_extra + min(cfg.num_layers // 2 // seg + 1, cap)
+        return _attn_res_mix(blocks[:keep], block_logits[:keep], None, queries, gate_index, eps, logit_bias)
 
     return _attn_res_sublayers(
         layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, kv_share, logit_bias
@@ -3768,6 +3790,12 @@ def _attn_res_sublayers(
     physical = layer_index % cfg.num_layers
     kda_ablation = (physical in (), physical in ())
     v_stats: dict[str, jax.Array] = {}
+    kv_input = _kv_stream_input(logit_bias)
+    if physical in cfg.attn_res_kv_layers:
+        kv_gate = 2 * cfg.num_layers + (cfg.num_layers if cfg.attn_res_shared_query else 0) + layer_index
+        h_kv, z_kv, _ = mix(None, kv_gate, False, first_half_only=True)
+        z_attn = z_attn + z_kv
+        kv_input = layer._attn_input(h_kv)
     attn_out, attn_stats = attn_branch(
         layer,
         h,
@@ -3780,7 +3808,7 @@ def _attn_res_sublayers(
         (),
         kda_ablation,
         physical in (),
-        _kv_stream_input(logit_bias),
+        kv_input,
     )
     attn_out = _sublayer_dropout(cfg, attn_out, noise_key, _ATTN_DROPOUT_SALT)
     scale_attn = scale_mlp = None
@@ -4772,7 +4800,12 @@ class Transformer(eqx.Module):
         if cfg.attn_res_shared_query:
             v_queries = [_cast_floats(_unit_queries(scan, units, "attn_res_query_shared"), dtype)] if units else []
             v_queries += [layer.attn_res_query_shared[None] for layer in layers[scan.num_layers if units else 0 :]]
-        queries_flat = jnp.concatenate([*gate_queries, *v_queries, self.attn_res_query_final[None]])
+        # KV-gate queries (attn_res_kv_layers) follow the V gates: KV gate of layer i is row
+        # 2 * L + (L if attn_res_shared_query) + i.
+        kv_queries = []
+        if cfg.attn_res_kv_layers:
+            kv_queries = [layer.attn_res_query_kv[None] for layer in layers]
+        queries_flat = jnp.concatenate([*gate_queries, *v_queries, *kv_queries, self.attn_res_query_final[None]])
         queries = queries_flat
         logit_bias = _gate_extras(self, queries.shape[0])
         allowed = {"q", "k", "v", "mlp", "mlp_shared", "mlp_routed", "mlp_router"}
