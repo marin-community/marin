@@ -849,7 +849,7 @@ async def test_reasoning_only_length_stop_reports_missing_answer():
 
 
 async def test_reasoning_only_length_stop_grades_prior_file_submission():
-    message = {"role": "assistant", "content": None, "reasoning": "Unfinished reasoning"}
+    message = {"role": "assistant", "content": None, "tool_calls": [], "reasoning": "Unfinished reasoning"}
 
     class TruncatedModel(ReplayModel):
         async def complete(self, request):

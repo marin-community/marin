@@ -36,7 +36,7 @@ async def _grade_rollout(
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     grading_messages = list(messages)
     final = grading_messages[-1]
-    if final.get("role") == "assistant" and final.get("content") is None and final.get("tool_calls") is None:
+    if final.get("role") == "assistant" and final.get("content") is None and not final.get("tool_calls"):
         # A truncated reasoning-only turn has no answer, but earlier files can still be graded.
         grading_messages[-1] = {**final, "content": ""}
     conversation = chat_conversation(grading_messages)
