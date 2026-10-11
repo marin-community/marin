@@ -117,6 +117,7 @@ def protocol_recipe(updates: int) -> str:
             "callbacks": [
                 {"type": "logging"},
                 {"type": "checkpoint", "save_steps": 2, "save_on_train_end": True},
+                {"type": "hf_model_save", "save_steps": 2, "save_on_train_end": True},
                 {"type": "evaluation", "eval_steps": 2, "eval_before_train": True, "eval_on_train_end": True},
             ],
         },
