@@ -298,9 +298,9 @@ class GrugTrainerConfig:
     # when present, written by process 0 after the first step otherwise. None: autotune every compile.
     xla_autotune_cache_path: str | None = None
     # Seed ``xla_autotune_cache_path`` from one process: run under this mock GPU topology ("slices x hosts x
-    # devices", e.g. "1x16x4" for a 16-node GB200 rack), so the one process compiles the full mesh's train step and
-    # autotunes it alone (no cross-process exchange); compile ahead of time, publish the results and stop before
-    # running a step. None: a normal run.
+    # devices"; "1x64x1" for a GB200 rack, which runs one process per GPU), so the one process compiles the full
+    # mesh's train step and autotunes it alone (no cross-process exchange); compile ahead of time, publish the
+    # results and stop before running a step. None: a normal run.
     xla_autotune_seed_topology: str | None = None
     # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
     layer_skip: LayerSkipRule | None = None

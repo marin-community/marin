@@ -491,7 +491,8 @@ def build_h100_ladder_run(
     cpu, ram, disk = (120, "890g", "1t") if rung.device == "GB200" else (32, "600g", "900g")
     train_resources = ResourceConfig.with_gpu(
         rung.device,
-        count=rung.gpus_per_task,
+        # The seed is one process on one GPU (GB200 runs one process per GPU), standing in for all of them.
+        count=1 if seed_xla_autotune_cache else rung.gpus_per_task,
         cpu=cpu,
         ram=ram,
         disk=disk,
@@ -575,7 +576,7 @@ def build_h100_ladder_run(
                 token_dump_path=(prefix_join(ctx.output_path, "token_dump.npz") if token_dump else None),
                 token_dump_skip_layers=token_dump_skip_layers,
                 xla_autotune_cache_path=_xla_autotune_cache_path(model, rung) if rung.device == "GB200" else None,
-                xla_autotune_seed_topology=(f"1x{rung.nodes}x{rung.gpus_per_task}" if seed_xla_autotune_cache else None),
+                xla_autotune_seed_topology=(f"1x{rung.global_device_count}x1" if seed_xla_autotune_cache else None),
                 layer_skip=layer_skip,
                 extra_mlp_start_frac=extra_mlp_start_frac,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
