@@ -8,6 +8,7 @@ resource_hint:
     H100: 8
   memory: 512g
 serve:
+  hf_hub_disable_xet: true
   tensor_parallel_size: 1
   data_parallel_size: 8
   max_model_len: 73728

@@ -74,10 +74,10 @@ class ServeConfig:
 
     ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
     inference settings. The remaining typed vLLM fields map onto command-line flags or process
-    settings. The two ``vllm_*`` boolean process settings and the RunAI streamer settings apply to
-    GPU workers. ``vllm_extra_args`` is the escape hatch for flags without a typed field. Multi-node
-    topology flags are owned by the launcher; a typed GPU memory limit cannot also appear in the
-    escape hatch.
+    settings. ``hf_hub_disable_xet`` selects regular HTTP for the worker's Hugging Face weight
+    mirror when Xet is rate-limited. ``vllm_extra_args`` is the escape hatch for flags without a
+    typed field. Multi-node topology flags are owned by the launcher; a typed GPU memory limit
+    cannot also appear in the escape hatch.
 
     When ``auto_overrides`` is true, the lowering path inspects the Hugging Face ``config.json`` to
     fill portable architecture-specific vLLM flags and clamp an explicit context length to the
@@ -100,6 +100,7 @@ class ServeConfig:
     vllm_use_flashinfer_sampler: bool | None = None
     runai_streamer_concurrency: int | None = None
     runai_streamer_s3_request_timeout_ms: int | None = None
+    hf_hub_disable_xet: bool = False
     vllm_source: VllmSource | None = None
     vllm_version: str | None = None
     vllm_plugin_requirements: tuple[str, ...] = ()

@@ -222,6 +222,20 @@ def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
     assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "60000"
 
 
+def test_gpu_lowering_can_disable_xet_for_weight_mirror():
+    model = ModelConfig(
+        name="xet-rate-limited-model",
+        location="org/model",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(hf_hub_disable_xet=True, auto_overrides=False),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+
+    assert lowered.iris.worker_environment.env_vars["HF_HUB_DISABLE_XET"] == "1"
+
+
 @pytest.mark.parametrize(
     ("serve", "accelerator"),
     [

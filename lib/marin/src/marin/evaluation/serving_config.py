@@ -264,6 +264,9 @@ def inference_config_for_model(
         raise ValueError("speculative serving requires the GPU vLLM backend")
     geometry = serving_geometry(serve, accelerator)
     vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
+    worker_env = dict(env_vars)
+    if serve.hf_hub_disable_xet:
+        worker_env["HF_HUB_DISABLE_XET"] = "1"
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
 
@@ -289,11 +292,11 @@ def inference_config_for_model(
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars={**env_vars, **vllm_environment_variables},
+                env_vars={**worker_env, **vllm_environment_variables},
             )
         else:
             engine = LevanterEngineConfig()
-            environment = create_environment(extras=["gpu"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["gpu"], env_vars=worker_env)
     else:
         if accelerator.tpu_type is None:
             raise ValueError("TPU accelerator choice requires tpu_type")
@@ -306,10 +309,10 @@ def inference_config_for_model(
         )
         if serve.backend is ServeBackend.VLLM:
             engine = _vllm_engine_config(serve, accelerator.platform, extra_args)
-            environment = create_environment(extras=["tpu"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["tpu"], env_vars=worker_env)
         else:
             engine = LevanterEngineConfig()
-            environment = create_environment(extras=["tpu"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["tpu"], env_vars=worker_env)
 
     return RemoteInferenceConfig(
         model=ServedModelConfig(
