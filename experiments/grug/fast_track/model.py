@@ -168,6 +168,10 @@ _ATTN_RES_W_MLP = "attn_res_weights_mlp"
 _ATTN_RES_W_V = "attn_res_weights_v"
 # Per-layer extras key carrying ``LayerSkip.keep`` into a skipped layer.
 _SKIP_KEEP = "layer_skip_keep"
+# Per-layer extras key carrying the extra-MLP token mask (``extra_mlp_layers``), and the entropy head's prediction.
+_EXTRA_KEEP = "extra_mlp_keep"
+_ENTROPY_PRED = "entropy_pred"
+_ENTROPY_CHUNK = 1024
 # Per-layer router stats carrying each token's ``[T, K]`` selected experts and combine weights to
 # ``Transformer.routing_assignments``.
 _ROUTING_SELECTED = "routing_selected"
@@ -200,6 +204,14 @@ KDA_CHUNK_TILES: dict[int, int | None] = {16: None, 32: 32, 64: 32}
 # kda_dd_rope: per-pair base angular frequencies (rad/token) are log-spaced over this range, periods ~6 to
 # ~800 tokens, spanning the KDA decay's memory lengths (|g| init in kda_dt_range).
 _KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
+
+
+class ExtraMlpSelect(StrEnum):
+    """Which tokens ``extra_mlp_layers`` serve, by the entropy head's prediction (``extra_mlp_frac`` of the batch)."""
+
+    HIGH = "high"  # the highest predicted entropy
+    LOW = "low"  # the lowest
+    RANDOM = "random"  # a fixed pseudo-random subset (the control)
 
 
 class LocalMixer(StrEnum):
@@ -693,6 +705,15 @@ class GrugModelConfig:
     layer that mixes only the sources the first ``attn_res_kv_source_layers`` layers produced (the extra sources,
     the embedding and the blocks completed by that layer), normed like the attention input. Q and everything
     else keep the attention gate's mix."""
+    extra_mlp_layers: tuple[int, ...] = ()
+    """Layers with an extra SwiGLU MLP (width ``extra_mlp_dim``, on the MLP gate's mix) whose output is scaled by a
+    learned per-layer gain (init 0) and reaches only ``extra_mlp_frac`` of the tokens, chosen by ``extra_mlp_select``
+    from an entropy head: a linear read of the stream entering the first of these layers, trained (on stop-gradient
+    inputs) to predict the model's own next-token entropy. The trainer turns the extra MLPs on part-way through
+    (``extra_mlp_active``)."""
+    extra_mlp_dim: int = 0
+    extra_mlp_select: ExtraMlpSelect = ExtraMlpSelect.HIGH
+    extra_mlp_frac: float = 0.25
     attn_res_kv_source_layers: int | None = None
     """How many leading layers' outputs ``attn_res_kv_layers`` may read (None: ``num_layers // 2``)."""
     attn_res_partial_scale: bool = False
@@ -840,6 +861,11 @@ class GrugModelConfig:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
         if self.moe_drop_renorm and self.moe_implementation != "fixed_pooled_wave_all_to_all":
             raise ValueError("moe_drop_renorm needs moe_implementation=fixed_pooled_wave_all_to_all")
+        if self.extra_mlp_layers:
+            if not self.attn_res or self.scan_layers or self.extra_mlp_dim <= 0:
+                raise ValueError("extra_mlp_layers needs attn_res, the unrolled layer loop and extra_mlp_dim > 0")
+            if not 0.0 < self.extra_mlp_frac < 1.0:
+                raise ValueError(f"extra_mlp_frac must be in (0, 1), got {self.extra_mlp_frac}")
         if self.attn_res_kv_layers:
             if not self.attn_res or self.scan_layers:
                 raise ValueError("attn_res_kv_layers needs attn_res and the unrolled layer loop (scan_layers=false)")
@@ -2957,6 +2983,8 @@ class Block(eqx.Module):
     attn_res_query_mlp: Float[Array, " D"] | None
     attn_res_query_shared: Float[Array, " D"] | None  # cfg.attn_res_shared_query
     attn_res_query_kv: Float[Array, " D"] | None  # cfg.attn_res_kv_layers (every layer carries one; those read it)
+    extra_mlp: DenseMLP | None  # cfg.extra_mlp_layers (every layer carries one; those use it)
+    extra_mlp_gain: Float[Array, ""] | None
     attn_res_partial_scale: Float[Array, " 2"] | None  # cfg.attn_res_partial_scale: (a_attn, a_mlp)
 
     @staticmethod
@@ -3018,6 +3046,12 @@ class Block(eqx.Module):
             attn_res_query_mlp=attn_res_query,
             attn_res_query_shared=attn_res_query if cfg.attn_res_shared_query else None,
             attn_res_query_kv=attn_res_query if cfg.attn_res_kv_layers else None,
+            extra_mlp=(
+                DenseMLP.init(cfg.hidden_dim, cfg.extra_mlp_dim, cfg.initializer_std, key=random.fold_in(key, 77))
+                if cfg.extra_mlp_layers
+                else None
+            ),
+            extra_mlp_gain=jnp.zeros((), jnp.float32) if cfg.extra_mlp_layers else None,
             attn_res_partial_scale=(
                 reshard(jnp.ones((2,), jnp.float32), P(None)) if cfg.attn_res and cfg.attn_res_partial_scale else None
             ),
@@ -3427,6 +3461,34 @@ def _tied_expert_activation(cfg: "GrugModelConfig", em: MoEExpertMlp):
         slope_sq = (0.0) ** 2
         return lambda u: jax.nn.leaky_relu(u, slope_sq)
     return em.activation
+
+
+def _predictive_entropy(
+    head_in: Float[Array, "B S E"], lm_head: Float[Array, "E V"], cap: float | None
+) -> Float[Array, "B S"]:
+    """Stop-gradient entropy of each position's next-token distribution, one online pass over vocabulary chunks
+    (``H = log s + m - t / s`` with running max ``m``, ``s = sum e^(z - m)``, ``t = sum e^(z - m) z``), so the
+    ``[B, S, V]`` logits are never materialized. ``cap`` applies the logit soft cap first."""
+    head_in = jax.lax.stop_gradient(head_in)
+    vocab = lm_head.shape[1]
+    chunk = math.gcd(vocab, _ENTROPY_CHUNK)
+    weights = rearrange(jax.lax.stop_gradient(lm_head), "e (n c) -> n e c", c=chunk)
+    b, s_len, _ = head_in.shape
+    init = tuple(reshard(jnp.full((b, s_len), v, jnp.float32), P(_BATCH_AXES, None)) for v in (-jnp.inf, 0.0, 0.0))
+
+    def step(carry, w):
+        m, total, weighted = carry
+        z = jnp.einsum("bse,ec->bsc", head_in, w.astype(head_in.dtype), preferred_element_type=jnp.float32)
+        z = reshard(z, P(_BATCH_AXES, None, None))
+        if cap is not None:
+            z = cap * jnp.tanh(z / cap)
+        m_new = jnp.maximum(m, jnp.max(z, axis=-1))
+        scale = jnp.exp(m - m_new)
+        e = jnp.exp(z - m_new[..., None])
+        return (m_new, total * scale + jnp.sum(e, -1), weighted * scale + jnp.sum(e * z, -1)), None
+
+    (m, total, weighted), _ = jax.lax.scan(step, init, weights)
+    return jnp.log(total) + m - weighted / total
 
 
 def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | None:
@@ -3886,6 +3948,13 @@ def _attn_res_sublayers(
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
     mlp_out = _sublayer_dropout(cfg, mlp_out, noise_key, _MLP_DROPOUT_SALT)
+    extra_keep = None if logit_bias is None else logit_bias.get(_EXTRA_KEEP)
+    if extra_keep is not None:
+        assert layer.extra_mlp is not None and layer.extra_mlp_gain is not None
+        extra = layer.extra_mlp(layer._mlp_input(h), moe_output_reshard=False)
+        mlp_out = mlp_out + (layer.extra_mlp_gain.astype(extra.dtype) * extra) * extra_keep[..., None].astype(
+            extra.dtype
+        )
     if skip_keep is not None:
         mlp_out = mlp_out * skip_keep[..., None].astype(mlp_out.dtype)
     if trace_capture.TRACE:
@@ -4473,6 +4542,8 @@ class Transformer(eqx.Module):
     final_norm: LearnedRMSNorm
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
+    entropy_head: Float[Array, " D"] | None  # cfg.extra_mlp_layers: predicts the next-token entropy
+    entropy_head_bias: Float[Array, ""] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
     embed2_norm: LearnedRMSNorm | None
@@ -4558,6 +4629,8 @@ class Transformer(eqx.Module):
             attn_res_query_final=(
                 reshard(jnp.zeros((_attn_res_key_dim(cfg),), jnp.float32), P(None)) if cfg.attn_res else None
             ),
+            entropy_head=reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None)) if cfg.extra_mlp_layers else None,
+            entropy_head_bias=jnp.zeros((), jnp.float32) if cfg.extra_mlp_layers else None,
             token_embed2=(
                 reshard(
                     _init_weight(
@@ -4650,8 +4723,10 @@ class Transformer(eqx.Module):
         return_routing: bool = False,
         router_tie_active: bool | None = None,
         layer_skip: "LayerSkip | None" = None,
+        extra_mlp_active: jax.Array | bool = True,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``layer_skip`` (an eval ablation, AttnRes only) drops the listed layers' attention and MLP outputs for
+        """``extra_mlp_active`` (traced bool) turns on the ``extra_mlp_layers`` MLPs (off: no token reaches them).
+        ``layer_skip`` (an eval ablation, AttnRes only) drops the listed layers' attention and MLP outputs for
         the tokens it marks.
         ``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
         (True); None runs all passes. ``route_key`` (training only) seeds ``moe_gumbel_tau``.
@@ -4738,6 +4813,7 @@ class Transformer(eqx.Module):
                 (None),
                 (None),
                 layer_skip,
+                extra_mlp_active,
             )
         else:
             if layer_skip is not None:
@@ -4825,6 +4901,7 @@ class Transformer(eqx.Module):
         input_embed2: jax.Array | None = None,
         ple_rows: jax.Array | None = None,
         layer_skip: "LayerSkip | None" = None,
+        extra_mlp_active: jax.Array | bool = True,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -4915,6 +4992,7 @@ class Transformer(eqx.Module):
 
         stats_out: list[dict[str, jax.Array]] = []
         z_out: list[jax.Array] = []
+        extra_state: dict[str, jax.Array] = {}
 
         def run_pass(state, pass_index, start=0):
             """One pass over the physical layers from ``start``, extending the history; returns the new state."""
@@ -4942,6 +5020,13 @@ class Transformer(eqx.Module):
                     layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
                 if layer_skip is not None and i in layer_skip.layers:
                     layer_extras = {**(layer_extras or {}), _SKIP_KEEP: layer_skip.keep}
+                if cfg.extra_mlp_layers and i == min(cfg.extra_mlp_layers) and pass_index == 0:
+                    stream = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
+                    extra_state["pred"], extra_state["keep"] = self._extra_mlp_selection(
+                        stream, token_ids, extra_mlp_active
+                    )
+                if i in cfg.extra_mlp_layers:
+                    layer_extras = {**(layer_extras or {}), _EXTRA_KEEP: extra_state["keep"]}
                 layer_args = (
                     (layer, blocks, block_logits, partial, queries, layer_extras),
                     long_layer_mask if use_long else short_layer_mask,
@@ -5028,6 +5113,8 @@ class Transformer(eqx.Module):
             state = run_pass(state, 0)
         mixed, layer_stats, z_total, max_weight, entropy = finish(state, [stats_out], z_out)
         final_stats = {"attn_res_final_max_weight": max_weight, "attn_res_final_entropy": entropy}
+        if "pred" in extra_state:
+            final_stats[_ENTROPY_PRED] = extra_state["pred"]
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
             num_blocks = mean_weights.shape[0] - int(has_partial)
@@ -5221,6 +5308,29 @@ class Transformer(eqx.Module):
         top_logp, top_ids = jax.lax.top_k(logp, k)
         return loss, top_ids, jnp.exp(top_logp), probe
 
+    def _extra_mlp_selection(
+        self, stream: Float[Array, "B S D"], token_ids: Int[Array, "B S"], active: jax.Array | bool
+    ) -> tuple[Float[Array, "B S"], Bool[Array, "B S"]]:
+        """The entropy head's prediction (from the stop-gradient stream) and the ``extra_mlp_layers`` token mask: the
+        ``extra_mlp_frac`` of the batch with the highest / lowest prediction, or a fixed pseudo-random subset."""
+        cfg = self.config
+        assert self.entropy_head is not None and self.entropy_head_bias is not None
+        x = rms_norm(jax.lax.stop_gradient(stream).astype(jnp.float32), cfg.layer_norm_eps)
+        pred = jnp.einsum("bsd,d->bs", x, self.entropy_head) + self.entropy_head_bias
+        frac, chosen = cfg.extra_mlp_frac, jax.lax.stop_gradient(pred)
+        # The batch quantile sorts the whole [B, S] prediction (a few MB), gathered off the batch sharding.
+        everywhere = reshard(chosen, P(None, None))
+        if cfg.extra_mlp_select == ExtraMlpSelect.HIGH:
+            keep = chosen >= jnp.quantile(everywhere, 1.0 - frac)
+        elif cfg.extra_mlp_select == ExtraMlpSelect.LOW:
+            keep = chosen <= jnp.quantile(everywhere, frac)
+        else:
+            pos = jnp.broadcast_to(jnp.arange(token_ids.shape[1], dtype=jnp.uint32), token_ids.shape)
+            h = pos * jnp.uint32(2654435761) + token_ids.astype(jnp.uint32) * jnp.uint32(2246822519)
+            h = (h ^ (h >> 15)) * jnp.uint32(2246822519)
+            keep = ((h ^ (h >> 13)).astype(jnp.float32) / jnp.float32(1 << 32)) < frac
+        return pred, keep & jnp.asarray(active)
+
     def _lm_head_operands(
         self, hidden: Float[Array, "... D"], bigram_ids: Int[Array, "..."] | None
     ) -> tuple[Float[Array, "... E"], Float[Array, "E V"]]:
@@ -5254,6 +5364,7 @@ class Transformer(eqx.Module):
         router_tie_active: bool | None = None,
         future_aux_weight: jax.Array | None = None,
         layer_skip: "LayerSkip | None" = None,
+        extra_mlp_active: jax.Array | bool = True,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
         ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
@@ -5265,8 +5376,10 @@ class Transformer(eqx.Module):
             route_key=route_key,
             router_tie_active=router_tie_active,
             layer_skip=layer_skip,
+            extra_mlp_active=extra_mlp_active,
         )
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
+        entropy_pred = router_metrics.pop(_ENTROPY_PRED, None)
         router_metrics.pop(_NITP_TARGET, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
         router_metrics.pop(_MTP_EMBED, None)
@@ -5326,6 +5439,26 @@ class Transformer(eqx.Module):
             loss = loss + aux_loss_weight.astype(loss_dtype) * aux_loss
         if compress_loss is not None and train_terms:
             loss = loss + jnp.sum(compress_loss).astype(loss_dtype)
+        entropy_metrics: dict[str, jax.Array] = {}
+        if entropy_pred is not None and train_terms:
+            head_in, lm_head = self._lm_head_operands(hidden, token_ids)
+            cap = _logit_cap(self.config)
+            assert cap is None or isinstance(cap, float), "the entropy head needs a scalar logit_soft_cap"
+            target = _predictive_entropy(head_in, lm_head, cap)
+            weight = loss_weight.astype(jnp.float32)
+            count = jnp.maximum(jnp.sum(weight), 1.0)
+            err = entropy_pred - target
+            mse = jnp.sum(weight * jnp.square(err)) / count
+            loss = loss + mse.astype(loss_dtype)
+            centered = [x - jnp.sum(weight * x) / count for x in (entropy_pred, target)]
+            corr = jnp.sum(weight * centered[0] * centered[1]) / jnp.sqrt(
+                jnp.sum(weight * jnp.square(centered[0])) * jnp.sum(weight * jnp.square(centered[1])) + 1e-12
+            )
+            entropy_metrics = {
+                "train/aux/entropy_head_mse": jax.lax.stop_gradient(mse),
+                "train/aux/entropy_head_corr": jax.lax.stop_gradient(corr),
+                "train/aux/entropy_target_mean": jnp.sum(weight * target) / count,
+            }
         if attn_res_z is not None and train_terms:
             loss = loss + (0.0) * attn_res_z.astype(loss_dtype)
         nitp_loss = nitp_cos = None
@@ -5343,6 +5476,7 @@ class Transformer(eqx.Module):
                 return loss, {"train/cross_entropy_loss": cross_entropy_loss, **final_gate_metrics}
             summarized_metrics = summarize_router_metrics(router_metrics)
             summarized_metrics.update(final_gate_metrics)
+            summarized_metrics.update(entropy_metrics)
             if NEWTON_GRAM_KEY in router_metrics:
                 summarized_metrics[NEWTON_GRAM_KEY] = router_metrics[NEWTON_GRAM_KEY]
             if self.config.num_null_experts:

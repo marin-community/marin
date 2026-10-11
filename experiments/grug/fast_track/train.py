@@ -840,7 +840,14 @@ def _layer_skip_mask(rule: LayerSkipRule | None, tokens: jax.Array, mask) -> Lay
     return LayerSkip(rule.layers, ~skip)
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, layer_skip: LayerSkipRule | None = None):
+def _loss_and_grads(
+    params,
+    batch,
+    mp: jmp.Policy,
+    z_loss: float | None,
+    layer_skip: LayerSkipRule | None = None,
+    extra_mlp_active: jax.Array | bool = True,
+):
     def loss_fn(model):
         compute_params = _cast_to_compute(mp, model)
         skip = _layer_skip_mask(layer_skip, batch.tokens, batch.attn_mask)
@@ -853,6 +860,7 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, layer_s
             return_router_metrics=True,
             train_terms=True,
             layer_skip=skip,
+            extra_mlp_active=extra_mlp_active,
         )
         if skip is not None:
             metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
@@ -862,7 +870,13 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, layer_s
 
 
 def _accumulated_loss_and_grads(
-    num_microbatches: int, params, batch, mp: jmp.Policy, z_loss, layer_skip: LayerSkipRule | None = None
+    num_microbatches: int,
+    params,
+    batch,
+    mp: jmp.Policy,
+    z_loss,
+    layer_skip: LayerSkipRule | None = None,
+    extra_mlp_active: jax.Array | bool = True,
 ):
     """``_loss_and_grads`` over ``num_microbatches`` equal slices of ``batch``, one at a time: the loss, gradients
     and float metrics are averaged, integer metrics (counts) summed. Every microbatch runs in one ``lax.scan``
@@ -871,7 +885,7 @@ def _accumulated_loss_and_grads(
     micro = reshape_batch_into_microbatches(batch, num_microbatches)
 
     def one(microbatch):
-        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip)
+        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip, extra_mlp_active)
 
     shapes = jax.eval_shape(one, jax.tree.map(lambda x: x[0], micro))
     zeros = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype, out_sharding=getattr(s.sharding, "spec", None)), shapes)
@@ -930,8 +944,10 @@ def _make_train_step(
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
     layer_skip: LayerSkipRule | None = None,
+    extra_mlp_start_step: int = 0,
 ):
-    """``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
+    """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
+    ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
     (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
     between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
     one = jnp.array(1, dtype=jnp.int32)
@@ -949,13 +965,14 @@ def _make_train_step(
         # host-side kernel launches that can cause SPMD sync issues).
         with jax.named_scope("qb_apply"):
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        extra_active = state.step >= extra_mlp_start_step
 
         if grad_accum_microbatches > 1:
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip
+                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active
             )
         else:
-            (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, layer_skip)
+            (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, layer_skip, extra_active)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -1131,6 +1148,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
         layer_skip=config.trainer.layer_skip,
+        # The extra MLPs switch on half-way, once the entropy head has learned something.
+        extra_mlp_start_step=trainer.num_train_steps // 2,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
