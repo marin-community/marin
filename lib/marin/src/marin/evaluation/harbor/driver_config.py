@@ -5,7 +5,6 @@
 
 import json
 import logging
-import os
 import subprocess
 import tempfile
 import tomllib
@@ -26,7 +25,9 @@ from marin.inference.iris import InferenceBackendState
 
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _LIB_DIR = Path(__file__).parents[5]
-_DRIVER_PYTHONPATH = os.pathsep.join(str(_LIB_DIR / project / "src") for project in ("marin", "rigging", "finestore"))
+# The isolated Harbor lock owns Rigging and FineStore. Exposing the workspace copies here can
+# shadow those pinned packages with incompatible source from a newer Marin checkout.
+_DRIVER_PYTHONPATH = str(_LIB_DIR / "marin" / "src")
 _OWNER_ONLY_MODE = 0o600
 # Harbor can exhaust a trial's upstream retry budget in tens of seconds when an endpoint disappears.
 _BACKEND_POLL_SECONDS = 5.0

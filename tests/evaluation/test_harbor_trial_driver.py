@@ -74,6 +74,27 @@ def _external_python(
     )
 
 
+def test_external_driver_uses_locked_archive_dependencies():
+    _external_python(
+        "-c",
+        textwrap.dedent(
+            """
+            from pathlib import Path
+
+            import finestore
+            import rigging
+            from harbor import archive
+            from marin.evaluation.harbor import trial_driver
+
+            assert archive.EvaluationStore is not None
+            assert trial_driver.RuntimeOverlay is not None
+            assert "site-packages" in str(Path(finestore.__file__).resolve())
+            assert "site-packages" in str(Path(rigging.__file__).resolve())
+            """
+        ),
+    )
+
+
 def test_external_driver_retries_spurious_path_style_response():
     result = _external_python(
         "-c",
