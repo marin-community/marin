@@ -158,7 +158,14 @@ def protocol_recipe(updates: int) -> str:
                 "enable_reward_shaping": False,
             },
             "installed_agent": {
-                "agent": {"name": "pi", "kwargs": {"version": "0.87.0", "collect_rollout_details": True}},
+                "agent": {
+                    "name": "pi",
+                    "kwargs": {
+                        "version": "0.87.0",
+                        "collect_rollout_details": True,
+                        "thinking_format": "chat-template",
+                    },
+                },
                 "setup_timeout": 360,
                 "run_timeout": 1800,
                 "cleanup_timeout": 60,
