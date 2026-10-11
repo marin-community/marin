@@ -54,6 +54,7 @@ from experiments.grug.fast_track.train import (
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
+    LayerSkipRule,
     MasterParamMode,
     RaggedTransport,
     WatchMode,
@@ -358,6 +359,7 @@ def build_h100_ladder_run(
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
     null_routing_dump: bool = False,
+    layer_skip: LayerSkipRule | None = None,
     resume_from: str | None = None,
     xla_memory_report: bool = False,
     master_param_mode: MasterParamMode | None = None,
@@ -562,6 +564,7 @@ def build_h100_ladder_run(
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 null_routing_dump_path=(prefix_join(ctx.output_path, "null_routing.npz") if null_routing_dump else None),
+                layer_skip=layer_skip,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
                 pipeline_depth=pipeline_depth,
                 loader_buffer_batches=loader_buffer_batches,
@@ -655,6 +658,25 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     return args
 
 
+def _layer_skip_rule(
+    layers: str | None, rate: float, positions: str | None, token_ids_file: str | None
+) -> LayerSkipRule | None:
+    """The ``--layer-skip-*`` options as a ``LayerSkipRule`` (None without ``--layer-skip-layers``)."""
+    if layers is None:
+        if positions is not None or token_ids_file is not None:
+            raise click.UsageError("--layer-skip-positions / --layer-skip-token-ids-file need --layer-skip-layers")
+        return None
+    span = None
+    if positions is not None:
+        lo, _, hi = positions.partition(":")
+        span = (int(lo), int(hi) if hi else -1)
+    ids: tuple[int, ...] = ()
+    if token_ids_file is not None:
+        with open(token_ids_file) as f:
+            ids = tuple(sorted({int(t) for t in f.read().split()}))
+    return LayerSkipRule(layers=tuple(int(x) for x in layers.split(",")), rate=rate, positions=span, token_ids=ids)
+
+
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
 @click.option(
@@ -714,6 +736,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Capture a JAX profile of a few steps from this step (uploaded to the run's xprof directory).",
 )
 @click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
+@click.option("--layer-skip-layers", default=None, help="Comma-separated layers some tokens skip (LayerSkipRule).")
+@click.option("--layer-skip-rate", type=float, default=1.0, show_default=True, help="Skip probability of a match.")
+@click.option("--layer-skip-positions", default=None, help="LO:HI document positions that skip (HI empty: open).")
+@click.option(
+    "--layer-skip-token-ids-file", default=None, help="Local file of whitespace-separated token ids that skip."
+)
 @click.option(
     "--null-routing-dump",
     is_flag=True,
@@ -858,6 +886,10 @@ def main(
     profile_start_step: int | None,
     dump_hlo: bool,
     null_routing_dump: bool,
+    layer_skip_layers: str | None,
+    layer_skip_rate: float,
+    layer_skip_positions: str | None,
+    layer_skip_token_ids_file: str | None,
     resume_from: str | None,
     xla_memory_report: bool,
     master_param_mode: str | None,
@@ -898,6 +930,7 @@ def main(
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
         null_routing_dump=null_routing_dump,
+        layer_skip=_layer_skip_rule(layer_skip_layers, layer_skip_rate, layer_skip_positions, layer_skip_token_ids_file),
         resume_from=resume_from,
         xla_memory_report=xla_memory_report,
         master_param_mode=MasterParamMode(master_param_mode) if master_param_mode else None,

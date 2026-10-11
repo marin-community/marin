@@ -68,6 +68,7 @@ from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     DenseMLP,
     GrugModelConfig,
+    LayerSkip,
     Transformer,
     forward_flops_per_token,
 )
@@ -251,6 +252,26 @@ def _tree_to_memory_kind(tree, memory_kind: str):
 
 
 @dataclass(frozen=True)
+class LayerSkipRule:
+    """Tokens that skip ``layers`` (no attention or MLP output there; their K/V still computed) in training and
+    eval. A token matches by document position (``positions = (lo, hi)``, ``hi < 0`` for open-ended) or by id
+    (``token_ids``); a matching token skips with probability ``rate``, drawn by a fixed hash of (position,
+    token id, seed) so train and eval pick the same tokens."""
+
+    layers: tuple[int, ...]
+    rate: float = 1.0
+    positions: tuple[int, int] | None = None
+    token_ids: tuple[int, ...] = ()
+    seed: int = 0
+
+    def __post_init__(self):
+        if (self.positions is None) == (not self.token_ids):
+            raise ValueError("LayerSkipRule needs exactly one of positions or token_ids")
+        if not 0.0 < self.rate <= 1.0:
+            raise ValueError(f"LayerSkipRule rate must be in (0, 1], got {self.rate}")
+
+
+@dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
@@ -271,6 +292,8 @@ class GrugTrainerConfig:
     # After the last step, route ``NULL_ROUTING_DUMP_BATCHES`` train-size batches of held-out sequences and write each
     # token's null-slot count per layer and its next-token loss here (``moe_null_layers`` runs).
     null_routing_dump_path: str | None = None
+    # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
+    layer_skip: LayerSkipRule | None = None
     # Train steps dispatched before the previous step's host work: 1 overlaps that work (logging, callbacks) with
     # the devices; 0 finishes every step before dispatching the next. 1 crashes the devices around step 515
     # (CUDA_ERROR_ILLEGAL_ADDRESS, with or without PGLE; batch 160), so it is opt-in until that is understood.
@@ -493,6 +516,7 @@ def build_tagged_evaluator(
     eval_cfg: GrugEvalConfig,
     mp: jmp.Policy,
     model_transform: Callable[[Transformer], Transformer] | None = None,
+    layer_skip: LayerSkipRule | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -522,6 +546,7 @@ def build_tagged_evaluator(
             mask=batch.attn_mask,
             reduction="none",
             logsumexp_weight=None,
+            layer_skip=_layer_skip_mask(layer_skip, batch.tokens, batch.attn_mask),
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
@@ -775,10 +800,46 @@ def _drop_metrics(
     }
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
+def _doc_positions(tokens: jax.Array, mask) -> jax.Array:
+    """Each token's position within its document (segment), ``[B, S]``."""
+    seg = None if not isinstance(mask, AttentionMask) or mask.segment_ids is None else mask.segment_ids[0]
+    idx = jnp.broadcast_to(jnp.arange(tokens.shape[1], dtype=jnp.int32), tokens.shape)
+    if seg is None:
+        return idx
+    starts = jnp.concatenate([jnp.ones_like(seg[:, :1], bool), seg[:, 1:] != seg[:, :-1]], axis=1)
+    return idx - jax.lax.cummax(jnp.where(starts, idx, 0), axis=1)
+
+
+def _hash_uniform(pos: jax.Array, tokens: jax.Array, seed: int) -> jax.Array:
+    """A fixed pseudo-random uniform in [0, 1) per (position, token id, seed)."""
+    h = pos.astype(jnp.uint32) * jnp.uint32(2654435761) + tokens.astype(jnp.uint32) * jnp.uint32(2246822519)
+    h = h + jnp.uint32((seed * 3266489917) % (1 << 32))
+    h = h ^ (h >> 15)
+    h = h * jnp.uint32(2246822519)
+    h = h ^ (h >> 13)
+    return h.astype(jnp.float32) / jnp.float32(1 << 32)
+
+
+def _layer_skip_mask(rule: LayerSkipRule | None, tokens: jax.Array, mask) -> LayerSkip | None:
+    if rule is None:
+        return None
+    pos = _doc_positions(tokens, mask)
+    if rule.positions is not None:
+        lo, hi = rule.positions
+        match = (pos >= lo) & ((pos < hi) if hi >= 0 else True)
+    else:
+        table = np.zeros(int(max(rule.token_ids)) + 1, bool)
+        table[np.asarray(rule.token_ids)] = True
+        match = jnp.take(jnp.asarray(table), jnp.minimum(tokens, len(table) - 1)) & (tokens < len(table))
+    skip = match & (_hash_uniform(pos, tokens, rule.seed) < rule.rate)
+    return LayerSkip(rule.layers, ~skip)
+
+
+def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, layer_skip: LayerSkipRule | None = None):
     def loss_fn(model):
         compute_params = _cast_to_compute(mp, model)
-        return compute_params.next_token_loss(
+        skip = _layer_skip_mask(layer_skip, batch.tokens, batch.attn_mask)
+        loss, metrics = compute_params.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
@@ -786,12 +847,18 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
             logsumexp_weight=z_loss,
             return_router_metrics=True,
             train_terms=True,
+            layer_skip=skip,
         )
+        if skip is not None:
+            metrics = {**metrics, "train/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
+        return loss, metrics
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
 
 
-def _accumulated_loss_and_grads(num_microbatches: int, params, batch, mp: jmp.Policy, z_loss):
+def _accumulated_loss_and_grads(
+    num_microbatches: int, params, batch, mp: jmp.Policy, z_loss, layer_skip: LayerSkipRule | None = None
+):
     """``_loss_and_grads`` over ``num_microbatches`` equal slices of ``batch``, one at a time: the loss, gradients
     and float metrics are averaged, integer metrics (counts) summed. Every microbatch runs in one ``lax.scan``
     body from a zero accumulator, so the forward and backward compile once and one microbatch's activations are
@@ -799,7 +866,7 @@ def _accumulated_loss_and_grads(num_microbatches: int, params, batch, mp: jmp.Po
     micro = reshape_batch_into_microbatches(batch, num_microbatches)
 
     def one(microbatch):
-        return _loss_and_grads(params, microbatch, mp, z_loss)
+        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip)
 
     shapes = jax.eval_shape(one, jax.tree.map(lambda x: x[0], micro))
     zeros = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype, out_sharding=getattr(s.sharding, "spec", None)), shapes)
@@ -857,6 +924,7 @@ def _make_train_step(
     grad_accum_microbatches: int = 1,
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
+    layer_skip: LayerSkipRule | None = None,
 ):
     """``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
     (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
@@ -879,10 +947,10 @@ def _make_train_step(
 
         if grad_accum_microbatches > 1:
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-                grad_accum_microbatches, qb_params, batch, mp, z_loss
+                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip
             )
         else:
-            (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
+            (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, layer_skip)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -1052,6 +1120,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         grad_accum_microbatches=config.trainer.grad_accum_microbatches,
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
+        layer_skip=config.trainer.layer_skip,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1146,6 +1215,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     mesh=mesh,
                     eval_cfg=eval_cfg,
                     mp=trainer.mp,
+                    layer_skip=config.trainer.layer_skip,
                 )
             # Expert-parallel runs drop tokens over capacity; a second evaluator scores the same
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
@@ -1167,6 +1237,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         mesh=dropless_eval_mesh,
                         eval_cfg=eval_cfg,
                         mp=trainer.mp,
+                        layer_skip=config.trainer.layer_skip,
                         model_transform=functools.partial(
                             _to_dropless_local,
                             implementation=eval_cfg.dropless_eval_moe_implementation,

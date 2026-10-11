@@ -166,6 +166,8 @@ _ATTN_RES_Z = "attn_res_z_term"
 _ATTN_RES_W_ATTN = "attn_res_weights_attn"
 _ATTN_RES_W_MLP = "attn_res_weights_mlp"
 _ATTN_RES_W_V = "attn_res_weights_v"
+# Per-layer extras key carrying ``LayerSkip.keep`` into a skipped layer.
+_SKIP_KEEP = "layer_skip_keep"
 # Per-layer router stats carrying each token's ``[T, K]`` selected experts and combine weights to
 # ``Transformer.routing_assignments``.
 _ROUTING_SELECTED = "routing_selected"
@@ -3861,6 +3863,9 @@ def _attn_res_sublayers(
         kv_input,
     )
     attn_out = _sublayer_dropout(cfg, attn_out, noise_key, _ATTN_DROPOUT_SALT)
+    skip_keep = None if logit_bias is None else logit_bias.get(_SKIP_KEEP)
+    if skip_keep is not None:
+        attn_out = attn_out * skip_keep[..., None].astype(attn_out.dtype)
     scale_attn = scale_mlp = None
     if layer.attn_res_partial_scale is not None:
         scale_attn, scale_mlp = (layer.attn_res_partial_scale[j].astype(attn_out.dtype) for j in range(2))
@@ -3881,6 +3886,8 @@ def _attn_res_sublayers(
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
     mlp_out = _sublayer_dropout(cfg, mlp_out, noise_key, _MLP_DROPOUT_SALT)
+    if skip_keep is not None:
+        mlp_out = mlp_out * skip_keep[..., None].astype(mlp_out.dtype)
     if trace_capture.TRACE:
         router_stats = {
             **router_stats,
@@ -4234,6 +4241,15 @@ def _accumulate_source_grads(
     d_partial = d_partial + jnp.where(boundary, d_slot, 0).astype(d_partial.dtype)
     rolled = boundary & (jnp.arange(d_sources.shape[0]) == slot)
     return jnp.where(rolled[:, None, None, None], 0, acc).astype(d_sources.dtype), d_partial
+
+
+class LayerSkip(NamedTuple):
+    """An eval ablation: on ``layers``, tokens with ``keep`` False contribute no attention or MLP output. Their
+    K/V are still computed (other tokens attend to them as before), so with ``attn_res_kv_layers`` on those
+    layers every other token's outputs are unchanged."""
+
+    layers: tuple[int, ...]
+    keep: Bool[Array, "B S"]
 
 
 class _ScanArgs(NamedTuple):
@@ -4633,8 +4649,11 @@ class Transformer(eqx.Module):
         route_key: jax.Array | None = None,
         return_routing: bool = False,
         router_tie_active: bool | None = None,
+        layer_skip: "LayerSkip | None" = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
+        """``layer_skip`` (an eval ablation, AttnRes only) drops the listed layers' attention and MLP outputs for
+        the tokens it marks.
+        ``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
         (True); None runs all passes. ``route_key`` (training only) seeds ``moe_gumbel_tau``.
         ``router_tie_active`` (static) applies the ``router_embed_tie`` ties; None applies them unless
         ``router_embed_tie_release_step`` is set (a released model's router columns already hold them).
@@ -4718,8 +4737,11 @@ class Transformer(eqx.Module):
                 route_key,
                 (None),
                 (None),
+                layer_skip,
             )
         else:
+            if layer_skip is not None:
+                raise ValueError("layer_skip needs attn_res")
             # One compiled Block body scanned over the stacked layers; per-layer short/long is a
             # Bool[num_layers] scan input, and the FA4 metadata is selected per layer with jnp.where.
             mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every, (None))
@@ -4802,6 +4824,7 @@ class Transformer(eqx.Module):
         route_key: jax.Array | None = None,
         input_embed2: jax.Array | None = None,
         ple_rows: jax.Array | None = None,
+        layer_skip: "LayerSkip | None" = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -4917,6 +4940,8 @@ class Transformer(eqx.Module):
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
                 if kv_inputs is not None:
                     layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
+                if layer_skip is not None and i in layer_skip.layers:
+                    layer_extras = {**(layer_extras or {}), _SKIP_KEEP: layer_skip.keep}
                 layer_args = (
                     (layer, blocks, block_logits, partial, queries, layer_extras),
                     long_layer_mask if use_long else short_layer_mask,
@@ -5228,12 +5253,18 @@ class Transformer(eqx.Module):
         byte_aux_weight: jax.Array | None = None,
         router_tie_active: bool | None = None,
         future_aux_weight: jax.Array | None = None,
+        layer_skip: "LayerSkip | None" = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
         ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
         score the plain next-token loss."""
         hidden, router_metrics = self(
-            token_ids, mask=mask, loop_active=loop_active, route_key=route_key, router_tie_active=router_tie_active
+            token_ids,
+            mask=mask,
+            loop_active=loop_active,
+            route_key=route_key,
+            router_tie_active=router_tie_active,
+            layer_skip=layer_skip,
         )
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
         router_metrics.pop(_NITP_TARGET, None)
