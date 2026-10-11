@@ -287,55 +287,105 @@ def test_direct_inference_session_reports_backend_state(
     assert session.backend_state() is expected
 
 
-@pytest.mark.parametrize(
-    ("task_state", "placed"),
-    [
-        (TaskState.PENDING, False),
-        (TaskState.ASSIGNED, True),
-        (TaskState.RUNNING, True),
-    ],
-)
-def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
-    task_state: TaskState, placed: bool, monkeypatch
-) -> None:
-    class FixedDeadline:
+_GATED = "SchedulingGated: Scheduling is blocked due to non-empty scheduling gates"
+
+
+def _wait_on_timeline(monkeypatch, timeline: list[tuple[float, TaskState, str]], timeout_seconds: float):
+    """Run ``_wait_for_endpoint`` on a fake clock while the serve task walks ``timeline``.
+
+    Each entry is (seconds spent, task state, status message). The endpoint
+    registers once the timeline is over.
+    """
+    clock = 0.0
+    ends = [sum(seconds for seconds, _, _ in timeline[: index + 1]) for index in range(len(timeline))]
+
+    class ClockDeadline:
         def __init__(self, seconds: float) -> None:
-            self.seconds = seconds
+            self.at = clock + seconds
 
         def expired(self) -> bool:
-            return self.seconds == 0
+            return clock >= self.at
 
-    endpoint_probes = 0
+    def sleep(seconds: float) -> None:
+        nonlocal clock
+        clock += seconds
 
     def list_endpoint_instances(_endpoint_name: str):
-        nonlocal endpoint_probes
-        endpoint_probes += 1
-        if endpoint_probes > 1:
+        if clock >= ends[-1]:
             return [SimpleNamespace(address="https://inference.example", metadata={})]
         return []
 
-    monkeypatch.setattr(iris_module.Deadline, "from_seconds", FixedDeadline)
-    monkeypatch.setattr(iris_module.time, "sleep", lambda _seconds: None)
+    def list_tasks(_job_id):
+        index = next(index for index, end in enumerate(ends) if clock < end)
+        _, state, message = timeline[index]
+        return [SimpleNamespace(state=state, status_message=message)]
+
+    monkeypatch.setattr(iris_module.Deadline, "from_seconds", ClockDeadline)
+    monkeypatch.setattr(iris_module.time, "sleep", sleep)
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
         lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                list_endpoint_instances=list_endpoint_instances,
-                job_status=lambda _job_id: SimpleNamespace(task_state_counts={task_state: 1}),
-            )
+            client=SimpleNamespace(list_endpoint_instances=list_endpoint_instances, list_tasks=list_tasks)
         ),
     )
     job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
+    return iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=timeout_seconds)
+
+
+@pytest.mark.parametrize(
+    ("task_state", "status_message", "placed"),
+    [
+        (TaskState.PENDING, "", False),
+        (TaskState.BUILDING, _GATED, False),
+        (TaskState.BUILDING, "ContainerCreating", True),
+        (TaskState.ASSIGNED, "", True),
+        (TaskState.RUNNING, "", True),
+    ],
+)
+def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
+    task_state: TaskState, status_message: str, placed: bool, monkeypatch
+) -> None:
+    timeline = [(10.0, task_state, status_message)]
 
     if placed:
-        with pytest.raises(TimeoutError):
-            iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0)
+        with pytest.raises(TimeoutError, match="inference endpoint"):
+            _wait_on_timeline(monkeypatch, timeline, timeout_seconds=0)
     else:
-        assert iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0) == (
-            "https://inference.example",
-            {},
-        )
+        assert _wait_on_timeline(monkeypatch, timeline, timeout_seconds=0) == ("https://inference.example", {})
+
+
+def test_inference_endpoint_wait_charges_gated_time_to_placement_not_startup(monkeypatch) -> None:
+    # Gated for 3x the startup budget, placed, requeued by preemption, gated
+    # again, then placed: each placed stretch fits the startup budget, so the
+    # wait succeeds.
+    timeline = [
+        (300.0, TaskState.BUILDING, _GATED),
+        (60.0, TaskState.BUILDING, "ContainerCreating"),
+        (20.0, TaskState.PENDING, ""),
+        (300.0, TaskState.BUILDING, _GATED),
+        (80.0, TaskState.RUNNING, ""),
+    ]
+
+    assert _wait_on_timeline(monkeypatch, timeline, timeout_seconds=100) == ("https://inference.example", {})
+
+
+def test_inference_endpoint_wait_times_out_startup_after_placement(monkeypatch) -> None:
+    timeline = [
+        (300.0, TaskState.BUILDING, _GATED),
+        (150.0, TaskState.RUNNING, ""),
+    ]
+
+    with pytest.raises(TimeoutError, match="inference endpoint"):
+        _wait_on_timeline(monkeypatch, timeline, timeout_seconds=100)
+
+
+def test_inference_endpoint_wait_times_out_placement_while_gated(monkeypatch) -> None:
+    gated = iris_module._ENDPOINT_PLACEMENT_TIMEOUT_SECONDS + 60
+    timeline = [(gated, TaskState.BUILDING, _GATED), (10.0, TaskState.RUNNING, "")]
+
+    with pytest.raises(TimeoutError, match="to be placed"):
+        _wait_on_timeline(monkeypatch, timeline, timeout_seconds=100)
 
 
 def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:
