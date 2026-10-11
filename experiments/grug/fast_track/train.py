@@ -1116,14 +1116,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if seed_topology is not None:
         if config.trainer.xla_autotune_cache_path is None:
             raise ValueError("xla_autotune_seed_topology needs xla_autotune_cache_path")
-        _seed_xla_autotune_cache(seed_topology)
-        autotune_cache_loaded: bool | None = False
-    else:
-        autotune_cache_loaded = (
-            _use_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
-            if config.trainer.xla_autotune_cache_path is not None
-            else None
-        )
+        _seed_xla_autotune_cache(config, seed_topology)
+        return
+    autotune_cache_loaded = (
+        _use_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
+        if config.trainer.xla_autotune_cache_path is not None
+        else None
+    )
     marker = config.trainer.completion_marker_path
     if marker is not None and fsspec.core.url_to_fs(marker)[0].exists(marker):
         logger.info("run already completed (%s exists); not retraining", marker)
@@ -1141,32 +1140,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
-    diagnostic_watch_step = None
-    inline_watch_config = watch_config if watch_config.is_enabled else None
-    if watch_config.is_enabled and config.trainer.watch_mode == WatchMode.DIAGNOSTIC:
-        diagnostic_watch_step = _make_diagnostic_watch_step(
-            trainer.mp,
-            z_loss_weight=config.trainer.z_loss_weight,
-            watch_config=watch_config,
-        )
-        inline_watch_config = None
-    ema_start_step = (
-        0 if config.trainer.ema_last_steps is None else max(0, trainer.num_train_steps - config.trainer.ema_last_steps)
-    )
-    train_step_fn = _make_train_step(
-        optimizer,
-        trainer.mp,
-        z_loss_weight=config.trainer.z_loss_weight,
-        ema_beta=config.trainer.ema_beta,
-        ema_start_step=ema_start_step,
-        watch_config=inline_watch_config,
-        grad_accum_microbatches=config.trainer.grad_accum_microbatches,
-        offload_opt_state=config.trainer.offload_opt_state,
-        master_param_mode=config.trainer.master_param_mode,
-        layer_skip=config.trainer.layer_skip,
-        # Late by default, once the entropy head has learned something.
-        extra_mlp_start_step=int(trainer.num_train_steps * config.trainer.extra_mlp_start_frac),
-    )
+    train_step_fn, diagnostic_watch_step = _build_train_step(config, optimizer)
+    ema_start_step = _ema_start_step(config)
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
     if config.trainer.data_seed is not None:
@@ -1536,13 +1511,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             jax.process_index(),
                             iterator.this_load_time,
                         )
-                    if seed_topology is not None:
-                        assert config.trainer.xla_autotune_cache_path is not None
-                        compile_start = time.perf_counter()
-                        train_step.lower(state_leaves, batch).compile()
-                        logger.info("Seed compile of the train step took %.0f s", time.perf_counter() - compile_start)
-                        _publish_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
-                        return
                     state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                     dispatch_start = time.perf_counter()
                     state_leaves, metrics, inline_watch_stats = train_step(state_leaves, batch)
@@ -1755,13 +1723,93 @@ def _use_xla_autotune_cache(path: str) -> bool:
     return loaded
 
 
-def _seed_xla_autotune_cache(topology: str) -> None:
-    """Make this one process stand in for ``topology``'s full mesh (mock NCCL) and autotune everything locally,
-    dumping the results for ``_publish_xla_autotune_cache``. Must run before the backend is created."""
+def _ema_start_step(config: GrugRunConfig) -> int:
+    num_steps, last = config.trainer.trainer.num_train_steps, config.trainer.ema_last_steps
+    return 0 if last is None else max(0, num_steps - last)
+
+
+def _build_train_step(config: GrugRunConfig, optimizer):
+    """The jitted train step and the optional diagnostic watch step, shared by training and the autotune seed so
+    both compile the same program."""
+    trainer = config.trainer.trainer
+    watch_config = trainer.watch
+    diagnostic_watch_step = None
+    inline_watch_config = watch_config if watch_config.is_enabled else None
+    if watch_config.is_enabled and config.trainer.watch_mode == WatchMode.DIAGNOSTIC:
+        diagnostic_watch_step = _make_diagnostic_watch_step(
+            trainer.mp,
+            z_loss_weight=config.trainer.z_loss_weight,
+            watch_config=watch_config,
+        )
+        inline_watch_config = None
+    train_step_fn = _make_train_step(
+        optimizer,
+        trainer.mp,
+        z_loss_weight=config.trainer.z_loss_weight,
+        ema_beta=config.trainer.ema_beta,
+        ema_start_step=_ema_start_step(config),
+        watch_config=inline_watch_config,
+        grad_accum_microbatches=config.trainer.grad_accum_microbatches,
+        offload_opt_state=config.trainer.offload_opt_state,
+        master_param_mode=config.trainer.master_param_mode,
+        layer_skip=config.trainer.layer_skip,
+        # Late by default, once the entropy head has learned something.
+        extra_mlp_start_step=int(trainer.num_train_steps * config.trainer.extra_mlp_start_frac),
+    )
+    return train_step_fn, diagnostic_watch_step
+
+
+def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
+    """Seed ``xla_autotune_cache_path`` from this one process standing in for ``topology``'s full mesh (mock NCCL):
+    build the state and one real batch, compile the train step ahead of time with sharded autotuning off (so the
+    process autotunes every fusion itself) and publish the results. Skips the trainer's host-level setup (tracker,
+    distributed syncs, data loader), which waits for processes that do not exist. Must run before the backend is
+    created."""
+    assert config.trainer.xla_autotune_cache_path is not None
     jax.config.update("jax_mock_gpu_topology", topology)
     flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}", "--xla_gpu_shard_autotuning=false"]
     os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
     logger.info("Seeding the XLA autotune cache under mock topology %s", topology)
+    trainer = config.trainer.trainer
+    optimizer = config.optimizer.build(trainer.num_train_steps)
+    train_step_fn, _ = _build_train_step(config, optimizer)
+    mesh = compact_grug_mesh(
+        expert_axis_size=config.trainer.expert_axis_size,
+        replica_axis_size=config.trainer.replica_axis_size,
+    )
+    with set_mesh(mesh):
+        state = jax.jit(
+            lambda key: initial_state(
+                config.model,
+                optimizer=optimizer,
+                mp=trainer.mp,
+                key=key,
+                ema_beta=config.trainer.ema_beta,
+                offload_opt_state=config.trainer.offload_opt_state,
+                master_param_mode=config.trainer.master_param_mode,
+            )
+        )(jax.random.PRNGKey(trainer.seed))
+        dataset = build_train_dataset(
+            config.data,
+            max_seq_len=config.model.max_seq_len,
+            batch_schedule=trainer.batch_schedule,
+            key=jax.random.PRNGKey(0),
+        ).as_sync_dataset()
+        batch_size = trainer.batch_schedule.batch_size_at_step(0)
+        host = jax.tree.map(
+            lambda *xs: np.stack([np.asarray(x) for x in xs]), *dataset.get_batch(list(range(batch_size)))
+        )
+        batch = jax.tree.map(
+            lambda x: jax.make_array_from_callback(
+                x.shape, NamedSharding(mesh, P(_BATCH_AXES, *([None] * (x.ndim - 1)))), lambda index, x=x: x[index]
+            ),
+            host,
+        )
+        state_leaves, state_treedef = jax.tree.flatten(state)
+        compile_start = time.perf_counter()
+        _flat_train_step(train_step_fn, state_treedef).lower(state_leaves, batch).compile()
+        logger.info("Seed compile of the train step took %.0f s", time.perf_counter() - compile_start)
+    _publish_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
 
 
 def _publish_xla_autotune_cache(path: str) -> None:
