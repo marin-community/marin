@@ -709,6 +709,10 @@ class GrugModelConfig:
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
     attn_res_num_blocks: int = 8
+    attn_res_plain_sum: bool = False
+    """Every AttnRes gate (and the final gate) returns the plain sum of its sources instead of a softmax mix: the
+    standard residual stream (embedding + every earlier sublayer output), keeping the AttnRes loop's features
+    (``attn_res_kv_layers`` then reads the residual stream after the leading layers)."""
     attn_res_shared_query: bool = False
     """A third zero-init pseudo-query per layer whose AttnRes mix feeds the shared experts only; the router and
     routed experts keep the MLP gate's mix."""
@@ -3865,8 +3869,10 @@ def _attn_res_mix(
     stream_source: bool = False,
     source_delta: bool = False,
     soft_cap: float | None = None,
+    plain_sum: bool = False,
 ) -> tuple[Float[Array, "B S D"], jax.Array]:
-    """One AttnRes gate: softmax over the completed blocks (+ the running partial) and their weighted sum.
+    """One AttnRes gate: softmax over the completed blocks (+ the running partial) and their weighted sum
+    (``plain_sum``: their plain sum, ``attn_res_plain_sum``).
 
     ``additive`` (Delta AttnRes) adds the plain sum of the sources to the mix; ``head_norm`` scores
     each head's channel slice with its own RMS (``attn_res_head_norm``); ``soft_cap`` tanh-caps the final
@@ -3882,6 +3888,10 @@ def _attn_res_mix(
     each gate) is scored here. Only the valid sources are read -- no masked slots.
     """
     sources = list(blocks)
+    if plain_sum:
+        sources = [*sources, *([] if partial is None else [partial])]
+        uniform = jnp.full((len(sources),), 1.0 / len(sources), jnp.float32)
+        return reshard(_stream_sum(tuple(sources)), _batch_spec()), jnp.zeros((), jnp.float32), uniform
     logits = [_block_logit(bl, queries, gate_index) for bl in block_logits]
     if source_delta:
         # Output deltas: the precomputed block logits score raw sources, so score the deltas here.
@@ -4027,16 +4037,27 @@ def _attn_res_layer(
 
     def mix(p: jax.Array | None, gate_index: int, attn_gate: bool, leading_sources_only: bool = False):
         del attn_gate
+        cfg = layer.attn.cfg
         if not leading_sources_only:
-            return _attn_res_mix(blocks, block_logits, p, queries, gate_index, eps, logit_bias)
+            return _attn_res_mix(
+                blocks, block_logits, p, queries, gate_index, eps, logit_bias, plain_sum=cfg.attn_res_plain_sum
+            )
         # The leading layers' sources: the extra sources, then the blocks rolled at layers 0, seg, ... <= the
         # cutoff (each holds only earlier layers); the partial and later blocks are later layers' work.
-        cfg = layer.attn.cfg
         seg = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
         cap = cfg.attn_res_num_blocks
         num_extra = len(blocks) - min(layer_index // seg + 1, cap)
         keep = num_extra + min(cfg.kv_source_layers // seg + 1, cap)
-        return _attn_res_mix(blocks[:keep], block_logits[:keep], None, queries, gate_index, eps, logit_bias)
+        return _attn_res_mix(
+            blocks[:keep],
+            block_logits[:keep],
+            None,
+            queries,
+            gate_index,
+            eps,
+            logit_bias,
+            plain_sum=cfg.attn_res_plain_sum,
+        )
 
     return _attn_res_sublayers(
         layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, kv_share, logit_bias
@@ -5282,6 +5303,9 @@ class Transformer(eqx.Module):
             logits = _bias_gate_logits(logits, logit_bias, final_index, [*blocks, partial], eps, has_partial=True)
             logits = _soft_cap_logits(logits, (None))
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
+            if cfg.attn_res_plain_sum:
+                mixed = _stream_sum((*blocks, partial))
+                weights = jnp.full_like(weights, 1.0 / weights.shape[0])
             spot = _probe_spot()
             if spot is not None:
                 probe_logs[f"{PROBE_STAT}final_sources"] = jnp.stack([_at_spot(src, spot) for src in [*blocks, partial]])
