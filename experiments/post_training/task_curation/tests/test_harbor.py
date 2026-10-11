@@ -418,7 +418,11 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
     task = converted_task(
         cast(CurationRecipe, source.config),
         tasktrove_row(
-            {"instruction.md": b"Solve the grid puzzle.", "tests/verifier_data.json": json.dumps(data).encode()}
+            {
+                "instruction.md": b"Solve the grid puzzle.",
+                "tests/verifier_data.json": json.dumps(data).encode(),
+                "environment/Dockerfile": b"FROM python:3.11-slim\nWORKDIR /app\n",
+            }
         ),
     )
     record = harbor_record(
@@ -430,7 +434,9 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
     )
     files = archive_files(record.task_binary)
     config = tomllib.loads(files["task.toml"].decode())
-    assert tuple(artifact["source"] for artifact in config["artifacts"]) == task.output_paths
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert not config["artifacts"]
+    assert files["environment/Dockerfile"].startswith(b"FROM python:3.11-slim\n")
     assert not any(path.startswith("environment/files/tests/") for path in files)
     for path, content in files.items():
         target = tmp_path / path
@@ -441,6 +447,7 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
                 .replace("/tests", str(tmp_path / "tests"))
                 .replace("/app/", str(tmp_path / "app") + "/")
                 .replace("/logs/", str(tmp_path / "logs") + "/")
+                .replace("exec verifyit ", f"exec verifyit --logs-dir {shlex.quote(str(tmp_path / 'logs/verifier'))} ")
                 .encode()
             )
         target.write_bytes(content)
@@ -465,7 +472,13 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
     source = next(source for source in arc.sources() if source.name == "tasktrove-arc_transductive")
     task = converted_task(
         cast(CurationRecipe, source.config),
-        tasktrove_row({"instruction.md": b"Solve.", "tests/verifier_data.json": b'{"expected_output":[[1]]}'}),
+        tasktrove_row(
+            {
+                "instruction.md": b"Solve.",
+                "tests/verifier_data.json": b'{"expected_output":[[1]]}',
+                "environment/Dockerfile": b"FROM python:3.11-slim\nWORKDIR /app\n",
+            }
+        ),
     )
     task = task.model_copy(
         update={

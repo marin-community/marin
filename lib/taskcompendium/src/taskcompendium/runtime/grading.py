@@ -16,7 +16,7 @@ import math
 import os
 import tarfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -590,6 +590,8 @@ async def _grade_staged(
                     machine_spec,
                     host_environment,
                 )
+                if attempt.stop_reason is not None:
+                    prepared = replace(prepared, env={**prepared.env, "TASKCOMPENDIUM_STOP_REASON": attempt.stop_reason})
                 machine = await factory.create(prepared)
             try:
                 return await _grade_on(

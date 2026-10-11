@@ -22,9 +22,7 @@ from taskcompendium.convert.script_grader import grade_script, script_package, s
 from taskcompendium.grader import GraderPackage, grader_config, verifyit_package
 from taskcompendium.models import (
     AnswerType,
-    CommandSemantics,
     ConversationInput,
-    EnvironmentRequirements,
     PlainText,
     ResourceGroups,
     TaskSpec,
@@ -177,8 +175,8 @@ def _tasktrove_task(
         id=row.id,
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
-        environment_requirements=EnvironmentRequirements(
-            command_semantics=CommandSemantics.LINUX_PROCESS, capabilities=("filesystem", "python")
+        environment_requirements=required_grader_environment(context).model_copy(
+            update={"capabilities": ("shell", "filesystem"), "working_directory": "/app"}
         ),
         # The archive's own tests are replaced by the NVARC grader, so only its other files are kept.
         resources=ResourceGroups(worker=archive.worker, verifier=package.resources, oracle=archive.oracle),
@@ -264,7 +262,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-arc_inductive",
                 source=tasktrove_source(INDUCTIVE_CONFIG),
                 convert=convert_tasktrove_inductive,
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_INDUCTIVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,
@@ -286,7 +284,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-arc_transductive",
                 source=tasktrove_source(TRANSDUCTIVE_CONFIG),
                 convert=convert_tasktrove_transductive,
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_TRANSDUCTIVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,

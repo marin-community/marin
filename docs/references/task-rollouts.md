@@ -89,7 +89,7 @@ It calls these session methods:
 
 1. `prepare()` returns `SessionStart`: public messages and model options.
 2. `advance(turn)` executes task operations and returns `Transition`: observations, completion, and optional per-turn grades or credit.
-3. `grade(messages)` returns the final `GradeResult`.
+3. `grade(messages, stop_reason=...)` returns the final `GradeResult`.
 4. `close()` releases session resources before machine cleanup.
 
 The engine owns model calls, conversation accumulation, and exact-token accounting.
@@ -206,6 +206,12 @@ Late cleanup failures appear in logs after the returned record becomes final.
 Thread-backed sessions retain their pending operations until session cleanup can safely release resources.
 
 ## Grading
+
+Sessions receive `grade(messages, stop_reason=...)`, including turn/token-limit endings.
+The Shellbox session carries that reason in `GradingAttempt.stop_reason`; sandboxed graders
+can read `TASKCOMPENDIUM_STOP_REASON`. The reason is context, not a prerequisite for grading.
+A reasoning-only final response becomes an empty answer in grading evidence; the raw provider
+response remains in the rollout. Existing file submissions are still captured and graded.
 
 The built-in Shellbox session grades by grader kind:
 
