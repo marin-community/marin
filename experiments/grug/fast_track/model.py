@@ -3532,6 +3532,15 @@ def _softmax_mix(logits: list[jax.Array], sources: list[jax.Array]) -> tuple[jax
     return weights, mixed
 
 
+def _weighted_sources(weights: Float[Array, "N B S"], sources: Float[Array, "N B S D"]) -> Float[Array, "B S D"]:
+    """``sum_n weights[n] * sources[n]`` in float32 over a stacked source buffer, summed in source order so it
+    matches ``_softmax_mix`` bit for bit."""
+    mixed = weights[0][..., None] * sources[0].astype(jnp.float32)
+    for n in range(1, sources.shape[0]):
+        mixed = mixed + weights[n][..., None] * sources[n].astype(jnp.float32)
+    return mixed
+
+
 @named_call
 def _attn_res_mix(
     blocks: tuple[jax.Array, ...],
@@ -4042,38 +4051,52 @@ def _scan_history_layer(
     token_ids: Int[Array, "B S"],
     eps: float,
     route_key: jax.Array | None,
-) -> tuple[_AttnResHistory, dict[str, jax.Array]]:
+    probes: tuple[jax.Array, ...] | None = None,
+) -> tuple[_AttnResHistory, dict[str, jax.Array], tuple[jax.Array, ...]]:
     """``_attn_res_layer`` on the fixed-shape history, at a traced ``layer_index``.
 
     A block boundary writes the partial into its slot with its logits against every query and resets the
     partial to zero; off a boundary the slot write is a no-op. Unfilled sources get ``-inf`` logits (zero
     weight) and a fresh partial is masked out of the attention gate, so every gate mixes exactly the
-    unrolled loop's sources."""
+    unrolled loop's sources.
+
+    With ``probes`` (the backward's recompute) ``history.sources`` is the final history, whose slot already
+    holds this partial, so the slot write is skipped; the source stack is held constant and each gate adds
+    its zero probe to its mix and returns its source weights, so the caller rebuilds the source cotangent
+    as ``sum_gates weights * d_probe`` in one pass (``_accumulate_source_grads``)."""
     num_sources = history.sources.shape[0]
     block = layer_index // schedule.seg_size
-    boundary = (layer_index % schedule.seg_size == 0) & (block < schedule.block_cap)
-    slot = schedule.num_extra + jnp.minimum(block, schedule.block_cap - 1)
+    boundary, slot = _roll_slot(schedule, layer_index)
 
     def roll(buffer: jax.Array, new: jax.Array) -> jax.Array:
         old = jax.lax.dynamic_index_in_dim(buffer, slot, axis=0, keepdims=False)
         return jax.lax.dynamic_update_index_in_dim(buffer, jnp.where(boundary, new, old), slot, axis=0)
 
-    sources = roll(history.sources, history.partial)
+    sources = roll(history.sources, history.partial) if probes is None else history.sources
     logits = roll(history.logits, _attn_res_source_logits(history.partial, queries, eps))
     partial = jnp.where(boundary, jnp.zeros_like(history.partial), history.partial)
     valid = jnp.arange(num_sources) < schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
-    source_rows = list(_logit_rows(sources))
+    gate_weights: list[jax.Array] = []
 
     def mix(p: jax.Array | None, gate_index: jax.Array, attn_gate: bool):
         assert p is not None
-        rows = _logit_rows(jax.lax.dynamic_index_in_dim(logits, gate_index, axis=1, keepdims=False))
-        gate_logits = [jnp.where(valid[n], rows[n], -jnp.inf) for n in range(num_sources)]
+        gate = jax.lax.dynamic_index_in_dim(logits, gate_index, axis=1, keepdims=False)  # [N, B, S]
+        gate = jnp.where(valid[:, None, None], gate, -jnp.inf)
         query = jax.lax.dynamic_index_in_dim(queries, gate_index, axis=0, keepdims=True)
-        partial_logit = _attn_res_source_logits(p, query, eps)[0]
-        gate_logits.append(jnp.where(boundary, -jnp.inf, partial_logit) if attn_gate else partial_logit)
-        weights, mixed = _softmax_mix(gate_logits, [*source_rows, p])
+        partial_logit = _attn_res_source_logits(p, query, eps)  # [1, B, S]
+        if attn_gate:
+            partial_logit = jnp.where(boundary, -jnp.inf, partial_logit)
+        gate_logits = jnp.concatenate([gate, partial_logit])
+        weights = jax.nn.softmax(gate_logits, axis=0)
+        if probes is None:
+            mixed = _weighted_sources(weights[:num_sources], sources)
+        else:
+            mixed = _weighted_sources(weights[:num_sources], jax.lax.stop_gradient(sources)) + probes[len(gate_weights)]
+            gate_weights.append(jax.lax.stop_gradient(weights[:num_sources]))
+        mixed = mixed + weights[num_sources][..., None] * p.astype(jnp.float32)
         mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
-        return reshard(mixed.astype(sources.dtype), _batch_spec()), _gate_z(gate_logits), mean_weights
+        z = jnp.mean(jnp.square(jax.nn.logsumexp(gate_logits, axis=0)))
+        return reshard(mixed.astype(sources.dtype), _batch_spec()), z, mean_weights
 
     noise_key = None if route_key is None else jax.random.fold_in(route_key, layer_index)
     partial, stats = _attn_res_sublayers(
@@ -4081,7 +4104,37 @@ def _scan_history_layer(
     )
     if unsupported := set(stats) & set(_DIFFERENTIABLE_STATS):
         raise ValueError(f"scan_layers does not carry the differentiable layer stats {sorted(unsupported)}")
-    return _AttnResHistory(sources, logits, partial), stats
+    return _AttnResHistory(sources, logits, partial), stats, tuple(gate_weights)
+
+
+def _roll_slot(schedule: _BlockSchedule, layer_index: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Whether layer ``layer_index`` rolls the partial into a new block, and that block's history slot."""
+    block = layer_index // schedule.seg_size
+    boundary = (layer_index % schedule.seg_size == 0) & (block < schedule.block_cap)
+    return boundary, schedule.num_extra + jnp.minimum(block, schedule.block_cap - 1)
+
+
+def _accumulate_source_grads(
+    d_sources: jax.Array,
+    d_partial: jax.Array,
+    gate_weights: tuple[jax.Array, ...],
+    d_mixes: tuple[jax.Array, ...],
+    schedule: _BlockSchedule,
+    layer_index: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Add one layer's gate cotangents to the history's source cotangent: ``weights[n] * d_mix`` per gate.
+
+    At a block boundary the slot was written from the incoming partial, so its cotangent moves onto
+    ``d_partial`` and the slot's (overwritten) previous value gets none."""
+    boundary, slot = _roll_slot(schedule, layer_index)
+    d_slot = jax.lax.dynamic_index_in_dim(d_sources, slot, axis=0, keepdims=False).astype(jnp.float32)
+    acc = d_sources.astype(jnp.float32)
+    for weights, d_mix in zip(gate_weights, d_mixes, strict=True):
+        d_slot = d_slot + jax.lax.dynamic_index_in_dim(weights, slot, axis=0, keepdims=False)[..., None] * d_mix
+        acc = acc + weights[..., None] * d_mix[None]
+    d_partial = d_partial + jnp.where(boundary, d_slot, 0).astype(d_partial.dtype)
+    rolled = boundary & (jnp.arange(d_sources.shape[0]) == slot)
+    return jnp.where(rolled[:, None, None, None], 0, acc).astype(d_sources.dtype), d_partial
 
 
 class _ScanArgs(NamedTuple):
@@ -4113,7 +4166,8 @@ def _run_unit_layer(
     layer_index: jax.Array,
     unit_layer: _UnitLayer,
     args: _ScanArgs,
-) -> tuple[_AttnResHistory, dict[str, jax.Array]]:
+    probes: tuple[jax.Array, ...] | None = None,
+) -> tuple[_AttnResHistory, dict[str, jax.Array], tuple[jax.Array, ...]]:
     return _scan_history_layer(
         layer,
         history,
@@ -4125,16 +4179,20 @@ def _run_unit_layer(
         args.token_ids,
         args.eps,
         args.route_key,
+        probes,
     )
 
 
-def _layer_history(layer_diff, sources, logits, partial, queries, *, layer_static, layer_index, unit_layer, args):
-    """``_run_unit_layer``'s history as a function of the differentiable inputs (the backward's ``jax.vjp``)."""
+def _layer_history(
+    layer_diff, logits, partial, queries, probes, *, sources, layer_static, layer_index, unit_layer, args
+):
+    """``_run_unit_layer``'s ``(logits, partial)`` as a function of the differentiable inputs (the backward's
+    ``jax.vjp``), with the gates' source weights as aux. ``sources`` is the final history, held constant."""
     layer = eqx.combine(_cast_floats(layer_diff, sources.dtype), layer_static)
-    history, _ = _run_unit_layer(
-        layer, _AttnResHistory(sources, logits, partial), queries, layer_index, unit_layer, args
+    history, _, gate_weights = _run_unit_layer(
+        layer, _AttnResHistory(sources, logits, partial), queries, layer_index, unit_layer, args, probes
     )
-    return history
+    return (history.logits, history.partial), gate_weights
 
 
 def _scan_forward(
@@ -4150,7 +4208,7 @@ def _scan_forward(
         partials, stats = [], []
         for j, unit_layer in enumerate(plan.unit):
             partials.append(history.partial)
-            history, layer_stats = _run_unit_layer(
+            history, layer_stats, _ = _run_unit_layer(
                 _unit_layer(units, unit_layer), history, queries, len(plan.unit) * u + j, unit_layer, args
             )
             stats.append(layer_stats)
@@ -4218,10 +4276,22 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
                     (layer_diff, unit_partials[j], d_history)
                 )
                 layer_fn = functools.partial(
-                    _layer_history, layer_static=layer_static, layer_index=layer_index, unit_layer=unit_layer, args=args
+                    _layer_history,
+                    sources=sources,
+                    layer_static=layer_static,
+                    layer_index=layer_index,
+                    unit_layer=unit_layer,
+                    args=args,
                 )
-                _, vjp_fn = jax.vjp(layer_fn, layer_diff, sources, logits, partial_in, queries)
-                d_layer, d_sources, d_logits, d_partial, d_q = vjp_fn(d_history)
+                num_gates = 2 + (layer_diff.attn_res_query_shared is not None)
+                probes = tuple(jnp.zeros_like(partial_in, dtype=jnp.float32) for _ in range(num_gates))
+                _, vjp_fn, gate_weights = jax.vjp(
+                    layer_fn, layer_diff, logits, partial_in, queries, probes, has_aux=True
+                )
+                d_layer, d_logits, d_partial, d_q, d_mixes = vjp_fn((d_history.logits, d_history.partial))
+                d_sources, d_partial = _accumulate_source_grads(
+                    d_history.sources, d_partial, gate_weights, d_mixes, plan.schedule, layer_index
+                )
                 d_layer, d_history, d_q = jax.lax.optimization_barrier(
                     (d_layer, _AttnResHistory(d_sources, d_logits, d_partial), d_q)
                 )

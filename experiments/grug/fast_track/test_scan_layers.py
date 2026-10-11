@@ -13,16 +13,18 @@ import pytest
 import experiments.grug.fast_track.test_kda_local as t
 
 
-def _loss_grads_metrics(**overrides):
-    mesh, model = t._model(**overrides)
-    tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
+def _loss_grads_metrics(dtype=jnp.float32, **overrides):
+    with jax.enable_x64(dtype == jnp.float64):
+        mesh, model = t._model(**overrides)
+        model = jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) else x, model)
+        tokens = jax.random.randint(jax.random.PRNGKey(1), (2, t._SEQ), 0, t._VOCAB)
 
-    def loss_fn(m, x):
-        return m.next_token_loss(x, jnp.ones(x.shape, jnp.float32), return_router_metrics=True)
+        def loss_fn(m, x):
+            return m.next_token_loss(x, jnp.ones(x.shape, dtype), return_router_metrics=True)
 
-    with jax.set_mesh(mesh):
-        (loss, metrics), grads = eqx.filter_jit(eqx.filter_value_and_grad(loss_fn, has_aux=True))(model, tokens)
-    return float(loss), _per_layer_leaves(grads), metrics
+        with jax.set_mesh(mesh):
+            (loss, metrics), grads = eqx.filter_jit(eqx.filter_value_and_grad(loss_fn, has_aux=True))(model, tokens)
+        return float(loss), [np.asarray(g) for g in _per_layer_leaves(grads)], jax.tree.map(np.asarray, metrics)
 
 
 def _per_layer_leaves(grads):
@@ -61,13 +63,17 @@ def _per_layer_leaves(grads):
         ),
     ],
 )
+@pytest.mark.timeout(240)  # three compiles per case: float32 unrolled and scanned, float64 unrolled
 def test_scanned_layers_match_the_unrolled_loop(overrides):
     loss, grads, metrics = _loss_grads_metrics(**overrides)
     scan_loss, scan_grads, scan_metrics = _loss_grads_metrics(scan_layers=True, **overrides)
+    _, exact_grads, _ = _loss_grads_metrics(jnp.float64, **overrides)
     np.testing.assert_allclose(scan_loss, loss, rtol=1e-6)
-    for a, b in zip(jax.tree.leaves(grads), jax.tree.leaves(scan_grads), strict=True):
-        a, b = np.asarray(a), np.asarray(b)
-        assert np.max(np.abs(a - b)) <= 1e-5 * np.max(np.abs(a)) + 1e-12
+    # The scan accumulates the source cotangents in a different order, so its float32 gradients are not the
+    # unrolled loop's bit for bit; they must be as close to the float64 gradients as the unrolled loop's are.
+    for unrolled, scanned, exact in zip(grads, scan_grads, exact_grads, strict=True):
+        unrolled_err = np.max(np.abs(unrolled - exact))
+        assert np.max(np.abs(scanned - exact)) <= 2 * unrolled_err + 1e-6 * np.max(np.abs(exact)) + 1e-12
     gate_logs = sorted(k for k in metrics if k.startswith("train/attn_res/w_g"))
     assert gate_logs and gate_logs == sorted(k for k in scan_metrics if k.startswith("train/attn_res/w_g"))
     for key in gate_logs:
