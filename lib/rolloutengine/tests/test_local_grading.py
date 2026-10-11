@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
-from lib.rolloutengine.tests.test_rollout import TWELVE, ReplayModel, arithmetic_task, engine, lowered, machine_runtime
 from shellbox.machine import Backend, Machine, MachineFactory, MachineSpec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
@@ -18,6 +17,7 @@ from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Res
 from taskcompendium.runtime.resources import inline_resource
 
 from rolloutengine.lowering import lower_task
+from rolloutengine.test_support import TWELVE, ReplayModel, arithmetic_task, engine, lowered, machine_runtime
 
 SCRIPT = b"""
 import os

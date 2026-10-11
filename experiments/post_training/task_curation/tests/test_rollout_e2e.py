@@ -124,7 +124,7 @@ def file_write_command(files):
 @pytest.mark.parametrize("case", ["math500", "tasktrove-codeforces", "tasktrove-stack_pytest"])
 async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_path, monkeypatch, machines):
     # RolloutEngine is optional in Marin CI; import it only when this manual test is selected.
-    from lib.rolloutengine.tests.test_rollout import (  # noqa: PLC0415
+    from rolloutengine.test_support import (  # noqa: PLC0415
         ReplayModel,
         engine,
         lowered,

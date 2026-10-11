@@ -10,13 +10,13 @@ import shutil
 import subprocess
 
 import pytest
-from lib.rolloutengine.tests.test_rollout import ReplayModel, engine, lowered, machine_runtime
 from shellbox.machine import Backend, ExitReason, Result
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TaskSpec, TextMessage
 
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
+from rolloutengine.test_support import ReplayModel, engine, lowered, machine_runtime
 
 
 class LocalGitMachine:
