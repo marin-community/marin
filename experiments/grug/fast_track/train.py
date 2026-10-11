@@ -830,7 +830,9 @@ def _layer_skip_mask(rule: LayerSkipRule | None, tokens: jax.Array, mask) -> Lay
     else:
         table = np.zeros(int(max(rule.token_ids)) + 1, bool)
         table[np.asarray(rule.token_ids)] = True
-        match = jnp.take(jnp.asarray(table), jnp.minimum(tokens, len(table) - 1)) & (tokens < len(table))
+        # The replicated table gathered at the batch-sharded ids keeps the ids' sharding.
+        lookup = jnp.asarray(table).at[jnp.minimum(tokens, len(table) - 1)].get(out_sharding=jax.typeof(tokens).sharding)
+        match = lookup & (tokens < len(table))
     skip = match & (_hash_uniform(pos, tokens, rule.seed) < rule.rate)
     return LayerSkip(rule.layers, ~skip)
 
@@ -850,7 +852,7 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, layer_s
             layer_skip=skip,
         )
         if skip is not None:
-            metrics = {**metrics, "train/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
+            metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
         return loss, metrics
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
