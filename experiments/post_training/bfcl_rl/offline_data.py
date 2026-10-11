@@ -406,11 +406,11 @@ def build_verified_sft_store(
     num_shards: int,
     max_workers: int,
 ) -> SftTokenStore:
-    """Reuse Harmony normalization, deduplication and masked student token-store construction.
+    """Write normalized, deduplicated student traces with assistant-only loss masks.
 
     The selection manifest retains every accepted trace's run, seed, model,
     harness, task digest and raw evidence locations across content deduplication.
-    Datakit supplies normalization quarantine and overlength accounting.
+    Invalid and overlength traces are accounted for separately.
     """
     root = StoragePath(output_path)
     raw = root / "selected-chat"

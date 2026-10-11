@@ -285,7 +285,7 @@ def recovery_preference_rows(
 
 
 def write_recovery_cache(rows: Sequence[PretokenizedPreference], report: Mapping[str, Any], output_path: str) -> None:
-    """Write exact-token columns using Levanter's cache writer and retain preference provenance."""
+    """Write exact-token preference columns and their selection provenance."""
     root = StoragePath(output_path)
     root.mkdirs()
     report_text = json.dumps(report, sort_keys=True, indent=2) + "\n"
