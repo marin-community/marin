@@ -733,6 +733,10 @@ class GrugModelConfig:
     mid_head_trunk_grad: bool = True
     """False: the mid head trains on the stop-gradient stream, a probe that leaves the trunk unchanged."""
     mid_confidence_dim: int = 256
+    mid_skip_layers: tuple[int, ...] = ()
+    """Layers that tokens skip (as in ``LayerSkip``) when the confidence head is above ``mid_skip_threshold``, from
+    when ``extra_mlp_active`` turns on (the confidence head trains first)."""
+    mid_skip_threshold: float = 0.9
     entropy_head_input_layer: int | None = None
     """The layer whose input stream the entropy head reads (0: the embedding sources); at most the first of
     ``entropy_head_layers``. None: the first of ``entropy_head_layers``."""
@@ -899,6 +903,8 @@ class GrugModelConfig:
         if self.skip_router_layers:
             if not self.attn_res or self.scan_layers or not 0.0 < self.skip_router_frac < 1.0:
                 raise ValueError("skip_router_layers needs attn_res, the unrolled layer loop and 0 < frac < 1")
+        if self.mid_skip_layers and (self.mid_head_layer is None or min(self.mid_skip_layers) < self.mid_head_layer):
+            raise ValueError("mid_skip_layers needs mid_head_layer at or before them")
         if self.mid_head_layer is not None:
             if not self.attn_res or self.scan_layers or not 0 < self.mid_head_layer < self.num_layers:
                 raise ValueError("mid_head_layer needs attn_res, the unrolled layer loop and 0 < layer < num_layers")
@@ -5141,6 +5147,13 @@ class Transformer(eqx.Module):
                     extra_state["router_keep"], extra_state["router_frac"] = self._skip_router_keep(stream)
                 if i == cfg.mid_head_layer and pass_index == 0:
                     extra_state["mid"] = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
+                    if cfg.mid_skip_layers:
+                        _, logit = self._mid_confidence(jax.lax.stop_gradient(extra_state["mid"]))
+                        skip = (jax.nn.sigmoid(jax.lax.stop_gradient(logit)) > cfg.mid_skip_threshold) & jnp.asarray(
+                            extra_mlp_active
+                        )
+                        extra_state["mid_skip_keep"] = (~skip).astype(jnp.float32)
+                        extra_state["mid_skip_frac"] = jnp.mean(skip.astype(jnp.float32))
                 if cfg.entropy_head_layers and i == cfg.entropy_head_read_layer and pass_index == 0:
                     stream = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
                     extra_state["pred"], extra_state["keep"] = self._extra_mlp_selection(
@@ -5155,6 +5168,8 @@ class Transformer(eqx.Module):
                     keeps.append((~extra_state["keep"]).astype(jnp.float32))
                 if i in cfg.skip_router_layers:
                     keeps.append(extra_state["router_keep"])
+                if i in cfg.mid_skip_layers:
+                    keeps.append(extra_state["mid_skip_keep"])
                 skip_keep = functools.reduce(jnp.multiply, keeps) if keeps else None
                 if skip_keep is not None:
                     layer_extras = {**(layer_extras or {}), _SKIP_KEEP: skip_keep}
@@ -5248,6 +5263,8 @@ class Transformer(eqx.Module):
             final_stats[_ENTROPY_PRED] = extra_state["pred"]
         if "mid" in extra_state:
             final_stats[_MID_HIDDEN] = extra_state["mid"]
+        if "mid_skip_frac" in extra_state:
+            final_stats["attn_res_mid_skip_frac"] = extra_state["mid_skip_frac"]
         if "router_frac" in extra_state:
             final_stats["attn_res_skip_router_frac"] = extra_state["router_frac"]
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
@@ -5517,6 +5534,29 @@ class Transformer(eqx.Module):
         weight = loss_weight.astype(jnp.float32)
         count = jnp.maximum(jnp.sum(weight), 1.0)
         mid_loss = jnp.sum(per_token.astype(jnp.float32)) / count
+        stats, logit = self._mid_confidence(mid_hidden, labels)
+        correct = (stats.top_id == labels).astype(jnp.float32)
+        bce = jnp.sum(weight * (jax.nn.softplus(logit) - correct * logit)) / count
+        out = {
+            "loss": stats.logsumexp - stats.label_logit,
+            "correct": correct,
+            "confidence": jax.nn.sigmoid(logit),
+            "entropy": stats.entropy,
+        }
+        return mid_loss, bce, out
+
+    def _mid_confidence(
+        self, mid_hidden: Float[Array, "B S D"], labels: Int[Array, "B S"] | None = None
+    ) -> tuple[VocabStats, Float[Array, "B S"]]:
+        """The mid head's stop-gradient ``VocabStats`` (``label_logit`` is meaningless without ``labels``) and the
+        confidence head's logit that its top token is right."""
+        cap = _logit_cap(self.config)
+        assert cap is None or isinstance(cap, float)
+        assert self.mid_output_proj is not None and self.mid_conf_w1 is not None
+        assert self.mid_conf_b1 is not None and self.mid_conf_w2 is not None and self.mid_conf_b2 is not None
+        mid_in = reshard(rms_norm(mid_hidden), _batch_spec())
+        if labels is None:
+            labels = jnp.zeros(mid_hidden.shape[:2], jnp.int32)
         stats = _vocab_stats(mid_in, self.mid_output_proj, cap, labels)
         top_logp = stats.top_logit - stats.logsumexp
         answer = rms_norm(_embedding_gather(jax.lax.stop_gradient(self.token_embed), stats.top_id).astype(jnp.float32))
@@ -5530,16 +5570,7 @@ class Transformer(eqx.Module):
             axis=-1,
         )
         h = jax.nn.relu(jnp.einsum("bsf,fh->bsh", features, self.mid_conf_w1) + self.mid_conf_b1)
-        logit = jnp.einsum("bsh,h->bs", h, self.mid_conf_w2) + self.mid_conf_b2
-        correct = (stats.top_id == labels).astype(jnp.float32)
-        bce = jnp.sum(weight * (jax.nn.softplus(logit) - correct * logit)) / count
-        out = {
-            "loss": stats.logsumexp - stats.label_logit,
-            "correct": correct,
-            "confidence": jax.nn.sigmoid(logit),
-            "entropy": stats.entropy,
-        }
-        return mid_loss, bce, out
+        return stats, jnp.einsum("bsh,h->bs", h, self.mid_conf_w2) + self.mid_conf_b2
 
     def mid_head_diagnostics(self, token_ids: Int[Array, "B S"], mask: AttentionMask) -> dict[str, Float[Array, "B S"]]:
         """Per-position mid-head outputs (``_mid_head_terms``) and the final head's ``final_correct``."""
