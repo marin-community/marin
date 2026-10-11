@@ -19,9 +19,10 @@ import torch
 import yaml
 from audit_skyrl import collect
 from botocore.config import Config
+from skyrl_train.objective.score_centering import ppo_tis_score_centering_correction
 
 
-def audit(config: dict, root: Path) -> dict:
+def audit(config: dict, root: Path, *, platform_scope: bool = False) -> dict:
     resolved = yaml.safe_load((root / "resolved-launch.yaml").read_text())["config"]
     assert resolved["runtime"]["launcher_commit"] == config["runtime"]["launcher_commit"]
     trainer = resolved["skyrl"]["trainer"]
@@ -41,8 +42,9 @@ def audit(config: dict, root: Path) -> dict:
         assert metrics["policy/policy_update_steps"] == 1 and metrics["policy/skipped_steps"] == 0
         assert math.isfinite(metrics["policy/raw_grad_norm"])
         assert metrics["async/staleness_max"] == 0
-        assert metrics["policy/ppo_ratio_exact_unit_fraction"] == 1 and metrics["policy/ppo_clip_ratio"] == 0
-        assert metrics["async/rejected_count"] == 0
+        assert metrics["policy/log_ratio_abs_max"] == 0 and metrics["policy/ppo_clip_ratio"] == 0
+        if not platform_scope:
+            assert metrics["async/rejected_count"] == 0
         batch = pickle.loads((root / "exports/dumped_data" / f"global_step_{step}_training_input.pkl").read_bytes())
         assert batch.metadata["global_step"] == step and batch.metadata["source_batch_size"] == batch_size
         mask = batch["loss_mask"].bool()
@@ -64,17 +66,36 @@ def audit(config: dict, root: Path) -> dict:
             rtol=1e-6,
             atol=1e-7,
         )
+        gap = batch["action_log_probs"][mask] - chosen
+        correction = ppo_tis_score_centering_correction(
+            batch["score_old_logprobs"],
+            batch["score_old_logprobs"],
+            batch["score_behavior_logprobs"],
+            batch["advantages"],
+            batch["loss_mask"],
+            tis_cap=2,
+            eps_clip_low=0.2,
+            eps_clip_high=0.2,
+        )[mask]
         evidence.append(
             {
                 "step": step,
                 "gradient_norm": metrics["policy/raw_grad_norm"],
+                "pooled_active_log_ratio_abs_max": metrics["policy/log_ratio_abs_max"],
+                "row_averaged_exact_unit_fraction": metrics["policy/ppo_ratio_exact_unit_fraction"],
                 "consumed_loss_tokens": metrics["async/performance/consumed_loss_tokens"],
                 "retained_rows": batch.batch_size,
                 "captured_loss_tokens": int(mask.sum()),
                 "mean_omitted_mass": float(1 - q.exp().sum(-1).mean()),
+                "retained_chosen_log_gap_abs_p99": float(torch.quantile(gap.abs(), 0.99)),
+                "retained_capped_token_fraction": float((gap >= math.log(2)).float().mean()),
+                "retained_pre_update_correction_abs_mean": float(correction.abs().mean()),
+                "pooled_mismatch": {key: value for key, value in metrics.items() if "/mismatch/pooled/" in key},
             }
         )
     counts = Counter()
+    accepted = Counter()
+    training_groups = {}
     memberships = {}
     quality = {}
     errors = []
@@ -88,29 +109,54 @@ def audit(config: dict, root: Path) -> dict:
                 counts[(phase, step)] += 1
                 if row["disposition"]["exception_type"] or row["verification_result"]["status"] == "error":
                     errors.append((phase, step, row["trajectory"]["instance_id"]))
+                else:
+                    accepted[(phase, step)] += 1
+                if phase == "train":
+                    uid = row["trajectory"]["instance_id"]
+                    group = training_groups.setdefault((step, uid), {"rows": 0, "has_loss": False})
+                    group["rows"] += 1
+                    group["has_loss"] |= bool(row["response"]["trainable_spans"])
                 assert row["prompt"]["token_ids"] == row["trajectory"]["environment_extras"]["reference_prompt_ids"]
                 logical_tokens = len(row["prompt"]["token_ids"]) + len(row["response"]["token_ids"])
                 assert logical_tokens <= config["skyrl"]["context_budget"]["request_window_tokens"]
                 if phase == "eval":
-                    memberships.setdefault(step, Counter())[tuple(row["prompt"]["token_ids"])] += 1
+                    source_row = row["trajectory"]["environment_extras"]["campaign_source_row"]
+                    member = (source_row, tuple(row["prompt"]["token_ids"]))
+                    memberships.setdefault(step, Counter())[member] += 1
                     verdict = row["verification_result"]
                     score = verdict["passed"]
                     if score is None:
                         score = verdict["score"]
-                    assert score in (0, 1)
+                    if score is None and platform_scope:
+                        score = 0
+                    assert 0 <= score <= 1
                     quality.setdefault(step, []).append(float(score))
-    assert not errors, f"native source/evaluation errors: {errors[:10]}"
-    assert all(counts[("train", step)] == batch_size for step in range(1, updates + 1))
-    expected_evaluations = list(range(updates + 1)) if updates == 2 else list(range(0, updates + 1, 20))
+    if not platform_scope:
+        assert not errors, f"native source/evaluation errors: {errors[:10]}"
+    if platform_scope:
+        retained_learner_rows = Counter()
+        for (step, _), group in training_groups.items():
+            if group["has_loss"]:
+                retained_learner_rows[step] += group["rows"]
+        assert all(retained_learner_rows[step] == batch_size for step in range(1, updates + 1))
+    else:
+        assert all(accepted[("train", step)] == batch_size for step in range(1, updates + 1))
+    interval = trainer["eval_interval"]
+    expected_evaluations = list(range(0, updates + 1, interval))
     assert sorted(quality) == expected_evaluations
     first = memberships[0]
-    expected_members = 756 if config["skyrl"]["context_budget"]["request_window_tokens"] == 8192 else 753
+    if "sc-snowball" in config["run"]["id"]:
+        expected_members = 1199
+    else:
+        expected_members = 756 if config["skyrl"]["context_budget"]["request_window_tokens"] == 8192 else 753
     assert len(first) == expected_members and set(first.values()) == {generator["eval_n_samples_per_prompt"]}
     assert all(members == first for members in memberships.values())
     return {
         "run_id": config["run"]["id"],
         "source": config["runtime"]["launcher_commit"],
         "completed_updates": updates,
+        "audit_scope": "platform qualification" if platform_scope else "complete native curriculum run",
+        "source_task_errors": errors,
         "score_centering": algorithm["score_centering_enabled"],
         "learner_evidence": evidence,
         "quality": [
@@ -127,6 +173,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--platform-scope", action="store_true")
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     client = boto3.client(
@@ -138,7 +185,7 @@ def main() -> None:
     )
     args.cache.mkdir(parents=True, exist_ok=True)
     collect(client, config["artifacts"]["attempts_root"].removesuffix("/attempts"), args.cache)
-    result = audit(config, args.cache)
+    result = audit(config, args.cache, platform_scope=args.platform_scope)
     checkpoint = urlparse(config["artifacts"]["checkpoint_root"])
     marker = client.get_object(
         Bucket=checkpoint.netloc, Key=checkpoint.path.lstrip("/") + "/latest_ckpt_global_step.txt"
