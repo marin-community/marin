@@ -833,6 +833,40 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
     assert record.loss_mask == ((1,) if completed_turns else ())
 
 
+async def test_reasoning_only_length_stop_reports_missing_answer():
+    message = {"role": "assistant", "content": None, "reasoning": "Unfinished reasoning"}
+
+    class TruncatedModel(ReplayModel):
+        async def complete(self, request):
+            return replace(await super().complete(request), stop_reason="length")
+
+    record = await engine(TruncatedModel([message])).run(lowered(arithmetic_task()))
+
+    assert record.stop_reason == "length"
+    assert record.messages[-1] == message
+    assert (record.grade.status, record.grade.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+    assert record.response_token_ids == (20,)
+
+
+async def test_reasoning_only_length_stop_grades_prior_file_submission():
+    message = {"role": "assistant", "content": None, "tool_calls": [], "reasoning": "Unfinished reasoning"}
+
+    class TruncatedModel(ReplayModel):
+        async def complete(self, request):
+            turn = await super().complete(request)
+            return replace(turn, stop_reason="length") if len(self.requests) == 2 else turn
+
+    record = await engine(
+        TruncatedModel([shell_call("echo 12 > /workspace/answer"), message]),
+        {"local": FixtureImageFactory()},
+    ).run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
+
+    assert record.stop_reason == "length"
+    assert record.messages[-1] == message
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.response_token_ids == (20, 90, 91, 21)
+
+
 @pytest.mark.parametrize("violation", ["prefix", "logprobs", "empty"])
 async def test_model_transport_must_preserve_exact_token_evidence(violation):
     async def complete(request):

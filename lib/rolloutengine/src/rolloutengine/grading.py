@@ -34,7 +34,12 @@ async def _grade_rollout(
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
-    conversation = chat_conversation(list(messages))
+    grading_messages = list(messages)
+    final = grading_messages[-1]
+    if final.get("role") == "assistant" and final.get("content") is None and not final.get("tool_calls"):
+        # A truncated reasoning-only turn has no answer, but earlier files can still be graded.
+        grading_messages[-1] = {**final, "content": ""}
+    conversation = chat_conversation(grading_messages)
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
         return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation))
     timeout = lowered.session.verifier_timeout
