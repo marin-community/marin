@@ -596,7 +596,7 @@ def build_h100_ladder_run(
                 )
             ),
             stop_after_steps=num_steps if stop_after_steps is None else stop_after_steps,
-            processes_per_task=1 if single_process else rung.gpus_per_task,
+            processes_per_task=1 if single_process or seed_xla_autotune_cache else rung.gpus_per_task,
             ragged_transport=ragged_transport,
             collective_overlap_limit=collective_overlap_limit,
             max_retries_failure=max_retries_failure,
