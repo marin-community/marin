@@ -254,8 +254,8 @@ def _validate_harbor_task(task: TaskSpec, environment_mode: VerifierEnvironmentM
         raise UnsupportedHarborTask("Text extraction beyond plain text requires dedicated Harbor lowering")
     if task.final_tools:
         raise UnsupportedHarborTask("Final tool calls require dedicated Harbor lowering")
-    if environment.setup_commands or environment.packages_lock:
-        raise UnsupportedHarborTask("Agent setup commands and package locks require an environment build")
+    if environment.setup_commands:
+        raise UnsupportedHarborTask("Agent setup commands require an environment build")
     if set(environment.tool_providers) - {"shell"}:
         raise UnsupportedHarborTask("Only shell tool providers have Harbor lowering")
 
@@ -418,6 +418,9 @@ def harbor_payload(
         actor_build = source_actor_build(
             task, source=row["source_row"].split("/", 1)[0], mode=verifier.mode, package=verifyit_package_root
         )
+    # Legacy export uses the original source image instead of the native package lock.
+    if environment.packages_lock is not None and actor_build is None:
+        raise UnsupportedHarborTask("Agent package locks require an environment build")
     if actor_build is not None:
         for resource in actor_build.files:
             if (

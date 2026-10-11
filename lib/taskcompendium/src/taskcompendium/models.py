@@ -679,6 +679,7 @@ class GradingAttempt:
     conversation: ConversationTrace
     files: Mapping[str, bytes] = field(default_factory=dict)
     state: StateSubmission | None = None
+    stop_reason: str | None = None
 
 
 JSON_VALUE = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))

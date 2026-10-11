@@ -44,6 +44,7 @@ class _PytestFailure:
     filename: str | None
     nodeid: str | None
     module: str = ""
+    missing_module: str = ""
 
 
 # The recorder uses builtins so candidate modules can shadow stdlib dependencies.
@@ -65,6 +66,8 @@ def record(error, nodeid=None):
         if isinstance(error, ImportError) and error.path:
             filename = error.path
     failure = {"kind": kind, "filename": filename, "nodeid": nodeid}
+    if isinstance(error, ModuleNotFoundError):
+        failure["missing_module"] = error.name or ""
     if isinstance(error, AttributeError) and isinstance(error.obj, type(sys)):
         failure["module"] = object.__getattribute__(error.obj, "__dict__").get("__file__", "")
     with open(sys.argv[1], "a") as output:
@@ -164,7 +167,11 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                     record = ast.literal_eval(line)
                     failures.append(
                         _PytestFailure(
-                            _FailureKind(record["kind"]), record["filename"], record["nodeid"], record.get("module", "")
+                            _FailureKind(record["kind"]),
+                            record["filename"],
+                            record["nodeid"],
+                            record.get("module", ""),
+                            record.get("missing_module", ""),
                         )
                     )
             if any(failure.kind is _FailureKind.INTERRUPT for failure in failures) or result.returncode < 0:
@@ -299,8 +306,19 @@ def _candidate_error_files(failures: list[_PytestFailure], workspace: Path, prot
     root = workspace.resolve()
     files = set()
     for failure in failures:
-        if failure.kind in {_FailureKind.DEPENDENCY, _FailureKind.INTERRUPT}:
+        if failure.kind == _FailureKind.INTERRUPT:
             return []
+        if failure.kind == _FailureKind.DEPENDENCY:
+            # A missing child of an editable package is an incomplete submission.
+            # An absent top-level dependency has no candidate provenance.
+            package, separator, _ = failure.missing_module.partition(".")
+            if not separator:
+                return []
+            parent = (root / package / "__init__.py").resolve()
+            if not parent.is_relative_to(root) or not parent.is_file() or parent in protected:
+                return []
+            files.add(str(parent.relative_to(root)))
+            continue
         filename = failure.filename
         path = (root / filename).resolve() if filename else root
         if failure.module:

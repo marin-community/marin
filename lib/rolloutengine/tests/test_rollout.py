@@ -321,6 +321,35 @@ def engine(model, factories=None, *, sessions=None) -> ShellboxRolloutEngine:
     return ShellboxRolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
 
 
+@pytest.mark.parametrize("stop_reason", ["stop", "length"])
+async def test_reasoning_only_response_grades_missing_answer_or_existing_files(stop_reason):
+    empty = {"role": "assistant", "content": None, "reasoning": "Still working."}
+
+    async def run(task, messages, **runtime):
+        replay = ReplayModel(messages)
+
+        async def complete(request):
+            turn = await replay.complete(request)
+            return replace(turn, stop_reason=stop_reason) if turn.message is empty else turn
+
+        return await ShellboxRolloutEngine(complete, {"local": FixtureImageFactory()}).run(lowered(task, **runtime))
+
+    missing = await run(arithmetic_task(), [empty])
+    assert missing.grade.reward == 0.0
+    assert missing.messages[-1] == empty
+    task = file_task(
+        b'if [ "$(cat /workspace/answer)" = 12 ] && '
+        b'[ "$TASKCOMPENDIUM_STOP_REASON" = "' + stop_reason.encode() + b'" ]; then echo 1; else echo 0; fi'
+    )
+    submitted = await run(
+        task,
+        [shell_call("echo 12 > /workspace/answer"), empty],
+        machine=machine_runtime(),
+        verifier_machine=machine_runtime(),
+    )
+    assert (submitted.grade.status, submitted.grade.reward) == (Outcome.GRADED, 1.0)
+
+
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
 async def test_lowering_preserves_task_and_produces_private_grade_with_training_tokens(answer, reward):
     task = arithmetic_task()
@@ -451,7 +480,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
         async def advance(self, turn):
             return Transition(done=True)
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             return GradeResult(Outcome.GRADED, float(messages[0]["content"] == "learner:0"))
 
         async def close(self):
@@ -955,7 +984,7 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
                 await asyncio.Future()
             return Transition(done=phase == "grade")
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             if phase == "grade":
                 entered.set()
                 await asyncio.Future()
@@ -1021,7 +1050,7 @@ async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
         async def advance(self, turn):
             return Transition(done=False, observations=({"role": "user", "content": "Continue."},))
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             assert messages[-1]["role"] == "assistant"
             grading.set()
             await release_grade.wait()
@@ -1219,7 +1248,7 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
                 await wait_for_deadline()
             return Transition(done=True)
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             await wait_for_deadline()
 
         async def close(self):
@@ -1269,7 +1298,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
             assert (result.exit_code, result.stdout) == (0, b"learner")
             return Transition(done=True)
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             return GradeResult(Outcome.GRADED, 1.0)
 
         async def close(self):
