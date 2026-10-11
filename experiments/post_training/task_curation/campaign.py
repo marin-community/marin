@@ -20,9 +20,20 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.pipeline.models import SourceStatus
 from zephyr.context import ZephyrContext
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PipelineResult:
+    """An execution outcome and the stages that actually ran."""
+
+    status: SourceStatus
+    outputs: dict[str, str]
+    evidence: dict[str, str]
+    stages: tuple[str, ...]
 
 
 class CampaignStatus(StrEnum):
@@ -77,6 +88,7 @@ class SourceOutcome:
     path: str
     status: str
     error: str | None = None
+    result: PipelineResult | None = None
 
 
 class CampaignFailed(RuntimeError):
@@ -87,6 +99,7 @@ class CampaignArtifact(Artifact):
     """A source artifact that records the terminal status the campaign reports for it."""
 
     status: str
+    result: PipelineResult | None = None
 
 
 def campaign_plan(steps: Sequence[ArtifactStep[Artifact]], pool: CampaignPool) -> dict[str, object]:
@@ -113,7 +126,7 @@ def _build_source(
 ) -> SourceOutcome:
     started(step)
     result = run(step, max_concurrent=1)[0]
-    return SourceOutcome(step.name, result.path, result.status)
+    return SourceOutcome(step.name, result.path, result.status, result=result.result)
 
 
 def error_chain(error: BaseException) -> str:
@@ -137,6 +150,14 @@ def campaign_report(status: CampaignStatus, *, mode: str, outcomes: Sequence[Sou
     }
 
 
+def write_campaign_report(
+    report_path: str, status: CampaignStatus, *, mode: str, outcomes: Sequence[SourceOutcome]
+) -> None:
+    """Persist the current source outcomes for local or reviewed runs."""
+    report = campaign_report(status, mode=mode, outcomes=outcomes)
+    StoragePath(report_path).write_text(json.dumps(report, indent=2))
+
+
 def run_campaign(
     steps: Sequence[ArtifactStep[CampaignArtifact]],
     *,
@@ -158,8 +179,7 @@ def run_campaign(
     report_lock = Lock()
 
     def write_report(status: CampaignStatus) -> None:
-        report = campaign_report(status, mode=mode, outcomes=[outcomes[step.name] for step in steps])
-        StoragePath(report_path).write_text(json.dumps(report, indent=2))
+        write_campaign_report(report_path, status, mode=mode, outcomes=list(outcomes.values()))
 
     def started(step: ArtifactStep[CampaignArtifact]) -> None:
         with report_lock:

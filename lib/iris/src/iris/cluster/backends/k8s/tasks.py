@@ -852,6 +852,7 @@ def _build_pod_manifest(
         num_tasks=run_req.num_tasks,
         bundle_id=run_req.bundle_id,
         controller_address=config.controller_address if isolation.include_controller_address else None,
+        task_token=run_req.task_token if isolation.include_task_token else None,
         environment=run_req.environment,
         constraints=run_req.constraints,
         ports=run_req.ports,
@@ -2088,7 +2089,7 @@ class PeriodicProfiler:
         """
         dispatch = _K8sProfileDispatch(self._kubectl, target.pod_name)
         try:
-            data = capture_threads(dispatch, pid="1")
+            data = capture_threads(dispatch, pid="1", nonblocking=True)
         except Exception as e:
             logger.debug("PeriodicProfiler: thread dump failed for pod %s: %s", target.pod_name, e)
             return None

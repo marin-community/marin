@@ -26,6 +26,7 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
+from shellbox.transfer import download_files
 
 # Prints "ok" or the errno name for each (operation, target) pair in argv, so one command reports several checks.
 ACCESS_PROBE = """
@@ -85,6 +86,42 @@ def make_factory(**options) -> LocalMachineFactory:
 @pytest.fixture
 def factory() -> LocalMachineFactory:
     return make_factory()
+
+
+def test_recursive_download_preserves_hardlinks_as_files_and_literal_names(factory, tmp_path):
+    async def check():
+        machine = await factory.create(SPEC)
+        try:
+            source = tmp_path / "source"
+            source.write_bytes(b"answer\x00")
+            name = "/app/submission/nested/colon:\nλ\\file"
+            await machine.upload(source, name)
+            linked = await machine.run(Command(("ln", name, "/app/submission/alias")))
+            assert linked.exit_code == 0
+            symlink = await machine.run(Command(("ln", "-s", "/etc/passwd", "/app/submission/private")))
+            assert symlink.exit_code == 0
+            files = await download_files(
+                machine,
+                ("/missing", "/app/submission", name),
+                timeout=10,
+                max_files=2,
+                max_bytes=1024,
+                max_file_bytes=1024,
+            )
+            assert files == {name: b"answer\x00", "/app/submission/alias": b"answer\x00"}
+            with pytest.raises(RuntimeError, match="links"):
+                await download_files(
+                    machine,
+                    ("/app/submission/private",),
+                    timeout=10,
+                    max_files=2,
+                    max_bytes=1024,
+                    max_file_bytes=1024,
+                )
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
 
 
 @pytest.fixture(scope="session")
@@ -173,6 +210,19 @@ def test_bin_dirs_win_path_lookup_and_host_environment_is_not_inherited(tmp_path
     python, environment = on_machine(factory, SPEC, scenario)
     assert python.stdout == b"fake-python\n"
     assert b"SHELLBOX_HOST_SECRET" not in environment.stdout
+
+
+def test_host_image_adds_read_only_mount_and_program_path(tmp_path, factory):
+    bin_dir = tmp_path / "venv-bin"
+    bin_dir.mkdir()
+    command = bin_dir / "grader-python"
+    command.write_text("#!/bin/sh\necho mounted-runtime\n")
+    command.chmod(0o755)
+    spec = MachineSpec(HostImage(read_only=(bin_dir,), bin_dirs=(bin_dir,)), workdir="/app")
+
+    result = run_command(factory, Command(("grader-python",)), spec)
+
+    assert (result.exit_code, result.stdout) == (0, b"mounted-runtime\n")
 
 
 def test_timeout_kills_the_command_and_its_descendants(factory):

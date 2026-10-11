@@ -5,19 +5,22 @@
 
 from collections.abc import Callable, Mapping
 
-from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     EnvironmentRequirements,
     NoGrader,
     ScriptGrader,
     SessionGrader,
     TaskSpec,
     VerifyitGrader,
+    require_resolved_environment,
 )
+from taskcompendium.runtime.environment import validate_machine_spec
 
 from rolloutengine.contracts import TaskSession
+from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec, TaskSessionSpec
 
 SHELLBOX_SESSION = "shellbox"
@@ -48,6 +51,9 @@ def validate_lowered_task(
     grader = task.grader
     verifier_machine = lowered.runtime.verifier_machine
     grader_environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) else None
+    require_resolved_environment(task.environment_requirements)
+    if grader_environment is not None:
+        require_resolved_environment(grader_environment)
     if grader_environment is not None and verifier_machine is None:
         raise ValueError("A grader with an environment requires a verifier machine")
     if grader_environment is None and verifier_machine is not None:
@@ -63,10 +69,10 @@ def validate_lowered_task(
             continue
         if selection.backend not in factories:
             raise ValueError(f"Unknown Shellbox factory: {selection.backend!r}")
-        if requirements.packages_lock is not None and requirements.docker_image is None:
-            if not isinstance(factories[selection.backend], LocalMachineFactory):
-                raise ValueError("Lock-only graders require a LocalMachineFactory")
-        if requirements.docker_image is None and any(resource.mtime_ns is not None for resource in resources):
+        validate_machine_spec(requirements, factories[selection.backend], _machine_spec(requirements, selection))
+        if requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR and any(
+            resource.mtime_ns is not None for resource in resources
+        ):
             raise NotImplementedError("The built-in filesystem cannot preserve resource timestamps")
     if lowered.session.task_session != SHELLBOX_SESSION:
         if lowered.session.task_session not in sessions:

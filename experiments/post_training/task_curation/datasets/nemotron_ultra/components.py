@@ -21,7 +21,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
@@ -31,11 +30,10 @@ from taskcompendium.pipeline.models import Controls, Converter, IntendedUse
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_parquet
 
-from experiments.post_training.task_curation.datasets.arc.arc import ARC_SHIPS, ULTRA_ARC_CONTROLS, convert_ultra_arc
+from experiments.post_training.task_curation.datasets.arc.arc import ULTRA_ARC_CONTROLS, convert_ultra_arc
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
     CODE_CONTROLS,
-    CODE_SHIPS,
     DAPO,
     MATH_CONTROLS,
     MCQA_CONTROLS,
@@ -43,7 +41,6 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     RDKIT_CONTROLS,
     REASONING_GYM_CONTROLS,
     REPLY_CONTROLS,
-    SHIPS,
     TOOL_ACTION_CONTROLS,
     VERIFIER_REVISION,
     convert_calendar,
@@ -60,7 +57,12 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     convert_ungraded_agent,
 )
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, RowDecoder, ShellSim
+from experiments.post_training.task_curation.pipeline import (
+    CurationRecipe,
+    HfSource,
+    RowDecoder,
+    process_rows,
+)
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
@@ -69,6 +71,9 @@ NAME_PREFIX = "nemotron_ultra_"
 ULTRA_VERIFIER_URL = (
     "https://github.com/marin-community/MarinSkyRL/tree/"
     "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
+)
+HARBOR_VERIFIER_URL = (
+    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598f3/src/harbor/verifier"
 )
 
 
@@ -294,8 +299,7 @@ def preference_rubric(scope: str) -> str:
 class Component:
     """How one component's rows become tasks; ``decode`` and ``inputs`` restore placeholder questions.
 
-    ``grader`` is what the component's grade script needs and ``ships`` holds the scorer directories it
-    packages; components graded in process or kept as ``NoGrader`` contracts name neither.
+    ``grader`` declares packages needed by the component's grade script.
     """
 
     convert: Converter
@@ -304,23 +308,21 @@ class Component:
     decode: RowDecoder | None = None
     inputs: Mapping[str, HfSource] = field(default_factory=dict)
     grader: Environment | None = None
-    ships: tuple[Path, ...] = ()
 
 
 def scored(
     convert: Converter,
     rubric: str,
     controls: Controls = REPLY_CONTROLS,
-    ships: tuple[Path, ...] = SHIPS,
 ) -> Component:
     """A component whose grade script needs the grader packages."""
-    return Component(convert, rubric, controls, grader=GRADER_PACKAGES, ships=ships)
+    return Component(convert, rubric, controls, grader=GRADER_PACKAGES)
 
 
 ABSTENTION = Component(convert_ungraded, QA_ABSTENTION_RUBRIC)
 AGENTIC_SAFETY = Component(convert_ungraded_agent, AGENTIC_SAFETY_RUBRIC)
 CALENDAR = scored(convert_calendar, INSTRUCTION_FOLLOWING_RUBRIC)
-COMPETITIVE_CODE = scored(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS, CODE_SHIPS)
+COMPETITIVE_CODE = scored(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS)
 FORMAT = scored(convert_format, INSTRUCTION_FOLLOWING_RUBRIC)
 INSTRUCTION_FOLLOWING = scored(convert_instruction_following, INSTRUCTION_FOLLOWING_RUBRIC)
 MATH = Component(
@@ -330,7 +332,7 @@ MATH_PROOF = Component(convert_ungraded, MATH_PROOF_RUBRIC)
 MCQA = scored(convert_mcqa, QA_MULTIPLE_CHOICE_RUBRIC, MCQA_CONTROLS)
 MULTICHALLENGE = Component(convert_ungraded, INSTRUCTION_FOLLOWING_RUBRIC)
 NEXT_ACTION = scored(convert_tool_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
-NVARC = scored(convert_ultra_arc, ARC_RUBRIC, ULTRA_ARC_CONTROLS, ARC_SHIPS)
+NVARC = scored(convert_ultra_arc, ARC_RUBRIC, ULTRA_ARC_CONTROLS)
 RDKIT = scored(convert_rdkit, CHEMISTRY_RUBRIC, RDKIT_CONTROLS)
 REASONING_GYM = scored(convert_reasoning_gym, REASONING_GYM_RUBRIC, REASONING_GYM_CONTROLS)
 SAFETY = Component(convert_ungraded, SAFETY_RUBRIC)
@@ -500,10 +502,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "3b04884dd2139714321f8e06416596dd5e60dd79d6cb4c3aab2a86b52e96bcdb",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
@@ -519,10 +518,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5f19be9f7240c4b6cc597922b4037fb08648738cd6593c4ff18a98ccc94e792b",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
@@ -535,10 +531,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "8d531a83a74e477b9adae6dd7cf2af3af1e17800a051ebdabe37f468acee61ac",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -551,10 +544,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "011ce022c8a4ec20f483945ae34e42169f0034da9d65e980e509392f6ad913c3",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
@@ -827,10 +817,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "1b8b156a91f4647ed898c1fa0899447b2b08b2419acf292ca05110510fc2e028",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -845,10 +832,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "dd3310c994d63f365d41bba3ca91deda96c8c472e13a68b751f26610e99ca83d",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
     },
@@ -1071,10 +1055,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1087,10 +1068,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
@@ -1339,10 +1317,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "0cc68adcf55f5a2579adc3accf900968e2ca456ff721cf68ec3dd9d935ef68e4",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
@@ -1355,10 +1330,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             verifier=SourceReference(
                 "nemotron_ultra",
                 "5cc0a0ac3da28111ddaecaeaa9cd4d03d39214dd5c12df22f64a2c87a08a0287",
-                (
-                    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598"
-                    "f3/src/harbor/verifier"
-                ),
+                HARBOR_VERIFIER_URL,
             ),
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
@@ -1447,14 +1419,15 @@ def pipeline_name(blend: str, path: str) -> str:
     return NAME_PREFIX + blend + "_" + re.sub(r"[^a-z0-9]+", "_", path.lower()).strip("_")
 
 
-def _source(blend: str, path: str) -> RlDataSource:
+def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
     component = COMPONENTS[path]
     name, _, split = path.partition("/")
     select = SweRows(name, SweSplit(split)) if split else ComponentRows(name)
     inputs = {SWE_GYM.repo: SWE_GYM} if split else dict(component.inputs)
     return RlDataSource(
+        pipeline=process_rows,
         info=BLENDS[blend][path],
-        pipeline=RlDataPipeline(
+        config=CurationRecipe(
             name=pipeline_name(blend, path),
             source=HfSource(
                 ULTRA_REPO,
@@ -1466,16 +1439,14 @@ def _source(blend: str, path: str) -> RlDataSource:
             ),
             convert=component.convert,
             version="2",
-            environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=component.rubric,
             controls=component.controls,
             inputs=inputs,
             grader=component.grader,
-            ships=component.ships,
         ),
     )
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [_source(blend, path) for blend, paths in BLENDS.items() for path in paths]

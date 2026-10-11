@@ -192,14 +192,3 @@ def test_incompatible_answer_format_and_grader_cannot_form_chat_request(specific
     assert not submission_compatibility(task).compatible
     with pytest.raises(ValueError):
         chat_request(task)
-
-
-def test_direct_chat_cannot_acquire_state_for_structured_grader(specification):
-    task = _revised(
-        specification,
-        answer_type=AnswerType.STATE,
-        answer_format=JsonValueAnswer(),
-        grader=verifyit_package(StructuredExactSpec(expected={"value": 12})).grader,
-    )
-    with pytest.raises(NotImplementedError):
-        chat_request(task)

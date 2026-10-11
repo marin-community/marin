@@ -23,7 +23,7 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
         # Private fixtures are unreadable to the image's default unprivileged user.
         # Command lookup does not access private files.
         options = args[1:index]
-        lookup = command[:2] == ("sh", "-c") and command[2].startswith("command -v ")
+        lookup = command[:2] == ("/bin/sh", "-c") and command[2].startswith("command -v ")
         if not lookup and ("--user" not in options or options[options.index("--user") + 1] != "0"):
             return DockerCommandResult(1, b"", b"Permission denied")
         result = subprocess.run(command, input=stdin, capture_output=True, timeout=30)

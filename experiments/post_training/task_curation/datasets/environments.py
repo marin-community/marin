@@ -9,9 +9,13 @@ from pathlib import Path
 from experiments.post_training.task_curation.environment import Environment
 
 HERE = Path(__file__).resolve().parent
+VERIFYIT_PACKAGE = HERE.parents[3] / "lib/verifyit"
 
 GRADER_PACKAGES = Environment(lock=HERE / "grader.lock", data=("nltk:punkt_tab", "nltk:wordnet"))
 """The packages every grade script in the catalog imports, compiled from ``grader.in``, and their NLTK data."""
 
 COMPILER_GRADER_PACKAGES = replace(GRADER_PACKAGES, apt=("build-essential",))
 """The grader packages with a C++ toolchain, for graders that compile submissions."""
+
+BUILDABLE_ENVIRONMENTS = (GRADER_PACKAGES, COMPILER_GRADER_PACKAGES)
+"""Explicit environment registrations for the images build CLI."""

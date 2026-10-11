@@ -28,6 +28,7 @@ from marin.inference.vllm_server import (
     VllmLauncher,
     VllmLauncherWithEnvironment,
     VllmType,
+    _is_object_store_path,
 )
 
 _VLLM_ENGINE_READY_TIMEOUT_ENV = "VLLM_ENGINE_READY_TIMEOUT_S"
@@ -154,6 +155,13 @@ class VllmBackend:
         chat_template_args: Sequence[str],
         extra_args: Sequence[str],
     ) -> list[str]:
+        loader_args = (*self.config.extra_args, *extra_args)
+        if (
+            self.config.launcher is not VllmLauncherType.TPU
+            and _is_object_store_path(spec.weights)
+            and not any(arg.partition("=")[0] in {"--load-format", "--model-loader-extra-config"} for arg in loader_args)
+        ):
+            loader_args = ("--model-loader-extra-config", '{"distributed":true}', *loader_args)
         return [
             *(
                 ("--tensor-parallel-size", str(spec.tensor_parallel_size))
@@ -171,8 +179,7 @@ class VllmBackend:
                 if self.config.speculative is not None
                 else ()
             ),
-            *self.config.extra_args,
-            *extra_args,
+            *loader_args,
         ]
 
     def _model_config(self, spec: ModelSpec) -> InferenceModelConfig:

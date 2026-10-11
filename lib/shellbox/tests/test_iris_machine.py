@@ -13,6 +13,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+pytest.importorskip("iris")
+
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.client.workload_codec import task_status_from_proto

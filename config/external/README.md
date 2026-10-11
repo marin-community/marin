@@ -79,6 +79,12 @@ The external configurations intentionally model only what Marin needs:
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
+  The lock overrides Rigging's source because a pinned Marin Git workspace
+  advertises its development version while the launcher needs published Marin
+  wheels. After each MarinSkyRL update, the updater installs the frozen base
+  lock in a temporary environment and runs `uv pip check`. This catches
+  requirements hidden by the override, including exact Rigging versions
+  required by published Iris and Finestore wheels.
 - `vllm` records the promoted GPU wheels (`gpu.toml`) and a main-line source
   paired with tpu-inference for TPU (`tpu.toml`). The GPU and TPU wheels have
   independent build and promotion paths. Neither is a workspace dependency.

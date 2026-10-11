@@ -21,6 +21,7 @@ from taskcompendium.models import (
     SessionGrader,
     TaskSpec,
 )
+from taskcompendium.runtime.shell import SHELL
 from taskcompendium.submission import (
     answer_call_tool,
     conversation_messages,
@@ -33,23 +34,11 @@ from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart,
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.spec import LoweredTaskSpec
 
-SHELL_TOOL_NAME = "shell"
+SHELL_TOOL_NAME = SHELL.name
 WORKSPACE_INSTRUCTION = (
     "Use the shell tool to inspect and change the workspace. Send a final response when the task is completed."
 )
-SHELL_TOOL = {
-    "type": "function",
-    "function": {
-        "name": SHELL_TOOL_NAME,
-        "description": "Run a shell command in the task workspace. Files persist between commands.",
-        "parameters": {
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-            "additionalProperties": False,
-        },
-    },
-}
+SHELL_TOOL = {"type": "function", "function": SHELL.model_dump(exclude_none=True)}
 
 
 def session_start(task: TaskSpec) -> SessionStart:
@@ -140,7 +129,7 @@ class _ShellboxTaskSession:
                 continue
             result = await self.machine.run(
                 Command(
-                    argv=("sh", "-c", command),
+                    argv=("bash", "-c", command),
                     timeout=self.lowered.session.command_timeout,
                 )
             )

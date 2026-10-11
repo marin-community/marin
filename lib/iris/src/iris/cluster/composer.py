@@ -259,6 +259,7 @@ def make_backend(
             scale_groups=config.scale_groups,
             label_prefix=config.platform.label_prefix or "iris",
             base_worker_config=base_worker_config,
+            worker_token_provider=auth.worker_token_provider,
             provisioning_table=log_stack.provisioning_table,
         )
         logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))

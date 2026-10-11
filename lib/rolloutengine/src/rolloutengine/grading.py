@@ -13,8 +13,8 @@ from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import GradingAttempt, NoGrader, ScriptGrader, VerifyitGrader
-from taskcompendium.runtime.grading import ROOT, grade_in_sandbox
-from taskcompendium.runtime.shell import captured_output_files
+from taskcompendium.runtime.grading import grade_in_sandbox
+from taskcompendium.runtime.output_capture import captured_output_files
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
@@ -42,7 +42,7 @@ async def _grade_rollout(
         {}
         if machine is None
         else await captured_output_files(
-            machine, task.output_paths, timeout=timeout, limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, user=ROOT
+            machine, task.output_paths, timeout=timeout, limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
         )
     )
     attempt = GradingAttempt(conversation, files)
@@ -52,7 +52,7 @@ async def _grade_rollout(
     return await grade_in_sandbox(
         task,
         attempt,
-        _AttemptMachineFactory(selection, factories, cleanup, resources, grader.environment),
+        _AttemptMachineFactory(selection, factories, cleanup, resources),
         _machine_spec(grader.environment, selection),
         task_machine=machine,
         timeout=timeout,

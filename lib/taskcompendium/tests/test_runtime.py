@@ -13,22 +13,38 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, ExitReason, MachineSpec, Result
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import (
+    Backend,
+    Command,
+    DockerImage,
+    ExitReason,
+    MachineSpec,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from verifyit.spec import ScriptSpec, render_spec, spec_from_table
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
+    CommandSemantics,
     ConversationInput,
+    ConversationToolCall,
     ConversationTrace,
+    DockerBuildContext,
     EnvironmentRequirements,
+    ExitCodeReward,
     FileReward,
+    FunctionCall,
     GradingAttempt,
     NoGrader,
     PlainText,
-    ProviderRequirement,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -40,14 +56,14 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import CheckStatus
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
-from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_in_sandbox
+from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
 from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.shell import BASH, CONTROL_PATH, INTERFACE, OUTPUT_PATH, ShellFactory
+from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH, ShellFactory
 from taskcompendium.runtime.task_grading import grade_task
 
 GRADER_IMAGE = "fixture@sha256:" + "a" * 64
-GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=GRADER_IMAGE, compatible_backends=(Backend.DOCKER,))
+GRADER_ENVIRONMENT = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE)
 GRADER_MACHINE = MachineSpec(DockerImage(GRADER_IMAGE))
 EXITED = Result(0, b"", b"", False, False, ExitReason.EXITED)
 
@@ -62,11 +78,10 @@ def shell_task():
             events=(TextMessage(role="user", content="Read people.csv and save the selected names."),)
         ),
         environment_requirements=EnvironmentRequirements(
-            compatible_backends=(Backend.DOCKER,),
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image=GRADER_IMAGE,
             capabilities=("shell", "filesystem"),
-            tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
         ),
-        interaction_tools=(BASH,),
         resources=ResourceGroups(
             worker=(inline_resource("workspace/people.csv", b"name,team\nperson-0-0,team-0\nperson-0-1,other\n"),),
             oracle=(inline_resource(CONTROL_PATH.lstrip("/"), b"#!/bin/sh\ntrue\n"),),
@@ -123,6 +138,42 @@ class FileMachines:
         machine = FileMachine()
         self.machines.append(machine)
         return machine
+
+
+@pytest.mark.parametrize("entrypoint", ["factory", "episode"])
+def test_unresolved_actor_build_never_creates_a_machine(shell_task, entrypoint):
+    requirements = shell_task.environment_requirements.model_copy(
+        update={"docker_build": DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))}
+    )
+    task = shell_task.model_copy(update={"environment_requirements": requirements})
+    machines = FileMachines()
+    factory = ShellFactory(machines, GRADER_MACHINE, {}, 10, 1024)
+    with pytest.raises(UnsupportedMachineSpec):
+        if entrypoint == "factory":
+            asyncio.run(factory.create(task))
+        else:
+            asyncio.run(run_episode(task, ScriptedActor(()), factory, max_steps=1, control="fixture"))
+    assert machines.machines == []
+
+
+@pytest.mark.parametrize("entrypoint", ["grade", "empty", "no_machine_spec"])
+def test_unresolved_grader_build_never_creates_a_machine(shell_task, entrypoint):
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),)),
+    )
+    task = shell_task.model_copy(
+        update={"grader": ScriptGrader(argv=("true",), answer_path=None, environment=environment)}
+    )
+    machines = FileMachines()
+    with pytest.raises(UnsupportedMachineSpec):
+        if entrypoint == "grade":
+            asyncio.run(grade_in_sandbox(task, GradingAttempt(finished(task)), machines, GRADER_MACHINE))
+        elif entrypoint == "empty":
+            asyncio.run(grade_empty_in_sandbox(task, machines, GRADER_MACHINE))
+        else:
+            grade_task(task, GradingAttempt(finished(task)))
+    assert machines.machines == []
 
 
 @dataclass(kw_only=True)
@@ -199,6 +250,7 @@ class LocalGradingMachines:
     backend = Backend.DOCKER
 
     async def create(self, spec):
+        (self.root / spec.workdir.lstrip("/")).mkdir(parents=True, exist_ok=True)
         machine = LocalGradingMachine(root=self.root, workdir=spec.workdir, remove_exit_code=self.remove_exit_code)
         self.machines.append(machine)
         return machine
@@ -232,6 +284,7 @@ def trusted_bootstrap_task(shell_task):
 
 
 @pytest.mark.parametrize("candidate,expected", [(b"print(42)\n", 1.0), (b"raise RuntimeError('candidate')\n", 0.0)])
+@pytest.mark.asyncio
 async def test_trusted_grader_bootstrap_excludes_submitted_stdlib_names(
     tmp_path, trusted_bootstrap_task, candidate, expected
 ):
@@ -242,6 +295,7 @@ async def test_trusted_grader_bootstrap_excludes_submitted_stdlib_names(
 
 
 @pytest.mark.parametrize("remove_exit_code", [0, 1])
+@pytest.mark.asyncio
 async def test_private_fixture_archive_removed_before_grading_or_grader_never_runs(
     tmp_path, trusted_bootstrap_task, remove_exit_code
 ):
@@ -341,21 +395,119 @@ def test_no_grader_task_is_unavailable_without_a_grading_machine(shell_task):
     assert not machines.machines
 
 
+@pytest.mark.asyncio
 async def test_shell_uploads_public_files_without_oracle_and_captures_submission(shell_task):
-    task = shell_task
-    machines = FileMachines()
-    factory = ShellFactory(machines, MachineSpec(DockerImage("test")), {"backend": "file-machine"}, 1, 1024)
+    task = shell_task.model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem")
+            )
+        }
+    )
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024)
     env = await factory.create(task)
-    assert "/workspace/people.csv" in machines.machines[0].files
-    assert CONTROL_PATH not in machines.machines[0].files
-    assert (await env.evidence()).files == {}
-    machines.machines[0].files[OUTPUT_PATH] = b"person-0-0\n"
-    assert (await env.evidence()).files[OUTPUT_PATH] == b"person-0-0\n"
-    await env.close()
+    try:
+        public = await env.machine.run(Command(("cat", "/workspace/people.csv")))
+        assert b"person-0-0" in public.stdout
+        oracle = await env.machine.run(Command(("test", "-e", CONTROL_PATH)))
+        assert oracle.exit_code == 1
+        assert (await env.evidence()).files == {}
+        written = await env.step(FunctionCall(name="shell", arguments={"command": f"echo person-0-0 > {OUTPUT_PATH}"}))
+        assert json.loads(written)["exit_code"] == 0
+        assert (await env.evidence()).files[OUTPUT_PATH] == b"person-0-0\n"
+    finally:
+        await env.close()
     fresh = await factory.create(task)
-    assert (await fresh.evidence()).files == {}
-    await fresh.close()
-    assert all(machine.closed for machine in machines.machines)
+    try:
+        assert (await fresh.evidence()).files == {}
+    finally:
+        await fresh.close()
+
+
+@pytest.mark.asyncio
+async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task):
+    task = shell_task.model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem")
+            ),
+            "output_paths": ("/workspace/submission",),
+        }
+    )
+    actor = ScriptedActor(
+        (
+            AssistantToolCalls(
+                calls=(
+                    ConversationToolCall(
+                        call_id="write",
+                        name="shell",
+                        arguments={"command": "mkdir -p submission/nested; printf answer > submission/nested/result"},
+                    ),
+                )
+            ),
+        )
+    )
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024)
+    rollout = await run_episode(task, actor, factory, max_steps=2, control="fixture")
+    assert rollout.termination == Termination.FINAL_MESSAGE
+    assert rollout.evidence().files == {"/workspace/submission/nested/result": b"answer"}
+
+
+@pytest.mark.asyncio
+async def test_grader_setup_uses_prepared_cwd_before_explicit_grader_command(shell_task, tmp_path):
+    grader = ScriptGrader(
+        argv=("sh", "-c", 'test -f ../setup/prepared.csv && test "${PWD##*/}" = grading'),
+        cwd="/grading",
+        answer_path=None,
+        reward=ExitCodeReward(),
+        environment=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image=GRADER_IMAGE,
+            working_directory="/setup",
+            setup_commands=("cp ../workspace/people.csv prepared.csv",),
+        ),
+    )
+    task = shell_task.model_copy(update={"grader": grader, "output_paths": ()})
+    result = await grade_in_sandbox(task, GradingAttempt(finished(task)), LocalGradingMachines(tmp_path), GRADER_MACHINE)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
+@pytest.mark.asyncio
+async def test_shell_commands_use_required_directory_and_variables(shell_task, monkeypatch):
+    monkeypatch.setenv("TASKCOMPENDIUM_TEST_SETTING", "required")
+    task = shell_task.model_copy(
+        update={
+            "environment_requirements": shell_task.environment_requirements.model_copy(
+                update={
+                    "docker_image": None,
+                    "command_semantics": CommandSemantics.SHELL_SIMULATOR,
+                    "working_directory": "/task",
+                    "setup_commands": ("cp /workspace/people.csv prepared.csv",),
+                    "environment_variables": {"SETTING": "${TASKCOMPENDIUM_TEST_SETTING}"},
+                }
+            )
+        }
+    )
+    factory = ShellFactory(
+        ShellSimMachineFactory(),
+        MachineSpec(ShellSimBuiltins(), workdir="/incoming", env={"SETTING": "incoming", "RETAINED": "kept"}),
+        {},
+        1,
+        1024,
+    )
+    environment = await factory.create(task)
+    try:
+        result = json.loads(
+            await environment.step(
+                FunctionCall(
+                    name="shell", arguments={"command": 'pwd; echo "$SETTING:$RETAINED"; head -n 1 prepared.csv'}
+                )
+            )
+        )
+        assert result["exit_code"] == 0
+        assert result["stdout"] == "/task\nrequired:kept\nname,team\n"
+    finally:
+        await environment.close()
 
 
 @dataclass(frozen=True)
@@ -368,6 +520,7 @@ class UnavailableFactory:
         raise RuntimeError("Machine service unavailable")
 
 
+@pytest.mark.asyncio
 async def test_environment_failure_is_recorded_without_reward(script_grading_task):
     rollout = await run_episode(
         script_grading_task, ScriptedActor(()), UnavailableFactory(), max_steps=2, control="failure"

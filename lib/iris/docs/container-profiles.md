@@ -8,7 +8,7 @@ in [`job.proto`](../src/iris/rpc/job.proto):
 |---|---|---|
 | `CONTAINER_PROFILE_RESTRICTED` | `--container-profile CONTAINER_PROFILE_RESTRICTED` | Hardened: drops all Linux capabilities, blocks privilege escalation, keeps the default seccomp profile. No profiling cap. For untrusted/sandboxed workloads. |
 | `CONTAINER_PROFILE_DEFAULT` | default (or `--container-profile CONTAINER_PROFILE_DEFAULT`) | `SYS_PTRACE` for profiling (plus `SYS_RESOURCE` on TPU). The everyday training/eval pod. |
-| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | For model-controlled workloads. Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / k8s `runtimeClassName: gvisor`). The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address; no node-shared caches; no Kubernetes service account token. Its [egress policy](#egress-policy) defaults to `INTERNET` and cannot be `CLUSTER`. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** CPU-only. See [Sandbox jobs](#sandbox-jobs). |
+| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | For model-controlled workloads. Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / k8s `runtimeClassName: gvisor`). The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address or task token; no node-shared caches; no Kubernetes service account token. Its [egress policy](#egress-policy) defaults to `INTERNET` and cannot be `CLUSTER`. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** CPU-only. See [Sandbox jobs](#sandbox-jobs). |
 | `CONTAINER_PROFILE_DOCKER_ACCESS` | `--container-profile CONTAINER_PROFILE_DOCKER_ACCESS` | DEFAULT **plus** the host docker socket (`/var/run/docker.sock`) — lets the container drive the host Docker daemon to build images or run sibling containers. **Elevated.** |
 | `CONTAINER_PROFILE_PRIVILEGED` | `--container-profile CONTAINER_PROFILE_PRIVILEGED` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
 
@@ -194,15 +194,31 @@ logs are therefore not in finelog, and `/iris/outputs` is not archived. Docker
 workers ship logs and upload outputs from the worker process, outside the
 container, so both keep working there.
 
+## Task tokens
+
+A controller with auth enabled gives every task outside `SANDBOX` a token in
+`IRIS_TASK_TOKEN`. The token names the job's owner with the role `task`, and
+the task's own Iris client (`iris_ctx()`, `IrisClient.in_cluster`) presents it
+on every controller RPC. Owner-gated calls (child jobs, endpoint registration,
+`ExecInContainer`) then behave as for the owner. The role carries no admin
+authority: a task may give a child job the elevated container profile or the
+`PRODUCTION`/`SYSTEM` priority band only when the child's parent already
+holds it, and the token's `job_id` claim names that parent, so a task of one job
+cannot borrow another job's privileges. Each dispatch mints a fresh token,
+valid for 30 days and not revocable. A running container's token is never
+refreshed: an attempt that outlives it loses controller access, the same
+limit the worker token has. Under null auth no token is minted.
+
 ## Cluster network trust
 
 The controller still trusts its network. Every production cluster lists the
 private address ranges in `auth.trusted_cidrs`, and the controller
 authenticates a caller from those ranges that presents no token as the
-anonymous admin (`CidrAuthenticator` in `rigging.server_auth`). A task with
-`CLUSTER` egress can therefore submit jobs with any container profile and,
-since the anonymous admin passes the owner check on `ExecInContainer`, run
-commands in any task on the cluster. This is why `SANDBOX` rejects `CLUSTER`.
+anonymous admin (`CidrAuthenticator` in `rigging.server_auth`). Until those
+ranges are narrowed, a task with `CLUSTER` egress that drops its token can
+still submit jobs with any container profile and, since the anonymous admin
+passes the owner check on `ExecInContainer`, run commands in any task on the
+cluster. This is why `SANDBOX` rejects `CLUSTER`.
 
 ## See also
 
