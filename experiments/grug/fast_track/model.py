@@ -110,7 +110,8 @@ NEWTON_GRAM_KEY = "_newton_gram"
 # Per-layer detached router distributions [B, S, E] for ``router_history``; popped by the layer loop, never summarized.
 ROUTER_PROBS_KEY = "router_probs"
 # Metrics-dict key that carries the auxiliary-loss residual stream from the forward to the loss.
-_AUX_HIDDEN = "aux_lm_hidden"
+# The stream entering ``mid_head_layer``, for the mid lm_head and its confidence head.
+_MID_HIDDEN = "mid_head_hidden"
 _NITP_TARGET = "nitp_target"
 _LM_HEAD_EXTRA = "lm_head_extra"
 # Metrics-dict key that carries the raw (pre-norm) token embeddings from the forward to the MTP loss.
@@ -716,6 +717,16 @@ class GrugModelConfig:
     """Layers the entropy head's chosen tokens (``extra_mlp_select``, ``extra_mlp_frac``) skip, as in ``LayerSkip``,
     from when ``extra_mlp_active`` turns on. The head reads the stream entering the first of these and
     ``extra_mlp_layers`` unless ``entropy_head_input_layer`` is set."""
+    mid_head_layer: int | None = None
+    """A second lm_head (own weights, initialized like the lm_head) reads the rms-normed stream entering this layer
+    and adds its next-token loss (``mid_head_loss_weight``) in training. A confidence head (``mid_confidence_dim``
+    hidden ReLU MLP) reads the stop-gradient stream and the mid head's answer (its top token's embedding, top
+    log-prob and entropy) and predicts, with a BCE loss, the probability that the mid head's top token is the
+    next token."""
+    mid_head_loss_weight: float = 1.0
+    mid_head_trunk_grad: bool = True
+    """False: the mid head trains on the stop-gradient stream, a probe that leaves the trunk unchanged."""
+    mid_confidence_dim: int = 256
     entropy_head_input_layer: int | None = None
     """The layer whose input stream the entropy head reads (0: the embedding sources); at most the first of
     ``entropy_head_layers``. None: the first of ``entropy_head_layers``."""
@@ -879,6 +890,11 @@ class GrugModelConfig:
                 raise ValueError("entropy_head_input_layer must be in [0, min(entropy_head_layers)]")
             if not 0.0 < self.extra_mlp_frac < 1.0:
                 raise ValueError(f"extra_mlp_frac must be in (0, 1), got {self.extra_mlp_frac}")
+        if self.mid_head_layer is not None:
+            if not self.attn_res or self.scan_layers or not 0 < self.mid_head_layer < self.num_layers:
+                raise ValueError("mid_head_layer needs attn_res, the unrolled layer loop and 0 < layer < num_layers")
+            if not isinstance(self.logit_soft_cap, float | None):
+                raise ValueError("mid_head_layer needs a scalar logit_soft_cap")
         if self.attn_res_kv_layers:
             if not self.attn_res or self.scan_layers:
                 raise ValueError("attn_res_kv_layers needs attn_res and the unrolled layer loop (scan_layers=false)")
@@ -3487,10 +3503,20 @@ def _tied_expert_activation(cfg: "GrugModelConfig", em: MoEExpertMlp):
     return em.activation
 
 
-def _predictive_entropy(
-    head_in: Float[Array, "B S E"], lm_head: Float[Array, "E V"], cap: float | None
-) -> Float[Array, "B S"]:
-    """Stop-gradient entropy of each position's next-token distribution, one online pass over vocabulary chunks
+class VocabStats(NamedTuple):
+    """Per-position statistics of a next-token distribution (``_vocab_stats``)."""
+
+    entropy: Float[Array, "B S"]
+    logsumexp: Float[Array, "B S"]
+    top_logit: Float[Array, "B S"]
+    top_id: Int[Array, "B S"]
+    label_logit: Float[Array, "B S"]
+
+
+def _vocab_stats(
+    head_in: Float[Array, "B S E"], lm_head: Float[Array, "E V"], cap: float | None, labels: Int[Array, "B S"]
+) -> VocabStats:
+    """Stop-gradient statistics of each position's next-token distribution, one online pass over vocabulary chunks
     (``H = log s + m - t / s`` with running max ``m``, ``s = sum e^(z - m)``, ``t = sum e^(z - m) z``), so the
     ``[B, S, V]`` logits are never materialized. ``cap`` applies the logit soft cap first."""
     head_in = jax.lax.stop_gradient(head_in)
@@ -3499,21 +3525,60 @@ def _predictive_entropy(
     # Scanned chunks must be unsharded along the scan axis: gather the (FSDP / model-sharded) head first.
     weights = rearrange(reshard(jax.lax.stop_gradient(lm_head), P(None, None)), "e (n c) -> n e c", c=chunk)
     b, s_len, _ = head_in.shape
-    init = tuple(reshard(jnp.full((b, s_len), v, jnp.float32), P(_BATCH_AXES, None)) for v in (-jnp.inf, 0.0, 0.0))
+    spec = P(_BATCH_AXES, None)
+    init = (
+        *(reshard(jnp.full((b, s_len), v, jnp.float32), spec) for v in (-jnp.inf, 0.0, 0.0, 0.0)),
+        reshard(jnp.zeros((b, s_len), jnp.int32), spec),
+    )
+    labels = reshard(labels.astype(jnp.int32), spec)
 
-    def step(carry, w):
-        m, total, weighted = carry
+    def step(carry, chunk_in):
+        m, total, weighted, label_logit, top_id = carry
+        w, start = chunk_in
         z = jnp.einsum("bse,ec->bsc", head_in, w.astype(head_in.dtype), preferred_element_type=jnp.float32)
         z = reshard(z, P(_BATCH_AXES, None, None))
         if cap is not None:
             z = cap * jnp.tanh(z / cap)
-        m_new = jnp.maximum(m, jnp.max(z, axis=-1))
+        chunk_max = jnp.max(z, axis=-1)
+        top_id = jnp.where(chunk_max > m, start + jnp.argmax(z, axis=-1).astype(jnp.int32), top_id)
+        m_new = jnp.maximum(m, chunk_max)
         scale = jnp.exp(m - m_new)
         e = jnp.exp(z - m_new[..., None])
-        return (m_new, total * scale + jnp.sum(e, -1), weighted * scale + jnp.sum(e * z, -1)), None
+        offset = labels - start
+        in_chunk = (offset >= 0) & (offset < chunk)
+        at_label = jnp.take_along_axis(z, jnp.clip(offset, 0, chunk - 1)[..., None], axis=-1)[..., 0]
+        label_logit = jnp.where(in_chunk, at_label, label_logit)
+        carry = (m_new, total * scale + jnp.sum(e, -1), weighted * scale + jnp.sum(e * z, -1), label_logit, top_id)
+        return carry, None
 
-    (m, total, weighted), _ = jax.lax.scan(step, init, weights)
-    return jnp.log(total) + m - weighted / total
+    starts = jnp.arange(weights.shape[0], dtype=jnp.int32) * chunk
+    (m, total, weighted, label_logit, top_id), _ = jax.lax.scan(step, init, (weights, starts))
+    lse = jnp.log(total) + m
+    return VocabStats(lse - weighted / total, lse, m, top_id, label_logit)
+
+
+def _predictive_entropy(
+    head_in: Float[Array, "B S E"], lm_head: Float[Array, "E V"], cap: float | None
+) -> Float[Array, "B S"]:
+    labels = jnp.zeros(head_in.shape[:2], jnp.int32)
+    return _vocab_stats(head_in, lm_head, cap, labels).entropy
+
+
+def _mid_head_params(cfg: "GrugModelConfig", head_shape: tuple[int, int], key: jax.Array) -> dict[str, jax.Array | None]:
+    names = ("mid_output_proj", "mid_conf_w1", "mid_conf_b1", "mid_conf_w2", "mid_conf_b2")
+    if cfg.mid_head_layer is None:
+        return dict.fromkeys(names, None)
+    head_key, conf_key = random.split(key)
+    features, hidden = 2 * cfg.hidden_dim + 2, cfg.mid_confidence_dim
+    return {
+        "mid_output_proj": reshard(_init_weight(head_key, head_shape, cfg.initializer_std), _LM_HEAD_PARTITION_SPEC),
+        "mid_conf_w1": reshard(
+            random.normal(conf_key, (features, hidden), jnp.float32) / math.sqrt(features), P(None, None)
+        ),
+        "mid_conf_b1": jnp.zeros((hidden,), jnp.float32),
+        "mid_conf_w2": jnp.zeros((hidden,), jnp.float32),
+        "mid_conf_b2": jnp.zeros((), jnp.float32),
+    }
 
 
 def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | None:
@@ -4567,9 +4632,14 @@ class Transformer(eqx.Module):
     final_norm: LearnedRMSNorm
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
+    """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     entropy_head: Float[Array, " D"] | None  # cfg.entropy_head_layers: predicts the next-token entropy
     entropy_head_bias: Float[Array, ""] | None
-    """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
+    mid_output_proj: jax.Array | None  # cfg.mid_head_layer: the mid lm_head
+    mid_conf_w1: Float[Array, "F H"] | None  # the confidence head: features (2D + 2) -> H -> 1
+    mid_conf_b1: Float[Array, " H"] | None
+    mid_conf_w2: Float[Array, " H"] | None
+    mid_conf_b2: Float[Array, ""] | None
     token_embed2: jax.Array | None
     embed2_norm: LearnedRMSNorm | None
     bigram_gate_w: Float[Array, " D"] | None
@@ -4658,6 +4728,7 @@ class Transformer(eqx.Module):
                 reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None)) if cfg.entropy_head_layers else None
             ),
             entropy_head_bias=jnp.zeros((), jnp.float32) if cfg.entropy_head_layers else None,
+            **_mid_head_params(cfg, output_proj.shape, random.fold_in(key, 5)),
             token_embed2=(
                 reshard(
                     _init_weight(
@@ -5045,6 +5116,8 @@ class Transformer(eqx.Module):
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
                 if kv_inputs is not None:
                     layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
+                if i == cfg.mid_head_layer and pass_index == 0:
+                    extra_state["mid"] = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
                 if cfg.entropy_head_layers and i == cfg.entropy_head_read_layer and pass_index == 0:
                     stream = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
                     extra_state["pred"], extra_state["keep"] = self._extra_mlp_selection(
@@ -5148,6 +5221,8 @@ class Transformer(eqx.Module):
         final_stats = {"attn_res_final_max_weight": max_weight, "attn_res_final_entropy": entropy}
         if "pred" in extra_state:
             final_stats[_ENTROPY_PRED] = extra_state["pred"]
+        if "mid" in extra_state:
+            final_stats[_MID_HIDDEN] = extra_state["mid"]
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
             num_blocks = mean_weights.shape[0] - int(has_partial)
@@ -5377,6 +5452,71 @@ class Transformer(eqx.Module):
         """
         return hidden, self.output_proj
 
+    def _mid_head_terms(
+        self, mid_hidden: Float[Array, "B S D"], labels: Int[Array, "B S"], loss_weight: jax.Array, loss_dtype
+    ) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
+        """The mid head's mean next-token loss, the confidence head's mean BCE, and per-position ``loss``,
+        ``correct`` (the mid head's top token is the label), ``confidence`` (the predicted probability of that)
+        and ``entropy``."""
+        cfg = self.config
+        assert self.mid_output_proj is not None and self.mid_conf_w1 is not None
+        assert self.mid_conf_b1 is not None and self.mid_conf_w2 is not None and self.mid_conf_b2 is not None
+        cap = _logit_cap(cfg)
+        assert cap is None or isinstance(cap, float)
+        mid_in = reshard(rms_norm(mid_hidden), _batch_spec())
+        head_in = mid_in if cfg.mid_head_trunk_grad else jax.lax.stop_gradient(mid_in)
+        per_token = fused_linear_softmax_cross_entropy_loss(
+            head_in,
+            self.mid_output_proj,
+            labels,
+            weight=loss_weight,
+            reduction="none",
+            dtype=loss_dtype,
+            implementation="xla_fast_bwd",
+            block_sizes=_ce_block_sizes(),
+            logit_soft_cap=cap,
+        )
+        weight = loss_weight.astype(jnp.float32)
+        count = jnp.maximum(jnp.sum(weight), 1.0)
+        mid_loss = jnp.sum(per_token.astype(jnp.float32)) / count
+        stats = _vocab_stats(mid_in, self.mid_output_proj, cap, labels)
+        top_logp = stats.top_logit - stats.logsumexp
+        answer = rms_norm(_embedding_gather(jax.lax.stop_gradient(self.token_embed), stats.top_id).astype(jnp.float32))
+        features = jnp.concatenate(
+            [
+                rms_norm(jax.lax.stop_gradient(mid_hidden).astype(jnp.float32)),
+                answer,
+                top_logp[..., None],
+                stats.entropy[..., None],
+            ],
+            axis=-1,
+        )
+        h = jax.nn.relu(jnp.einsum("bsf,fh->bsh", features, self.mid_conf_w1) + self.mid_conf_b1)
+        logit = jnp.einsum("bsh,h->bs", h, self.mid_conf_w2) + self.mid_conf_b2
+        correct = (stats.top_id == labels).astype(jnp.float32)
+        bce = jnp.sum(weight * (jax.nn.softplus(logit) - correct * logit)) / count
+        out = {
+            "loss": stats.logsumexp - stats.label_logit,
+            "correct": correct,
+            "confidence": jax.nn.sigmoid(logit),
+            "entropy": stats.entropy,
+        }
+        return mid_loss, bce, out
+
+    def mid_head_diagnostics(self, token_ids: Int[Array, "B S"], mask: AttentionMask) -> dict[str, Float[Array, "B S"]]:
+        """Per-position mid-head outputs (``_mid_head_terms``) and the final head's ``final_correct``."""
+        hidden, stats = self(token_ids, mask=mask)
+        labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
+        weight = jnp.ones(token_ids.shape, jnp.float32)
+        _, _, mid = self._mid_head_terms(stats[_MID_HIDDEN].astype(hidden.dtype), labels, weight, jnp.float32)
+        head_in, lm_head = self._lm_head_operands(hidden, token_ids)
+        final = _vocab_stats(head_in, lm_head, _logit_cap(self.config), labels)
+        return {
+            **{f"mid_{k}": v for k, v in mid.items()},
+            "final_correct": (final.top_id == labels).astype(jnp.float32),
+            "final_entropy": final.entropy,
+        }
+
     def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
@@ -5387,7 +5527,6 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
-        aux_loss_weight: jax.Array | None = None,
         loop_active: bool | None = None,
         train_terms: bool = False,
         route_key: jax.Array | None = None,
@@ -5399,9 +5538,8 @@ class Transformer(eqx.Module):
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
-        ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
-        score the plain next-token loss."""
+        """``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss, the mid head); evals leave it off
+        so they score the plain next-token loss."""
         hidden, router_metrics = self(
             token_ids,
             mask=mask,
@@ -5411,7 +5549,7 @@ class Transformer(eqx.Module):
             layer_skip=layer_skip,
             extra_mlp_active=extra_mlp_active,
         )
-        aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
+        mid_hidden = router_metrics.pop(_MID_HIDDEN, None)
         entropy_pred = router_metrics.pop(_ENTROPY_PRED, None)
         router_metrics.pop(_NITP_TARGET, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
@@ -5460,16 +5598,19 @@ class Transformer(eqx.Module):
             )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
-        aux_loss = None
-        if aux_hidden is not None and aux_loss_weight is not None:
-            aux_in = reshard(rms_norm(aux_hidden.astype(hidden.dtype)), _batch_spec())
-            aux_loss = jax.lax.cond(
-                aux_loss_weight > 0,
-                lambda h: lm_loss(h).astype(loss_dtype),
-                lambda h: jnp.zeros((), loss_dtype),
-                aux_in,
-            )
-            loss = loss + aux_loss_weight.astype(loss_dtype) * aux_loss
+        mid_metrics: dict[str, jax.Array] = {}
+        if mid_hidden is not None and train_terms:
+            mid_loss, bce, mid = self._mid_head_terms(mid_hidden.astype(hidden.dtype), labels, loss_weight, loss_dtype)
+            loss = loss + (self.config.mid_head_loss_weight * mid_loss + bce).astype(loss_dtype)
+            weight = loss_weight.astype(jnp.float32)
+            count = jnp.maximum(jnp.sum(weight), 1.0)
+            mid_metrics = {
+                "train/aux/mid_lm_loss": jax.lax.stop_gradient(mid_loss),
+                "train/aux/mid_conf_bce": jax.lax.stop_gradient(bce),
+                "train/aux/mid_top1_acc": jnp.sum(weight * mid["correct"]) / count,
+                "train/aux/mid_conf_mean": jnp.sum(weight * mid["confidence"]) / count,
+                "train/aux/mid_conf_brier": jnp.sum(weight * jnp.square(mid["confidence"] - mid["correct"])) / count,
+            }
         if compress_loss is not None and train_terms:
             loss = loss + jnp.sum(compress_loss).astype(loss_dtype)
         entropy_metrics: dict[str, jax.Array] = {}
@@ -5510,6 +5651,7 @@ class Transformer(eqx.Module):
             summarized_metrics = summarize_router_metrics(router_metrics)
             summarized_metrics.update(final_gate_metrics)
             summarized_metrics.update(entropy_metrics)
+            summarized_metrics.update(mid_metrics)
             if NEWTON_GRAM_KEY in router_metrics:
                 summarized_metrics[NEWTON_GRAM_KEY] = router_metrics[NEWTON_GRAM_KEY]
             if self.config.num_null_experts:
@@ -5519,8 +5661,6 @@ class Transformer(eqx.Module):
                 summarized_metrics["train/head_replay_loss"] = replay_loss
             if head_replay is not None:
                 summarized_metrics[FINAL_HIDDEN_KEY] = jax.lax.stop_gradient(hidden)
-            if aux_loss is not None:
-                summarized_metrics["train/attn_res/aux_lm_loss"] = aux_loss
             if erc_loss is not None:
                 summarized_metrics["train/aux/erc_loss"] = erc_loss
                 summarized_metrics.update(erc_ratios)

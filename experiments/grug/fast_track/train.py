@@ -1617,10 +1617,13 @@ def _held_out_sequences(data_config: LmDataConfig, *, seq_len: int, num_sequence
     return tokens, segments
 
 
-def _token_dump_step(mp: jmp.Policy, num_real_experts: int, null_layers: bool, skip_layers: tuple[int, ...]):
+def _token_dump_step(
+    mp: jmp.Policy, num_real_experts: int, null_layers: bool, skip_layers: tuple[int, ...], mid_head: bool
+):
     """Jitted ``(params, qb_betas, tokens, segment_ids) -> dict`` of per-token ``[B, S]`` arrays (``[L, B, S]`` for
-    ``null_slots``): ``next_token_loss``, with ``null_layers`` each token's ``null_slots`` per layer, and with
-    ``skip_layers`` ``skipped_loss``, the loss with every token skipping those layers."""
+    ``null_slots``): ``next_token_loss``, with ``null_layers`` each token's ``null_slots`` per layer, with
+    ``skip_layers`` ``skipped_loss``, the loss with every token skipping those layers, and with ``mid_head`` the
+    ``Transformer.mid_head_diagnostics``."""
 
     @jax.jit
     def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
@@ -1634,6 +1637,8 @@ def _token_dump_step(mp: jmp.Policy, num_real_experts: int, null_layers: bool, s
         if skip_layers:
             skip = LayerSkip(skip_layers, jnp.zeros(tokens.shape, jnp.bool_))
             out["skipped_loss"] = model.next_token_loss(tokens, weight, mask=mask, reduction="none", layer_skip=skip)
+        if mid_head:
+            out.update(model.mid_head_diagnostics(tokens, mask))
         return out
 
     return run
@@ -1652,7 +1657,13 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
         ).result()
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
     skip_layers = config.trainer.token_dump_skip_layers
-    step = _token_dump_step(config.trainer.trainer.mp, cfg.num_experts, bool(cfg.moe_null_layers), skip_layers)
+    step = _token_dump_step(
+        config.trainer.trainer.mp,
+        cfg.num_experts,
+        bool(cfg.moe_null_layers),
+        skip_layers,
+        cfg.mid_head_layer is not None,
+    )
     parts: list[dict[str, np.ndarray]] = []
     for start in range(0, num_sequences, batch_size):
         batch = [
@@ -1666,9 +1677,9 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
         return
     buffer = io.BytesIO()
     arrays = {k: np.concatenate([p[k] for p in parts], axis=1 if k == "null_slots" else 0) for k in parts[0]}
-    for k in ("next_token_loss", "skipped_loss"):
-        if k in arrays:
-            arrays[k] = arrays[k].astype(np.float16)
+    for k, v in arrays.items():
+        if v.dtype == np.float32:
+            arrays[k] = v.astype(np.float16)
     np.savez(
         buffer,
         tokens=tokens,
