@@ -3803,8 +3803,7 @@ def _attn_res_sublayers(
     kv_input = _kv_stream_input(logit_bias)
     if physical in cfg.attn_res_kv_layers:
         kv_gate = 2 * cfg.num_layers + (cfg.num_layers if cfg.attn_res_shared_query else 0) + layer_index
-        h_kv, z_kv, _ = mix(None, kv_gate, False, leading_sources_only=True)
-        z_attn = z_attn + z_kv
+        h_kv, _, _ = mix(None, kv_gate, False, leading_sources_only=True)
         kv_input = layer._attn_input(h_kv)
     attn_out, attn_stats = attn_branch(
         layer,
