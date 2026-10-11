@@ -616,7 +616,7 @@ class GrugModelConfig:
     max_seq_len: int = 4096
     sliding_window: int = 2048
     global_every: int = 4
-    capacity_factor: float = 1.15
+    capacity_factor: float = 1.05
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
@@ -628,7 +628,7 @@ class GrugModelConfig:
     """``short_conv`` implementation for every SConv: None (the fused Pallas kernel on GPU) or ``triton_gpu``
     (streams the sequence with the taps in registers, kernel size 4 only; from #9708)."""
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
-    pooled_transport_capacity_factor: float | None = 1.15
+    pooled_transport_capacity_factor: float | None = 1.05
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False

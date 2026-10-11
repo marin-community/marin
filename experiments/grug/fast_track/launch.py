@@ -142,7 +142,7 @@ TENSORSTORE_CACHE_BYTES = 1_000_000_000
 SEQ_LEN = 4096
 SLIDING_WINDOW = 2048
 GLOBAL_EVERY = 4
-_EP_CAPACITY_FACTOR = 1.15  # receiver and sender EP capacity, kept paired.
+_EP_CAPACITY_FACTOR = 1.05  # receiver and sender EP capacity, kept paired.
 
 # Fault tolerance / watchdog.
 WATCH_INTERVAL = 10
