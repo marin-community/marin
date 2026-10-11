@@ -1680,19 +1680,20 @@ def _autotune_dump_file() -> str:
 def _use_xla_autotune_cache(path: str) -> bool:
     """Point XLA at the shared autotune results: load ``path`` when it exists, and dump this process's results.
 
-    A fully loaded program has nothing left to autotune, so its compile skips sharded autotuning's cross-process
-    key-value exchange, where multi-process GB200 compiles hang (every rank waits in ``ConfigAssigner::AssignConfigs``
-    for keys that never arrive). Must run before the backend is created; returns whether a cache was loaded."""
+    Multi-process GB200 compiles hang in sharded autotuning's cross-process key-value exchange (every rank waits in
+    ``ConfigAssigner::AssignConfigs`` for keys that never arrive), and loading results alone does not skip it. With a
+    cache, every rank takes its configs from the same file with sharding off, so nothing is exchanged and all ranks
+    pick identical kernels. Must run before the backend is created; returns whether a cache was loaded."""
     fs = fsspec.core.url_to_fs(path)[0]
     flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}"]
     loaded = fs.exists(path)
     if loaded:
         local = f"/tmp/xla_autotune_cached_{os.getpid()}.textproto"
         fs.get(path, local)
-        # Use only the loaded results: nothing is autotuned, so nothing is exchanged; a missing result is an error.
         flags += [
             f"--xla_gpu_load_autotune_results_from={local}",
             "--xla_gpu_require_complete_aot_autotune_results=true",
+            "--xla_gpu_shard_autotuning=false",
         ]
     os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
     logger.info("XLA autotune cache %s: %s", "loaded" if loaded else "empty, will publish", path)
