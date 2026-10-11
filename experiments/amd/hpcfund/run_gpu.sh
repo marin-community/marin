@@ -25,6 +25,12 @@ export JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=${JAX_PERSISTENT_CACHE_ENABLE_XLA_
 # same step time.
 export XLA_PYTHON_CLIENT_PREALLOCATE=${XLA_PYTHON_CLIENT_PREALLOCATE:-false}
 
+# The cluster's default module puts /opt/rocm-7.2.0 on LD_LIBRARY_PATH, so jobs load its HIP runtime and RCCL
+# rather than the wheel's. With jax 0.11.1, RCCL then aborts at the first collective unless scratch reclaim is
+# off. Removing /opt/rocm from the paths avoids that, but makes lax.top_k on rows under 1,024 entries 2.4-4.2x
+# slower on MI350X.
+export HSA_NO_SCRATCH_RECLAIM=${HSA_NO_SCRATCH_RECLAIM:-1}
+
 # Drop ROCm runtime log lines that repeat on every step. Exit with Python's status: grep exits 1
 # when it prints nothing.
 uv run --no-sync python "$@" 2>&1 | grep --line-buffered -v -E "rocm_pcie_bandwidth|rocm_executor"
