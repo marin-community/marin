@@ -20,7 +20,7 @@ dependencies = [
     # COLUMN_TYPE_FLOAT64_LIST or COLUMN_TYPE_INT64_LIST.
     "marin-finelog-server>=0.2.54.dev35409391246",
     # Platform companion wheel containing the Rust-owned public proxy listener.
-    "marin-iris-native>=0.1.11.dev37977873285",
+    "marin-iris-native>=0.1.12.dev38062449553",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
