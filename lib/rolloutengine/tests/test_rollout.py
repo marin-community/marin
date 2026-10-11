@@ -323,7 +323,10 @@ def engine(model, factories=None, *, sessions=None) -> ShellboxRolloutEngine:
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
-async def test_installed_agent_uses_isolated_task_grading_and_engine_cleanup(answer, reward):
+@pytest.mark.parametrize(
+    "content", ["Solve the task.", [{"type": "text", "text": "Solve "}, {"type": "text", "text": "the task."}]]
+)
+async def test_installed_agent_uses_isolated_task_grading_and_engine_cleanup(answer, reward, content):
     factory = RecordingShellSimFactory()
     model = ReplayModel([{"role": "assistant", "content": answer}])
     released = asyncio.Event()
@@ -333,7 +336,7 @@ async def test_installed_agent_uses_isolated_task_grading_and_engine_cleanup(ans
         try:
             private = await machine.run(Command(("test", "-f", "/tests/grade.sh")))
             assert private.exit_code != 0
-            response = await complete(SessionStart(({"role": "user", "content": "Solve the task."},), {}))
+            response = await complete(SessionStart(({"role": "user", "content": content},), {}))
             written = await machine.run(Command(("sh", "-c", f"echo {response.message['content']} > /workspace/answer")))
             assert written.exit_code == 0
         finally:

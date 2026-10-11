@@ -19,6 +19,19 @@ from taskcompendium.models import (
     ToolResult,
 )
 
+TEXT_BLOCKS = frozenset({"input_text", "output_text", "text"})
+
+
+def message_text(content: Any) -> str:
+    """Join text blocks, rejecting media rather than silently dropping their context."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        raise ValueError("Message content must be text or text blocks")
+    if any(block.get("type") not in TEXT_BLOCKS for block in content):
+        raise ValueError("Unsupported nontext message content")
+    return "".join(block["text"] for block in content)
+
 
 class ChatFunction(BaseModel):
     model_config = ConfigDict(strict=True, allow_inf_nan=False)
@@ -73,6 +86,8 @@ def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCal
 def _conversation_events(messages: list[dict[str, Any]]) -> tuple[ConversationEvent, ...]:
     events: list[ConversationEvent] = []
     for message in messages:
+        if isinstance(message.get("content"), list):
+            message = {**message, "content": message_text(message["content"])}
         role = message.get("role")
         if role == "assistant":
             events.append(assistant_message(message))

@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic import JsonValue, ValidationError
 
+from taskcompendium.chat import message_text
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.grader import GraderPackage
 from taskcompendium.models import (
@@ -40,23 +41,11 @@ REQUEST_FIELD = "responses_create_params"
 PLACEHOLDER_FIELD = "_hf_question_placeholder"
 STATE_FIELDS = ("environment", "scenario", "info", "metadata", "exp_cal_state")
 """Row fields that describe an agent's initial environment rather than its answer key."""
-TEXT_BLOCKS = frozenset({"input_text", "output_text", "text"})
 
 
 def blend_component(data: Mapping[str, Any]) -> str:
     """The blend component of a row: its ``dataset``, or ``agent:<name>`` for agent-keyed rows."""
     return data.get("dataset") or AGENT_COMPONENT_PREFIX + data["agent_ref"]["name"]
-
-
-def message_text(content: Any) -> str:
-    """Join text blocks, rejecting media rather than silently dropping their context."""
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        raise ValueError("Message content must be text or text blocks")
-    if any(block.get("type") not in TEXT_BLOCKS for block in content):
-        raise ValueError("Unsupported nontext message content")
-    return "".join(block["text"] for block in content)
 
 
 def conversation_events(
