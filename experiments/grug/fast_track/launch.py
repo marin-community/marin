@@ -10,6 +10,8 @@ data-matches or compute-matches it (``--match``, default data), or sets ``--batc
 """
 
 import dataclasses
+import hashlib
+import importlib.metadata
 import math
 import os
 import shlex
@@ -38,6 +40,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import temporary_checkpoint_base_path
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
@@ -564,6 +567,7 @@ def build_h100_ladder_run(
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 null_routing_dump_path=(prefix_join(ctx.output_path, "null_routing.npz") if null_routing_dump else None),
+                xla_autotune_cache_path=_xla_autotune_cache_path(model, rung) if rung.device == "GB200" else None,
                 layer_skip=layer_skip,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
                 pipeline_depth=pipeline_depth,
@@ -656,6 +660,17 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
             raise click.BadParameter(f"--job-env needs KEY=VALUE, got {item!r}")
         args += ["-e", key, value]
     return args
+
+
+XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
+
+
+def _xla_autotune_cache_path(model: GrugModelConfig, rung: H100LadderRung) -> str:
+    """Region-temp path of the shared XLA autotune results for this program: keyed by the model, the rung's mesh,
+    the job's XLA flags and jaxlib, so only runs that compile the same fusions share them."""
+    identity = repr((model, rung, os.environ.get("XLA_FLAGS", ""), importlib.metadata.version("jaxlib")))
+    key = hashlib.sha256(identity.encode()).hexdigest()[:24]
+    return prefix_join(marin_temp_bucket(XLA_AUTOTUNE_CACHE_TTL_DAYS, "xla-autotune-results"), f"{key}.textproto")
 
 
 def _layer_skip_rule(

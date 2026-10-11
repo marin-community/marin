@@ -292,6 +292,9 @@ class GrugTrainerConfig:
     # After the last step, route ``NULL_ROUTING_DUMP_BATCHES`` train-size batches of held-out sequences and write each
     # token's null-slot count per layer and its next-token loss here (``moe_null_layers`` runs).
     null_routing_dump_path: str | None = None
+    # XLA GPU autotune results shared across runs of the same program (``_use_xla_autotune_cache``): loaded at start
+    # when present, written by process 0 after the first step otherwise. None: autotune every compile.
+    xla_autotune_cache_path: str | None = None
     # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
     layer_skip: LayerSkipRule | None = None
     # Train steps dispatched before the previous step's host work: 1 overlaps that work (logging, callbacks) with
@@ -1083,6 +1086,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # dispatcher: an environment variable forwarded from the coordinator does not reach it on GB200 (probe
     # lc1-hostlim2 saw it unset and capped at 64 GB), so set it here before any device is touched.
     os.environ.setdefault(_HOST_MEMORY_LIMIT_ENV, RUNTIME_ENV[_HOST_MEMORY_LIMIT_ENV])
+    autotune_cache_loaded = (
+        _use_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
+        if config.trainer.xla_autotune_cache_path is not None
+        else None
+    )
     marker = config.trainer.completion_marker_path
     if marker is not None and fsspec.core.url_to_fs(marker)[0].exists(marker):
         logger.info("run already completed (%s exists); not retraining", marker)
@@ -1345,6 +1353,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         gc.freeze()
         gc.disable()
         hlo_written = False
+        autotune_published = False
 
         # The step runs on the state's flat leaves (``_flat_train_step``); ``state`` is rebuilt from them each step.
         state_leaves, state_treedef = jax.tree.flatten(state)
@@ -1358,6 +1367,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             donated) the state-dependent work runs too; without it the step was finished lagged, behind the next
             dispatch, and the callbacks see only its step number and loss."""
             nonlocal state, state_leaves, last_loss, last_step_duration, host_gap_start, hlo_written, last_ready_time
+            nonlocal autotune_published
             metrics, step = rec.metrics, rec.step
             # A host float, and no device math on the metrics below: a device op would queue behind the step
             # dispatched after this one and wait for it, undoing the overlap.
@@ -1378,6 +1388,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     )
                 hlo_written = True
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
+            if autotune_cache_loaded is False and not autotune_published:
+                # The first finished step: train_step compiled, so its autotune results are on disk.
+                _publish_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
+                autotune_published = True
             if not math.isfinite(loss):
                 raise RuntimeError(f"Non-finite loss ({loss}) at step {step + 1}.")
             hook_start = time.perf_counter()
@@ -1635,6 +1649,39 @@ def write_null_routing_dump(
     with fsspec.open(path, "wb") as f:
         f.write(buffer.getvalue())
     logger.info("Wrote the null-routing dump to %s", path)
+
+
+def _autotune_dump_file() -> str:
+    # One file per process: the processes of a multi-GPU task share /tmp.
+    return f"/tmp/xla_autotune_results_{os.getpid()}.textproto"
+
+
+def _use_xla_autotune_cache(path: str) -> bool:
+    """Point XLA at the shared autotune results: load ``path`` when it exists, and dump this process's results.
+
+    A fully loaded program has nothing left to autotune, so its compile skips sharded autotuning's cross-process
+    key-value exchange, where multi-process GB200 compiles hang (every rank waits in ``ConfigAssigner::AssignConfigs``
+    for keys that never arrive). Must run before the backend is created; returns whether a cache was loaded."""
+    fs = fsspec.core.url_to_fs(path)[0]
+    flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}"]
+    loaded = fs.exists(path)
+    if loaded:
+        local = f"/tmp/xla_autotune_cached_{os.getpid()}.textproto"
+        fs.get(path, local)
+        flags.append(f"--xla_gpu_load_autotune_results_from={local}")
+    os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
+    logger.info("XLA autotune cache %s: %s", "loaded" if loaded else "empty, will publish", path)
+    return loaded
+
+
+def _publish_xla_autotune_cache(path: str) -> None:
+    """Process 0 uploads its autotune results (written during the compile) to the shared cache."""
+    dump = _autotune_dump_file()
+    if jax.process_index() != 0 or not os.path.exists(dump):
+        return
+    with open(dump, "rb") as src, fsspec.open(path, "wb") as dst:
+        dst.write(src.read())
+    logger.info("Published the XLA autotune results to %s", path)
 
 
 # Every rank logs host-side stalls longer than this: a late rank stalls every other rank's collectives.
