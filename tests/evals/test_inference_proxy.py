@@ -287,59 +287,6 @@ def test_direct_inference_session_reports_backend_state(
     assert session.backend_state() is expected
 
 
-@pytest.mark.parametrize(
-    ("task_state", "status_message", "placed"),
-    [
-        (TaskState.PENDING, "", False),
-        (TaskState.BUILDING, "SchedulingGated: Scheduling is blocked due to non-empty scheduling gates", False),
-        (TaskState.BUILDING, "ContainerCreating", True),
-        (TaskState.ASSIGNED, "", True),
-        (TaskState.RUNNING, "", True),
-    ],
-)
-def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
-    task_state: TaskState, status_message: str, placed: bool, monkeypatch
-) -> None:
-    class FixedDeadline:
-        def __init__(self, seconds: float) -> None:
-            self.seconds = seconds
-
-        def expired(self) -> bool:
-            return self.seconds == 0
-
-    endpoint_probes = 0
-
-    def list_endpoint_instances(_endpoint_name: str):
-        nonlocal endpoint_probes
-        endpoint_probes += 1
-        if endpoint_probes > 1:
-            return [SimpleNamespace(address="https://inference.example", metadata={})]
-        return []
-
-    monkeypatch.setattr(iris_module.Deadline, "from_seconds", FixedDeadline)
-    monkeypatch.setattr(iris_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        iris_module,
-        "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                list_endpoint_instances=list_endpoint_instances,
-                list_tasks=lambda _job_id: [SimpleNamespace(state=task_state, status_message=status_message)],
-            )
-        ),
-    )
-    job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
-
-    if placed:
-        with pytest.raises(TimeoutError):
-            iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0)
-    else:
-        assert iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0) == (
-            "https://inference.example",
-            {},
-        )
-
-
 _GATED = "SchedulingGated: Scheduling is blocked due to non-empty scheduling gates"
 
 
@@ -384,6 +331,28 @@ def _wait_on_timeline(monkeypatch, timeline: list[tuple[float, TaskState, str]],
     )
     job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
     return iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=timeout_seconds)
+
+
+@pytest.mark.parametrize(
+    ("task_state", "status_message", "placed"),
+    [
+        (TaskState.PENDING, "", False),
+        (TaskState.BUILDING, _GATED, False),
+        (TaskState.BUILDING, "ContainerCreating", True),
+        (TaskState.ASSIGNED, "", True),
+        (TaskState.RUNNING, "", True),
+    ],
+)
+def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
+    task_state: TaskState, status_message: str, placed: bool, monkeypatch
+) -> None:
+    timeline = [(10.0, task_state, status_message)]
+
+    if placed:
+        with pytest.raises(TimeoutError, match="inference endpoint"):
+            _wait_on_timeline(monkeypatch, timeline, timeout_seconds=0)
+    else:
+        assert _wait_on_timeline(monkeypatch, timeline, timeout_seconds=0) == ("https://inference.example", {})
 
 
 def test_inference_endpoint_wait_charges_gated_time_to_placement_not_startup(monkeypatch) -> None:

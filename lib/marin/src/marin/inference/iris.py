@@ -537,7 +537,6 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
             notify_iris_vllm_stopped(launch)
 
 
-_PLACED_TASK_STATES = frozenset({TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING})
 # Iris reports a Pending pod as BUILDING. While Kueue holds the pod at its
 # admission gate, the status message starts with this reason and no node is
 # assigned, so the task is still queued.
@@ -545,9 +544,9 @@ _SCHEDULING_GATED_PREFIX = "SchedulingGated"
 
 
 def _task_placed(task: TaskStatus) -> bool:
-    if task.state is TaskState.BUILDING and task.status_message.startswith(_SCHEDULING_GATED_PREFIX):
-        return False
-    return task.state in _PLACED_TASK_STATES
+    if task.state is TaskState.BUILDING:
+        return not task.status_message.startswith(_SCHEDULING_GATED_PREFIX)
+    return task.state in (TaskState.ASSIGNED, TaskState.RUNNING)
 
 
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
