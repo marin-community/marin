@@ -64,9 +64,12 @@ def _per_layer_leaves(grads):
     ],
 )
 @pytest.mark.timeout(240)  # three compiles per case: float32 unrolled and scanned, float64 unrolled
-def test_scanned_layers_match_the_unrolled_loop(overrides):
+@pytest.mark.parametrize("two_phase", [False, True])
+def test_scanned_layers_match_the_unrolled_loop(overrides, two_phase):
     loss, grads, metrics = _loss_grads_metrics(**overrides)
-    scan_loss, scan_grads, scan_metrics = _loss_grads_metrics(scan_layers=True, **overrides)
+    scan_loss, scan_grads, scan_metrics = _loss_grads_metrics(
+        scan_layers=True, attn_res_two_phase=two_phase, **overrides
+    )
     _, exact_grads, _ = _loss_grads_metrics(jnp.float64, **overrides)
     np.testing.assert_allclose(scan_loss, loss, rtol=1e-6)
     # The scan accumulates the source cotangents in a different order, so its float32 gradients are not the

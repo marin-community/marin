@@ -709,6 +709,10 @@ class GrugModelConfig:
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
     attn_res_num_blocks: int = 8
+    attn_res_two_phase: bool = False
+    """``scan_layers``: each layer mixes the history for its attention and MLP gates in one pass over the sources
+    (Kimi's two-phase Block AttnRes: inter-block mix + log-sum-exp per gate, then an online-softmax merge with the
+    partial), instead of one pass per gate. Same math; the inter-block mix is rounded to the sources' dtype."""
     attn_res_plain_sum: bool = False
     """Every AttnRes gate (and the final gate) returns the plain sum of its sources instead of a softmax mix: the
     standard residual stream (embedding + every earlier sublayer output), keeping the AttnRes loop's features
@@ -4441,9 +4445,46 @@ def _scan_history_layer(
     partial = jnp.where(boundary, jnp.zeros_like(history.partial), history.partial)
     valid = jnp.arange(num_sources) < schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
     gate_weights: list[jax.Array] = []
+    two_phase = layer.attn.cfg.attn_res_two_phase
+    # Phase 1 (two_phase): the attention and MLP gates' mixes of the completed sources in one pass over them.
+    inter = None
+    if two_phase:
+        gate_logits_2 = jax.lax.dynamic_slice_in_dim(logits, 2 * layer_index, 2, axis=1)  # [N, 2, B, S]
+        gate_logits_2 = jnp.where(valid[:, None, None, None], gate_logits_2, -jnp.inf)
+        lse = jax.nn.logsumexp(gate_logits_2, axis=0)  # [2, B, S]
+        inter_weights = jnp.exp(gate_logits_2 - lse[None])  # [N, 2, B, S]
+        src = sources if probes is None else jax.lax.stop_gradient(sources)
+        normed = inter_weights[0][..., None] * src[0][None].astype(jnp.float32)
+        for n in range(1, num_sources):
+            normed = normed + inter_weights[n][..., None] * src[n][None].astype(jnp.float32)
+        inter = (normed.astype(sources.dtype), lse, inter_weights)
+    calls = [0]
+
+    def two_phase_mix(p: jax.Array, gate_index: jax.Array, attn_gate: bool, j: int):
+        """Phase 2: merge phase-1 mix ``j`` (0: attention gate, 1: MLP gate) with the partial (online softmax)."""
+        assert inter is not None and attn_gate == (j == 0)
+        normed, lse, inter_weights = inter
+        query = jax.lax.dynamic_index_in_dim(queries, gate_index, axis=0, keepdims=True)
+        partial_logit = _attn_res_source_logits(p, query, eps)[0]  # [B, S]
+        if attn_gate:
+            partial_logit = jnp.where(boundary, -jnp.inf, partial_logit)
+        total = jnp.logaddexp(lse[j], partial_logit)
+        alpha = jnp.exp(lse[j] - total)  # the completed sources' share
+        source_weights = inter_weights[:, j] * alpha[None]
+        mixed = alpha[..., None] * normed[j].astype(jnp.float32) + (1.0 - alpha)[..., None] * p.astype(jnp.float32)
+        if probes is not None:
+            mixed = mixed + probes[len(gate_weights)]
+            gate_weights.append(jax.lax.stop_gradient(source_weights))
+        weights = jnp.concatenate([source_weights, (1.0 - alpha)[None]])
+        mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
+        return reshard(mixed.astype(sources.dtype), _batch_spec()), jnp.mean(jnp.square(total)), mean_weights
 
     def mix(p: jax.Array | None, gate_index: jax.Array, attn_gate: bool):
         assert p is not None
+        j = calls[0]
+        calls[0] += 1
+        if two_phase and j < 2:  # the attention gate, then the MLP gate (``_attn_res_sublayers``' order)
+            return two_phase_mix(p, gate_index, attn_gate, j)
         gate = jax.lax.dynamic_index_in_dim(logits, gate_index, axis=1, keepdims=False)  # [N, B, S]
         gate = jnp.where(valid[:, None, None], gate, -jnp.inf)
         query = jax.lax.dynamic_index_in_dim(queries, gate_index, axis=0, keepdims=True)
