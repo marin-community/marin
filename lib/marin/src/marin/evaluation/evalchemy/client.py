@@ -276,7 +276,12 @@ def main() -> None:
     if not config["tasks"]:
         raise SystemExit("run_evalchemy_client requires at least one task")
     with endpoint_relay(config["endpoint_name"]) as origin:
-        run_tasks({**config, "base_url": f"{origin}{config['api_path']}"})
+        run_tasks(relayed_config(config, origin))
+
+
+def relayed_config(config: dict, relay_origin: str) -> dict:
+    """``config`` with ``base_url`` set to the OpenAI API under the endpoint relay at ``relay_origin``."""
+    return {**config, "base_url": f"{relay_origin.rstrip('/')}{config['api_path']}"}
 
 
 def run_tasks(config: dict) -> None:

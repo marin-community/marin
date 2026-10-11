@@ -48,7 +48,7 @@ DEFAULT_NUM_CONCURRENT = 16
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
-# How often a running Evalchemy job checks that its serving jobs are still alive.
+# How often the parent checks its serving jobs while an Evalchemy job runs.
 _SERVE_CHECK_SECONDS = 60.0
 
 

@@ -17,7 +17,13 @@ from types import SimpleNamespace
 
 import pytest
 from fray.types import JobStatus
-from marin.evaluation.evalchemy.client import build_command, build_model_args, endpoint_relay, scored_results
+from marin.evaluation.evalchemy.client import (
+    build_command,
+    build_model_args,
+    endpoint_relay,
+    relayed_config,
+    scored_results,
+)
 from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
@@ -65,7 +71,7 @@ def _config(**overrides) -> EvalchemyRunConfig:
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
     """The child's config once it has started its endpoint relay."""
     payload = json.loads(_run_config_json(_session(), config or _config(), "gs://bucket/evals/qwen3/core"))
-    return {**payload, "base_url": f"{_RELAY_ORIGIN}{payload['api_path']}"}
+    return relayed_config(payload, _RELAY_ORIGIN)
 
 
 def test_client_config_json_carries_endpoint_and_per_task_dirs():
