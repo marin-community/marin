@@ -1,0 +1,12 @@
+{
+  "size": 200,
+  "parent_size": 5000,
+  "task_families": 44,
+  "selection": "Four records per task; 24 tasks receive a fifth, ordered by SHA256(nupa200-v1:task_name). Select midpoint quantiles of each task list sorted by digit then source digest.",
+  "manifest_sha256": "5be0a0a3882301ac293f8aebcb765af4532cd2795b4d88fa1166d3998763d090",
+  "parent_manifest_sha256": "27f122972d76dc2a1170a3d105a9856b55beedabe037f697c1a1aa2baeb67036",
+  "evalchemy_revision": "2c102ddc321a1f9280c094e5996792eae8b8e413",
+  "marin_revision": "1d7c22dcd6a434cdf2a964c8a9508e9baa7021c8",
+  "max_tokens": 72945,
+  "validation": "Loaded 200 records from pinned source, verified unique identities, membership in policy panel, all44 families, and runtime limit; test passed. Lint and Pyrefly passed; launch dry run passed."
+}

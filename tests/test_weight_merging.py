@@ -319,3 +319,13 @@ def test_invalid_protected_rows_leave_no_partial_checkpoint(tmp_path, shape, row
             row_overrides={},
         )
     assert not output.exists()
+
+
+def test_dare_ties_trims_after_dropping_with_independent_density():
+    result = merge_tensor(
+        torch.zeros(4),
+        [torch.tensor([1.0, 4.0, 3.0, 2.0]), torch.tensor([-2.0, 5.0, 1.0, 2.0])],
+        MergeParameters(MergeMethod.DARE_TIES, (0.5, 0.5), 1.0, 1.0, 0, ties_density=0.25),
+        tensor_name="weight",
+    )
+    torch.testing.assert_close(result, torch.tensor([0.0, 4.5, 0.0, 0.0]), rtol=0, atol=0)

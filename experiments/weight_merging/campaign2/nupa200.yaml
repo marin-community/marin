@@ -1,0 +1,13 @@
+tasks: [NUPA200-Loose]
+task_options:
+  NUPA200-Loose:
+    num_fewshot: 0
+    task_alias: nupa200
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 20222943
+max_length: 73664
+# Match the full policy panel's derived output budget exactly.
+max_tokens: 72945
+runtime_extras: [nupa200-loose]

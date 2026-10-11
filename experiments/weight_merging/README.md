@@ -4,6 +4,8 @@ This experiment implements aligned checkpoint merging for the Snowball/Grug 67B 
 
 The [public campaign archive](https://huggingface.co/datasets/open-athena/Snowball-67B-A2B-Model-Merging-Artifacts-2026.10.09) contains the historical recipes, calibration settings, selected expert IDs, model revisions, scores, and method citations. Generated coefficients, model configurations for completed evaluations, and historical result files are kept there instead of in the source tree.
 
+Campaign 2 adds exports that preserve at least 75% of the original Base scalar weights and every non-weight file. Use the [Campaign 2 reproduction guide](campaign2/README.md) for its 48 recipes, calibration, evaluation pins, timing estimates, and results. The historical workflow below remains available for the first campaign.
+
 ## Static merge
 
 Download each parent checkpoint at the revision recorded in the recipe, preserving its sharded safetensors index. Replace the archived object-storage paths with your local paths and choose an empty output directory. `revision` records provenance; the reader does not resolve or verify a remote revision. Verify the downloaded revision before starting.

@@ -53,8 +53,11 @@ class MergeParameters:
     scale: float
     seed: int
     ram: RamParameters | None = None
+    ties_density: float = 1.0
 
     def __post_init__(self) -> None:
+        if not 0 < self.ties_density <= 1:
+            raise ValueError("TIES density must be in (0, 1]")
         if self.method in (MergeMethod.RAM, MergeMethod.RAM_PLUS_TL):
             if self.ram is None or self.density != 1 or self.scale != 1 or any(c != 1 for c in self.coefficients):
                 raise ValueError("RAM requires explicit RAM parameters, unit coefficients, density=1, scale=1")
@@ -120,8 +123,9 @@ def merge_tensor(
             generator = torch.Generator(device="cpu").manual_seed(int.from_bytes(digest[:8], "little"))
             mask = torch.rand(update.shape, generator=generator) < parameters.density
             update.mul_(mask).div_(parameters.density)
-        elif parameters.method == MergeMethod.TIES and parameters.density < 1:
-            count = max(1, math.ceil(update.numel() * parameters.density))
+        trim_density = parameters.density if parameters.method == MergeMethod.TIES else parameters.ties_density
+        if parameters.method in (MergeMethod.TIES, MergeMethod.DARE_TIES) and trim_density < 1:
+            count = max(1, math.ceil(update.numel() * trim_density))
             indices = torch.topk(update.flatten().abs(), count, sorted=False).indices
             mask = torch.zeros(update.numel(), dtype=torch.bool)
             mask[indices] = True

@@ -3,6 +3,7 @@
 
 """Grug forward passes over frozen checkpoint banks and learned coefficients."""
 
+import logging
 import re
 from dataclasses import dataclass
 from importlib import import_module
@@ -38,8 +39,8 @@ def coefficient_group(name: str) -> str | None:
 class FrozenGrugBank:
     """Keep source checkpoints on CPU and execute their existing Grug modules.
 
-    Sources are ordered Step92, Step12, Step20. Calibration uses the same token
-    IDs for all teachers. Non-component weights use the Step92 anchor.
+    Sources follow the recipe order. Calibration uses Base token IDs for all
+    teachers. Source zero is the recipient for coefficient fitting.
     """
 
     def __init__(self, sources: list[CheckpointSource], config: dict, devices: tuple[torch.device, ...]):
@@ -56,6 +57,7 @@ class FrozenGrugBank:
         self.states: list[dict[str, torch.Tensor]] = []
         expected = set(self.model.state_dict())
         for source in sources:
+            logging.info("Loading frozen source: %s", source.path)
             reader = CheckpointReader(source)
             if set(reader.weight_map) != expected:
                 raise ValueError(f"Grug implementation and checkpoint keys differ: {source.path}")
@@ -65,6 +67,7 @@ class FrozenGrugBank:
                 if not torch.isfinite(tensor).all():
                     raise ValueError(f"Nonfinite checkpoint weight: {name}")
                 state[name] = tensor.detach().contiguous()
+                logging.info("Loaded %s", name)
             self.states.append(state)
         self.module_keys = {}
         prefixes = [

@@ -1,0 +1,30 @@
+{
+  "id": "base-copy",
+  "base": {
+    "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02_50fe2f488aee7730bbccc721024b35229075602e-ed9c7f9b0a347fc0",
+    "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+  },
+  "donors": [
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02_50fe2f488aee7730bbccc721024b35229075602e-ed9c7f9b0a347fc0",
+      "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+    },
+    {
+      "path": "s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02_50fe2f488aee7730bbccc721024b35229075602e-ed9c7f9b0a347fc0",
+      "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+    }
+  ],
+  "output": "s3://marin-us-east-02a/marin/weight-merging/campaign2-20261009/base-copy/model",
+  "audit": "s3://marin-us-east-02a/marin/weight-merging/campaign2-20261009/base-copy/audit.json",
+  "threads": 16,
+  "support": [],
+  "support_cap": 0,
+  "change_cap": 0,
+  "parameters": {
+    "method": "average",
+    "coefficients": [0.25, 0.25],
+    "density": 1,
+    "scale": 1,
+    "seed": 0
+  }
+}
