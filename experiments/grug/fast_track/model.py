@@ -712,6 +712,10 @@ class GrugModelConfig:
     inputs) to predict the model's own next-token entropy. The trainer turns the extra MLPs on part-way through
     (``extra_mlp_active``)."""
     extra_mlp_dim: int = 0
+    entropy_skip_layers: tuple[int, ...] = ()
+    """Layers the entropy head's chosen tokens (``extra_mlp_select``, ``extra_mlp_frac``) skip, as in ``LayerSkip``,
+    from when ``extra_mlp_active`` turns on. The head reads the stream entering the first of these and
+    ``extra_mlp_layers``."""
     extra_mlp_select: ExtraMlpSelect = ExtraMlpSelect.HIGH
     extra_mlp_frac: float = 0.25
     attn_res_kv_source_layers: int | None = None
@@ -861,9 +865,11 @@ class GrugModelConfig:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
         if self.moe_drop_renorm and self.moe_implementation != "fixed_pooled_wave_all_to_all":
             raise ValueError("moe_drop_renorm needs moe_implementation=fixed_pooled_wave_all_to_all")
-        if self.extra_mlp_layers:
-            if not self.attn_res or self.scan_layers or self.extra_mlp_dim <= 0:
-                raise ValueError("extra_mlp_layers needs attn_res, the unrolled layer loop and extra_mlp_dim > 0")
+        if self.extra_mlp_layers and self.extra_mlp_dim <= 0:
+            raise ValueError("extra_mlp_layers needs extra_mlp_dim > 0")
+        if self.entropy_head_layers:
+            if not self.attn_res or self.scan_layers:
+                raise ValueError("extra_mlp_layers and entropy_skip_layers need attn_res and the unrolled layer loop")
             if not 0.0 < self.extra_mlp_frac < 1.0:
                 raise ValueError(f"extra_mlp_frac must be in (0, 1), got {self.extra_mlp_frac}")
         if self.attn_res_kv_layers:
@@ -940,6 +946,11 @@ class GrugModelConfig:
     def kv_in_dim(self) -> int:
         """Input width of the attention K/V projections: the side stream (``kv_stream_dim``) or the main stream."""
         return self.hidden_dim
+
+    @property
+    def entropy_head_layers(self) -> tuple[int, ...]:
+        """The layers the entropy head's selection serves; it reads the stream entering the first."""
+        return (*self.extra_mlp_layers, *self.entropy_skip_layers)
 
     @property
     def kv_source_layers(self) -> int:
@@ -4543,7 +4554,7 @@ class Transformer(eqx.Module):
     final_norm: LearnedRMSNorm
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
-    entropy_head: Float[Array, " D"] | None  # cfg.extra_mlp_layers: predicts the next-token entropy
+    entropy_head: Float[Array, " D"] | None  # cfg.entropy_head_layers: predicts the next-token entropy
     entropy_head_bias: Float[Array, ""] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
@@ -4630,8 +4641,10 @@ class Transformer(eqx.Module):
             attn_res_query_final=(
                 reshard(jnp.zeros((_attn_res_key_dim(cfg),), jnp.float32), P(None)) if cfg.attn_res else None
             ),
-            entropy_head=reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None)) if cfg.extra_mlp_layers else None,
-            entropy_head_bias=jnp.zeros((), jnp.float32) if cfg.extra_mlp_layers else None,
+            entropy_head=(
+                reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None)) if cfg.entropy_head_layers else None
+            ),
+            entropy_head_bias=jnp.zeros((), jnp.float32) if cfg.entropy_head_layers else None,
             token_embed2=(
                 reshard(
                     _init_weight(
@@ -5019,15 +5032,21 @@ class Transformer(eqx.Module):
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
                 if kv_inputs is not None:
                     layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
-                if layer_skip is not None and i in layer_skip.layers:
-                    layer_extras = {**(layer_extras or {}), _SKIP_KEEP: layer_skip.keep}
-                if cfg.extra_mlp_layers and i == min(cfg.extra_mlp_layers) and pass_index == 0:
+                if cfg.entropy_head_layers and i == min(cfg.entropy_head_layers) and pass_index == 0:
                     stream = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
                     extra_state["pred"], extra_state["keep"] = self._extra_mlp_selection(
                         stream, token_ids, extra_mlp_active
                     )
                 if i in cfg.extra_mlp_layers:
                     layer_extras = {**(layer_extras or {}), _EXTRA_KEEP: extra_state["keep"]}
+                skip_keep = None
+                if layer_skip is not None and i in layer_skip.layers:
+                    skip_keep = layer_skip.keep
+                if i in cfg.entropy_skip_layers:
+                    chosen_keep = ~extra_state["keep"]
+                    skip_keep = chosen_keep if skip_keep is None else skip_keep & chosen_keep
+                if skip_keep is not None:
+                    layer_extras = {**(layer_extras or {}), _SKIP_KEEP: skip_keep}
                 layer_args = (
                     (layer, blocks, block_logits, partial, queries, layer_extras),
                     long_layer_mask if use_long else short_layer_mask,
