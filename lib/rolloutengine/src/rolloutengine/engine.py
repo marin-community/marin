@@ -167,7 +167,15 @@ class ShellboxRolloutEngine:
                 for index in range(limits.max_turns):
                     try:
                         async with asyncio.timeout(limits.model_turn_timeout):
-                            turn = await self.model(ModelRequest(tuple(messages), options, tokens, assistant_index))
+                            turn = await self.model(
+                                ModelRequest(
+                                    tuple(messages),
+                                    options,
+                                    tokens,
+                                    assistant_index,
+                                    start.prompt_token_ids if index == 0 else None,
+                                )
+                            )
                     except GenerationLimitReached as limit:
                         stop_reason = LENGTH_STOP_REASON
                         if not steps:
@@ -191,6 +199,12 @@ class ShellboxRolloutEngine:
                     if not turn.response_token_ids:
                         raise RolloutContractError("Model response contains no token evidence")
                     if assistant_index is None:
+                        if (
+                            index == 0
+                            and start.prompt_token_ids is not None
+                            and turn.prompt_token_ids != start.prompt_token_ids
+                        ):
+                            raise RolloutContractError("Model transport changed the initial replay token prefix")
                         prompt = turn.prompt_token_ids
                         tokens = prompt
                     if turn.prompt_token_ids[: len(tokens)] != tokens:
