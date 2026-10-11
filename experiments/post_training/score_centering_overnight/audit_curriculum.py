@@ -22,13 +22,21 @@ from botocore.config import Config
 from skyrl_train.objective.score_centering import ppo_tis_score_centering_correction
 
 
-def audit(config: dict, root: Path, *, platform_scope: bool = False) -> dict:
+def audit(
+    config: dict,
+    root: Path,
+    *,
+    platform_scope: bool = False,
+    archive_after_ms: int = 0,
+    max_eval_errors: int = 0,
+) -> dict:
     resolved = yaml.safe_load((root / "resolved-launch.yaml").read_text())["config"]
     assert resolved["runtime"]["launcher_commit"] == config["runtime"]["launcher_commit"]
     trainer = resolved["skyrl"]["trainer"]
     generator = resolved["skyrl"]["generator"]
     algorithm = trainer["algorithm"]
     updates = trainer["max_steps"]
+    refresh_period = generator.get("sampler_refresh_period", 1)
     group_size = generator["n_samples_per_prompt"]
     batch_size = trainer["train_batch_size"] * group_size
     assert trainer["policy_mini_batch_size"] == trainer["train_batch_size"]
@@ -41,12 +49,14 @@ def audit(config: dict, root: Path, *, platform_scope: bool = False) -> dict:
         metrics = json.loads((root / "exports/training_metrics" / f"train-{step:08d}.json").read_text())
         assert metrics["policy/policy_update_steps"] == 1 and metrics["policy/skipped_steps"] == 0
         assert math.isfinite(metrics["policy/raw_grad_norm"])
-        assert metrics["async/staleness_max"] == 0
+        expected_age = (step - 1) % refresh_period
+        assert metrics["async/staleness_max"] == metrics["async/staleness_min"] == expected_age
         assert metrics["policy/log_ratio_abs_max"] == 0 and metrics["policy/ppo_clip_ratio"] == 0
         if not platform_scope:
             assert metrics["async/rejected_count"] == 0
         batch = pickle.loads((root / "exports/dumped_data" / f"global_step_{step}_training_input.pkl").read_bytes())
         assert batch.metadata["global_step"] == step and batch.metadata["source_batch_size"] == batch_size
+        assert torch.all(batch["rollout_staleness"] == expected_age)
         mask = batch["loss_mask"].bool()
         q, old = batch["score_behavior_logprobs"][mask], batch["score_old_logprobs"][mask]
         ids = batch["score_topk_indices"][mask]
@@ -80,6 +90,8 @@ def audit(config: dict, root: Path, *, platform_scope: bool = False) -> dict:
         evidence.append(
             {
                 "step": step,
+                "sampler_completed_updates": ((step - 1) // refresh_period) * refresh_period,
+                "sampler_age_updates": expected_age,
                 "gradient_norm": metrics["policy/raw_grad_norm"],
                 "pooled_active_log_ratio_abs_max": metrics["policy/log_ratio_abs_max"],
                 "row_averaged_exact_unit_fraction": metrics["policy/ppo_ratio_exact_unit_fraction"],
@@ -99,13 +111,28 @@ def audit(config: dict, root: Path, *, platform_scope: bool = False) -> dict:
     memberships = {}
     quality = {}
     errors = []
+    inventory = {
+        item["Key"].split("/attempts/", 1)[-1]: item for item in json.loads((root / "object_inventory.json").read_text())
+    }
+    selected_archives = []
     for path in (root / "attempts/trajectories").glob("**/*.zip"):
+        item = inventory[str(path.relative_to(root / "attempts"))]
+        if archive_after_ms and item["last_modified_ms"] < archive_after_ms:
+            continue
+        selected_archives.append(item)
         with zipfile.ZipFile(path) as archive:
             for name in archive.namelist():
                 if not name.startswith("records/"):
                     continue
                 row = json.loads(gzip.decompress(archive.read(name)))
                 phase, step = row["phase"], row["global_step"]
+                if phase == "train" and refresh_period > 1:
+                    # This calibration stays within the first frozen input epoch.
+                    consumed_step = int(row["trajectory"]["instance_id"]) // trainer["train_batch_size"] + 1
+                    assert 1 <= consumed_step <= updates
+                    assert step == 1 + ((consumed_step - 1) // refresh_period) * refresh_period
+                    assert row["provenance"]["model_version_step"] == step - 1
+                    step = consumed_step
                 counts[(phase, step)] += 1
                 if row["disposition"]["exception_type"] or row["verification_result"]["status"] == "error":
                     errors.append((phase, step, row["trajectory"]["instance_id"]))
@@ -127,12 +154,13 @@ def audit(config: dict, root: Path, *, platform_scope: bool = False) -> dict:
                     score = verdict["passed"]
                     if score is None:
                         score = verdict["score"]
-                    if score is None and platform_scope:
+                    if score is None and (platform_scope or max_eval_errors):
                         score = 0
                     assert 0 <= score <= 1
                     quality.setdefault(step, []).append(float(score))
     if not platform_scope:
-        assert not errors, f"native source/evaluation errors: {errors[:10]}"
+        assert all(phase == "eval" for phase, _, _ in errors), f"native training errors: {errors[:10]}"
+        assert len(errors) <= max_eval_errors, f"native evaluation errors: {errors[:10]}"
     if platform_scope:
         retained_learner_rows = Counter()
         for (step, _), group in training_groups.items():
@@ -155,8 +183,13 @@ def audit(config: dict, root: Path, *, platform_scope: bool = False) -> dict:
         "run_id": config["run"]["id"],
         "source": config["runtime"]["launcher_commit"],
         "completed_updates": updates,
+        "sampler_refresh_period": refresh_period,
         "audit_scope": "platform qualification" if platform_scope else "complete native curriculum run",
         "source_task_errors": errors,
+        "evaluation_error_accounting": "Retained execution failures receive zero quality in the fixed denominator.",
+        "permitted_evaluation_errors": max_eval_errors,
+        "archive_after_ms": archive_after_ms,
+        "selected_archives": selected_archives,
         "score_centering": algorithm["score_centering_enabled"],
         "learner_evidence": evidence,
         "quality": [
@@ -174,6 +207,8 @@ def main() -> None:
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--platform-scope", action="store_true")
+    parser.add_argument("--archive-after-ms", type=int, default=0)
+    parser.add_argument("--max-eval-errors", type=int, default=0)
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     client = boto3.client(
@@ -185,7 +220,13 @@ def main() -> None:
     )
     args.cache.mkdir(parents=True, exist_ok=True)
     collect(client, config["artifacts"]["attempts_root"].removesuffix("/attempts"), args.cache)
-    result = audit(config, args.cache, platform_scope=args.platform_scope)
+    result = audit(
+        config,
+        args.cache,
+        platform_scope=args.platform_scope,
+        archive_after_ms=args.archive_after_ms,
+        max_eval_errors=args.max_eval_errors,
+    )
     checkpoint = urlparse(config["artifacts"]["checkpoint_root"])
     marker = client.get_object(
         Bucket=checkpoint.netloc, Key=checkpoint.path.lstrip("/") + "/latest_ckpt_global_step.txt"
@@ -193,7 +234,11 @@ def main() -> None:
     assert int(marker) == result["completed_updates"]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
-    print(json.dumps({k: v for k, v in result.items() if k != "learner_evidence"}))
+    print(
+        json.dumps(
+            {k: v for k, v in result.items() if k not in {"learner_evidence", "selected_archives", "source_task_errors"}}
+        )
+    )
 
 
 if __name__ == "__main__":

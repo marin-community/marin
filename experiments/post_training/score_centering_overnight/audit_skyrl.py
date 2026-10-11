@@ -48,11 +48,21 @@ def collect(client, uri: str, root: Path) -> None:
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(download, inventory))
     (root / "object_inventory.json").write_text(
-        json.dumps([{k: x[k] for k in ("Key", "Size", "ETag")} for x in inventory], indent=2) + "\n"
+        json.dumps(
+            [
+                {
+                    **{k: x[k] for k in ("Key", "Size", "ETag")},
+                    "last_modified_ms": int(x["LastModified"].timestamp() * 1000),
+                }
+                for x in inventory
+            ],
+            indent=2,
+        )
+        + "\n"
     )
 
 
-def audit(config: dict, root: Path) -> dict:
+def audit(config: dict, root: Path, *, training_group_audit: dict | None = None) -> dict:
     resolved = yaml.safe_load((root / "resolved-launch.yaml").read_text())["config"]
     assert resolved["runtime"]["launcher_commit"] == config["runtime"]["launcher_commit"]
     trainer = resolved["skyrl"]["trainer"]
@@ -162,7 +172,15 @@ def audit(config: dict, root: Path) -> dict:
                 if phase == "eval":
                     memberships.setdefault(step, Counter())[tuple(row["prompt"]["token_ids"])] += 1
                     qualities.setdefault(step, []).append(score)
-    assert all(records[("train", step)] == 512 for step in range(1, updates + 1))
+    if training_group_audit is None:
+        assert all(records[("train", step)] == 512 for step in range(1, updates + 1))
+    else:
+        assert training_group_audit["audit_passed"]
+        assert training_group_audit["run_id"] == config["run"]["id"]
+        assert training_group_audit["source"] == config["runtime"]["launcher_commit"]
+        assert training_group_audit["completed_updates"] == updates
+        assert training_group_audit["responses"] == updates * 512
+        assert all(records[("train", step)] <= 512 for step in range(1, updates + 1))
     expected_eval_steps = [*range(0, 300, 20), 299] if updates == 300 else list(range(updates + 1))
     extra_eval_steps = sorted(set(qualities) - set(expected_eval_steps))
     # The interval callback also fires at update300 even with train-end evaluation disabled.
@@ -183,6 +201,12 @@ def audit(config: dict, root: Path) -> dict:
         ),
         "primary_endpoint_completed_updates": 299 if updates == 300 else updates,
         "supplemental_eval_steps": extra_eval_steps,
+        "native_archive_training_gaps": {
+            str(step): 512 - records[("train", step)]
+            for step in range(1, updates + 1)
+            if records[("train", step)] != 512
+        },
+        "complete_original_training_groups": training_group_audit,
         "learner_evidence": learner,
         "quality": [
             {
@@ -203,6 +227,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--training-group-audit", type=Path)
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     client = boto3.client(
@@ -215,7 +240,8 @@ def main() -> None:
     uri = config["artifacts"]["attempts_root"].removesuffix("/attempts")
     args.cache.mkdir(parents=True, exist_ok=True)
     collect(client, uri, args.cache)
-    result = audit(config, args.cache)
+    group_audit = json.loads(args.training_group_audit.read_text()) if args.training_group_audit else None
+    result = audit(config, args.cache, training_group_audit=group_audit)
     checkpoint = urlparse(config["artifacts"]["checkpoint_root"])
     marker = client.get_object(
         Bucket=checkpoint.netloc, Key=checkpoint.path.lstrip("/") + "/latest_ckpt_global_step.txt"

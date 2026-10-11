@@ -19,11 +19,17 @@ def stage(job_id: str) -> str:
         return "core GPU qualification"
     if "sc-snowball-runtime" in job_id:
         return "Snowball GPU qualification"
+    if "sc-snowball-noise-calibration" in job_id:
+        return "Snowball noise calibration"
+    if "sc-snowball-stale-calibration" in job_id:
+        return "Snowball staleness calibration"
     if "stale-path" in job_id:
         return "SkyRL staleness qualification"
     if "sc-skyrl-countdown-main" in job_id:
         return "SkyRL main"
     if "sc-qwen-transfer" in job_id:
+        if "runtime-qual" in job_id:
+            return "Qwen GPU qualification"
         return "Qwen transfer pilot" if "pilot" in job_id else "Qwen transfer main"
     return "SkyRL qualification"
 
@@ -114,6 +120,8 @@ def main() -> None:
             row.setdefault(
                 "outcome", "succeeded; audit pending" if int(row["state"]) == 4 else "failed engineering attempt"
             )
+            if row["terminal_reason"].startswith("PodDeleted:"):
+                row["outcome"] = "infrastructure interruption; controller restarted the job"
             if job.get("retained_audit"):
                 row.update(outcome="succeeded with retained audit", retained_audit=job["retained_audit"])
             attempts[key] = row

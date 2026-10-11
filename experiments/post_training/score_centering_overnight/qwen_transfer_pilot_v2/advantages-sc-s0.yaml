@@ -203,7 +203,7 @@ skyrl:
       sample_count_per_step: 0
       max_bytes_per_step: null
       max_bytes_per_run: null
-      required: false
+      required: true
   extra_env:
     NVTE_FLASH_ATTN: '1'
     NVTE_FUSED_ATTN: '0'
