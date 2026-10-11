@@ -19,6 +19,7 @@ import boto3
 import torch
 import yaml
 from botocore.config import Config
+from grading_text import grading_text
 from skyrl_gym.countdown_reference import compute_reward
 from skyrl_train.objective.score_centering import ppo_tis_score_centering_correction
 
@@ -147,6 +148,8 @@ def audit(config: dict, root: Path, *, training_group_audit: dict | None = None)
     records = Counter()
     memberships = {}
     qualities = {}
+    full_completion_grade_differences = Counter()
+    preserve_full_response = resolved["skyrl"]["generator"].get("preserve_full_response_text", False)
     for path in sorted((root / "attempts/trajectories").glob("**/*.zip")):
         with zipfile.ZipFile(path) as archive:
             for name in archive.namelist():
@@ -154,6 +157,8 @@ def audit(config: dict, root: Path, *, training_group_audit: dict | None = None)
                     continue
                 row = json.loads(gzip.decompress(archive.read(name)))
                 phase, step = row["phase"], row["global_step"]
+                if phase == "eval" and preserve_full_response:
+                    assert row["provenance"]["model_version_step"] == step
                 if phase == "train":
                     assert row["provenance"]["model_version_step"] == step - 1
                     if refresh_period > 1:
@@ -167,7 +172,10 @@ def audit(config: dict, root: Path, *, training_group_audit: dict | None = None)
                 assert row["prompt"]["token_ids"] == row["trajectory"]["environment_extras"]["reference_prompt_ids"]
                 assert len(row["prompt"]["token_ids"]) + len(row["response"]["token_ids"]) <= 512
                 extras = row["trajectory"]["environment_extras"]["info"]
-                score = compute_reward(row["response"]["text"], extras["numbers"], extras["target"])
+                text = grading_text(row["response"]["text"], row["response"]["messages"], preserve_full_response)
+                score = compute_reward(text, extras["numbers"], extras["target"])
+                author_score = compute_reward(row["response"]["text"], extras["numbers"], extras["target"])
+                full_completion_grade_differences[phase] += score != author_score
                 assert row["verification_result"]["score"] == score
                 if phase == "eval":
                     memberships.setdefault(step, Counter())[tuple(row["prompt"]["token_ids"])] += 1
@@ -195,6 +203,13 @@ def audit(config: dict, root: Path, *, training_group_audit: dict | None = None)
         "completed_updates": updates,
         "score_centering": algorithm["score_centering_enabled"],
         "sampler_refresh_period": refresh_period,
+        "matches_authors_completion_grading": preserve_full_response,
+        "full_completion_grade_differences_in_native_archives": dict(full_completion_grade_differences),
+        "scientific_scope": (
+            "faithful completion grading"
+            if preserve_full_response
+            else "diagnostic with native reasoning stripping; excluded from corrected faithful matrix"
+        ),
         "historical_eval_version_metadata": (
             "Older sources report step-1. Actual clean evaluation follows "
             "post-update sync at the stated global_step. Preserve raw metadata."

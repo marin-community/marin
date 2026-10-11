@@ -386,7 +386,8 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "priority_band": 3,
       "status": "terminal",
-      "configuration_sha256_basis": "published launcher-input bytes"
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a0-01a126ce",
@@ -403,7 +404,8 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "priority_band": 3,
       "status": "terminal",
-      "configuration_sha256_basis": "published launcher-input bytes"
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a0-01a126ce",
@@ -421,7 +423,8 @@
       "priority_band": 3,
       "status": "terminal",
       "configuration_sha256_basis": "published launcher-input bytes",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_sc_s0.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_sc_s0.json",
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s1-a0-01a126ce",
@@ -438,7 +441,8 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "priority_band": 3,
       "status": "terminal",
-      "configuration_sha256_basis": "published launcher-input bytes"
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a0-01a126ce",
@@ -455,7 +459,8 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "priority_band": 3,
       "status": "terminal",
-      "configuration_sha256_basis": "published launcher-input bytes"
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a0-01a126ce",
@@ -472,7 +477,8 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "priority_band": 3,
       "status": "running",
-      "configuration_sha256_basis": "published launcher-input bytes"
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a0-01a126ce",
@@ -490,7 +496,8 @@
       "priority_band": 3,
       "status": "terminal",
       "configuration_sha256_basis": "published launcher-input bytes",
-      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_tis_s1.json"
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_tis_s1.json",
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a0-01a126ce",
@@ -507,7 +514,8 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "priority_band": 3,
       "status": "terminal",
-      "configuration_sha256_basis": "published launcher-input bytes"
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "scientific_scope": "native reasoning-stripping diagnostic; not faithful author completion grading"
     },
     {
       "job_id": "/romain/sc-skyrl-stale-path-qual-sc-s0-a0-01a126ce",

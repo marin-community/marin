@@ -18,6 +18,7 @@ import boto3
 import numpy as np
 import yaml
 from botocore.config import Config
+from grading_text import grading_text
 from skyrl_gym.countdown_reference import compute_reward
 from transformers import AutoTokenizer
 
@@ -57,6 +58,7 @@ def main() -> None:
         tokens = 0
         inside = 0
         omitted = 0.0
+        grade_differences = 0
         for index, response_ids in enumerate(batch["response_ids"]):
             prompt_ids = batch["prompt_token_ids"][index]
             assert prompt_ids == list(extras["reference_prompt_ids"])
@@ -64,7 +66,14 @@ def main() -> None:
             verdict = batch["verification_results"][index]
             assert verdict.status == "verified"
             response = tokenizer.decode(response_ids, skip_special_tokens=False)
-            assert verdict.score == compute_reward(response, extras["info"]["numbers"], extras["info"]["target"])
+            text = grading_text(
+                response,
+                batch["evidence_messages"][index],
+                config["skyrl"]["generator"].get("preserve_full_response_text", False),
+            )
+            score = compute_reward(text, extras["info"]["numbers"], extras["info"]["target"])
+            assert verdict.score == score
+            grade_differences += score != compute_reward(response, extras["info"]["numbers"], extras["info"]["target"])
             q = np.asarray(batch["behavior_topk_logprobs"][index])
             ids = np.asarray(batch["student_topk_indices"][index])
             chosen = np.asarray(batch["rollout_logprobs"][index])
@@ -91,6 +100,7 @@ def main() -> None:
             "response_tokens": tokens,
             "chosen_tokens_in_head": inside,
             "omitted_mass_sum": omitted,
+            "full_completion_grade_differences": grade_differences,
         }
 
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -122,6 +132,8 @@ def main() -> None:
         "mean_omitted_mass": sum(item["omitted_mass_sum"] for item in checked) / total_tokens,
         "manifest_uri": destination.geturl(),
         "manifest_sha256": hashlib.sha256(payload).hexdigest(),
+        "matches_authors_completion_grading": config["skyrl"]["generator"].get("preserve_full_response_text", False),
+        "full_completion_grade_differences": sum(item["full_completion_grade_differences"] for item in checked),
         "basis": (
             "All original RolloutGroup pickles: exact input order, full behavior probabilities, token budget "
             "and replayed Countdown grades. Old/current rescoring remains checked in retained learner inputs."

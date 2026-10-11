@@ -16,15 +16,19 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
+from grading_text import grading_text
 from skyrl_gym.envs.aime.utils import verify
 from skyrl_gym.envs.gsm8k.utils import compute_score
 from skyrl_gym.envs.reasoning_gym.scoring import normalize_ground_truth, score_response
 
 SOURCES = {}
+PRESERVE_FULL_RESPONSE = False
 
 
-def load_sources(train: str, validation: str) -> None:
+def load_sources(train: str, validation: str, preserve_full_response: bool) -> None:
+    global PRESERVE_FULL_RESPONSE
     SOURCES.update(train=pd.read_parquet(train), eval=pd.read_parquet(validation))
+    PRESERVE_FULL_RESPONSE = preserve_full_response
 
 
 def regrade(record: dict) -> dict:
@@ -35,7 +39,7 @@ def regrade(record: dict) -> dict:
     assert row["data_source"] == extras["data_source"]
     environment = row["env_class"]
     expected = (row["reward_spec"] or row["reward_model"])["ground_truth"]
-    response = record["response"]["text"]
+    response = grading_text(record["response"]["text"], record["response"]["messages"], PRESERVE_FULL_RESPONSE)
     try:
         if environment == "aime":
             quality = float(verify(response, expected, allow_general_math_reference=True)[0])
@@ -96,7 +100,13 @@ def main() -> None:
         manifest = json.loads((Path(__file__).parent / "results/curriculum_data_manifest.json").read_text())
         expected_hashes = {"train": manifest["source_files"]["train"], "eval": manifest["source_files"]["validation"]}
     assert source_hashes == expected_hashes
-    files = ["envs/aime/utils.py", "envs/gsm8k/utils.py", "envs/reasoning_gym/scoring.py"]
+    preserve_full_response = config["skyrl"]["generator"].get("preserve_full_response_text", False)
+    files = [
+        "envs/aime/utils.py",
+        "envs/gsm8k/utils.py",
+        "envs/reasoning_gym/scoring.py",
+        "envs/nemotron_ultra/answer_extraction.py",
+    ]
     grader_files = {}
     for file in files:
         relative = "skyrl-gym/skyrl_gym/" + file
@@ -125,7 +135,9 @@ def main() -> None:
     discrepancies = []
     native_errors = []
     with ProcessPoolExecutor(
-        max_workers=4, initializer=load_sources, initargs=(str(args.train_source), str(args.validation_source))
+        max_workers=4,
+        initializer=load_sources,
+        initargs=(str(args.train_source), str(args.validation_source), preserve_full_response),
     ) as executor:
         for result in executor.map(regrade, records, chunksize=16):
             key = (result["phase"], result["step"])
@@ -139,6 +151,7 @@ def main() -> None:
     report = {
         "run_id": config["run"]["id"],
         "source": config["runtime"]["launcher_commit"],
+        "preserve_full_response_text": preserve_full_response,
         "basis": (
             "Every retained response replayed against its original source row using the frozen grading contract; "
             "this is not an independent verifier implementation."

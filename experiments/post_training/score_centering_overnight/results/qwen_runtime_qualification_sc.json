@@ -277,5 +277,7 @@
   "audit_passed": true,
   "purpose": "engineering runtime qualification",
   "scientific_effect_claim": false,
-  "controller_attempt": 0
+  "controller_attempt": 0,
+  "matches_transfer_completion_contract": false,
+  "qualification_limitation": "Original native final-answer transport; full-completion source61506a73 requires new qualification before transfer science"
 }

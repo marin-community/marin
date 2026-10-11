@@ -6,7 +6,7 @@ run:
   submission: detach
   export_hf: false
 runtime:
-  launcher_commit: 158c7f0ac5cd0c92b2aa8829ff8d733e0b6c0e04
+  launcher_commit: 61506a73f05b7d42d09d530d70627b1983a1233f
   profile: megatron
 iris:
   cluster: cw-us-east-02a
@@ -204,6 +204,7 @@ skyrl:
       max_bytes_per_step: null
       max_bytes_per_run: null
       required: true
+    preserve_full_response_text: true
   extra_env:
     NVTE_FLASH_ATTN: '1'
     NVTE_FUSED_ATTN: '0'

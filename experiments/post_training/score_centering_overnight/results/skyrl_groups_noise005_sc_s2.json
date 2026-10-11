@@ -1,0 +1,16 @@
+{
+  "run_id": "sc-skyrl-countdown-main-noise005-sc-s2-a0-01a126ce",
+  "source": "01944d73c92c493b835b9e3773147e4e72097e8f",
+  "groups": 19200,
+  "responses": 153600,
+  "completed_updates": 300,
+  "response_tokens": 39078323,
+  "chosen_tokens_in_head": 39074983,
+  "mean_omitted_mass": 8.626660335764872e-05,
+  "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-sc-s2-a0-01a126ce/analysis/training-group-audit.json.gz",
+  "manifest_sha256": "f19ed4c8e882e0b35351d3b2aa7a56c0da56b3590a92cf9b4769dcdb7b6bb4ad",
+  "basis": "All original RolloutGroup pickles: exact input order, full behavior probabilities, token budget and replayed Countdown grades. Old/current rescoring remains checked in retained learner inputs.",
+  "audit_passed": true,
+  "matches_authors_completion_grading": false,
+  "scientific_scope": "Native reasoning-stripping diagnostic; excluded from corrected faithful matrix"
+}

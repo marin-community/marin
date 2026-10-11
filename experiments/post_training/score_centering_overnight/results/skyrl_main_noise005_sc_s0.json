@@ -3423,5 +3423,7 @@
     }
   ],
   "nonzero_gradient_updates": 300,
-  "audit_passed": true
+  "audit_passed": true,
+  "matches_authors_completion_grading": false,
+  "scientific_scope": "Native reasoning-stripping diagnostic; excluded from corrected faithful matrix"
 }
