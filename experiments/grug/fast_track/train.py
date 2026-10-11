@@ -289,9 +289,11 @@ class GrugTrainerConfig:
     save_checkpoints: bool = False
     # Write the compiled (optimized) train-step HLO text here after the first step, for profile attribution.
     hlo_dump_path: str | None = None
-    # After the last step, route ``NULL_ROUTING_DUMP_BATCHES`` train-size batches of held-out sequences and write each
-    # token's null-slot count per layer and its next-token loss here (``moe_null_layers`` runs).
-    null_routing_dump_path: str | None = None
+    # After the last step, run ``TOKEN_DUMP_BATCHES`` train-size batches of held-out sequences and write each token's
+    # next-token loss here (``write_token_dump``).
+    token_dump_path: str | None = None
+    # The token dump also records each token's loss with every token skipping these layers (``LayerSkip``).
+    token_dump_skip_layers: tuple[int, ...] = ()
     # XLA GPU autotune results shared across runs of the same program (``_use_xla_autotune_cache``): loaded at start
     # when present, written by process 0 after the first step otherwise. None: autotune every compile.
     xla_autotune_cache_path: str | None = None
@@ -1561,9 +1563,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if config.trainer.null_routing_dump_path is not None:
-                write_null_routing_dump(
-                    config, state, mesh, batch_schedule.batch_size_at_step(0), config.trainer.null_routing_dump_path
+            if config.trainer.token_dump_path is not None:
+                write_token_dump(
+                    config, state, mesh, batch_schedule.batch_size_at_step(0), config.trainer.token_dump_path
                 )
             if marker is not None and jax.process_index() == 0:
                 with fsspec.open(marker, "w") as f:
@@ -1583,7 +1585,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     levanter.tracker.current_tracker().finish()
 
 
-NULL_ROUTING_DUMP_BATCHES = 4
+TOKEN_DUMP_BATCHES = 4
 
 
 def _held_out_sequences(data_config: LmDataConfig, *, seq_len: int, num_sequences: int) -> tuple[np.ndarray, np.ndarray]:
@@ -1591,13 +1593,13 @@ def _held_out_sequences(data_config: LmDataConfig, *, seq_len: int, num_sequence
     round-robin over the sets in name order."""
     sets = data_config.validation_sets(Axis("position", seq_len))
     if not sets:
-        raise ValueError("the null-routing dump needs validation sets")
+        raise ValueError("the token dump needs validation sets")
     names = sorted(sets)
     datasets = {name: sets[name].as_sync_dataset() for name in names}
     lengths = {name: len(datasets[name]) for name in names}
     picks = [(name, index) for index in range(max(lengths.values())) for name in names if index < lengths[name]]
     if len(picks) < num_sequences:
-        raise ValueError(f"the null-routing dump needs {num_sequences} sequences, the validation sets hold {len(picks)}")
+        raise ValueError(f"the token dump needs {num_sequences} sequences, the validation sets hold {len(picks)}")
     picks = picks[:num_sequences]
     fetched = {}
     for name in names:
@@ -1615,28 +1617,33 @@ def _held_out_sequences(data_config: LmDataConfig, *, seq_len: int, num_sequence
     return tokens, segments
 
 
-def _null_routing_step(mp: jmp.Policy, num_real_experts: int):
-    """Jitted ``(params, qb_betas, tokens, segment_ids) -> (null_slots [L, B, S] uint8, next_token_loss [B, S])``."""
+def _token_dump_step(mp: jmp.Policy, num_real_experts: int, null_layers: bool, skip_layers: tuple[int, ...]):
+    """Jitted ``(params, qb_betas, tokens, segment_ids) -> dict`` of per-token ``[B, S]`` arrays (``[L, B, S]`` for
+    ``null_slots``): ``next_token_loss``, with ``null_layers`` each token's ``null_slots`` per layer, and with
+    ``skip_layers`` ``skipped_loss``, the loss with every token skipping those layers."""
 
     @jax.jit
     def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
         model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
         mask = AttentionMask.causal().with_segment_ids(segment_ids)
-        selected, _ = model.routing_assignments(tokens, mask)
-        null_slots = jnp.sum(selected >= num_real_experts, axis=-1).astype(jnp.uint8)
-        loss = model.next_token_loss(tokens, jnp.ones(tokens.shape, jnp.float32), mask=mask, reduction="none")
-        return null_slots, loss
+        weight = jnp.ones(tokens.shape, jnp.float32)
+        out = {"next_token_loss": model.next_token_loss(tokens, weight, mask=mask, reduction="none")}
+        if null_layers:
+            selected, _ = model.routing_assignments(tokens, mask)
+            out["null_slots"] = jnp.sum(selected >= num_real_experts, axis=-1).astype(jnp.uint8)
+        if skip_layers:
+            skip = LayerSkip(skip_layers, jnp.zeros(tokens.shape, jnp.bool_))
+            out["skipped_loss"] = model.next_token_loss(tokens, weight, mask=mask, reduction="none", layer_skip=skip)
+        return out
 
     return run
 
 
-def write_null_routing_dump(
-    config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, batch_size: int, path: str
-) -> None:
-    """Route held-out batches and write ``tokens``, ``segment_ids``, ``null_slots`` ``[L, N, S]`` (each token's
-    slots on null experts per layer) and ``next_token_loss`` ``[N, S]`` (the loss of predicting token s+1 at s)."""
+def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, batch_size: int, path: str) -> None:
+    """Run held-out batches and write ``tokens``, ``segment_ids``, ``next_token_loss`` ``[N, S]`` (the loss of
+    predicting token s+1 at s), and per ``_token_dump_step`` ``null_slots`` ``[L, N, S]`` and ``skipped_loss``."""
     cfg = config.model
-    num_sequences = NULL_ROUTING_DUMP_BATCHES * batch_size
+    num_sequences = TOKEN_DUMP_BATCHES * batch_size
     # The dataset's per-example jit pins its output to a CPU device; JAX's mesh context is thread-local, so fetch
     # on a worker thread (as the data loader does).
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -1644,32 +1651,37 @@ def write_null_routing_dump(
             _held_out_sequences, config.data, seq_len=cfg.max_seq_len, num_sequences=num_sequences
         ).result()
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-    step = _null_routing_step(config.trainer.trainer.mp, cfg.num_experts)
-    nulls, losses = [], []
+    skip_layers = config.trainer.token_dump_skip_layers
+    step = _token_dump_step(config.trainer.trainer.mp, cfg.num_experts, bool(cfg.moe_null_layers), skip_layers)
+    parts: list[dict[str, np.ndarray]] = []
     for start in range(0, num_sequences, batch_size):
         batch = [
             jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index])
             for x in (tokens[start : start + batch_size], segments[start : start + batch_size])
         ]
-        null_slots, loss = step(state.params, state.pending_qb_betas, *batch)
-        nulls.append(np.asarray(jax.device_get(null_slots)))
-        losses.append(np.asarray(jax.device_get(loss), np.float32))
+        parts.append(
+            {k: np.asarray(v) for k, v in jax.device_get(step(state.params, state.pending_qb_betas, *batch)).items()}
+        )
     if jax.process_index() != 0:
         return
     buffer = io.BytesIO()
+    arrays = {k: np.concatenate([p[k] for p in parts], axis=1 if k == "null_slots" else 0) for k in parts[0]}
+    for k in ("next_token_loss", "skipped_loss"):
+        if k in arrays:
+            arrays[k] = arrays[k].astype(np.float16)
     np.savez(
         buffer,
         tokens=tokens,
         segment_ids=segments,
-        null_slots=np.concatenate(nulls, axis=1),
-        next_token_loss=np.concatenate(losses, axis=0).astype(np.float16),
         null_layers=np.asarray(cfg.moe_null_layers, np.int32),
         slots_per_token=np.asarray(2 * cfg.num_experts_per_token),
+        skip_layers=np.asarray(skip_layers, np.int32),
         step=np.asarray(int(state.step)),
+        **arrays,
     )
     with fsspec.open(path, "wb") as f:
         f.write(buffer.getvalue())
-    logger.info("Wrote the null-routing dump to %s", path)
+    logger.info("Wrote the token dump to %s", path)
 
 
 def _autotune_dump_file() -> str:

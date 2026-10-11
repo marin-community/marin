@@ -361,7 +361,8 @@ def build_h100_ladder_run(
     seed: int = 0,
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
-    null_routing_dump: bool = False,
+    token_dump: bool = False,
+    token_dump_skip_layers: tuple[int, ...] = (),
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_frac: float = 0.5,
     resume_from: str | None = None,
@@ -567,7 +568,8 @@ def build_h100_ladder_run(
                 grug_trainer,
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
-                null_routing_dump_path=(prefix_join(ctx.output_path, "null_routing.npz") if null_routing_dump else None),
+                token_dump_path=(prefix_join(ctx.output_path, "token_dump.npz") if token_dump else None),
+                token_dump_skip_layers=token_dump_skip_layers,
                 xla_autotune_cache_path=_xla_autotune_cache_path(model, rung) if rung.device == "GB200" else None,
                 layer_skip=layer_skip,
                 extra_mlp_start_frac=extra_mlp_start_frac,
@@ -775,10 +777,15 @@ def _layer_skip_rule(
     "--layer-skip-token-ids-file", default=None, help="Local file of whitespace-separated token ids that skip."
 )
 @click.option(
-    "--null-routing-dump",
+    "--token-dump",
     is_flag=True,
-    help="moe_null_layers: after the last step, write each held-out token's null slots per layer and next-token "
-    "loss to <output>/null_routing.npz.",
+    help="After the last step, write each held-out token's next-token loss (and null slots per layer, with "
+    "moe_null_layers) to <output>/token_dump.npz.",
+)
+@click.option(
+    "--token-dump-skip-layers",
+    default=None,
+    help="Comma-separated layers: the token dump also records each token's loss with every token skipping them.",
 )
 @click.option(
     "--resume-from",
@@ -917,7 +924,8 @@ def main(
     seed: int,
     profile_start_step: int | None,
     dump_hlo: bool,
-    null_routing_dump: bool,
+    token_dump: bool,
+    token_dump_skip_layers: str | None,
     extra_mlp_start_frac: float,
     layer_skip_layers: str | None,
     layer_skip_rate: float,
@@ -962,7 +970,10 @@ def main(
         seed=seed,
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
-        null_routing_dump=null_routing_dump,
+        token_dump=token_dump,
+        token_dump_skip_layers=(
+            tuple(int(x) for x in token_dump_skip_layers.split(",")) if token_dump_skip_layers else ()
+        ),
         extra_mlp_start_frac=extra_mlp_start_frac,
         layer_skip=_layer_skip_rule(layer_skip_layers, layer_skip_rate, layer_skip_positions, layer_skip_token_ids_file),
         resume_from=resume_from,
