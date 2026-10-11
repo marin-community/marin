@@ -628,6 +628,8 @@ def _launcher_command(requirement: str, config_path: str) -> list[str]:
         "run",
         "--isolated",
         "--no-project",
+        # Transitive Git workspaces must not replace published dependencies with development versions.
+        "--no-sources",
         "--prerelease=allow",
         "--python",
         _LAUNCHER_PYTHON,
