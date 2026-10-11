@@ -356,7 +356,13 @@ class TritonBlockConfig:
         )
 
 
+_GFX942 = "gfx942"
+
+
 class _GpuFamily(StrEnum):
+    # MI300X and MI325X.
+    AMD_INSTINCT_GFX942 = "amd_instinct_gfx942"
+    # Other AMD Instinct GPUs, such as MI350X (gfx950).
     AMD_INSTINCT = "amd_instinct"
     NVIDIA_BLACKWELL = "nvidia_blackwell"
     NVIDIA = "nvidia"
@@ -367,8 +373,12 @@ class _GpuFamily(StrEnum):
 def _gpu_family() -> _GpuFamily:
     if jax.default_backend() != "gpu":
         return _GpuFamily.OTHER
-    device_kind = jax.devices("gpu")[0].device_kind
+    device = jax.devices("gpu")[0]
+    device_kind = device.device_kind
     if "Instinct" in device_kind:
+        # ROCm reports the gfx architecture name as the compute capability.
+        if device.compute_capability == _GFX942:
+            return _GpuFamily.AMD_INSTINCT_GFX942
         return _GpuFamily.AMD_INSTINCT
     if _is_blackwell_gpu_backend():
         return _GpuFamily.NVIDIA_BLACKWELL
@@ -382,20 +392,22 @@ _TILE_MAP_GENERIC_CONFIG = TritonBlockConfig(
     block_m=128, block_n=_TRITON_DEFAULT_BLOCK_N, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=1
 )
 _TILE_MAP_BLACKWELL_ROW_CONFIG = dataclasses.replace(_TILE_MAP_GENERIC_CONFIG, block_n=_TRITON_BLACKWELL_BLOCK_N)
+# Swept on MI350X (gfx950) at the June (G=32, K and N of 1280-2560) and Mixtral-like (G=8, 4096x14336)
+# expert shapes; gfx942 reuses them untuned.
+_TILE_MAP_AMD_INSTINCT_CONFIGS = {
+    RaggedLayout.FWD: TritonBlockConfig(
+        block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=2
+    ),
+    RaggedLayout.DLHS: TritonBlockConfig(
+        block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=4
+    ),
+    RaggedLayout.DRHS: TritonBlockConfig(
+        block_m=256, block_n=128, block_k=64, num_warps=4, num_stages=1, num_xcds=8, group_m=8
+    ),
+}
 _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
-    # Swept on MI350X (gfx950) at the June (G=32, K and N of 1280-2560) and Mixtral-like (G=8, 4096x14336)
-    # expert shapes.
-    _GpuFamily.AMD_INSTINCT: {
-        RaggedLayout.FWD: TritonBlockConfig(
-            block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=2
-        ),
-        RaggedLayout.DLHS: TritonBlockConfig(
-            block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=4
-        ),
-        RaggedLayout.DRHS: TritonBlockConfig(
-            block_m=256, block_n=128, block_k=64, num_warps=4, num_stages=1, num_xcds=8, group_m=8
-        ),
-    },
+    _GpuFamily.AMD_INSTINCT_GFX942: _TILE_MAP_AMD_INSTINCT_CONFIGS,
+    _GpuFamily.AMD_INSTINCT: _TILE_MAP_AMD_INSTINCT_CONFIGS,
     _GpuFamily.NVIDIA_BLACKWELL: {
         RaggedLayout.FWD: _TILE_MAP_BLACKWELL_ROW_CONFIG,
         RaggedLayout.DLHS: _TILE_MAP_BLACKWELL_ROW_CONFIG,
@@ -702,7 +714,7 @@ _TRITON_KERNELS: dict[TritonKernelFamily, Callable[[jax.Array, jax.Array, jax.Ar
     TritonKernelFamily.TILE_MAP: _tile_map_pallas_call,
 }
 # GPU families that run the tile-map kernels; every other GPU, NVIDIA included, runs the group-grid kernels.
-_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT})
+_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT_GFX942, _GpuFamily.AMD_INSTINCT})
 
 
 def _triton_kernel_family() -> TritonKernelFamily:
@@ -814,6 +826,12 @@ def _preferred_implementations(implementation: Implementation) -> tuple[Implemen
         return ("megablox", "xla")
 
     if jax.default_backend() == "gpu" and _has_pallas_triton:
+        if _gpu_family() == _GpuFamily.AMD_INSTINCT_GFX942:
+            # XLA's bf16 grouped GEMM beats the Triton kernels on MI300X. MI350X keeps Triton: XLA rejects
+            # bf16 ragged_dot on gfx950. XLA's hipBLASLt grouped GEMM crashes with ROCM_ERROR_ILLEGAL_ADDRESS
+            # under HIP command buffers, so ROCm runs must pass --xla_gpu_enable_command_buffer=. The Grug
+            # entry points and the HPC Fund Slurm wrapper already set it.
+            return ("xla", "triton")
         return ("triton", "xla")
 
     return ("xla",)
