@@ -357,6 +357,7 @@ def build_h100_ladder_run(
     seed: int = 0,
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
+    null_routing_dump: bool = False,
     resume_from: str | None = None,
     xla_memory_report: bool = False,
     master_param_mode: MasterParamMode | None = None,
@@ -560,6 +561,7 @@ def build_h100_ladder_run(
                 grug_trainer,
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
+                null_routing_dump_path=(prefix_join(ctx.output_path, "null_routing.npz") if null_routing_dump else None),
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
                 pipeline_depth=pipeline_depth,
                 loader_buffer_batches=loader_buffer_batches,
@@ -713,6 +715,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 )
 @click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
 @click.option(
+    "--null-routing-dump",
+    is_flag=True,
+    help="moe_null_layers: after the last step, write each held-out token's null slots per layer and next-token "
+    "loss to <output>/null_routing.npz.",
+)
+@click.option(
     "--resume-from",
     default=None,
     help="Load this checkpoint directory (another run's <output>/checkpoints) first.",
@@ -849,6 +857,7 @@ def main(
     seed: int,
     profile_start_step: int | None,
     dump_hlo: bool,
+    null_routing_dump: bool,
     resume_from: str | None,
     xla_memory_report: bool,
     master_param_mode: str | None,
@@ -888,6 +897,7 @@ def main(
         seed=seed,
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
+        null_routing_dump=null_routing_dump,
         resume_from=resume_from,
         xla_memory_report=xla_memory_report,
         master_param_mode=MasterParamMode(master_param_mode) if master_param_mode else None,

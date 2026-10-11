@@ -2346,6 +2346,13 @@ class MoEMLP(eqx.Module):
         # Per-token assignments for the routing dump (``Transformer.routing_assignments``); unused (and so
         # dead-code eliminated) in the training forward.
         assignments = {_ROUTING_SELECTED: selected_experts.astype(jnp.int32), _ROUTING_WEIGHTS: combine_weights_f}
+        if self.cfg.num_null_experts and not null_layer:
+            # moe_null_layers route 2K slots; pad this layer's K to 2K (expert -1, weight 0) so layers stack.
+            pad = ((0, 0), (0, 2 * self.cfg.num_experts_per_token - k))
+            assignments = {
+                _ROUTING_SELECTED: jnp.pad(assignments[_ROUTING_SELECTED], pad, constant_values=-1),
+                _ROUTING_WEIGHTS: jnp.pad(assignments[_ROUTING_WEIGHTS], pad),
+            }
         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
         router_stats = local_routing_stats(
             reshard(selected_experts, P(_BATCH_AXES, None)),

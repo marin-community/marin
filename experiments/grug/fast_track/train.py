@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import concurrent.futures
 import dataclasses
 import faulthandler
 import functools
 import gc
 import glob
+import io
 import json
 import logging
 import math
@@ -44,6 +46,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_NCCL_SEND_RECV_XLA_FLAGS, RAGGED_REQUIRED_XLA_FLAGS
+from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
@@ -265,6 +268,9 @@ class GrugTrainerConfig:
     save_checkpoints: bool = False
     # Write the compiled (optimized) train-step HLO text here after the first step, for profile attribution.
     hlo_dump_path: str | None = None
+    # After the last step, route ``NULL_ROUTING_DUMP_BATCHES`` train-size batches of held-out sequences and write each
+    # token's null-slot count per layer and its next-token loss here (``moe_null_layers`` runs).
+    null_routing_dump_path: str | None = None
     # Train steps dispatched before the previous step's host work: 1 overlaps that work (logging, callbacks) with
     # the devices; 0 finishes every step before dispatching the next. 1 crashes the devices around step 515
     # (CUDA_ERROR_ILLEGAL_ADDRESS, with or without PGLE; batch 160), so it is opt-in until that is understood.
@@ -1447,6 +1453,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if config.trainer.null_routing_dump_path is not None:
+                write_null_routing_dump(
+                    config, state, mesh, batch_schedule.batch_size_at_step(0), config.trainer.null_routing_dump_path
+                )
             if marker is not None and jax.process_index() == 0:
                 with fsspec.open(marker, "w") as f:
                     json.dump({"step": int(state.step), "final_loss": float(last_loss)}, f)
@@ -1463,6 +1473,95 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+
+
+NULL_ROUTING_DUMP_BATCHES = 4
+
+
+def _held_out_sequences(data_config: LmDataConfig, *, seq_len: int, num_sequences: int) -> tuple[np.ndarray, np.ndarray]:
+    """``num_sequences`` fixed held-out sequences and their segment ids: every validation set from its start,
+    round-robin over the sets in name order."""
+    sets = data_config.validation_sets(Axis("position", seq_len))
+    if not sets:
+        raise ValueError("the null-routing dump needs validation sets")
+    names = sorted(sets)
+    datasets = {name: sets[name].as_sync_dataset() for name in names}
+    lengths = {name: len(datasets[name]) for name in names}
+    picks = [(name, index) for index in range(max(lengths.values())) for name in names if index < lengths[name]]
+    if len(picks) < num_sequences:
+        raise ValueError(f"the null-routing dump needs {num_sequences} sequences, the validation sets hold {len(picks)}")
+    picks = picks[:num_sequences]
+    fetched = {}
+    for name in names:
+        indices = [index for n, index in picks if n == name]
+        if indices:
+            examples = [grug_lm_example_from_named(ex) for ex in datasets[name].get_batch(indices)]
+            fetched.update({(name, index): ex for index, ex in zip(indices, examples, strict=True)})
+    tokens = np.stack([np.asarray(fetched[pick].tokens, np.int32) for pick in picks])
+    segments = np.stack(
+        [
+            np.zeros(seq_len, np.int32) if (seg := fetched[pick].attn_mask.segment_ids) is None else np.asarray(seg[0])
+            for pick in picks
+        ]
+    ).astype(np.int32)
+    return tokens, segments
+
+
+def _null_routing_step(mp: jmp.Policy, num_real_experts: int):
+    """Jitted ``(params, qb_betas, tokens, segment_ids) -> (null_slots [L, B, S] uint8, next_token_loss [B, S])``."""
+
+    @jax.jit
+    def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
+        model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
+        mask = AttentionMask.causal().with_segment_ids(segment_ids)
+        selected, _ = model.routing_assignments(tokens, mask)
+        null_slots = jnp.sum(selected >= num_real_experts, axis=-1).astype(jnp.uint8)
+        loss = model.next_token_loss(tokens, jnp.ones(tokens.shape, jnp.float32), mask=mask, reduction="none")
+        return null_slots, loss
+
+    return run
+
+
+def write_null_routing_dump(
+    config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, batch_size: int, path: str
+) -> None:
+    """Route held-out batches and write ``tokens``, ``segment_ids``, ``null_slots`` ``[L, N, S]`` (each token's
+    slots on null experts per layer) and ``next_token_loss`` ``[N, S]`` (the loss of predicting token s+1 at s)."""
+    cfg = config.model
+    num_sequences = NULL_ROUTING_DUMP_BATCHES * batch_size
+    # The dataset's per-example jit pins its output to a CPU device; JAX's mesh context is thread-local, so fetch
+    # on a worker thread (as the data loader does).
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _held_out_sequences, config.data, seq_len=cfg.max_seq_len, num_sequences=num_sequences
+        ).result()
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    step = _null_routing_step(config.trainer.trainer.mp, cfg.num_experts)
+    nulls, losses = [], []
+    for start in range(0, num_sequences, batch_size):
+        batch = [
+            jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index])
+            for x in (tokens[start : start + batch_size], segments[start : start + batch_size])
+        ]
+        null_slots, loss = step(state.params, state.pending_qb_betas, *batch)
+        nulls.append(np.asarray(jax.device_get(null_slots)))
+        losses.append(np.asarray(jax.device_get(loss), np.float32))
+    if jax.process_index() != 0:
+        return
+    buffer = io.BytesIO()
+    np.savez(
+        buffer,
+        tokens=tokens,
+        segment_ids=segments,
+        null_slots=np.concatenate(nulls, axis=1),
+        next_token_loss=np.concatenate(losses, axis=0).astype(np.float16),
+        null_layers=np.asarray(cfg.moe_null_layers, np.int32),
+        slots_per_token=np.asarray(2 * cfg.num_experts_per_token),
+        step=np.asarray(int(state.step)),
+    )
+    with fsspec.open(path, "wb") as f:
+        f.write(buffer.getvalue())
+    logger.info("Wrote the null-routing dump to %s", path)
 
 
 # Every rank logs host-side stalls longer than this: a late rank stalls every other rank's collectives.
