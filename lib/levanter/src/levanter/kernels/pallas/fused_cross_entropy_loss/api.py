@@ -13,6 +13,7 @@ from typing import Literal, Optional, TypeAlias, cast, overload
 import warnings
 
 import jax
+from jax._src import distributed as jax_distributed
 import jax.numpy as jnp
 import jaxlib
 from jax._src.mesh import get_concrete_mesh
@@ -821,7 +822,9 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         inferred, has_tuned_match = None, False
 
     process_ids = _autotune_process_ids(x, labels, w)
-    if len(process_ids) > 1:
+    # A mock multi-process topology (``jax_mock_gpu_topology``) is one real process with no distributed client:
+    # there are no peers to agree with.
+    if len(process_ids) > 1 and jax_distributed.global_state.client is not None:
         # The sweep's rendezvous cannot help if one rank takes a tuned-table hit,
         # disables tuning, or chooses a different implementation before entering it.
         plan = {
