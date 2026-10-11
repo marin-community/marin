@@ -1766,6 +1766,9 @@ def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
     distributed syncs, data loader), which waits for processes that do not exist. Must run before the backend is
     created."""
     assert config.trainer.xla_autotune_cache_path is not None
+    # The mock compile's executables use no-op NCCL: they must never reach the persistent compilation cache, where a
+    # real run's ranks would load them and deadlock in collectives that do nothing.
+    jax.config.update("jax_enable_compilation_cache", False)
     jax.config.update("jax_mock_gpu_topology", topology)
     flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}", "--xla_gpu_shard_autotuning=false"]
     os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
