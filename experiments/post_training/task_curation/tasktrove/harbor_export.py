@@ -11,7 +11,7 @@ import re
 import shlex
 import tarfile
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from functools import cache
 from pathlib import Path, PurePosixPath
@@ -65,7 +65,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     TEST_SH,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT
-from experiments.post_training.task_curation.tasktrove.source_images import ARC_SOURCES, source_actor_build
+from experiments.post_training.task_curation.tasktrove.source_images import ARC_SOURCES, PYTEST_ENV, source_actor_build
 
 
 class VerifierEnvironmentMode(StrEnum):
@@ -275,6 +275,14 @@ def _verifier_program(
     spec: Spec | None = None
     if isinstance(grader, VerifyitGrader):
         spec = verifyit_spec(grader)
+        if (
+            isinstance(spec, PytestSpec)
+            and task.environment_requirements.docker_build is None
+            and task.source.dataset == TASKTROVE_REPO
+            and any(resource.path == DOCKERFILE for resource in task.resources.oracle)
+        ):
+            # The legacy source image installs pytest and its reporting plugin in this venv.
+            spec = replace(spec, python=f"{PYTEST_ENV}/bin/python")
         answer_path = verifyit_answer_file(spec) if task.answer_type == AnswerType.TEXT else None
         # Harbor reserves tests/verifier.toml for its image-installed dispatch.
         files[VERIFIER_SPEC_PATH] = render_spec(spec).encode()
@@ -417,7 +425,7 @@ def harbor_payload(
     actor_build = environment.docker_build
     if actor_build is None:
         actor_build = source_actor_build(task, source=source, mode=verifier.mode, package=verifyit_package_root)
-    # Only ARC has an explicit native-lock replacement in source_actor_build.
+    # ARC's Harbor compatibility recipe supplies scorer imports independently of its native package lock.
     if environment.packages_lock is not None and (actor_build is None or source not in ARC_SOURCES):
         raise UnsupportedHarborTask("Agent package locks require an environment build")
     if actor_build is not None:

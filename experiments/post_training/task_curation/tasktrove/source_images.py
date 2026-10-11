@@ -36,7 +36,7 @@ OLD_JUDGE_INSTALL = re.compile(r"rewardkit|litellm", re.IGNORECASE)
 OLD_PUZZLE_INSTALL = re.compile(r"pip install .*\bpytest\b")
 OLD_REASONING_INSTALL = re.compile(r"^RUN pip install --no-cache-dir reasoning-gym")
 MODE_EXTRAS: dict[str, tuple[str, ...]] = {
-    Mode.MATH: ("answer",),
+    Mode.MATH: ("math",),
     Mode.JSON_SCHEMA: ("schema",),
     Mode.REASONING_GYM: ("reasoning-gym",),
     Mode.JUDGE: ("judge",),

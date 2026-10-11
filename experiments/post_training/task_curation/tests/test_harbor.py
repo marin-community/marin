@@ -38,7 +38,7 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.grade import grade, read_output
-from verifyit.spec import ExactSpec, JsonSchemaSpec, McqSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
+from verifyit.spec import ExactSpec, JsonSchemaSpec, MathSpec, McqSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
 
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
@@ -466,23 +466,31 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
     assert not config["artifacts"]
     assert files["environment/Dockerfile"].startswith(b"FROM python:3.11-slim\n")
     assert not any(path.startswith("environment/files/tests/") for path in files)
+    path = "solution.py" if mode == "inductive" else "answer.txt"
+    positive = arc.literal_transform(grid) if mode == "inductive" else arc.grid_text(grid)
+    negative = "def transform(grid): return [[8]]" if mode == "inductive" else "8"
+    assert grade_in_exported_image(files, path, (positive, negative), tmp_path) == [1, 0]
+
+
+def grade_in_exported_image(files, answer_path, candidates, tmp_path):
     for path, content in files.items():
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
-    image = f"taskcuration-arc-test:{uuid4().hex}"
+    image = f"taskcuration-harbor-test:{uuid4().hex}"
     subprocess.run(["docker", "build", "-t", image, str(tmp_path / "environment")], check=True)
     try:
         (tmp_path / "app").mkdir()
         (tmp_path / "logs").mkdir()
-        answer_path = tmp_path / "app" / ("solution.py" if mode == "inductive" else "answer.txt")
-        positive = arc.literal_transform(grid) if mode == "inductive" else arc.grid_text(grid)
-        negative = "def transform(grid): return [[8]]" if mode == "inductive" else "8"
-        for candidate, expected in [(positive, 1), (negative, 0)]:
-            # Inductive grading removes hidden config before executing the candidate.
-            if mode == "inductive":
-                (tmp_path / "tests/config.json").write_bytes(files["tests/config.json"])
-            answer_path.write_text(candidate)
+        rewards = []
+        for candidate in candidates:
+            # Some graders remove private files before executing candidate code.
+            for path, content in files.items():
+                if path.startswith("tests/"):
+                    (tmp_path / path).write_bytes(content)
+            (tmp_path / "app" / answer_path).write_text(candidate)
+            reward = tmp_path / "logs/reward.txt"
+            reward.unlink(missing_ok=True)
             result = subprocess.run(
                 [
                     "docker",
@@ -505,9 +513,52 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
                 text=True,
             )
             assert result.returncode == 0, result.stderr
-            assert float((tmp_path / "logs/reward.txt").read_text()) == expected
+            assert reward.exists(), result.stdout + result.stderr
+            rewards.append(float(reward.read_text()))
+        return rewards
     finally:
         subprocess.run(["docker", "image", "rm", image], check=True)
+
+
+@pytest.mark.docker
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize(
+    "spec, resources, answer_path, candidates",
+    [
+        (MathSpec(expected="42"), (), "answer.txt", ("42", "43")),
+        (
+            PytestSpec(paths=("/tests/test_solution.py",)),
+            (
+                inline_resource(
+                    "test_solution.py", b"from solution import add\n\ndef test_add(): assert add(2, 3) == 5\n"
+                ),
+            ),
+            "solution.py",
+            ("def add(a, b): return a + b", "def add(a, b): return a - b"),
+        ),
+    ],
+)
+def test_harbor_source_image_supplies_grader_dependencies(
+    normalized_row, spec, resources, answer_path, candidates, tmp_path
+):
+    row, original = normalized_row
+    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE)
+    task = original.model_copy(
+        update={
+            "grader": verifyit_package(spec, environment=environment).grader,
+            "answer_type": AnswerType.FILE if isinstance(spec, PytestSpec) else AnswerType.TEXT,
+            "output_paths": (f"/app/{answer_path}",),
+            "resources": original.resources.model_copy(update={"verifier": resources}),
+        }
+    )
+    record = harbor_record(
+        {**row, "task_json": task.model_dump_json()},
+        fallback_actor_image=BASE_IMAGE,
+        verifyit_package_root=VERIFYIT_PACKAGE,
+        grader_image=GRADER_IMAGE,
+        family="fixture",
+    )
+    assert grade_in_exported_image(archive_files(record.task_binary), answer_path, candidates, tmp_path) == [1, 0]
 
 
 @pytest.mark.parametrize(
