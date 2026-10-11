@@ -53,8 +53,8 @@ def arithmetic_task(**update) -> TaskSpec:
 
 
 def machine_runtime(**overrides) -> MachineRuntimeSpec:
-    return MachineRuntimeSpec(
-        **{
+    return MachineRuntimeSpec.model_validate(
+        {
             "backend": "local",
             "network": NetworkPolicy.DENY,
             "cpus": None,
@@ -73,8 +73,8 @@ def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) ->
     return LoweredTaskSpec(
         task=task,
         runtime=TaskRuntimeSpec(task_machine=machine, verifier_machine=verifier_machine),
-        session=TaskSessionSpec(
-            **{
+        session=TaskSessionSpec.model_validate(
+            {
                 "task_session": "shellbox",
                 "max_turns": 3,
                 "model_turn_timeout": None,
