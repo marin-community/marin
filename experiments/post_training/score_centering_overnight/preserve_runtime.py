@@ -33,11 +33,15 @@ def main() -> None:
     destination = urlparse(config["artifacts"]["attempts_root"].removesuffix("/attempts") + "/retained-runtime")
     destination_prefix = destination.path.lstrip("/").rstrip("/")
     inventory = []
-    for label, uri in (
+    sources = [
         ("groups", config["skyrl"]["trainer"]["rollout_buffer"]["object_store_root"]),
         ("ray-logs", config["ray"]["log_dir"]),
         ("debug", config["ray"]["rendezvous_dir"].rstrip("/") + "/debug_artifacts"),
-    ):
+    ]
+    checkpoint_uri = config["artifacts"]["checkpoint_root"]
+    if urlparse(checkpoint_uri).path.startswith("/tmp/"):
+        sources.append(("checkpoints", checkpoint_uri))
+    for label, uri in sources:
         source = urlparse(uri)
         assert source.netloc == destination.netloc, "Runtime retention must stay in the source bucket"
         prefix = source.path.lstrip("/").rstrip("/") + "/"

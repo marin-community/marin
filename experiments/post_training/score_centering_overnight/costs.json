@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-11T01:35:30.043792+00:00",
+  "observed_at": "2026-10-11T02:11:30.088011+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -904,7 +904,8 @@
       "configuration_sha256": "96fd226a9514bc7e6d8fd8b0f69e7464f3e006a67e337187f70205a354bb9849",
       "allocated_seconds": 23134.31,
       "allocated_h100_hours": 51.409577777777784,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_sc_s1.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s1-a0-01a126ce/1",
@@ -924,7 +925,8 @@
       "configuration_sha256": "96fd226a9514bc7e6d8fd8b0f69e7464f3e006a67e337187f70205a354bb9849",
       "allocated_seconds": 23117.424,
       "allocated_h100_hours": 51.372053333333334,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_main_noise005_sc_s1.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a0-01a126ce/0",
@@ -944,7 +946,8 @@
       "configuration_sha256": "355090963d1ac6a60bc8d9561e2a8591a5c0b6c2e0d210c331a2c39eea25b71b",
       "allocated_seconds": 23821.596,
       "allocated_h100_hours": 52.93688,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_groups_noise005_sc_s2.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a0-01a126ce/1",
@@ -964,7 +967,8 @@
       "configuration_sha256": "355090963d1ac6a60bc8d9561e2a8591a5c0b6c2e0d210c331a2c39eea25b71b",
       "allocated_seconds": 23816.167,
       "allocated_h100_hours": 52.92481555555556,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/skyrl_groups_noise005_sc_s2.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a0-01a126ce/0",
@@ -1104,7 +1108,8 @@
       "configuration_sha256": "b456fa6bad9362d0aa14438c1e299d1260cf0643ea3751e873b2926d19864132",
       "allocated_seconds": 4823.226,
       "allocated_h100_hours": 10.71828,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a0.json"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a0-01a126ce/1",
@@ -1124,7 +1129,8 @@
       "configuration_sha256": "b456fa6bad9362d0aa14438c1e299d1260cf0643ea3751e873b2926d19864132",
       "allocated_seconds": 4823.226,
       "allocated_h100_hours": 10.71828,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a0.json"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a0-01a126ce/2",
@@ -1144,7 +1150,8 @@
       "configuration_sha256": "b456fa6bad9362d0aa14438c1e299d1260cf0643ea3751e873b2926d19864132",
       "allocated_seconds": 4823.226,
       "allocated_h100_hours": 10.71828,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a0.json"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a0-01a126ce/3",
@@ -1164,7 +1171,8 @@
       "configuration_sha256": "b456fa6bad9362d0aa14438c1e299d1260cf0643ea3751e873b2926d19864132",
       "allocated_seconds": 4823.226,
       "allocated_h100_hours": 10.71828,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a0.json"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a0-01a126ce/4",
@@ -1184,7 +1192,8 @@
       "configuration_sha256": "b456fa6bad9362d0aa14438c1e299d1260cf0643ea3751e873b2926d19864132",
       "allocated_seconds": 4823.226,
       "allocated_h100_hours": 10.71828,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a0.json"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a0-01a126ce/0",
@@ -1204,7 +1213,8 @@
       "configuration_sha256": "3cac199a653e6d18b847075335df20a6edd381271767f02ba53dbb3442da499c",
       "allocated_seconds": 2354.404,
       "allocated_h100_hours": 5.232008888888889,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_sc.json"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a0-01a126ce/1",
@@ -1224,7 +1234,8 @@
       "configuration_sha256": "3cac199a653e6d18b847075335df20a6edd381271767f02ba53dbb3442da499c",
       "allocated_seconds": 2348.612,
       "allocated_h100_hours": 5.219137777777778,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_sc.json"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a0-01a126ce/0",
@@ -1244,7 +1255,8 @@
       "configuration_sha256": "bb8e761ac5a480d901d19d0e824e82d87a39433c3d5d80def35860dd7972ae46",
       "allocated_seconds": 2371.134,
       "allocated_h100_hours": 5.269186666666667,
-      "outcome": "infrastructure interruption; controller restarted the job"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a0-01a126ce/1",
@@ -1264,7 +1276,8 @@
       "configuration_sha256": "bb8e761ac5a480d901d19d0e824e82d87a39433c3d5d80def35860dd7972ae46",
       "allocated_seconds": 2371.134,
       "allocated_h100_hours": 5.269186666666667,
-      "outcome": "failed engineering attempt"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a1-01a126ce/0",
@@ -1284,7 +1297,8 @@
       "configuration_sha256": "8feef5fab3211d1136a7796dd876ef465fbbaa387b184d8aba61322ecfe22d46",
       "allocated_seconds": 5758.656,
       "allocated_h100_hours": 12.797013333333334,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a1.json"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a1-01a126ce/1",
@@ -1304,7 +1318,8 @@
       "configuration_sha256": "8feef5fab3211d1136a7796dd876ef465fbbaa387b184d8aba61322ecfe22d46",
       "allocated_seconds": 5758.656,
       "allocated_h100_hours": 12.797013333333334,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a1.json"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a1-01a126ce/2",
@@ -1324,7 +1339,8 @@
       "configuration_sha256": "8feef5fab3211d1136a7796dd876ef465fbbaa387b184d8aba61322ecfe22d46",
       "allocated_seconds": 5758.656,
       "allocated_h100_hours": 12.797013333333334,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a1.json"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a1-01a126ce/3",
@@ -1344,7 +1360,8 @@
       "configuration_sha256": "8feef5fab3211d1136a7796dd876ef465fbbaa387b184d8aba61322ecfe22d46",
       "allocated_seconds": 5758.656,
       "allocated_h100_hours": 12.797013333333334,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a1.json"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a1-01a126ce/4",
@@ -1364,7 +1381,8 @@
       "configuration_sha256": "8feef5fab3211d1136a7796dd876ef465fbbaa387b184d8aba61322ecfe22d46",
       "allocated_seconds": 5758.656,
       "allocated_h100_hours": 12.797013333333334,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_runtime_qualification_a1.json"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a0-01a126ce/0",
@@ -1384,7 +1402,8 @@
       "configuration_sha256": "bb8e761ac5a480d901d19d0e824e82d87a39433c3d5d80def35860dd7972ae46",
       "allocated_seconds": 2330.859,
       "allocated_h100_hours": 5.179686666666666,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json"
     },
     {
       "task_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a0-01a126ce/1",
@@ -1404,7 +1423,8 @@
       "configuration_sha256": "bb8e761ac5a480d901d19d0e824e82d87a39433c3d5d80def35860dd7972ae46",
       "allocated_seconds": 2330.859,
       "allocated_h100_hours": 5.179686666666666,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_runtime_qualification_tis.json"
     }
   ],
   "terminal_h100_hours": 54.25557777777778,
@@ -1437,7 +1457,7 @@
       "gpus": 8,
       "source": "01944d73c92c493b835b9e3773147e4e72097e8f",
       "configuration_sha256": "e5a610a96c8f7fff93459650c0b0724e8b69a28bb055f1b80744819ead230a27",
-      "allocated_h100_hours_so_far": 54.62403731558058
+      "allocated_h100_hours_so_far": 59.42413558006287
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a0-01a126ce/1",
@@ -1455,7 +1475,7 @@
       "gpus": 8,
       "source": "01944d73c92c493b835b9e3773147e4e72097e8f",
       "configuration_sha256": "e5a610a96c8f7fff93459650c0b0724e8b69a28bb055f1b80744819ead230a27",
-      "allocated_h100_hours_so_far": 54.62403731558058
+      "allocated_h100_hours_so_far": 59.42413558006287
     },
     {
       "task_id": "/romain/sc-snowball-noise-calibration-001-tis-s0-a1-01a126ce/0",
@@ -1473,7 +1493,7 @@
       "gpus": 8,
       "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
       "configuration_sha256": "ab3cabbc605b9e33656a28b130332365430b413dda9c6cf2319d5b9104db87d7",
-      "allocated_h100_hours_so_far": 0.12386176003350152
+      "allocated_h100_hours_so_far": 4.923960024515788
     },
     {
       "task_id": "/romain/sc-snowball-noise-calibration-001-tis-s0-a1-01a126ce/1",
@@ -1491,7 +1511,7 @@
       "gpus": 8,
       "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
       "configuration_sha256": "ab3cabbc605b9e33656a28b130332365430b413dda9c6cf2319d5b9104db87d7",
-      "allocated_h100_hours_so_far": 0.12386176003350152
+      "allocated_h100_hours_so_far": 4.923960024515788
     },
     {
       "task_id": "/romain/sc-snowball-noise-calibration-001-tis-s0-a1-01a126ce/2",
@@ -1509,7 +1529,7 @@
       "gpus": 8,
       "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
       "configuration_sha256": "ab3cabbc605b9e33656a28b130332365430b413dda9c6cf2319d5b9104db87d7",
-      "allocated_h100_hours_so_far": 0.1359662045372857
+      "allocated_h100_hours_so_far": 4.936064469019572
     },
     {
       "task_id": "/romain/sc-snowball-noise-calibration-001-tis-s0-a1-01a126ce/3",
@@ -1527,7 +1547,7 @@
       "gpus": 8,
       "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
       "configuration_sha256": "ab3cabbc605b9e33656a28b130332365430b413dda9c6cf2319d5b9104db87d7",
-      "allocated_h100_hours_so_far": 0.12386176003350152
+      "allocated_h100_hours_so_far": 4.923960024515788
     },
     {
       "task_id": "/romain/sc-snowball-noise-calibration-001-tis-s0-a1-01a126ce/4",
@@ -1545,7 +1565,79 @@
       "gpus": 8,
       "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
       "configuration_sha256": "ab3cabbc605b9e33656a28b130332365430b413dda9c6cf2319d5b9104db87d7",
-      "allocated_h100_hours_so_far": 0.1359662045372857
+      "allocated_h100_hours_so_far": 4.936064469019572
+    },
+    {
+      "task_id": "/romain/sc-skyrl-countdown-qual-sc-s0-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "a9bde3ef9be2cee7",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791684563908",
+      "finished_at_ms": "",
+      "node_name": "g73bb8a",
+      "terminal_reason": "",
+      "stage": "SkyRL qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "gpus": 8,
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "configuration_sha256": "acb7c0f11f21cd3e277ccd3cd33790a1d37a92329a71ae5e5ca5f2d44469a503",
+      "allocated_h100_hours_so_far": 0.2804000245200263
+    },
+    {
+      "task_id": "/romain/sc-skyrl-countdown-qual-sc-s0-a1-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "fc71cca1d388cea9",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791684563908",
+      "finished_at_ms": "",
+      "node_name": "g845f76",
+      "terminal_reason": "",
+      "stage": "SkyRL qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "gpus": 8,
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "configuration_sha256": "acb7c0f11f21cd3e277ccd3cd33790a1d37a92329a71ae5e5ca5f2d44469a503",
+      "allocated_h100_hours_so_far": 0.2804000245200263
+    },
+    {
+      "task_id": "/romain/sc-skyrl-countdown-qual-tis-s0-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "58d01ad355cb5921",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791684563908",
+      "finished_at_ms": "",
+      "node_name": "g7387bc",
+      "terminal_reason": "",
+      "stage": "SkyRL qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "gpus": 8,
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "configuration_sha256": "c9cd937063618ae3115337b1b19c3cc61867e6593677c36308a699fff2547e22",
+      "allocated_h100_hours_so_far": 0.2804000245200263
+    },
+    {
+      "task_id": "/romain/sc-skyrl-countdown-qual-tis-s0-a1-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "624ce51c2063f8d7",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791684563908",
+      "finished_at_ms": "",
+      "node_name": "g73e294",
+      "terminal_reason": "",
+      "stage": "SkyRL qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "gpus": 8,
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "configuration_sha256": "c9cd937063618ae3115337b1b19c3cc61867e6593677c36308a699fff2547e22",
+      "allocated_h100_hours_so_far": 0.2804000245200263
     }
   ]
 }
