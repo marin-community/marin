@@ -14,7 +14,10 @@ from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 from experiments.post_training.bfcl_rl.data import task_identity
 from experiments.post_training.skill_acquisition.data import build_diagnostic, diagnostic_task_split, replay_prefixes
 from experiments.post_training.skill_acquisition.native_tasks import materialize_native_tasks
-from experiments.post_training.skill_acquisition.training_data import materialize_training_tasks
+from experiments.post_training.skill_acquisition.training_data import (
+    build_training_replay_cases,
+    materialize_training_tasks,
+)
 
 
 @pytest.fixture
@@ -71,7 +74,9 @@ def test_build_replay_audits_partition_and_preserves_immutable_output(tmp_path, 
     }
     archive = tmp_path / "source.zip"
     with zipfile.ZipFile(archive, "w") as stream:
-        stream.writestr("records/a.json.gz", gzip.compress(json.dumps(row).encode()))
+        for task in approved:
+            task_row = {**row, "record_id": task, "trajectory": {"instance_id": task}}
+            stream.writestr(f"records/{task}.json.gz", gzip.compress(json.dumps(task_row).encode()))
     output = tmp_path / "version-1"
     arguments = dict(version="test-v1", validation_tasks=1, max_prefix_tokens=100)
     manifest = build_diagnostic([archive], partition_file, tokenizer_file, output, **arguments)
@@ -81,6 +86,24 @@ def test_build_replay_audits_partition_and_preserves_immutable_output(tmp_path, 
     assert case["source_phase"] == "eval"
     assert case["task_source_id"] not in manifest["train_task_ids"]
     assert case["task_source_id"] not in manifest["parity_task_ids"]
+    training_output = tmp_path / "training-replays"
+    training_manifest = build_training_replay_cases(
+        tmp_path,
+        partition_file,
+        output / "manifest.json",
+        tokenizer_file,
+        training_output,
+        version="training-replays-v1",
+        excluded_records={},
+    )
+    training_cases = [json.loads(line) for line in (training_output / "cases.jsonl").read_text().splitlines()]
+    assert {case["task_source_id"] for case in training_cases} == set(train)
+    assert training_manifest["training_cases"] == len(train)
+    assert all(case["prompt_token_ids"] == prompt + response[:1] for case in training_cases)
+    assert training_manifest["diagnostic_reserved_task_ids"] == manifest["diagnostic_reserved_task_ids"]
+    assert (
+        training_manifest["cases_sha256"] == hashlib.sha256((training_output / "cases.jsonl").read_bytes()).hexdigest()
+    )
     with pytest.raises(FileExistsError):
         build_diagnostic([archive], partition_file, tokenizer_file, output, **arguments)
     assert (output / "cases.jsonl").read_bytes() == case_bytes
