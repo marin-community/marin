@@ -35,6 +35,7 @@ from levanter.data.text.preference import (
     PreferencePairDataset,
 )
 from levanter.adaptor import AdaptorExportConfig, LoraAdaptorConfig, NoAdaptorConfig
+from levanter.callbacks import StepInfo
 from levanter.dpo import (
     CachedDpoExample,
     DpoModel,
@@ -69,6 +70,7 @@ from levanter.optim.model_averaging import ModelAveraging
 from levanter.store.cache import SerialCacheWriter
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.trainer_state import TrainerState, saveable_training_mask, trainables_only
+from levanter.trainer import Trainer, TrainerHooks
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.tree_utils import inference_mode
 
@@ -723,6 +725,9 @@ class _CapturingTrainer:
     def __init__(self):
         self.hooks = []
 
+    def add_completed_step_hook(self, hook, *, every: int):
+        self.hooks.append((hook, every))
+
     def add_hook(self, hook, *, every: int):
         self.hooks.append((hook, every))
 
@@ -804,12 +809,47 @@ def test_separate_reference_hf_export_passes_generation_config():
 
     hook, _ = trainer.hooks[0]
     model = object()
-    hook(SimpleNamespace(step=1, eval_model=model))
+    hook(SimpleNamespace(step=1, next_step=2, eval_model=model))
 
     assert len(converter.calls) == 1
     saved_model, _, saved_kwargs = converter.calls[0]
     assert saved_model is model
     assert saved_kwargs["generation_config"] == generation_config
+
+
+@pytest.mark.parametrize("updates", [6, 7])
+def test_dpo_exports_completed_update_intervals_and_final_checkpoint(tmp_path, updates):
+    class ExportTrainer:
+        config = SimpleNamespace(checkpointer=None)
+        run_id = "export-cadence"
+        add_completed_step_hook = Trainer.add_completed_step_hook
+
+        def __init__(self):
+            self.hooks = TrainerHooks()
+
+    class FileConverter:
+        def save_pretrained(self, model, path, **kwargs):
+            # A second export of the same update must fail, including the forced final hook.
+            destination = Path(path)
+            destination.mkdir()
+            (destination / "policy.txt").write_text(str(model))
+
+    trainer = ExportTrainer()
+    _install_separate_reference_export_hooks(
+        trainer=trainer,
+        converter=FileConverter(),
+        export=AdaptorExportConfig(hf_save_path=str(tmp_path), hf_save_steps=2),
+    )
+    for completed in range(1, updates + 1):
+        state = SimpleNamespace(step=completed, model=completed, eval_model=completed, opt_state=None)
+        info = StepInfo(state, 0.0, 0.0)
+        trainer.hooks.run_hooks(info)
+    trainer.hooks.run_hooks(info, force=True)
+
+    expected = {"step-1": "2", "step-3": "4", "step-5": "6"}
+    if updates == 7:
+        expected["step-6"] = "7"
+    assert {path.name: (path / "policy.txt").read_text() for path in tmp_path.iterdir()} == expected
 
 
 def test_vmapped_init_with_sharding_handles_layer_axis():

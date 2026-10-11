@@ -57,6 +57,7 @@ from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
 from verifyit.spec import FunctionCall, NumericSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
 
+from rolloutengine.agent_session import ExternalAgentSession
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     GenerationLimitReached,
@@ -319,6 +320,157 @@ def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) ->
 
 def engine(model, factories=None, *, sessions=None) -> ShellboxRolloutEngine:
     return ShellboxRolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
+
+
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_installed_agent_uses_isolated_task_grading_and_engine_cleanup(answer, reward):
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([{"role": "assistant", "content": answer}])
+    released = asyncio.Event()
+
+    async def agent(machine, complete):
+        assert machine is not None
+        try:
+            private = await machine.run(Command(("test", "-f", "/tests/grade.sh")))
+            assert private.exit_code != 0
+            response = await complete(SessionStart(({"role": "user", "content": "Solve the task."},), {}))
+            written = await machine.run(Command(("sh", "-c", f"echo {response.message['content']} > /workspace/answer")))
+            assert written.exit_code == 0
+        finally:
+            released.set()
+
+    record = await ShellboxRolloutEngine(model.complete, {"local": factory}, agent=agent).run(
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
+    assert record.response_token_ids == (20,)
+    assert record.loss_mask == (1,)
+    assert released.is_set()
+    assert len(factory.machines) == 2
+    for machine in factory.machines:
+        with pytest.raises(RuntimeError):
+            await machine.run(Command(("true",)))
+
+
+@pytest.mark.parametrize("compact", [False, True])
+async def test_external_agent_receives_engine_turns_and_controls_next_history(compact):
+    first = ({"role": "user", "content": "Return 12."},)
+    observation = {"role": "tool", "tool_call_id": "write", "content": "Written."}
+    received = []
+    finished = asyncio.Event()
+
+    async def agent(complete):
+        turn = await complete(SessionStart(first, {"tool_choice": "auto"}))
+        received.append(turn)
+        history = (
+            ({"role": "user", "content": "File written. Finish."},) if compact else (*first, turn.message, observation)
+        )
+        options = {} if compact else {"tool_choice": "auto"}
+        received.append(await complete(SessionStart(history, options)))
+        finished.set()
+
+    async def grade(messages, *, stop_reason):
+        assert finished.is_set()
+        return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
+
+    model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
+    result = await engine(model, sessions={"agent": lambda task, machine: ExternalAgentSession(agent, grade)}).run(
+        lowered(arithmetic_task(), task_session="agent")
+    )
+
+    assert result.grade.reward == 1.0
+    assert [turn.response_token_ids for turn in received] == [(20,), (21,)]
+    assert [turn.logprobs for turn in received] == [(-0.5,), (-0.5,)]
+    assert result.loss_mask == ((1,) if compact else (1, 0, 0, 1))
+    assert model.requests[1].options == ({} if compact else {"tool_choice": "auto"})
+    assert model.requests[1].messages == (
+        ({"role": "user", "content": "File written. Finish."},)
+        if compact
+        else (*first, received[0].message, observation)
+    )
+
+
+async def test_external_agent_is_cancelled_when_engine_generation_is_cancelled():
+    model_entered = asyncio.Event()
+    agent_closed = asyncio.Event()
+
+    async def agent(complete):
+        try:
+            await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
+        finally:
+            agent_closed.set()
+
+    async def model(request):
+        model_entered.set()
+        await asyncio.Future()
+
+    async def grade(messages, *, stop_reason):
+        raise AssertionError("Cancellation must not grade an unfinished model call")
+
+    runner = ShellboxRolloutEngine(
+        model, {}, sessions={"agent": lambda task, machine: ExternalAgentSession(agent, grade)}
+    )
+    pending = asyncio.create_task(runner.run(lowered(arithmetic_task(), task_session="agent")))
+    await asyncio.wait_for(model_entered.wait(), timeout=5)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert agent_closed.is_set()
+
+
+async def test_external_agent_failure_retains_the_generated_turn():
+    async def agent(complete):
+        await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
+        raise RuntimeError("Installed agent failed after receiving its response")
+
+    async def grade(messages, *, stop_reason):
+        raise AssertionError("The agent failure must be reported before grading")
+
+    runner = engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]),
+        sessions={"agent": lambda task, machine: ExternalAgentSession(agent, grade)},
+    )
+    with pytest.raises(RolloutInterrupted) as caught:
+        await runner.run(lowered(arithmetic_task(), task_session="agent"))
+    assert caught.value.operation == RolloutOperation.ADVANCE
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert caught.value.rollout.response_token_ids == (20,)
+    assert caught.value.rollout.loss_mask == (1,)
+
+
+@pytest.mark.parametrize("next_options", [{}, {"tool_choice": "none"}])
+async def test_session_replaces_model_options_after_conversation_reset(next_options):
+    initial_options = {"tool_choice": "required", "parallel_tool_calls": False}
+    revised_messages = ({"role": "user", "content": "Return 12 without tools."},)
+
+    class Session:
+        def __init__(self):
+            self.turns = 0
+
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Use a tool."},), initial_options)
+
+        async def advance(self, turn):
+            self.turns += 1
+            if self.turns == 1:
+                return Transition(done=False, reset_conversation=revised_messages, next_options=next_options)
+            return Transition(done=self.turns == 3)
+
+        async def grade(self, messages, *, stop_reason):
+            return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
+
+        async def close(self):
+            pass
+
+    model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
+    result = await engine(model, sessions={"fixture": lambda task, machine: Session()}).run(
+        lowered(arithmetic_task(), task_session="fixture")
+    )
+
+    assert [request.options for request in model.requests] == [initial_options, next_options, next_options]
+    assert model.requests[1].messages == revised_messages
+    assert result.grade.reward == 1.0
+    assert result.loss_mask == (1, 0, 0, 1)
 
 
 @pytest.mark.parametrize("stop_reason", ["stop", "length"])

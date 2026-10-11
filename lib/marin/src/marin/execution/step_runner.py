@@ -494,7 +494,8 @@ def _submit_iris_job(
 
     def _fn_with_artifact_save() -> None:
         result = raw_fn(output_path)
-        write_step_record(identity, output_path=output_path, result=result)
+        if not step.writes_record:
+            write_step_record(identity, output_path=output_path, result=result)
 
     job_name = sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)

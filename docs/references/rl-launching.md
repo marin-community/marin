@@ -43,8 +43,11 @@ Outside Iris, `--run` submits a 4-CPU coordinator with 16 GB RAM and 64 GB disk.
 `IrisSkyRLExecution` sets the coordinator deadline for its workload. CoreWeave coordinators route
 through the Marin hub to their target cluster. The coordinator runs the same module and arguments
 inside Iris, where `--run` executes the artifact graph. This preserves one construction and
-validation path. The submitter forwards `DAYTONA_API_KEY`, `HF_TOKEN`, and `WANDB_API_KEY` when they
-are present in its environment.
+validation path. The submitter forwards `DAYTONA_API_KEY`, `DAYTONA_RL_API_KEY`, `HF_TOKEN`,
+`TOGETHER_API_KEY`, and `WANDB_API_KEY` when they are present in its environment. MarinSkyRL resolves
+the dedicated RL credential from `DAYTONA_RL_API_KEY`, falling back to the canonical RL secret in
+Google Secret Manager. It sets Harbor's `DAYTONA_API_KEY` to that resolved value, replacing any
+forwarded generic key. A Daytona launch fails if neither RL credential source is available.
 
 ## One Hydra launch document
 
@@ -99,10 +102,11 @@ forwarding tests at every process boundary.
 
 ## SkyRL role plan
 
-`SkyRLRolePlan` is the source of truth for policy, rollout, and batch geometry. Every parallelism
+`SkyRLRolePlan` is the source of truth for policy, reference, rollout, and batch geometry. Every parallelism
 field is required:
 
 - policy node and per-node GPU counts;
+- reference node and per-node GPU counts, and whether policy/reference share GPUs;
 - inference engine count;
 - tensor, pipeline, data, and expert parallel sizes;
 - train, policy mini-batch, and per-GPU micro-batch sizes;
@@ -131,6 +135,11 @@ rollout GPUs = engine count * engine ranks
 separate roles: policy GPUs + rollout GPUs
 colocated roles: policy GPUs, which must equal rollout GPUs
 ```
+
+When `colocate_policy_ref=false`, add `reference_num_nodes * reference_num_gpus_per_node`
+to the allocation. Shared policy/reference roles must declare the same footprint.
+Reference parallelism remains explicit in the recipe's `trainer.ref.megatron_config`; it can differ
+from policy parallelism when the roles use separate GPUs.
 
 That total must equal `num_nodes * gpus_per_node`. For example, four 8-GPU policy nodes plus four
 node-sized rollout engines require 64 GPUs. Leaving rollout DP at one describes only 36 GPUs and is
@@ -183,3 +192,8 @@ data-dependent numerical failures in runtime diagnosis rather than guessing at t
 
 For live submission, monitoring, or recovery, follow the `launch-rl` and `use-iris` skills and
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
+
+For Harbor runs using Daytona, also read the
+[Daytona operations runbook](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md)
+before submission. It covers the dedicated RL credential, snapshot quota and
+authorized stale-resource reclamation, sandbox cleanup, and trial diagnostics.

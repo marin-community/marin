@@ -7,10 +7,12 @@ dependencies = ["marinskyrl"]
 [tool.uv]
 package = false
 prerelease = "allow"
-required-environments = ["sys_platform == 'linux'"]
+required-environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 # Marin Git workspace rigging is 0.2.0; TaskCompendium needs a newer published release.
 override-dependencies = ["marin-rigging[secrets]>=0.2.139.dev37117265303"]
 
 [tool.uv.sources]
-# The isolated lock keeps the selected branch revision immutable.
 marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }

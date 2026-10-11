@@ -279,6 +279,26 @@ The reset preserves session state and workspace files.
 Final grading receives the new conversation and its subsequent turns.
 A custom session can use this operation after a failed proof attempt.
 
+A session can replace the model options for subsequent turns with `Transition.next_options`.
+`None` retains the previous options; an empty mapping clears them.
+The replacement is complete, so omitted fields do not carry over from the previous request.
+When new tools or template settings change the rendered conversation prefix, the session must also reset the conversation.
+The exact-token prefix check still applies when options change.
+
+`rolloutengine.agent_session.ExternalAgentSession` adapts a sequential external agent to this loop.
+Its agent coroutine receives an asynchronous completion function that accepts `SessionStart` and returns the engine's exact `ModelTurn`.
+The adapter treats new request messages as observations when their prefix exactly matches the previous request messages plus the generated assistant message, and the options are unchanged.
+Changed histories or options cause a conversation reset with the retention behavior described above.
+Agent execution failures raise `RolloutInterrupted` with retained token evidence, which is empty if the first response has not been generated. Protocol violations can raise `RolloutContractError` directly.
+Closing the session cancels an unfinished agent coroutine.
+The caller supplies grading and must release agent-owned subprocesses and network resources on success, failure, or cancellation.
+
+For a Shellbox task, pass `agent=` to `ShellboxRolloutEngine` to retain the engine's existing isolated grader.
+This asynchronous callable receives the task machine (or `None` for a task without one) and the completion function.
+It replaces the shell conversation loop, not machine preparation, grading, or cleanup.
+The engine closes the agent session before closing the task machine.
+Custom task sessions cannot use this argument because their graders can depend on their own preparation and interaction state.
+
 `GenerationLimitReached` retains rendered prompt tokens when the model cannot start another response.
 The engine grades completed state with stop reason `length`.
 It does not add an oversized observation to retained response evidence.

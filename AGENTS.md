@@ -14,6 +14,7 @@ For debugging and operating live infrastructure, read the relevant OPS.md:
 
 - `lib/iris/OPS.md` — cluster lifecycle, job/task management, profiling, SQL queries, GCP/CoreWeave operations
 - `lib/zephyr/OPS.md` — pipeline debugging, straggler diagnosis, coordinator queries, diagnostic patterns
+- `.agents/ops/daytona.md` — Daytona RL credentials, snapshot quota and stale-resource cleanup, sandbox lifecycle, and trial diagnostics
 
 Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 

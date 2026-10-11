@@ -110,6 +110,7 @@ class Transition:
     reward_components: dict[str, float] = field(default_factory=dict)
     grade: GradeResult | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
+    next_options: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

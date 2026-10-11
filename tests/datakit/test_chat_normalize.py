@@ -11,11 +11,13 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.chat_normalize import (
     ChatChannel,
+    InvalidToolCallPolicy,
+    RepeatedToolCallPolicy,
     _normalize_chat_record,
     normalize_chat_to_parquet,
     validate_chat_messages,
 )
-from marin.datakit.chat_render import render_chat_record
+from marin.datakit.chat_render import chat_training_record, render_chat_record
 from marin.datakit.download.coderforge import SOURCE_CHAT_SCHEMA
 from marin.datakit.download.coderforge import transform_chat as transform_coderforge_chat
 from openai_harmony import Author, Message, Role
@@ -64,6 +66,21 @@ def test_normalization_derives_conversation_mode_from_analysis(analysis, expecte
     assert expected_instruction in render_chat_record(normalized)["text"]
 
 
+def test_normalization_preserves_explicit_student_mode_without_analysis():
+    messages = [
+        Message.from_role_and_content(Role.USER, "Write the result."),
+        Message.from_role_and_content(Role.ASSISTANT, "Done.").with_channel(ChatChannel.FINAL),
+    ]
+    record = {
+        "messages": [message.to_dict() for message in messages],
+        "chat_template_kwargs": {"enable_thinking": "/think"},
+    }
+    normalized = _normalize_chat_record(record, "messages", "id")
+    rendered = render_chat_record(normalized)["text"]
+    assert "Reasoning: /think" in rendered
+    assert _normalize_chat_record(normalized, "messages", "id")["id"] == normalized["id"]
+
+
 def test_normalization_rejects_legacy_source_turns():
     with pytest.raises(ValueError, match="Source adapters must emit Harmony"):
         _normalize_chat_record(
@@ -94,6 +111,45 @@ def test_chat_identity_includes_tool_definitions():
         for description in ["First", "Second"]
     ]
     assert ids[0] != ids[1]
+
+
+def test_captured_literals_survive_parquet_dedup_and_replace_parsed_calls(tmp_path: Path):
+    messages = [
+        Message.from_role_and_content(Role.USER, "Run it."),
+        Message.from_role_and_content(Role.ASSISTANT, "{}")
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("functions.run"),
+    ]
+    records = [
+        {
+            "messages": [message.to_dict() for message in messages],
+            "chat_template_kwargs": {"tools": [{"name": "run", "parameters": {"type": "object"}}]},
+            "assistant_literals": ["<tool_call>\n" + "RAW_LOOP " * count],
+        }
+        for count in (20, 21)
+    ]
+    with pytest.raises(ValueError, match="explicit offline retention"):
+        _normalize_chat_record(records[0], "messages", "id")
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "records.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+    normalized = normalize_chat_to_parquet(
+        input_path=str(raw),
+        output_path=str(tmp_path / "normalized"),
+        file_extensions=(".jsonl",),
+        max_workers=1,
+        invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN,
+    )
+    rows = pq.read_table(normalized.main_output_dir).to_pylist()
+    assert len(rows) == 2
+    assert len({row["id"] for row in rows}) == 2
+    for row in rows:
+        literal = row["assistant_literals"][0]
+        rendered = render_chat_record(row)["text"]
+        assert literal.strip() in rendered
+        assert rendered.rsplit("<|start_header_id|>assistant<|end_header_id|>\n", 1)[1] == literal.strip() + "<|eot_id|>"
+        assistant = chat_training_record(row)["messages"][-1]
+        assert assistant == {"role": "assistant", "content": literal}
 
 
 def test_harmony_tool_handoff_requires_matching_observations_before_continuation():
@@ -129,7 +185,8 @@ def test_harmony_tool_handoff_requires_matching_observations_before_continuation
         validate_chat_messages([user, call, wrong_observation, final])
 
 
-def test_normalization_filters_repeated_tool_call_after_identical_replies(tmp_path: Path):
+@pytest.mark.parametrize("policy", [RepeatedToolCallPolicy.FILTER, RepeatedToolCallPolicy.RETAIN])
+def test_normalization_applies_stalled_tool_policy_without_changing_observations(tmp_path: Path, policy):
     def call(arguments: str) -> Message:
         return (
             Message.from_role_and_content(Role.ASSISTANT, arguments)
@@ -167,16 +224,24 @@ def test_normalization_filters_repeated_tool_call_after_identical_replies(tmp_pa
     input_dir.mkdir()
     (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
 
-    result = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(tmp_path / "normalized"))
+    result = normalize_chat_to_parquet(
+        input_path=str(input_dir), output_path=str(tmp_path / "normalized"), repeated_tool_call_policy=policy
+    )
 
     normalized = [
         row
         for path in (tmp_path / "normalized" / "outputs" / "main").glob("*.parquet")
         for row in pq.read_table(path).to_pylist()
     ]
-    assert len(normalized) == 1
-    assert normalized[0]["messages"][0]["content"][0]["text"] == "Hello."
-    assert result.counters["normalize_chat/repeated_tool_calls_filtered"] == 1
+    if policy == RepeatedToolCallPolicy.FILTER:
+        assert len(normalized) == 1
+        assert normalized[0]["messages"][0]["content"][0]["text"] == "Hello."
+        assert result.counters["normalize_chat/repeated_tool_calls_filtered"] == 1
+    else:
+        assert len(normalized) == 2
+        loop = next(row for row in normalized if row["messages"][0]["content"][0]["text"] == "Search again.")
+        assert [Message.from_dict(message).to_dict() for message in loop["messages"]] == records[1]["messages"]
+        assert result.counters.get("normalize_chat/repeated_tool_calls_filtered", 0) == 0
     assert result.counters.get("normalize_chat/records_quarantined", 0) == 0
 
 

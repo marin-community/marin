@@ -103,6 +103,10 @@ Kueue topology annotations derived from
 `kubernetes_provider.kueue.topologies`, or from the CoreWeave defaults when the
 map is empty.
 
+CPU task Pods using the `gvisor` container profile use the CNI pod network even
+when the cluster enables `host_network`. gVisor's isolated network stack needs
+the pod interface and routes for DNS and outbound connections.
+
 Task logs are shipped from the node's container log file to Finelog by a
 sidecar. Process inspection and profiling run against the task container with
 `kubectl exec`; they do not call a worker service.

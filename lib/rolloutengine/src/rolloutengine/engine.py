@@ -7,12 +7,14 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
+from functools import partial
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import conversation_messages
 
+from rolloutengine.agent_session import AgentCompletion, ExternalAgentSession
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
     LENGTH_STOP_REASON,
@@ -49,7 +51,11 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
 
 
 class ShellboxRolloutEngine:
-    """Generate exact-token rollouts from lowered single-stage tasks."""
+    """Generate exact-token rollouts from lowered single-stage tasks.
+
+    An optional external agent controls conversation with the task machine and
+    a completion callback. Shellbox still owns isolated grading and cleanup.
+    """
 
     def __init__(
         self,
@@ -57,13 +63,17 @@ class ShellboxRolloutEngine:
         factories: Mapping[str, MachineFactory],
         *,
         sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
+        agent: Callable[[Machine | None, AgentCompletion], Awaitable[None]] | None = None,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
+        self.agent = agent
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
+        if self.agent is not None and lowered.session.task_session != SHELLBOX_SESSION:
+            raise ValueError("External agents require the Shellbox task session")
         validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
         deadline = asyncio.timeout(lowered.session.attempt_timeout)
         cleanup = _Cleanup(lowered.session.cleanup_timeout)
@@ -120,6 +130,11 @@ class ShellboxRolloutEngine:
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
+        if self.agent is not None:
+            # Keep the selected session's grader and resource ownership; only
+            # conversation control moves to the installed agent.
+            session = ExternalAgentSession(partial(self.agent, machine), session.grade)
+            resources.push_async_callback(cleanup.run, "agent_close", session.close)
         return await self._run_session(lowered, session, attempt)
 
     async def _run_session(
@@ -136,6 +151,7 @@ class ShellboxRolloutEngine:
         except Exception as error:
             raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
         messages = list(start.messages)
+        options = start.options
         completed = replace(completed, messages=tuple(messages))
         prompt: tuple[int, ...] = ()
         tokens: tuple[int, ...] = ()
@@ -151,9 +167,7 @@ class ShellboxRolloutEngine:
                 for index in range(limits.max_turns):
                     try:
                         async with asyncio.timeout(limits.model_turn_timeout):
-                            turn = await self.model(
-                                ModelRequest(tuple(messages), start.options, tokens, assistant_index)
-                            )
+                            turn = await self.model(ModelRequest(tuple(messages), options, tokens, assistant_index))
                     except GenerationLimitReached as limit:
                         stop_reason = LENGTH_STOP_REASON
                         if not steps:
@@ -222,6 +236,8 @@ class ShellboxRolloutEngine:
                                 "Transition rewards and credit must align with model response tokens"
                             )
                     stop_reason = turn.stop_reason
+                    if transition.next_options is not None:
+                        options = transition.next_options
                     if transition.reset_conversation is not None and index + 1 < limits.max_turns:
                         messages = list(transition.reset_conversation)
                         prompt = tokens = masks = ()
