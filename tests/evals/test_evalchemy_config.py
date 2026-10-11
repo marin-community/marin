@@ -16,15 +16,18 @@ import os
 from types import SimpleNamespace
 
 import pytest
-from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
+from fray.types import JobStatus
+from marin.evaluation.evalchemy.client import build_command, build_model_args, endpoint_relay, scored_results
 from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
+    EvalPipelineError,
     _run_config_json,
     _run_evalchemy_child,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
+from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
 _MODEL = RunningModel(
@@ -34,6 +37,19 @@ _MODEL = RunningModel(
     ),
     tokenizer="Qwen/Qwen3-0.6B",
 )
+_RELAY_ORIGIN = "http://127.0.0.1:43210"
+
+
+def _session(*jobs) -> RemoteInferenceSession:
+    return RemoteInferenceSession(
+        model=_MODEL,
+        jobs=jobs,
+        endpoint_name="/serve/inference-abc",
+        endpoint_health_timeout_seconds=60,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
 
 
 def _config(**overrides) -> EvalchemyRunConfig:
@@ -47,13 +63,17 @@ def _config(**overrides) -> EvalchemyRunConfig:
 
 
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
-    return json.loads(_run_config_json(_MODEL, config or _config(), "gs://bucket/evals/qwen3/core"))
+    """The child's config once it has started its endpoint relay."""
+    payload = json.loads(_run_config_json(_session(), config or _config(), "gs://bucket/evals/qwen3/core"))
+    return {**payload, "base_url": f"{_RELAY_ORIGIN}{payload['api_path']}"}
 
 
 def test_client_config_json_carries_endpoint_and_per_task_dirs():
     payload = _payload()
 
-    assert payload["base_url"] == _MODEL.endpoint.base_url
+    # The child reaches the serve through a relay that follows the endpoint name, not a fixed address.
+    assert payload["endpoint_name"] == "/serve/inference-abc"
+    assert payload["api_path"] == "/v1"
     assert payload["model_id"] == _MODEL.endpoint.model
     assert payload["tokenizer"] == _MODEL.tokenizer
     # Each task carries the bare lm-eval name (what --tasks runs) plus its own upload dir: an alias is
@@ -171,7 +191,7 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
         job_id = "/eval/financebench"
 
         def wait(self, timeout):
-            assert timeout == float("inf")
+            pass
 
     client = SimpleNamespace(submit=lambda **kwargs: submitted.append(kwargs) or FakeJob())
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
@@ -186,7 +206,7 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
     )
 
     _run_evalchemy_child(
-        _MODEL,
+        _session(),
         config,
         "gs://bucket/evals/qwen3/financebench",
         {"JUDGE_API_KEY": "judge-key", "HF_TOKEN": "candidate-runtime-token"},
@@ -212,7 +232,66 @@ def test_evalchemy_child_rejects_a_missing_judge_secret():
     )
 
     with pytest.raises(ValueError, match="requires JUDGE_API_KEY"):
-        _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {})
+        _run_evalchemy_child(_session(), config, "gs://bucket/evals/qwen3/financebench", {})
+
+
+def test_evalchemy_child_is_cancelled_when_its_serve_job_dies(monkeypatch):
+    cancelled = []
+
+    class RunningEvalJob:
+        job_id = "/eval/core"
+
+        def wait(self, timeout):
+            raise TimeoutError("still running")
+
+        def cancel(self):
+            cancelled.append(self.job_id)
+
+        def logs(self, **kwargs):
+            return []
+
+    client = SimpleNamespace(submit=lambda **kwargs: RunningEvalJob())
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    # The first status read hits a controller blip, which must not end the evaluation.
+    statuses = iter([ConnectionError("controller restarting"), JobStatus.RUNNING, JobStatus.FAILED])
+
+    def serve_status():
+        status = next(statuses)
+        if isinstance(status, Exception):
+            raise status
+        return status
+
+    serve_job = SimpleNamespace(job_id="/serve/inference-abc-job", status=serve_status)
+
+    with pytest.raises(EvalPipelineError, match="inference job /serve/inference-abc-job finished with status failed"):
+        _run_evalchemy_child(_session(serve_job), _config(), "gs://bucket/evals/qwen3/core", {})
+
+    assert cancelled == ["/eval/core"]
+    assert next(statuses, None) is None
+
+
+def test_child_waits_for_its_endpoint_relay_to_listen(tmp_path, monkeypatch):
+    # Stand-in for the task venv's interpreter: report a port the way the relay does, then serve.
+    python = tmp_path / "bin" / "python"
+    python.parent.mkdir()
+    python.write_text('#!/bin/sh\nsleep 0.5\necho 43210 > "$5.partial" && mv "$5.partial" "$5"\nexec sleep 60\n')
+    python.chmod(0o755)
+    monkeypatch.setenv("IRIS_VENV", str(tmp_path))
+
+    with endpoint_relay("/serve/inference-abc") as origin:
+        assert origin == _RELAY_ORIGIN
+
+
+def test_child_fails_when_its_endpoint_relay_exits(tmp_path, monkeypatch):
+    python = tmp_path / "bin" / "python"
+    python.parent.mkdir()
+    python.write_text("#!/bin/sh\nexit 3\n")
+    python.chmod(0o755)
+    monkeypatch.setenv("IRIS_VENV", str(tmp_path))
+
+    with pytest.raises(SystemExit, match="exited 3 before listening"):
+        with endpoint_relay("/serve/inference-abc"):
+            pass
 
 
 def test_task_dirs_distinguish_shot_variants_of_one_task():
@@ -247,7 +326,7 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert cmd[cmd.index("--num_fewshot") + 1] == "5"
     assert cmd[cmd.index("--limit") + 1] == "7"
     model_args = dict(pair.split("=", 1) for pair in cmd[cmd.index("--model_args") + 1].split(","))
-    assert model_args["base_url"] == "http://10.0.0.1:30000/v1/completions"
+    assert model_args["base_url"] == f"{_RELAY_ORIGIN}/v1/completions"
     assert model_args["model"] == "Qwen/Qwen3-0.6B"
     assert model_args["tokenizer"] == "Qwen/Qwen3-0.6B"
 
@@ -325,7 +404,7 @@ def test_build_command_chat_route_needs_template_and_generation():
     assert cmd[cmd.index("--model") + 1] == "local-chat-completions"
     assert "--apply_chat_template" in cmd
     chat_args = dict(pair.split("=", 1) for pair in build_model_args(config, True, None).split(","))
-    assert chat_args["base_url"] == "http://10.0.0.1:30000/v1/chat/completions"
+    assert chat_args["base_url"] == f"{_RELAY_ORIGIN}/v1/chat/completions"
     # The endpoint applies the chat template; a client-side tokenizer would reject custom tokenizer
     # code (Kimi-Linear) or metadata the client's Transformers cannot read (Gemma 4).
     assert chat_args["tokenizer_backend"] == "none"

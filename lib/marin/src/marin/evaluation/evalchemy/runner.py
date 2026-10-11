@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from fray.types import JobStatus
 from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
@@ -38,8 +39,8 @@ from marin.evaluation.records import (
 )
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
+from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.iris import RemoteInferenceSession
-from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ DEFAULT_NUM_CONCURRENT = 16
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
+# How often a running Evalchemy job checks that its serving jobs are still alive.
+_SERVE_CHECK_SECONDS = 60.0
 
 
 class PipelineStage(StrEnum):
@@ -220,7 +223,8 @@ def _apply_recovered_canonical_metrics(
             canonical_metrics.pop(task_key, None)
 
 
-def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
+def _run_config_json(session: RemoteInferenceSession, config: EvalchemyRunConfig, output_dir: str) -> str:
+    model = session.model
     tokenizer = model.tokenizer
     if tokenizer is None:
         raise ValueError("Evalchemy requires RunningModel.tokenizer")
@@ -229,7 +233,8 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
         raise ValueError(f"extra_model_args cannot override Marin endpoint fields: {conflicting_model_args}")
     return json.dumps(
         {
-            "base_url": model.endpoint.base_url,
+            "endpoint_name": session.endpoint_name,
+            "api_path": OPENAI_API_SUFFIX,
             "model_id": model.endpoint.model,
             "tokenizer": tokenizer,
             "tasks": [
@@ -275,7 +280,7 @@ def _evalchemy_client_command(runtime: EvalchemyRuntimeConfig) -> tuple[str, ...
 
 
 def _run_evalchemy_child(
-    model: RunningModel,
+    session: RemoteInferenceSession,
     config: EvalchemyRunConfig,
     output_dir: str,
     env_vars: Mapping[str, str],
@@ -311,7 +316,7 @@ def _run_evalchemy_child(
                 OPENAI_API_KEY="local-endpoint",
                 TQDM_MININTERVAL="30",
                 **judge_env,
-                **{CONFIG_ENV_KEY: _run_config_json(model, config, output_dir)},
+                **{CONFIG_ENV_KEY: _run_config_json(session, config, output_dir)},
             )
         ),
         max_retries_failure=0,
@@ -321,10 +326,10 @@ def _run_evalchemy_child(
         "Submitted Evalchemy job %s for %s against model %s",
         eval_job,
         config.name,
-        model.endpoint.model,
+        session.model.endpoint.model,
     )
     try:
-        eval_job.wait(timeout=float("inf"))
+        _wait_while_serving(eval_job, session)
     except JobFailedError as exc:
         raise EvalPipelineError(
             f"Evalchemy job {eval_path} failed: {exc}",
@@ -335,8 +340,38 @@ def _run_evalchemy_child(
     return eval_path
 
 
+def _wait_while_serving(eval_job: Job, session: RemoteInferenceSession) -> None:
+    """Wait for the Evalchemy job, stopping it once a serving job reaches a terminal state.
+
+    A preempted serve task is retried by Iris and followed by the child's endpoint relay, so only
+    a finished serving job ends the evaluation early. A failed status read is not a verdict: the
+    wait continues as it would through a controller restart.
+    """
+    while True:
+        try:
+            eval_job.wait(timeout=_SERVE_CHECK_SECONDS)
+            return
+        except TimeoutError:
+            pass
+        for serve_job in session.jobs:
+            try:
+                status = serve_job.status()
+            except Exception:
+                logger.warning("could not read status of inference job %s", serve_job.job_id, exc_info=True)
+                continue
+            if JobStatus.finished(status):
+                eval_job.cancel()
+                raise EvalPipelineError(
+                    f"Evalchemy job {eval_job.job_id} stopped because inference job {serve_job.job_id} "
+                    f"finished with status {status}",
+                    stage=PipelineStage.EVAL,
+                    jobs={_EVAL_JOB_ROLE: str(eval_job.job_id)},
+                    log_tails={_EVAL_JOB_ROLE: job_log_tail(eval_job)},
+                )
+
+
 def run_evalchemy(
-    model: RunningModel,
+    session: RemoteInferenceSession,
     config: EvalchemyRunConfig,
     output_dir: str,
     *,
@@ -347,7 +382,7 @@ def run_evalchemy(
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
-    eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
+    eval_job = _run_evalchemy_child(session, config, output_dir, env_vars)
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
         result.task_metrics()
@@ -404,7 +439,7 @@ class EvalchemyExecutor:
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
         try:
-            outcome = run_evalchemy(session.model, self.config, output_dir, env_vars=env_vars)
+            outcome = run_evalchemy(session, self.config, output_dir, env_vars=env_vars)
         except EvalPipelineError as exc:
             status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.ARTIFACT_FAILED
             raise EvaluationError(
