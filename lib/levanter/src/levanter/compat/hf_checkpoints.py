@@ -1350,7 +1350,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     continue
                 destination = os.path.join(path, relative)
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
-                fs.get_file(source, destination)
+                (StoragePath(repo) / relative).download_to(destination)
             return
         if os.path.exists(repo):
             local_code_path = repo

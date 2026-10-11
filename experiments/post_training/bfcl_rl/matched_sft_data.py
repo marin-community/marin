@@ -4,7 +4,6 @@
 """Project a fixed DPO exposure into identically masked, unpacked chosen-only SFT."""
 
 import asyncio
-import hashlib
 import json
 from dataclasses import dataclass
 
@@ -15,14 +14,18 @@ from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.main.train_dpo import _derive_training_keys
-from levanter.store.cache import CacheLedger, TreeCache, write_levanter_cache
+from levanter.store.cache import TreeCache, write_levanter_cache
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import Artifact, write_artifact
-from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256, BFCLPartition
 from experiments.post_training.bfcl_rl.preference_union import PREFERENCE_COLUMNS
-from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCache, load_audited_partition
+from experiments.post_training.bfcl_rl.recovery_data import (
+    RecoveryPreferenceCache,
+    load_audited_partition,
+    preference_cache_evidence,
+)
 
 
 class MatchedChosenCache(Artifact):
@@ -89,20 +92,8 @@ def project_chosen_exposure(
     output_path: str,
 ) -> MatchedChosenCache:
     """Verify source provenance and copy selected chosen tokens/masks without rerendering."""
-    source_path = prefix_join(source.path, "train")
-    ledger = CacheLedger.load(source_path)
-    raw = StoragePath(source.selection_manifest_uri).read_bytes()
-    digest = hashlib.sha256(raw).hexdigest()
-    manifest = json.loads(raw)
-    metadata = ledger.metadata.preprocessor_metadata
-    if not ledger.is_finished or not (StoragePath(source_path) / ".success").exists():
-        raise ValueError("Matched SFT requires a finished preference cache")
-    if metadata is None or metadata.get("preference_provenance_sha256") != digest:
-        raise ValueError("Preference selection differs from its cache ledger")
-    if metadata.get("preference_provenance_uri") != source.selection_manifest_uri:
-        raise ValueError("Preference selection locator differs from its cache ledger")
-    if len(manifest["preferences"]) != ledger.total_num_rows or source.num_preferences != ledger.total_num_rows:
-        raise ValueError("Preference row counts disagree")
+    evidence = preference_cache_evidence(source)
+    source_path, ledger, manifest, digest = evidence.path, evidence.ledger, evidence.manifest, evidence.selection_sha256
     if manifest["partition_manifest_sha256"] != PARTITION_MANIFEST_SHA256:
         raise ValueError("Preference partition differs from the audited BFCL split")
     if manifest["dataset_commit"] != partition.dataset_commit:

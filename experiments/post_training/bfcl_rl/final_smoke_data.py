@@ -10,14 +10,19 @@ from dataclasses import dataclass
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from levanter.store.cache import CacheLedger, TreeCache
+from levanter.store.cache import TreeCache
 from marin.execution.artifact import Artifact
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.bfcl_rl.collect import MODELS
 from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256
+from experiments.post_training.bfcl_rl.optimize import RECOVERY_CONTEXT
 from experiments.post_training.bfcl_rl.preference_union import PREFERENCE_COLUMNS
-from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCache, load_audited_partition
+from experiments.post_training.bfcl_rl.recovery_data import (
+    RecoveryPreferenceCache,
+    load_audited_partition,
+    preference_cache_evidence,
+)
 
 SMOKE_PAIRS = 64
 
@@ -68,19 +73,8 @@ def fresh_smoke_rows(fresh_rows: list[dict], frozen_rows: list[dict]) -> list[di
 
 def run_fresh_smoke_data(config: FreshSmokeDataConfig) -> FreshSmokeData:
     fresh = RecoveryPreferenceCache.raw_load(config.fresh_cache_path)
-    raw = StoragePath(fresh.selection_manifest_uri).read_bytes()
-    manifest = json.loads(raw)
-    cache_path = str(StoragePath(fresh.path) / "train")
-    ledger = CacheLedger.load(cache_path)
-    metadata = ledger.metadata.preprocessor_metadata
-    if not ledger.is_finished or not (StoragePath(cache_path) / ".success").exists():
-        raise ValueError("Fresh canary requires a finished curated preference cache")
-    if metadata is None or metadata["preference_provenance_sha256"] != hashlib.sha256(raw).hexdigest():
-        raise ValueError("Fresh preference provenance differs from its cache ledger")
-    if metadata["preference_provenance_uri"] != fresh.selection_manifest_uri:
-        raise ValueError("Fresh preference provenance locator differs from its cache ledger")
-    if len(manifest["preferences"]) != ledger.total_num_rows or fresh.num_preferences != ledger.total_num_rows:
-        raise ValueError("Fresh preference counts disagree")
+    evidence = preference_cache_evidence(fresh)
+    cache_path, ledger, manifest = evidence.path, evidence.ledger, evidence.manifest
     frozen = StoragePath(config.frozen_inputs_path)
     selection = json.loads((frozen / "selection.json").read_text())
     partition = load_audited_partition(config.complement_path)
@@ -95,7 +89,7 @@ def run_fresh_smoke_data(config: FreshSmokeDataConfig) -> FreshSmokeData:
         tokenizer.model,
         tokenizer.revision,
         manifest["max_length"],
-    ) or fresh.max_length != 40960:
+    ) or fresh.max_length != RECOVERY_CONTEXT:
         raise ValueError("Fresh preference artifact metadata differs from the training contract")
     complement = {task.source_id: task.digest for task in partition.complement}
     seen_tasks = set(selection["seen_task_ids"])
@@ -122,7 +116,7 @@ def run_fresh_smoke_data(config: FreshSmokeDataConfig) -> FreshSmokeData:
         for role in ("chosen", "rejected"):
             ids, masks = values[f"{role}_input_ids"], values[f"{role}_assistant_masks"]
             if (
-                not 0 < len(ids) <= 40960
+                not 0 < len(ids) <= RECOVERY_CONTEXT
                 or min(ids) < 0
                 or len(ids) != len(masks)
                 or not any(masks)
@@ -148,7 +142,7 @@ def run_fresh_smoke_data(config: FreshSmokeDataConfig) -> FreshSmokeData:
         json.dumps(
             {
                 "fresh_cache": fresh.path,
-                "fresh_selection_sha256": hashlib.sha256(raw).hexdigest(),
+                "fresh_selection_sha256": evidence.selection_sha256,
                 "frozen_inputs": config.frozen_inputs_path,
                 "pairs": len(rows),
                 "fresh_pairs": len(fresh_rows),

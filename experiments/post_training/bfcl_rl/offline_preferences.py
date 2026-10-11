@@ -75,6 +75,33 @@ class NativePreferenceBranch:
     initial_prompt_sha256: str
 
 
+def exclude_native_branch(
+    exclusions: list[dict],
+    branches: list[NativePreferenceBranch],
+    evidence: NativeCollectionEvidence,
+    source_id: str,
+    reason: str,
+    *,
+    initial_prompt_sha256: str = "",
+    error: ValueError | None = None,
+) -> None:
+    record = {
+        "source_id": source_id,
+        "reason": reason,
+        "verifier_outcome": evidence.retained.rollout.outcome.value,
+        "retained_uri": evidence.retained_uri,
+        "native_trace_uri": evidence.native_uri,
+    }
+    if error is not None:
+        record["error"] = str(error)
+    exclusions.append(record)
+    branches.append(
+        NativePreferenceBranch(
+            replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED), source_id, initial_prompt_sha256
+        )
+    )
+
+
 def mark_conversion_failure(
     failures: list[dict],
     branches: list[NativePreferenceBranch],
@@ -154,19 +181,8 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                 initial_prompt = ""
                 if evidence.retained.rollout.outcome is not RolloutOutcome.UNSCORED:
                     if not any(any(step.loss_mask) for step in evidence.retained.steps):
-                        excluded_branches.append(
-                            {
-                                "source_id": source_id,
-                                "reason": "no_trainable_assistant_tokens",
-                                "verifier_outcome": evidence.retained.rollout.outcome.value,
-                                "retained_uri": evidence.retained_uri,
-                                "native_trace_uri": evidence.native_uri,
-                            }
-                        )
-                        selected.append(
-                            NativePreferenceBranch(
-                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED), source_id, ""
-                            )
+                        exclude_native_branch(
+                            excluded_branches, selected, evidence, source_id, "no_trainable_assistant_tokens"
                         )
                         continue
                     try:
@@ -184,37 +200,16 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                             tool_call_format=evidence.tool_call_format,
                         )
                     except NativeAssistantCaptureError as error:
-                        excluded_branches.append(
-                            {
-                                "source_id": source_id,
-                                "reason": "unproven_assistant_history",
-                                "verifier_outcome": evidence.retained.rollout.outcome.value,
-                                "retained_uri": evidence.retained_uri,
-                                "native_trace_uri": evidence.native_uri,
-                                "error": str(error),
-                            }
-                        )
-                        selected.append(
-                            NativePreferenceBranch(
-                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED), source_id, ""
-                            )
+                        exclude_native_branch(
+                            excluded_branches, selected, evidence, source_id, "unproven_assistant_history", error=error
                         )
                         continue
                     except ValueError as error:
                         mark_conversion_failure(conversion_failures, selected, evidence, source_id, "", error)
                         continue
                     if not trace.tools and not evidence.identity.harness.startswith("mini-swe-agent@"):
-                        excluded_branches.append(
-                            {
-                                "source_id": source_id,
-                                "reason": "tool_free_auxiliary_capture",
-                                "verifier_outcome": evidence.retained.rollout.outcome.value,
-                            }
-                        )
-                        selected.append(
-                            NativePreferenceBranch(
-                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED), source_id, ""
-                            )
+                        exclude_native_branch(
+                            excluded_branches, selected, evidence, source_id, "tool_free_auxiliary_capture"
                         )
                         continue
                     try:
@@ -241,22 +236,14 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                             trace = replace(trace, messages=messages)
                         document = native_chat_document(trace)
                     except ToolCallLiteralFormatError as error:
-                        excluded_branches.append(
-                            {
-                                "source_id": source_id,
-                                "reason": "unmatched_literal_tool_calls",
-                                "verifier_outcome": evidence.retained.rollout.outcome.value,
-                                "retained_uri": evidence.retained_uri,
-                                "native_trace_uri": evidence.native_uri,
-                                "error": str(error),
-                            }
-                        )
-                        selected.append(
-                            NativePreferenceBranch(
-                                replace(evidence.retained.rollout, outcome=RolloutOutcome.UNSCORED),
-                                source_id,
-                                initial_prompt,
-                            )
+                        exclude_native_branch(
+                            excluded_branches,
+                            selected,
+                            evidence,
+                            source_id,
+                            "unmatched_literal_tool_calls",
+                            initial_prompt_sha256=initial_prompt,
+                            error=error,
                         )
                         continue
                     except ValueError as error:

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import click
 import numpy as np
 from fray.types import ResourceConfig
-from levanter.store.cache import CacheLedger, TreeCache, write_levanter_cache
+from levanter.store.cache import TreeCache, write_levanter_cache
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -21,7 +21,11 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, complement_data_step
 from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256, BFCLPartition
-from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCache, load_audited_partition
+from experiments.post_training.bfcl_rl.recovery_data import (
+    RecoveryPreferenceCache,
+    load_audited_partition,
+    preference_cache_evidence,
+)
 
 READ_BATCH_SIZE = 16
 PREFERENCE_COLUMNS = (
@@ -55,18 +59,9 @@ def combine_preference_caches(
     preferences = []
     expected_tokens = 0
     for source in inputs:
-        raw = StoragePath(source.selection_manifest_uri).read_bytes()
-        digest = hashlib.sha256(raw).hexdigest()
-        report = json.loads(raw)
-        cache_path = str(StoragePath(source.path) / "train")
-        ledger = CacheLedger.load(cache_path)
-        metadata = ledger.metadata.preprocessor_metadata
-        if not ledger.is_finished or not (StoragePath(cache_path) / ".success").exists():
-            raise ValueError(f"Unfinished preference cache: {source.path}")
-        if metadata is None or metadata.get("preference_provenance_sha256") != digest:
-            raise ValueError(f"Selection hash differs from cache ledger: {source.path}")
-        if metadata.get("preference_provenance_uri") != source.selection_manifest_uri:
-            raise ValueError(f"Selection locator differs from cache ledger: {source.path}")
+        evidence = preference_cache_evidence(source)
+        report, digest = evidence.manifest, evidence.selection_sha256
+        cache_path, ledger = evidence.path, evidence.ledger
         count = len(report["preferences"])
         stats = json.loads((StoragePath(cache_path) / ".stats.json").read_text())
         if not count or not count == ledger.total_num_rows == source.num_preferences == stats["total_elements"]:

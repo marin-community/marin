@@ -12,7 +12,7 @@ from marin.execution.build_context import BuildContext, VersionCodex, build_cont
 from marin.execution.lazy import StepContext
 from marin.rl.cli import _coordinator_request
 
-from experiments.post_training.bfcl_rl import launch
+from experiments.post_training.bfcl_rl import final_dpo, launch
 from experiments.post_training.bfcl_rl.launch import recovered_model
 from experiments.post_training.bfcl_rl.offline_curate import NativeCollectionScope
 from experiments.post_training.bfcl_rl.offline_preferences import native_preference_step
@@ -90,3 +90,19 @@ def test_rl_recipe_survives_coordinator_workspace_relocation(tmp_path, monkeypat
     # The coordinator cannot access the submitting machine's configuration files.
     monkeypatch.setattr(Path, "read_text", workspace_read)
     assert yaml.safe_load(relocated.rl_recipe(2, 8, "stream")) == expected
+
+
+def test_final_dpo_uses_the_policy_input_budget_without_changing_output_budget(monkeypatch):
+    policy_path = Path(final_dpo.__file__).with_name(final_dpo.POLICY_FILE)
+    policy = yaml.safe_load(policy_path.read_text())
+    policy["agents"][0]["kwargs"]["model_info"]["max_input_tokens"] = 16384
+    read_text = Path.read_text
+
+    def policy_read(path, *args, **kwargs):
+        return yaml.safe_dump(policy) if path == policy_path else read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", policy_read)
+    recipe = yaml.safe_load(final_dpo.final_dpo_recipe(final_dpo.RunScale.SMOKE))
+    budget = recipe["context_budget"]
+    assert budget["max_new_tokens_per_turn"] == 8192
+    assert budget["request_window_tokens"] - budget["max_new_tokens_per_turn"] == 16384

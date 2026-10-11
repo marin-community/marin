@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from levanter.store.cache import write_levanter_cache
+from levanter.store.cache import CacheLedger, write_levanter_cache
 from marin.execution.artifact import Artifact
 from rigging.filesystem.storage_path import StoragePath
 
@@ -58,6 +58,33 @@ class RecoveryPreferenceCache(Artifact):
     tokenizer_revision: str
     max_length: int
     selection_manifest_uri: str
+
+
+@dataclass(frozen=True)
+class PreferenceCacheEvidence:
+    path: str
+    ledger: CacheLedger
+    manifest: dict[str, Any]
+    selection_sha256: str
+
+
+def preference_cache_evidence(source: RecoveryPreferenceCache) -> PreferenceCacheEvidence:
+    """Require a finished preference cache bound to its selection manifest and row count."""
+    path = str(StoragePath(source.path) / "train")
+    ledger = CacheLedger.load(path)
+    raw = StoragePath(source.selection_manifest_uri).read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    manifest = json.loads(raw)
+    metadata = ledger.metadata.preprocessor_metadata
+    if not ledger.is_finished or not (StoragePath(path) / ".success").exists():
+        raise ValueError(f"Unfinished preference cache: {source.path}")
+    if metadata is None or metadata.get("preference_provenance_sha256") != digest:
+        raise ValueError(f"Selection hash differs from cache ledger: {source.path}")
+    if metadata.get("preference_provenance_uri") != source.selection_manifest_uri:
+        raise ValueError(f"Selection locator differs from cache ledger: {source.path}")
+    if len(manifest["preferences"]) != ledger.total_num_rows or source.num_preferences != ledger.total_num_rows:
+        raise ValueError(f"Preference row counts disagree: {source.path}")
+    return PreferenceCacheEvidence(path, ledger, manifest, digest)
 
 
 def load_audited_partition(data_root: str) -> BFCLPartition:

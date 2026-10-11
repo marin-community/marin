@@ -28,6 +28,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODELS, collection_recipe
+from experiments.post_training.bfcl_rl.data import PARITY_TASK_COUNT
 
 
 class RunScale(StrEnum):
@@ -102,6 +103,9 @@ def final_dpo_recipe(scale: RunScale) -> str:
     for field in ("override_cpus", "override_memory_mb", "override_storage_mb"):
         harbor.pop(field)
     (agent,) = policy["agents"]
+    recipe["context_budget"]["request_window_tokens"] = (
+        agent["kwargs"]["model_info"]["max_input_tokens"] + recipe["context_budget"]["max_new_tokens_per_turn"]
+    )
     harbor.update(
         name=agent["name"],
         version=agent["kwargs"]["version"],
@@ -132,7 +136,7 @@ def final_dpo_recipe(scale: RunScale) -> str:
         evaluation_runner="harbor",
         eval_before_train=True,
         eval_interval=4,
-        eval_batch_size=123,
+        eval_batch_size=PARITY_TASK_COUNT,
         eval_num_prompts=None,
         resume_mode="none",
         gradient_checkpointing=True,
@@ -166,7 +170,7 @@ def final_dpo_recipe(scale: RunScale) -> str:
             {
                 "type": "best_checkpoint",
                 "initial_model_uri": f"{MODEL_URI}/hf/step-1",
-                "expected_tasks": 123,
+                "expected_tasks": PARITY_TASK_COUNT,
                 "minimum_scored_tasks": 111,
             },
         ],
