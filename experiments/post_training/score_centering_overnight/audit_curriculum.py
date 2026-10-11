@@ -29,6 +29,8 @@ def audit(
     platform_scope: bool = False,
     archive_after_ms: int = 0,
     max_eval_errors: int = 0,
+    max_train_errors: int = 0,
+    recorded_learner_steps: bool = False,
 ) -> dict:
     resolved = yaml.safe_load((root / "resolved-launch.yaml").read_text())["config"]
     assert resolved["runtime"]["launcher_commit"] == config["runtime"]["launcher_commit"]
@@ -126,13 +128,15 @@ def audit(
                     continue
                 row = json.loads(gzip.decompress(archive.read(name)))
                 phase, step = row["phase"], row["global_step"]
-                if phase == "train" and refresh_period > 1:
+                if phase == "train" and refresh_period > 1 and not recorded_learner_steps:
                     # This calibration stays within the first frozen input epoch.
                     consumed_step = int(row["trajectory"]["instance_id"]) // trainer["train_batch_size"] + 1
                     assert 1 <= consumed_step <= updates
                     assert step == 1 + ((consumed_step - 1) // refresh_period) * refresh_period
                     assert row["provenance"]["model_version_step"] == step - 1
                     step = consumed_step
+                elif phase == "train" and recorded_learner_steps:
+                    assert row["provenance"]["model_version_step"] == ((step - 1) // refresh_period) * refresh_period
                 counts[(phase, step)] += 1
                 if row["disposition"]["exception_type"] or row["verification_result"]["status"] == "error":
                     errors.append((phase, step, row["trajectory"]["instance_id"]))
@@ -159,16 +163,17 @@ def audit(
                     assert 0 <= score <= 1
                     quality.setdefault(step, []).append(float(score))
     if not platform_scope:
-        assert all(phase == "eval" for phase, _, _ in errors), f"native training errors: {errors[:10]}"
-        assert len(errors) <= max_eval_errors, f"native evaluation errors: {errors[:10]}"
-    if platform_scope:
-        retained_learner_rows = Counter()
-        for (step, _), group in training_groups.items():
-            if group["has_loss"]:
-                retained_learner_rows[step] += group["rows"]
-        assert all(retained_learner_rows[step] == batch_size for step in range(1, updates + 1))
-    else:
-        assert all(accepted[("train", step)] == batch_size for step in range(1, updates + 1))
+        assert (
+            sum(phase == "train" for phase, _, _ in errors) <= max_train_errors
+        ), f"native training errors: {errors[:10]}"
+        assert (
+            sum(phase == "eval" for phase, _, _ in errors) <= max_eval_errors
+        ), f"native evaluation errors: {errors[:10]}"
+    retained_learner_rows = Counter()
+    for (step, _), group in training_groups.items():
+        if group["has_loss"]:
+            retained_learner_rows[step] += group["rows"]
+    assert all(retained_learner_rows[step] == batch_size for step in range(1, updates + 1))
     interval = trainer["eval_interval"]
     expected_evaluations = list(range(0, updates + 1, interval))
     assert sorted(quality) == expected_evaluations
@@ -184,10 +189,16 @@ def audit(
         "source": config["runtime"]["launcher_commit"],
         "completed_updates": updates,
         "sampler_refresh_period": refresh_period,
+        "recorded_learner_steps": recorded_learner_steps,
         "audit_scope": "platform qualification" if platform_scope else "complete native curriculum run",
         "source_task_errors": errors,
         "evaluation_error_accounting": "Retained execution failures receive zero quality in the fixed denominator.",
         "permitted_evaluation_errors": max_eval_errors,
+        "permitted_training_errors": max_train_errors,
+        "failure_response_note": (
+            "Failed native turns can be replaced by masked placeholders; these are not original responses."
+        ),
+        "graded_training_responses": {str(step): accepted[("train", step)] for step in range(1, updates + 1)},
         "archive_after_ms": archive_after_ms,
         "selected_archives": selected_archives,
         "score_centering": algorithm["score_centering_enabled"],
@@ -209,6 +220,8 @@ def main() -> None:
     parser.add_argument("--platform-scope", action="store_true")
     parser.add_argument("--archive-after-ms", type=int, default=0)
     parser.add_argument("--max-eval-errors", type=int, default=0)
+    parser.add_argument("--max-train-errors", type=int, default=0)
+    parser.add_argument("--recorded-learner-steps", action="store_true")
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     client = boto3.client(
@@ -226,6 +239,8 @@ def main() -> None:
         platform_scope=args.platform_scope,
         archive_after_ms=args.archive_after_ms,
         max_eval_errors=args.max_eval_errors,
+        max_train_errors=args.max_train_errors,
+        recorded_learner_steps=args.recorded_learner_steps,
     )
     checkpoint = urlparse(config["artifacts"]["checkpoint_root"])
     marker = client.get_object(

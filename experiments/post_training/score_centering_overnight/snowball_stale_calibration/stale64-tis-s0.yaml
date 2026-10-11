@@ -6,7 +6,7 @@ run:
   submission: detach
   export_hf: false
 runtime:
-  launcher_commit: f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b
+  launcher_commit: 9846397cde1bd7c72b55d25f755ec76e77f43726
   profile: megatron
 iris:
   cluster: cw-us-east-02a

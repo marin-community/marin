@@ -131,7 +131,7 @@ skyrl:
         optimizer_checkpoint_sharding_type: dp_reshardable
         logprob_chunk_size: 512
         torch_profiler_config:
-          enable: false
+          enable: true
           ranks:
           - 0
           - 16

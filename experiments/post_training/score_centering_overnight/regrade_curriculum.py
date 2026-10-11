@@ -39,6 +39,23 @@ def regrade(record: dict) -> dict:
     assert row["data_source"] == extras["data_source"]
     environment = row["env_class"]
     expected = (row["reward_spec"] or row["reward_model"])["ground_truth"]
+    verdict = record["verification_result"]
+    native_error = verdict["status"] == "error" or record["disposition"]["exception_type"] is not None
+    if native_error:
+        return {
+            "record_id": record["record_id"],
+            "phase": phase,
+            "step": record["global_step"],
+            "source_row": source_row,
+            "native_error": True,
+            "quality": 0.0,
+            "native_quality": None,
+            "mismatch": False,
+            "replayed": False,
+            "reason": (
+                "Native execution failure; attempted response may be removed and replaced by a masked placeholder."
+            ),
+        }
     response = grading_text(record["response"]["text"], record["response"]["messages"], PRESERVE_FULL_RESPONSE)
     try:
         if environment == "aime":
@@ -59,8 +76,6 @@ def regrade(record: dict) -> dict:
             "offline_error": type(error).__name__,
             "error": str(error),
         }
-    verdict = record["verification_result"]
-    native_error = verdict["status"] == "error" or record["disposition"]["exception_type"] is not None
     native = verdict["passed"] if verdict["passed"] is not None else verdict["score"]
     return {
         "record_id": record["record_id"],
@@ -170,7 +185,7 @@ def main() -> None:
             for (phase, step), count in sorted(counts.items())
         ],
         "discrepancies": discrepancies,
-        "native_errors_replayed": native_errors,
+        "native_failures_not_regraded": native_errors,
         "regrading_passed": not discrepancies,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

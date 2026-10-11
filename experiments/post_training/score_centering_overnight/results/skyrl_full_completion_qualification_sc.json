@@ -1,0 +1,71 @@
+{
+  "run_id": "sc-skyrl-countdown-qual-sc-s0-a1-01a126ce",
+  "runtime": {
+    "entrypoint": "skyrl_train.entrypoints.main_base",
+    "experiments_dir": "/app/experiments",
+    "launcher_commit": "61506a73f05b7d42d09d530d70627b1983a1233f",
+    "profile": "megatron",
+    "task_env": {},
+    "training_type": "sync"
+  },
+  "completed_updates": 2,
+  "score_centering": true,
+  "sampler_refresh_period": 1,
+  "matches_authors_completion_grading": true,
+  "full_completion_grade_differences_in_native_archives": {
+    "eval": 0,
+    "train": 0
+  },
+  "scientific_scope": "faithful completion grading",
+  "historical_eval_version_metadata": "Older sources report step-1. Actual clean evaluation follows post-update sync at the stated global_step. Preserve raw metadata.",
+  "primary_endpoint_completed_updates": 2,
+  "supplemental_eval_steps": [],
+  "native_archive_training_gaps": {},
+  "complete_original_training_groups": null,
+  "learner_evidence": [
+    {
+      "completed_updates_before_batch": 0,
+      "sampler_completed_updates": 0,
+      "sampler_age_updates": 0,
+      "retained_rows": 2,
+      "retained_loss_tokens": 165,
+      "chosen_tokens_in_head": 165,
+      "mean_omitted_mass": 0.00015175342559814453,
+      "pre_update_correction_abs_mean": 0.0,
+      "centering_applied": true
+    },
+    {
+      "completed_updates_before_batch": 1,
+      "sampler_completed_updates": 1,
+      "sampler_age_updates": 0,
+      "retained_rows": 2,
+      "retained_loss_tokens": 38,
+      "chosen_tokens_in_head": 38,
+      "mean_omitted_mass": 5.1915645599365234e-05,
+      "pre_update_correction_abs_mean": 0.0,
+      "centering_applied": true
+    }
+  ],
+  "quality": [
+    {
+      "completed_updates": 0,
+      "correct": 33.0,
+      "responses": 512,
+      "quality": 0.064453125
+    },
+    {
+      "completed_updates": 1,
+      "correct": 36.0,
+      "responses": 512,
+      "quality": 0.0703125
+    },
+    {
+      "completed_updates": 2,
+      "correct": 65.0,
+      "responses": 512,
+      "quality": 0.126953125
+    }
+  ],
+  "nonzero_gradient_updates": 2,
+  "audit_passed": true
+}
