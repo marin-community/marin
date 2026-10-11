@@ -37,11 +37,11 @@ class ChatFunction(BaseModel):
     model_config = ConfigDict(strict=True, allow_inf_nan=False)
 
     name: str = Field(min_length=1)
-    arguments: dict[str, JsonValue]
+    arguments: JsonValue
 
     @field_validator("arguments", mode="before")
     @classmethod
-    def decode_arguments(cls, value: str) -> dict[str, JsonValue]:
+    def decode_arguments(cls, value: str) -> JsonValue:
         if not isinstance(value, str):
             raise ValueError("Provider tool arguments must be a JSON string")
         return json.loads(value, object_pairs_hook=unique_object)
@@ -66,8 +66,8 @@ class ChatAssistantMessage(BaseModel):
 def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCalls:
     """Validate chat wire data and return protocol-independent submission evidence.
 
-    Malformed protocol data raises at this ingestion boundary. A valid text reply,
-    wrong function name, or wrong arguments remain available for grading.
+    Invalid JSON raises at this ingestion boundary. JSON arguments of the wrong
+    shape remain evidence; execution and submission validation reject them.
     """
     validated = ChatAssistantMessage.model_validate(message)
     if validated.tool_calls:

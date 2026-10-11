@@ -289,6 +289,42 @@ async def test_installed_agent_uses_isolated_task_grading_and_engine_cleanup(ans
             await machine.run(Command(("true",)))
 
 
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_installed_agent_file_grade_preserves_rejected_nonobject_tool_arguments(answer, reward):
+    rejected = shell_call("unused", call_id="rejected")
+    rejected["tool_calls"][0]["function"]["arguments"] = '["echo incorrect > /workspace/answer"]'
+    model = ReplayModel([rejected, {"role": "assistant", "content": answer}])
+
+    async def agent(machine, complete):
+        assert machine is not None
+        prefix = ({"role": "user", "content": "Write the answer."},)
+        first = await complete(SessionStart(prefix, {}))
+        feedback = {"role": "tool", "tool_call_id": "rejected", "content": "Arguments must be an object"}
+        response = await complete(SessionStart((*prefix, first.message, feedback), {}))
+        result = await machine.run(Command(("sh", "-c", f"echo {response.message['content']} > /workspace/answer")))
+        assert result.exit_code == 0
+
+    record = await ShellboxRolloutEngine(model.complete, {"local": RecordingShellSimFactory()}, agent=agent).run(
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
+    assert record.messages[1] == rejected
+    assert record.messages[2]["tool_call_id"] == "rejected"
+
+
+@pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
+async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(arguments):
+    rejected = shell_call("unused", call_id="rejected")
+    rejected["tool_calls"][0]["function"]["arguments"] = arguments
+    model = ReplayModel([rejected, shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
+    record = await ShellboxRolloutEngine(model.complete, {"local": RecordingShellSimFactory()}).run(
+        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.messages[1] == rejected
+    assert json.loads(record.messages[2]["content"]) == {"error": "Tool arguments must be a JSON object"}
+
+
 @pytest.mark.parametrize("compact", [False, True])
 async def test_external_agent_receives_engine_turns_and_controls_next_history(compact):
     first = ({"role": "user", "content": "Return 12."},)

@@ -123,13 +123,19 @@ class TextMessage(BaseModel):
 
 
 class ConversationToolCall(BaseModel):
-    """A function call with its conversation identity and decoded arguments."""
+    """A recorded call, including JSON arguments rejected by the tool."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True, allow_inf_nan=False)
 
     call_id: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    arguments: dict[str, JsonValue]
+    arguments: JsonValue
+
+    def object_arguments(self) -> dict[str, JsonValue]:
+        """Return the argument object or reject non-object submission evidence."""
+        if not isinstance(self.arguments, dict):
+            raise SubmissionFailure("Tool arguments must be a JSON object")
+        return self.arguments
 
 
 class AssistantToolCalls(BaseModel):
@@ -790,7 +796,7 @@ class AnswerCall(BaseAnswerFormat):
             or response.calls[0].name != ANSWER_CALL_NAME
         ):
             raise SubmissionFailure(f"Answer call requires one {ANSWER_CALL_NAME} function call")
-        arguments = response.calls[0].arguments
+        arguments = response.calls[0].object_arguments()
         if (
             set(arguments) != {ANSWER_FIELD}
             or not isinstance(arguments[ANSWER_FIELD], str)
@@ -826,6 +832,9 @@ class FinalAction(BaseAnswerFormat):
             and len(response.calls) > self.max_calls
         ):
             raise SubmissionFailure(f"Final action permits at most {self.max_calls} function calls")
+        if isinstance(response, AssistantToolCalls):
+            for call in response.calls:
+                call.object_arguments()
         return response
 
     def extract(self, attempt: GradingAttempt) -> ActionSubmission:
