@@ -10,6 +10,7 @@ import tarfile
 import tomllib
 from pathlib import Path
 from typing import cast
+from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -90,6 +91,25 @@ def normalized_row() -> tuple[dict, TaskSpec]:
         "original_path": "fixture-task",
         "source_row": source.row,
     }, task
+
+
+def test_harbor_rejects_unresolved_package_lock_despite_source_dockerfile(normalized_row):
+    row, task = normalized_row
+    task = task.model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="/unavailable/requirements.lock"
+            )
+        }
+    )
+    with pytest.raises(UnsupportedHarborTask, match="package locks"):
+        harbor_record(
+            {**row, "task_json": task.model_dump_json()},
+            fallback_actor_image=BASE_IMAGE,
+            verifyit_package_root=VERIFYIT_PACKAGE,
+            grader_image=GRADER_IMAGE,
+            family="fixture",
+        )
 
 
 def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(normalized_row) -> None:
@@ -410,6 +430,8 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
     assert read_output(spec, workspace) == candidate
 
 
+@pytest.mark.docker
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mode", ["inductive", "transductive"])
 def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp_path):
     source = next(source for source in arc.sources() if source.name == f"tasktrove-arc_{mode}")
@@ -426,7 +448,13 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
         ),
     )
     record = harbor_record(
-        {"task_json": task.model_dump_json(), "original_path": "arc.tar.gz", "source_row": "arc/tasks.parquet:0"},
+        {
+            "task_json": task.model_dump_json(),
+            "original_path": "arc.tar.gz",
+            "source_row": (
+                (arc.INDUCTIVE_CONFIG if mode == "inductive" else arc.TRANSDUCTIVE_CONFIG) + "/tasks.parquet:0"
+            ),
+        },
         fallback_actor_image=BASE_IMAGE,
         verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
@@ -441,28 +469,45 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
     for path, content in files.items():
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        if path.endswith((".py", ".sh", ".toml")):
-            content = (
-                content.decode()
-                .replace("/tests", str(tmp_path / "tests"))
-                .replace("/app/", str(tmp_path / "app") + "/")
-                .replace("/logs/", str(tmp_path / "logs") + "/")
-                .replace("exec verifyit ", f"exec verifyit --logs-dir {shlex.quote(str(tmp_path / 'logs/verifier'))} ")
-                .encode()
-            )
         target.write_bytes(content)
-    (tmp_path / "app").mkdir()
-    answer_path = tmp_path / "app" / ("solution.py" if mode == "inductive" else "answer.txt")
-    positive = arc.literal_transform(grid) if mode == "inductive" else arc.grid_text(grid)
-    negative = "def transform(grid): return [[8]]" if mode == "inductive" else "8"
-    for candidate, expected in [(positive, 1), (negative, 0)]:
-        # Inductive grading removes hidden config before executing the candidate.
-        if mode == "inductive":
-            (tmp_path / "tests/config.json").write_bytes(files["tests/config.json"])
-        answer_path.write_text(candidate)
-        result = subprocess.run(["bash", str(tmp_path / "tests/test.sh")], capture_output=True, text=True)
-        assert result.returncode == 0, result.stderr
-        assert float((tmp_path / "logs/verifier/reward.txt").read_text()) == expected
+    image = f"taskcuration-arc-test:{uuid4().hex}"
+    subprocess.run(["docker", "build", "-t", image, str(tmp_path / "environment")], check=True)
+    try:
+        (tmp_path / "app").mkdir()
+        (tmp_path / "logs").mkdir()
+        answer_path = tmp_path / "app" / ("solution.py" if mode == "inductive" else "answer.txt")
+        positive = arc.literal_transform(grid) if mode == "inductive" else arc.grid_text(grid)
+        negative = "def transform(grid): return [[8]]" if mode == "inductive" else "8"
+        for candidate, expected in [(positive, 1), (negative, 0)]:
+            # Inductive grading removes hidden config before executing the candidate.
+            if mode == "inductive":
+                (tmp_path / "tests/config.json").write_bytes(files["tests/config.json"])
+            answer_path.write_text(candidate)
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network=none",
+                    "-e",
+                    "PYTHONDONTWRITEBYTECODE=1",
+                    "-v",
+                    f"{tmp_path / 'tests'}:/tests",
+                    "-v",
+                    f"{tmp_path / 'app'}:/app",
+                    "-v",
+                    f"{tmp_path / 'logs'}:/logs/verifier",
+                    image,
+                    "bash",
+                    "/tests/test.sh",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, result.stderr
+            assert float((tmp_path / "logs/reward.txt").read_text()) == expected
+    finally:
+        subprocess.run(["docker", "image", "rm", image], check=True)
 
 
 @pytest.mark.parametrize(
@@ -482,6 +527,9 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
     )
     task = task.model_copy(
         update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+            ),
             "resources": task.resources.model_copy(update={"verifier": (inline_resource("grade.py", script.encode()),)}),
             "grader": ScriptGrader(
                 argv=("python3", "/tests/grade.py"),

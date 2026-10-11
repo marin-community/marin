@@ -14,6 +14,10 @@ from verifyit.spec import Mode, PytestSpec
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TASKTROVE_REPO
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 
+ARC_SOURCES = frozenset(
+    {"laion__nemotron-gym-arc-agi-python-inductive-v2", "laion__nemotron-gym-arc-agi-transductive-v3"}
+)
+
 JUDGE_SOURCES = frozenset(
     {
         "laion__nemotron-gym-knowledge-openqa-v4",
@@ -81,6 +85,10 @@ def source_actor_build(task: TaskSpec, *, source: str, mode: str, package: Path 
         resources = {resource.path: resource for resource in task.resources.verifier}
         test = resources[spec.paths[0].removeprefix("/tests/")]
         dockerfile = legacy_pytest_dockerfile(dockerfile, ast.parse(resource_bytes(test)))
+    if source in ARC_SOURCES:
+        # NVARC runs with system Python, including its candidate subprocess. Verifyit's
+        # isolated tool environment cannot supply these imports or the reward writer's tomli_w.
+        dockerfile = dockerfile.rstrip() + "\nRUN python3 -m pip install --no-cache-dir numpy requests 'tomli-w>=1.2'\n"
     # Legacy text converters retained only the source Dockerfile.
     # Declared executable build contexts are handled before this compatibility path.
     extras = ("schema", "judge") if source == "laion__nemotron-gym-structured-outputs-v4" else MODE_EXTRAS.get(mode, ())

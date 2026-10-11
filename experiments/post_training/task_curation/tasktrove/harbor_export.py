@@ -65,7 +65,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     TEST_SH,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT
-from experiments.post_training.task_curation.tasktrove.source_images import source_actor_build
+from experiments.post_training.task_curation.tasktrove.source_images import ARC_SOURCES, source_actor_build
 
 
 class VerifierEnvironmentMode(StrEnum):
@@ -413,13 +413,12 @@ def harbor_payload(
         raise UnsupportedHarborTask(f"gold_leak: {leak}")
     files["instruction.md"] = prompt.encode()
     public = () if environment.docker_build is not None else (*task.resources.all, *task.resources.worker)
+    source = row["source_row"].split("/", 1)[0]
     actor_build = environment.docker_build
     if actor_build is None:
-        actor_build = source_actor_build(
-            task, source=row["source_row"].split("/", 1)[0], mode=verifier.mode, package=verifyit_package_root
-        )
-    # Legacy export uses the original source image instead of the native package lock.
-    if environment.packages_lock is not None and actor_build is None:
+        actor_build = source_actor_build(task, source=source, mode=verifier.mode, package=verifyit_package_root)
+    # Only ARC has an explicit native-lock replacement in source_actor_build.
+    if environment.packages_lock is not None and (actor_build is None or source not in ARC_SOURCES):
         raise UnsupportedHarborTask("Agent package locks require an environment build")
     if actor_build is not None:
         for resource in actor_build.files:
