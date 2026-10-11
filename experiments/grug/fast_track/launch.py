@@ -365,6 +365,7 @@ def build_h100_ladder_run(
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
     token_dump: bool = False,
+    seed_xla_autotune_cache: bool = False,
     token_dump_skip_layers: tuple[int, ...] = (),
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_frac: float = 0.5,
@@ -494,7 +495,7 @@ def build_h100_ladder_run(
         cpu=cpu,
         ram=ram,
         disk=disk,
-        replicas=rung.nodes,
+        replicas=1 if seed_xla_autotune_cache else rung.nodes,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -574,6 +575,7 @@ def build_h100_ladder_run(
                 token_dump_path=(prefix_join(ctx.output_path, "token_dump.npz") if token_dump else None),
                 token_dump_skip_layers=token_dump_skip_layers,
                 xla_autotune_cache_path=_xla_autotune_cache_path(model, rung) if rung.device == "GB200" else None,
+                xla_autotune_seed_topology=(f"1x{rung.nodes}x{rung.gpus_per_task}" if seed_xla_autotune_cache else None),
                 layer_skip=layer_skip,
                 extra_mlp_start_frac=extra_mlp_start_frac,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
@@ -786,6 +788,11 @@ def _layer_skip_rule(
     "moe_null_layers) to <output>/token_dump.npz.",
 )
 @click.option(
+    "--seed-xla-autotune-cache",
+    is_flag=True,
+    help="GB200: seed the shared XLA autotune cache from one node under a mock topology of the full rack, then stop.",
+)
+@click.option(
     "--token-dump-skip-layers",
     default=None,
     help="Comma-separated layers: the token dump also records each token's loss with every token skipping them.",
@@ -928,6 +935,7 @@ def main(
     profile_start_step: int | None,
     dump_hlo: bool,
     token_dump: bool,
+    seed_xla_autotune_cache: bool,
     token_dump_skip_layers: str | None,
     extra_mlp_start_frac: float,
     layer_skip_layers: str | None,
@@ -974,6 +982,7 @@ def main(
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
         token_dump=token_dump,
+        seed_xla_autotune_cache=seed_xla_autotune_cache,
         token_dump_skip_layers=(
             tuple(int(x) for x in token_dump_skip_layers.split(",")) if token_dump_skip_layers else ()
         ),

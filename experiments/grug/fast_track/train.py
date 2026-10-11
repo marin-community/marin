@@ -297,6 +297,11 @@ class GrugTrainerConfig:
     # XLA GPU autotune results shared across runs of the same program (``_use_xla_autotune_cache``): loaded at start
     # when present, written by process 0 after the first step otherwise. None: autotune every compile.
     xla_autotune_cache_path: str | None = None
+    # Seed ``xla_autotune_cache_path`` from one process: run under this mock GPU topology ("slices x hosts x
+    # devices", e.g. "1x16x4" for a 16-node GB200 rack), so the one process compiles the full mesh's train step and
+    # autotunes it alone (no cross-process exchange); compile ahead of time, publish the results and stop before
+    # running a step. None: a normal run.
+    xla_autotune_seed_topology: str | None = None
     # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
     layer_skip: LayerSkipRule | None = None
     # When the extra_mlp_layers MLPs switch on, as a fraction of training (0: from the start).
@@ -1107,11 +1112,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # dispatcher: an environment variable forwarded from the coordinator does not reach it on GB200 (probe
     # lc1-hostlim2 saw it unset and capped at 64 GB), so set it here before any device is touched.
     os.environ.setdefault(_HOST_MEMORY_LIMIT_ENV, RUNTIME_ENV[_HOST_MEMORY_LIMIT_ENV])
-    autotune_cache_loaded = (
-        _use_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
-        if config.trainer.xla_autotune_cache_path is not None
-        else None
-    )
+    seed_topology = config.trainer.xla_autotune_seed_topology
+    if seed_topology is not None:
+        if config.trainer.xla_autotune_cache_path is None:
+            raise ValueError("xla_autotune_seed_topology needs xla_autotune_cache_path")
+        _seed_xla_autotune_cache(seed_topology)
+        autotune_cache_loaded: bool | None = False
+    else:
+        autotune_cache_loaded = (
+            _use_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
+            if config.trainer.xla_autotune_cache_path is not None
+            else None
+        )
     marker = config.trainer.completion_marker_path
     if marker is not None and fsspec.core.url_to_fs(marker)[0].exists(marker):
         logger.info("run already completed (%s exists); not retraining", marker)
@@ -1524,6 +1536,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             jax.process_index(),
                             iterator.this_load_time,
                         )
+                    if seed_topology is not None:
+                        assert config.trainer.xla_autotune_cache_path is not None
+                        compile_start = time.perf_counter()
+                        train_step.lower(state_leaves, batch).compile()
+                        logger.info("Seed compile of the train step took %.0f s", time.perf_counter() - compile_start)
+                        _publish_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
+                        return
                     state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                     dispatch_start = time.perf_counter()
                     state_leaves, metrics, inline_watch_stats = train_step(state_leaves, batch)
@@ -1734,6 +1753,15 @@ def _use_xla_autotune_cache(path: str) -> bool:
     os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
     logger.info("XLA autotune cache %s: %s", "loaded" if loaded else "empty, will publish", path)
     return loaded
+
+
+def _seed_xla_autotune_cache(topology: str) -> None:
+    """Make this one process stand in for ``topology``'s full mesh (mock NCCL) and autotune everything locally,
+    dumping the results for ``_publish_xla_autotune_cache``. Must run before the backend is created."""
+    jax.config.update("jax_mock_gpu_topology", topology)
+    flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}", "--xla_gpu_shard_autotuning=false"]
+    os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
+    logger.info("Seeding the XLA autotune cache under mock topology %s", topology)
 
 
 def _publish_xla_autotune_cache(path: str) -> None:
