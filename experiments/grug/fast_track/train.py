@@ -1689,7 +1689,11 @@ def _use_xla_autotune_cache(path: str) -> bool:
     if loaded:
         local = f"/tmp/xla_autotune_cached_{os.getpid()}.textproto"
         fs.get(path, local)
-        flags.append(f"--xla_gpu_load_autotune_results_from={local}")
+        # Use only the loaded results: nothing is autotuned, so nothing is exchanged; a missing result is an error.
+        flags += [
+            f"--xla_gpu_load_autotune_results_from={local}",
+            "--xla_gpu_require_complete_aot_autotune_results=true",
+        ]
     os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
     logger.info("XLA autotune cache %s: %s", "loaded" if loaded else "empty, will publish", path)
     return loaded
