@@ -92,7 +92,7 @@ def protocol_recipe(updates: int) -> str:
             "max_steps": updates,
             "update_epochs_per_batch": 1,
             "use_sample_packing": False,
-            "micro_forward_batch_size_per_gpu": 1,
+            "micro_forward_batch_size_per_gpu": ROLE_PLAN.micro_train_batch_size_per_gpu,
             "gradient_checkpointing": True,
             "flash_attn": True,
             "offload_optimizer_during_rollouts": True,

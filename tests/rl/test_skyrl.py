@@ -151,6 +151,21 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     )
 
 
+def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
+    # Protocol smoke .4 allocated 192 GPUs before the runtime rejected these unequal sizes.
+    base = _spec()
+    plan = dataclasses.replace(base.topology.role_plan, micro_train_batch_size_per_gpu=2)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 1
+    with pytest.raises(ValueError, match="equal micro_forward_batch_size_per_gpu"):
+        dataclasses.replace(
+            base,
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            topology=dataclasses.replace(base.topology, role_plan=plan),
+            config_yaml=yaml.safe_dump(recipe),
+        )
+
+
 def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
     policy = SkyRLRetentionPolicy(resume_checkpoint_count=5)
 

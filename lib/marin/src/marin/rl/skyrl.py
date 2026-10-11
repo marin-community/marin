@@ -577,6 +577,13 @@ def _validate_skyrl_recipe(
     config = _parsed_config(config_yaml)
     _validate_runtime_strategy(config, runtime)
     _validate_role_plan_config(config, topology.role_plan)
+    forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
+    if (
+        runtime.profile == SkyRLRuntimeProfile.MEGATRON
+        and forward_batch is not _MISSING_CONFIG_VALUE
+        and forward_batch != topology.role_plan.micro_train_batch_size_per_gpu
+    ):
+        raise ValueError("Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu")
     _validate_entrypoint_config(config, topology.role_plan)
     _validate_skyrl_backend_constraints(config, topology)
 
