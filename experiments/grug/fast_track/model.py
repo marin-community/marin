@@ -110,6 +110,8 @@ NEWTON_GRAM_KEY = "_newton_gram"
 # Per-layer detached router distributions [B, S, E] for ``router_history``; popped by the layer loop, never summarized.
 ROUTER_PROBS_KEY = "router_probs"
 # Metrics-dict key that carries the auxiliary-loss residual stream from the forward to the loss.
+# Per-layer logits of the ``final_conf_layers`` probes, [n, B, S].
+_FINAL_CONF_LOGITS = "final_conf_logits"
 # The stream entering ``mid_head_layer``, for the mid lm_head and its confidence head.
 _MID_HIDDEN = "mid_head_hidden"
 _NITP_TARGET = "nitp_target"
@@ -733,6 +735,10 @@ class GrugModelConfig:
     mid_head_trunk_grad: bool = True
     """False: the mid head trains on the stop-gradient stream, a probe that leaves the trunk unchanged."""
     mid_confidence_dim: int = 256
+    final_conf_layers: tuple[int, ...] = ()
+    """Probes (``mid_confidence_dim`` hidden ReLU MLPs, one per layer) on the stop-gradient rms-normed stream
+    entering each of these layers (0: the embedding sources), trained with a BCE loss to predict whether the final
+    head's top token is the next token. They leave the model unchanged."""
     mid_skip_layers: tuple[int, ...] = ()
     """Layers that tokens skip (as in ``LayerSkip``) when the confidence head is above ``mid_skip_threshold``, from
     when ``extra_mlp_active`` turns on (the confidence head trains first)."""
@@ -903,6 +909,10 @@ class GrugModelConfig:
         if self.skip_router_layers:
             if not self.attn_res or self.scan_layers or not 0.0 < self.skip_router_frac < 1.0:
                 raise ValueError("skip_router_layers needs attn_res, the unrolled layer loop and 0 < frac < 1")
+        if self.final_conf_layers and (
+            not self.attn_res or self.scan_layers or not all(0 <= i < self.num_layers for i in self.final_conf_layers)
+        ):
+            raise ValueError("final_conf_layers needs attn_res, the unrolled layer loop and layers in [0, num_layers)")
         if self.mid_skip_layers and (self.mid_head_layer is None or min(self.mid_skip_layers) < self.mid_head_layer):
             raise ValueError("mid_skip_layers needs mid_head_layer at or before them")
         if self.mid_head_layer is not None:
@@ -3579,6 +3589,20 @@ def _predictive_entropy(
     return _vocab_stats(head_in, lm_head, cap, labels).entropy
 
 
+def _final_conf_params(cfg: "GrugModelConfig", key: jax.Array) -> dict[str, jax.Array | None]:
+    names = ("final_conf_w1", "final_conf_b1", "final_conf_w2", "final_conf_b2")
+    n = len(cfg.final_conf_layers)
+    if not n:
+        return dict.fromkeys(names, None)
+    d, hidden = cfg.hidden_dim, cfg.mid_confidence_dim
+    return {
+        "final_conf_w1": reshard(random.normal(key, (n, d, hidden), jnp.float32) / math.sqrt(d), P(None, None, None)),
+        "final_conf_b1": jnp.zeros((n, hidden), jnp.float32),
+        "final_conf_w2": jnp.zeros((n, hidden), jnp.float32),
+        "final_conf_b2": jnp.zeros((n,), jnp.float32),
+    }
+
+
 def _mid_head_params(cfg: "GrugModelConfig", head_shape: tuple[int, int], key: jax.Array) -> dict[str, jax.Array | None]:
     names = ("mid_output_proj", "mid_conf_w1", "mid_conf_b1", "mid_conf_w2", "mid_conf_b2")
     if cfg.mid_head_layer is None:
@@ -4652,6 +4676,10 @@ class Transformer(eqx.Module):
     entropy_head_bias: Float[Array, ""] | None
     skip_router: Float[Array, " D"] | None  # cfg.skip_router_layers: the skip router's score
     skip_router_bias: Float[Array, ""] | None
+    final_conf_w1: Float[Array, "N D H"] | None  # cfg.final_conf_layers probes
+    final_conf_b1: Float[Array, "N H"] | None
+    final_conf_w2: Float[Array, "N H"] | None
+    final_conf_b2: Float[Array, " N"] | None
     mid_output_proj: jax.Array | None  # cfg.mid_head_layer: the mid lm_head
     mid_conf_w1: Float[Array, "F H"] | None  # the confidence head: features (2D + 2) -> H -> 1
     mid_conf_b1: Float[Array, " H"] | None
@@ -4755,6 +4783,7 @@ class Transformer(eqx.Module):
             ),
             skip_router_bias=jnp.zeros((), jnp.float32) if cfg.skip_router_layers else None,
             **_mid_head_params(cfg, output_proj.shape, random.fold_in(key, 5)),
+            **_final_conf_params(cfg, random.fold_in(key, 7)),
             token_embed2=(
                 reshard(
                     _init_weight(
@@ -5142,6 +5171,11 @@ class Transformer(eqx.Module):
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
                 if kv_inputs is not None:
                     layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
+                if i in cfg.final_conf_layers and pass_index == 0:
+                    stream = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
+                    extra_state.setdefault("final_conf", []).append(
+                        self._final_conf_logit(cfg.final_conf_layers.index(i), stream)
+                    )
                 if cfg.skip_router_layers and i == min(cfg.skip_router_layers) and pass_index == 0:
                     stream = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
                     extra_state["router_keep"], extra_state["router_frac"] = self._skip_router_keep(stream)
@@ -5263,6 +5297,8 @@ class Transformer(eqx.Module):
             final_stats[_ENTROPY_PRED] = extra_state["pred"]
         if "mid" in extra_state:
             final_stats[_MID_HIDDEN] = extra_state["mid"]
+        if "final_conf" in extra_state:
+            final_stats[_FINAL_CONF_LOGITS] = jnp.stack(extra_state["final_conf"])
         if "mid_skip_frac" in extra_state:
             final_stats["attn_res_mid_skip_frac"] = extra_state["mid_skip_frac"]
         if "router_frac" in extra_state:
@@ -5460,6 +5496,13 @@ class Transformer(eqx.Module):
         top_logp, top_ids = jax.lax.top_k(logp, k)
         return loss, top_ids, jnp.exp(top_logp), probe
 
+    def _final_conf_logit(self, n: int, stream: Float[Array, "B S D"]) -> Float[Array, "B S"]:
+        assert self.final_conf_w1 is not None and self.final_conf_b1 is not None
+        assert self.final_conf_w2 is not None and self.final_conf_b2 is not None
+        x = rms_norm(jax.lax.stop_gradient(stream).astype(jnp.float32), self.config.layer_norm_eps)
+        h = jax.nn.relu(jnp.einsum("bsd,dh->bsh", x, self.final_conf_w1[n]) + self.final_conf_b1[n])
+        return jnp.einsum("bsh,h->bs", h, self.final_conf_w2[n]) + self.final_conf_b2[n]
+
     def _skip_router_keep(self, stream: Float[Array, "B S D"]) -> tuple[Float[Array, "B S"], jax.Array]:
         """Per-token output scale for ``skip_router_layers`` (0: skip) and the skipped fraction."""
         cfg = self.config
@@ -5572,6 +5615,19 @@ class Transformer(eqx.Module):
         h = jax.nn.relu(jnp.einsum("bsf,fh->bsh", features, self.mid_conf_w1) + self.mid_conf_b1)
         return stats, jnp.einsum("bsh,h->bs", h, self.mid_conf_w2) + self.mid_conf_b2
 
+    def final_conf_diagnostics(
+        self, token_ids: Int[Array, "B S"], mask: AttentionMask
+    ) -> dict[str, Float[Array, "B S"]]:
+        """Per-position ``final_correct`` and each ``final_conf_layers`` probe's ``final_conf_L{layer}``."""
+        hidden, stats = self(token_ids, mask=mask)
+        labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
+        head_in, lm_head = self._lm_head_operands(hidden, token_ids)
+        final = _vocab_stats(head_in, lm_head, _logit_cap(self.config), labels)
+        out = {"final_correct": (final.top_id == labels).astype(jnp.float32), "final_entropy": final.entropy}
+        for n, layer in enumerate(self.config.final_conf_layers):
+            out[f"final_conf_L{layer}"] = jax.nn.sigmoid(stats[_FINAL_CONF_LOGITS][n])
+        return out
+
     def mid_head_diagnostics(self, token_ids: Int[Array, "B S"], mask: AttentionMask) -> dict[str, Float[Array, "B S"]]:
         """Per-position mid-head outputs (``_mid_head_terms``) and the final head's ``final_correct``."""
         hidden, stats = self(token_ids, mask=mask)
@@ -5619,6 +5675,7 @@ class Transformer(eqx.Module):
             extra_mlp_active=extra_mlp_active,
         )
         mid_hidden = router_metrics.pop(_MID_HIDDEN, None)
+        final_conf_logits = router_metrics.pop(_FINAL_CONF_LOGITS, None)
         entropy_pred = router_metrics.pop(_ENTROPY_PRED, None)
         router_metrics.pop(_NITP_TARGET, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
@@ -5668,6 +5725,18 @@ class Transformer(eqx.Module):
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
         mid_metrics: dict[str, jax.Array] = {}
+        if final_conf_logits is not None and train_terms:
+            head_in, lm_head = self._lm_head_operands(hidden, token_ids)
+            final = _vocab_stats(head_in, lm_head, _logit_cap(self.config), labels)
+            correct = (final.top_id == labels).astype(jnp.float32)
+            weight = loss_weight.astype(jnp.float32)
+            count = jnp.maximum(jnp.sum(weight), 1.0)
+            bce = jnp.sum(weight * (jax.nn.softplus(final_conf_logits) - correct * final_conf_logits), axis=(1, 2))
+            bce = bce / count
+            loss = loss + jnp.sum(bce).astype(loss_dtype)
+            mid_metrics["train/aux/final_top1_acc"] = jnp.sum(weight * correct) / count
+            for n, layer in enumerate(self.config.final_conf_layers):
+                mid_metrics[f"train/aux/final_conf_bce_L{layer}"] = jax.lax.stop_gradient(bce[n])
         if mid_hidden is not None and train_terms:
             mid_loss, bce, mid = self._mid_head_terms(mid_hidden.astype(hidden.dtype), labels, loss_weight, loss_dtype)
             loss = loss + (self.config.mid_head_loss_weight * mid_loss + bce).astype(loss_dtype)
