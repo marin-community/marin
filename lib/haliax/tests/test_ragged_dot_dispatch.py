@@ -242,16 +242,6 @@ def _assert_close_to_reference(actual, expected, rtol):
     assert max_error <= rtol * scale, f"max abs error {max_error:.3e}, scale {scale:.3e}"
 
 
-def _triton_f32_dots_use_tf32() -> bool:
-    """Triton's dot defaults f32 inputs to TF32 on NVIDIA GPUs and on gfx942 (MI300X, MI325X), and to IEEE on gfx950."""
-    nvidia = (ragged_dot_module._GpuFamily.NVIDIA, ragged_dot_module._GpuFamily.NVIDIA_BLACKWELL)
-    if ragged_dot_module._gpu_family() in nvidia:
-        return True
-    # ROCm reports the gfx architecture name as the compute capability.
-    device = jax.devices()[0]
-    return device.platform == "gpu" and device.compute_capability == "gfx942"
-
-
 def _run_kernel_family(family: str, lhs, rhs, sizes, layout: str):
     layout = ragged_dot_module.RaggedLayout(layout)
     if family == "group_grid":
@@ -271,9 +261,15 @@ def _run_kernel_family(family: str, lhs, rhs, sizes, layout: str):
 @pytest.mark.parametrize("family", ["group_grid", "tile_map"])
 def test_triton_kernel_families_match_ragged_dot_general(family, layout, group_sizes, dtype, rtol):
     _require_kernel_family(family)
-    if dtype == jnp.float32 and _triton_f32_dots_use_tf32():
-        # About 3e-4 off here on NVIDIA and 7e-4 on MI300X; XLA's own ragged dot on NVIDIA is off by as much.
-        pytest.skip("f32 Triton dots use TF32 on NVIDIA and gfx942")
+    reduced_f32 = (
+        ragged_dot_module._GpuFamily.NVIDIA,
+        ragged_dot_module._GpuFamily.NVIDIA_BLACKWELL,
+        ragged_dot_module._GpuFamily.AMD_INSTINCT_GFX942,
+    )
+    if dtype == jnp.float32 and ragged_dot_module._gpu_family() in reduced_f32:
+        # Triton runs f32 dots in TF32 on NVIDIA and xf32 on gfx942, 3e-4 to 1e-3 off here; XLA's own ragged
+        # dot is off by as much. On gfx942 the group-grid f32 tiles also exceed the 64 KiB LDS.
+        pytest.skip("f32 Triton dots use TF32 on NVIDIA and xf32 on MI300X")
     lhs, rhs, sizes = _layout_operands(layout, dtype, group_sizes)
 
     actual = _run_kernel_family(family, lhs, rhs, sizes, layout)
