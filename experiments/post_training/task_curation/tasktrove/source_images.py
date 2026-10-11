@@ -11,8 +11,11 @@ from taskcompendium.models import DockerBuildContext, TaskSpec, VerifyitGrader, 
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import Mode, PytestSpec
 
+from experiments.post_training.task_curation.datasets.arc.arc import INDUCTIVE_CONFIG, TRANSDUCTIVE_CONFIG
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import DOCKERFILE, TASKTROVE_REPO
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
+
+ARC_SOURCES = frozenset({INDUCTIVE_CONFIG, TRANSDUCTIVE_CONFIG})
 
 JUDGE_SOURCES = frozenset(
     {
@@ -33,7 +36,7 @@ OLD_JUDGE_INSTALL = re.compile(r"rewardkit|litellm", re.IGNORECASE)
 OLD_PUZZLE_INSTALL = re.compile(r"pip install .*\bpytest\b")
 OLD_REASONING_INSTALL = re.compile(r"^RUN pip install --no-cache-dir reasoning-gym")
 MODE_EXTRAS: dict[str, tuple[str, ...]] = {
-    Mode.MATH: ("answer",),
+    Mode.MATH: ("math",),
     Mode.JSON_SCHEMA: ("schema",),
     Mode.REASONING_GYM: ("reasoning-gym",),
     Mode.JUDGE: ("judge",),
@@ -81,6 +84,10 @@ def source_actor_build(task: TaskSpec, *, source: str, mode: str, package: Path 
         resources = {resource.path: resource for resource in task.resources.verifier}
         test = resources[spec.paths[0].removeprefix("/tests/")]
         dockerfile = legacy_pytest_dockerfile(dockerfile, ast.parse(resource_bytes(test)))
+    if source in ARC_SOURCES:
+        # NVARC runs with system Python, including its candidate subprocess. Verifyit's
+        # isolated tool environment cannot supply these imports or the reward writer's tomli_w.
+        dockerfile = dockerfile.rstrip() + "\nRUN python3 -m pip install --no-cache-dir numpy requests 'tomli-w>=1.2'\n"
     # Legacy text converters retained only the source Dockerfile.
     # Declared executable build contexts are handled before this compatibility path.
     extras = ("schema", "judge") if source == "laion__nemotron-gym-structured-outputs-v4" else MODE_EXTRAS.get(mode, ())
