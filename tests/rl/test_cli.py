@@ -86,6 +86,7 @@ def test_rl_launch_forwards_dedicated_daytona_credential(monkeypatch: pytest.Mon
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "test-rl-key")
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "test-eval-key")
     monkeypatch.setenv("DAYTONA_API_KEY", "test-other-key")
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
 
@@ -99,6 +100,7 @@ def test_rl_launch_forwards_dedicated_daytona_credential(monkeypatch: pytest.Mon
     assert result.exit_code == 0, result.output
     environment = client.submit.call_args.kwargs["environment"]
     assert environment.env_vars["DAYTONA_RL_API_KEY"] == "test-rl-key"
+    assert environment.env_vars["DAYTONA_EVAL_API_KEY"] == "test-eval-key"
     assert environment.env_vars["DAYTONA_API_KEY"] == "test-other-key"
     assert "UNRELATED_SECRET" not in environment.env_vars
 
