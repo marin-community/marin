@@ -596,6 +596,11 @@ class GrugModelConfig:
     num_shared_experts: int = 2
     num_experts: int = 384
     num_experts_per_token: int = 8
+    moe_null_layers: tuple[int, ...] = ()
+    """Null routing on these layers: the router also scores ``num_experts`` zero-computation experts and each
+    token takes the top ``2 * num_experts_per_token`` over all ``2 * num_experts`` columns, so a token can spend
+    some of its slots on "nothing". A null slot adds zero and has no weights to train. The other layers keep
+    top-``num_experts_per_token`` over the real experts (their null router columns are never read)."""
     # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
     latent_dim: int | None = 256
     latent_out_dim: int | None = None
@@ -817,8 +822,11 @@ class GrugModelConfig:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
         if self.moe_drop_renorm and self.moe_implementation != "fixed_pooled_wave_all_to_all":
             raise ValueError("moe_drop_renorm needs moe_implementation=fixed_pooled_wave_all_to_all")
-        if self.num_null_experts:
-            pass
+        if self.moe_null_layers:
+            if self.scan_layers:
+                raise ValueError("moe_null_layers needs the unrolled layer loop (scan_layers=false)")
+            if bad := [i for i in self.moe_null_layers if not 0 <= i < self.num_layers]:
+                raise ValueError(f"moe_null_layers {bad} out of range for {self.num_layers} layers")
         tail_modes = (self.latent_out_full_layers, (), (), ())
         if sum(bool(x) for x in tail_modes) > 1:
             raise ValueError(
@@ -876,8 +884,8 @@ class GrugModelConfig:
 
     @property
     def num_null_experts(self) -> int:
-        """Zero-computation (zero + copy + constant) experts, the router columns past ``num_experts``."""
-        return 0
+        """Zero-computation experts, the router columns past ``num_experts`` (``moe_null_layers``)."""
+        return self.num_experts if self.moe_null_layers else 0
 
     @property
     def Embed(self) -> Axis:
@@ -2246,8 +2254,10 @@ class MoEMLP(eqx.Module):
         router_tok_rows: Float[Array, "B S r"] | None = None,
         router_seed_bias: Float[Array, "B S E"] | None = None,
         router_embed: Float[Array, "B S D"] | None = None,
+        null_routing: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``router_embed`` is the token embedding the router reads under ``router_on_embed``.
+        ``null_routing`` (a ``moe_null_layers`` layer) routes top-2K over the real and null columns.
         ``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller
         computed them already (fused with other projections of the same input). ``hash_token_ids`` picks
         the experts by token-id hash (``moe_hash_layers``); ``noise_key`` adds the training-only Gumbel
@@ -2267,8 +2277,10 @@ class MoEMLP(eqx.Module):
         k = self.cfg.num_experts_per_token
         banks = _expert_banks(self.cfg)
         num_real = self.cfg.num_experts
-        if self.cfg.num_null_experts:
-            # The zero-computation experts compete in the one bank's top-K.
+        null_layer = bool(self.cfg.num_null_experts) and null_routing
+        if null_layer:
+            # The zero-computation experts compete in the one bank's top-2K.
+            k = 2 * k
             banks = [(0, num_real + self.cfg.num_null_experts, k)]
         # Select top-(K+1) on biased logits per bank; the (K+1)-th is that bank's QB threshold alpha.
         bank_selected, bank_alpha = [], []
@@ -2325,7 +2337,7 @@ class MoEMLP(eqx.Module):
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha` by binning
         # them into fixed bins over the live global range and reading the (1-K/E) quantile.
-        if self.cfg.num_null_experts:
+        if null_layer:
             bank_stats = [self._null_qb_stats(router_logits - bank_alpha[0], selected_experts, mesh)]
         else:
             bank_stats = [
@@ -2340,6 +2352,9 @@ class MoEMLP(eqx.Module):
                 for (start, size, bank_k), alpha in zip(banks, bank_alpha, strict=True)
             ]
         beta = jnp.concatenate([b for b, _, _ in bank_stats], axis=-1)
+        if self.cfg.num_null_experts and not null_layer:
+            # A real-only layer leaves its (unread) null columns' bias at zero.
+            beta = jnp.concatenate([beta, jnp.zeros((self.cfg.num_null_experts,), beta.dtype)])
         margin_min = functools.reduce(jnp.minimum, [lo for _, lo, _ in bank_stats])
         margin_max = functools.reduce(jnp.maximum, [hi for _, _, hi in bank_stats])
         router_stats["qb_beta"] = beta
@@ -2364,7 +2379,7 @@ class MoEMLP(eqx.Module):
             routed_input = self._matryoshka_latent(routed_input, x_flat, router_stats)
         bank_mlps = [self.expert_mlp]
         real_selected, real_weights, null_out = selected_experts, combine_weights, None
-        if self.cfg.num_null_experts:
+        if null_layer:
             real_selected, real_weights, null_out = self._split_null_slots(
                 routed_input, selected_experts, combine_weights
             )
@@ -2481,6 +2496,7 @@ def moe_and_shared_fused(
     router_seed_bias: Float[Array, "B S E"] | None = None,
     shadow: DenseMLP | None = None,
     router_embed: Float[Array, "B S D"] | None = None,
+    null_routing: bool = False,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -2538,6 +2554,7 @@ def moe_and_shared_fused(
             router_seed_bias=router_seed_bias,
             overlap=overlap,
             router_embed=router_embed,
+            null_routing=null_routing,
         )
 
     routed, stats = routed_mlp()
@@ -3015,6 +3032,7 @@ class Block(eqx.Module):
         router_tok_rows: Float[Array, "B S r"] | None = None,
         router_seed_bias: Float[Array, "B S E"] | None = None,
         router_embed: Float[Array, "B S D"] | None = None,
+        null_routing: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
@@ -3044,6 +3062,7 @@ class Block(eqx.Module):
                 router_seed_bias,
                 None,
                 router_embed,
+                null_routing,
             )
         else:
             out, stats = self.mlp(
@@ -3053,6 +3072,7 @@ class Block(eqx.Module):
                 router_tok_rows=router_tok_rows,
                 router_seed_bias=router_seed_bias,
                 router_embed=router_embed,
+                null_routing=null_routing,
             )
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
@@ -3833,6 +3853,7 @@ def _route_kwargs(
             None,
             None if extras is None else extras.get("router_hist"),
         ),
+        "null_routing": physical_layer in cfg.moe_null_layers,
     }
 
 
