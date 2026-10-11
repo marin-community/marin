@@ -5,6 +5,7 @@
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -216,6 +217,11 @@ def audit(config: dict, root: Path, *, training_group_audit: dict | None = None)
         ),
         "primary_endpoint_completed_updates": 299 if updates == 300 else updates,
         "supplemental_eval_steps": extra_eval_steps,
+        "evaluation_membership_sha256": (
+            hashlib.sha256(
+                json.dumps(sorted((list(tokens), count) for tokens, count in first.items())).encode()
+            ).hexdigest()
+        ),
         "native_archive_training_gaps": {
             str(step): 512 - records[("train", step)]
             for step in range(1, updates + 1)
