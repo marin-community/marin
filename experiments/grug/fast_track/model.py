@@ -211,6 +211,13 @@ KDA_CHUNK_TILES: dict[int, int | None] = {16: None, 32: 32, 64: 32}
 _KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
 
 
+class SkipProbeTarget(StrEnum):
+    """What the ``skip_probe_layer`` probes predict."""
+
+    CORRECT = "correct"  # the final head's top token is the next token (BCE on a logit)
+    LOSS = "loss"  # the final next-token loss (squared error)
+
+
 class ExtraMlpSelect(StrEnum):
     """Which tokens ``extra_mlp_layers`` serve, by the entropy head's prediction (``extra_mlp_frac`` of the batch)."""
 
@@ -745,7 +752,9 @@ class GrugModelConfig:
     """Two stop-gradient probes (``mid_confidence_dim`` hidden ReLU MLPs) on the rms-normed stream entering this
     layer predict, with BCE, whether the final head's top token is the next token: an aware probe, told whether
     this token skips the later layers (``LayerSkip``; ``d`` = 1 if it does), with logit ``f0(x) + d f1(x)``, so
-    ``f1`` estimates each token's effect of skipping; and a blind probe ``g(x)``."""
+    ``f1`` estimates each token's effect of skipping; and a blind probe ``g(x)``. ``skip_probe_target`` picks
+    the predicted quantity."""
+    skip_probe_target: SkipProbeTarget = SkipProbeTarget.CORRECT
     mid_skip_layers: tuple[int, ...] = ()
     """Layers that tokens skip (as in ``LayerSkip``) when the confidence head is above ``mid_skip_threshold``, from
     when ``extra_mlp_active`` turns on (the confidence head trains first)."""
@@ -5664,8 +5673,8 @@ class Transformer(eqx.Module):
         self, token_ids: Int[Array, "B S"], mask: AttentionMask, skip_layers: tuple[int, ...]
     ) -> dict[str, Float[Array, "B S"]]:
         """Per position: the probes' ``probe_kept`` (aware, not skipping), ``probe_skipped`` (aware, skipping) and
-        ``probe_blind`` probabilities, and the final head's ``correct_kept`` / ``correct_skipped`` with every token
-        keeping / skipping ``skip_layers``."""
+        ``probe_blind`` predictions (probabilities, or losses for ``SkipProbeTarget.LOSS``), and the final head's
+        ``correct_kept`` / ``correct_skipped`` with every token keeping / skipping ``skip_layers``."""
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         out = {}
         for name, keep in (("kept", True), ("skipped", False)):
@@ -5675,7 +5684,9 @@ class Transformer(eqx.Module):
             final = _vocab_stats(head_in, lm_head, _logit_cap(self.config), labels)
             out[f"correct_{name}"] = (final.top_id == labels).astype(jnp.float32)
             if keep:
-                logits = jax.nn.sigmoid(stats[_SKIP_PROBE_LOGITS])
+                logits = stats[_SKIP_PROBE_LOGITS]
+                if self.config.skip_probe_target == SkipProbeTarget.CORRECT:
+                    logits = jax.nn.sigmoid(logits)
                 out.update(probe_blind=logits[1], probe_kept=logits[2], probe_skipped=logits[3])
         return out
 
@@ -5798,13 +5809,18 @@ class Transformer(eqx.Module):
             count = jnp.maximum(jnp.sum(weight), 1.0)
             # The aware probe (f0 + d f1) and the blind probe (g) train; the counterfactual rows only log.
             trained = skip_probe_logits[:2]
-            bce = jnp.sum(weight * (jax.nn.softplus(trained) - correct * trained), axis=(1, 2)) / count
+            if self.config.skip_probe_target == SkipProbeTarget.LOSS:
+                target = jax.lax.stop_gradient(final.logsumexp - final.label_logit)
+                bce = jnp.sum(weight * jnp.square(trained - target), axis=(1, 2)) / count
+                effect = skip_probe_logits[3] - skip_probe_logits[2]
+            else:
+                bce = jnp.sum(weight * (jax.nn.softplus(trained) - correct * trained), axis=(1, 2)) / count
+                effect = jax.nn.sigmoid(skip_probe_logits[3]) - jax.nn.sigmoid(skip_probe_logits[2])
             loss = loss + jnp.sum(bce).astype(loss_dtype)
-            effect = jax.nn.sigmoid(skip_probe_logits[3]) - jax.nn.sigmoid(skip_probe_logits[2])
             mid_metrics.update(
                 {
-                    "train/aux/skip_probe_bce_aware": jax.lax.stop_gradient(bce[0]),
-                    "train/aux/skip_probe_bce_blind": jax.lax.stop_gradient(bce[1]),
+                    "train/aux/skip_probe_err_aware": jax.lax.stop_gradient(bce[0]),
+                    "train/aux/skip_probe_err_blind": jax.lax.stop_gradient(bce[1]),
                     "train/aux/skip_probe_effect_mean": jax.lax.stop_gradient(jnp.sum(weight * effect) / count),
                     "train/aux/final_top1_acc": jnp.sum(weight * correct) / count,
                 }
