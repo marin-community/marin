@@ -542,7 +542,7 @@ markers = [
     "manual: mark tests that are run by hand on demand, never by any CI workflow",
 ]
 testpaths = ["tests", "experiments"]
-pythonpath = [".", "lib/verifyit/tests"]
+pythonpath = ["."]
 
 # Don't run slow, integration, data_integration, cluster-bound, Docker, or manual tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
