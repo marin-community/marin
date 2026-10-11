@@ -16,8 +16,7 @@ from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TaskSpec, TextMessage
 
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
-
-from .test_rollout import ReplayModel, engine, lowered, machine_runtime
+from rolloutengine.test_support import ReplayModel, engine, lowered, machine_runtime
 
 
 class LocalGitMachine:

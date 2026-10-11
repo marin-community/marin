@@ -17,8 +17,7 @@ from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Res
 from taskcompendium.runtime.resources import inline_resource
 
 from rolloutengine.lowering import lower_task
-
-from .test_rollout import TWELVE, ReplayModel, arithmetic_task, engine, lowered, machine_runtime
+from rolloutengine.test_support import TWELVE, ReplayModel, arithmetic_task, engine, lowered, machine_runtime
 
 SCRIPT = b"""
 import os
