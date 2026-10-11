@@ -35,7 +35,9 @@ logger = logging.getLogger(__name__)
 
 _KERNEL_IDENTITY_ATTR = "_levanter_cute_kernel_identity"
 _KERNEL_SOURCE_COVERED_ATTR = "_levanter_cute_kernel_source_covered"
-_KERNEL_CACHE_PREFIX = "cutlass-kernels"
+_KERNEL_CACHE_PREFIX = (
+    "cutlass-kernels-lc1"  # the shared prefix's manifest names a deleted segment (every load misses)
+)
 _KERNEL_CACHE_SCHEMA = "cutlass-object-v3"
 
 
