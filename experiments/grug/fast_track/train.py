@@ -1718,6 +1718,10 @@ def _use_xla_autotune_cache(path: str) -> bool:
             "--xla_gpu_require_complete_aot_autotune_results=true",
             "--xla_gpu_shard_autotuning=false",
         ]
+        # With nothing autotuned at compile time, kernels (e.g. XLA's CUB sort) would first load lazily inside the
+        # first step, while NCCL kernels spin on the device: every rank then hangs in the driver's module load
+        # (stacks: cub::DeviceRadixSort -> cuOccupancyMaxActiveBlocksPerMultiprocessor). Load every module up front.
+        os.environ["CUDA_MODULE_LOADING"] = "EAGER"
     os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
     logger.info("XLA autotune cache %s: %s", "loaded" if loaded else "empty, will publish", path)
     return loaded
