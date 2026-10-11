@@ -339,8 +339,8 @@ def _wait_on_timeline(monkeypatch, timeline: list[tuple[float, TaskState, str]],
         (TaskState.PENDING, "", False),
         (TaskState.BUILDING, _GATED, False),
         (TaskState.BUILDING, "ContainerCreating", True),
-        # Admitted by Kueue but not yet bound to a node: placed on purpose, so the
-        # startup budget bounds a pod that can never start.
+        # Admitted by Kueue but not bound to a node: placed on purpose, so the startup
+        # budget bounds an admitted pod that does not start, whatever the cause.
         (TaskState.BUILDING, "Unschedulable: 0/12 nodes are available: 12 Insufficient nvidia.com/gpu.", True),
         (TaskState.ASSIGNED, "", True),
         (TaskState.RUNNING, "", True),
