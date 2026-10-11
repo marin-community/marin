@@ -57,7 +57,7 @@ from experiments.grug.fast_track.train import (
     MasterParamMode,
     RaggedTransport,
     WatchMode,
-    _compute_flops,
+    _compute_match_flops,
     dropless_moe_implementation,
     run_grug,
 )
@@ -89,12 +89,12 @@ _BASELINE_ACTIVE_PARAMS: dict[tuple[str, bool], int] = {
     ("d1280", True): 261_488_640,
 }
 
-# Fixed baseline training FLOPs/example of the recorded dense/MoE baselines, from the trainer's own
-# `_compute_flops` (which prices the lm_head and attention matmuls that `_active_params` omits). These
+# Fixed baseline training FLOPs/example of the recorded dense/MoE baselines, from the trainer's
+# `_compute_match_flops` (which prices the lm_head and attention matmuls that `_active_params` omits). These
 # pin the compute-match budget so it holds the baseline's *true* FLOPs, not an active-param proxy, and
 # so a candidate architecture cannot move the budget it is compared against. NOT recomputed from the
 # candidate. Regenerate deliberately only when the baseline recipe changes, via
-# `_compute_flops(model_config=_h100_ladder_model(_h100_ladder_rung(size), dense=dense))[0]`.
+# `_compute_match_flops(model_config=_h100_ladder_model(_h100_ladder_rung(size), dense=dense))`.
 _BASELINE_FLOPS_PER_EXAMPLE: dict[tuple[str, bool], int] = {
     ("d512", False): 1_133_066_059_776,
     ("d512", True): 1_065_420_324_864,
@@ -443,9 +443,9 @@ def build_h100_ladder_run(
             num_steps = max(1, round(baseline_tokens / (batch_size * SEQ_LEN)))
         else:
             # COMPUTE holds the baseline's *true* training FLOPs, derived from the candidate's own
-            # flops/example (the trainer's `_compute_flops`, which counts the lm_head and attention that
+            # flops/example (the trainer's `_compute_match_flops`, which counts the lm_head and attention that
             # `_active_params` omits) -- so an architecture change never buys or loses compute.
-            candidate_flops_per_example, _ = _compute_flops(model_config=model)
+            candidate_flops_per_example = _compute_match_flops(model_config=model)
             num_steps = max(1, round(baseline_flops / (candidate_flops_per_example * batch_size)))
     elif num_steps <= 0:
         raise ValueError(f"--num-steps must be positive, got {num_steps}")

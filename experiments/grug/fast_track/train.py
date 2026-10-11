@@ -66,6 +66,7 @@ from experiments.grug.fast_track.model import (
     DenseMLP,
     GrugModelConfig,
     Transformer,
+    forward_flops_per_token,
 )
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -557,10 +558,13 @@ def _forced_final_global_flops(cfg: GrugModelConfig) -> float:
     return (qkv(global_kv) + attn(seq)) - (qkv(local_kv) + attn(sw))
 
 
-def _compute_flops(
+def _compute_match_flops(
     *,
     model_config: GrugModelConfig,
-) -> tuple[float, dict[str, float]]:
+) -> float:
+    """Training FLOPs/example under the generic GQA/GLU formula that ``_BASELINE_FLOPS_PER_EXAMPLE`` in
+    ``launch.py`` was recorded with; ``--match compute`` budgets stay in these units. MFU and the logged
+    throughput use the architecture-accurate ``forward_flops_per_token`` instead."""
     # The dense variant runs a single GLU MLP of width `intermediate_dim` per layer -- no routed or
     # shared experts and no latent. Pricing it with the MoE terms (top-k + shared experts) overcounts
     # its FLOPs ~2x, which would inflate both its reported MFU and its scaling-law compute.
@@ -627,14 +631,7 @@ def _compute_flops(
     # global layer the shared util misses (applies to both dense and MoE).
     flops_per_token += _forced_final_global_flops(model_config)
 
-    flops_per_example = 3 * flops_per_token * model_config.max_seq_len
-
-    flops_summary: dict[str, float] = {
-        "throughput/flops_per_token_analytic": flops_per_token,
-        "throughput/flops_per_example_analytic": flops_per_example,
-    }
-
-    return flops_per_example, flops_summary
+    return 3 * flops_per_token * model_config.max_seq_len
 
 
 def log_device_memory(step_info) -> None:
@@ -1117,8 +1114,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             max_buffered_batches=config.trainer.loader_buffer_batches,
         )
 
-        flops_per_example, flops_summary = _compute_flops(model_config=config.model)
-        levanter.tracker.log_summary(flops_summary)
+        flops_per_token = forward_flops_per_token(state.params)
+        flops_per_example = 3 * flops_per_token * config.model.max_seq_len
+        levanter.tracker.log_summary(
+            {
+                "throughput/flops_per_token_analytic": flops_per_token,
+                "throughput/flops_per_example_analytic": flops_per_example,
+                "throughput/compute_match_flops_per_example": _compute_match_flops(model_config=config.model),
+            }
+        )
 
         eval_cfg = config.eval
         evaluator = None

@@ -5415,6 +5415,75 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
     return mesh, P(("replica_dcn", "data", "expert"), None)
 
 
+# Lookup tables: a token reads one row, so they cost no matmul FLOPs.
+_EMBEDDING_TABLES = frozenset({"token_embed", "token_embed2", "value_embed"})
+# Per-head or per-expert vectors stored as 2-D arrays that are added, not multiplied.
+_NON_MATMUL_PARAMS = frozenset({"dt_bias", "router_bias", "a_log"})
+
+
+def forward_flops_per_token(model: "Transformer") -> float:
+    """Analytic forward FLOPs per token of ``model``'s architecture.
+
+    Matmuls are read off the parameter tree: 2 x every weight a token multiplies, with the routed experts
+    scaled by ``num_experts_per_token / num_experts`` (nominal routing, drops not discounted). Embedding
+    tables, norms and other vectors are excluded. The attention cores have no weights and are added
+    explicitly: causal softmax attention over the keys each query actually attends (a sliding window caps
+    the span), ``QK^T`` plus ``PV``; and KDA's chunked delta rule, ``6 d_k d_v + 4 C (d_k + d_v)`` per head
+    (state read, state update, and the intra-chunk products at chunk size ``C``)."""
+    cfg = model.config
+    matmul = 0.0
+    q_widths: dict[str, int] = {}
+    kda_heads: list[tuple[int, int, int]] = []
+    # Shapes only, so abstract models (``eqx.filter_eval_shape``) work too.
+    leaves = jax.tree_util.tree_flatten_with_path(
+        eqx.filter(
+            model, lambda x: isinstance(x, jax.Array | jax.ShapeDtypeStruct) and jnp.issubdtype(x.dtype, jnp.inexact)
+        )
+    )[0]
+    for path, leaf in leaves:
+        names = [k.name for k in path if isinstance(k, jax.tree_util.GetAttrKey)]
+        stacked = "stacked" in names
+        per_layer_ndim = leaf.ndim - (1 if stacked else 0)
+        if names[-1] in _EMBEDDING_TABLES or names[-1] in _NON_MATMUL_PARAMS or per_layer_ndim < 2:
+            continue
+        size = float(math.prod(leaf.shape))
+        if "expert_mlp" in names:
+            size *= cfg.num_experts_per_token / cfg.num_experts
+        matmul += 2 * size
+        if names[-2:] == ["attn", "w_q"]:
+            q_widths[names[0]] = leaf.shape[-1]
+    for name in ("kda_blocks", "kda_blocks_rest", "kda_blocks_tail"):
+        stack = getattr(model, name)
+        if stack is None:
+            continue
+        attn = stack.stacked.attn
+        heads = attn.a_log.shape[-1]
+        kda_heads.append((stack.num_layers, heads, attn.w_q.shape[-1] // heads, attn.w_v.shape[-1] // heads))
+
+    seq, window = cfg.max_seq_len, cfg.sliding_window
+    kda_layers = set(_kda_layer_indices(cfg))
+    softmax_widths = {w for name, w in q_widths.items() if not name.startswith("kda")}
+    if len(softmax_widths) > 1:
+        raise ValueError(f"softmax attention stacks disagree on the query width: {q_widths}")
+    if not softmax_widths and len(kda_layers) < cfg.num_layers:
+        raise ValueError("softmax attention layers have no w_q to size their attention core")
+    core = 0.0
+    if softmax_widths:
+        (q_width,) = softmax_widths
+        for i in range(cfg.num_layers):
+            if i in kda_layers:
+                continue
+            long = _is_long_layer(i, cfg.num_layers, cfg.global_every, None)
+            span = seq if long or window is None else min(window, seq)
+            # Mean keys per query under a causal mask capped at ``span``: sum_p min(p + 1, span) / seq.
+            keys = (span * (span + 1) / 2 + (seq - span) * span) / seq
+            core += 2 * keys * q_width * 2  # QK^T over d_qk and PV over d_v, both q_width = heads * head_dim
+    chunk = cfg.kda_chunk_size
+    for num_layers, heads, d_k, d_v in kda_heads:
+        core += num_layers * heads * (6 * d_k * d_v + 4 * chunk * (d_k + d_v))
+    return matmul + core
+
+
 __all__ = [
     "AttnResLayerBackward",
     "Block",
@@ -5431,5 +5500,6 @@ __all__ = [
     "Transformer",
     "ZeroCenteredRMSNorm",
     "debug_mesh_and_token_pspec",
+    "forward_flops_per_token",
     "moe_and_shared_fused",
 ]
