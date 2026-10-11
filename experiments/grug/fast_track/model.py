@@ -732,6 +732,10 @@ class GrugModelConfig:
     """Layers the entropy head's chosen tokens (``extra_mlp_select``, ``extra_mlp_frac``) skip, as in ``LayerSkip``,
     from when ``extra_mlp_active`` turns on. The head reads the stream entering the first of these and
     ``extra_mlp_layers`` unless ``entropy_head_input_layer`` is set."""
+    skip_adapter_dim: int = 0
+    """With a ``LayerSkip``, tokens that skip its layers pass the final residual stream through one extra SwiGLU MLP
+    of this width (``h + MLP(rms_norm(h))``) before the final norm and lm_head, so they can restructure their
+    representation for the readout. Tokens that keep the layers never use it. 0: off."""
     skip_router_layers: tuple[int, ...] = ()
     """Layers a learned router lets some tokens skip (mixture-of-depths): a linear score of the rms-normed stream
     entering the first of them; the ``skip_router_frac`` of the batch with the lowest score skips them (as in
@@ -926,6 +930,8 @@ class GrugModelConfig:
                 raise ValueError("entropy_head_input_layer must be in [0, min(entropy_head_layers)]")
             if not 0.0 < self.extra_mlp_frac < 1.0:
                 raise ValueError(f"extra_mlp_frac must be in (0, 1), got {self.extra_mlp_frac}")
+        if self.skip_adapter_dim and not self.attn_res:
+            raise ValueError("skip_adapter_dim needs attn_res")
         if self.skip_router_layers:
             if not self.attn_res or self.scan_layers or not 0.0 < self.skip_router_frac < 1.0:
                 raise ValueError("skip_router_layers needs attn_res, the unrolled layer loop and 0 < frac < 1")
@@ -4728,6 +4734,7 @@ class Transformer(eqx.Module):
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     entropy_head: Float[Array, " D"] | None  # cfg.entropy_head_layers: predicts the next-token entropy
     entropy_head_bias: Float[Array, ""] | None
+    skip_adapter: DenseMLP | None  # cfg.skip_adapter_dim: the skipped tokens' readout MLP
     skip_router: Float[Array, " D"] | None  # cfg.skip_router_layers: the skip router's score
     skip_router_bias: Float[Array, ""] | None
     skip_probe_w1: Float[Array, "3 D H"] | None  # cfg.skip_probe_layer probes (f0, f1, g)
@@ -4831,6 +4838,11 @@ class Transformer(eqx.Module):
                 reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None)) if cfg.entropy_head_layers else None
             ),
             entropy_head_bias=jnp.zeros((), jnp.float32) if cfg.entropy_head_layers else None,
+            skip_adapter=(
+                DenseMLP.init(cfg.hidden_dim, cfg.skip_adapter_dim, cfg.initializer_std, key=random.fold_in(key, 9))
+                if cfg.skip_adapter_dim
+                else None
+            ),
             skip_router=(
                 reshard(
                     random.normal(random.fold_in(key, 6), (cfg.hidden_dim,), jnp.float32) * cfg.initializer_std,
@@ -5367,6 +5379,10 @@ class Transformer(eqx.Module):
             )
             state = run_pass(state, 0)
         mixed, layer_stats, z_total, max_weight, entropy = finish(state, [stats_out], z_out)
+        if self.skip_adapter is not None and layer_skip is not None:
+            adapted = self.skip_adapter(rms_norm(mixed, eps), moe_output_reshard=False)
+            skipped = (~layer_skip.keep)[..., None].astype(mixed.dtype)
+            mixed = mixed + skipped * adapted.astype(mixed.dtype)
         final_stats = {"attn_res_final_max_weight": max_weight, "attn_res_final_entropy": entropy}
         if "pred" in extra_state:
             final_stats[_ENTROPY_PRED] = extra_state["pred"]
