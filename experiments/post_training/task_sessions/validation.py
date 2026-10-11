@@ -61,12 +61,12 @@ class ValidationDataConfig:
     rows: int
 
 
-def validation_record(index: int) -> dict:
+def validation_record(index: int, split: str) -> dict:
     if index % 2 == 0:
         count = 1 + index % 13
-        # Parquet keeps one ground-truth column type across task families.
+        # Parquet needs one ground-truth type. Cat-count grading reads extra_info.n.
         return {
-            **cat_count_record(count, "validation", index),
+            **cat_count_record(count, split, index),
             "reward_spec": {"method": "rule", "ground_truth": str(count)},
         }
     left, right = 3 + index % 11, 2 + index % 7
@@ -83,14 +83,17 @@ def validation_record(index: int) -> dict:
         ],
         "env_class": "gsm8k_multi_turn",
         "reward_spec": {"method": "rule", "ground_truth": str(left * right)},
-        "extra_info": {"index": index, "split": "validation"},
+        "extra_info": {"index": index, "split": split},
     }
 
 
 def write_validation_data(config: ValidationDataConfig) -> None:
-    for filename, count in ((TRAIN_FILENAME, config.rows), (VALIDATION_FILENAME, VALIDATION_ROWS)):
+    for filename, count, split in (
+        (TRAIN_FILENAME, config.rows, "train"),
+        (VALIDATION_FILENAME, VALIDATION_ROWS, "validation"),
+    ):
         write_parquet_file(
-            (validation_record(index) for index in range(count)),
+            (validation_record(index, split) for index in range(count)),
             prefix_join(config.output_path, filename),
         )
 
@@ -139,8 +142,8 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     data_identity = fingerprint_hash(
         canonical_json(
             {
-                "train": [validation_record(index) for index in range(rows)],
-                "validation": [validation_record(index) for index in range(VALIDATION_ROWS)],
+                "train": [validation_record(index, "train") for index in range(rows)],
+                "validation": [validation_record(index, "validation") for index in range(VALIDATION_ROWS)],
             }
         )
     )
