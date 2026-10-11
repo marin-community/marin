@@ -3,7 +3,6 @@
 
 """Fit convex recipient/donor coefficients on a fixed routed-expert support."""
 
-import gc
 import json
 import logging
 import random
@@ -12,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from marin.merging.learned import differentiable_weight_blend
 
-from experiments.weight_merging.calibration_model import FrozenGrugBank, coefficient_group
+from experiments.weight_merging.calibration_model import FrozenGrugBank, coefficient_group, teacher_cache
 
 logger = logging.getLogger(__name__)
 BLOCK_ELEMENTS = 4194304
@@ -70,23 +69,6 @@ def allocate_chunks(selected: dict, coefficients: torch.nn.ParameterDict, budget
         chosen = max(sorted(eligible), key=lambda key: scores[key] / chunks[key])
         chunks[chosen] += 1
     return chunks
-
-
-def teacher_cache(bank: FrozenGrugBank, examples: list) -> dict:
-    cache = {}
-    for teacher in range(len(bank.states)):
-        weights = bank.frozen_weights(teacher)
-        with torch.no_grad():
-            for example in examples:
-                if example.teacher == teacher:
-                    output = bank.forward(weights, example.tokens, example.positions)
-                    cache[example.identity] = (output.logits.cpu(), tuple(state.cpu() for state in output.hidden_states))
-                    del output
-                    logger.info("Cached teacher %d: %s", teacher, example.identity)
-        del weights
-        gc.collect()
-        torch.cuda.empty_cache()
-    return cache
 
 
 def train_supported_coefficients(bank: FrozenGrugBank, examples: list, recipe: dict, write) -> None:

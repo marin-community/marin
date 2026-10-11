@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
-from marin.merging.constrained import TensorSupport, export_constrained
+from marin.merging.constrained import TensorSupport, export_constrained, validate_audit_location
 from marin.merging.curvature import ota_merge_tensor
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -104,7 +104,8 @@ def main() -> None:
         )
 
     audit_fs, audit_path = filesystem_for(recipe["audit"])
-    if audit_fs.exists(audit_path) or recipe["audit"].startswith(recipe["output"].rstrip("/") + "/"):
+    validate_audit_location(recipe["audit"], recipe["output"])
+    if audit_fs.exists(audit_path):
         raise ValueError("Require a fresh audit outside the model directory")
     start = time.monotonic()
     audit = export_constrained(base, recipe["output"], support, recipe["support_cap"], transform)

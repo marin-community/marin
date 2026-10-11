@@ -9,6 +9,7 @@ import logging
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import safetensors.torch
 import torch
@@ -22,6 +23,25 @@ from marin.merging.checkpoint import INDEX_NAME, CheckpointReader
 class TensorSupport:
     name: str
     rows: tuple[int, ...] | None
+
+
+def validate_audit_location(audit: str, output: str) -> None:
+    """Require the audit to be outside the checkpoint, including local path aliases."""
+    audit_location = StoragePath.parse(audit)
+    output_location = StoragePath.parse(output)
+    if audit_location.scheme in (None, "file"):
+        audit_location = StoragePath.parse(
+            str(Path("/" + audit_location.key if audit_location.scheme else audit).resolve())
+        )
+    if output_location.scheme in (None, "file"):
+        output_location = StoragePath.parse(
+            str(Path("/" + output_location.key if output_location.scheme else output).resolve())
+        )
+    try:
+        audit_location.relative_to(output_location)
+    except ValueError:
+        return
+    raise ValueError("Audit must be outside the model directory")
 
 
 def changed_elements(left: torch.Tensor, right: torch.Tensor) -> int:
@@ -88,7 +108,7 @@ def export_constrained(
     changes = 0
     shards = set(headers)
     for source_path in sorted(base.fs.find(base.path)):
-        relative = source_path[len(base.path.rstrip("/")) + 1 :]
+        relative = StoragePath.parse(source_path).relative_to(StoragePath.parse(base.path))
         if not relative or relative.startswith("../"):
             raise ValueError(f"Invalid source path: {source_path}")
         original = base.fs.cat_file(source_path)
@@ -148,7 +168,7 @@ def export_constrained(
         raise ValueError("Missing checkpoint objects")
     if changes > math.floor(cap * total):
         raise ValueError("Stored checkpoint exceeds scalar budget")
-    actual_files = {p[len(path.rstrip("/")) + 1 :] for p in fs.find(path)}
+    actual_files = {StoragePath.parse(p).relative_to(StoragePath.parse(path)) for p in fs.find(path)}
     if actual_files != files.keys():
         raise ValueError("Export contains unexpected or missing files")
     return {

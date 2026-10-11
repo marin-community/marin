@@ -28,8 +28,7 @@ def isospectral_merge(
 ) -> tuple[torch.Tensor, list[float]]:
     """Combine frame displacements with unit-retention coefficients and Base singular values.
 
-    Sign alignment, trailing-mode masking, Gram coefficients and polar retraction
-    follow ISO-Merger. The caller selects complete matrices; masking reconstructed
+    The caller selects complete matrices; masking reconstructed
     scalar coordinates would generally invalidate the spectrum constraint.
     """
     if base.ndim != 2 or not donors or not 0 < keep <= 1:

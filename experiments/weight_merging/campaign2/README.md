@@ -108,7 +108,7 @@ git worktree add --detach /data/marin-nupa d2369021770463d4282126ddb0b37eab25aa8
 Copy [eval-model.yaml](eval-model.yaml) into each checkout's `experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/` as `wm2-replay.yaml`. Set `name` to `wm2-replay` and `location` to the new model's serving-accessible location. The historical identity was a SHA1 of the sorted JSON construction recipe. Generate the replacement fields from your remapped recipe:
 
 ```sh
-python - <<'PYTHON'
+uv run --package marin-core --extra cpu python - <<'PYTHON'
 import hashlib, json
 recipe = json.load(open('/data/campaign2-recipes/dare-ties-02.json'))
 revision = hashlib.sha1(json.dumps(recipe, sort_keys=True).encode()).hexdigest()

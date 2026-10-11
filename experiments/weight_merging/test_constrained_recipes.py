@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import safetensors.torch
 import torch
 from marin.merging.learned import differentiable_weight_blend
@@ -97,6 +98,12 @@ def test_serial_stages_keep_base_files_and_frozen_weights(tmp_path, monkeypatch)
     path = tmp_path / "recipe.json"
     path.write_text(json.dumps(recipe))
     monkeypatch.setattr("sys.argv", ["serial_merge", "--recipe", str(path)])
+    invalid_stage = {**stages[0], "audit": stages[0]["output"] + "/sub/../audit.json"}
+    path.write_text(json.dumps({**recipe, "stages": [invalid_stage, stages[1]]}))
+    with pytest.raises(ValueError, match="outside the model directory"):
+        serial_main()
+    assert not Path(stages[0]["output"]).exists()
+    path.write_text(json.dumps(recipe))
     serial_main()
     expected = base.clone()
     for i in range(1, 3):

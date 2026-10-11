@@ -22,7 +22,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer
 
-from experiments.weight_merging.calibration_model import FrozenGrugBank, coefficient_group
+from experiments.weight_merging.calibration_model import FrozenGrugBank, coefficient_group, teacher_cache
 
 logger = logging.getLogger(__name__)
 CPU_BLOCK_ELEMENTS = 2**20
@@ -101,20 +101,7 @@ def allocate_chunks(bank: FrozenGrugBank, coefficients: torch.nn.ParameterDict, 
 
 
 def train_coefficients(bank: FrozenGrugBank, examples: list[TokenExample], recipe: dict, write) -> None:
-    cache = {}
-    for teacher in range(len(bank.states)):
-        weights = bank.frozen_weights(teacher)
-        with torch.no_grad():
-            for example in examples:
-                if example.teacher != teacher:
-                    continue
-                output = bank.forward(weights, example.tokens, example.positions)
-                cache[example.identity] = (output.logits.cpu(), tuple(state.cpu() for state in output.hidden_states))
-                logger.info("Cached teacher %d: %s", teacher, example.identity)
-                del output
-        del weights
-        gc.collect()
-        torch.cuda.empty_cache()
+    cache = teacher_cache(bank, examples)
     for config in recipe["experiments"]:
         torch.manual_seed(config["seed"])
         coefficients = bank.initial_coefficients({}, config["initial"])

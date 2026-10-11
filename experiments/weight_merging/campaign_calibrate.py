@@ -25,17 +25,20 @@ from experiments.weight_merging.calibration_model import FrozenGrugBank
 from experiments.weight_merging.constrained_coefficients import train_supported_coefficients
 
 logger = logging.getLogger(__name__)
+ROUTED_EXPERT_COUNT = 256
 
 
 def routing_statistics(bank: FrozenGrugBank, examples: list) -> dict:
-    counts = {domain: torch.zeros(bank.layer_count, 256, dtype=torch.int64) for domain in ("numeric", "tools")}
+    counts = {
+        domain: torch.zeros(bank.layer_count, ROUTED_EXPERT_COUNT, dtype=torch.int64) for domain in ("numeric", "tools")
+    }
     current = "numeric"
     handles = []
 
     def observer(layer):
-        def collect(module, inputs, output):
+        def collect(_module, _inputs, output):
             selected = output.selected_experts.detach().flatten().cpu()
-            counts[current][layer] += torch.bincount(selected, minlength=256)
+            counts[current][layer] += torch.bincount(selected, minlength=ROUTED_EXPERT_COUNT)
 
         return collect
 

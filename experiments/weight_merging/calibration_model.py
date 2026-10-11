@@ -3,6 +3,7 @@
 
 """Grug forward passes over frozen checkpoint banks and learned coefficients."""
 
+import gc
 import logging
 import re
 from dataclasses import dataclass
@@ -147,3 +148,20 @@ class FrozenGrugBank:
                 values = torch.tensor(initial[group.rsplit("_", 1)[1]], device=self.device_for(name))
                 coefficients[group] = torch.nn.Parameter(values.repeat(chunks.get(group, 1), 1))
         return coefficients
+
+
+def teacher_cache(bank: FrozenGrugBank, examples: list) -> dict:
+    cache = {}
+    for teacher in range(len(bank.states)):
+        weights = bank.frozen_weights(teacher)
+        with torch.no_grad():
+            for example in examples:
+                if example.teacher == teacher:
+                    output = bank.forward(weights, example.tokens, example.positions)
+                    cache[example.identity] = (output.logits.cpu(), tuple(state.cpu() for state in output.hidden_states))
+                    del output
+                    logging.info("Cached teacher %d: %s", teacher, example.identity)
+        del weights
+        gc.collect()
+        torch.cuda.empty_cache()
+    return cache

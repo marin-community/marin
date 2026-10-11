@@ -13,7 +13,7 @@ from pathlib import Path
 import torch
 from marin.merging.arithmetic import MergeMethod, MergeParameters, RamParameters, merge_tensor
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
-from marin.merging.constrained import TensorSupport, export_constrained
+from marin.merging.constrained import TensorSupport, export_constrained, validate_audit_location
 from marin.merging.isospectral import isospectral_merge
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
@@ -47,8 +47,7 @@ def main() -> None:
     audit_fs, audit_path = filesystem_for(recipe["audit"])
     if audit_fs.exists(audit_path):
         raise FileExistsError(recipe["audit"])
-    if recipe["audit"].startswith(recipe["output"].rstrip("/") + "/"):
-        raise ValueError("Audit must be outside the model files")
+    validate_audit_location(recipe["audit"], recipe["output"])
 
     def transform(name: str, row: int | None, value: torch.Tensor) -> torch.Tensor:
         values = [reader.tensor(name) for reader in donors]

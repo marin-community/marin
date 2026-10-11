@@ -20,6 +20,7 @@ from marin.merging.learned import differentiable_weight_blend
 
 logger = logging.getLogger(__name__)
 INDEX_NAME = "model.safetensors.index.json"
+RECIPE_NAME = "merge-recipe.json"
 MANIFEST_NAME = "merge-manifest.json"
 METADATA_NAMES = (
     "config.json",
@@ -69,7 +70,7 @@ class CheckpointReader:
     def __init__(self, source: CheckpointSource):
         self.source = source
         self.fs, self.path = filesystem_for(source.path)
-        if self.fs.exists(prefix_join(self.path, "merge-recipe.json")) and not self.fs.exists(
+        if self.fs.exists(prefix_join(self.path, RECIPE_NAME)) and not self.fs.exists(
             prefix_join(self.path, MANIFEST_NAME)
         ):
             raise ValueError(f"Incomplete merged checkpoint: {source.path}")
@@ -101,8 +102,7 @@ def merge_checkpoint(
     """Write an immutable merged checkpoint, publishing its manifest last.
 
     Inputs must already be aligned and their tokenizer/config semantics reviewed.
-    Each output tensor is one safetensors shard, bounding output serialization
-    memory independently of input shard layout. A partial failure is retained
+    Each output tensor occupies one safetensors shard. A partial failure is retained
     for audit and must not be served without the completion manifest. Row
     overrides merge first-axis slices independently and cannot overlap protected rows.
     """
@@ -171,7 +171,7 @@ def merge_checkpoint(
         manifest["objects"].append({"name": name, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
 
     # Establish provenance before expensive work; the manifest remains the final gate.
-    write("merge-recipe.json", json.dumps(manifest, indent=2).encode())
+    write(RECIPE_NAME, json.dumps(manifest, indent=2).encode())
     weight_map = {}
     total_size = 0
     ordered = sorted(names, key=lambda name: (readers[0].weight_map[name], name))
