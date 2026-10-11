@@ -1,9 +1,6 @@
 name: BFCL campaign task images
 
 on:
-  push:
-    branches: [bfcl-rl/campaign-20261003]
-    paths: [.github/workflows/bfcl-rl-images.yaml]
   workflow_dispatch:
 
 permissions:
