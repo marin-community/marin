@@ -71,6 +71,7 @@ MODEL_NAME = "models/bfcl-rl-recovery-dpo-native"
 MODEL_URI = "s3://marin-us-east-02a/marin/users/benfeuer/models/bfcl-rl-recovery-dpo-native/2026.10.08.304"
 INPUT_NAME = "data/bfcl-rl-final-dpo-inputs"
 POLICY_FILE = "final_dpo_pi_policy.yaml"
+FINAL_DPO_PAIRS = 1712
 
 
 def megatron_config(parallel: DPOParallelism) -> dict[str, object]:
@@ -118,7 +119,7 @@ def final_dpo_recipe(scale: RunScale) -> str:
         **policy["environment"]["kwargs"],
         **policy["retry"],
     )
-    updates = 4 if scale is RunScale.SMOKE else 1712 // ROLE_PLAN.train_batch_size
+    updates = 4 if scale is RunScale.SMOKE else FINAL_DPO_PAIRS // ROLE_PLAN.train_batch_size
     recipe["data"] = {
         "kind": "parquet",
         "train_data": [],

@@ -16,6 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.bfcl_rl.collect import MODELS
 from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256
+from experiments.post_training.bfcl_rl.final_dpo import FINAL_DPO_PAIRS
 from experiments.post_training.bfcl_rl.optimize import RECOVERY_CONTEXT
 from experiments.post_training.bfcl_rl.preference_union import PREFERENCE_COLUMNS
 from experiments.post_training.bfcl_rl.recovery_data import (
@@ -95,7 +96,7 @@ def run_fresh_smoke_data(config: FreshSmokeDataConfig) -> FreshSmokeData:
     seen_tasks = set(selection["seen_task_ids"])
     with (frozen / "full-batches.parquet").open("rb") as source:
         table = pq.read_table(source)
-    if table.num_rows != 1712:
+    if table.num_rows != FINAL_DPO_PAIRS:
         raise ValueError("Frozen final training subset must contain 1,712 pairs")
     cache = TreeCache.load_from_ledger(cache_path, {name: np.zeros(0, np.int32) for name in PREFERENCE_COLUMNS}, ledger)
     fresh_rows = []
