@@ -36,6 +36,7 @@ SEED = 20260924
 SCORE = re.compile(r"^([01](?:\.\d+)?)\s+\((s3://[^)]+)\)$")
 CONTINUOUS = frozenset({"truthfulqa", "mrcr", "SOTOPIA-hard", "cruxeval"})
 SNOWBALL_FLOPS = 1.2440924703713099e23
+SHARED100_MODEL = "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09"
 STATISTICS_VERSION = "recovered-metrics-v4"
 
 
@@ -411,6 +412,12 @@ def main() -> None:
     stats = {(str(row["model"]), str(row["benchmark"])): row for row in stats_rows}
     flops = {row["model"]: float(row["total_flops"]) for row in flops_rows}
     flops[winner] = SNOWBALL_FLOPS
+    winner_flops_basis = (
+        "Step92 base-lineage proxy; incremental Step12/Step20 donor training and "
+        "weight-merge operations not estimated"
+        if winner == SHARED100_MODEL
+        else "September 17 Step92 proxy; checkpoint-specific posttraining differences not estimated"
+    )
     write_csv(
         args.output_dir / "model_flops.csv",
         [
@@ -418,7 +425,7 @@ def main() -> None:
                 "model": model,
                 "total_flops": flops[model],
                 "basis": (
-                    "September 17 Step92 proxy"
+                    winner_flops_basis
                     if model == winner
                     else next(row["basis"] for row in flops_rows if row["model"] == model)
                 ),
@@ -444,8 +451,10 @@ def main() -> None:
         "Within each draw, scores are normalized by benchmark. The controlled plot removes one common fitted slope "
         "against log10(total training FLOPs). FLOP estimates are fixed and their uncertainty is not propagated. "
         "Bars are simultaneous 95% rank bands; the Nemenyi CD uses alpha=0.05. "
-        "Baseline FLOPs come from the September 17 campaign's NON_SNOWBALL_FLOP_ESTIMATES.csv; Step92 uses its "
-        "September 17 release-figure estimate.\n"
+        "Baseline FLOPs come from the September 17 campaign's NON_SNOWBALL_FLOP_ESTIMATES.csv. "
+        "The selected Snowball-lineage checkpoint uses the September 17 Step92 proxy. For a weight merge, "
+        "incremental donor training and merge operations are not estimated. "
+        "The FLOP-controlled result is approximate.\n"
     )
     print(f"plotted {len(models)} models over {len(benchmarks)} benchmarks; excluded {excluded}")
 
