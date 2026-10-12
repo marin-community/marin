@@ -269,8 +269,8 @@ async def test_agent_wrapper_uses_isolated_task_grading_and_engine_cleanup(answe
     async def agent(machine, complete):
         assert machine is not None
         try:
-            private = await machine.run(Command(("test", "-f", "/tests/grade.sh")))
-            assert private.exit_code != 0
+            grader_script_probe = await machine.run(Command(("test", "-f", "/tests/grade.sh")))
+            assert grader_script_probe.exit_code != 0
             response = await complete(SessionStart(({"role": "user", "content": content},), {}))
             written = await machine.run(Command(("sh", "-c", f"echo {response.message['content']} > /workspace/answer")))
             assert written.exit_code == 0
