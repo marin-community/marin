@@ -228,7 +228,7 @@ def collection_receipt(
     )
 
 
-def recovery_preference_rows(
+def recovery_preferences_with_audit(
     teacher: Sequence[RetainedRollout],
     student: Sequence[RetainedRollout],
     *,
@@ -336,7 +336,7 @@ def build_recovery_cache(config: RecoveryCacheConfig) -> RecoveryPreferenceCache
         records = read_retained_archives(archives, identity=receipt.identity, partition=partition)
         receipts.append(receipt)
         collections.append(records)
-    rows, report = recovery_preference_rows(
+    rows, report = recovery_preferences_with_audit(
         collections[0],
         collections[1],
         teacher_receipt=receipts[0],

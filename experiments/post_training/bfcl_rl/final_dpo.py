@@ -26,8 +26,9 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import prefix_join
 
-from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODELS, collection_recipe
+from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MAX_RETAINED_BYTES, MODELS, collection_recipe
 from experiments.post_training.bfcl_rl.data import PARITY_TASK_COUNT
 
 
@@ -68,10 +69,12 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 MODEL_VERSION = "2026.10.08.304"
 MODEL_NAME = "models/bfcl-rl-recovery-dpo-native"
-MODEL_URI = "s3://marin-us-east-02a/marin/users/benfeuer/models/bfcl-rl-recovery-dpo-native/2026.10.08.304"
+MODEL_URI = prefix_join(prefix_join("s3://marin-us-east-02a/marin/users/benfeuer", MODEL_NAME), MODEL_VERSION)
 INPUT_NAME = "data/bfcl-rl-final-dpo-inputs"
 POLICY_FILE = "final_dpo_pi_policy.yaml"
 FINAL_DPO_PAIRS = 1712
+EVALUATION_INTERVAL = 4
+DPO_TIMEOUT_HOURS = 72
 
 
 def megatron_config(parallel: DPOParallelism) -> dict[str, object]:
@@ -119,7 +122,7 @@ def final_dpo_recipe(scale: RunScale) -> str:
         **policy["environment"]["kwargs"],
         **policy["retry"],
     )
-    updates = 4 if scale is RunScale.SMOKE else FINAL_DPO_PAIRS // ROLE_PLAN.train_batch_size
+    updates = EVALUATION_INTERVAL if scale is RunScale.SMOKE else FINAL_DPO_PAIRS // ROLE_PLAN.train_batch_size
     recipe["data"] = {
         "kind": "parquet",
         "train_data": [],
@@ -136,15 +139,15 @@ def final_dpo_recipe(scale: RunScale) -> str:
         use_sample_packing=False,
         evaluation_runner="harbor",
         eval_before_train=True,
-        eval_interval=4,
+        eval_interval=EVALUATION_INTERVAL,
         eval_batch_size=PARITY_TASK_COUNT,
         eval_num_prompts=None,
         resume_mode="none",
         gradient_checkpointing=True,
         flash_attn=True,
         offload_optimizer_during_rollouts=True,
-        ckpt_interval=4,
-        hf_save_interval=4 if scale is RunScale.SMOKE else -1,
+        ckpt_interval=EVALUATION_INTERVAL,
+        hf_save_interval=EVALUATION_INTERVAL if scale is RunScale.SMOKE else -1,
         enable_db_registration=False,
         logger="wandb",
         project_name="bfcl-rl",
@@ -166,11 +169,16 @@ def final_dpo_recipe(scale: RunScale) -> str:
         step_phase_budgets={"evaluation": 21600, "policy_training": 7200, "checkpoint_work": 7200},
         callbacks=[
             {"type": "logging"},
-            {"type": "checkpoint", "save_steps": 4, "save_on_train_end": True},
-            {"type": "evaluation", "eval_steps": 4, "eval_before_train": True, "eval_on_train_end": True},
+            {"type": "checkpoint", "save_steps": EVALUATION_INTERVAL, "save_on_train_end": True},
+            {
+                "type": "evaluation",
+                "eval_steps": EVALUATION_INTERVAL,
+                "eval_before_train": True,
+                "eval_on_train_end": True,
+            },
             {
                 "type": "best_checkpoint",
-                "initial_model_uri": f"{MODEL_URI}/hf/step-1",
+                "initial_model_uri": prefix_join(MODEL_URI, "hf/step-1"),
                 "expected_tasks": PARITY_TASK_COUNT,
                 "minimum_scored_tasks": 111,
             },
@@ -178,7 +186,9 @@ def final_dpo_recipe(scale: RunScale) -> str:
     )
     trainer["algorithm"] = {"use_kl_loss": False, "dpo": {"beta": 0.1, "label_smoothing": 0.0}}
     if scale is RunScale.SMOKE:
-        trainer["callbacks"].append({"type": "hf_model_save", "save_steps": 4, "save_on_train_end": True})
+        trainer["callbacks"].append(
+            {"type": "hf_model_save", "save_steps": EVALUATION_INTERVAL, "save_on_train_end": True}
+        )
     generator = recipe["generator"]
     generator.update(
         model_loading="stage_local",
@@ -188,14 +198,17 @@ def final_dpo_recipe(scale: RunScale) -> str:
         sampling_params={"temperature": 1.0, "top_p": 1.0, "logprobs": None},
     )
     generator["trajectory_retention"].update(
-        phases=["eval"], max_bytes_per_run=512 * 1024**3, max_bytes_per_step=16 * 1024**3
+        phases=["eval"], max_bytes_per_run=512 * 1024**3, max_bytes_per_step=MAX_RETAINED_BYTES
     )
     recipe["trajectory_runner"] = {"rollout_workers": {"num_workers": 1, "cpus_per_worker": 4}}
     return yaml.safe_dump(recipe, sort_keys=False)
 
 
 DPO_EXECUTION = replace(
-    COLLECTION_EXECUTION, wandb_entity="nyu-dice-lab", coordinator_timeout_hours=72, job_timeout_seconds=72 * 3600
+    COLLECTION_EXECUTION,
+    wandb_entity="nyu-dice-lab",
+    coordinator_timeout_hours=DPO_TIMEOUT_HOURS,
+    job_timeout_seconds=DPO_TIMEOUT_HOURS * 3600,
 )
 
 

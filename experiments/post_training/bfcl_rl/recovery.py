@@ -13,7 +13,12 @@ from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.bfcl_rl.collect import SMOKE_TASKS, collection_step, complement_data_step
+from experiments.post_training.bfcl_rl.collect import (
+    RECOVERY_CONTEXT,
+    SMOKE_TASKS,
+    collection_step,
+    complement_data_step,
+)
 from experiments.post_training.bfcl_rl.recovery_data import (
     RecoveryCacheConfig,
     RecoveryPreferenceCache,
@@ -65,7 +70,7 @@ def recovery_cache_step(
 def main(task: str | None) -> ArtifactStep:
     teacher = collection_step("teacher", task)
     student = collection_step("student", task)
-    return recovery_cache_step(teacher, student, selection_name=task or "full", max_length=40960)
+    return recovery_cache_step(teacher, student, selection_name=task or "full", max_length=RECOVERY_CONTEXT)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,8 @@
 
 """Collect pinned teacher or student BFCL complement trajectories without optimizer updates."""
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from types import MappingProxyType
 
 import click
 import yaml
@@ -27,24 +28,37 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 
-from experiments.post_training.bfcl_rl.data import DATASET_COMMIT
+from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, FULL_TASK_COUNT, PARITY_TASK_COUNT
 
 DATA_URI = f"s3://marin-us-east-02a/marin/users/benfeuer/bfcl-rl/data/bfcl-complement-{DATASET_COMMIT}"
+COLLECTION_CLUSTER = "cw-rno2a"
+COLLECTION_TIMEOUT_HOURS = 24
+RECOVERY_CONTEXT = 40960
+MAX_RETAINED_BYTES = 16 * 1024**3
 SMOKE_TASKS = ("bfcl-irrelevance-0", "bfcl-simple-java-0", "bfcl-simple-javascript-0")
+
+
+@dataclass(frozen=True)
+class NativeAgentProfile:
+    name: str
+    version: str
+    collect_rollout_details: bool = True
+
+
 NATIVE_AGENT_PROFILES = (
-    {"name": "opencode", "version": "1.18.2", "collect_rollout_details": True},
-    {"name": "claude-code", "version": "2.1.284", "collect_rollout_details": True},
-    {"name": "codex", "version": "0.118.0", "collect_rollout_details": True},
-    {"name": "mini-swe-agent", "version": "2.1.0", "collect_rollout_details": True},
+    NativeAgentProfile("opencode", "1.18.2"),
+    NativeAgentProfile("claude-code", "2.1.284"),
+    NativeAgentProfile("codex", "0.118.0"),
+    NativeAgentProfile("mini-swe-agent", "2.1.0"),
 )
 
 
 def native_agent_profiles(harnesses: tuple[str, ...]) -> list[dict]:
     """Resolve a weighted collection schedule to the registered harness versions."""
-    profiles = {profile["name"]: profile for profile in NATIVE_AGENT_PROFILES}
+    profiles = {profile.name: profile for profile in NATIVE_AGENT_PROFILES}
     if not harnesses:
         raise ValueError("Native collection requires an explicit harness schedule")
-    return [dict(profiles[name]) for name in harnesses]
+    return [asdict(profiles[name]) for name in harnesses]
 
 
 @dataclass(frozen=True)
@@ -55,21 +69,23 @@ class ModelSource:
     version: str
 
 
-MODELS = {
-    "teacher": ModelSource(
-        "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21",
-        "b8c07f7df1df65525abbfdbcd1572318ba11c42f",
-        "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21",
-        "2026.09.21",
-    ),
-    "student": ModelSource(
-        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
-        "50fe2f488aee7730bbccc721024b35229075602e",
-        "s3://marin-us-east-02a/marin/users/benfeuer/checkpoints/antidoom-rlvr1-async/2026.10.02.6/"
-        "exports-best-step12/global_step_12/policy",
-        "2026.10.03.12",
-    ),
-}
+MODELS = MappingProxyType(
+    {
+        "teacher": ModelSource(
+            "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21",
+            "b8c07f7df1df65525abbfdbcd1572318ba11c42f",
+            "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21",
+            "2026.09.21",
+        ),
+        "student": ModelSource(
+            "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+            "50fe2f488aee7730bbccc721024b35229075602e",
+            "s3://marin-us-east-02a/marin/users/benfeuer/checkpoints/antidoom-rlvr1-async/2026.10.02.6/"
+            "exports-best-step12/global_step_12/policy",
+            "2026.10.03.12",
+        ),
+    }
+)
 
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=True,
@@ -97,7 +113,7 @@ def collection_recipe() -> str:
             "entrypoint": "terminal_bench_generate",
             "config_groups": {"terminal_bench_config": "terminal_bench"},
             "context_budget": {
-                "request_window_tokens": 40960,
+                "request_window_tokens": RECOVERY_CONTEXT,
                 "max_new_tokens_per_turn": 8192,
                 "max_turns": 999999,
             },
@@ -168,8 +184,8 @@ def collection_recipe() -> str:
                     "sample_count_per_step": 0,
                     "sample_fraction": 1.0,
                     "required": True,
-                    "max_bytes_per_step": 17179869184,
-                    "max_bytes_per_run": 17179869184,
+                    "max_bytes_per_step": MAX_RETAINED_BYTES,
+                    "max_bytes_per_run": MAX_RETAINED_BYTES,
                 },
             },
             "data": {"kind": "tasks", "train_data": [], "val_data": [], "shuffle": True},
@@ -185,7 +201,11 @@ def complement_data_step() -> ArtifactStep:
         "2026.10.03",
         DATA_URI,
         kind=Artifact,
-        config={"dataset_commit": DATASET_COMMIT, "train_tasks": 3518, "parity_tasks": 123},
+        config={
+            "dataset_commit": DATASET_COMMIT,
+            "train_tasks": FULL_TASK_COUNT - PARITY_TASK_COUNT,
+            "parity_tasks": PARITY_TASK_COUNT,
+        },
     )
 
 
@@ -223,17 +243,17 @@ def collection_spec(model: str, task: str | None) -> SkyRLSpec:
 
 
 COLLECTION_EXECUTION = IrisSkyRLExecution(
-    cluster="cw-rno2a",
-    cluster_config="lib/iris/config/cw-rno2a.yaml",
-    target_cluster="cw-rno2a",
+    cluster=COLLECTION_CLUSTER,
+    cluster_config=f"lib/iris/config/{COLLECTION_CLUSTER}.yaml",
+    target_cluster=COLLECTION_CLUSTER,
     parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
     cpu=48,
     memory="1611Gi",
     disk="21745Gi",
     priority="interactive",
     max_retries=0,
-    coordinator_timeout_hours=24,
-    job_timeout_seconds=24 * 60 * 60,
+    coordinator_timeout_hours=COLLECTION_TIMEOUT_HOURS,
+    job_timeout_seconds=COLLECTION_TIMEOUT_HOURS * 3600,
 )
 
 

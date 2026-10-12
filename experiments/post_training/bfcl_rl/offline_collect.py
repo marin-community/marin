@@ -54,7 +54,8 @@ def offline_collection_step(
     spec = collection_spec("teacher", task)
     recipe = yaml.safe_load(spec.config_yaml)
     harbor = recipe["terminal_bench"]["harbor"]
-    harbor.update(name="opencode", version="1.18.2", agent_profiles=native_agent_profiles(harnesses))
+    (default_profile,) = native_agent_profiles(("opencode",))
+    harbor.update(**default_profile, agent_profiles=native_agent_profiles(harnesses))
     harbor.pop("thinking_format")
     generator = recipe["generator"]
     generator["model_loading"] = "stage_local"
@@ -97,7 +98,7 @@ def offline_collection_step(
 @click.option(
     "--harness",
     "harnesses",
-    type=click.Choice([p["name"] for p in NATIVE_AGENT_PROFILES]),
+    type=click.Choice([p.name for p in NATIVE_AGENT_PROFILES]),
     multiple=True,
     required=True,
     help="Ordered schedule; repeat a harness to increase its collection share.",

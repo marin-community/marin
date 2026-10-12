@@ -124,7 +124,7 @@ def test_captured_literals_survive_parquet_dedup_and_replace_parsed_calls(tmp_pa
         {
             "messages": [message.to_dict() for message in messages],
             "chat_template_kwargs": {"tools": [{"name": "run", "parameters": {"type": "object"}}]},
-            "assistant_literals": ["<tool_call>\n" + "RAW_LOOP " * count],
+            "assistant_literals": ["  <tool_call>\n" + "RAW_LOOP " * count + "\n "],
         }
         for count in (20, 21)
     ]
@@ -146,10 +146,9 @@ def test_captured_literals_survive_parquet_dedup_and_replace_parsed_calls(tmp_pa
     for row in rows:
         literal = row["assistant_literals"][0]
         rendered = render_chat_record(row)["text"]
-        assert literal.strip() in rendered
-        assert rendered.rsplit("<|start_header_id|>assistant<|end_header_id|>\n", 1)[1] == literal.strip() + "<|eot_id|>"
+        assert rendered.rsplit("<|start_header_id|>assistant<|end_header_id|>\n", 1)[1] == literal + "<|eot_id|>"
         assistant = chat_training_record(row)["messages"][-1]
-        assert assistant == {"role": "assistant", "content": literal}
+        assert assistant == {"role": "assistant", "content": literal, "captured_literal": True}
 
 
 def test_harmony_tool_handoff_requires_matching_observations_before_continuation():

@@ -1,5 +1,4 @@
 n_concurrent_trials: 32
-release_trial_payloads_in_memory: true
 retry:
   max_retries: 10
   include_exceptions:

@@ -27,7 +27,7 @@ from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCa
 
 
 def test_recovery_train_only_cache_loads_without_complement_validation(tmp_path):
-    # The live trainer attempted a validation ledger although recovery writes only train.
+    # Train-only recovery data must not request a validation ledger.
     root = str(tmp_path / "preferences")
     row = {
         "chosen_input_ids": np.asarray([1, 2, 3], dtype=np.int32),
@@ -90,7 +90,7 @@ def test_recovery_train_only_cache_loads_without_complement_validation(tmp_path)
 
 
 def test_recovery_mesh_fits_eight_gpu_nodes_and_preserves_batch_parallelism():
-    # The live 64-GPU recovery run failed because preflight assumed one slice.
+    # Preflight must accept multi-slice training topologies.
     cache = ArtifactStep.adopt("preferences", "2026.10.03.16", "preferences", kind=RecoveryPreferenceCache)
     with build_context(BuildContext(VersionCodex("2026.10.03.18"))):
         step = recovery_optimizer_step(

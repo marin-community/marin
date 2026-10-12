@@ -22,6 +22,8 @@ from experiments.post_training.bfcl_rl.collect import (
 )
 from experiments.post_training.bfcl_rl.launch import recovered_model
 
+STUDENT_COLLECTION_TIMEOUT_HOURS = 48
+
 
 def native_student_collection_step(
     recovery_version: str,
@@ -36,16 +38,15 @@ def native_student_collection_step(
     spec = collection_spec("student", task)
     recipe = yaml.safe_load(spec.config_yaml)
     harbor = recipe["terminal_bench"]["harbor"]
-    harbor.update(name="opencode", version="1.18.2", agent_profiles=native_agent_profiles(harnesses))
+    (default_profile,) = native_agent_profiles(("opencode",))
+    harbor.update(**default_profile, agent_profiles=native_agent_profiles(harnesses))
     harbor.pop("thinking_format")
     generator = recipe["generator"]
     generator["model_loading"] = "stage_local"
     generator["engine_init_kwargs"]["model_loader_extra_config"] = {"concurrency": 4}
     recipe["trainer"]["seed"] = seed
     recipe["trainer"]["eval_batch_size"] = generation_batch_size
-    policy = replace(
-        recovered_model(recovery_version, policy_export_version), relative_path=f"hf/step-{policy_checkpoint_step}"
-    )
+    policy = recovered_model(recovery_version, policy_export_version, checkpoint_step=policy_checkpoint_step)
     name = user_owned_name(f"rollouts/bfcl-rl-native-student-seed-{seed}-{task or 'full'}")
     return skyrl_step(
         replace(
@@ -56,7 +57,11 @@ def native_student_collection_step(
             model=policy,
             seed=seed,
         ),
-        replace(COLLECTION_EXECUTION, coordinator_timeout_hours=48, job_timeout_seconds=48 * 60 * 60),
+        replace(
+            COLLECTION_EXECUTION,
+            coordinator_timeout_hours=STUDENT_COLLECTION_TIMEOUT_HOURS,
+            job_timeout_seconds=STUDENT_COLLECTION_TIMEOUT_HOURS * 3600,
+        ),
     )
 
 
@@ -70,7 +75,7 @@ def native_student_collection_step(
 @click.option(
     "--harness",
     "harnesses",
-    type=click.Choice([p["name"] for p in NATIVE_AGENT_PROFILES]),
+    type=click.Choice([p.name for p in NATIVE_AGENT_PROFILES]),
     multiple=True,
     required=True,
     help="Ordered schedule; repeat a harness to increase its collection share.",

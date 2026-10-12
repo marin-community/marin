@@ -23,7 +23,7 @@ def partition():
     )
 
 
-def preference_cache(path, run_id, rejected_tokens):
+def cache_with_row(path, run_id, rejected_tokens):
     identity = {"run_id": run_id, "model_source_identity": "student-checkpoint", "model_revision": "student-revision"}
     archive = str(path / "student.zip")
     branch = {
@@ -76,8 +76,8 @@ def preference_cache(path, run_id, rejected_tokens):
 
 
 def test_union_preserves_exact_rows_and_manifest_provenance(tmp_path, partition):
-    first, first_row = preference_cache(tmp_path / "first", "run-a", [1, 4, 5])
-    second, second_row = preference_cache(tmp_path / "second", "run-b", [1, 6, 7, 8])
+    first, first_row = cache_with_row(tmp_path / "first", "run-a", [1, 4, 5])
+    second, second_row = cache_with_row(tmp_path / "second", "run-b", [1, 6, 7, 8])
     output = tmp_path / "union"
     result = combine_preference_caches((first, second), partition, str(output))
     cache = TreeCache.load(str(output / "train"), {key: np.zeros(0, np.int32) for key in first_row})
@@ -105,8 +105,8 @@ def test_union_preserves_exact_rows_and_manifest_provenance(tmp_path, partition)
 
 
 def test_union_rejects_overlapping_snapshots_even_with_different_archive_paths(tmp_path, partition):
-    first, _ = preference_cache(tmp_path / "early", "same-run", [1, 4, 5])
-    expanded, _ = preference_cache(tmp_path / "later", "same-run", [1, 4, 5])
+    first, _ = cache_with_row(tmp_path / "early", "same-run", [1, 4, 5])
+    expanded, _ = cache_with_row(tmp_path / "later", "same-run", [1, 4, 5])
     output = tmp_path / "union"
     with pytest.raises(ValueError, match="Overlapping student"):
         combine_preference_caches((first, expanded), partition, str(output))
@@ -114,7 +114,7 @@ def test_union_rejects_overlapping_snapshots_even_with_different_archive_paths(t
 
 
 def test_union_rejects_manifest_changed_after_cache_completion(tmp_path, partition):
-    source, _ = preference_cache(tmp_path / "source", "run-a", [1, 4, 5])
+    source, _ = cache_with_row(tmp_path / "source", "run-a", [1, 4, 5])
     manifest_path = tmp_path / "source/selection.json"
     report = json.loads(manifest_path.read_text())
     report["preferences"][0]["rejected"]["task_source_id"] = "holdout-id"
@@ -126,7 +126,7 @@ def test_union_rejects_manifest_changed_after_cache_completion(tmp_path, partiti
 
 
 def test_union_rejects_holdout_even_with_consistent_provenance_hash(tmp_path, partition):
-    source, row = preference_cache(tmp_path / "source", "run-a", [1, 4, 5])
+    source, row = cache_with_row(tmp_path / "source", "run-a", [1, 4, 5])
     report = json.loads((tmp_path / "source/selection.json").read_text())
     for branch in report["preferences"][0].values():
         branch.update(task_source_id="holdout-id", task_digest="holdout-digest")

@@ -26,7 +26,13 @@ from marin.rl.cli import rl_build_options
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.bfcl_rl.collect import MODELS, NATIVE_AGENT_PROFILES, ModelSource, complement_data_step
+from experiments.post_training.bfcl_rl.collect import (
+    MODELS,
+    NATIVE_AGENT_PROFILES,
+    RECOVERY_CONTEXT,
+    ModelSource,
+    complement_data_step,
+)
 from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256, BFCLPartition
 from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
 from experiments.post_training.bfcl_rl.offline_data import (
@@ -169,7 +175,9 @@ def collection_native_evidence(
         raise ValueError("Model seed differs from the declared collection")
     harbor = skyrl["terminal_bench_config"]["harbor"]
     profiles = harbor["agent_profiles"]
-    if not profiles or any(profile not in NATIVE_AGENT_PROFILES for profile in profiles):
+    if not profiles or any(
+        profile not in [asdict(registered) for registered in NATIVE_AGENT_PROFILES] for profile in profiles
+    ):
         raise ValueError("Model collection uses an unregistered native harness")
     if source.scope is NativeCollectionScope.COMPLETE_RUN and receipt.task_names != frozenset(
         task.name for task in partition.complement
@@ -340,7 +348,9 @@ def offline_corpus_step(collections: tuple[tuple[str, int], ...], teacher_source
             OfflineCollectionInput(str(StoragePath(ctx.artifact_path(step)) / "terminal.json"), teacher_source, seed)
             for step, (_, seed) in zip(inputs, collections, strict=True)
         )
-        return OfflineCorpusConfig(sources, ctx.artifact_path(data), tokenizer, 40960, ctx.output_path, 42, 8, 4)
+        return OfflineCorpusConfig(
+            sources, ctx.artifact_path(data), tokenizer, RECOVERY_CONTEXT, ctx.output_path, 42, 8, 4
+        )
 
     return ArtifactStep(
         name=name,

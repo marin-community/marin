@@ -300,7 +300,7 @@ def native_model_trace(
 
 
 def native_chat_document(trace: NativeModelTrace) -> dict:
-    """Adapt a native model branch using the shared OpenAI-to-Harmony conversion."""
+    """Return a Harmony chat document with exact captured assistant text and provenance."""
     tokenizer = load_tokenizer(trace.model_tokenizer)
     turn_end_id = tokenizer.get_vocab().get("<|eot_id|>")
     terminal_ids = {tokenizer.eos_token_id}

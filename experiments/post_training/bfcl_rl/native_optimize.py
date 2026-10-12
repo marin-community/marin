@@ -30,9 +30,7 @@ def native_optimizer_step(
     cache = ArtifactStep.adopt(
         f"{name}-input", preference_version, f"{name}/{preference_version}", kind=RecoveryPreferenceCache
     )
-    policy = replace(
-        recovered_model(recovery_version, policy_export_version), relative_path=f"hf/step-{policy_checkpoint_step}"
-    )
+    policy = recovered_model(recovery_version, policy_export_version, checkpoint_step=policy_checkpoint_step)
     optimization = RecoveryOptimization(
         num_train_steps=num_train_steps,
         batch_size=16,

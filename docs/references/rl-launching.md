@@ -54,12 +54,22 @@ forwarded generic key. A Daytona launch fails if neither RL credential source is
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
+The runtime executes tasks through `TaskSession` and sends token requests to model engines.
+Harbor tasks use the Shellbox session. Installed Harbor agents use the shared rollout engine
+through `terminal_bench.installed_agent`; the runtime retains their requests and logs.
+See [task rollouts](task-rollouts.md) for task execution and backend limits.
+
+The launcher uses the frozen project in `config/external/MarinSkyRL` in an isolated environment.
+This project supplies the pinned SkyRL revision, published Rigging package, and platform wheel sources.
+The launch document records that revision in `runtime.launcher_commit`.
+Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
+
 ```text
 Marin experiment
   SkyRLSpec + IrisSkyRLExecution + resolved artifacts
                          |
                          v
-  source launch.yaml: run, runtime, iris, ingress, ray,
+  source launch.yaml: run, runtime, iris, ray,
                       artifacts, inputs, skyrl recipe
                          |
                          v

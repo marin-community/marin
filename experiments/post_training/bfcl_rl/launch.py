@@ -3,7 +3,7 @@
 
 """Train on BFCL complement with four native harnesses after DPO recovery."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import click
@@ -17,13 +17,15 @@ from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.bfcl_rl.collect import (
     COLLECTION_EXECUTION,
+    MAX_RETAINED_BYTES,
     MODELS,
     NATIVE_AGENT_PROFILES,
     collection_recipe,
     collection_spec,
+    native_agent_profiles,
 )
 
-MAX_RETAINED_BYTES_PER_STEP = 16 * 1024**3
+MAX_RETAINED_BYTES_PER_STEP = MAX_RETAINED_BYTES
 
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
@@ -44,8 +46,10 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def recovered_model(recovery_version: str, policy_export_version: str | None) -> ArtifactHfModel:
-    """Bind the recovery artifact's latest HF export, failing if none exists."""
+def recovered_model(
+    recovery_version: str, policy_export_version: str | None, *, checkpoint_step: int | None = None
+) -> ArtifactHfModel:
+    """Bind a recovery HF export, selecting the latest unless a step is specified."""
     name = user_owned_name("inputs/bfcl-rl-recovered-policy")
     producer = "bfcl-rl-recovery-dpo-full" if policy_export_version is None else "bfcl-rl-recovery-policy-export"
     producer_name = user_owned_name(f"models/{producer}")
@@ -62,11 +66,12 @@ def recovered_model(recovery_version: str, policy_export_version: str | None) ->
             "recovery_version": recovery_version,
         },
     )
-    return ArtifactHfModel(step, source.model, source.revision)
+    relative_path = None if checkpoint_step is None else f"hf/step-{checkpoint_step}"
+    return ArtifactHfModel(step, source.model, source.revision, relative_path=relative_path)
 
 
 def rl_recipe(num_train_steps: int, reader_concurrency: int, model_loading: str) -> str:
-    """Adapt the copied v125 recipe to Harbor without changing optimizer settings."""
+    """Build a Harbor recipe with fixed optimizer settings and retained rollout evidence."""
     recipe = yaml.safe_load(Path(__file__).with_name("v125_async.yaml").read_text())["skyrl"]
     recipe["entrypoint"] = "terminal_bench"
     recipe["config_groups"] = {"terminal_bench_config": "terminal_bench"}
@@ -74,9 +79,10 @@ def rl_recipe(num_train_steps: int, reader_concurrency: int, model_loading: str)
     recipe["context_budget"] = collection["context_budget"]
     recipe["terminal_bench"] = collection["terminal_bench"]
     harbor = recipe["terminal_bench"]["harbor"]
-    harbor.update(name="opencode", version="1.18.2")
+    (default_profile,) = native_agent_profiles(("opencode",))
+    harbor.update(**default_profile)
     harbor.pop("thinking_format")
-    harbor["agent_profiles"] = list(NATIVE_AGENT_PROFILES)
+    harbor["agent_profiles"] = [asdict(profile) for profile in NATIVE_AGENT_PROFILES]
 
     trainer = recipe["trainer"]
     old_async = trainer.pop("fully_async")

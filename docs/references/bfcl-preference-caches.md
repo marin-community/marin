@@ -52,7 +52,7 @@ artifact; use a new version for another attempt.
 ## Train from an explicit cache
 
 `experiments.post_training.bfcl_rl.native_optimize` requires `--preference-name`
-and `--preference-version`. The former `--seed` option is removed. For a single-seed cache,
+and `--preference-version`. For a single-seed cache,
 pass `data/bfcl-rl-native-preferences-seed-<seed>`; for a union, pass
 `data/bfcl-rl-native-preference-union`.
 

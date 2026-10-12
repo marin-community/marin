@@ -29,7 +29,13 @@ from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.readers import load_parquet
 
-from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODELS, ModelSource, complement_data_step
+from experiments.post_training.bfcl_rl.collect import (
+    COLLECTION_EXECUTION,
+    MODELS,
+    RECOVERY_CONTEXT,
+    ModelSource,
+    complement_data_step,
+)
 from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256, BFCLPartition
 from experiments.post_training.bfcl_rl.launch import recovered_model
 from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
@@ -132,7 +138,7 @@ def mark_conversion_failure(
     )
 
 
-def opencode_student_identity(messages: list[dict], source_alias: str, student_alias: str) -> list[dict]:
+def messages_with_student_identity(messages: list[dict], source_alias: str, student_alias: str) -> list[dict]:
     """Translate only OpenCode's exact system model-identification line to the student."""
     original = f"You are powered by the model named {source_alias}. " f"The exact model ID is hosted_vllm/{source_alias}"
     replacement = (
@@ -215,10 +221,10 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                     try:
                         initial_prompt = trace.initial_prompt_sha256
                         if evidence.identity.harness.startswith("opencode@"):
-                            messages = opencode_student_identity(
+                            messages = messages_with_student_identity(
                                 trace.messages, evidence.served_model_alias, config.student_model_alias
                             )
-                            initial_messages = opencode_student_identity(
+                            initial_messages = messages_with_student_identity(
                                 trace.initial_messages, evidence.served_model_alias, config.student_model_alias
                             )
                             initial_prompt = native_prompt_sha256(
@@ -419,9 +425,7 @@ def native_preference_step(
         student_collection_root,
         kind=collection_kind,
     )
-    policy = replace(
-        recovered_model(recovery_version, policy_export_version), relative_path=f"hf/step-{policy_checkpoint_step}"
-    )
+    policy = recovered_model(recovery_version, policy_export_version, checkpoint_step=policy_checkpoint_step)
     data = complement_data_step()
     name = user_owned_name(f"data/bfcl-rl-native-preferences-seed-{seed}")
 
@@ -447,7 +451,7 @@ def native_preference_step(
             ),
             ctx.artifact_path(data),
             f"{original.model}@{original.revision}",
-            40960,
+            RECOVERY_CONTEXT,
             ctx.output_path,
             4,
             "bfcl-rl-recovered-policy",

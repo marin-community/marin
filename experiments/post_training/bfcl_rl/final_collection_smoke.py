@@ -17,7 +17,13 @@ from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import ArtifactDataSource, skyrl_step
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODELS, ModelSource, complement_data_step
+from experiments.post_training.bfcl_rl.collect import (
+    COLLECTION_EXECUTION,
+    MODELS,
+    RECOVERY_CONTEXT,
+    ModelSource,
+    complement_data_step,
+)
 from experiments.post_training.bfcl_rl.final_dpo import DPO_EXECUTION, INPUT_NAME, RunScale, final_dpo_spec
 from experiments.post_training.bfcl_rl.final_smoke_data import FreshSmokeData, FreshSmokeDataConfig, run_fresh_smoke_data
 from experiments.post_training.bfcl_rl.launch import recovered_model
@@ -77,7 +83,7 @@ def collection_smoke_step(
         student = native_student_collection_step(
             RECOVERY_VERSION, EXPORT_VERSION, CHECKPOINT_STEP, student_seed, TASK, 32, HARNESS
         )
-    policy = replace(recovered_model(RECOVERY_VERSION, EXPORT_VERSION), relative_path=f"hf/step-{CHECKPOINT_STEP}")
+    policy = recovered_model(RECOVERY_VERSION, EXPORT_VERSION, checkpoint_step=CHECKPOINT_STEP)
     data = complement_data_step()
     teacher_snapshot = collection_snapshot_step(teacher, data)
     student_snapshot = collection_snapshot_step(student, data)
@@ -102,7 +108,7 @@ def collection_smoke_step(
             ),
             data_root=ctx.artifact_path(data),
             student_tokenizer=f"{original.model}@{original.revision}",
-            max_length=40960,
+            max_length=RECOVERY_CONTEXT,
             output_path=ctx.output_path,
             max_workers=4,
             student_model_alias="bfcl-rl-recovered-policy",

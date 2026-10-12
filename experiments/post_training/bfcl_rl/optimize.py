@@ -30,11 +30,25 @@ from marin.training.training import (
 )
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODELS, SMOKE_TASKS, collection_step
+from experiments.post_training.bfcl_rl.collect import (
+    COLLECTION_EXECUTION,
+    MODELS,
+    RECOVERY_CONTEXT,
+    SMOKE_TASKS,
+    collection_step,
+)
 from experiments.post_training.bfcl_rl.recovery import recovery_cache_step
 from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCache
 
-RECOVERY_CONTEXT = 40960
+
+def recovery_model_config() -> SnowballConfig:
+    return SnowballConfig(
+        max_seq_len=262144,
+        qk_mult=1.75,
+        initializer_std=0.009882117688026186,
+        attention_implementation="gpu_fa4_cute",
+        moe_implementation="ring",
+    )
 
 
 @dataclass(frozen=True)
@@ -155,13 +169,7 @@ def recovery_optimizer_step(
         train = TrainDpoConfig(
             data=data,
             trainer=trainer,
-            model=SnowballConfig(
-                max_seq_len=262144,
-                qk_mult=1.75,
-                initializer_std=0.009882117688026186,
-                attention_implementation="gpu_fa4_cute",
-                moe_implementation="ring",
-            ),
+            model=recovery_model_config(),
             train_seq_len=RECOVERY_CONTEXT,
             optimizer=AdamConfig(
                 learning_rate=optimization.learning_rate,

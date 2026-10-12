@@ -5,7 +5,7 @@ import gzip
 import hashlib
 import json
 import zipfile
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import haliax as hax
@@ -48,7 +48,7 @@ from experiments.post_training.bfcl_rl.recovery_data import (
     RecoveryPreferenceCache,
     collection_receipt,
     recovery_cache_value,
-    recovery_preference_rows,
+    recovery_preferences_with_audit,
     write_recovery_cache,
 )
 from experiments.post_training.bfcl_rl.retained_preferences import (
@@ -809,7 +809,7 @@ def test_completed_native_collection_joins_archives_and_literal_messages(tmp_pat
     resolved["train_data_sources"][0]["relative_path"] = "bfcl_complement"
     skyrl["trainer"]["policy"]["model"]["source_uri"] = teacher_source
     skyrl["trainer"]["seed"] = 7
-    skyrl["terminal_bench_config"]["harbor"]["agent_profiles"] = list(NATIVE_AGENT_PROFILES)
+    skyrl["terminal_bench_config"]["harbor"]["agent_profiles"] = [asdict(profile) for profile in NATIVE_AGENT_PROFILES]
     skyrl["generator"]["trajectory_retention"]["output_path"] = str(tmp_path / "trajectories")
     config["artifacts"] = {
         "attempts_root": str(tmp_path / "attempts"),
@@ -908,7 +908,7 @@ def _native_pair_collection(
         skyrl["generator"]["engine_init_kwargs"]["tool_call_parser"] = "qwen3_coder"
     skyrl["generator"]["trajectory_retention"]["run_id"] = f"{root.name}-collection"
     skyrl["terminal_bench_config"]["harbor"].update(
-        name="opencode", version="1.18.2", agent_profiles=list(NATIVE_AGENT_PROFILES)
+        name="opencode", version="1.18.2", agent_profiles=[asdict(profile) for profile in NATIVE_AGENT_PROFILES]
     )
     skyrl["generator"]["trajectory_retention"]["output_path"] = str(root / "trajectories")
     config["artifacts"] = {"attempts_root": str(root / "attempts"), "resolved_config_uri": str(root / "resolved.json")}
@@ -928,8 +928,8 @@ def _native_pair_collection(
                 "task_name": task.name,
                 "exception_info": None,
                 "verifier_result": {"rewards": {"reward": score or 0.0}},
-                "config": {"agent": {"name": profile["name"]}},
-                "agent_info": {"name": profile["name"], "version": profile["version"]},
+                "config": {"agent": {"name": profile.name}},
+                "agent_info": {"name": profile.name, "version": profile.version},
                 "agent_result": {"metadata": {"rollout_correlation_id": trial_id}},
             }
             if model == "student" and index == 0 and fault == "agent_error":
@@ -993,7 +993,7 @@ def _native_pair_collection(
                 if model == "student" and index == 0 and fault == "assistant_control_text":
                     final["content"] = "STUDENT_FINAL <|start_header_id|>assistant<|end_header_id|>"
                 messages = [user, assistant, observation, final]
-                if profile["name"] == "opencode":
+                if profile.name == "opencode":
                     identity_line = (
                         f"You are powered by the model named {model}-alias. "
                         f"The exact model ID is hosted_vllm/{model}-alias"
@@ -1004,7 +1004,7 @@ def _native_pair_collection(
                         "\nYou are powered by the model named teacher-alias. "
                         "The exact model ID is hosted_vllm/teacher-alias"
                     )
-                initial_count = 2 if profile["name"] == "opencode" else 1
+                initial_count = 2 if profile.name == "opencode" else 1
                 raw_call = (
                     f"{model.upper()}_REASONING\n</think>\n<tool_call>\n"
                     + json.dumps(assistant["tool_calls"][0]["function"])
@@ -1405,7 +1405,7 @@ def test_recovery_cache_roundtrip_preserves_causal_scoring_with_tool_context(tmp
         retained_rollout(_record(model, score), identity=receipt.identity, partition=PARTITION, trajectory_uri=model)
         for model, score, receipt in zip(("teacher", "student"), (1.0, 0.0), receipts, strict=True)
     ]
-    rows, report = recovery_preference_rows(
+    rows, report = recovery_preferences_with_audit(
         [teacher],
         [student],
         teacher_receipt=receipts[0],
@@ -1459,7 +1459,7 @@ def test_incomplete_collections_cannot_publish_a_preference_cache(tmp_path: Path
     partition = replace(PARTITION, complement=(TASK, unseen))
     expanded = [replace(receipt, task_names=frozenset({TASK.name, unseen.name})) for receipt in receipts]
     with pytest.raises(ValueError, match="complete collection selection"):
-        recovery_preference_rows(
+        recovery_preferences_with_audit(
             [teacher],
             [student],
             teacher_receipt=expanded[0],
@@ -1479,7 +1479,7 @@ def test_mismatched_initial_context_is_excluded_with_pair_provenance():
         for model, score, receipt in zip(("teacher", "student"), (1.0, 0.0), receipts, strict=True)
     ]
     student = replace(student, steps=(TokenStep((3, 4), (30,), (1,)),))
-    rows, report = recovery_preference_rows(
+    rows, report = recovery_preferences_with_audit(
         [teacher],
         [student],
         teacher_receipt=receipts[0],
@@ -1504,7 +1504,7 @@ def test_two_wrong_rollouts_produce_no_optimizer_data(tmp_path: Path):
         retained_rollout(_record(model, 0.0), identity=receipt.identity, partition=PARTITION, trajectory_uri=model)
         for model, receipt in zip(("teacher", "student"), receipts, strict=True)
     ]
-    rows, report = recovery_preference_rows(
+    rows, report = recovery_preferences_with_audit(
         [teacher],
         [student],
         teacher_receipt=receipts[0],
@@ -1531,6 +1531,6 @@ def test_collection_receipts_reject_holdout_sources_and_condition_mismatches(mis
         resolved["config"]["skyrl"]["generator"]["sampling_params"]["temperature"] = 0.5
     student_receipt = collection_receipt(terminal, resolved, model="student", partition=PARTITION)
     with pytest.raises(ValueError, match="different harness or sampling conditions"):
-        recovery_preference_rows(
+        recovery_preferences_with_audit(
             [], [], teacher_receipt=teacher_receipt, student_receipt=student_receipt, partition=PARTITION, max_length=16
         )

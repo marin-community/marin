@@ -67,7 +67,7 @@ def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, t
     launch = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args, run.rl.deps))
     path = tmp_path / "launch.yaml"
     path.write_text(launch.launch_config_yaml)
-    command = launcher_command_for_test(launch.launcher_requirement, str(path))
+    command = launcher_command_for_test(str(path))
     # Exercise the production bootstrap without invoking the job-submission CLI.
     bootstrap = command[: command.index("marinskyrl")]
     result = subprocess.run(

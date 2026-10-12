@@ -9,7 +9,6 @@ import click
 import jmp
 from fray.types import ResourceConfig
 from levanter.main.train_lm import TrainLmConfig
-from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -31,7 +30,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODELS
 from experiments.post_training.bfcl_rl.launch import recovered_model
-from experiments.post_training.bfcl_rl.optimize import RECOVERY_CONTEXT
+from experiments.post_training.bfcl_rl.optimize import RECOVERY_CONTEXT, recovery_model_config
 
 
 def dispatch_offline_training(config: TrainLmOnPodConfig) -> None:
@@ -84,13 +83,7 @@ def offline_optimizer_step(
                 log_jaxprs=False,
                 log_xla_hlo=False,
             ),
-            model=SnowballConfig(
-                max_seq_len=262144,
-                qk_mult=1.75,
-                initializer_std=0.009882117688026186,
-                attention_implementation="gpu_fa4_cute",
-                moe_implementation="ring",
-            ),
+            model=recovery_model_config(),
             train_seq_len=RECOVERY_CONTEXT,
             optimizer=AdamConfig(
                 learning_rate=4e-6,
@@ -139,9 +132,7 @@ def main(
 ) -> ArtifactStep:
     corpus_name = user_owned_name("data/bfcl-rl-qwen36-harmony")
     corpus = ArtifactStep.adopt(corpus_name, corpus_version, f"{corpus_name}/{corpus_version}", kind=SftTokenStore)
-    policy = replace(
-        recovered_model(recovery_version, policy_export_version), relative_path=f"hf/step-{policy_checkpoint_step}"
-    )
+    policy = recovered_model(recovery_version, policy_export_version, checkpoint_step=policy_checkpoint_step)
     step = offline_optimizer_step(corpus, policy, num_train_steps=num_train_steps)
     return replace(step, runtime_args={"execution": COLLECTION_EXECUTION})
 

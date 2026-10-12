@@ -21,7 +21,7 @@ from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.normalize import DEFAULT_MAX_WORKERS
 from marin.execution.step_spec import StepSpec
 
-CHAT_RENDER_VERSION = "marin-v4"
+CHAT_RENDER_VERSION = "marin-v5"
 MARIN_BOS_TOKEN = "<|begin_of_text|>"
 START_THINK = "<|start_think|>"
 END_THINK = "<|end_think|>"
@@ -75,7 +75,7 @@ def _inference_messages(messages: Sequence[Message], assistant_literals: Sequenc
             if assistant_literals is not None:
                 if literal_index >= len(assistant_literals):
                     raise ValueError("Captured assistant literals lack a turn")
-                yield {"role": "assistant", "content": assistant_literals[literal_index]}
+                yield {"role": "assistant", "content": assistant_literals[literal_index], "captured_literal": True}
                 literal_index += 1
                 continue
             turn = list(group)

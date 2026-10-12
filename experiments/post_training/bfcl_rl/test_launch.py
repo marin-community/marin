@@ -50,7 +50,7 @@ def test_native_preference_graph_submits_cpu_coordinator_to_coreweave(tmp_path):
 
 @pytest.mark.parametrize("policy_export_version", [None, "2026.10.04.26"])
 def test_recovery_handoff_requires_export_and_resolves_saved_policy(tmp_path, policy_export_version):
-    # The first live DPO update saved a native checkpoint but skipped its HF hook.
+    # Terminal updates must request both native checkpoints and HF exports.
     # The RL learner must fail rather than silently reverting to the starting model.
     model = recovered_model("2026.10.04.21", policy_export_version)
     root = model.step.path(str(tmp_path))

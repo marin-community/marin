@@ -121,10 +121,11 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path, monkeypatch):
 
 
 @pytest.mark.parametrize("attributes", [None, "*.blob filter=lfs diff=lfs merge=lfs -text\n"])
+@pytest.mark.parametrize("max_shard_size", [4096, 10**9])
 def test_url_reference_export_copies_code_and_preserves_trained_weights(
-    tmp_path, local_gpt2_tokenizer_path, attributes
+    tmp_path, local_gpt2_tokenizer_path, attributes, max_shard_size
 ):
-    # The live BFCL export wrote all weights, then sent its S3 reference URI to the Hub API.
+    # Reference code must not replace trained weights or their shard index.
     config = Gpt2Config(
         hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
@@ -134,6 +135,10 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     fs.pipe(f"{reference}/nested/modeling_custom.py", b"CUSTOM_MODEL = True\n")
     fs.pipe(f"{reference}/.git/config", b"git metadata")
     fs.pipe(f"{reference}/reference-weights.safetensors", b"stale weights")
+    fs.pipe(
+        f"{reference}/{SAFE_TENSORS_INDEX_NAME}",
+        json.dumps({"weight_map": {"transformer.wte.weight": "reference-weights.safetensors"}}).encode(),
+    )
     fs.pipe(f"{reference}/weights.blob", b"LFS weights")
     if attributes is not None:
         fs.pipe(f"{reference}/.gitattributes", attributes.encode())
@@ -142,7 +147,7 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     with use_test_mesh():
         model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
         fs.pipe(f"{reference}/config.json", config.to_hf_config(model.Vocab.size).to_json_string().encode())
-        converter.save_pretrained(model, str(tmp_path), max_shard_size=4096, save_reference_code=True)
+        converter.save_pretrained(model, str(tmp_path), max_shard_size=max_shard_size, save_reference_code=True)
         restored = converter.load_pretrained(Gpt2LMHeadModel, ref=str(tmp_path), config=config)
         assert_trees_all_equal(model, restored)
 
@@ -150,6 +155,8 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     assert (tmp_path / "nested/modeling_custom.py").read_bytes() == b"CUSTOM_MODEL = True\n"
     assert not (tmp_path / ".git/config").exists()
     assert not (tmp_path / "reference-weights.safetensors").exists()
+    if max_shard_size == 10**9:
+        assert not (tmp_path / SAFE_TENSORS_INDEX_NAME).exists()
     if attributes is not None:
         assert not (tmp_path / "weights.blob").exists()
 
