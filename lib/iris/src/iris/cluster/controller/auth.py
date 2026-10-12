@@ -522,11 +522,10 @@ class ControllerAuth:
     # roles; rebuilt from config on each controller start.
     role_policy: RolePolicy | None = None
     # Which submitters this cluster admits via an inbound federation handoff, matched
-    # against the proto's asserted submitting_user (allow-policy syntax). Empty
-    # allowlists admit none. The federation token itself only proves the requester; the
+    # against the proto's asserted submitting_user (allow-policy syntax). Empty admits
+    # none (fail closed). The federation token itself only proves the requester; the
     # verifier that checks it is folded into ``verifier``.
     allowed_submitters: tuple[str, ...] = ()
-    allowed_batch_submitters: tuple[str, ...] = ()
     iap_audience: str | None = None
     federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
 
@@ -668,7 +667,6 @@ def create_controller_auth(
     federation_peers = dict(auth_config.federation_peers) if auth_config is not None else {}
     federation_verifier = FederationTokenVerifier(federation_peers) if federation_peers else None
     allowed_submitters = tuple(auth_config.allowed_submitters) if auth_config is not None else ()
-    allowed_batch_submitters = tuple(auth_config.allowed_batch_submitters) if auth_config is not None else ()
     request_verifier: TokenVerifier = (
         _ControlPlaneOrFederationVerifier(jwt_mgr, federation_verifier) if federation_verifier is not None else jwt_mgr
     )
@@ -683,7 +681,6 @@ def create_controller_auth(
             jwt_manager=jwt_mgr,
             role_policy=_build_role_policy(auth_config, None),
             allowed_submitters=allowed_submitters,
-            allowed_batch_submitters=allowed_batch_submitters,
             federation_keys=federation_peers,
         )
 
@@ -724,7 +721,6 @@ def create_controller_auth(
         trusted_cidrs=tuple(auth_config.trusted_cidrs),
         role_policy=role_policy,
         allowed_submitters=allowed_submitters,
-        allowed_batch_submitters=allowed_batch_submitters,
         iap_audience=signed_header_audience if provider == "iap" else None,
         federation_keys=federation_peers,
     )

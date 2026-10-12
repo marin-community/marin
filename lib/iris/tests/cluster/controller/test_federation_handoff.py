@@ -19,9 +19,8 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import content_id
-from iris.cluster.config import AuthConfig
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD, peer_status
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -279,76 +278,6 @@ def test_inbound_handoff_rejects_a_submitter_outside_the_allowlist(tmp_path, log
             with pytest.raises(ConnectError) as exc:
                 peer_service.launch_job(request, None)
         assert exc.value.code == Code.PERMISSION_DENIED
-
-
-@pytest.mark.parametrize(
-    "band",
-    [
-        job_pb2.PRIORITY_BAND_INHERIT,
-        job_pb2.PRIORITY_BAND_BATCH,
-        job_pb2.PRIORITY_BAND_INTERACTIVE,
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-        job_pb2.PRIORITY_BAND_SYSTEM,
-    ],
-)
-def test_inbound_handoff_batch_submitter_only_admitted_at_batch(tmp_path, log_client, band):
-    auth = create_controller_auth(
-        AuthConfig(trusted_cidrs=["127.0.0.0/8"], allowed_batch_submitters=["alice@example.com"]),
-        cluster_name="peer",
-    )
-    with ExitStack() as stack:
-        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client, auth=auth)
-        request = _peer_handoff_request("fed-job", "parent-cluster", "alice@example.com")
-        request.priority_band = band
-        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
-            if band == job_pb2.PRIORITY_BAND_BATCH:
-                response = peer_service.launch_job(request, None)
-                job = query_job(peer_state, JobName.from_wire(response.job_id))
-                assert job.submitting_user == "alice@example.com"
-                assert job.priority_band == job_pb2.PRIORITY_BAND_BATCH
-            else:
-                with pytest.raises(ConnectError) as exc:
-                    peer_service.launch_job(request, None)
-                assert exc.value.code == Code.PERMISSION_DENIED
-
-
-@pytest.mark.parametrize(
-    "band", [job_pb2.PRIORITY_BAND_INHERIT, job_pb2.PRIORITY_BAND_INTERACTIVE, job_pb2.PRIORITY_BAND_SYSTEM]
-)
-def test_batch_submitter_child_cannot_raise_priority(tmp_path, log_client, band):
-    auth = ControllerAuth(provider="cidr", allowed_batch_submitters=("alice@example.com",))
-    with ExitStack() as stack:
-        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=auth)
-        request = _peer_handoff_request("fed-job", "parent-cluster", "alice@example.com")
-        request.priority_band = job_pb2.PRIORITY_BAND_BATCH
-        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
-            root = JobName.from_wire(peer_service.launch_job(request, None).job_id)
-        child = make_direct_job_request("child", priority_band=band)
-        child.name = root.child("child").to_wire()
-        # In-cluster task submissions inherit the root's accountable submitter.
-        with identity_scope(VerifiedIdentity("anonymous", "admin")):
-            if band == job_pb2.PRIORITY_BAND_INHERIT:
-                response = peer_service.launch_job(child, None)
-                assert JobName.from_wire(response.job_id) == root.child("child")
-            else:
-                with pytest.raises(ConnectError) as exc:
-                    peer_service.launch_job(child, None)
-                assert exc.value.code == Code.PERMISSION_DENIED
-
-
-def test_unrestricted_submitter_overrides_batch_allowance(tmp_path, log_client):
-    auth = ControllerAuth(
-        provider="cidr",
-        allowed_submitters=("*@example.com",),
-        allowed_batch_submitters=("alice@example.com",),
-    )
-    with ExitStack() as stack:
-        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=auth)
-        request = _peer_handoff_request("fed-job", "parent-cluster", "alice@example.com")
-        request.priority_band = job_pb2.PRIORITY_BAND_INTERACTIVE
-        with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
-            response = peer_service.launch_job(request, None)
-        assert JobName.from_wire(response.job_id).name == "fed-job"
 
 
 def test_inbound_handoff_rejects_a_requester_that_mismatches_the_peer(tmp_path, log_client):
