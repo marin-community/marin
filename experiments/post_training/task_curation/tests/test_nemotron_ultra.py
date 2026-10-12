@@ -415,6 +415,21 @@ def test_tool_action_golden_calls_the_expected_tool(staged):
     assert TOOL_ACTION_CONTROLS.golden(task) == Reply(AssistantToolCalls(calls=(call,)))
 
 
+def test_tool_action_conversion_rejects_duplicate_public_tools(staged):
+    path = "ultra_sft_step3200_toolcall_schema"
+    row = COMPONENT_ROWS[path]
+    request = row["responses_create_params"]
+    tools = request["tools"]
+    duplicate = {**row, "responses_create_params": {**request, "tools": [*tools, tools[0]]}}
+    result = convert_row(RECIPES[pipeline_name("rlvr2", path)], duplicate, inputs=staged)
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "duplicate_tool_name")
+
+    task = task_for(path, staged)
+    assert [tool.name for tool in task.final_tools] == [tool["name"] for tool in tools]
+    assert grader_config(task)["contract"]["expected_action"] == row["expected_action"]
+
+
 def test_reasoning_gym_golden_is_the_rows_answer(staged):
     assert REASONING_GYM_CONTROLS.golden is not None
     assert reply_text(REASONING_GYM_CONTROLS.golden(task_for("ultra_sft_step3200_reasoning_gym", staged))) == "42"

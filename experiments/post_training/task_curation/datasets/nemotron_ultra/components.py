@@ -23,9 +23,11 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Any
 
+import msgspec
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.nemotron_ultra import PLACEHOLDER_FIELD, blend_component
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
+from taskcompendium.pipeline.jsonl_normalization import normalize_jsonl
 from taskcompendium.pipeline.models import Controls, Converter, IntendedUse
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_parquet
@@ -93,6 +95,33 @@ PLACEHOLDER_INPUTS = {
     ),
 }
 PLACEHOLDER_SPLITS = {DAPO: "train", SKYWORK: "math"}
+
+
+class _AgentLabel(msgspec.Struct):
+    name: str
+
+
+class _BlendLabel(msgspec.Struct):
+    dataset: str | None = None
+    agent_ref: _AgentLabel | None = None
+
+
+BLEND_LABEL_DECODER = msgspec.json.Decoder(_BlendLabel)
+
+
+def _blend_label(line: bytes) -> str:
+    # Unknown fields include very large unit-test payloads; decode only the routing keys.
+    row = BLEND_LABEL_DECODER.decode(line)
+    if row.dataset:
+        return row.dataset
+    if row.agent_ref is None:
+        raise ValueError("A blend record requires a dataset or agent_ref.name")
+    return "agent:" + row.agent_ref.name
+
+
+def prepare_blend(path: str) -> dict:
+    """Normalize a shared blend once without rewriting raw records or row IDs."""
+    return normalize_jsonl(path, _blend_label)
 
 
 @lru_cache(maxsize=1)
@@ -1436,9 +1465,11 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
                 SourceFormat.JSONL,
                 select=select,
                 decode=component.decode,
+                prepare=prepare_blend,
+                prepared_component=name,
             ),
             convert=component.convert,
-            version="2",
+            version="3",
             intended_use=IntendedUse.TRAIN,
             rubric=component.rubric,
             controls=component.controls,

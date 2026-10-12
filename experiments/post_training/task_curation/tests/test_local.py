@@ -12,6 +12,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.reader import ReadView
 from taskcompendium.convert.answers import answer_task, exact_answer_task
 from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
@@ -43,7 +44,14 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, down
         for name, pipeline in pipelines.items()
     }
     steps = {name: source.pipeline(source, options) for name, source in sources.items()}
-    return run_local_steps(steps, output_root, runtime=runtime, max_workers=max_workers, download_cache=download_cache)
+    return run_local_steps(
+        steps,
+        output_root,
+        runtime=runtime,
+        max_workers=max_workers,
+        download_cache=download_cache,
+        source_ids={name: source.info.id for name, source in sources.items()},
+    )
 
 
 def convert_local_answer(row, context):
@@ -94,6 +102,12 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     assert verifyit_spec(grader) == ExactSpec(("two",), ignore_case=False)
     environment = cast(EnvironmentRequirements, grader.environment)
     assert environment.packages_lock == str(source.grader.lock.resolve())
+    catalog = ReadView(str(output / "catalog"))
+    recorded = list(catalog.iter_rows("sources"))
+    successful = next(row for row in recorded if row["atlas_id"] == f"fixture:{source.name}")
+    assert successful["processed_rows"] == 1
+    assert successful["admitted"] is None
+    assert successful["verification_status"] is None
 
 
 def answer_from_auxiliary(row, context):
@@ -155,6 +169,10 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     assert {file: file.read_bytes() for file in payloads} == payloads
     assert (cold / source.name / "manifest.json").read_bytes() == manifest_bytes
     assert json.loads((cold / "campaign.json").read_text())["counts"] == {"failed": 1}
+    report = json.loads((cold / "campaign.json").read_bytes())
+    failed = ReadView(str(cold / "catalog")).point("sources", run_id=report["run_id"], name=source.name)
+    assert failed["manifest_evidence"] == "unconfirmed"
+    assert failed["processed_rows"] is None
 
     shutil.rmtree(remote)
     warm = tmp_path / "warm"

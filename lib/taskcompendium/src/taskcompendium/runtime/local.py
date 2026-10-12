@@ -14,7 +14,7 @@ import json
 import shutil
 import stat
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache, cached_property
 from pathlib import Path
 from typing import Any
@@ -94,7 +94,12 @@ COMPLETE_MARKER = ".complete"
 ENVIRONMENT_DIRECTORY = "env"
 RUNTIME_DIRECTORY = "runtime"
 NLTK_DATA_DIRECTORY = Path("share") / "nltk_data"
-RUNTIME_PARENT = Path("/tmp")
+
+
+def _runtime_parent() -> Path:
+    """Use Iris' executable node cache when mounted; local hosts keep the /tmp default."""
+    cache = Path("/cache")
+    return cache / "task-curation" if cache.is_mount() else Path("/tmp")
 
 
 @dataclass(frozen=True)
@@ -109,7 +114,7 @@ class LocalRuntime:
     lock_url: str
     lock_sha256: str
     data: tuple[str, ...]
-    parent: Path = RUNTIME_PARENT
+    parent: Path = field(default_factory=_runtime_parent)
 
     @cached_property
     def identity(self) -> str:

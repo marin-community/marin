@@ -4,6 +4,7 @@
 """Control submissions check a grader through the grading path that rollouts use."""
 
 import json
+import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.controls import answer_reply, control_suite, reference_reply
 from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand, RawRow, Reply, WorkspaceFiles
+from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.resources import inline_resource
 
 from .pipeline_stages import GRADER_IMAGE, FixtureGradingMachines, ShellSimImages, UnavailableImages, script_graded
@@ -60,7 +62,11 @@ class ImageMachine:
         return await self.machine.run(command)
 
     async def upload(self, source: Path, target: str) -> None:
-        self.uploads.append(target)
+        if source.suffix == ".tar":
+            with tarfile.open(source) as archive:
+                self.uploads.extend("/" + member.name for member in archive if member.isfile())
+        else:
+            self.uploads.append(target)
         await self.machine.upload(source, target)
 
     async def download(self, source: str, target: Path) -> None:
@@ -272,6 +278,30 @@ def test_oracle_uses_simulator_directory_and_setup_before_native_grading(monkeyp
         golden=lambda _: OracleCommand('test "$PWD" = /agent && cat ready.txt > answer.out', answer_file="answer.out")
     )
     assert checks(task, controls, OracleMachines()) == {"golden": PASS}
+
+
+def test_local_oracle_and_grader_setup_run_without_changing_host_user(local_machine_environment):
+    environment, _factory = local_machine_environment
+    task = answer_task()
+    task = task.model_copy(
+        update={
+            "environment_requirements": environment.model_copy(
+                update={"working_directory": "/agent", "setup_commands": ("cp /data/expected.txt ready.txt",)}
+            ),
+            "grader": task.grader.model_copy(
+                update={
+                    "environment": environment.model_copy(
+                        update={"working_directory": "/app", "setup_commands": ("test -f /data/expected.txt",)}
+                    )
+                }
+            ),
+        }
+    )
+    controls = Controls(golden=lambda _: OracleCommand("cat ready.txt > answer.out", answer_file="answer.out"))
+
+    report = control_suite(controls, LocalGraderMachines()).run(task)
+
+    assert {check.check: check.status for check in report.checks} == {"golden": PASS}
 
 
 def test_lock_backed_oracle_rejects_image_only_provider_before_acquisition():

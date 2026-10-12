@@ -31,6 +31,28 @@ conversion, validation, review and control stages. Its run closure accesses the
 active Zephyr context through the runtime. A pipeline can generate inputs or
 read local files without reviewer credentials, grader builds or sandbox setup.
 
+Recipe pipelines honor `InputOverrides` in all three modes. A primary `root` or
+`files` mapping replaces the pinned download; `auxiliary` replaces named input
+downloads. Local file contents enter the artifact identity and provenance, so
+changing an input creates a new result. SAMPLE and FULL still run their normal
+checks and controls. Set the invocation's recipe `rubric=None` to skip model
+review while retaining those stages.
+
+Nemotron blend downloads include one shared JSONL-to-Parquet preparation per pinned
+file. `HfSource.prepare` runs after download inside the acquisition artifact;
+`prepared_component` selects component-homogeneous row groups using Parquet footer
+statistics. The prepared file retains each original JSON record and its upstream
+row index, so task IDs and source locators remain stable. Declared selectors and
+decoders still run, including the SWE-Gym membership split. Explicit local file
+overrides can supply raw JSONL directly for small reruns. A prepared copy is reused
+for an override only when its recorded source hash matches the override's file
+hash; stale copies are bypassed. Shared preparation buffers binary line reads to
+keep remote range reads sequential.
+Prepared conversion ranges also cap each shard at 256 rows, so compact components
+with expensive decoders or reference checks can use multiple workers. These
+ranges may share a row group; each reader keeps the component predicate and the
+stored original row index.
+
 `CampaignArtifact.result` carries a `PipelineResult`: the existing `SourceStatus`,
 named output and evidence paths, and the stages that actually ran. It requires no
 `final` or admitted view. Exceptions enter the campaign's failure report while
@@ -58,7 +80,7 @@ directly. Atlas reads these facts without invoking or inspecting the callable.
 | `experiments/post_training/task_curation/datasets/` | Dataset declarations, converters, rubrics, controls, `*_grade.py` grader scripts and vendored `scorers/` |
 | `experiments/post_training/task_curation/environment.py` | `Environment`, what a machine must provide, and `placement`, which decides where it runs |
 | `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
-| `experiments/post_training/task_curation/environment_runtime.py` | The uv environments that local graders run in on the Zephyr worker |
+| `taskcompendium.runtime.local` | The uv environments that local graders run in on the Zephyr worker |
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()` and `runnable_sources()` |
 | `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
 | `experiments/post_training/task_curation/config.py` | Invocation options and concrete recipe settings; service binding belongs to `process_rows` |
@@ -153,6 +175,10 @@ Converters declare agent requirements independently. A simulated shell requires
 explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation.
 Conversation-only tasks need no machine. Memory settings are advisory sizing hints.
 
+Built environments export gzip layers, including inherited base-image layers,
+for the workers' Skopeo acquisition path. Compression enters built-image cache
+identity; lock-backed worker environments retain their existing identities.
+
 ## Graders and controls
 
 A task's grader is one of four kinds:
@@ -229,6 +255,12 @@ task the panel converts is judge-graded, verification samples nothing and
 records `skipped` with reason `judge grader; no control path yet`, and kept rows
 are admitted like rows of in-process graders.
 
+Lock-backed bubblewrap graders share content-addressed Python environments on
+each host. On Iris, they use the executable `/cache/task-curation` mount because
+`/tmp` is mounted with `noexec`. Hosts without the `/cache` mount use `/tmp`.
+Build locks and completion markers let concurrent workers reuse finished
+environments; uv retains its configured package cache.
+
 ## Conversion modes
 
 Each dataset's callable receives `PipelineOptions` with an explicit mode. The
@@ -289,6 +321,14 @@ worker pool. `--concurrent-sources` limits whole-source admission and
 others; the campaign report records it. Review requests are cached by the
 complete request and declared model revision, so rebuilt artifacts do not repeat
 identical inference.
+
+`--normalized-shards` caps the export shard count. The count is the source
+population divided by 1,000, rounded up and capped, with a minimum of one.
+This avoids many small files for small sources; filtering can reduce rows per shard.
+The source manifest records the resulting count in `normalized_shards` and the
+configured cap in `normalized_shard_limit`. Full preparation uses the same
+population rule with a cap of 64 deduplication partitions; persisted review files
+retain their independent record and byte limits.
 
 ## Run a campaign
 
@@ -369,6 +409,7 @@ Each source artifact `data/rl/<name>-<hash>` contains:
 | `final/part-*.parquet` | Admitted rows only |
 | `manifest.json` | Status, counts, revisions, reports and the source admission |
 | `telemetry.json` | Zephyr execution IDs, counters and phase wall times |
+| `identity.json` | Resolved input, converter, grader, control and execution identities for recipe SAMPLE/FULL runs |
 
 Every row's `admission` is `admitted`, `rejected`, `deferred`, `no_grader` or
 `unverified`; `final/` holds the admitted rows. Sidecars
@@ -384,3 +425,36 @@ normalization reasons.
 The
 [pipeline contract](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/README.md)
 describes each stage in detail.
+
+## Run catalog
+
+Each terminal campaign appends a FineStore transaction to `catalog/` beside its
+campaign report. QUICK writes to `<output-root>/catalog`. The existing entry
+points create it automatically; no separate command is required.
+
+The `runs` table records each invocation, its report snapshot, mode, status,
+timestamps and resources. `sources`, keyed by run ID and source artifact name,
+records the stable Atlas ID, input and recipe revisions, population and sample
+counts, admissions, control outcomes, phase evidence and output pointers.
+`phases` records wall times and Zephyr execution counters. Exact manifest,
+telemetry, identity and filter-count snapshots are named FineStore objects with
+SHA-256 digests. Failed sources remain visible; missing statistics are null.
+QUICK does not imply review, verification or admission.
+
+```python
+from finestore.reader import ReadView
+
+view = ReadView("/path/to/campaign-output/catalog")
+sources = view.scan("sources", where=[("run_id", "==", "saved-run-id")])
+```
+
+A cached artifact retains its original attempt timestamp and timing. The
+containing invocation has a different run ID and start time; summing those
+artifact timings does not measure campaign throughput. Counts are per recipe
+and can include overlapping source populations. Completed conversion and
+passed verification are separate fields.
+
+The catalog inherits its output directory's retention policy. A seven-day
+temporary prefix must be promoted or imported before expiry for permanent
+Atlas history. Repeated writes cannot keep old immutable FineStore shards
+alive under object-age lifecycle deletion.

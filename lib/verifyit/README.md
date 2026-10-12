@@ -40,7 +40,9 @@ process exit after a verdict has been written.
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
-Missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
+`PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
+Missing imports of those modules score zero, including an empty submission.
+Unlisted missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
 `protected_paths_files` lists tests-directory manifests of trusted workspace paths restored by setup.
 Every batch is checked before returning a candidate startup or collection failure.
 

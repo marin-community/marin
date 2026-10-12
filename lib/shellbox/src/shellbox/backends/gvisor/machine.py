@@ -12,6 +12,11 @@ from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
 from shellbox.machine import Backend, MachineSpec
 
 
+def _guest_owner(member: tarfile.TarInfo) -> tarfile.TarInfo:
+    # Match docker cp: guest files belong to root, regardless of the uploading host's UID.
+    return member.replace(uid=0, gid=0, uname="root", gname="root")
+
+
 class GvisorMachine(DockerMachine):
     """A gVisor sandbox with file transfer into its isolated filesystem."""
 
@@ -21,7 +26,7 @@ class GvisorMachine(DockerMachine):
         directory = target if source.is_dir() else str(path.parent)
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w") as archive:
-            archive.add(source, arcname="." if source.is_dir() else path.name)
+            archive.add(source, arcname="." if source.is_dir() else path.name, filter=_guest_owner)
         result = await docker(
             "exec",
             "-i",

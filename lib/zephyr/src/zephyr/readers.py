@@ -13,19 +13,20 @@ import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import Literal
+from typing import BinaryIO, Literal
 
 import fsspec
 import msgspec
 import numpy as np
 import pyarrow as pa
+import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
 from rigging.filesystem.factory import open_url, url_to_fs
 
 from zephyr import counters
-from zephyr.expr import referenced_columns, to_pyarrow_expr
+from zephyr.expr import Expr, referenced_columns, to_pyarrow_expr
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ def iter_parquet_row_groups(
     columns: list[str] | None = None,
     row_start: int | None = None,
     row_end: int | None = None,
+    row_groups: frozenset[int] | None = None,
 ) -> Iterator[pa.Table]:
     """Yield one ``pa.Table`` per qualifying row group with O(row_group) memory.
 
@@ -52,6 +54,7 @@ def iter_parquet_row_groups(
         columns: Columns to read (``None`` for all).
         row_start: First row to include (inclusive, before filtering).
         row_end: Last row to include (exclusive, before filtering).
+        row_groups: Metadata-selected row group IDs (``None`` for all).
     """
     # Open string paths through open_file (rigging fsspec) rather than letting
     # pyarrow build a native S3FileSystem from the URI: pyarrow's default S3
@@ -61,7 +64,9 @@ def iter_parquet_row_groups(
     # of the delegated generator.
     if isinstance(source, str):
         with open_file(source, "rb") as f:
-            yield from iter_parquet_row_groups(pq.ParquetFile(f), columns=columns, row_start=row_start, row_end=row_end)
+            yield from iter_parquet_row_groups(
+                pq.ParquetFile(f), columns=columns, row_start=row_start, row_end=row_end, row_groups=row_groups
+            )
         return
 
     pf = source
@@ -84,6 +89,9 @@ def iter_parquet_row_groups(
             if rg_start >= end:
                 return
 
+        if row_groups is not None and i not in row_groups:
+            continue
+
         table = pf.read_row_group(i, columns=columns)
 
         if has_row_range:
@@ -101,6 +109,9 @@ def iter_parquet_row_groups(
 _READ_BLOCK_SIZE = 16_000_000
 _READ_CACHE_TYPE = "background"
 _READ_MAX_BLOCKS = 2
+# Small cache blocks keep footer reads and filtered payloads from fetching many
+# unrelated row groups. Unfiltered scans retain the larger streaming blocks.
+_PARQUET_READ_BLOCK_SIZE = 1_048_576
 
 
 def _as_spec(source: str | InputFileSpec) -> InputFileSpec:
@@ -140,7 +151,7 @@ except ImportError:
 
 
 @contextmanager
-def open_file(file_path: str, mode: str = "rb"):
+def open_file(file_path: str, mode: str = "rb", *, block_size: int = _READ_BLOCK_SIZE):
     """Open ``file_path``, decompressing by extension, with caching defaults.
 
     ``.zst`` / ``.zstd`` decode via zstandard; ``.gz`` / ``.xz`` via fsspec's
@@ -152,7 +163,7 @@ def open_file(file_path: str, mode: str = "rb"):
     # AioSession rejects unknown kwargs like block_size.
     fs, resolved_path = url_to_fs(file_path)
     read_kwargs = {
-        "block_size": _READ_BLOCK_SIZE,
+        "block_size": block_size,
         "cache_type": _READ_CACHE_TYPE,
         "cache_options": {"maxblocks": _READ_MAX_BLOCKS},
     }
@@ -180,7 +191,20 @@ def open_file(file_path: str, mode: str = "rb"):
         yield f
 
 
-def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int, int]]:
+def _matching_row_groups(stream: BinaryIO, schema: pa.Schema, filter_expr: Expr) -> frozenset[int]:
+    # Use the Dataset API only for footer statistics, never its scanner: payload
+    # reads stay with ParquetFile to avoid the scanner memory leak above.
+    fragment = pads.ParquetFileFormat().make_fragment(stream)
+    return frozenset(
+        group.id
+        for part in fragment.split_by_row_group(filter=to_pyarrow_expr(filter_expr), schema=schema)
+        for group in part.row_groups
+    )
+
+
+def compute_parquet_splits(
+    path: str, approx_shard_bytes: int, *, filter_expr: Expr | None = None
+) -> list[tuple[int, int]]:
     """Compute row-range split points from Parquet footer metadata.
 
     Reads only the file footer — no data is transferred. Splits are aligned to
@@ -192,6 +216,7 @@ def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int
         path: Path to the Parquet file (local or remote via fsspec).
         approx_shard_bytes: Approximate target split size in bytes. Best-effort:
             a row group will never be split, so individual shards may be larger.
+        filter_expr: Exclude groups whose footer statistics rule out this predicate.
 
     Returns:
         List of (row_start, row_end) tuples where row_end is exclusive.
@@ -199,8 +224,10 @@ def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int
     # Read the footer through open_file (fsspec) so CoreWeave object storage's
     # virtual-host addressing is honored; a raw path makes pyarrow use its native
     # path-style S3 client, which CW rejects with HTTP 400.
-    with open_file(path, "rb") as f:
-        metadata = pq.ParquetFile(f).metadata
+    with open_file(path, "rb", block_size=_PARQUET_READ_BLOCK_SIZE) as f:
+        parquet = pq.ParquetFile(f)
+        metadata = parquet.metadata
+        matching = _matching_row_groups(f, parquet.schema_arrow, filter_expr) if filter_expr is not None else None
     splits: list[tuple[int, int]] = []
     split_start = 0
     split_bytes = 0
@@ -210,6 +237,14 @@ def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int
         rg = metadata.row_group(i)
         rg_bytes = rg.total_byte_size
 
+        if matching is not None and i not in matching:
+            if split_bytes:
+                splits.append((split_start, cumulative_rows))
+                split_bytes = 0
+            cumulative_rows += rg.num_rows
+            split_start = cumulative_rows
+            continue
+
         if split_bytes > 0 and split_bytes + rg_bytes > approx_shard_bytes:
             splits.append((split_start, cumulative_rows))
             split_start = cumulative_rows
@@ -218,7 +253,8 @@ def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int
         split_bytes += rg_bytes
         cumulative_rows += rg.num_rows
 
-    splits.append((split_start, cumulative_rows))
+    if split_bytes or matching is None:
+        splits.append((split_start, cumulative_rows))
     return splits
 
 
@@ -304,18 +340,27 @@ def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
             read_columns = list(spec.columns) + sorted(filter_cols)
             need_project = True
 
-    for table in iter_parquet_row_groups(
-        spec.path,
-        columns=read_columns,
-        row_start=spec.row_start,
-        row_end=spec.row_end,
-    ):
-        if pa_filter is not None:
-            table = table.filter(pa_filter)
-        if need_project:
-            table = table.select(spec.columns)
-        counters.pipeline.update_counter(counters.RECORDS_IN, len(table))
-        yield from table.to_batches()
+    block_size = _PARQUET_READ_BLOCK_SIZE if spec.filter_expr is not None else _READ_BLOCK_SIZE
+    with open_file(spec.path, "rb", block_size=block_size) as stream:
+        parquet = pq.ParquetFile(stream)
+        matching = (
+            _matching_row_groups(stream, parquet.schema_arrow, spec.filter_expr)
+            if spec.filter_expr is not None
+            else None
+        )
+        for table in iter_parquet_row_groups(
+            parquet,
+            columns=read_columns,
+            row_start=spec.row_start,
+            row_end=spec.row_end,
+            row_groups=matching,
+        ):
+            if pa_filter is not None:
+                table = table.filter(pa_filter)
+            if need_project:
+                table = table.select(spec.columns)
+            counters.pipeline.update_counter(counters.RECORDS_IN, len(table))
+            yield from table.to_batches()
 
 
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
@@ -324,7 +369,8 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     When given an InputFileSpec with row_start or row_end, reads only the exact rows
     in that range. Row groups are read efficiently (only overlapping groups are loaded),
     then rows are filtered to the precise range. When filter_expr is provided, the filter
-    is pushed down to PyArrow for efficient filtering at read time.
+    excludes row groups using footer statistics before payload reads; remaining rows
+    are filtered by PyArrow after reading.
 
     Args:
         source: Path to Parquet file or InputFileSpec containing the path, columns,

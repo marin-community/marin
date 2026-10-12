@@ -10,16 +10,20 @@ from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from typing import Any
 
+import pyarrow.parquet as pq
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
+from zephyr.expr import col
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import compute_parquet_splits, load_jsonl, load_parquet
 
 from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFiles, SourceFormat, StagedInputs
+from taskcompendium.pipeline.jsonl_normalization import normalized_jsonl_path
 from taskcompendium.pipeline.models import SourceRecipe
 
 PARQUET_SHARD_BYTES = 128 * 1024 * 1024
+PREPARED_SHARD_ROWS = 256
 
 
 def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
@@ -35,6 +39,11 @@ def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
         "read": callable_identity(spec.read) if spec.read is not None else None,
         # Present only for parted sources, so whole-file sources keep their identities.
         **({"parts": callable_identity(spec.parts)} if spec.parts is not None else {}),
+        **(
+            {"prepared_component": spec.prepared_component, "prepared_source_revision": "2"}
+            if spec.prepared_component is not None
+            else {}
+        ),
     }
 
 
@@ -96,6 +105,7 @@ class SourceShard:
     row_start: int = 0
     row_end: int | None = None
     read_path: str | None = None
+    prepared_path: str | None = None
 
     @property
     def name(self) -> str:
@@ -138,6 +148,17 @@ def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[di
 def _indexed_rows(
     file: StoragePath, shard: SourceShard, spec: SourceFiles, context: ConversionContext
 ) -> Iterator[tuple[int, dict[str, Any]]]:
+    if shard.prepared_path is not None:
+        rows = load_parquet(
+            InputFileSpec(
+                path=shard.prepared_path,
+                columns=["source_index", "raw_json"],
+                row_start=shard.row_start,
+                row_end=shard.row_end,
+                filter_expr=col("component") == spec.prepared_component,
+            )
+        )
+        return ((row["source_index"], json.loads(row["raw_json"])) for row in rows)
     if spec.parts is not None:
         return spec.parts(file, context, shard.part, shard.indices)
     assert shard.indices is None, "Only a parted source reads selected rows"
@@ -192,10 +213,43 @@ def conversion_shards(
 ) -> tuple[SourceShard, ...]:
     """Split native Parquet reads at row-group boundaries for mechanical conversion.
 
-    Row groups remain intact, so a single large group can exceed the byte target.
+    Native row groups remain intact, so a single large group can exceed the byte target.
+    Prepared components also bound rows per shard: small compressed math records
+    can otherwise leave costly decoding and reference checks on one worker.
     Custom readers and explicitly partitioned sources retain their own shard definitions.
     """
     shards = source_shards(source_input, spec, overrides)
+    if spec.prepared_component is not None:
+        prepared = []
+        for shard in shards:
+            file = StoragePath(shard.read_path or str(StoragePath(source_input) / shard.file))
+            parquet = normalized_jsonl_path(file)
+            # Local raw-file overrides need not have the acquisition's normalized copy.
+            if not parquet.exists():
+                if shard.read_path is None:
+                    raise FileNotFoundError(f"Missing acquisition-normalized JSONL: {parquet}")
+                prepared.append(shard)
+                continue
+            if overrides:
+                with parquet.open("rb") as stream:
+                    metadata = pq.read_metadata(stream).metadata or {}
+                source = json.loads(metadata.get(b"curation_source", b"{}"))
+                if source.get("source_sha256") != overrides[shard.file].sha256:
+                    prepared.append(shard)
+                    continue
+            ranges = compute_parquet_splits(
+                str(parquet), parquet_shard_bytes, filter_expr=col("component") == spec.prepared_component
+            )
+            ranges = [
+                (row_start, min(row_start + PREPARED_SHARD_ROWS, end))
+                for start, end in ranges
+                for row_start in range(start, end, PREPARED_SHARD_ROWS)
+            ]
+            prepared.extend(
+                replace(shard, part=index, parts=len(ranges), prepared_path=str(parquet), row_start=start, row_end=end)
+                for index, (start, end) in enumerate(ranges)
+            )
+        return tuple(prepared)
     if spec.format != SourceFormat.PARQUET or spec.read is not None or spec.parts is not None:
         return shards
     parts = []

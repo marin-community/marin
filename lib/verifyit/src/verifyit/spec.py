@@ -222,6 +222,8 @@ class StdioSpec:
 class PytestSpec:
     paths: tuple[str, ...] = ()
     args: tuple[str, ...] = ()
+    candidate_modules: tuple[str, ...] = ()
+    """Python modules the task explicitly asks the candidate to implement."""
     must_pass: tuple[str, ...] = ()
     must_not_break: tuple[str, ...] = ()
     setup: str = ""

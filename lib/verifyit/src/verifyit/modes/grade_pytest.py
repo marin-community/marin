@@ -35,6 +35,7 @@ FAIL_OUTCOMES = frozenset({"failed", "error"})
 class _FailureKind(StrEnum):
     ERROR = "error"
     DEPENDENCY = "dependency"
+    IMPORT = "import"
     INTERRUPT = "interrupt"
 
 
@@ -57,6 +58,8 @@ def record(error, nodeid=None):
     else:
         if isinstance(error, ModuleNotFoundError):
             kind = "dependency"
+        elif isinstance(error, ImportError):
+            kind = "import"
         elif isinstance(error, (KeyboardInterrupt, SystemExit)):
             kind = "interrupt"
         traceback = error.__traceback__
@@ -67,6 +70,8 @@ def record(error, nodeid=None):
             filename = error.path
     failure = {"kind": kind, "filename": filename, "nodeid": nodeid}
     if isinstance(error, ModuleNotFoundError):
+        failure["missing_module"] = error.name or ""
+    elif isinstance(error, ImportError):
         failure["missing_module"] = error.name or ""
     if isinstance(error, AttributeError) and isinstance(error.obj, type(sys)):
         failure["module"] = object.__getattribute__(error.obj, "__dict__").get("__file__", "")
@@ -158,7 +163,11 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
             report_path = Path(scratch) / f"{index}-{REPORT_NAME}"
             failures_path = Path(scratch) / f"{index}-failures.txt"
             argv = [spec.python, "-c", PYTEST_RUNNER, str(failures_path), *_pytest_args(report_path), *spec.args, *paths]
-            result = run_command(argv, directory, remaining)
+            environment = None
+            if directory.name == "app" and not (directory / "app.py").is_file():
+                pythonpath = os.environ.get("PYTHONPATH", "")
+                environment = {"PYTHONPATH": os.pathsep.join(filter(None, (str(directory.parent), pythonpath)))}
+            result = run_command(argv, directory, remaining, env=environment)
             if result.timed_out:
                 return scored(0.0, reason="timeout", passed=0, total=0)
             failures = []
@@ -180,7 +189,7 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return scored(0.0, reason="timeout", passed=0, total=0)
-                files = _candidate_error_files(failures, directory, protected)
+                files = _candidate_error_files(failures, directory, protected, spec.candidate_modules)
                 if files and _pytest_available(spec.python, Path(scratch), remaining):
                     candidate_failure = scored(
                         0.0,
@@ -193,9 +202,14 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                         total=0,
                     )
                     continue
+                missing_test_dependencies = _missing_test_dependencies(failures, paths, directory)
+                if missing_test_dependencies:
+                    raise InvalidTask(
+                        "pytest tests require modules missing from the grader environment: "
+                        f"{', '.join(missing_test_dependencies)}"
+                    )
                 raise RuntimeError(
-                    f"pytest wrote no json report (exit {result.returncode}): "
-                    f"{_tail(result.stderr or result.stdout)}"
+                    f"pytest wrote no json report (exit {result.returncode}): {_tail(result.stderr or result.stdout)}"
                 )
             report = json.loads(read_text(report_path))
             failed_collectors = [
@@ -207,8 +221,14 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
                     collector["nodeid"] for collector in failed_collectors
                 }:
                     raise RuntimeError("pytest collection failure has no exception provenance")
-                files = _candidate_error_files(collection_failures, directory, protected)
+                files = _candidate_error_files(collection_failures, directory, protected, spec.candidate_modules)
                 if not files:
+                    missing_test_dependencies = _missing_test_dependencies(collection_failures, paths, directory)
+                    if missing_test_dependencies:
+                        raise InvalidTask(
+                            "pytest tests require modules missing from the grader environment: "
+                            f"{', '.join(missing_test_dependencies)}"
+                        )
                     raise RuntimeError(
                         "pytest collection failed in trusted code or dependencies: "
                         f"{_tail(result.stderr or result.stdout)}"
@@ -301,14 +321,35 @@ def _protected_paths(spec: PytestSpec, tests_dir: Path, workspace: Path) -> set[
     return protected
 
 
-def _candidate_error_files(failures: list[_PytestFailure], workspace: Path, protected: set[Path]) -> list[str]:
+def _candidate_error_files(
+    failures: list[_PytestFailure], workspace: Path, protected: set[Path], candidate_modules: tuple[str, ...]
+) -> list[str]:
     """Return files only when every failure comes from editable source; otherwise return []."""
     root = workspace.resolve()
     files = set()
     for failure in failures:
         if failure.kind == _FailureKind.INTERRUPT:
             return []
-        if failure.kind == _FailureKind.DEPENDENCY:
+        if failure.kind in (_FailureKind.DEPENDENCY, _FailureKind.IMPORT):
+            if any(
+                failure.missing_module == module
+                or failure.missing_module.startswith(module + ".")
+                or module.startswith(failure.missing_module + ".")
+                for module in candidate_modules
+            ):
+                if failure.kind == _FailureKind.IMPORT:
+                    files.update(
+                        _candidate_module_path(module, root)
+                        for module in candidate_modules
+                        if failure.missing_module == module
+                        or failure.missing_module.startswith(module + ".")
+                        or module.startswith(failure.missing_module + ".")
+                    )
+                else:
+                    files.add(failure.missing_module.replace(".", "/"))
+                continue
+            if failure.kind == _FailureKind.IMPORT:
+                return []
             # A missing child of an editable package is an incomplete submission.
             # An absent top-level dependency has no candidate provenance.
             package, separator, _ = failure.missing_module.partition(".")
@@ -329,6 +370,34 @@ def _candidate_error_files(failures: list[_PytestFailure], workspace: Path, prot
             return []
         files.add(str(path.relative_to(root)))
     return sorted(files)
+
+
+def _candidate_module_path(module: str, workspace: Path) -> str:
+    """Map an app-qualified module alias back to its file under the /app workspace."""
+    if workspace.name == "app":
+        if module == "app":
+            return "__init__.py"
+        if module.startswith("app."):
+            return module.removeprefix("app.").replace(".", "/")
+    return module.replace(".", "/")
+
+
+def _missing_test_dependencies(
+    failures: list[_PytestFailure], paths: tuple[str, ...], workspace: Path
+) -> tuple[str, ...]:
+    """Identify missing imports raised directly by a collected test module."""
+    if not failures or any(failure.kind != _FailureKind.DEPENDENCY for failure in failures):
+        return ()
+    test_paths = {(path if path.is_absolute() else workspace / path).resolve() for path in map(Path, paths)}
+    for failure in failures:
+        if not failure.filename:
+            return ()
+        filename = Path(failure.filename)
+        if not filename.is_absolute():
+            filename = workspace / filename
+        if filename.resolve() not in test_paths:
+            return ()
+    return tuple(sorted({failure.missing_module for failure in failures if failure.missing_module}))
 
 
 def _match_partial_ids(outcomes: dict[str, bool], reported_ids: set[str], required: tuple[str, ...]) -> dict[str, bool]:
