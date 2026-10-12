@@ -61,12 +61,10 @@ from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.pool import (
     ANSWER_LINE_ENV,
     GSM8K_BIN,
-    GSM8K_ENV,
     MAX_PROMPT_TOKENS,
     QWEN3_MODEL,
     QWEN3_REVISION,
     REASONING_GYM_BINS,
-    REASONING_GYM_ENV,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
     VALIDATION_GSM8K_SOURCE,
@@ -616,9 +614,12 @@ data:
     )
     trainer = config["trainer"]
     config["environment"]["task_sessions"]["sources"] = {
-        **{source: {"session": {"task_session": GSM8K_ENV}} for source in (GSM8K_BIN.name, VALIDATION_GSM8K_SOURCE)},
         **{
-            source.pool_bin.name: {"session": {"task_session": REASONING_GYM_ENV}}
+            source: {"session": {"task_session": GSM8K_BIN.env_class}}
+            for source in (GSM8K_BIN.name, VALIDATION_GSM8K_SOURCE)
+        },
+        **{
+            source.pool_bin.name: {"session": {"task_session": source.pool_bin.env_class}}
             for source in (*REASONING_GYM_BINS, *VALIDATION_REASONING_GYM_BINS)
         },
     }

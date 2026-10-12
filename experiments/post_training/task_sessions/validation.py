@@ -48,6 +48,7 @@ from experiments.post_training.cat_count_canary.launcher import (
 from experiments.post_training.task_sessions.data import answer_task_record
 
 BATCH_SIZE = 8
+MATH_SOURCE = "task_session_math"
 RUN_NAME = "checkpoints/task-session-validation"
 GROUP_SIZE = 4
 MICRO_BATCH_SIZE = 4
@@ -76,7 +77,7 @@ def validation_record(index: int, split: str) -> dict:
                 ),
             }
         ],
-        dataset="task_session_math",
+        dataset=MATH_SOURCE,
         split=split,
         index=index,
         extras={
@@ -107,7 +108,7 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
         micro_train_batch_size=MICRO_BATCH_SIZE,
     )
     config["environment"]["task_sessions"]["sources"] = {
-        "task_session_math": {"session": {"task_session": "gsm8k_multi_turn"}},
+        MATH_SOURCE: {"session": {"task_session": "gsm8k_multi_turn"}},
     }
     config["context_budget"] = {
         "request_window_tokens": 1024,

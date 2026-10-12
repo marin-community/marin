@@ -198,7 +198,6 @@ generator:
     top_p: 1.0
 
 data:
-  kind: parquet
   train_data: []
   val_data: []
 """

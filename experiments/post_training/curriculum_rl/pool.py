@@ -292,10 +292,6 @@ def _pool_record(
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"{question}{instruction}"},
         ],
-        "env_class": pool_bin.env_class,
-        # The gsm8k env reads reward_spec.ground_truth; the aime env reads
-        # reward_model.ground_truth. Every row carries both.
-        "reward_spec": {"method": "rule", "ground_truth": answer},
         "reward_model": {"ground_truth": answer},
         "extra_info": {
             "data_source": source,
