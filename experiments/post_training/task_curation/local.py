@@ -31,7 +31,7 @@ from experiments.post_training.task_curation.campaign import (
     error_chain,
     write_campaign_report,
 )
-from experiments.post_training.task_curation.run_catalog import CATALOG_DIRECTORY, append_run_catalog
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, append_curation_catalog
 
 
 @contextmanager
@@ -76,7 +76,7 @@ def run_local_steps(
             started_at=started_at,
         )
         if status != CampaignStatus.RUNNING:
-            append_run_catalog(
+            append_curation_catalog(
                 str(output_root / CATALOG_DIRECTORY),
                 report_path.read_bytes(),
                 run_id=run_id,

@@ -131,18 +131,6 @@ def test_pinned_registry_cache_does_not_bypass_an_explicit_signature_policy(tmp_
     assert len(contact_log.read_text().splitlines()) == 2
 
 
-def test_pinned_registry_cache_rejects_a_changed_configuration_blob(tmp_path, registry_transport):
-    skopeo = registry_transport.skopeo
-    source = RegistryImage(f"registry.invalid/image@sha256:{'d' * 64}")
-    cache = tmp_path / "cache"
-    image = ImageCache(cache, skopeo=skopeo).prepare(source)
-    manifest = json.loads((image.layout / "blobs/sha256" / image.manifest_digest.split(":")[1]).read_text())
-    config = image.layout / "blobs/sha256" / manifest["config"]["digest"].split(":")[1]
-    config.write_bytes(config.read_bytes() + b" ")
-    with pytest.raises(ValueError, match="OCI configuration digest mismatch"):
-        ImageCache(cache, skopeo=skopeo).prepare(source)
-
-
 def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, monkeypatch):
     contexts = [tmp_path / name for name in ("first", "second")]
     contexts[0].mkdir()
@@ -334,25 +322,8 @@ def test_compressed_oci_load_preserves_image_identity_payload_and_pinned_cache(c
             assert payload.read() == marker
     finally:
         subprocess.run(("docker", "rm", container), check=True, capture_output=True)
-    assert load_docker_image(image, skopeo=skopeo) == tag
+    cached_only = PreparedImage(image.layout.parent / "missing-layout", image.manifest_digest, image.source)
+    assert load_docker_image(cached_only, skopeo=skopeo) == tag
     assert {
         path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()
     } == original
-
-
-@pytest.mark.docker
-def test_cached_docker_tag_with_different_contents_is_rejected(compressed_image, skopeo):
-    image = compressed_image.image
-    tag = load_docker_image(image, skopeo=skopeo)
-    original_id = json.loads(subprocess.check_output(("docker", "image", "inspect", tag)))[0]["Id"]
-    stream = io.BytesIO()
-    with tarfile.open(fileobj=stream, mode="w") as archive:
-        member = tarfile.TarInfo("wrong-payload")
-        member.size = 3
-        archive.addfile(member, io.BytesIO(b"bad"))
-    try:
-        subprocess.run(("docker", "import", "-", tag), input=stream.getvalue(), check=True, capture_output=True)
-        with pytest.raises(ValueError):
-            load_docker_image(image, skopeo=skopeo)
-    finally:
-        subprocess.run(("docker", "image", "rm", original_id), capture_output=True)

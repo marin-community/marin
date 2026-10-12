@@ -66,7 +66,6 @@ from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import (
     CONTROL_PATH,
     OUTPUT_PATH,
-    RESOURCE_ARCHIVE,
     ShellFactory,
     ShellToolConfig,
     upload_resources,
@@ -181,8 +180,11 @@ def test_resource_upload_preserves_nested_bytes_executable_modes_and_last_write(
             assert (opaque.exit_code, opaque.stdout) == (0, b"\x00\xff")
             mode = await machine.run(Command(("stat", "-c", "%a", "/app")))
             assert (mode.exit_code, mode.stdout) == (0, b"700\n")
-            removed = await machine.run(Command(("test", "!", "-e", RESOURCE_ARCHIVE)))
-            assert removed.exit_code == 0
+            remaining = await machine.run(
+                Command(("find", "/tmp", "-maxdepth", "1", "-name", "taskcompendium-resources-*.tar"))
+            )
+            assert remaining.exit_code == 0
+            assert remaining.stdout == b""
         finally:
             await machine.close()
 

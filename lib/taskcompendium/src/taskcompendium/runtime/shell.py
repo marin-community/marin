@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import os
+import uuid
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -40,7 +41,6 @@ from taskcompendium.runtime.staging import resource_files, write_archive
 
 OUTPUT_PATH = "/output/command_capture.txt"
 CONTROL_PATH = "/controls/reference.sh"
-RESOURCE_ARCHIVE = "/tmp/taskcompendium-resources.tar"
 
 
 class ShellToolConfig(BaseModel):
@@ -158,15 +158,19 @@ async def upload_resources(
     machine: Machine, resources: Sequence[TaskResource], timeout: float, *, user: str | None
 ) -> None:
     """Write task resources at their absolute paths, applying declared file modes."""
+    if not resources:
+        return
     with TemporaryDirectory() as directory:
         for resource in resources:
             if resource.mtime_ns is not None:
                 raise ValueError("Shell factory cannot mount resource timestamps")
         archive = Path(directory) / "resources.tar"
+        target = f"/tmp/taskcompendium-resources-{uuid.uuid4().hex}.tar"
+        # Batch resources into one upload to avoid a machine RPC for every file.
         # File-only entries preserve existing guest directory ownership and modes.
         write_archive(archive, resource_files(resources, ""), [])
-        await machine.upload(archive, RESOURCE_ARCHIVE)
-        for arguments in (("tar", "-xf", RESOURCE_ARCHIVE, "-C", "/"), ("rm", "-f", RESOURCE_ARCHIVE)):
+        await machine.upload(archive, target)
+        for arguments in (("tar", "-xf", target, "-C", "/"), ("rm", "-f", target)):
             result = await machine.run(Command(arguments, cwd="/", timeout=timeout, user=user))
             if result.exit_code != 0:
                 raise RuntimeError(f"Could not stage task resources: {result.stderr.decode(errors='replace')}")

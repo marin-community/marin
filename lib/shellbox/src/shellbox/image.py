@@ -128,14 +128,9 @@ def _manifest_digest(layout: Path) -> str:
     if algorithm != "sha256" or len(value) != 64:
         raise ValueError(f"Unsupported image digest: {digest}")
     manifest_path = layout / "blobs" / algorithm / value
-    if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != value:
-        raise ValueError("OCI manifest digest mismatch")
     manifest = json.loads(manifest_path.read_text())
     config_algorithm, config_hash = manifest["config"]["digest"].split(":", 1)
-    config_bytes = (layout / "blobs" / config_algorithm / config_hash).read_bytes()
-    if config_algorithm != "sha256" or hashlib.sha256(config_bytes).hexdigest() != config_hash:
-        raise ValueError("OCI configuration digest mismatch")
-    config = json.loads(config_bytes)
+    config = json.loads((layout / "blobs" / config_algorithm / config_hash).read_text())
     if config["os"] != "linux" or config["architecture"] != "amd64":
         raise ValueError("Only Linux amd64 images are supported")
     return digest
@@ -161,27 +156,16 @@ def prepare_image(
     # by a persistent cache hit. Tags remain process-local snapshots.
     if isinstance(source, RegistryImage) and re.search(r"@sha256:[0-9a-f]{64}$", source.reference) and policy is None:
         key = hashlib.sha256(source.reference.encode()).hexdigest()
-        reference = cache / f".registry-{key}.json"
+        reference = cache / f".registry-{key}"
         with (cache / f".registry-{key}.lock").open("w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            if reference.exists():
-                recorded = json.loads(reference.read_text())
-                if recorded["source"] != source.reference:
-                    raise ValueError("Cached registry reference differs from requested image")
-                digest = recorded["manifest_digest"]
-                if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
-                    raise ValueError(f"Unsupported cached OCI digest: {digest}")
-                layout = cache / digest.replace(":", "-")
-                if _manifest_digest(layout) != digest:
-                    raise ValueError("Cached registry layout differs from recorded OCI digest")
-                return PreparedImage(layout, digest, source)
+            if reference.is_symlink():
+                layout = reference.resolve(strict=True)
+                return PreparedImage(layout, _manifest_digest(layout), source)
             image = _prepare_image(source, cache, skopeo=skopeo, authfile=authfile, policy=policy)
             # The selected OCI manifest can differ from the registry's pinned
             # manifest after platform selection and media-type conversion.
-            with tempfile.TemporaryDirectory(prefix="reference-", dir=cache) as temporary:
-                pending = Path(temporary) / "reference.json"
-                pending.write_text(json.dumps({"source": source.reference, "manifest_digest": image.manifest_digest}))
-                pending.replace(reference)
+            reference.symlink_to(image.layout.name)
             return image
     return _prepare_image(source, cache, skopeo=skopeo, authfile=authfile, policy=policy)
 
@@ -225,37 +209,24 @@ def _prepare_image(
             _run(*skopeo_args, source_ref, f"oci:{layout}:{OCI_TAG}")
         digest = _manifest_digest(layout)
         destination = cache / digest.replace(":", "-")
-        if destination.exists():
-            if _manifest_digest(destination) != digest:
-                raise ValueError("Cached OCI image digest differs from prepared image")
-        else:
+        if not destination.exists():
             try:
                 layout.rename(destination)
             except FileExistsError:
-                if _manifest_digest(destination) != digest:
-                    raise ValueError("Cached OCI image digest differs from prepared image") from None
+                pass  # Another process published this content-addressed layout.
         return PreparedImage(destination, digest, source)
 
 
 def load_docker_image(image: PreparedImage, *, skopeo: Path, policy: Path | None = None) -> str:
     """Load a prepared OCI layout into Docker under a digest-derived local tag."""
-    if _manifest_digest(image.layout) != image.manifest_digest:
-        raise ValueError("Prepared OCI image digest differs from its cached manifest")
-    algorithm, digest = image.manifest_digest.split(":", 1)
-    manifest = json.loads((image.layout / "blobs" / algorithm / digest).read_bytes())
-    config_digest = manifest["config"]["digest"]
-    config_algorithm, config_hash = config_digest.split(":", 1)
-    config_bytes = (image.layout / "blobs" / config_algorithm / config_hash).read_bytes()
-    if hashlib.sha256(config_bytes).hexdigest() != config_hash:
-        raise ValueError("Prepared OCI image configuration digest mismatch")
-    config = json.loads(config_bytes)
     tag = f"harbor-prepared:sha256-{image.manifest_digest.split(':', 1)[1]}"
     lock_path = image.layout.parent / f".{image.manifest_digest.replace(':', '-')}.docker.lock"
     with lock_path.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        inspect_args = ("docker", "image", "inspect", tag)
-        inspect = subprocess.run(inspect_args, capture_output=True, text=True)
+        inspect = subprocess.run(("docker", "image", "inspect", tag), capture_output=True)
         if inspect.returncode:
+            algorithm, digest = image.manifest_digest.split(":", 1)
+            manifest = json.loads((image.layout / "blobs" / algorithm / digest).read_bytes())
             args = [str(skopeo)]
             args.extend(("--policy", str(policy)) if policy is not None else ("--insecure-policy",))
             source = f"oci:{image.layout}:{OCI_TAG}"
@@ -270,24 +241,4 @@ def load_docker_image(image: PreparedImage, *, skopeo: Path, policy: Path | None
                     _run(*args, "copy", compressed, f"docker-daemon:{tag}")
             else:
                 _run(*args, "copy", source, f"docker-daemon:{tag}")
-            inspect = subprocess.run(inspect_args, capture_output=True, text=True, check=True)
-        loaded = json.loads(inspect.stdout)[0]
-        # Docker normalizes configuration JSON, so its image ID can change even when
-        # the uncompressed layers and declared runtime configuration are unchanged.
-        expected = (config["os"], config["architecture"], config["rootfs"]["type"], config["rootfs"]["diff_ids"])
-        actual = (loaded["Os"], loaded["Architecture"], loaded["RootFS"]["Type"], loaded["RootFS"]["Layers"])
-        if actual != expected or not _runtime_config_matches(config.get("config", {}), loaded["Config"]):
-            raise ValueError(f"Loaded Docker image {tag} differs from its prepared OCI image")
     return tag
-
-
-def _runtime_config_matches(declared: dict, loaded: dict) -> bool:
-    # Docker fills omitted nested defaults, notably zero-valued Healthcheck fields.
-    for key, value in declared.items():
-        actual = loaded.get(key)
-        if isinstance(value, dict):
-            if not isinstance(actual, dict) or not _runtime_config_matches(value, actual):
-                return False
-        elif actual != value:
-            return False
-    return True

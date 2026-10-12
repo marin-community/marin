@@ -24,7 +24,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.models import SourceStatus
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.task_curation.run_catalog import CATALOG_DIRECTORY, append_run_catalog
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, append_curation_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +202,7 @@ def run_campaign(
             path = StoragePath(report_path)
             with path.open("rb") as stream:
                 report_bytes = stream.read()
-            append_run_catalog(
+            append_curation_catalog(
                 str(path.parent / CATALOG_DIRECTORY),
                 report_bytes,
                 run_id=run_id,

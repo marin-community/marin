@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.readers import open_file
+from zephyr.writers import ensure_parent_dir, parquet_sink
 
 ROW_GROUP_BYTES = 8 * 1024 * 1024
 READ_BUFFER_BYTES = 1024 * 1024
@@ -49,18 +50,24 @@ def normalize_jsonl(path: str, component: Callable[[bytes], str], *, row_group_b
     Blank lines do not advance the native row index. Groups contain one component;
     ``row_group_bytes`` bounds their raw payload, except for an oversized single record.
     Return the input hash, byte/row counts and per-component counts.
+
+    Acquisition runs this once per file as a Zephyr task. Its generic Parquet
+    writer combines batches across component boundaries, defeating component
+    filter pushdown, so this writer flushes each component separately.
     """
     destination = normalized_jsonl_path(StoragePath(path))
+    ensure_parent_dir(str(destination))
     buffers: dict[str, _Buffer] = defaultdict(_Buffer)
     source_hash = hashlib.sha256()
     source_bytes = 0
     count = 0
     with atomic_rename(str(destination)) as temporary:
-        with StoragePath(temporary).open("wb", auto_mkdir=True) as output:
+        with parquet_sink(temporary) as (output, filesystem):
             # Exclude large raw values from footer statistics and dictionaries.
             with pq.ParquetWriter(
                 output,
                 NORMALIZED_SCHEMA,
+                filesystem=filesystem,
                 compression="zstd",
                 use_dictionary=["component"],
                 write_statistics=["component", "source_index"],

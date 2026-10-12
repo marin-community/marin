@@ -201,7 +201,7 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
     return SourceDocuments(outcome["name"], documents, applicability)
 
 
-def append_run_catalog(
+def append_curation_catalog(
     root: str,
     report_bytes: bytes,
     *,

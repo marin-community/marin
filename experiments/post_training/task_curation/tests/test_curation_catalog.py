@@ -7,7 +7,7 @@ import json
 import pytest
 from finestore.reader import ReadView
 
-from experiments.post_training.task_curation.run_catalog import ManifestEvidence, SourceDocuments, append_run_catalog
+from experiments.post_training.task_curation.curation_catalog import ManifestEvidence, SourceDocuments, append_curation_catalog
 
 
 def test_catalog_preserves_evidence_and_dispositions_across_reused_paths(tmp_path):
@@ -45,7 +45,7 @@ def test_catalog_preserves_evidence_and_dispositions_across_reused_paths(tmp_pat
         "sources": [{"name": "numbers", "path": str(artifact), "status": "failed", "error": "controls incomplete"}],
     }
     root = str(tmp_path / "catalog")
-    token = append_run_catalog(
+    token = append_curation_catalog(
         root,
         json.dumps(report).encode(),
         run_id="first",
@@ -70,7 +70,7 @@ def test_catalog_preserves_evidence_and_dispositions_across_reused_paths(tmp_pat
     (artifact / "manifest.json").write_text(json.dumps({**manifest, "admission_counts": {"admitted": 1000}}))
     report["status"] = "completed"
     report["sources"][0]["status"] = "completed"
-    append_run_catalog(
+    append_curation_catalog(
         root,
         json.dumps(report).encode(),
         run_id="second",
@@ -99,7 +99,7 @@ def test_catalog_imports_saved_attempt_without_loading_current_artifact(tmp_path
         "sources": [{"name": "historic", "path": "gs://missing/old-attempt", "status": "sampled"}],
     }
     root = str(tmp_path / "catalog")
-    append_run_catalog(
+    append_curation_catalog(
         root,
         json.dumps(report).encode(),
         run_id="historic",
@@ -116,7 +116,7 @@ def test_catalog_imports_saved_attempt_without_loading_current_artifact(tmp_path
     assert row["source_wall_seconds"] is None
     assert view.point("runs", run_id="historic")["started_at"] is None
     with pytest.raises(ValueError, match="already exists"):
-        append_run_catalog(
+        append_curation_catalog(
             root,
             json.dumps(report).encode(),
             run_id="historic",
@@ -143,7 +143,7 @@ def test_failed_retry_retains_old_manifest_without_attributing_its_counts_to_ret
         "sources": [{"name": "retry", "path": str(artifact), "status": status, "error": "output already exists"}],
     }
     root = str(tmp_path / "catalog")
-    append_run_catalog(
+    append_curation_catalog(
         root,
         json.dumps(report).encode(),
         run_id="retry",
@@ -190,7 +190,7 @@ def test_interrupted_running_source_retains_partial_phase_evidence(tmp_path):
         "sources": [{"name": "interrupted", "path": str(artifact), "status": "running"}],
     }
     root = str(tmp_path / "catalog")
-    append_run_catalog(
+    append_curation_catalog(
         root,
         json.dumps(report).encode(),
         run_id="interrupted",
