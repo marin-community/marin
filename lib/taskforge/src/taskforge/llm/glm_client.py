@@ -185,7 +185,7 @@ def _status_failure(response: httpx.Response, body: str) -> _AttemptFailed:
         return _AttemptFailed(AttemptOutcome.CONTEXT_OVERFLOW, body, status)
     if status in RETRYABLE_STATUSES:
         return _AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, body, status, _retry_after(response))
-    raise ModelRequestRejected(status, body)
+    return _AttemptFailed(AttemptOutcome.REJECTED, body, status)
 
 
 def request_body(
@@ -354,8 +354,11 @@ class GlmClient:
                         events=tuple(events),
                     )
                 )
+                if failure.outcome is AttemptOutcome.REJECTED:
+                    assert failure.http_status is not None
+                    raise ModelRequestRejected(failure.http_status, failure.detail, attempts) from failure
                 if failure.outcome is AttemptOutcome.CONTEXT_OVERFLOW:
-                    raise ContextExhausted(failure.detail) from failure
+                    raise ContextExhausted(failure.detail, attempts) from failure
                 if failure.outcome is AttemptOutcome.ROUTE_MISSING or await self._pool_empty():
                     if hold_started is None:
                         hold_started = time.monotonic()

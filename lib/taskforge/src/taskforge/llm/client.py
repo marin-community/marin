@@ -4,7 +4,8 @@
 """The model surface: call records, the errors a call raises, and the ``ModelClient`` protocol.
 
 Every logical call is a ``Completion``: the concatenation of its continuation segments, with the
-``Attempt`` record of every HTTP request it made.
+``Attempt`` record of every HTTP request it made. A call that fails keeps that record too: every
+HTTP request has an ``Attempt``, and a rejection carries the attempts made so far.
 
 ``ModelClient`` is the one interface callers reach a model through: free-text ``complete`` and
 ``complete_structured``, which returns a reply validated as a pydantic model with every completion
@@ -44,6 +45,7 @@ class AttemptOutcome(StrEnum):
     INCOMPLETE_STREAM = "incomplete_stream"
     STREAM_ERROR = "stream_error"
     ABORTED = "aborted"
+    REJECTED = "rejected"
 
 
 @dataclass(frozen=True)
@@ -107,19 +109,20 @@ class Completion:
 
 
 class ModelRequestRejected(Exception):
-    """The server rejected the request in a way a retry cannot fix."""
+    """The server rejected the request in a way a retry cannot fix; ``attempts`` ends with the rejected one."""
 
-    def __init__(self, status: int, body: str):
+    def __init__(self, status: int, body: str, attempts: Sequence[Attempt]):
         super().__init__(f"model server rejected request with HTTP {status}: {body}")
         self.status = status
         self.body = body
+        self.attempts = tuple(attempts)
 
 
 class ContextExhausted(ModelRequestRejected):
     """The prompt plus the requested output does not fit the model's context window."""
 
-    def __init__(self, body: str):
-        super().__init__(400, body)
+    def __init__(self, body: str, attempts: Sequence[Attempt]):
+        super().__init__(400, body, attempts)
 
 
 class ModelUnavailable(Exception):

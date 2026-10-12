@@ -132,6 +132,8 @@ def test_client_error_is_not_retried(fake_glm, run):
         run()
     assert error.value.status == 401
     assert len(fake_glm.requests) == 1
+    [attempt] = error.value.attempts
+    assert (attempt.outcome, attempt.http_status) == (AttemptOutcome.REJECTED, 401)
 
 
 def test_route_404_holds_without_counting_an_attempt(fake_glm, run):
@@ -198,6 +200,7 @@ def test_context_overflow_raises_without_lowering_max_tokens(fake_glm, run):
     with pytest.raises(ContextExhausted) as error:
         run()
     assert error.value.status == 400
+    assert error.value.attempts[0].outcome is AttemptOutcome.CONTEXT_OVERFLOW
     assert [r["max_tokens"] for r in fake_glm.requests] == [GLM_MAX_OUTPUT_TOKENS]
 
 

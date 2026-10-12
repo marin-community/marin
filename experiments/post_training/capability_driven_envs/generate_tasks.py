@@ -5,7 +5,8 @@
 
 For each selected capability and sample, GLM gets ``program_prompt.program_messages`` and submits a
 Python program; the program runs in this driver's Python environment, as a child process, and must
-write a TaskSpec to the path it is given. Everything stays in memory until every item is done; then
+write a TaskSpec to the path it is given. Every item records its own failure, from the model or the
+program, so the run always writes. Everything stays in memory until every item is done; then
 ``OUTPUT_DIR/<item id>/`` gets ``request.json``, ``completions.json`` (content, reasoning, usage and
 every HTTP attempt), ``program.py``, ``run.json`` and, when the output parses, ``task.json``, and
 ``OUTPUT_DIR/summary.json`` maps each item id to ``task`` or its failure. Item ids are
@@ -21,10 +22,12 @@ Inside an Iris task, ``--relay-job`` names the GLM relay job instead of ``--base
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import re
+import signal
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -34,7 +37,7 @@ from pathlib import Path
 from pydantic import ValidationError
 from taskcompendium.models import TaskSpec
 from taskforge.content_hash import pretty_json
-from taskforge.llm.client import Completion, ModelClient
+from taskforge.llm.client import Completion, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.endpoint import GLM_MODEL
 from taskforge.llm.glm_client import GlmClient, GlmEndpoint, Pool, endpoint_in_task
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
@@ -100,7 +103,11 @@ def _tail(output: bytes) -> str:
 
 
 async def run_program(source: str, task_id: str, timeout: float) -> ProgramRun:
-    """Run ``source`` as ``python3 program.py <task_id> <output path>`` and parse the TaskSpec it writes."""
+    """Run ``source`` as ``python3 program.py <task_id> <output path>`` and parse the TaskSpec it writes.
+
+    The program runs in its own session; on timeout its whole process group is killed, so nothing it
+    spawned outlives it.
+    """
     with tempfile.TemporaryDirectory(prefix="task-program-") as workdir:
         program, output = Path(workdir) / PROGRAM_FILE, Path(workdir) / TASK_FILE
         program.write_text(source)
@@ -113,11 +120,14 @@ async def run_program(source: str, task_id: str, timeout: float) -> ProgramRun:
             env=PROGRAM_ENV,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
         except TimeoutError:
-            process.kill()
+            # The group may have exited between the timeout and the kill; that is still a timeout.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
             await process.wait()
             return ProgramRun(None, "", "", None, f"the program did not finish within {timeout}s")
         code = process.returncode
@@ -135,12 +145,19 @@ async def run_program(source: str, task_id: str, timeout: float) -> ProgramRun:
 async def generate_task(
     client: ModelClient, idea: CapabilityIdea, item_id: str, policy: LLMPolicy, program_timeout: float
 ) -> GeneratedTask:
-    """Ask GLM for a program for ``idea`` and run it; a model or program failure is recorded, not raised."""
+    """Ask GLM for a program for ``idea`` and run it.
+
+    Every model error (an invalid submission, a rejected request, an exhausted context, the model
+    unavailable) and every program failure is recorded as this item's failure, never raised, so the
+    other items and the run's outputs survive it.
+    """
     messages = program_messages(idea)
     try:
         result = await client.complete_structured(messages, ProgramSubmission, policy)
     except StructuredOutputError as error:
         return GeneratedTask(item_id, messages, error.completions, None, None, str(error))
+    except (ModelRequestRejected, ModelUnavailable) as error:
+        return GeneratedTask(item_id, messages, (), None, None, str(error))
     run = await run_program(result.value.source, item_id, program_timeout)
     return GeneratedTask(item_id, messages, result.completions, result.value.source, run, run.failure)
 
@@ -217,19 +234,26 @@ async def _generate(
         return await generate_tasks(client, items, LLMPolicy(), args.program_timeout, args.concurrency)
 
 
+def positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {number}")
+    return number
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output-dir", type=Path, required=True, help="where the run is written; must not exist")
     parser.add_argument("--catalog", type=Path, default=CATALOG, help="the capability catalog JSON file")
     parser.add_argument("--capability", action="append", default=[], help="only this capability id; repeatable")
-    parser.add_argument("--samples", type=int, default=1, help="tasks per capability")
+    parser.add_argument("--samples", type=positive_int, default=1, help="tasks per capability")
     where = parser.add_mutually_exclusive_group(required=True)
     where.add_argument("--base-url", help="the GLM router's OpenAI-compatible base URL, ending in /v1")
     where.add_argument("--relay-job", help="the Iris GLM relay job to resolve the endpoint from (inside Iris only)")
     parser.add_argument("--token-file", type=Path, required=True, help=f"a file with a {TOKEN_KEY}= line")
     parser.add_argument("--pool", type=Pool, choices=list(Pool), default=Pool.BULK, help="the router pool")
     parser.add_argument("--program-timeout", type=float, default=300.0, help="seconds each program may run")
-    parser.add_argument("--concurrency", type=int, default=16, help="items generated at once")
+    parser.add_argument("--concurrency", type=positive_int, default=16, help="items generated at once")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 

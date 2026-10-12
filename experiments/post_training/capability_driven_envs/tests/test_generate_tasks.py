@@ -8,12 +8,21 @@ pytest.importorskip("taskforge")
 
 import asyncio
 import json
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
+from rigging.timing import Duration, ExponentialBackoff
 from taskcompendium.models import TaskSpec
-from taskforge.llm.client import Completion, FinishReason, StructuredResult, Usage
+from taskforge.llm.client import (
+    Completion,
+    ContextExhausted,
+    FinishReason,
+    ModelUnavailable,
+    StructuredResult,
+    Usage,
+)
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 
@@ -22,6 +31,7 @@ from experiments.post_training.capability_driven_envs.generate_tasks import (
     SUMMARY_FILE,
     TASK_STATUS,
     generate_tasks,
+    main,
     run_program,
     selected_ideas,
     task_items,
@@ -48,12 +58,12 @@ COMPLETION = Completion(
 
 
 class CannedModel:
-    """Submits the example program for every request; ``rejected`` capabilities never get a valid call."""
+    """Submits the example program for every request, except that the first calls raise ``errors`` in order."""
 
     model = "canned"
 
-    def __init__(self, rejected: frozenset[str] = frozenset()):
-        self.rejected = rejected
+    def __init__(self, errors: Sequence[Exception] = ()):
+        self.errors = list(errors)
         self.output_types: list[type[BaseModel]] = []
 
     async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
@@ -63,8 +73,8 @@ class CannedModel:
         self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
         self.output_types.append(output_type)
-        if any(capability in str(messages[-1]["content"]) for capability in self.rejected):
-            raise StructuredOutputError(ValueError("no tool call"), (COMPLETION, COMPLETION))
+        if self.errors:
+            raise self.errors.pop(0)
         value = output_type.model_validate({"source": EXAMPLE_PROGRAM.read_text()})
         return StructuredResult(value, (COMPLETION,))
 
@@ -91,6 +101,31 @@ def test_program_failures_are_recorded(source, failure):
 
     assert run.task is None
     assert failure in (run.failure or "")
+
+
+def test_timeout_kills_what_the_program_spawned(tmp_path: Path):
+    pid_file = tmp_path / "grandchild.pid"
+    source = (
+        "import pathlib, subprocess, time\n"
+        "child = subprocess.Popen(['sleep', '60'])\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))\n"
+        "time.sleep(60)\n"
+    )
+
+    run = asyncio.run(run_program(source, "item--00", timeout=0.5))
+
+    assert "did not finish" in (run.failure or "")
+    grandchild = int(pid_file.read_text())
+
+    def gone() -> bool:
+        try:
+            os.kill(grandchild, 0)
+        except ProcessLookupError:
+            return True
+        return False
+
+    # SIGKILL is delivered asynchronously and init reaps the orphan, so the pid lingers briefly.
+    assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(gone, Duration.from_seconds(10))
 
 
 def test_failed_program_keeps_its_stderr():
@@ -129,7 +164,13 @@ def test_item_without_a_valid_submission_keeps_its_completions_and_no_program(tm
     ideas = selected_ideas(CATALOG, [CAPABILITY])
 
     generated = asyncio.run(
-        generate_tasks(CannedModel(rejected=frozenset({CAPABILITY})), task_items(ideas, 1), LLMPolicy(), 60, 1)
+        generate_tasks(
+            CannedModel(errors=[StructuredOutputError(ValueError("no tool call"), (COMPLETION, COMPLETION))]),
+            task_items(ideas, 1),
+            LLMPolicy(),
+            60,
+            1,
+        )
     )
     write_outputs(tmp_path / "run", generated)
 
@@ -137,3 +178,41 @@ def test_item_without_a_valid_submission_keeps_its_completions_and_no_program(tm
     assert "structured output invalid" in json.loads((tmp_path / "run" / SUMMARY_FILE).read_text())[item_dir.name]
     assert len(json.loads((item_dir / "completions.json").read_text())) == 2
     assert not (item_dir / "program.py").exists() and not (item_dir / "task.json").exists()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ModelUnavailable("GLM attempts exhausted after 8: boom", ()), ContextExhausted("prompt too long", ())],
+    ids=["unavailable", "context-exhausted"],
+)
+def test_model_error_fails_only_its_item(tmp_path: Path, error: Exception):
+    ideas = selected_ideas(CATALOG, [CAPABILITY])
+
+    generated = asyncio.run(generate_tasks(CannedModel(errors=[error]), task_items(ideas, 2), LLMPolicy(), 60, 1))
+    write_outputs(tmp_path / "run", generated)
+
+    failed, written = f"{CAPABILITY}--00", f"{CAPABILITY}--01"
+    assert json.loads((tmp_path / "run" / SUMMARY_FILE).read_text()) == {failed: str(error), written: TASK_STATUS}
+    assert json.loads((tmp_path / "run" / failed / "completions.json").read_text()) == []
+    assert not (tmp_path / "run" / failed / "task.json").exists()
+    assert TaskSpec.model_validate_json((tmp_path / "run" / written / "task.json").read_text()).id == written
+
+
+@pytest.mark.parametrize("flag", ["--samples", "--concurrency"])
+def test_main_refuses_a_count_below_one(tmp_path: Path, capsys: pytest.CaptureFixture[str], flag: str):
+    token_file = tmp_path / "token.env"
+    token_file.write_text("GLM_API_TOKEN=test-token\n")
+    argv = [
+        "--output-dir",
+        str(tmp_path / "run"),
+        "--base-url",
+        "http://127.0.0.1:1/v1",
+        "--token-file",
+        str(token_file),
+    ]
+
+    with pytest.raises(SystemExit):
+        main([*argv, flag, "0"])
+
+    assert "must be at least 1" in capsys.readouterr().err
+    assert not (tmp_path / "run").exists()
