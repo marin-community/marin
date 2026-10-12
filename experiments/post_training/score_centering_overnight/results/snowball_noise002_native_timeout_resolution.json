@@ -1,0 +1,47 @@
+{
+  "run_id": "sc-snowball-noise-calibration-002-tis-s0-a1-01a126ce",
+  "record_id": "847f7618876a8ed4547cb8dafba156d080f2b39178960c78551d4fb6402a278c",
+  "record_payload_sha256": "35856dbc2a08bd5a8c54a72af913b14cc76be1c451d466a842a37793f5552aa0",
+  "original_full_report_sha256": "78dd4e7036753e2afb22b74e2bab2a64192f4491436a9e03598d967ddcb1a929",
+  "native_runtime": {
+    "python": "3.12.14",
+    "versions": {
+      "verifyit": "0.1.0",
+      "math-verify": "0.9.0",
+      "latex2sympy2-extended": "1.11.0",
+      "sympy": "1.14.0"
+    },
+    "grader_sha256": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "payload_sha256": "934bc8c6a31e3b80663bef76400e928b4d2f98187150e1cacbc33f3b79509df4",
+    "scope": "Exact recorded response and original source reference, unchanged frozen verifier deadline."
+  },
+  "attempts": [
+    {
+      "index": 0,
+      "result": [
+        false,
+        "theanswerisderivedasthedenominatorproductsimplifiestoapplicablevalues"
+      ],
+      "seconds": 2.486593199893832
+    },
+    {
+      "index": 1,
+      "result": [
+        false,
+        "theanswerisderivedasthedenominatorproductsimplifiestoapplicablevalues"
+      ],
+      "seconds": 2.272359810769558
+    },
+    {
+      "index": 2,
+      "result": [
+        false,
+        "theanswerisderivedasthedenominatorproductsimplifiestoapplicablevalues"
+      ],
+      "seconds": 2.4027020689100027
+    }
+  ],
+  "resolved_grade_agreement": true,
+  "full_report_preserved": true,
+  "basis": "15,735 records agreed in the full local replay. The one local deadline case was replayed three times on the live b8 GPU runtime with identical recorded response, original reference, frozen grader bytes and unchanged deadline; all matched the original negative native verdict. Local deadline failure remains recorded; platform timing cause is not established."
+}

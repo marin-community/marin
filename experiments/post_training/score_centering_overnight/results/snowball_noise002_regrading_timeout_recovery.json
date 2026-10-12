@@ -1,0 +1,36 @@
+{
+  "record_payload_sha256": "35856dbc2a08bd5a8c54a72af913b14cc76be1c451d466a842a37793f5552aa0",
+  "record_id": "847f7618876a8ed4547cb8dafba156d080f2b39178960c78551d4fb6402a278c",
+  "original_report_sha256": "78dd4e7036753e2afb22b74e2bab2a64192f4491436a9e03598d967ddcb1a929",
+  "basis": "Isolated replay of the single offline grading deadline failure, unchanged frozen code/input/ten-second verifier deadline. Original full replay report is retained.",
+  "attempts": [
+    {
+      "record_id": "847f7618876a8ed4547cb8dafba156d080f2b39178960c78551d4fb6402a278c",
+      "phase": "eval",
+      "step": 0,
+      "source_row": 902,
+      "offline_error": "GradingInfraError",
+      "error": "math verifier deadline exhausted",
+      "wall_seconds": 7.491666977759451
+    },
+    {
+      "record_id": "847f7618876a8ed4547cb8dafba156d080f2b39178960c78551d4fb6402a278c",
+      "phase": "eval",
+      "step": 0,
+      "source_row": 902,
+      "offline_error": "GradingInfraError",
+      "error": "math verifier deadline exhausted",
+      "wall_seconds": 7.522907346952707
+    },
+    {
+      "record_id": "847f7618876a8ed4547cb8dafba156d080f2b39178960c78551d4fb6402a278c",
+      "phase": "eval",
+      "step": 0,
+      "source_row": 902,
+      "offline_error": "GradingInfraError",
+      "error": "math verifier deadline exhausted",
+      "wall_seconds": 7.7167607569135725
+    }
+  ],
+  "resolved": false
+}

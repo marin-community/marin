@@ -1,0 +1,920 @@
+{
+  "run_id": "sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce",
+  "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+  "completed_updates": 2,
+  "sampler_refresh_period": 1,
+  "recorded_learner_steps": true,
+  "audit_scope": "complete native curriculum run",
+  "source_task_errors": [],
+  "evaluation_error_accounting": "Retained execution failures receive zero quality in the fixed denominator.",
+  "permitted_evaluation_errors": 0,
+  "permitted_training_errors": 0,
+  "failure_response_note": "Failed native turns can be replaced by masked placeholders; these are not original responses.",
+  "graded_training_responses": {
+    "1": 512,
+    "2": 512
+  },
+  "archive_after_ms": 0,
+  "selected_archives": [
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/27aba63dbb41d4153b427bf025755985b80670f00b7bd83cd60500a508239636.zip",
+      "Size": 24387,
+      "ETag": "\"744f0b8a2d6a994578cbdae25ef180ba\"",
+      "last_modified_ms": 1791776233411
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/bee7c700fea7e80a8468f4e00e31ddb72f63a7a6f6b27d148f649a8d1cdef40d.zip",
+      "Size": 26610,
+      "ETag": "\"49293908821e286caeaf16350678b8c6\"",
+      "last_modified_ms": 1791776276089
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6586b7d80d73379d9de0308c99d8cf14a12cda800b45f9364ece46a8d250dd64.zip",
+      "Size": 24263,
+      "ETag": "\"0d301fec92ff212e3f66804781e1524b\"",
+      "last_modified_ms": 1791776251882
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/190179483fbebe3f5291a05e4d06542031aca8a4f1842171c9bbae3be2a75936.zip",
+      "Size": 18710,
+      "ETag": "\"1d442fd2f91728494e731821ec75dbd4\"",
+      "last_modified_ms": 1791776259171
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6bdd04d2c204b38f2f7cc553a5d72e0105ad12b8cb3b41926f119c6b0ebc8dbc.zip",
+      "Size": 21232,
+      "ETag": "\"8ec896ad20ec28212b530533b06c0c8b\"",
+      "last_modified_ms": 1791776276704
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7da6f24e4bb3b95901bb709f221dfe838a0181adeae9cde9a000fa43a323fe11.zip",
+      "Size": 23528,
+      "ETag": "\"8aa939904eade56061c06882268b0c64\"",
+      "last_modified_ms": 1791776234663
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ba1c9dc595ba392a8468966f9a65d0b2749b602dec45ac32bbeb55e1652d5d96.zip",
+      "Size": 18550,
+      "ETag": "\"d373a4c3ac2668d115639a24e43fc170\"",
+      "last_modified_ms": 1791776244127
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c1c71a761051d86ed2ed259859237489c0b11fbb489f922bc4dad780d333a296.zip",
+      "Size": 24871,
+      "ETag": "\"7500c41c912bb4748f622b8939ad8b00\"",
+      "last_modified_ms": 1791776243677
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/336c196729f9b28ff2e3470ec6bb5902ad3b6cef1238da74bf5116bad4a5f8cc.zip",
+      "Size": 26141,
+      "ETag": "\"603ac06c6463631147cc849684614f04\"",
+      "last_modified_ms": 1791776252140
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/805b34871a9ddc5ea098eaf91ab4d27e096d76f3c23cb6e58235f21fa3765a67.zip",
+      "Size": 28216,
+      "ETag": "\"b084e03e77f61536a3d014222c464ff5\"",
+      "last_modified_ms": 1791776267027
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7991b5fe6cacd6c2564235bd4e7f8449b00e1eec1adc75716dea214a34e8e5de.zip",
+      "Size": 23700,
+      "ETag": "\"2029c4df25830e20d30639cd78b843ed\"",
+      "last_modified_ms": 1791776272158
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c910978b994980f7ed83e9ffdebaa8d75df49a82db369676502fb2d6fee2c947.zip",
+      "Size": 27529,
+      "ETag": "\"6e24968c18894777194c3f28842542f7\"",
+      "last_modified_ms": 1791776272979
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/516be8acb267038447a0ef647b6b3177d1618791d2346386dfb11d9fce1c0fef.zip",
+      "Size": 27415,
+      "ETag": "\"0ed08e11bbacc7eebcac689b5e162c7e\"",
+      "last_modified_ms": 1791776284851
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/abc9550d02f32fcd37738d3df221cf1d78ca0e0300adc2b4b9f7542c980ec8a1.zip",
+      "Size": 18933,
+      "ETag": "\"d6878c9e6958cfebef09664552b139c3\"",
+      "last_modified_ms": 1791776243442
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/86d0119cde4b42bb3e7cf9068840284f8c722d5f94c27708b7f380e69a11f697.zip",
+      "Size": 25223,
+      "ETag": "\"dfe786b58174df4939c0716f74fbfb9d\"",
+      "last_modified_ms": 1791776233165
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/0b0afb3cc56cc12b6a14b56e27837493dfeaa06a960d3f7835ef899bef7a0a27.zip",
+      "Size": 19366,
+      "ETag": "\"61c7871f2d265f2dd514650e0dfa857d\"",
+      "last_modified_ms": 1791776235041
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c765d7304090ade62bafb485bc0019149fc558c817fa44aa11734ab8d3df9d30.zip",
+      "Size": 27875,
+      "ETag": "\"d82d5f09ded71565a4c360a102fb7e10\"",
+      "last_modified_ms": 1791776287065
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/d75bf750b528cb35d34054f6ea38feb3b0e3e44186ac65f98dcc597348e5ce20.zip",
+      "Size": 22444,
+      "ETag": "\"1440e875be38c3c2eec0e0da1a0764f3\"",
+      "last_modified_ms": 1791776262273
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/fa22075f20dee8276ccd828babdbda57cec7028e46cb5ad9a707a0386a68b878.zip",
+      "Size": 26825,
+      "ETag": "\"fd1e768cf2052e4e6f2a3d5109f3fc6a\"",
+      "last_modified_ms": 1791776283062
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7e9c48287299c4826608005d5a36e59d4cfb670a5b67cfe9cc2e220668651f0e.zip",
+      "Size": 25640,
+      "ETag": "\"447c031292e959c5962e575201c31b82\"",
+      "last_modified_ms": 1791776265124
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ba866c4e72154d71b9256886420d22114ee0f744d580fd6aeb6380768edba456.zip",
+      "Size": 28029,
+      "ETag": "\"1636daf399c6412e556b7edb74ff3f38\"",
+      "last_modified_ms": 1791776285232
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/36bb9ef230a0ab19e09c360e48f47d338036530cfac5bd25f8c173eca14a2c2f.zip",
+      "Size": 27516,
+      "ETag": "\"84e1d7cebe03fc927972224804312851\"",
+      "last_modified_ms": 1791776242829
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/46154f619343eccdf4a0a6075d82bd78f5a6dbbbb05f1b28e1ff306359372b66.zip",
+      "Size": 26835,
+      "ETag": "\"be99721d2070c141a7df97e268919fde\"",
+      "last_modified_ms": 1791776280159
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/cdf5bb185a2ef03ab8f4bbf0cce586b0da2492474175d3165d61506e80e52928.zip",
+      "Size": 23339,
+      "ETag": "\"7edd87e0bfc661211e3fdd429281ff5d\"",
+      "last_modified_ms": 1791776257805
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/890cbb115b8cb492049499b01492cd45862fa1d12b62096f851688fe6d6032b0.zip",
+      "Size": 27548,
+      "ETag": "\"486d5a1f61523e9bb02511b193580506\"",
+      "last_modified_ms": 1791776259415
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/1b187dc236e5081164972a0bf33e7dad63568b947a681c4162622ee65934ecaf.zip",
+      "Size": 23817,
+      "ETag": "\"1f991acf243875bbbf44aa7cbf38019c\"",
+      "last_modified_ms": 1791776234287
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/69efbe3e1b7649b1676b608f6896983a3d99716af4a1871b5ed26f61f0a73375.zip",
+      "Size": 25194,
+      "ETag": "\"802088a6c9b253c89102718d65b162eb\"",
+      "last_modified_ms": 1791776267677
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/07656a0ac670db8bdfb206a466f6602b38954cfd76ef88932241161368b2de1e.zip",
+      "Size": 27041,
+      "ETag": "\"453f27c3613663234d3f59f4dbe5ae51\"",
+      "last_modified_ms": 1791776250812
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/814f65b4cf7a15494743e7f23bf7cf8f0da3c875fe76bcd235f65e78a6adecab.zip",
+      "Size": 23424,
+      "ETag": "\"2f8efc58b7ba0cbe67e8fa8d0a5cd0e4\"",
+      "last_modified_ms": 1791776276339
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/eec2a7c37312ab7c85801d3c8e617e447c90a8ece13d7ab4ebf55f59de4d4d07.zip",
+      "Size": 26509,
+      "ETag": "\"a9265c57ab970bd779293e4cbd4b84e1\"",
+      "last_modified_ms": 1791776251467
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a660bad33cc7e12927d34bb442c8bf36b42a7294be6c4d5d000f31ff9d373e2e.zip",
+      "Size": 24797,
+      "ETag": "\"c771bc42059d4a88d3ddba6db0b62b85\"",
+      "last_modified_ms": 1791776286494
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/8c9881b0a467448672f64ed7b7ed79cd9f4481366de47de3af97c27f85c43a0d.zip",
+      "Size": 26748,
+      "ETag": "\"b56eb17448057579eb425c784e327c75\"",
+      "last_modified_ms": 1791776256296
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/7f75899c5ad1e6bffa90c367d3da410b7cdfc3634f5b74277ff6360e4ccd11da.zip",
+      "Size": 24711,
+      "ETag": "\"b4d52c4307beaca4ad871508dbe5e37a\"",
+      "last_modified_ms": 1791776257394
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/10a46ffa9059ca5316f05604a5b9c329d95f12485b9485ce6fb8be4c3056892a.zip",
+      "Size": 25854,
+      "ETag": "\"da2872d641be07adc29c156ee8e7a7d4\"",
+      "last_modified_ms": 1791776273450
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/adf4e8a5c94942363b091e34b10860353e93921a556a87f128a5606bfeaa125b.zip",
+      "Size": 26802,
+      "ETag": "\"a1d56d9dab08aa083668e0cc5ed3d287\"",
+      "last_modified_ms": 1791776243077
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/690c3af930672d67a73c1ca67efbd9a0c26c2b6f41f647d25300f25af05ee799.zip",
+      "Size": 28365,
+      "ETag": "\"f1dc05fb204eabb0073a31fd3834d2d8\"",
+      "last_modified_ms": 1791776233839
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e8723f0a852fc237de7ca1ae2f7e2a4d69c100803df3e7d349cabcd6a6044074.zip",
+      "Size": 25815,
+      "ETag": "\"89d2856df2ca196b0911a7be926e9750\"",
+      "last_modified_ms": 1791776235838
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/bd1d134e629e4631a014afc1d4e8091feb62e4c7145acb15f5e02d0e9e8084e1.zip",
+      "Size": 26278,
+      "ETag": "\"6a7f4a0ae6fa3ee81437dc568b1bfacf\"",
+      "last_modified_ms": 1791776275675
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/8646f35840b6fa968daf666718033a0cb7d4f895b0173a3d724443ef6d5a9278.zip",
+      "Size": 30018,
+      "ETag": "\"59992b5899c171aad3a5d4104595ad00\"",
+      "last_modified_ms": 1791776247170
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/1803ddd1b0f368bdedc7118209e45d0ff373b1f207fe5c5aca9d18bd3e764552.zip",
+      "Size": 24293,
+      "ETag": "\"50313b0a2cf967e7d9507d8cf7a66bfd\"",
+      "last_modified_ms": 1791776240557
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/eeee11371c7650e4311d9339f711764baceb6a158cebfbc54f7596b8f9270734.zip",
+      "Size": 24767,
+      "ETag": "\"32b3c3d385a3669bea2343e2a87e5c92\"",
+      "last_modified_ms": 1791776280536
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/6e94a5d863e15f77706cfae3a46a6f4b3bbe033acab8a16b4d24caa50d004cfb.zip",
+      "Size": 26843,
+      "ETag": "\"c831494aff7ae61ae3c8229244c5d125\"",
+      "last_modified_ms": 1791776241099
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/577762f182c82e0971421a5af48c6b8b5f4e690a9824f07e78e9daec574cc950.zip",
+      "Size": 22685,
+      "ETag": "\"c6c147fb047c62594d23db225ea16cde\"",
+      "last_modified_ms": 1791776270191
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e3f03d0c4386908a0458d93652955fc94b5da1b30998d77689849876ce3db051.zip",
+      "Size": 18790,
+      "ETag": "\"f6e88e0fed46f823136cb975dd137b7a\"",
+      "last_modified_ms": 1791776280901
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/68670fdb37890d76584726429b9ad0dbf32a177440db7d7a09d166b32ad96445.zip",
+      "Size": 26090,
+      "ETag": "\"18251a2b8a779a96dc99e7e65b178c3b\"",
+      "last_modified_ms": 1791776232690
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c409dc61adae8a849504f294432a1fd962d9e0fd8fc2805e4dadc279791598cb.zip",
+      "Size": 18370,
+      "ETag": "\"924120a3b78dad048263a85a95d0094a\"",
+      "last_modified_ms": 1791776235598
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/e49894af7870c1e9d1071b9ef2ef84924840a93fcd012f711fd96b283ddaddd2.zip",
+      "Size": 21722,
+      "ETag": "\"7241805686ba58fa7988dc30db36c0ed\"",
+      "last_modified_ms": 1791776263963
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3ccb37804d37e7e17fd445de4289073c6f047e16dea1658c765f18b3a7f77431.zip",
+      "Size": 20066,
+      "ETag": "\"350470b05a7a3680086985b9d2413d03\"",
+      "last_modified_ms": 1791776284202
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/670b9901a9259fdef51c4df3ccb03637c7c26a384f5adea98ad215b1a856b386.zip",
+      "Size": 22997,
+      "ETag": "\"a65cda38f780530982019f469ec6a7f0\"",
+      "last_modified_ms": 1791776281337
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/91acf912d73db6cd1049f21a8ae295653327cdd3b2f534938bf92d60b5f79730.zip",
+      "Size": 23459,
+      "ETag": "\"dfaa0a24763b24fb1955e8bff73c30c9\"",
+      "last_modified_ms": 1791776254901
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/a6b3cf3e12eebeae50a2f4648ab7db647d3e4543bdab8f348a93e4a830bb1843.zip",
+      "Size": 28636,
+      "ETag": "\"18c4ef1ff495799e342246d76c7e0601\"",
+      "last_modified_ms": 1791776251217
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f3cc2c0723691d9a50d9d110d6f618b5df39590e9e503dde8a086364fb563a37.zip",
+      "Size": 26227,
+      "ETag": "\"1864f10e064c15399a4cebee123ecfdf\"",
+      "last_modified_ms": 1791776267426
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/391a0461ce7aa4b36aa95c9538d4fceb861dc37103671220723086ecb46da942.zip",
+      "Size": 25469,
+      "ETag": "\"8d6cd3318b08303cb2a6ddb865d7991d\"",
+      "last_modified_ms": 1791776258052
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/c201ae3526f293b90137b39c894b71b04217f390410e606ffc750dc0c8e1b9b9.zip",
+      "Size": 18749,
+      "ETag": "\"2405118b767480f5cea59d208ca9a661\"",
+      "last_modified_ms": 1791776226785
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/770a443427c5afac79a140ff8015761a2fae017a295c0c7c753f290cad2b2692.zip",
+      "Size": 23905,
+      "ETag": "\"cf500415515d4e6dae0cc1dd6ee23fab\"",
+      "last_modified_ms": 1791776230263
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/b16586fd61ec0de53a693bf1e802627caa25a8425ccc9431179786f3207a7b79.zip",
+      "Size": 26322,
+      "ETag": "\"6052a1ff2427e844469c508054f26498\"",
+      "last_modified_ms": 1791776282058
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/598384de78c1a177d224a11a7811da01ccd8fe713c1acd39475adacca64dbeef.zip",
+      "Size": 22225,
+      "ETag": "\"1191bc261a3b5cd2005c4e6436bd3d69\"",
+      "last_modified_ms": 1791776262713
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/4ed75587008b22096db0e0ed689dd5e2937c66af92aed00c82d09e634a8b21b9.zip",
+      "Size": 20069,
+      "ETag": "\"568b1980a89f12da39ac96f7721f1c97\"",
+      "last_modified_ms": 1791776245962
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/f4d4bd0df5549b749bb4f6c61985818d1a1f16a84eddde4e994226773e7a1566.zip",
+      "Size": 27949,
+      "ETag": "\"ecb0d3ba7ef49f9a543bdbcd078b3e7f\"",
+      "last_modified_ms": 1791776284460
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/da23b7e40616c3bb4d7110decc8410681aafdeeaf8422c6c70160d524edf37b9.zip",
+      "Size": 27663,
+      "ETag": "\"23c1ca9186aca9d4382e0bf4f5b3dc1b\"",
+      "last_modified_ms": 1791776258432
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/ded2c12647eb3f9b89ad8c8336916ea39f2c8ebfa61e38adaf7b20fab6149b99.zip",
+      "Size": 24491,
+      "ETag": "\"55dbbee52effc7d4dd0e8e7c38c2e9e2\"",
+      "last_modified_ms": 1791776275420
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/2a15e2c4999b98b1ebc253d04580d89bb0bee39c4619a0db3667f5782168f0b3.zip",
+      "Size": 25129,
+      "ETag": "\"7a5758bed928d112bb0e9783edf5ecb9\"",
+      "last_modified_ms": 1791776258685
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/b44fb500736f033a84c2d5735a59c38918566b136ca36056191a046cbd9e6824.zip",
+      "Size": 25910,
+      "ETag": "\"ea8c0ced4c8ab9cb712d0a3fd32a9cff\"",
+      "last_modified_ms": 1791776242361
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000001/3ee2d7bb7badcf478fca7c603bf847f5b4af1ffdbcced0fd687ecf94f9ec3e5d.zip",
+      "Size": 19529,
+      "ETag": "\"5f1e7382cb8a891f30f9b2a2b25ae8e7\"",
+      "last_modified_ms": 1791776255888
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/f78ff7e438fb5a04be638bcb9d59b6d1ba1926cf0040a4678350aa32e8e8131a.zip",
+      "Size": 29125,
+      "ETag": "\"76c708e8506aae4476ae07bbd30a6547\"",
+      "last_modified_ms": 1791776979045
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a17dc3d7d4d6252273023fee958282fcc54206871571c2933ebd9b60f461612b.zip",
+      "Size": 20494,
+      "ETag": "\"b25b2253b04fbc3d551c792a54ea3f74\"",
+      "last_modified_ms": 1791776929067
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3d0966974180f9553cb982fbd54b4d6436c1b53d65e51dc6ddd333b4da967ca9.zip",
+      "Size": 24171,
+      "ETag": "\"716239e9698ef62e281948072627b2eb\"",
+      "last_modified_ms": 1791776955088
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/98eb0c90ad800bc5814233e7290a0ff9ce03b966baf0385bf10183782b7a51a6.zip",
+      "Size": 26329,
+      "ETag": "\"cecedc3846686c0b2fd84a11982d5668\"",
+      "last_modified_ms": 1791776965575
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/28cfaae527d853df3dd49a48d664017dcb5d06795820606d44b6a02b8df2b26e.zip",
+      "Size": 20408,
+      "ETag": "\"0e8685a7df70f6a7515063c1eee11815\"",
+      "last_modified_ms": 1791776974544
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4dcc460466ebc30dcd0815e6950c487157cc8b509185ec8c01ee16d63e6eb965.zip",
+      "Size": 28842,
+      "ETag": "\"6f809dd757e3b3f4379b4b31bacc8f6c\"",
+      "last_modified_ms": 1791776967898
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/269c1041336e5450e202d6529d5c4c7517fe71b1fcd5790afda98bcdc9ea41ca.zip",
+      "Size": 25777,
+      "ETag": "\"6a2f5e44ccfc158e9d4c7499fbf4d1a9\"",
+      "last_modified_ms": 1791776969704
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2e7e77d1888873402d54ee320bbf8a19feab5165e88774f413f605bea35e6091.zip",
+      "Size": 22251,
+      "ETag": "\"7986b0b85614d5909518150bae9414db\"",
+      "last_modified_ms": 1791776957085
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/081016c8174143fd0d7f8aa89e91ad3cc1eb98c494272cb96e932d06dec794ba.zip",
+      "Size": 24649,
+      "ETag": "\"3be917b55a08d89b2de4ba66d42b5db2\"",
+      "last_modified_ms": 1791776978351
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/74bc4682807b97a1bfbdb2a2a458919c3ac5028119fa0069e1c0b55172160c1c.zip",
+      "Size": 25759,
+      "ETag": "\"fda8242579df1c79c661d816c14a2c04\"",
+      "last_modified_ms": 1791776944516
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/91ce569f920a4df3946b15d414ee2ced177b1af10aebc73000db6b8497c83be2.zip",
+      "Size": 20514,
+      "ETag": "\"6716b6369f18a55b66cc4bad56e36e3a\"",
+      "last_modified_ms": 1791776941635
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/fb782c59961593a6461dad8c2e0e6c233bd132e5e399b552f7bdbdf7bf59a93f.zip",
+      "Size": 19926,
+      "ETag": "\"117b7ade46a139077f2d0caaa0ed5f9d\"",
+      "last_modified_ms": 1791776961298
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/76e249682a9d73e1c7f35115b13ac848212f34ffe90a3563912434d3156252fb.zip",
+      "Size": 26224,
+      "ETag": "\"692bd9e3d0d337c3576f9fbe0a2d28db\"",
+      "last_modified_ms": 1791776934546
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/9159546166d99d95262e8cfb2b46876bd8a4d5029bbd4ef4c74e5ddb943daad4.zip",
+      "Size": 25645,
+      "ETag": "\"0d35f9c8e63e38620eb50e8b042da460\"",
+      "last_modified_ms": 1791776943831
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/9b13182c77ef0d79314437ab7698fc447296771f42a3e41bf6c44e4eff3aba4f.zip",
+      "Size": 27543,
+      "ETag": "\"f40e010b3e5bbfe3e33032aa90e7d44c\"",
+      "last_modified_ms": 1791776988611
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/ea78aab21dafa6e835373711651195b4f1bddfb2a02332439f81a4cdee0fdfde.zip",
+      "Size": 25596,
+      "ETag": "\"237e5ac50292ce5fd65d17e15f350e83\"",
+      "last_modified_ms": 1791776989337
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/9d6af43c1bc832f0df7dec0acb0d36bab296289d18e620f9c7ec480843a84f7f.zip",
+      "Size": 26962,
+      "ETag": "\"ee352afe8b367c86879bb25773398945\"",
+      "last_modified_ms": 1791776958949
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c1ed6d7090a20d83961849f7566ff145129d3dbcebc9b7f07f1c0b55074d0aea.zip",
+      "Size": 22758,
+      "ETag": "\"3e67cf8d5910bdcd7ab2349e9a4a910a\"",
+      "last_modified_ms": 1791776961863
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3677f25fefc83d56fd69dadf717cf1f17c8847f9ff4106908679a81f6726fa74.zip",
+      "Size": 21049,
+      "ETag": "\"84699c7baaf636cae4fd24e7f7cec176\"",
+      "last_modified_ms": 1791776963196
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/8b2c60ee178b83c8136fdef68aab117c14823ed1f004bed00aaa2af267f6d6b9.zip",
+      "Size": 22882,
+      "ETag": "\"b8f6d26e35b1dbeef5badb1961ed7f3d\"",
+      "last_modified_ms": 1791776950131
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/fbf4d246a2eac078d026afa7a692062db8053abf421d2422d08fa19514b97d41.zip",
+      "Size": 25917,
+      "ETag": "\"0c3cced61a115f55b85ea27298ec52ab\"",
+      "last_modified_ms": 1791776936776
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/550ae2cd235ae62caf72110ae811938a073ead135817a214becd407c9a6d1ef3.zip",
+      "Size": 26462,
+      "ETag": "\"b60dd2246d64be7ecc8b99cbc266a477\"",
+      "last_modified_ms": 1791776984414
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c6444034e7522f06bb4b5fbbaaf30aadd270830dfe95fbe5232ef74307e5d492.zip",
+      "Size": 25607,
+      "ETag": "\"24f685fa0fe936f8cfaa39bede4f2b6d\"",
+      "last_modified_ms": 1791776946766
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/011220d8502d4d80f59bf0ed73d61bbaf279915362f2f6b103a673c224f52cda.zip",
+      "Size": 25583,
+      "ETag": "\"f5e8c0f23df25bd21c4fe21d8684c981\"",
+      "last_modified_ms": 1791776945655
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/470ae86bd5d0b124bafce97040c2f114c9757b253f45a84f6fd465572469c87f.zip",
+      "Size": 18011,
+      "ETag": "\"e9241e9caacfe7c94f1c039d48c8c60c\"",
+      "last_modified_ms": 1791776979593
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/68e421237175d154382b7ec5b2752edf44fda8b20d34e6a2330920750de817af.zip",
+      "Size": 21130,
+      "ETag": "\"5e03c544ddc76caf9a1758aaa81d7ba0\"",
+      "last_modified_ms": 1791776929863
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/c91538f7548ee3f416605531f9cf5fff8c8207ae09047417676e3848a878a91e.zip",
+      "Size": 26266,
+      "ETag": "\"2a3c1efc97d3aed92a38aaf576145cc5\"",
+      "last_modified_ms": 1791776983690
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/231359a0bae16ff0fbb12987394f8649d5420a37ec54f482dc8926b7626eb9a1.zip",
+      "Size": 26079,
+      "ETag": "\"ddea8fc3eec0d1d6af2e64be7e675105\"",
+      "last_modified_ms": 1791776962548
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/d1851cb1542d20b4b73bbb79fac4ea5b98557620d4067ca6ed928b016ead5ad4.zip",
+      "Size": 21140,
+      "ETag": "\"cc18f506e858b7aef51a2d3784589e09\"",
+      "last_modified_ms": 1791776951466
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/dde2bb9ab4cf32476508e9864dd32b0575db2a3a7bf3d3f89946ee7ceaf0ab87.zip",
+      "Size": 26222,
+      "ETag": "\"ed168e6bdae1e4b2862e1afba8853b65\"",
+      "last_modified_ms": 1791776975610
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/905da3b737ca59161edc4e3d7252552222076053f6e971b772a30b2eab9c9462.zip",
+      "Size": 26409,
+      "ETag": "\"4fb8015ab880d94e5ea32cffeb9bdb9d\"",
+      "last_modified_ms": 1791776945075
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7473ccfb28e546e1f0c03aeaa2797d13ab644215d2eb5d6286d7f9c68eccbad7.zip",
+      "Size": 19666,
+      "ETag": "\"185765a3b1ec90c4fed976e66cdb3946\"",
+      "last_modified_ms": 1791776952854
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/79f0ed7201b075d920cdc03e0818ec617179b39b4ef2c50485a9eb431dbb1ab5.zip",
+      "Size": 26261,
+      "ETag": "\"1ad15fdea79dd84e9debea57e2b64f5f\"",
+      "last_modified_ms": 1791776937512
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/dbe76ec209e488fa4b895a0a3a0009ee37dde9af5f4559c3994f58876f49a7e1.zip",
+      "Size": 26256,
+      "ETag": "\"6d67b8b6555b86dd6b6646bf134b02e9\"",
+      "last_modified_ms": 1791776938071
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3969792607cff77d75e967646667169b13896be25c78b08e3d7b454ce9daf91d.zip",
+      "Size": 22067,
+      "ETag": "\"2587b2ef67e0147ddae544e028320786\"",
+      "last_modified_ms": 1791776942839
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/3869694aa912db69e6f7959413272f4ebf203b24f0845bddc4adcfde8c65213e.zip",
+      "Size": 26665,
+      "ETag": "\"d65c1ff403d3962f060306873a8b3c55\"",
+      "last_modified_ms": 1791776976311
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/bc18a0a0e0d2e6fa1fecb8206ab30b525b46b6e3d68b4c7153478d7002b837c2.zip",
+      "Size": 24501,
+      "ETag": "\"e778048bfd300d2e01a80a0940a2a707\"",
+      "last_modified_ms": 1791776938669
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/381d7ffb6b4d1ac1627259d4c3c28bc21d70399a8bc26a799a41f26ebfdfcb4e.zip",
+      "Size": 28538,
+      "ETag": "\"f0bca9f692716aef54ef3f541ae065ba\"",
+      "last_modified_ms": 1791776956364
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/6a12a9b2e547a12149ad863eb87ee921a00ad227a0aa700bf45f526b1b51f1b7.zip",
+      "Size": 25449,
+      "ETag": "\"ce202746418e2bdf2c3a24c867d242d8\"",
+      "last_modified_ms": 1791776952162
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/55c843a330d2d5b1c6ad319759c8bccc5b1f10447518188501a76a813d99f590.zip",
+      "Size": 24700,
+      "ETag": "\"11f2dd94e48c269a6f56cc83de377ff1\"",
+      "last_modified_ms": 1791776955682
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a1360111d21a1db7f8e739b5d16f27519c6f2d0debee1d4ecff45b141376aa63.zip",
+      "Size": 25922,
+      "ETag": "\"2ad2eaef3f25b72c059b0b54706a5e73\"",
+      "last_modified_ms": 1791776973685
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/648592cc1bf8b1ac832770d3a417e111f35f2e3a7d75424f3e6034294d259564.zip",
+      "Size": 20021,
+      "ETag": "\"936c3b33d1822b84362ae304c81c0003\"",
+      "last_modified_ms": 1791776936201
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/0eac1d43f3c4dfc0787baf3a0716eea4fced14d1bcd7d9df3c46d28fef86b32b.zip",
+      "Size": 25068,
+      "ETag": "\"88c182458c9b795f8077662ce0b0e70b\"",
+      "last_modified_ms": 1791776948690
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/310f5cc7d22ea785934e91bfbb7daa2d0cd35f144cee136c71405d7fd4ed4c58.zip",
+      "Size": 26690,
+      "ETag": "\"5b9cde0664997074ea1d58b4909e2ef2\"",
+      "last_modified_ms": 1791776968467
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e2b101d02fd5cf7dd7b91074e01ccea83b89b82459a43cb2b19ccc4d9704d76b.zip",
+      "Size": 25860,
+      "ETag": "\"9948193c518b5cec9b02c1e5f948ee84\"",
+      "last_modified_ms": 1791776940959
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/84ba09d69e4a187a6470c4018e7b1c07769d114e85318dadb0a47935b977f344.zip",
+      "Size": 25051,
+      "ETag": "\"c3ad6cc8274ae44beb3be6c3593f5fd9\"",
+      "last_modified_ms": 1791776970296
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/e8131349b3535dc8f685f95db5caccfbecf6783aaacc2ce68dc871972d355964.zip",
+      "Size": 21300,
+      "ETag": "\"99b66ee89ba205900d7e1bdbbcf75d2a\"",
+      "last_modified_ms": 1791776987709
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/71ab4870dd24a65bacf8a812e7167a03a4a3df82dbd8baf4e1843fe82fca6715.zip",
+      "Size": 25883,
+      "ETag": "\"ca638393e2951b839ed3743b3ed65035\"",
+      "last_modified_ms": 1791776939993
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/68f7cbdfcfa67b5fbd4aa3d1221251c7683053e9917d598d2a8630ea1c6b4825.zip",
+      "Size": 24494,
+      "ETag": "\"a37c10141e42f5f9c1da6487593f7993\"",
+      "last_modified_ms": 1791776969028
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/6ebc951b1dc495516b44886fd28429053fb5dd8efcd882eb7ba1367a403bed2f.zip",
+      "Size": 27795,
+      "ETag": "\"e90cd60714f9b54f36ee0d372d8b1ecb\"",
+      "last_modified_ms": 1791776959508
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/4e3014c56f2b5030ba329719aebf24b93136913b659d837569d03ca8dc275208.zip",
+      "Size": 26630,
+      "ETag": "\"cb54157044ebe85de038e33f8cee9b18\"",
+      "last_modified_ms": 1791776977241
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2493a34600233efa94c8075b0640e25c425f938503af84d67758be276e59ed72.zip",
+      "Size": 27289,
+      "ETag": "\"5705da2be04d6a42ab0b344a4b8628cb\"",
+      "last_modified_ms": 1791776985001
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/7304daf6b6ae96b9f455d631147fc4069bcbca2531df0ba5e18be2f063bae3bd.zip",
+      "Size": 21210,
+      "ETag": "\"03e4ce8c4618f40a0467a75aac5628c3\"",
+      "last_modified_ms": 1791776980977
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/5f7846c03d1633d31b38012fbf86fe7619dd5aa7ecbea9fe793b91488631d18e.zip",
+      "Size": 20238,
+      "ETag": "\"472837e57d4232a58fc5cb5d8104cb09\"",
+      "last_modified_ms": 1791776986405
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/2ebd646c00ca8e4fa438f532fe29914fc3217d65a200af9ab95263a838baae0f.zip",
+      "Size": 26535,
+      "ETag": "\"f141d29e3a12c8581bbdecd78fab4cb7\"",
+      "last_modified_ms": 1791776986973
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/df097f7daf8ab143c5c0a3ca58bc05ce8a96ac86a08644fb3792ab18b0d49a7a.zip",
+      "Size": 19213,
+      "ETag": "\"f714d00510676d3a3f2687785fb27158\"",
+      "last_modified_ms": 1791776960179
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/653fcd074bd90a0e7dbf0d0c583f613b64e3b9be71d86673a4d4c5e0a97bf2d9.zip",
+      "Size": 21444,
+      "ETag": "\"fa5c41d61fff61de10d5d47303faf3b2\"",
+      "last_modified_ms": 1791776972500
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/647c3847e7aeebadee8470a986ec6c77818fa55a86552a5c1a09611b603b022e.zip",
+      "Size": 19589,
+      "ETag": "\"45ad809dbd023f51c3da4a5d61558a46\"",
+      "last_modified_ms": 1791776960726
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/af2d85c0b2b0cbefc57f8b28e117b89f159fda5cf82b2b7b009a9ff485dfb9c7.zip",
+      "Size": 20407,
+      "ETag": "\"7c5c9d51c7485630395afc09d9ec3602\"",
+      "last_modified_ms": 1791776971696
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/a31349275bdfdb0db2f39753ce3ad4b07a618b6a878cee4a9af0b5dc5bceb976.zip",
+      "Size": 18450,
+      "ETag": "\"0c00465a1c7fab63a5eec54909d618af\"",
+      "last_modified_ms": 1791776970975
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/cbf8f2029ec51f22b413391b4c3cacc6d5fc3697fd6e4a9710514ab8091c1515.zip",
+      "Size": 20382,
+      "ETag": "\"893a5e0b92419112e8c15eb86e6cf266\"",
+      "last_modified_ms": 1791776981728
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/cc91a083c12a6471783d6f17215806ad00e07c0a629ece3841619f2b2399f83f.zip",
+      "Size": 22823,
+      "ETag": "\"0b143e334b47053d5b91ddb7ae8d9fa1\"",
+      "last_modified_ms": 1791776983101
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/0066c571eb25aa8e876f8bfb36985c60553f5ec328032c1cd5441f2744568c12.zip",
+      "Size": 18305,
+      "ETag": "\"38b0e4c874d770b3a4362d236db7c49c\"",
+      "last_modified_ms": 1791776939348
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000002/b61fbac7f0b6a29eb0666c49dff861383cffc6c3fcee98b598b5797c0117f84f.zip",
+      "Size": 22548,
+      "ETag": "\"12140c00d001f784a065a364e3e07bde\"",
+      "last_modified_ms": 1791776957828
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=eval/step=00000000/be9c9e0d3fabf2cd0a4777af702d8f5fc36fbd436bbc63c6a8dd336e9dc1e63d.zip",
+      "Size": 17398882,
+      "ETag": "\"38b8c3e1d36cec1b780db695c5a4f4f9\"",
+      "last_modified_ms": 1791776218141
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=eval/step=00000001/281c7c79e82a3911b3b0cb94020d1d8ff031147be8273f7f3256c99f9ec19e8e.zip",
+      "Size": 17364353,
+      "ETag": "\"9436fa97d1c55df7f6d04db90bc13a07\"",
+      "last_modified_ms": 1791776923010
+    },
+    {
+      "Key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=eval/step=00000002/8a70b841c60aab9f4cac54018c1f7aee9bbf8da3dc5127035b094bde4f89094a.zip",
+      "Size": 17338343,
+      "ETag": "\"cc77ca1fd518354541fd4785d17229a7\"",
+      "last_modified_ms": 1791777624256
+    }
+  ],
+  "score_centering": true,
+  "learner_evidence": [
+    {
+      "step": 1,
+      "sampler_completed_updates": 0,
+      "sampler_age_updates": 0,
+      "gradient_norm": 0.17870627343654633,
+      "pooled_active_log_ratio_abs_max": 0.0,
+      "row_averaged_exact_unit_fraction": 1.0,
+      "consumed_loss_tokens": 158943.0,
+      "retained_rows": 2,
+      "captured_loss_tokens": 270,
+      "mean_omitted_mass": 9.697675704956055e-05,
+      "retained_chosen_log_gap_abs_p99": 1.5237514972686768,
+      "retained_capped_token_fraction": 0.011111111380159855,
+      "retained_pre_update_correction_abs_mean": 0.013100639916956425,
+      "pooled_mismatch": {
+        "policy/mismatch/pooled/chi2": 0.1472767708039251,
+        "policy/mismatch/pooled/ess_fraction": 0.87106195503088,
+        "policy/mismatch/pooled/finite_fraction": 1.0,
+        "policy/mismatch/pooled/finite_tokens": 158943.0,
+        "policy/mismatch/pooled/frac_below_1e_5": 1.2583127284624048e-05,
+        "policy/mismatch/pooled/frac_outside_0_5_2": 0.06278980515027399,
+        "policy/mismatch/pooled/kl_k1": 0.05775241787532585,
+        "policy/mismatch/pooled/kl_k3": 0.057426938375864545,
+        "policy/mismatch/pooled/log_ratio_abs_max": 17.91696071624756,
+        "policy/mismatch/pooled/log_ratio_abs_mean": 0.15243018301374403,
+        "policy/mismatch/pooled/log_ratio_abs_p95": 0.8046736091375347,
+        "policy/mismatch/pooled/log_ratio_abs_p99": 1.709434471130368,
+        "policy/mismatch/pooled/log_ratio_abs_p999": 3.517987390756602,
+        "policy/mismatch/pooled/log_ratio_mean": -0.05775241787532585,
+        "policy/mismatch/pooled/log_ratio_mean_squared": 0.15970536995197895,
+        "policy/mismatch/pooled/lower_clip_pressure": 0.11913704913082049,
+        "policy/mismatch/pooled/missing_behavior": 0.0,
+        "policy/mismatch/pooled/pos_first256/finite_tokens": 115081.0,
+        "policy/mismatch/pooled/pos_first256/frac_outside_0_5_2": 0.064876043829998,
+        "policy/mismatch/pooled/pos_first256/log_ratio_abs_mean": 0.1561214403587983,
+        "policy/mismatch/pooled/pos_first256/selected_tokens": 115081.0,
+        "policy/mismatch/pooled/pos_last256/finite_tokens": 115081.0,
+        "policy/mismatch/pooled/pos_last256/frac_outside_0_5_2": 0.06350309781805859,
+        "policy/mismatch/pooled/pos_last256/log_ratio_abs_mean": 0.15427560406612148,
+        "policy/mismatch/pooled/pos_last256/selected_tokens": 115081.0,
+        "policy/mismatch/pooled/pos_middle/finite_tokens": 0.0,
+        "policy/mismatch/pooled/pos_middle/selected_tokens": 0.0,
+        "policy/mismatch/pooled/selected_tokens": 158943.0,
+        "policy/mismatch/pooled/upper_clip_pressure": 0.07967636196623946
+      }
+    },
+    {
+      "step": 2,
+      "sampler_completed_updates": 1,
+      "sampler_age_updates": 0,
+      "gradient_norm": 0.16975067555904388,
+      "pooled_active_log_ratio_abs_max": 0.0,
+      "row_averaged_exact_unit_fraction": 1.0,
+      "consumed_loss_tokens": 156334.0,
+      "retained_rows": 2,
+      "captured_loss_tokens": 184,
+      "mean_omitted_mass": 0.00015920400619506836,
+      "retained_chosen_log_gap_abs_p99": 2.113401174545288,
+      "retained_capped_token_fraction": 0.021739130839705467,
+      "retained_pre_update_correction_abs_mean": 0.0055459425784647465,
+      "pooled_mismatch": {
+        "policy/mismatch/pooled/chi2": 0.17651254558581053,
+        "policy/mismatch/pooled/ess_fraction": 0.8506282296302536,
+        "policy/mismatch/pooled/finite_fraction": 1.0,
+        "policy/mismatch/pooled/finite_tokens": 156334.0,
+        "policy/mismatch/pooled/frac_below_1e_5": 0.0,
+        "policy/mismatch/pooled/frac_outside_0_5_2": 0.06552637302186344,
+        "policy/mismatch/pooled/kl_k1": 0.060607010716710735,
+        "policy/mismatch/pooled/kl_k3": 0.0609943276042455,
+        "policy/mismatch/pooled/log_ratio_abs_max": 11.289097651839256,
+        "policy/mismatch/pooled/log_ratio_abs_mean": 0.1595982552783249,
+        "policy/mismatch/pooled/log_ratio_abs_p95": 0.8346981331706049,
+        "policy/mismatch/pooled/log_ratio_abs_p99": 1.7787287163734464,
+        "policy/mismatch/pooled/log_ratio_abs_p999": 3.4461519448756928,
+        "policy/mismatch/pooled/log_ratio_mean": -0.060607010716710735,
+        "policy/mismatch/pooled/log_ratio_mean_squared": 0.16549105759721985,
+        "policy/mismatch/pooled/lower_clip_pressure": 0.12260928524825054,
+        "policy/mismatch/pooled/missing_behavior": 0.0,
+        "policy/mismatch/pooled/pos_first256/finite_tokens": 113162.0,
+        "policy/mismatch/pooled/pos_first256/frac_outside_0_5_2": 0.06622364397942772,
+        "policy/mismatch/pooled/pos_first256/log_ratio_abs_mean": 0.15971108705602094,
+        "policy/mismatch/pooled/pos_first256/selected_tokens": 113162.0,
+        "policy/mismatch/pooled/pos_last256/finite_tokens": 113162.0,
+        "policy/mismatch/pooled/pos_last256/frac_outside_0_5_2": 0.06626782842296884,
+        "policy/mismatch/pooled/pos_last256/log_ratio_abs_mean": 0.16168379037017808,
+        "policy/mismatch/pooled/pos_last256/selected_tokens": 113162.0,
+        "policy/mismatch/pooled/pos_middle/finite_tokens": 0.0,
+        "policy/mismatch/pooled/pos_middle/selected_tokens": 0.0,
+        "policy/mismatch/pooled/selected_tokens": 156334.0,
+        "policy/mismatch/pooled/upper_clip_pressure": 0.08289943326467691
+      }
+    }
+  ],
+  "quality": [
+    {
+      "completed_updates": 0,
+      "responses": 6024,
+      "quality": 0.08250332005312085
+    },
+    {
+      "completed_updates": 1,
+      "responses": 6024,
+      "quality": 0.08897742363877822
+    },
+    {
+      "completed_updates": 2,
+      "responses": 6024,
+      "quality": 0.09694555112881806
+    }
+  ],
+  "quality_basis": "native retained grader verdicts; independent response regrading remains required",
+  "audit_passed": true
+}

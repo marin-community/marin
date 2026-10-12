@@ -1,0 +1,42 @@
+{
+  "record_payload_sha256": "80daa535e2da6affdf310dd24ad3e7ea69870b8b14252d5b225cbec50dca25ae",
+  "record_id": "635a5547ac25df2dd8d37b5015bf7acaf13f5481aa9229fa129ae17d02e8addb",
+  "original_report_sha256": "69199fbbd86d66109aaaf60abb229862ed578d837718b2a936a62b4395a27e11",
+  "basis": "Isolated replay of the single offline grading deadline failure, unchanged frozen code/input/ten-second verifier deadline. Original full replay report is retained.",
+  "attempts": [
+    {
+      "record_id": "635a5547ac25df2dd8d37b5015bf7acaf13f5481aa9229fa129ae17d02e8addb",
+      "phase": "eval",
+      "step": 2,
+      "source_row": 740,
+      "native_error": false,
+      "quality": 0.0,
+      "native_quality": 0.0,
+      "mismatch": false,
+      "wall_seconds": 1.473686542827636
+    },
+    {
+      "record_id": "635a5547ac25df2dd8d37b5015bf7acaf13f5481aa9229fa129ae17d02e8addb",
+      "phase": "eval",
+      "step": 2,
+      "source_row": 740,
+      "native_error": false,
+      "quality": 0.0,
+      "native_quality": 0.0,
+      "mismatch": false,
+      "wall_seconds": 1.3571223951876163
+    },
+    {
+      "record_id": "635a5547ac25df2dd8d37b5015bf7acaf13f5481aa9229fa129ae17d02e8addb",
+      "phase": "eval",
+      "step": 2,
+      "source_row": 740,
+      "native_error": false,
+      "quality": 0.0,
+      "native_quality": 0.0,
+      "mismatch": false,
+      "wall_seconds": 1.4399744807742536
+    }
+  ],
+  "resolved": true
+}

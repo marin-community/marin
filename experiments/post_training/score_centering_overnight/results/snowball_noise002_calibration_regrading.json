@@ -1,0 +1,116 @@
+{
+  "run_id": "sc-snowball-noise-calibration-002-tis-s0-a1-01a126ce",
+  "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+  "preserve_full_response_text": false,
+  "basis": "Every retained response replayed against its original source row using the frozen grading contract; this is not an independent verifier implementation.",
+  "grader_files_sha256": {
+    "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+    "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+    "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+  },
+  "source_sha256": {
+    "train": "6515e0315d30948375fe51a811dafb87c43a6fa3535066f6d595d6200627175f",
+    "eval": "97d305a34496c36890e8320c5435a615ad8b058ed42f2ddc30c8eb72b0d413ef"
+  },
+  "record_payloads_sha256": "37edf530d6c3395a18a4332883179601ca7e18d56b393bb790e60937a495489b",
+  "records": 15736,
+  "quality": [
+    {
+      "phase": "eval",
+      "completed_updates": 0,
+      "responses": 4796,
+      "replayed_quality": 0.2970981165156156
+    },
+    {
+      "phase": "eval",
+      "completed_updates": 12,
+      "responses": 4796,
+      "replayed_quality": 0.47570606048504066
+    },
+    {
+      "phase": "train",
+      "completed_updates": 1,
+      "responses": 512,
+      "replayed_quality": 0.26706477402114315
+    },
+    {
+      "phase": "train",
+      "completed_updates": 2,
+      "responses": 512,
+      "replayed_quality": 0.33555596800641047
+    },
+    {
+      "phase": "train",
+      "completed_updates": 3,
+      "responses": 512,
+      "replayed_quality": 0.3195372363176203
+    },
+    {
+      "phase": "train",
+      "completed_updates": 4,
+      "responses": 512,
+      "replayed_quality": 0.32076384094122173
+    },
+    {
+      "phase": "train",
+      "completed_updates": 5,
+      "responses": 512,
+      "replayed_quality": 0.33610915842148786
+    },
+    {
+      "phase": "train",
+      "completed_updates": 6,
+      "responses": 512,
+      "replayed_quality": 0.32239242777707977
+    },
+    {
+      "phase": "train",
+      "completed_updates": 7,
+      "responses": 512,
+      "replayed_quality": 0.39877113580520385
+    },
+    {
+      "phase": "train",
+      "completed_updates": 8,
+      "responses": 512,
+      "replayed_quality": 0.39982197646046136
+    },
+    {
+      "phase": "train",
+      "completed_updates": 9,
+      "responses": 512,
+      "replayed_quality": 0.43993858899316385
+    },
+    {
+      "phase": "train",
+      "completed_updates": 10,
+      "responses": 512,
+      "replayed_quality": 0.4389759896107552
+    },
+    {
+      "phase": "train",
+      "completed_updates": 11,
+      "responses": 512,
+      "replayed_quality": 0.4844858243038107
+    },
+    {
+      "phase": "train",
+      "completed_updates": 12,
+      "responses": 512,
+      "replayed_quality": 0.46438122424450545
+    }
+  ],
+  "discrepancies": [
+    {
+      "record_id": "847f7618876a8ed4547cb8dafba156d080f2b39178960c78551d4fb6402a278c",
+      "phase": "eval",
+      "step": 0,
+      "source_row": 902,
+      "offline_error": "GradingInfraError",
+      "error": "math verifier deadline exhausted"
+    }
+  ],
+  "native_failures_not_regraded": [],
+  "regrading_passed": false
+}

@@ -1,0 +1,62 @@
+{
+  "run_id": "sc-qwen-transfer-runtime-qual-sc-s0-a1-01a126ce",
+  "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+  "preserve_full_response_text": true,
+  "basis": "Every retained response replayed against its original source row using the frozen grading contract; this is not an independent verifier implementation.",
+  "grader_files_sha256": {
+    "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+    "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+    "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+  },
+  "source_sha256": {
+    "train": "b0397b09bc4e8dd2b01b96cdf729268ade10c7839ab4193f94479b016b1400b1",
+    "eval": "e3b1ca83df0fb193413caad7396f35b4cd29d9f45f6f8561e761818e42e0f79b"
+  },
+  "record_payloads_sha256": "7c4747d55aeea8804440c67880bc7e5a8a14bc418b89af52cdf1d015fde9cd89",
+  "records": 19096,
+  "quality": [
+    {
+      "phase": "eval",
+      "completed_updates": 0,
+      "responses": 6024,
+      "replayed_quality": 0.08117529880478087
+    },
+    {
+      "phase": "eval",
+      "completed_updates": 1,
+      "responses": 6024,
+      "replayed_quality": 0.0904714475431607
+    },
+    {
+      "phase": "eval",
+      "completed_updates": 2,
+      "responses": 6024,
+      "replayed_quality": 0.09428950863213811
+    },
+    {
+      "phase": "train",
+      "completed_updates": 1,
+      "responses": 512,
+      "replayed_quality": 0.052734375
+    },
+    {
+      "phase": "train",
+      "completed_updates": 2,
+      "responses": 512,
+      "replayed_quality": 0.03125
+    }
+  ],
+  "discrepancies": [
+    {
+      "record_id": "635a5547ac25df2dd8d37b5015bf7acaf13f5481aa9229fa129ae17d02e8addb",
+      "phase": "eval",
+      "step": 2,
+      "source_row": 740,
+      "offline_error": "TimeoutError",
+      "error": "grading exceeded its deadline"
+    }
+  ],
+  "native_failures_not_regraded": [],
+  "regrading_passed": false
+}
