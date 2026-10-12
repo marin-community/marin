@@ -77,10 +77,13 @@ class ExternalAgentSession:
             receive.cancel()
             await asyncio.gather(receive, return_exceptions=True)
 
+    async def _run_agent(self) -> None:
+        await self.run_agent(self._complete)
+
     async def prepare(self) -> SessionStart:
         if self.agent is not None:
             raise RuntimeError("The agent session was already started")
-        self.agent = asyncio.create_task(self.run_agent(self._complete))
+        self.agent = asyncio.create_task(self._run_agent())
         self.pending = await self._next_request()
         if self.pending is None:
             raise RolloutContractError("The agent exited before requesting a model response")
