@@ -11,11 +11,12 @@ import shutil
 import subprocess
 import tarfile
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import pytest
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
-from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, load_docker_image
+from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, load_docker_image, prepare_image
 
 
 @dataclass(frozen=True)
@@ -73,12 +74,6 @@ def registry_transport(tmp_path):
     return RegistryTransport(skopeo, contact_log, f"sha256:{manifest_hash}")
 
 
-def _prepare_registry_process(directory, skopeo, source, start, results):
-    start.wait(timeout=20)
-    image = ImageCache(directory, skopeo=skopeo).prepare(source)
-    results.put((str(image.layout), image.manifest_digest))
-
-
 def test_pinned_registry_image_is_available_to_a_second_process_without_registry_access(tmp_path, registry_transport):
     skopeo = registry_transport.skopeo
     contact_log = registry_transport.request_log
@@ -91,13 +86,9 @@ def test_pinned_registry_image_is_available_to_a_second_process_without_registry
     assert not source.reference.endswith(selected_digest)
     skopeo.write_text("#!/bin/sh\nexit 99\n")
     context = multiprocessing.get_context("spawn")
-    start, results = context.Barrier(2), context.Queue()
-    process = context.Process(target=_prepare_registry_process, args=(directory, skopeo, source, start, results))
-    process.start()
-    start.wait(timeout=20)
-    process.join(timeout=20)
-    assert process.exitcode == 0
-    assert results.get(timeout=5) == (str(first.layout), selected_digest)
+    with context.Pool(1) as pool:
+        second = pool.apply_async(prepare_image, (source, directory), {"skopeo": skopeo}).get(timeout=20)
+    assert (second.layout, second.manifest_digest) == (first.layout, selected_digest)
     assert len(contact_log.read_text().splitlines()) == 1
 
 
@@ -108,20 +99,13 @@ def test_concurrent_processes_prepare_one_pinned_registry_layout(tmp_path, regis
     source = RegistryImage(f"registry.invalid/image@sha256:{'b' * 64}")
     directory = tmp_path / "cache"
     context = multiprocessing.get_context("spawn")
-    start, results = context.Barrier(5), context.Queue()
-    processes = [
-        context.Process(target=_prepare_registry_process, args=(directory, skopeo, source, start, results))
-        for _ in range(4)
-    ]
-    for process in processes:
-        process.start()
-    start.wait(timeout=20)
-    for process in processes:
-        process.join(timeout=20)
-        assert process.exitcode == 0
-    prepared = [results.get(timeout=5) for _ in processes]
-    assert len(set(prepared)) == 1
-    assert prepared[0][1] == selected_digest
+    start = context.Barrier(5)
+    # Spawn imports installed code; pytest's synthetic module names are not importable.
+    with context.Pool(4, initializer=start.wait, initargs=(20,)) as pool:
+        start.wait(timeout=20)
+        prepared = pool.map_async(partial(prepare_image, cache=directory, skopeo=skopeo), [source] * 4).get(timeout=20)
+    assert len({image.layout for image in prepared}) == 1
+    assert {image.manifest_digest for image in prepared} == {selected_digest}
     assert len(contact_log.read_text().splitlines()) == 1
 
 
