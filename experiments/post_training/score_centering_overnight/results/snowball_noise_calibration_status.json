@@ -1,5 +1,6 @@
 {
-  "selection_status": "pending the predeclared noise0.05 calibration",
+  "selection_status": "Scale0.05 selected under the predeclared mismatch and native usability rule.",
+  "selected_relative_initial_noise": 0.05,
   "selection_rule": "Lowest tested scale with >=5% capped loss tokens OR pooled p99 absolute log gap >=log(2), >=10% native behavior passes and <1% execution/grading failures.",
   "completed_scales": [
     {
@@ -211,8 +212,118 @@
       "audit_sha256": "18da8945220b3fd4500e95b3c47003c0b3506b4d9c1171f80dbc41e9a7779627",
       "decision": "This scale is below both stress thresholds in all twelve updates; do not select it.",
       "quality_basis": "Native retained verdicts; frozen source replay reported separately. Masked failure placeholders are not original responses."
+    },
+    {
+      "run_id": "sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce",
+      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+      "relative_initial_noise": 0.05,
+      "calibration_only": true,
+      "physical_behavior_responses": 6144,
+      "native_passes": 2033,
+      "native_execution_or_grading_errors": 1,
+      "native_pass_fraction": 0.3308919270833333,
+      "native_error_fraction": 0.00016276041666666666,
+      "max_per_update_pooled_capped_fraction": 0.00923763308674097,
+      "max_per_update_pooled_abs_log_gap_p99": 1.0236490583419817,
+      "stress_threshold_met": true,
+      "usability_threshold_met": true,
+      "eligible_scale": true,
+      "metrics": [
+        {
+          "update": 1,
+          "loss_tokens": 787751.0,
+          "capped_fraction": 0.00894698966294527,
+          "gap_abs_p99": 1.0164867639541626,
+          "raw_metrics_sha256": "8cf8f39838bb29315b9a0778ebf686db5eed1959122695821e22724f45e140ca"
+        },
+        {
+          "update": 2,
+          "loss_tokens": 772273.0,
+          "capped_fraction": 0.008930779993534088,
+          "gap_abs_p99": 1.0161228466033945,
+          "raw_metrics_sha256": "49160b13787daa65b92fe1be6a134322300b0e88c0a48af0ffab9f71a771d19f"
+        },
+        {
+          "update": 3,
+          "loss_tokens": 686323.0,
+          "capped_fraction": 0.00923763308674097,
+          "gap_abs_p99": 1.0236490583419817,
+          "raw_metrics_sha256": "31c161f5610f1eba15dd5e69ce57043871cf62a7c9b66efb0be471e94ff1c6da"
+        },
+        {
+          "update": 4,
+          "loss_tokens": 717625.0,
+          "capped_fraction": 0.009067409671843052,
+          "gap_abs_p99": 1.0101204395294197,
+          "raw_metrics_sha256": "b5c4b4f78923437193d15c63c38b589f7cce865d2560a01cd6ea81e94d5f4722"
+        },
+        {
+          "update": 5,
+          "loss_tokens": 664939.0,
+          "capped_fraction": 0.008799303323030472,
+          "gap_abs_p99": 1.0042504322528838,
+          "raw_metrics_sha256": "762fc0153499cdebde177e8e7376dfdd21b8dba63e60a1f45b0509af16bf711b"
+        },
+        {
+          "update": 6,
+          "loss_tokens": 668214.0,
+          "capped_fraction": 0.0089133121073246,
+          "gap_abs_p99": 1.0086670351028442,
+          "raw_metrics_sha256": "88aea7ed967e685877832f97ce95b6f225f41c879332a7f7502c7430072d5cd8"
+        },
+        {
+          "update": 7,
+          "loss_tokens": 577809.0,
+          "capped_fraction": 0.008786640129983425,
+          "gap_abs_p99": 1.016235980987554,
+          "raw_metrics_sha256": "6b2e217a7d4550f1cde5a7f3006bd6ec3e8b0965e3c44f2e1c44e5e227756686"
+        },
+        {
+          "update": 8,
+          "loss_tokens": 574918.0,
+          "capped_fraction": 0.008834303356707096,
+          "gap_abs_p99": 1.0058612155914277,
+          "raw_metrics_sha256": "34a78744f989c381a628e2cb77074e45993043bcf051a9386727428446080288"
+        },
+        {
+          "update": 9,
+          "loss_tokens": 616192.0,
+          "capped_fraction": 0.00852818600833416,
+          "gap_abs_p99": 0.9898720717430055,
+          "raw_metrics_sha256": "16010c90b29ca2b7e2d4fb3cd1199e246818f9c059f32abe0a59b45ff9eafb7b"
+        },
+        {
+          "update": 10,
+          "loss_tokens": 535038.0,
+          "capped_fraction": 0.008982539176940918,
+          "gap_abs_p99": 1.0217732918262485,
+          "raw_metrics_sha256": "5716d9e07c317d1b8b7f3d370435c3b56c0aa210d179d6b22580b9daeda45360"
+        },
+        {
+          "update": 11,
+          "loss_tokens": 430038.0,
+          "capped_fraction": 0.00842018611729145,
+          "gap_abs_p99": 1.0053936779499053,
+          "raw_metrics_sha256": "2d79345478de6e8a701785b2c9d1c875e1a1ec6b514784cb51c3d2e1f3900810"
+        },
+        {
+          "update": 12,
+          "loss_tokens": 465771.0,
+          "capped_fraction": 0.008401123806834221,
+          "gap_abs_p99": 0.9928694248199447,
+          "raw_metrics_sha256": "118883ecc661f4c2ed484436a5720a0c5aee6f445942fda03b24d874e10aafbc"
+        }
+      ],
+      "audit_sha256": "f25100c13a19295bdc9d9e7de9e48bbf9180f25b42372dc6fefcc1e68202cc4e",
+      "decision": "Eligible on mismatch and usability; selection still uses lowest qualifying tested scale.",
+      "quality_basis": "Native retained verdicts; frozen source replay reported separately. Masked failure placeholders are not original responses."
     }
   ],
   "main_starting_horizon": 1200,
-  "required_main_paired_seeds": 3
+  "required_main_paired_seeds": 3,
+  "selected_gap_abs_p99_range": [
+    0.9898720717430055,
+    1.0236490583419817
+  ],
+  "selection_scope": "Separate seed0 TIS calibration; no SC effect estimate. Native verdicts select usability; frozen-source replay remains pending."
 }

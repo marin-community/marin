@@ -15,6 +15,14 @@ import yaml
 
 
 def stage(job_id: str) -> str:
+    if "sc-snowball-main-noise" in job_id:
+        return "Snowball noise main"
+    if "sc-snowball-main-fresh" in job_id:
+        return "Snowball fresh controls"
+    if "sc-snowball-main-stale" in job_id:
+        return "Snowball staleness main"
+    if "sc-snowball-incumbent" in job_id:
+        return "Snowball incumbent qualification" if "runtime-qual" in job_id else "Snowball incumbent main"
     if "sc-core-runtime" in job_id:
         return "core GPU qualification"
     if "sc-snowball-runtime" in job_id:

@@ -832,8 +832,8 @@
       "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "ce1824ebb5ed376c7937cbf170b427cfdd42323d491c2fcd195aaa4497d96198",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -943,5 +943,5 @@
       "allocation_evidence": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/reused-publication-sc-task-describe.txt"
     }
   ],
-  "observed_at": "2026-10-12T02:24:02.153770+00:00"
+  "observed_at": "2026-10-12T03:10:30.590206+00:00"
 }

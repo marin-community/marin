@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-12T02:24:02.153770+00:00",
+  "observed_at": "2026-10-12T03:10:30.590206+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -1841,6 +1841,106 @@
       "allocated_h100_hours": 16.406235555555554,
       "outcome": "succeeded with retained audit",
       "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise002_calibration.json"
+    },
+    {
+      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "8ec635812d83c989",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791766727554",
+      "finished_at_ms": "1791774187872",
+      "node_name": "g73b716",
+      "terminal_reason": "",
+      "stage": "Snowball noise calibration",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
+      "allocated_seconds": 7460.318,
+      "allocated_h100_hours": 16.578484444444445,
+      "outcome": "succeeded; audit pending"
+    },
+    {
+      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "71235f622ca6610f",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791766727554",
+      "finished_at_ms": "1791774182359",
+      "node_name": "g83b852",
+      "terminal_reason": "",
+      "stage": "Snowball noise calibration",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
+      "allocated_seconds": 7454.805,
+      "allocated_h100_hours": 16.566233333333333,
+      "outcome": "succeeded; audit pending"
+    },
+    {
+      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "c5cb8c12e50022a2",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791766727554",
+      "finished_at_ms": "1791774182359",
+      "node_name": "g83d3c8",
+      "terminal_reason": "",
+      "stage": "Snowball noise calibration",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
+      "allocated_seconds": 7454.805,
+      "allocated_h100_hours": 16.566233333333333,
+      "outcome": "succeeded; audit pending"
+    },
+    {
+      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "86faddb3b41b99e4",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791766733094",
+      "finished_at_ms": "1791774182359",
+      "node_name": "g83d56a",
+      "terminal_reason": "",
+      "stage": "Snowball noise calibration",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
+      "allocated_seconds": 7449.265,
+      "allocated_h100_hours": 16.553922222222223,
+      "outcome": "succeeded; audit pending"
+    },
+    {
+      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "4b2f6f258ef68071",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791766727554",
+      "finished_at_ms": "1791774182359",
+      "node_name": "g83d862",
+      "terminal_reason": "",
+      "stage": "Snowball noise calibration",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
+      "allocated_seconds": 7454.805,
+      "allocated_h100_hours": 16.566233333333333,
+      "outcome": "succeeded; audit pending"
     }
   ],
   "terminal_h100_hours": 54.25557777777778,
@@ -1854,7 +1954,7 @@
     "core GPU qualification": 4.532366666666666,
     "Snowball GPU qualification": 117.57646666666669,
     "Qwen GPU qualification": 56.827613333333325,
-    "Snowball noise calibration": 152.45734888888887
+    "Snowball noise calibration": 235.28845555555557
   },
   "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
   "active_attempts": [
@@ -1874,7 +1974,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "1de3e1719239b1ab9ebc57974051b7cb5fa3912844e9baff0c4f29c0c6d78922",
-      "allocated_h100_hours_so_far": 27.44162393305037
+      "allocated_h100_hours_so_far": 33.63814934624566
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a1-01a126ce/1",
@@ -1892,7 +1992,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "1de3e1719239b1ab9ebc57974051b7cb5fa3912844e9baff0c4f29c0c6d78922",
-      "allocated_h100_hours_so_far": 27.44162393305037
+      "allocated_h100_hours_so_far": 33.63814934624566
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a1-01a126ce/0",
@@ -1910,7 +2010,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "2e2596b7e62b2b6a78e4ec31c7e744637f7f712ae11537234ac6eb0727898cbf",
-      "allocated_h100_hours_so_far": 25.277919489012824
+      "allocated_h100_hours_so_far": 31.474444902208116
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a1-01a126ce/1",
@@ -1928,7 +2028,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "2e2596b7e62b2b6a78e4ec31c7e744637f7f712ae11537234ac6eb0727898cbf",
-      "allocated_h100_hours_so_far": 25.277919489012824
+      "allocated_h100_hours_so_far": 31.474444902208116
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a1-01a126ce/0",
@@ -1946,7 +2046,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "a06ec8c4692316b64a7bea73293f8f2ec90bc3b7ea5bb86891b27139d1f06685",
-      "allocated_h100_hours_so_far": 19.412250599861146
+      "allocated_h100_hours_so_far": 25.60877601305644
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a1-01a126ce/1",
@@ -1964,97 +2064,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "a06ec8c4692316b64a7bea73293f8f2ec90bc3b7ea5bb86891b27139d1f06685",
-      "allocated_h100_hours_so_far": 19.412250599861146
-    },
-    {
-      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/0",
-      "attempt_id": "0",
-      "attempt_uid": "8ec635812d83c989",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791766727554",
-      "finished_at_ms": "",
-      "node_name": "g73b716",
-      "terminal_reason": "",
-      "stage": "Snowball noise calibration",
-      "cluster": "cw-us-east-02a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
-      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
-      "allocated_h100_hours_so_far": 11.365777266820272
-    },
-    {
-      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/1",
-      "attempt_id": "0",
-      "attempt_uid": "71235f622ca6610f",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791766727554",
-      "finished_at_ms": "",
-      "node_name": "g83b852",
-      "terminal_reason": "",
-      "stage": "Snowball noise calibration",
-      "cluster": "cw-us-east-02a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
-      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
-      "allocated_h100_hours_so_far": 11.365777266820272
-    },
-    {
-      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/2",
-      "attempt_id": "0",
-      "attempt_uid": "c5cb8c12e50022a2",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791766727554",
-      "finished_at_ms": "",
-      "node_name": "g83d3c8",
-      "terminal_reason": "",
-      "stage": "Snowball noise calibration",
-      "cluster": "cw-us-east-02a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
-      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
-      "allocated_h100_hours_so_far": 11.365777266820272
-    },
-    {
-      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/3",
-      "attempt_id": "0",
-      "attempt_uid": "86faddb3b41b99e4",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791766733094",
-      "finished_at_ms": "",
-      "node_name": "g83d56a",
-      "terminal_reason": "",
-      "stage": "Snowball noise calibration",
-      "cluster": "cw-us-east-02a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
-      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
-      "allocated_h100_hours_so_far": 11.353466155264112
-    },
-    {
-      "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/4",
-      "attempt_id": "0",
-      "attempt_uid": "4b2f6f258ef68071",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791766727554",
-      "finished_at_ms": "",
-      "node_name": "g83d862",
-      "terminal_reason": "",
-      "stage": "Snowball noise calibration",
-      "cluster": "cw-us-east-02a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
-      "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
-      "allocated_h100_hours_so_far": 11.365777266820272
+      "allocated_h100_hours_so_far": 25.60877601305644
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a1-01a126ce/0",
@@ -2072,7 +2082,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "488e5790e14bf9a709a2c021c062cccd248042c0dbac433fae9d965c4f4c1c81",
-      "allocated_h100_hours_so_far": 19.36100615554386
+      "allocated_h100_hours_so_far": 25.55753156873915
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a1-01a126ce/1",
@@ -2090,7 +2100,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "488e5790e14bf9a709a2c021c062cccd248042c0dbac433fae9d965c4f4c1c81",
-      "allocated_h100_hours_so_far": 19.36100615554386
+      "allocated_h100_hours_so_far": 25.55753156873915
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s1-a1-01a126ce/0",
@@ -2108,7 +2118,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "10e84b58d18b09cb40b74ad9fa1821c294bdff1c2a2ed295b1b2b2770a547eb6",
-      "allocated_h100_hours_so_far": 11.365777266820272
+      "allocated_h100_hours_so_far": 17.562302680015563
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s1-a1-01a126ce/1",
@@ -2126,7 +2136,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "10e84b58d18b09cb40b74ad9fa1821c294bdff1c2a2ed295b1b2b2770a547eb6",
-      "allocated_h100_hours_so_far": 11.365777266820272
+      "allocated_h100_hours_so_far": 17.562302680015563
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a1-01a126ce/0",
@@ -2144,7 +2154,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "418984cb88e2b5cdd2938697e0a00c9a8d94711abae6b732db9f828491697725",
-      "allocated_h100_hours_so_far": 8.821808377901712
+      "allocated_h100_hours_so_far": 15.018333791097005
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a1-01a126ce/1",
@@ -2162,7 +2172,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "418984cb88e2b5cdd2938697e0a00c9a8d94711abae6b732db9f828491697725",
-      "allocated_h100_hours_so_far": 8.821808377901712
+      "allocated_h100_hours_so_far": 15.018333791097005
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a1-01a126ce/0",
@@ -2180,7 +2190,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "dd93236aef37ae02e9b26dca2336438a26ca0031b7b5efffcba8bbad7ce930f2",
-      "allocated_h100_hours_so_far": 8.821808377901712
+      "allocated_h100_hours_so_far": 15.018333791097005
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a1-01a126ce/1",
@@ -2198,7 +2208,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "dd93236aef37ae02e9b26dca2336438a26ca0031b7b5efffcba8bbad7ce930f2",
-      "allocated_h100_hours_so_far": 8.821808377901712
+      "allocated_h100_hours_so_far": 15.018333791097005
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-sc-s0-a1-01a126ce/0",
@@ -2216,7 +2226,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "6fe63cf91ac38c7e9272f86abbf26d07f4665c3ce09430b5289123b7cf927180",
-      "allocated_h100_hours_so_far": 8.821808377901712
+      "allocated_h100_hours_so_far": 15.018333791097005
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-sc-s0-a1-01a126ce/1",
@@ -2234,7 +2244,43 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "6fe63cf91ac38c7e9272f86abbf26d07f4665c3ce09430b5289123b7cf927180",
-      "allocated_h100_hours_so_far": 8.796779488987394
+      "allocated_h100_hours_so_far": 14.993304902182684
+    },
+    {
+      "task_id": "/romain/sc-skyrl-publication-qual-sc-s0-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "b1974b1f5471c6b2",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791774193574",
+      "finished_at_ms": "",
+      "node_name": "g73b716",
+      "terminal_reason": "",
+      "stage": "SkyRL qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+      "configuration_sha256": "f6edeec7082b925ddc94566495345a30a4a3a90428d10d4d7e63a8b8a9b61c78",
+      "allocated_h100_hours_so_far": 0.9711471245023939
+    },
+    {
+      "task_id": "/romain/sc-skyrl-publication-qual-sc-s0-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "a0bb02bcb8856f9c",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791774193574",
+      "finished_at_ms": "",
+      "node_name": "g83b852",
+      "terminal_reason": "",
+      "stage": "SkyRL qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+      "configuration_sha256": "f6edeec7082b925ddc94566495345a30a4a3a90428d10d4d7e63a8b8a9b61c78",
+      "allocated_h100_hours_so_far": 0.9711471245023939
     }
   ]
 }
