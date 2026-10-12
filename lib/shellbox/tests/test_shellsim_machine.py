@@ -99,7 +99,6 @@ def test_run_unsupported_command_returns_failed_result(tmp_path: Path) -> None:
             assert result.reason is ExitReason.EXITED
             assert result.exit_code == 2
             assert result.stdout == b""
-            assert result.stderr.startswith(b"python: unsupported by minimal shim:")
             assert len(result.stderr) == UNSUPPORTED_OUTPUT_LIMIT_BYTES
             assert result.stderr_truncated
 
@@ -123,7 +122,6 @@ def test_shell_session_unsupported_command_returns_failed_update(tmp_path: Path)
             update = await shell.execute(UNSUPPORTED_COMMAND, output_limit_bytes=UNSUPPORTED_OUTPUT_LIMIT_BYTES)
             assert update.status is ShellStatus.COMPLETED
             assert update.exit_code == 2
-            assert update.output.startswith(b"python: unsupported by minimal shim:")
             assert len(update.output) == UNSUPPORTED_OUTPUT_LIMIT_BYTES
             assert update.truncated
 

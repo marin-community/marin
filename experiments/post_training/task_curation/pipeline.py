@@ -237,13 +237,10 @@ class CampaignMachines:
     image_factory: MachineFactory | None = None
     image_cpus: int = IMAGE_MACHINE_CPUS
     local: LocalGraderMachines = field(default_factory=LocalGraderMachines)
-    simulator_factory: MachineFactory | None = None
     simulator_catalog: str | None = None
 
     @cached_property
     def _simulator_factory(self) -> MachineFactory:
-        if self.simulator_factory is not None:
-            return self.simulator_factory
         try:
             import shellsim  # noqa: PLC0415
             from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415

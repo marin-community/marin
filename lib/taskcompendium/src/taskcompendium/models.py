@@ -341,6 +341,9 @@ class CommandSemantics(StrEnum):
     """A simulated shell and virtual filesystem with optional WASI software and no guest networking."""
 
 
+SHELL_SIMULATOR_CAPABILITIES = frozenset({"shell", "filesystem", "python"})
+
+
 class PortableSoftware(BaseModel):
     """Explicit WASI catalog selection, independent of native Linux package locks."""
 
@@ -375,11 +378,10 @@ class EnvironmentRequirements(BaseModel):
                 raise ValueError("Native environment dependencies require Linux process semantics")
         if self.portable_software is not None and self.command_semantics != CommandSemantics.SHELL_SIMULATOR:
             raise ValueError("Portable software requires shell simulator semantics")
-        if self.command_semantics == CommandSemantics.SHELL_SIMULATOR and set(self.capabilities) - {
-            "shell",
-            "filesystem",
-            "python",
-        }:
+        if (
+            self.command_semantics == CommandSemantics.SHELL_SIMULATOR
+            and set(self.capabilities) - SHELL_SIMULATOR_CAPABILITIES
+        ):
             raise ValueError("The shell simulator provides shell, filesystem, and Python capabilities")
         if any(not capability for capability in self.capabilities):
             raise ValueError("Capabilities must be nonempty names")
