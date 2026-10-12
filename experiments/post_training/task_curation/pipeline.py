@@ -307,6 +307,7 @@ def _pipeline_config(
     machines: GradingMachines | None,
     *,
     seed: int,
+    quality_sample_size: int,
     verification_sample_size: int,
     max_workers: int,
     worker_resources: ResourceConfig,
@@ -314,7 +315,7 @@ def _pipeline_config(
 ) -> SourcePipelineConfig:
     return SourcePipelineConfig(
         mode=mode,
-        quality_policy=SourceQualityPolicy(sample_size=100, seed=seed),
+        quality_policy=SourceQualityPolicy(sample_size=quality_sample_size, seed=seed),
         verification_policy=SourceVerificationPolicy(verification_sample_size, seed, 1, 0.95),
         review=review,
         execution=AuditExecution(
@@ -350,6 +351,7 @@ def _source_config(
         None,
         settings.machines if controls is not None else None,
         seed=settings.seed,
+        quality_sample_size=settings.quality_sample_size,
         verification_sample_size=settings.verification_sample_size,
         max_workers=settings.execution.max_workers,
         worker_resources=settings.execution.worker_resources,

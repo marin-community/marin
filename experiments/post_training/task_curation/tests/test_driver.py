@@ -146,7 +146,7 @@ def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypat
     options = {
         "--mode": "quick",
         "--output-root": str(output),
-        "--download-cache": str(cache),
+        "--cache-dir": str(cache),
         "--max-workers": "1",
     }
     args = [item for pair in options.items() for item in pair]
@@ -174,7 +174,7 @@ def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypat
         assert [row["source_row"] for row in rows] == [source_row]
 
 
-@pytest.mark.parametrize("option", ["--input-root", "--input-file", "--input", "--output-root", "--download-cache"])
+@pytest.mark.parametrize("option", ["--input-root", "--input-file", "--input", "--output-root"])
 def test_reviewed_cli_rejects_local_input_and_output_options(tmp_path, catalog, option):
     inputs = tmp_path / "inputs"
     inputs.mkdir()
@@ -185,7 +185,6 @@ def test_reviewed_cli_rejects_local_input_and_output_options(tmp_path, catalog, 
         "--input-file": ["fixture.jsonl", str(file)],
         "--input": ["answers", str(inputs)],
         "--output-root": [str(tmp_path / "output")],
-        "--download-cache": [str(tmp_path / "downloads")],
     }
     result = CliRunner().invoke(main, [*arguments(tmp_path), option, *values[option]])
     assert result.exit_code == 2
@@ -209,7 +208,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     if mode == "quick":
         output_root = tmp_path / "output"
         report = output_root / "campaign.json"
-        options += ["--output-root", str(output_root), "--download-cache", str(tmp_path / "downloads")]
+        options += ["--output-root", str(output_root), "--cache-dir", str(tmp_path / "downloads")]
     else:
         report = tmp_path / "report.json"
         options += ["--coordinator-memory", "1g", "--worker-image", "fixture-image", "--report-path", str(report)]
@@ -316,3 +315,63 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
         assert result["stages"] == ["download", "normalize", "final"]
     finally:
         client.shutdown()
+
+
+def test_local_reviewed_campaign_reuses_cached_source_graph(tmp_path, monkeypatch):
+    original_input = tmp_path / "numbers.txt"
+    original_input.write_text("1\n2\n3\n")
+    source = number_source(original_input)
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "original-prefix"))
+    cache = tmp_path / "cache"
+    args = ["--mode", "full", "--cache-dir", str(cache), "--source", source.name, "--max-workers", "1"]
+    runner = CliRunner()
+    plan = runner.invoke(main, args)
+    assert plan.exit_code == 0, plan.output
+    assert not cache.exists()
+    first = runner.invoke(main, [*args, "--run"])
+    assert first.exit_code == 0, first.output
+    report = json.loads((cache / "campaigns/campaign.json").read_text())
+    result = report["sources"][0]["result"]
+    output = StoragePath(result["outputs"]["numbers"])
+    assert json.loads(output.read_text()) == [2, 4, 6]
+    first_run = report["run_id"]
+    original_input.unlink()
+    repeated = runner.invoke(main, [*args, "--run"])
+    assert repeated.exit_code == 0, repeated.output
+    assert json.loads(output.read_text()) == [2, 4, 6]
+    assert json.loads((cache / "campaigns/campaign.json").read_text())["run_id"] != first_run
+    assert os.environ["MARIN_PREFIX"] == str(tmp_path / "original-prefix")
+
+
+def test_local_full_recipe_exports_admitted_tasks_without_cluster_settings(tmp_path, monkeypatch):
+    declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    source = replace(declared, config=replace(math500(), rubric=None, controls=None))
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
+    staged = tmp_path / "input"
+    staged.mkdir()
+    (staged / "test.jsonl").write_text('{"problem":"One plus one?","answer":"2"}\n')
+    cache = tmp_path / "cache"
+    result = CliRunner().invoke(
+        main,
+        [
+            "--mode",
+            "full",
+            "--cache-dir",
+            str(cache),
+            "--source",
+            source.name,
+            "--input-root",
+            str(staged),
+            "--max-workers",
+            "1",
+            "--run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    outcome = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
+    final = StoragePath(outcome["result"]["outputs"]["final"])
+    tasks = [row for path in (final / "*.parquet").glob() for row in load_parquet(str(path))]
+    assert len(tasks) == 1
+    assert tasks[0]["source_row"] == "test.jsonl:0"
+    assert outcome["status"] == "completed"

@@ -29,16 +29,42 @@ select sources in catalog order; omitting `--source` selects the full catalog.
 QUICK needs no review model, controller, worker image or coordinator settings.
 
 Repeat `--source` for a cohort and use a fresh output root each pass. Downloads
-are cached under `~/.cache/marin` (`--download-cache` overrides this).
+are cached under `~/.cache/marin` (`--cache-dir` overrides this).
 `--input-root PATH` uses already staged files from the declared revision;
 `--input NAME PATH` overrides an auxiliary input. These local input options,
-`--output-root` and `--download-cache` are accepted only in QUICK mode.
+`--output-root` selects QUICK outputs or local reviewed campaign reports.
 
 For a local fixture, replace `--input-root` with
 `--input-file LOGICAL_PATH LOCAL_FILE`, repeated as needed. The logical path must
 match the source declaration. These files become the selected primary inputs;
 the manifest records their physical paths and SHA-256 while preserving logical
 row IDs. Auxiliary inputs still use overrides or the download cache.
+
+### Reviewed local loop on real sources
+
+Use `--cache-dir` with SAMPLE or FULL to run the same reviewed pipelines on a
+local Zephyr pool. Pinned downloads and source artifacts live in that directory;
+unchanged graphs are reused on the next invocation. SAMPLE processes each
+source's panel, while FULL expands sources accepted by its panel review.
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.driver \
+  --mode sample --cache-dir ~/.cache/marin/rl-curation \
+  --source aime24 --source svamp --quality-sample-size 5 \
+  --max-workers 2 --concurrent-sources 1 --review-concurrency 1 \
+  --review-mode chat --model-revision YOUR_GLM_REVISION \
+  --base-url YOUR_GLM_ENDPOINT --run
+```
+
+Local reviewed runs need no worker image or controller for in-process graders.
+The default report is `CACHE_DIR/campaigns/campaign.json`, with its retained run
+catalog beside it. `--report-path` or `--output-root` chooses another report
+location. Review requests are cached under `CACHE_DIR/review-cache` unless
+`--review-cache` selects another location. `GLM_BULK_TOKEN` supplies credentials.
+Package-backed and image graders retain their normal environment prerequisites.
+Use `--input-root`, `--input-file` or `--input` only when deliberately replacing
+the pinned inputs; the local rollout can use real sources without overrides.
 
 ### Harbor compatibility view
 

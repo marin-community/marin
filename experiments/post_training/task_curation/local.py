@@ -34,9 +34,8 @@ from experiments.post_training.task_curation.campaign import (
 
 
 @contextmanager
-def _local_artifact_prefix(prefix: str) -> Iterator[None]:
-    # lazy.lower resolves dependency paths from MARIN_PREFIX at execution time.
-    # QUICK is sequential; reviewed campaigns never enter this scope.
+def local_artifact_prefix(prefix: str) -> Iterator[None]:
+    """Bind planning and execution to the same local artifact cache."""
     previous = os.environ.get("MARIN_PREFIX")
     os.environ["MARIN_PREFIX"] = prefix
     try:
@@ -98,7 +97,7 @@ def run_local_steps(
                     outcomes[name] = SourceOutcome(name, path, OutcomeStatus.RUNNING)
                     report(CampaignStatus.RUNNING)
                     try:
-                        with _local_artifact_prefix(str(download_cache)):
+                        with local_artifact_prefix(str(download_cache)):
                             # Mutable terminal versions rerun through the ordinary executor;
                             # dependency versions and cache addresses remain unchanged.
                             terminal = replace(step, version="dev")
