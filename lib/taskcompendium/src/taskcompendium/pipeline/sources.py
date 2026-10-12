@@ -9,8 +9,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from typing import Any
+from urllib.parse import quote
 
-import pyarrow.parquet as pq
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.expr import col
@@ -19,11 +19,18 @@ from zephyr.readers import compute_parquet_splits, load_jsonl, load_parquet
 
 from taskcompendium.pipeline.fingerprints import callable_identity
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFiles, SourceFormat, StagedInputs
-from taskcompendium.pipeline.jsonl_normalization import normalized_jsonl_path
 from taskcompendium.pipeline.models import SourceRecipe
 
 PARQUET_SHARD_BYTES = 128 * 1024 * 1024
 PREPARED_SHARD_ROWS = 256
+
+
+def prepared_manifest_path(file: StoragePath) -> StoragePath:
+    return file.parent / ".curation-parquet" / (file.name + ".parquet") / "manifest.json"
+
+
+def prepared_component_path(file: StoragePath, component: str) -> StoragePath:
+    return prepared_manifest_path(file).parent / (quote(component, safe="") + ".parquet")
 
 
 def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
@@ -40,7 +47,7 @@ def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
         # Present only for parted sources, so whole-file sources keep their identities.
         **({"parts": callable_identity(spec.parts)} if spec.parts is not None else {}),
         **(
-            {"prepared_component": spec.prepared_component, "prepared_source_revision": "2"}
+            {"prepared_component": spec.prepared_component, "prepared_source_revision": "3"}
             if spec.prepared_component is not None
             else {}
         ),
@@ -222,21 +229,16 @@ def conversion_shards(
     if spec.prepared_component is not None:
         prepared = []
         for shard in shards:
-            file = StoragePath(shard.read_path or str(StoragePath(source_input) / shard.file))
-            parquet = normalized_jsonl_path(file)
-            # Local raw-file overrides need not have the acquisition's normalized copy.
-            if not parquet.exists():
-                if shard.read_path is None:
-                    raise FileNotFoundError(f"Missing acquisition-normalized JSONL: {parquet}")
+            # Overrides read the supplied file directly; preparation belongs to
+            # the immutable acquisition artifact, not to neighboring local files.
+            if shard.read_path is not None:
                 prepared.append(shard)
                 continue
-            if overrides:
-                with parquet.open("rb") as stream:
-                    metadata = pq.read_metadata(stream).metadata or {}
-                source = json.loads(metadata.get(b"curation_source", b"{}"))
-                if source.get("source_sha256") != overrides[shard.file].sha256:
-                    prepared.append(shard)
-                    continue
+            file = StoragePath(source_input) / shard.file
+            manifest = json.loads(prepared_manifest_path(file).read_text())
+            if not manifest["components"].get(spec.prepared_component, 0):
+                continue
+            parquet = prepared_component_path(file, spec.prepared_component)
             ranges = compute_parquet_splits(
                 str(parquet), parquet_shard_bytes, filter_expr=col("component") == spec.prepared_component
             )

@@ -20,11 +20,11 @@ from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.models import TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import SourceFormat
-from taskcompendium.pipeline.jsonl_normalization import normalized_jsonl_path
 from taskcompendium.pipeline.models import Controls, FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
+from taskcompendium.pipeline.sources import prepared_component_path
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 from verifyit.spec import ExactSpec
 from zephyr.context import ZephyrContext
@@ -253,9 +253,9 @@ def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, co
         assert [row["source_row"] for row in rows] == ["rows.jsonl:0"]
         if prepared:
             (staged,) = (StoragePath(str(tmp_path / "artifacts")) / "task-curation/download/**/rows.jsonl").glob()
-            records = list(load_parquet(str(normalized_jsonl_path(staged))))
-            assert records == [
-                {"component": "fixture", "source_index": 0, "raw_json": (primary / "rows.jsonl").read_bytes()}
+            records = list(load_parquet(str(prepared_component_path(staged, "fixture"))))
+            assert [(row["component"], row["source_index"], json.loads(row["raw_json"])) for row in records] == [
+                ("fixture", 0, json.loads((primary / "rows.jsonl").read_text()))
             ]
         review = json.loads((StoragePath(result.evidence["review"]) / "report.json").read_text())
         verification = json.loads((StoragePath(result.evidence["verify"]) / "report.json").read_text())
@@ -282,7 +282,10 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
         '{"dataset":"fixture","prompt":"First question"}\n' '{"dataset":"fixture","prompt":"Second question"}\n'
     )
     if prepared:
-        prepare_blend(str(file))
+        with ZephyrContext(
+            client=LocalClient(), max_workers=2, chunk_storage_prefix=str(tmp_path / "prepare")
+        ) as context:
+            prepare_blend(str(file), context)
     auxiliary = tmp_path / "answers"
     auxiliary.mkdir()
     answer = auxiliary / "answer.txt"

@@ -10,6 +10,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from fray.local_backend import LocalClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
 from taskcompendium.grading_result import Outcome
@@ -27,14 +28,17 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask, Reply
-from taskcompendium.pipeline.sources import SourceShard, staged_raw_file_rows
+from taskcompendium.pipeline.sources import SourceShard, prepared_component_path, staged_raw_file_rows
 from taskcompendium.runtime.task_grading import grade_task
+from zephyr.context import ZephyrContext
+from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (
     PLACEHOLDER_INPUTS,
     SKYWORK,
     SWE_GYM,
     pipeline_name,
+    prepare_blend,
     sources,
 )
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
@@ -57,6 +61,8 @@ SWE_GYM_INSTANCE = "gym-1"
 SWE_REBENCH_INSTANCE = "rebench-1"
 DAPO_QUESTION = "What is 2 + 3?"
 DAPO_ROW = {"prompt": [{"content": DAPO_QUESTION}], "reward_model": {"ground_truth": "5"}}
+
+
 SHELL_TOOL = {
     "type": "function",
     "name": "shell_command",
@@ -91,6 +97,34 @@ UNPARSEABLE_MATH_ANSWER = (
 """A sampled reference that only the source's LLM judge could compare."""
 COUNT_SCHEMA = json.dumps({"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]})
 GRID = [[1, 2], [3, 4]]
+
+
+@pytest.mark.parametrize("max_workers", [1, 3])
+def test_blend_preparation_preserves_nested_records_and_native_indices(tmp_path, max_workers):
+    rows = [
+        {"dataset": "fixture/one", "payload": {"values": [1, "é", None]}},
+        {"agent_ref": {"name": "fixture_agent"}, "tools": [{"name": "read", "arguments": {"path": "/app"}}]},
+        {"dataset": "fixture/one", "payload": {"text": "x" * 34_000_000}},
+    ]
+    source = tmp_path / "blend.jsonl"
+    source.write_text("\n\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n")
+    with ZephyrContext(
+        client=LocalClient(), max_workers=max_workers, chunk_storage_prefix=str(tmp_path / "chunks")
+    ) as context:
+        manifest = prepare_blend(str(source), context)
+    assert manifest == {"source_rows": 3, "components": {"fixture/one": 2, "agent:fixture_agent": 1}}
+    records = [
+        record
+        for component in manifest["components"]
+        for record in load_parquet(str(prepared_component_path(StoragePath(str(source)), component)))
+    ]
+    assert {record["source_index"]: json.loads(record["raw_json"]) for record in records} == dict(enumerate(rows))
+    for component in manifest["components"]:
+        parquet = pq.ParquetFile(str(prepared_component_path(StoragePath(str(source)), component)))
+        for index in range(parquet.num_row_groups):
+            assert set(parquet.read_row_group(index, columns=["component"]).column("component").to_pylist()) == {
+                component
+            }
 
 
 def ultra_row(component: str, agent: str, prompt: str = "Answer the question.", tools=(), **fields) -> dict:

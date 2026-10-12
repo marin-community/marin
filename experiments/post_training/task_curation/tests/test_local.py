@@ -13,11 +13,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.reader import ReadView
+from fray.local_backend import LocalClient
 from taskcompendium.convert.answers import answer_task, exact_answer_task
 from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from verifyit.spec import ExactSpec
+from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
@@ -123,7 +125,10 @@ def test_quick_blend_root_uses_current_raw_rows_with_missing_or_stale_preparatio
     file = primary / "rows.jsonl"
     file.write_text('{"dataset":"fixture","prompt":"Old question","answer":"old"}\n')
     if prepared:
-        prepare_blend(str(file))
+        with ZephyrContext(
+            client=LocalClient(), max_workers=2, chunk_storage_prefix=str(tmp_path / "prepare")
+        ) as context:
+            prepare_blend(str(file), context)
     file.write_text('{"dataset":"fixture","prompt":"Current question","answer":"current"}\n')
     source = replace(
         local_source,

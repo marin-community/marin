@@ -40,16 +40,15 @@ review while retaining those stages.
 Overrides are checked against the planned hashes before and after execution;
 changed inputs fail the artifact instead of publishing results under an old identity.
 
-Nemotron blend downloads include one shared JSONL-to-Parquet preparation per pinned
-file. `HfSource.prepare` runs after download inside the acquisition artifact;
-`prepared_component` selects component-homogeneous row groups using Parquet footer
-statistics. The prepared file retains each original JSON record and its upstream
-row index, so task IDs and source locators remain stable. Declared selectors and
-decoders still run, including the SWE-Gym membership split. Explicit local file
-overrides can supply raw JSONL directly for small reruns. A prepared copy is reused
-for an override only when its recorded source hash matches the override's file
-hash; stale copies are bypassed. Shared preparation buffers binary line reads to
-keep remote range reads sequential.
+Nemotron blend downloads include one shared Zephyr preparation pipeline per pinned
+file. `HfSource.prepare` loads JSONL, assigns original row indices, groups by
+component, and uses Zephyr's Parquet writer to produce one file per component.
+Component files have separate row groups; conversion uses Parquet footer filters
+and row ranges. Records retain their values and upstream row IDs, so task IDs and
+source locators remain stable. Declared selectors and decoders still run, including
+the SWE-Gym membership split. Local overrides read their supplied raw files directly;
+neighboring preparation files do not replace them. Acquisition preparation does not
+calculate another source hash.
 Prepared conversion ranges also cap each shard at 256 rows, so compact components
 with expensive decoders or reference checks can use multiple workers. These
 ranges may share a row group; each reader keeps the component predicate and the

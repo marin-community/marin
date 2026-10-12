@@ -3,7 +3,6 @@
 
 import hashlib
 import json
-from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -13,7 +12,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.local_backend import LocalClient
-from fsspec.spec import AbstractBufferedFile
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -25,7 +23,6 @@ from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.conversion import convert_raw_row, convert_source_row
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFiles, SourceFormat
-from taskcompendium.pipeline.jsonl_normalization import normalize_jsonl
 from taskcompendium.pipeline.models import (
     Controls,
     ImportRejection,
@@ -41,29 +38,9 @@ from taskcompendium.pipeline.source_processing import (
     run_source_pipeline,
     write_conversion,
 )
+from taskcompendium.pipeline.sources import prepared_component_path, prepared_manifest_path
 from taskcompendium.pipeline.transforms import normalize_row
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
-
-
-class _RangeFile(AbstractBufferedFile):
-    """Remote range reads backed by local bytes, with the production fsspec cache."""
-
-    def __init__(self, data: bytes):
-        self.data = data
-        self.requested_bytes = 0
-        super().__init__(
-            None,
-            "fixture",
-            mode="rb",
-            size=len(data),
-            block_size=16_000_000,
-            cache_type="background",
-            cache_options={"maxblocks": 2},
-        )
-
-    def _fetch_range(self, start: int, end: int) -> bytes:
-        self.requested_bytes += end - start
-        return self.data[start:end]
 
 
 def convert_answer(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -87,8 +64,19 @@ def decode_answer(row: dict, _context: ConversionContext) -> dict:
     return {**row, "prompt": f"Decoded: {row['prompt']}"}
 
 
-def answer_component(line: bytes) -> str:
-    return json.loads(line)["component"]
+def prepared_answers(file: Path, rows: list[dict]) -> None:
+    source = StoragePath(str(file))
+    prepared_manifest_path(source).parent.mkdirs()
+    counts = {}
+    for component in sorted({row["component"] for row in rows}):
+        records = [
+            {"component": component, "source_index": index, "raw_json": json.dumps(row).encode()}
+            for index, row in enumerate(rows)
+            if row["component"] == component
+        ]
+        pq.write_table(pa.Table.from_pylist(records), str(prepared_component_path(source, component)))
+        counts[component] = len(records)
+    prepared_manifest_path(source).write_text(json.dumps({"source_rows": len(rows), "components": counts}))
 
 
 def select_left_answer(row: dict, _context: ConversionContext) -> bool:
@@ -199,32 +187,6 @@ def test_split_parquet_matches_whole_file_tasks_and_rejections_after_selection(t
     assert cast(TextMessage, task.context.events[0]).content == "Decoded: Name a color"
 
 
-def test_jsonl_normalization_bounds_remote_reads_and_retains_exact_large_records(tmp_path, monkeypatch):
-    small = b' {"component":"left","payload":"' + b"x" * 4060 + b'"}\r\n'
-    large = b'{"component":"right","payload":"' + b"y" * 34_000_000 + b'"}\n'
-    data = b"\n" + small * 1000 + b" \r\n" + large
-    stream = _RangeFile(data)
-
-    @contextmanager
-    def range_input(_path, _mode):
-        try:
-            yield stream
-        finally:
-            stream.close()
-
-    monkeypatch.setattr("taskcompendium.pipeline.jsonl_normalization.open_file", range_input)
-    source = tmp_path / "rows.jsonl"
-    result = normalize_jsonl(str(source), answer_component)
-    rows = pq.read_table(source.parent / ".curation-parquet" / "rows.jsonl.parquet").to_pylist()
-    by_index = {row["source_index"]: row["raw_json"] for row in rows}
-    assert by_index == {**dict.fromkeys(range(1000), small), 1000: large}
-    assert result["source_sha256"] == hashlib.sha256(data).hexdigest()
-    assert result["source_bytes"] == len(data)
-    assert result["source_rows"] == 1001
-    assert stream.requested_bytes <= len(data) + 32_000_000
-    assert stream.closed
-
-
 @pytest.mark.parametrize("override_state", ["absent", "matching", "stale"])
 def test_prepared_jsonl_matches_native_tasks_locators_and_rejections(tmp_path: Path, override_state: str):
     source = tmp_path / "input"
@@ -241,7 +203,7 @@ def test_prepared_jsonl_matches_native_tasks_locators_and_rejections(tmp_path: P
     ]
     file = source / "rows.jsonl"
     file.write_text("\n\n".join(json.dumps(row) for row in rows) + "\n")
-    normalize_jsonl(str(file), answer_component, row_group_bytes=1)
+    prepared_answers(file, rows)
     if override_state == "stale":
         rows[1]["prompt"] = "Updated source prompt"
         file.write_text("\n\n".join(json.dumps(row) for row in rows) + "\n")
@@ -315,7 +277,7 @@ def test_prepared_conversion_subdivides_a_row_group_without_changing_records(tmp
         for index in range(1026)
     ]
     file.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    normalize_jsonl(str(file), answer_component)
+    prepared_answers(file, rows)
     recipe = SourceRecipe(
         name="colors",
         version="1",

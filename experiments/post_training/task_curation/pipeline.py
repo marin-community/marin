@@ -123,7 +123,7 @@ class HfSource:
     decode: RowDecoder | None = None
     read: FileReader | None = None
     parts: FileParts | None = None
-    prepare: Callable[[str], Any] | None = None
+    prepare: Callable[[str, ZephyrContext], Any] | None = None
     prepared_component: str | None = None
 
     @property
@@ -533,7 +533,11 @@ def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
             "repo": source.repo,
             "revision": source.revision,
             "files": sorted(source.files),
-            **({"prepare": callable_identity(source.prepare)} if source.prepare is not None else {}),
+            **(
+                {"prepare": callable_identity(source.prepare), "preparation_revision": "2"}
+                if source.prepare is not None
+                else {}
+            ),
         }
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
 
@@ -601,9 +605,8 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
         )
         finish_download(plan)
         if source.prepare is not None:
-            campaign.context.execute(
-                Dataset.from_list([task.destination_path for task in plan.tasks]).map(source.prepare)
-            )
+            for task in plan.tasks:
+                source.prepare(task.destination_path, campaign.context)
         return
     digest = hashlib.sha256()
     destination = StoragePath(request.output_path) / source.filename
