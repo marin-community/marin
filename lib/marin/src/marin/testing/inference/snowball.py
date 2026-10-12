@@ -7,6 +7,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 from rigging.filesystem.storage_path import StoragePath
@@ -20,13 +21,15 @@ PROMPT_BUCKET_MAX_TOKENS = (256, 1024, 4096, 16384, 32768)
 MAX_PROBABILITY_ERROR = 0.075
 # Empirical v6e-8 compatibility ceilings. They are intentionally non-monotonic;
 # long-context convergence remains tracked separately in #7554 and #7555.
-TPU_VLLM_MAX_PROBABILITY_ERROR_BY_BUCKET = {
-    256: 0.04,
-    1024: 0.125,
-    4096: 0.10,
-    16384: 0.70,
-    32768: 0.50,
-}
+TPU_VLLM_MAX_PROBABILITY_ERROR_BY_BUCKET = MappingProxyType(
+    {
+        256: 0.04,
+        1024: 0.125,
+        4096: 0.10,
+        16384: 0.70,
+        32768: 0.50,
+    }
+)
 # Deep top-k keeps the frozen TPU golden tokens observable in long-context tails.
 TPU_VLLM_RETURNED_LOGPROBS = 4096
 
@@ -87,8 +90,7 @@ SNOWBALL_TPU = ModelIdentity(
     checkpoint_step=SNOWBALL.checkpoint_step,
     export_sha256=SNOWBALL.export_sha256,
     export_uri=(
-        "gs://marin-us-east5/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/"
-        "d819cbc63780bd866a942e47f9283cbd7932bbb237b52df527edd750c65be8f0"
+        "gs://marin-us-east5/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/" f"{SNOWBALL.export_sha256}"
     ),
 )
 
