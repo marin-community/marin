@@ -8,6 +8,8 @@ and Read all views derive from it. Copy a nearby node and preserve its fields.
 - Give `id` a unique, stable value; public model nodes normally use the full
   Hugging Face `owner/repo` ID. Set `model` to that ID, or `null` for a run without
   published weights. Set `title` and `summary` from the experiment record.
+  An optional `short` string provides the compact map label; without it the
+  frontend derives one from `title`.
   `stage` is a display label such as `SFT` or `RL`; `algorithms` is an array of
   strings. `status` is free text; include `failed` or `negative result` for the
   failure badge when applicable.

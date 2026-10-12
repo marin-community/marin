@@ -4718,6 +4718,7 @@
     {
       "id": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
       "title": "Broad A/B mixture SFT · 216 sources · 4,750 updates",
+      "short": "10.05 · A/B SFT",
       "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
       "parents": [
         "lce-skew8"
@@ -4762,6 +4763,7 @@
     {
       "id": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09",
       "title": "Serial NUPA/BFCL merge · shared 100%",
+      "short": "Merge · shared 100",
       "model": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09",
       "parents": [
         "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
@@ -4803,6 +4805,7 @@
     {
       "id": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared075-2026.10.09",
       "title": "Serial NUPA/BFCL merge · shared 75%",
+      "short": "Merge · shared 75",
       "model": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared075-2026.10.09",
       "parents": [
         "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
@@ -4844,6 +4847,7 @@
     {
       "id": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared050-Attn025-2026.10.09",
       "title": "Serial NUPA/BFCL merge · shared 50% + attention 25%",
+      "short": "Merge · shared 50/25",
       "model": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared050-Attn025-2026.10.09",
       "parents": [
         "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
@@ -4885,6 +4889,7 @@
     {
       "id": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
       "title": "DARE-TIES merge · campaign 2 · dare-ties-02",
+      "short": "C2 · DARE-TIES 02",
       "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
       "parents": [
         "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
@@ -4925,6 +4930,7 @@
     {
       "id": "open-athena/Grug-67B-A2B-BFCL-Recovery",
       "title": "BFCL DPO recovery initializer · run .304 step-1",
+      "short": "BFCL · DPO recovery",
       "model": "open-athena/Grug-67B-A2B-BFCL-Recovery",
       "parents": [
         "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
@@ -4963,6 +4969,7 @@
     {
       "id": "open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO",
       "title": "BFCL protocol FTPO · repeated-opener repair",
+      "short": "BFCL · protocol FTPO",
       "model": "open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO",
       "parents": [
         "open-athena/Grug-67B-A2B-BFCL-Recovery"
@@ -5002,6 +5009,7 @@
     {
       "id": "open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12",
       "title": "DARE-linear merge · campaign 3 · dare-linear-02",
+      "short": "C3 · DARE-linear 02",
       "model": "open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12",
       "parents": [
         "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",

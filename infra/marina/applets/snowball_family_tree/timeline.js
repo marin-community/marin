@@ -42,7 +42,7 @@ function timelineSource(n) {
         .find((url) =>
           /github\.com\/marin-community\/marin\/issues\/\d+/.test(url),
         );
-  return `<a href="${esc(issue || n.source)}" target="_blank" rel="noopener noreferrer">${sourceName(issue || n.source)} ↗</a>${n.model ? `<a href="${HF_URL}${esc(n.model)}" target="_blank" rel="noopener noreferrer">Weights ↗</a>` : ""}`;
+  return sourceLink(issue || n.source) + weightsLink(n);
 }
 function timelineModels(list, label) {
   $("#timeline-model-label").textContent = label;
@@ -67,7 +67,7 @@ function setupTimeline(autoplay = true) {
       order.get(a.id) - order.get(b.id),
   );
   timelineStart =
-    timelineFamily === "10T" ? TEN_T_TIMELINE_START : nodeTime(timelineRoot);
+    timelineFamily === FAMILY_10T ? TEN_T_TIMELINE_START : nodeTime(timelineRoot);
   timelineEnd = Math.max(
     timelineStart + DAY,
     ...timelineNodes.filter((n) => n.timeline.date).map(nodeTime),

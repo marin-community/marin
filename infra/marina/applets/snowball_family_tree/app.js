@@ -1,3 +1,9 @@
+// Snowball family tree frontend, in three classic scripts sharing one global
+// scope, loaded in order: app.js (graph, layout, zoom, detail view, init
+// tail), search.js (query/filter) and timeline.js (timeline player). The
+// mutable state below is crossed by all three scripts; nothing runs
+// cross-cluster synchronously at load time — the init tail defers via
+// requestAnimationFrame, after every script has executed.
 const DATA = JSON.parse(document.getElementById("graph-data").textContent),
   nodes = DATA.nodes,
   byId = new Map(nodes.map((n) => [n.id, n]));
@@ -19,6 +25,9 @@ const COOLDOWN_ROOTS = {
   "5.7T": "base-5.7",
   "10T": "base-10",
 };
+const FAMILIES = Object.keys(COOLDOWN_ROOTS);
+const FAMILY_10T = "10T";
+const BLOCK_BORDER = 22;
 const TIMELINE_ROWS = 6;
 const SCRUBBER_STEPS = Number($("#timeline-scrub").max);
 const SEPT21 = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21";
@@ -49,6 +58,14 @@ function sourceName(url) {
       ? "Discord thread"
       : "Experiment record";
 }
+function sourceLink(url, cls) {
+  return `<a${cls ? ` class="${cls}"` : ""} target="_blank" rel="noopener noreferrer" href="${esc(url)}">${sourceName(url)} ↗</a>`;
+}
+function weightsLink(n, cls, label = "Weights ↗") {
+  return n.model
+    ? `<a${cls ? ` class="${cls}"` : ""} target="_blank" rel="noopener noreferrer" href="${HF_URL}${esc(n.model)}">${label}</a>`
+    : "";
+}
 function ancestors(id, set = new Set()) {
   if (set.has(id)) return set;
   set.add(id);
@@ -61,26 +78,29 @@ function descendants(id, set = new Set()) {
   for (const n of nodes) if (n.parents.includes(id)) descendants(n.id, set);
   return set;
 }
+// Compact labels for run nodes without a published model id. Nodes may carry
+// their own `short` field in graph-data.json; it takes precedence.
+const NODE_LABELS = {
+  [PRETRAIN]: "67B A2B pretrain",
+  "base-2.7": "2.7T cooldown",
+  "base-5.7": "5.7T cooldown",
+  "base-10": "10T cooldown",
+  "lce-qk157": "262K · QK 1.57",
+  "lce-qk175": "262K · QK 1.75",
+  "lce-skew2": "262K · 2× long docs",
+  "lce-skew4": "262K · 4× long docs",
+  "lce-skew8": "262K · 8× long docs",
+  base157000: "September 14 base",
+  "antidoom-ftpo-math-step35": "FTPO · math 35",
+  "antidoom-ftpo-full-window-step45": "FTPO · full window 45",
+  "antidoom-ftpo-reset-math-step5": "FTPO · reset math 5",
+  "antidoom-ftpo-mixed-step5": "FTPO · mixed 5",
+  "antidoom-ftpo-mixed-step10": "FTPO · mixed 10",
+  "loop-length-sweep-six-arms": "Loop / length · 6 arms",
+};
 function shortTitle(n) {
-  const labels = {
-    [PRETRAIN]: "67B A2B pretrain",
-    "base-2.7": "2.7T cooldown",
-    "base-5.7": "5.7T cooldown",
-    "base-10": "10T cooldown",
-    "lce-qk157": "262K · QK 1.57",
-    "lce-qk175": "262K · QK 1.75",
-    "lce-skew2": "262K · 2× long docs",
-    "lce-skew4": "262K · 4× long docs",
-    "lce-skew8": "262K · 8× long docs",
-    base157000: "September 14 base",
-    "antidoom-ftpo-math-step35": "FTPO · math 35",
-    "antidoom-ftpo-full-window-step45": "FTPO · full window 45",
-    "antidoom-ftpo-reset-math-step5": "FTPO · reset math 5",
-    "antidoom-ftpo-mixed-step5": "FTPO · mixed 5",
-    "antidoom-ftpo-mixed-step10": "FTPO · mixed 10",
-    "loop-length-sweep-six-arms": "Loop / length · 6 arms",
-  };
-  if (labels[n.id]) return labels[n.id];
+  if (n.short) return n.short;
+  if (NODE_LABELS[n.id]) return NODE_LABELS[n.id];
   if (n.id.includes("Antidoom-RLVR1-Reference-KL"))
     return "Antidoom · ref/KL 20";
   if (n.id.includes("Antidoom-RLVR1-Step12")) return "Antidoom · RLVR1 12";
@@ -108,7 +128,7 @@ function card(n, presentation = "map") {
   return `<article class="node ${n.org === "community" ? "community" : ""} ${expanded ? "expanded" : "collapsed"} ${selected === n.id ? "selected" : ""}" data-node="${esc(n.id)}" ${reading ? "" : `id="node-${esc(n.id)}"`} aria-label="${esc(n.title)}">
  <h2>${reading ? esc(n.title) : `<button class="node-toggle" data-expand="${esc(n.id)}" aria-expanded="${expanded}" aria-label="${expanded ? "Collapse" : "Expand"} ${esc(n.title)}">${esc(expanded ? n.title : shortTitle(n))}</button>`}</h2>
  <div class="node-brief"><span>${esc(n.stage)}</span><span>${children.get(n.id).length ? "↳ " + children.get(n.id).length : "leaf"}</span></div>
- <div class="node-full"><div class="node-top"><span class="org-label">${esc(n.org)}</span><span class="kind">${esc(n.stage || "Experiment")}</span></div>${n.model ? `<span class="model">${esc(n.model)}</span>` : ""}${/failed|negative result|collapsed final/.test(n.status) ? '<div class="badge">NEGATIVE RESULT / FAILED TRIAL</div>' : ""}${n.confidence !== "documented" ? `<div class="badge">${esc(n.confidence || "Qualified provenance")}</div>` : ""}<p class="summary">${esc(n.summary)}</p><div class="tags">${n.algorithms.map((a) => `<span class="tag">${esc(a)}</span>`).join("")}</div><div class="compute">${esc(n.flops || "FLOPs unknown")}</div><div class="node-foot"><a href="${esc(n.source)}" target="_blank" rel="noopener noreferrer">${sourceName(n.source)} ↗</a>${n.model ? `<a href="${HF_URL}${esc(n.model)}" target="_blank" rel="noopener noreferrer">Weights ↗</a>` : ""}<button type="button" data-select="${esc(n.id)}">Details</button></div>${n.parents.length ? `<div class="from">${n.edge_kind === "retained checkpoint" ? "Earlier checkpoint" : "Initialized from"} ${n.parents.map((p) => `<button data-jump="${esc(p)}">${esc(byId.get(p)?.title || p)}</button>`).join(" + ")}</div>` : ""}</div></article>`;
+ <div class="node-full"><div class="node-top"><span class="org-label">${esc(n.org)}</span><span class="kind">${esc(n.stage || "Experiment")}</span></div>${n.model ? `<span class="model">${esc(n.model)}</span>` : ""}${/failed|negative result|collapsed final/.test(n.status) ? '<div class="badge">NEGATIVE RESULT / FAILED TRIAL</div>' : ""}${n.confidence !== "documented" ? `<div class="badge">${esc(n.confidence || "Qualified provenance")}</div>` : ""}<p class="summary">${esc(n.summary)}</p><div class="tags">${n.algorithms.map((a) => `<span class="tag">${esc(a)}</span>`).join("")}</div><div class="compute">${esc(n.flops || "FLOPs unknown")}</div><div class="node-foot">${sourceLink(n.source)}${weightsLink(n)}<button type="button" data-select="${esc(n.id)}">Details</button></div>${n.parents.length ? `<div class="from">${n.edge_kind === "retained checkpoint" ? "Earlier checkpoint" : "Initialized from"} ${n.parents.map((p) => `<button data-jump="${esc(p)}">${esc(byId.get(p)?.title || p)}</button>`).join(" + ")}</div>` : ""}</div></article>`;
 }
 function ordered(list) {
   const result = [],
@@ -194,7 +214,7 @@ function layout() {
     const rowHeights = rows.map((row) =>
       Math.max(...row.map((c) => blocks.get(c.id).height)),
     );
-    const blockWidth = Math.max(width, childrenWidth) + 22;
+    const blockWidth = Math.max(width, childrenWidth) + BLOCK_BORDER;
     const blockHeight =
       height +
       (kids.length
@@ -222,7 +242,7 @@ function layout() {
   const paths = [];
   function place(n, left, top) {
     const block = blocks.get(n.id),
-      x = left + (block.width - 22 - block.nodeWidth) / 2,
+      x = left + (block.width - BLOCK_BORDER - block.nodeWidth) / 2,
       el = document.getElementById("node-" + n.id);
     const pos = {
       x,
@@ -236,7 +256,7 @@ function layout() {
     el.style.left = x + "px";
     el.style.top = top + "px";
     let rowTop = top + block.nodeHeight + levelGap;
-    const childLeft = left + (block.width - 22 - block.childrenWidth) / 2;
+    const childLeft = left + (block.width - BLOCK_BORDER - block.childrenWidth) / 2;
     block.rows.forEach((row, rowIndex) => {
       let colLeft = childLeft;
       row.forEach((c, col) => {
@@ -287,7 +307,8 @@ function layout() {
 function applyZoom() {
   const view = $("#viewport");
   offsetX =
-    Math.max(0, (view.clientWidth - canvasWidth * zoom) / 2) + 11 * zoom;
+    Math.max(0, (view.clientWidth - canvasWidth * zoom) / 2) +
+    (BLOCK_BORDER / 2) * zoom;
   offsetY = 18;
   $("#sizer").style.width =
     Math.max(view.clientWidth, canvasWidth * zoom + 2 * offsetX) + "px";
@@ -366,10 +387,8 @@ function detail(id) {
   const path = ordered(nodes.filter((x) => ancestors(id).has(x.id)));
   const evidence = n.evidence || [];
   const shortLabels = {
+    ...NODE_LABELS,
     [PRETRAIN]: "Shared pretrain",
-    "base-2.7": "2.7T cooldown",
-    "base-5.7": "5.7T cooldown",
-    "base-10": "10T cooldown",
     [SEPT21]: "September 21 Datakit SFT",
   };
   $("#tree-path").innerHTML =
@@ -381,7 +400,7 @@ function detail(id) {
       )
       .join('<span aria-hidden="true">→</span>');
   $("#detail-content").innerHTML =
-    `<span class="kicker">Selected lineage / ${esc(n.lane)}</span><h2>${esc(n.title)}</h2><div class="detail-model">${esc(n.model || "Native training run / checkpoint")}</div><div class="tags">${n.algorithms.map((a) => `<span class="tag">${esc(a)}</span>`).join("")}</div><p>${esc(n.summary)}</p><a class="source-link" target="_blank" rel="noopener noreferrer" href="${esc(n.source)}">${sourceName(n.source)} ↗</a>${n.model ? `<a class="source-link" target="_blank" rel="noopener noreferrer" href="${HF_URL}${esc(n.model)}">Hugging Face ↗</a>` : ""}<section><h3>Direct children · ${children.get(id).length}</h3>${
+    `<span class="kicker">Selected lineage / ${esc(n.lane)}</span><h2>${esc(n.title)}</h2><div class="detail-model">${esc(n.model || "Native training run / checkpoint")}</div><div class="tags">${n.algorithms.map((a) => `<span class="tag">${esc(a)}</span>`).join("")}</div><p>${esc(n.summary)}</p>${sourceLink(n.source, "source-link")}${weightsLink(n, "source-link", "Hugging Face ↗")}<section><h3>Direct children · ${children.get(id).length}</h3>${
       children.get(id).length
         ? `<ul>${children
             .get(id)
@@ -616,6 +635,14 @@ window.addEventListener("resize", () => {
 
 $("#count").textContent = nodes.length;
 $("#edgecount").textContent = nodes.reduce((n, x) => n + x.parents.length, 0);
+for (const select of [$("#family"), $("#timeline-family")]) {
+  for (const lane of FAMILIES) {
+    const option = document.createElement("option");
+    option.textContent = lane;
+    select.append(option);
+  }
+}
+$("#timeline-family").value = FAMILY_10T;
 $("#coverage").textContent =
   "Evidence: GitHub issues + comments · Discord threads · model cards\nGraph data and token-count extracts packaged with this applet; source links open the original records.";
 $("#unplaced").innerHTML = (DATA.unplaced || []).length

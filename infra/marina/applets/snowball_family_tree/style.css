@@ -518,11 +518,6 @@ select {
   font: inherit;
   text-decoration: underline;
 }
-.empty {
-  padding: 30px;
-  color: var(--muted);
-  font-size: 14px;
-}
 .reading {
   padding: 25px;
   display: none;
