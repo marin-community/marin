@@ -22,7 +22,14 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import (
+    HARBOR_GRADING_REVISION,
+    MARINSKYRL_GRADING_REVISION,
+    GradingSelection,
+    RlDataSource,
+    SourceInfo,
+    SourceReference,
+)
 
 AIME_VERIFIER = SourceReference(
     "aime",
@@ -31,6 +38,7 @@ AIME_VERIFIER = SourceReference(
         "https://github.com/marin-community/MarinSkyRL/tree/"
         "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/aime"
     ),
+    grading=GradingSelection("verifyit", (), MARINSKYRL_GRADING_REVISION, HARBOR_GRADING_REVISION),
 )
 
 MATH_CONTROLS = Controls(golden=reference_reply)
@@ -417,6 +425,7 @@ SOURCES = (
                     "https://github.com/marin-community/MarinSkyRL/tree/"
                     "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/gsm8k"
                 ),
+                grading=GradingSelection("verifyit", (), MARINSKYRL_GRADING_REVISION, HARBOR_GRADING_REVISION),
             ),
         ),
     ),

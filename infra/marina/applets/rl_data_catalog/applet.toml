@@ -1,4 +1,4 @@
 title = "RL Data Atlas"
 description = "Task-curation source inventory with pinned inputs, row counts, and saved reviews."
 python_entrypoint = "server.app:create_api"
-build_command = "cd ../../../.. && uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.export_catalog --output infra/marina/applets/rl_data_catalog/dist/catalog.json"
+build_command = "cd ../../../.. && uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.export_catalog --output infra/marina/applets/rl_data_catalog/server/catalog_data.py --format python-literal"

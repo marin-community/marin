@@ -3,16 +3,19 @@
 
 import hashlib
 import json
+import shutil
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from marina.applets import load_backend_entrypoint, package_applet, read_applet_package, remove_backend_revision
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 
 from infra.marina.applets.rl_data_catalog.server.app import (
+    active_sources_with_review_state,
     difficulty_summary,
     migrate,
     refresh_catalog,
@@ -75,6 +78,30 @@ def test_generated_catalog_reconciles_sources_and_preserves_reviews(
     assert connection.execute(text("SELECT COUNT(*) FROM catalog_sources")).scalar_one() == 4
 
 
+def test_packaged_catalog_migration_reads_its_backend_resource(catalog_connection: Connection, tmp_path: Path) -> None:
+    applet = tmp_path / "applet"
+    server = Path(__file__).parents[1] / "applets" / "rl_data_catalog" / "server"
+    shutil.copytree(server, applet / "server", ignore=shutil.ignore_patterns("catalog_data.py", "__pycache__"))
+    (applet / "dist").mkdir()
+    (applet / "dist" / "index.html").write_text("<!doctype html><title>Atlas</title>")
+    (applet / "applet.toml").write_text(
+        'title = "Atlas"\ndescription = "Catalog migration regression"\npython_entrypoint = "server.app:create_api"\n'
+    )
+    source = {"id": "MarinSkyRL:math", "origin": "MarinSkyRL", "dataset_revision": "data1", "task_count": 7}
+    artifact = tmp_path / "catalog.json"
+    write_catalog(artifact, [source])
+    (applet / "server" / "catalog_data.py").write_text(repr(artifact.read_text()) + "\n")
+    package = read_applet_package(package_applet(applet))
+    applet_id = uuid.uuid4()
+    module, _ = load_backend_entrypoint(applet_id, 1, package)
+    try:
+        module.migrate(catalog_connection)
+        active = catalog_connection.execute(text("SELECT payload FROM catalog_sources WHERE active")).scalars().all()
+        assert active == [source]
+    finally:
+        remove_backend_revision(applet_id, 1, package.digest)
+
+
 @pytest.mark.parametrize("corruption", ["duplicate", "stale_revision"])
 def test_malformed_generated_catalog_preserves_saved_inventory(
     catalog_connection: Connection, tmp_path: Path, corruption: str
@@ -121,7 +148,7 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
         "review_source_revision": "data1",
         "review_verifier_revision": "code1",
     }
-    record = {"payload": payload, "verifier_issues": []}
+    record = {"payload": payload, "verifier_issues": [], "grading_enrolled": False}
     if review_origin == "source":
         payload.update(review)
         record.update({key: None for key in review})
@@ -165,6 +192,7 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
             "review_source_revision": "data1",
             "review_verifier_revision": "code1",
             "verifier_issues": [],
+            "grading_enrolled": False,
         }
     )
     if quality != "good" or revision != "data1":
@@ -332,11 +360,84 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
             "review_source_revision": "data1",
             "review_verifier_revision": "code1",
             "verifier_issues": [],
+            "grading_enrolled": False,
         }
     )
     assert row["difficulty_summary"]["status"] == expected_status
     assert {model["measurement_status"] for model in row["difficulty_summary"]["models"]} == {expected_status}
     assert [model["solved"] for model in row["difficulty_summary"]["models"]] == [11, 17, 21]
+
+
+@pytest.mark.parametrize("projected_solves,expected_status", [(None, "current"), (0, "invalid")])
+def test_cohort_rewards_preserve_native_scale_and_reject_projected_solves(projected_solves, expected_status) -> None:
+    parameters = {
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "repetition_penalty": 1,
+        "presence_penalty": 0,
+        "frequency_penalty": 0,
+        "max_tokens": 16384,
+    }
+    identities = [
+        ("small", "Qwen/Qwen3-Coder-30B-A3B-Instruct", 0.0, {}),
+        (
+            "large",
+            "Qwen/Qwen3.5-122B-A10B",
+            -0.75,
+            {"top_p": 0.8, "presence_penalty": 1.5, "chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        ("hosted", "zai-org/GLM-5.3", 6.25, {"reasoning_effort": "low"}),
+    ]
+    report = {
+        "estimated_at": "2026-10-10",
+        "sampling": {"task_count": 32, "method": "uniform"},
+        "metric_kind": "cohort_relative_reward",
+        "cohort_comparison": {
+            "cohort_size": 16,
+            "measured_responses_per_task": 3,
+            "reference_responses_per_task": 13,
+            "reference_model": "zai-org/GLM-5.3",
+        },
+        "protocol": {
+            "id": "atlas-difficulty-v4-genrm-cohort",
+            "context_window": 65536,
+            "max_input_tokens": 49152,
+            "max_output_tokens": 16384,
+        },
+        "models": [
+            {
+                "size": size,
+                "model": name,
+                "solved": projected_solves,
+                "verified": 32,
+                "cohort_reward": {"mean": reward, "interval_95": [reward - 0.1, reward + 0.1]},
+                "generation_parameters": {**parameters, **overrides},
+            }
+            for size, name, reward, overrides in identities
+        ],
+    }
+    row = source_with_review(
+        {
+            "payload": {"id": "MarinSkyRL:genrm", "dataset_revision": "data1", "verifier_revision": "code1"},
+            "quality": "good",
+            "difficulty": "Native cohort comparison",
+            "difficulty_report": json.dumps(report),
+            "traces": None,
+            "review_id": "review1",
+            "review_date": "2026-10-10",
+            "review_source_revision": "data1",
+            "review_verifier_revision": "code1",
+            "verifier_issues": [],
+            "grading_enrolled": False,
+        }
+    )
+    summary = row["difficulty_summary"]
+    assert summary["status"] == expected_status
+    assert [model["cohort_reward"]["mean"] for model in summary["models"]] == [0.0, -0.75, 6.25]
+    assert all(model["solve_rate"] is None for model in summary["models"])
+    assert "solved" not in row["difficulty"]
 
 
 def test_difficulty_summary_surfaces_ordering_audit() -> None:
@@ -400,6 +501,7 @@ def test_confirmed_verifier_defect_survives_publication_and_refresh(
         review_source_revision="data1",
         review_verifier_revision="code1",
         verifier_issues=[{"issue_url": "https://github.com/example/issues/1", "status": "open"}],
+        grading_enrolled=False,
     )
     displayed = source_with_review(record)
     assert displayed["review_stale"]
@@ -488,3 +590,110 @@ def test_verifier_defect_requires_a_validated_current_review_before_green_restor
     row = connection.execute(text("SELECT quality, difficulty FROM catalog_sources")).one()
     assert tuple(row) == ("good", "32/32")
     assert connection.execute(text("SELECT status FROM catalog_verifier_issues")).scalar_one() == "resolved"
+
+
+@pytest.mark.parametrize("change", [None, "data", "grader", "proof_hash", "source", "verdict", "malformed"])
+def test_grading_equivalence_preserves_ratings_only_for_matching_immutable_evidence(change) -> None:
+    claim = {
+        "schema_version": 1,
+        "equivalent": True,
+        "source_id": "MarinSkyRL:math",
+        "review_id": "review1",
+        "source_revision": "data1",
+        "captured_verifier_revision": "old-package",
+        "grading_revision": "selected-grader1",
+    }
+    binding = {**claim, "evidence_sha256": ""}
+    payload = {
+        "id": "MarinSkyRL:math",
+        "dataset_revision": "data1",
+        "verifier_revision": "new-package",
+        "grading_revision": "selected-grader1",
+    }
+    if change == "data":
+        payload["dataset_revision"] = "data2"
+    elif change == "grader":
+        payload["grading_revision"] = "selected-grader2"
+    elif change == "source":
+        claim["source_id"] = "other-source"
+    elif change == "verdict":
+        claim["equivalent"] = False
+    content = "invalid-json" if change == "malformed" else json.dumps(claim)
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    binding["evidence_sha256"] = digest
+    proof = {"content": content, "sha256": "wrong-hash" if change == "proof_hash" else digest}
+    record = {
+        "payload": payload,
+        "quality": "good",
+        "difficulty": "32/32",
+        "traces": 3,
+        "review_id": "review1",
+        "review_date": "2026-09-28",
+        "review_source_revision": "data1",
+        "review_verifier_revision": "old-package",
+        "verifier_issues": [],
+        "grading_enrolled": True,
+        "grading_binding": binding,
+        "grading_proof": proof,
+    }
+    row = source_with_review(record)
+    assert row["review_stale"] == (change is not None)
+    assert row["quality"] == ("good" if change is None else None)
+    assert row["difficulty"] == ("32/32" if change is None else None)
+    assert row["review_verifier_revision"] == "old-package"
+    assert row["review_id"] == "review1"
+
+
+def test_grading_migration_preserves_legacy_reviews_then_tracks_only_selected_grader(catalog_connection: Connection):
+    connection = catalog_connection
+    payload = {
+        "id": "MarinSkyRL:math",
+        "dataset_revision": "data1",
+        "verifier_revision": "raw1",
+        "grading_revision": "grader1",
+    }
+    save_snapshot(connection, Snapshot("MarinSkyRL", "repo1", "2026-10-08", [payload]))
+    connection.execute(
+        text(
+            "UPDATE catalog_sources SET quality='good',difficulty='32/32',review_id='review1',"
+            "review_source_revision='data1',review_verifier_revision='raw1'"
+        )
+    )
+    pending = active_sources_with_review_state(connection)[0]
+    assert pending["quality"] == "good" and pending["grading_tracking"] == "legacy"
+    claim = {
+        "schema_version": 1,
+        "equivalent": True,
+        "source_id": payload["id"],
+        "review_id": "review1",
+        "source_revision": "data1",
+        "captured_verifier_revision": "raw1",
+        "grading_revision": "grader1",
+    }
+    content = json.dumps(claim)
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    connection.execute(
+        text("INSERT INTO review_artifacts VALUES ('review1','proof.json',:content,:sha)"),
+        {"content": content, "sha": digest},
+    )
+    connection.execute(
+        text(
+            "INSERT INTO catalog_grading_reviews VALUES "
+            "(:source,'review1','data1','raw1','grader1','proof.json',:sha)"
+        ),
+        {"source": payload["id"], "sha": digest},
+    )
+    payload["verifier_revision"] = "unrelated-package-change"
+    save_snapshot(connection, Snapshot("MarinSkyRL", "repo2", "2026-10-08", [payload]))
+    enrolled = active_sources_with_review_state(connection)[0]
+    assert enrolled["quality"] == "good" and enrolled["grading_tracking"] == "source-specific"
+    payload["verifier_revision"] = "raw1"
+    payload["grading_revision"] = "grader2"
+    save_snapshot(connection, Snapshot("MarinSkyRL", "repo3", "2026-10-08", [payload]))
+    changed = active_sources_with_review_state(connection)[0]
+    assert changed["review_stale"] and changed["quality"] is None
+    del payload["grading_revision"]
+    save_snapshot(connection, Snapshot("MarinSkyRL", "repo4", "2026-10-08", [payload]))
+    missing = active_sources_with_review_state(connection)[0]
+    assert missing["review_stale"] and missing["quality"] is None
+    assert missing["review_id"] == "review1"

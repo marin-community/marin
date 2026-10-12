@@ -59,6 +59,10 @@
             "null"
           ],
           "pattern": "^[a-f0-9]{40}$"
+        },
+        "grading_revision": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
         }
       },
       "required": [
