@@ -1,0 +1,8 @@
+name: marin-shellsim-ports
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: Read-only HTTPS proxy for durable Shellsim guest port assets.
