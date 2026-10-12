@@ -165,10 +165,24 @@ def write_campaign_report(
     outcomes: Sequence[SourceOutcome],
     run_id: str,
     started_at: str,
+    source_ids: Mapping[str, str],
+    execution: Mapping[str, object],
 ) -> None:
-    """Persist the current source outcomes for local or reviewed runs."""
+    """Persist source outcomes and catalog terminal reports for local or reviewed runs."""
     report = campaign_report(status, mode=mode, outcomes=outcomes, run_id=run_id, started_at=started_at)
-    StoragePath(report_path).write_text(json.dumps(report, indent=2))
+    report_bytes = json.dumps(report, indent=2).encode()
+    path = StoragePath(report_path)
+    path.write_bytes(report_bytes)
+    if status != CampaignStatus.RUNNING:
+        append_curation_catalog(
+            str(path.parent / CATALOG_DIRECTORY),
+            report_bytes,
+            run_id=run_id,
+            report_path=report_path,
+            source_ids=source_ids,
+            started_at=started_at,
+            execution=execution,
+        )
 
 
 def run_campaign(
@@ -196,21 +210,15 @@ def run_campaign(
 
     def write_report(status: CampaignStatus) -> None:
         write_campaign_report(
-            report_path, status, mode=mode, outcomes=list(outcomes.values()), run_id=run_id, started_at=started_at
+            report_path,
+            status,
+            mode=mode,
+            outcomes=list(outcomes.values()),
+            run_id=run_id,
+            started_at=started_at,
+            source_ids=source_ids,
+            execution=asdict(pool),
         )
-        if status != CampaignStatus.RUNNING:
-            path = StoragePath(report_path)
-            with path.open("rb") as stream:
-                report_bytes = stream.read()
-            append_curation_catalog(
-                str(path.parent / CATALOG_DIRECTORY),
-                report_bytes,
-                run_id=run_id,
-                report_path=report_path,
-                source_ids=source_ids,
-                started_at=started_at,
-                execution=asdict(pool),
-            )
 
     def started(step: ArtifactStep[CampaignArtifact]) -> None:
         with report_lock:

@@ -17,8 +17,12 @@ from finestore.layout import CommitToken
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.pipeline.execution_telemetry import TELEMETRY_FILENAME
 
 CATALOG_DIRECTORY = "catalog"
+MANIFEST_FILENAME = "manifest.json"
+FILTER_MANIFEST_FILENAME = "work/filtered/manifest.json"
+REVIEW_MANIFEST_FILENAME = "review/manifest.json"
 
 
 @dataclass(frozen=True)
@@ -152,19 +156,19 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
     root = StoragePath(outcome["path"])
     documents = {}
     for name in (
-        "manifest.json",
-        "telemetry.json",
+        MANIFEST_FILENAME,
+        TELEMETRY_FILENAME,
         "identity.json",
         ".artifact.json",
-        "work/filtered/manifest.json",
-        "review/manifest.json",
+        FILTER_MANIFEST_FILENAME,
+        REVIEW_MANIFEST_FILENAME,
     ):
         path = root / name
         if path.exists():
             with path.open("rb") as stream:
                 documents[name] = stream.read()
     parsed, errors = _parsed_documents(documents)
-    telemetry = parsed.get("telemetry.json", {})
+    telemetry = parsed.get(TELEMETRY_FILENAME, {})
     attempt = telemetry.get("attempt_started_at")
     current = (
         started_at is not None
@@ -173,9 +177,9 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
         <= datetime.fromisoformat(attempt)
         <= datetime.fromisoformat(report_updated_at)
     )
-    if "manifest.json" not in documents:
+    if MANIFEST_FILENAME not in documents:
         applicability = ManifestEvidence.MISSING
-    elif "manifest.json" in errors:
+    elif MANIFEST_FILENAME in errors:
         applicability = ManifestEvidence.UNCONFIRMED
     elif outcome["status"] not in ("failed", "running"):
         applicability = ManifestEvidence.CURRENT_ATTEMPT if current else ManifestEvidence.RETAINED_ARTIFACT
@@ -249,9 +253,11 @@ def append_curation_catalog(
                 evidence = document.documents
                 parsed, errors = _parsed_documents(evidence)
                 manifest = (
-                    parsed.get("manifest.json", {}) if document.manifest_evidence != ManifestEvidence.UNCONFIRMED else {}
+                    parsed.get(MANIFEST_FILENAME, {})
+                    if document.manifest_evidence != ManifestEvidence.UNCONFIRMED
+                    else {}
                 )
-                telemetry = parsed.get("telemetry.json", {})
+                telemetry = parsed.get(TELEMETRY_FILENAME, {})
                 verification = manifest.get("verification", {})
                 admissions = manifest.get("admission_counts")
                 counts = verification.get("counts")
@@ -289,17 +295,17 @@ def append_curation_catalog(
                     ),
                     unprocessed_rows=manifest.get("unprocessed_rows"),
                     manifest_path=(
-                        str(StoragePath(outcome["path"]) / "manifest.json") if "manifest.json" in evidence else None
+                        str(StoragePath(outcome["path"]) / MANIFEST_FILENAME) if MANIFEST_FILENAME in evidence else None
                     ),
-                    manifest_sha256=digests.get("manifest.json"),
+                    manifest_sha256=digests.get(MANIFEST_FILENAME),
                     evidence_snapshots_json=_json(snapshots),
                     evidence_sha256_json=_json(digests),
                     outputs_json=_json(manifest.get("datasets", result.get("outputs", {}))),
                     result_json=_json(result),
                     quality_status=manifest.get("quality", {}).get("status"),
                     rubric_enabled=(
-                        (parsed["review/manifest.json"]["rubric"] is not None)
-                        if "rubric" in parsed.get("review/manifest.json", {})
+                        (parsed[REVIEW_MANIFEST_FILENAME]["rubric"] is not None)
+                        if "rubric" in parsed.get(REVIEW_MANIFEST_FILENAME, {})
                         else None
                     ),
                     verification_status=verification.get("status"),
@@ -312,7 +318,7 @@ def append_curation_catalog(
                     input_overrides_json=_json(manifest.get("source_file_overrides", {})) if manifest else None,
                     admission_counts_json=_json(admissions) if admissions is not None else None,
                     filter_counts_json=(
-                        _json(parsed["work/filtered/manifest.json"]) if "work/filtered/manifest.json" in parsed else None
+                        _json(parsed[FILTER_MANIFEST_FILENAME]) if FILTER_MANIFEST_FILENAME in parsed else None
                     ),
                     attempt_started_at=telemetry.get("attempt_started_at"),
                     source_wall_seconds=telemetry.get("source_wall_seconds", manifest.get("elapsed_seconds")),

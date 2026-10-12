@@ -31,7 +31,6 @@ from experiments.post_training.task_curation.campaign import (
     error_chain,
     write_campaign_report,
 )
-from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, append_curation_catalog
 
 
 @contextmanager
@@ -74,17 +73,9 @@ def run_local_steps(
             outcomes=list(outcomes.values()),
             run_id=run_id,
             started_at=started_at,
+            source_ids=source_ids,
+            execution={"max_workers": max_workers},
         )
-        if status != CampaignStatus.RUNNING:
-            append_curation_catalog(
-                str(output_root / CATALOG_DIRECTORY),
-                report_path.read_bytes(),
-                run_id=run_id,
-                report_path=str(report_path),
-                source_ids=source_ids,
-                started_at=started_at,
-                execution={"max_workers": max_workers},
-            )
 
     report(CampaignStatus.RUNNING)
     client = LocalClient()
