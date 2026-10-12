@@ -1,0 +1,79 @@
+{
+  "retired_attempts": [
+    {
+      "run_id": "sc-skyrl-countdown-main-clean-sc-s0-a1-01a126ce",
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "objects": 4915,
+      "bytes": 5246409526,
+      "manifest_sha256": "e4040b9cd4aef86db1bdb9c199be577ccc12d8a108bfcedbb826953ff6c6c0fc",
+      "manifest_path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/a1-retired-clean-sc-s0-promotion.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s."
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-clean-tis-s0-a1-01a126ce",
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "objects": 4863,
+      "bytes": 5049510196,
+      "manifest_sha256": "f152e331bdd94a9b84982de5d1e5e2a559c310f1337dd9ea13217e3a24a93132",
+      "manifest_path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/a1-retired-clean-tis-s0-promotion.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s."
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-sc-s0-a1-01a126ce",
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "objects": 6330,
+      "bytes": 7808185403,
+      "manifest_sha256": "efc010bded6230f2b0239b3593c740ad4d47b5ffd44157fbd8285f890afc2a75",
+      "manifest_path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/a1-retired-noise005-sc-s0-promotion.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s."
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-sc-s1-a1-01a126ce",
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "objects": 5159,
+      "bytes": 1251667807,
+      "manifest_sha256": "cf249dcd5c2ef26e4973700100a4747802f8fdd5bba82823bf7cf758310c30fc",
+      "manifest_path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/a1-retired-noise005-sc-s1-promotion.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s."
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-sc-s2-a1-01a126ce",
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "objects": 4896,
+      "bytes": 5101688793,
+      "manifest_sha256": "c7d94edd1a916917ec7847e035374a862ae778ec4635c4dcd80be81b275af767",
+      "manifest_path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/a1-retired-noise005-sc-s2-promotion.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s."
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-tis-s0-a1-01a126ce",
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "objects": 6224,
+      "bytes": 7430403095,
+      "manifest_sha256": "c198755b795ded41896572cb6cd7decd32bd80290cf519609fc791ecde331a36",
+      "manifest_path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/a1-retired-noise005-tis-s0-promotion.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s."
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-tis-s1-a1-01a126ce",
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "objects": 5717,
+      "bytes": 1639496317,
+      "manifest_sha256": "1e1e4832866e38a34fbd15ec0de717d0cb63fb3f3537112cf221f4c14dda3862",
+      "manifest_path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/a1-retired-noise005-tis-s1-promotion.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s."
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-tis-s2-a1-01a126ce",
+      "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
+      "objects": 5498,
+      "bytes": 6747280967,
+      "manifest_sha256": "1c7932b2962275428d24a648c74a43d2d28ee866f4a8dc9bd0c2da8f1d129211",
+      "manifest_path": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/a1-retired-noise005-tis-s2-promotion.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s."
+    }
+  ],
+  "objects": 43602,
+  "bytes": 40274642104,
+  "scope": "Eight owned partial source615 a1 trials; native persistent raw captures and metrics remain in their original roots. Temporary groups/logs/debug copied within original bucket; captured ETags/provenance and lengths verified, not whole-weight SHA256s."
+}
