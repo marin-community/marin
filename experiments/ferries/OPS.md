@@ -87,7 +87,7 @@ final store.
 
 ## Canary ferry: bisect an MFU change
 
-A scheduled canary run tests whatever `main` was when GitHub started it, so a change in MFU between two runs narrows only to the commits between them. Each run's commit is the head SHA of its GitHub Actions run, joined on `RUN_ID` (`canary-tpu-<Actions run id>-<attempt>`); runs from Oct 2, 2026 on also record it as `git_commit` in the W&B run config. To find the commit, re-run the canary configuration at commits inside that range.
+A scheduled canary run tests whatever `main` was when GitHub started it, so a change in MFU between two runs narrows only to the commits between them. Each run's commit is the head SHA of its GitHub Actions run, joined on `RUN_ID` (`canary-tpu-<Actions run id>-<attempt>`); runs from Oct 3, 2026 on also record it as `git_commit` in the W&B run config. To find the commit, re-run the canary configuration at commits inside that range.
 
 This covers the TPU canary. The H100 canary's `iris-ci` controller is redeployed by every scheduled canary and CoreWeave PR smoke test, and submitting to it needs the CoreWeave kubeconfig at `~/.kube/coreweave-iris`; that path is untested.
 
@@ -143,8 +143,8 @@ echo "https://wandb.ai/marin-community/marin/runs/$RUN_ID"
 
 - `iris job run` bundles the working directory, so the job runs the tested commit's code.
 - `--project "$CURRENT"` runs the current `iris` CLI. The controller rejects a root submission from a client whose build date, the last commit touching `lib/iris`, is more than 14 days older than its own; child jobs submitted from inside the bundle are not checked.
-- Iris passes `WANDB_API_KEY` and `HF_TOKEN` from the submitting shell. Without the W&B key the run logs nothing to W&B.
-- The coordinator job is `/<user>/iris-run-job-<timestamp>`; the TPU child is `grug-train-<RUN_ID>`. A v6e-4 run trains 237 steps in about 8 minutes; environment setup and queueing for capacity add to that.
+- Iris passes `WANDB_API_KEY` and `HF_TOKEN` from the submitting shell. Without `WANDB_API_KEY`, the coordinator raises an error before it submits the TPU job.
+- The coordinator job is `/<user>/iris-run-job-<timestamp>`; the TPU child is `grug-train-<RUN_ID>`. A v6e-4 run trains 238 steps in about 8 minutes; environment setup and queueing for capacity add to that.
 
 After the run finishes, remove the checkout with `git worktree remove "$WORKTREE"`.
 
