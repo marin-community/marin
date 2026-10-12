@@ -46,22 +46,14 @@ def evaluation_config() -> dict:
     return config
 
 
-@click.command(help=__doc__)
-@rl_build_options
-def main() -> ArtifactStep:
-    name = user_owned_name("evals/structure-closure-explicit")
+def build_evaluation(*, name: str, data: ArtifactStep) -> ArtifactStep:
+    """Evaluate an immutable closure cohort with the policy initializer."""
     model = ArtifactStep.adopt(
         user_owned_name("models/structure-closure-initializer"),
         "2026.10.12.1",
         MODEL_URI,
         kind=LevanterCheckpoint,
         config={"hf_repository": MODEL_REPOSITORY, "hf_revision": MODEL_REVISION},
-    )
-    data = ArtifactStep.adopt(
-        user_owned_name("datasets/structure-closure-explicit"),
-        "2026.10.12.3",
-        DATA_URI,
-        config={"validation_sha256": "f64e9ae5724ab081c3e119ee39efc850f12eeaf39f0c5a05ceaf017454a7b011"},
     )
     return skyrl_step(
         SkyRLSpec(
@@ -93,6 +85,18 @@ def main() -> ArtifactStep:
         ),
         export_hf=False,
     )
+
+
+@click.command(help=__doc__)
+@rl_build_options
+def main() -> ArtifactStep:
+    data = ArtifactStep.adopt(
+        user_owned_name("datasets/structure-closure-explicit"),
+        "2026.10.12.3",
+        DATA_URI,
+        config={"validation_sha256": "f64e9ae5724ab081c3e119ee39efc850f12eeaf39f0c5a05ceaf017454a7b011"},
+    )
+    return build_evaluation(name=user_owned_name("evals/structure-closure-explicit"), data=data)
 
 
 if __name__ == "__main__":
