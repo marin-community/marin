@@ -1297,12 +1297,12 @@
       "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "a647efc87416f65696bd02fb831c013d0d276f47579cb452858ab3704d061207",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-12T20:10:50.512156+00:00"
+  "observed_at": "2026-10-12T21:13:47.255112+00:00"
 }
