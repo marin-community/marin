@@ -89,6 +89,7 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
 def _publish_campaign(report_path: str, selected: dict[str, RlDataSource]) -> None:
     path = StoragePath(report_path)
     report = json.loads(path.read_text())
+    # Selected recipes may supply declarations absent from the default inventory.
     sources = {**all_sources(), **{source.info.id: source for source in selected.values()}}
     publish_catalog(str(path.parent / CATALOG_DIRECTORY), report["run_id"], sources.values())
 
@@ -386,7 +387,8 @@ def main(
         except CampaignFailed:
             _publish_campaign(report_path, selected)
             raise
-        _publish_campaign(report_path, selected)
+        else:
+            _publish_campaign(report_path, selected)
 
 
 if __name__ == "__main__":

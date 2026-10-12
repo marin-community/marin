@@ -138,6 +138,8 @@ changing the current snapshot pointer. A failed retry keeps a previous grade
 only when its report pipeline key matches. A changed key with a failed assessment
 has no current grade. Sources without conversion pipelines remain inventory
 entries with an explicit skip reason. Authored legacy ratings are excluded.
+Repeated successful invocations with the same pipeline key reuse the canonical
+grade. Changes to the rubric, model revision, sample size or seed change that key.
 
 Read the current snapshot without rereading source parquet:
 
