@@ -1,0 +1,26 @@
+{
+  "run_id": "sc-snowball-runtime-qual-sc-s0-a3-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "profiles": [
+    {
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-runtime-qual-sc-s0-a3-01a126ce/rendezvous/debug_artifacts/rank1-g8498e8/attention-profile/prof_rank_16.txt",
+      "sha256": "0be8209d8821c1e7626ccaf8de9ea076d08eb5129d15f1fd4a1cddc0882c5fd2",
+      "bytes": 45999,
+      "rank": 16,
+      "operator_lines": [
+        "                        flash_attn::_flash_attn_forward         0.77%     813.157us         1.15%       1.216ms      93.557us     150.723us         0.75%     150.723us      11.594us            13  "
+      ]
+    },
+    {
+      "key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-runtime-qual-sc-s0-a3-01a126ce/rendezvous/debug_artifacts/rank3-g853134/attention-profile/prof_rank_0.txt",
+      "sha256": "97b737cdec8283062e4a4459ac3521dfb29e5379c29b2e67ed082a33cf24521c",
+      "bytes": 45405,
+      "rank": 0,
+      "operator_lines": [
+        "                        flash_attn::_flash_attn_forward         0.67%     916.242us         0.99%       1.363ms     104.864us     151.934us         0.64%     151.934us      11.687us            13  "
+      ]
+    }
+  ],
+  "both_pipeline_stages_execute_flash_attention": true,
+  "scope": "Actual complete operator tables on the exact source; full five-update runtime qualification audited separately."
+}
