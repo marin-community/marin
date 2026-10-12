@@ -5,7 +5,14 @@ import json
 
 import pytest
 
-from rolloutengine.closure_scoring import ClosureFormat, closure_response_content, score_closure, score_closure_region
+from rolloutengine.closure_scoring import (
+    ClosureFormat,
+    ContinuationOutcome,
+    closure_response_content,
+    continuation_outcome,
+    score_closure,
+    score_closure_region,
+)
 from rolloutengine.structure_closure import (
     PrefixStatus,
     delimited_json_closure_state,
@@ -13,6 +20,48 @@ from rolloutengine.structure_closure import (
     paired_marker_closure_state,
     required_code_fence_state,
 )
+
+
+@pytest.mark.parametrize(
+    "structure_format,expected,early,changed",
+    [
+        (ClosureFormat.JSON, '{"task":"example_1234"}', '{"task":"example"}', '{"task":"wrong"}'),
+        (ClosureFormat.JSON, '["example",2]', '["example"]', '["example",3]'),
+        (ClosureFormat.JSON, '"example_1234"', '"example"', '"example_wrong"'),
+        (
+            ClosureFormat.TOOL,
+            '<tool_call>{"name":"example"}</tool_call>',
+            '<tool_call>{"name":"exam"}</tool_call>',
+            '<tool_call>{"name":"wrong"}</tool_call>',
+        ),
+        (
+            ClosureFormat.REASONING,
+            "<|start_think|>The task is example.<|end_think|>",
+            "<|start_think|>The task is <|end_think|>",
+            "<|start_think|>The task is wrong.<|end_think|>",
+        ),
+        (ClosureFormat.CODE_FENCE, "```json\n[1,2]\n```", "```json\n[1\n```", "```json\nwrong\n```"),
+    ],
+)
+def test_continuation_controls_distinguish_verified_early_closure_from_other_content_changes(
+    structure_format, expected, early, changed
+):
+    assert continuation_outcome(expected, expected, structure_format) == ContinuationOutcome.REFERENCE_COMPLETED
+    assert (
+        continuation_outcome(early + "\nextra output", expected, structure_format)
+        == ContinuationOutcome.REFERENCE_PREFIX_CLOSED_EARLY
+    )
+    assert continuation_outcome(changed, expected, structure_format) == ContinuationOutcome.OTHER_CONTENT_CHANGE
+
+
+def test_continuation_control_does_not_call_an_invalid_escape_or_unfinished_value_premature_closure():
+    expected = '{"task":"example"}'
+    for candidate in ['{"task":"exam', '{"task":', '{"task":"\\x"}']:
+        assert continuation_outcome(candidate, expected, ClosureFormat.JSON) == ContinuationOutcome.UNCLOSED_OR_INVALID
+    assert (
+        continuation_outcome('{ "task": "exam"}', expected, ClosureFormat.JSON)
+        == ContinuationOutcome.OTHER_CONTENT_CHANGE
+    )
 
 
 @pytest.mark.parametrize(

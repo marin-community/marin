@@ -15,7 +15,9 @@ from pathlib import Path
 from rolloutengine.closure_scoring import (
     CLOSURE_REGION_SCORER,
     ClosureFormat,
+    ContinuationOutcome,
     closure_response_content,
+    continuation_outcome,
     score_closure_region,
 )
 
@@ -49,6 +51,7 @@ class CaseResult:
     success: bool
     trailing_content: bool
     whole_response_success: bool
+    control_outcome: ContinuationOutcome | None
 
 
 @dataclass(frozen=True)
@@ -71,7 +74,10 @@ class EvaluationAudit:
 
     def summary(self) -> dict:
         groups: dict[str, Counter] = {}
+        control_outcomes: dict[str, Counter] = {}
         for result in self.results:
+            if result.control_outcome is not None:
+                control_outcomes.setdefault(f"{result.family}/{result.control}", Counter())[result.control_outcome] += 1
             for key in (result.family, f"{result.family}/{result.control}"):
                 counts = groups.setdefault(key, Counter())
                 counts.update(
@@ -88,6 +94,7 @@ class EvaluationAudit:
             "complete": self.complete,
             **asdict(self),
             "groups": dict(sorted(groups.items())),
+            "control_outcomes": dict(sorted(control_outcomes.items())),
         }
 
 
@@ -131,7 +138,21 @@ def audit_evaluation(
                     raise ValueError(f"Saved {name} metric disagrees with rescored response")
             if verification["score"] != float(score.success) or sum(row["score"]) != float(score.success):
                 raise ValueError("Reward/verifier score disagrees with rescored response")
-            results.append(CaseResult(uid, case["case_id"], case["family"], case["control"], **asdict(score)))
+            control_outcome = None
+            if case["control"] in ("continue_required", "escape_continue_required"):
+                control_outcome = continuation_outcome(
+                    case["prefix"] + content, case["expected"], ClosureFormat(case["format"])
+                )
+            results.append(
+                CaseResult(
+                    uid,
+                    case["case_id"],
+                    case["family"],
+                    case["control"],
+                    **asdict(score),
+                    control_outcome=control_outcome,
+                )
+            )
         except (KeyError, TypeError, ValueError) as error:
             failures.append(AuditFailure(uid, str(error)))
     return EvaluationAudit(

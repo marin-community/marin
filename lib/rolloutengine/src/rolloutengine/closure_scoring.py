@@ -43,6 +43,13 @@ class ClosureFormat(StrEnum):
     CODE_FENCE = "code_fence"
 
 
+class ContinuationOutcome(StrEnum):
+    REFERENCE_COMPLETED = "reference_completed"
+    REFERENCE_PREFIX_CLOSED_EARLY = "reference_prefix_closed_early"
+    OTHER_CONTENT_CHANGE = "other_content_change"
+    UNCLOSED_OR_INVALID = "unclosed_or_invalid"
+
+
 @dataclass(frozen=True)
 class ClosureScore:
     syntax_complete: bool
@@ -118,3 +125,30 @@ def score_closure_region(text: str, expected: str, structure_format: ClosureForm
     return ClosureRegionScore(
         score.syntax_complete, score.content_preserved, score.success, trailing, score.success and not trailing
     )
+
+
+def continuation_outcome(text: str, expected: str, structure_format: ClosureFormat) -> ContinuationOutcome:
+    """Identify closing-only truncation of a known reference, without inferring intent.
+
+    Early closure requires an exact strict reference prefix followed only by a verified
+    syntactic repair. Other content changes include ambiguous truncations with
+    spelling or whitespace changes; this is a conservative diagnostic, not a
+    complete detector of semantic premature closure. Trailing output is ignored.
+    """
+    state = closure_state(text, structure_format)
+    if state.completion_offset is None:
+        return ContinuationOutcome.UNCLOSED_OR_INVALID
+    region = text[: state.completion_offset]
+    score = score_closure(region, expected, structure_format)
+    if score.content_preserved:
+        return ContinuationOutcome.REFERENCE_COMPLETED
+    boundary = 0
+    for actual, reference in zip(region, expected, strict=False):
+        if actual != reference:
+            break
+        boundary += 1
+    shared = region[:boundary]
+    suffix = closure_state(shared, structure_format).closing_suffix
+    if suffix is not None and shared + suffix == region:
+        return ContinuationOutcome.REFERENCE_PREFIX_CLOSED_EARLY
+    return ContinuationOutcome.OTHER_CONTENT_CHANGE

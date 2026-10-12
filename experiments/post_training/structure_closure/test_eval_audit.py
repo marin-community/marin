@@ -70,6 +70,27 @@ def test_audit_keeps_identical_prompts_distinct_and_counts_model_failure(cohort,
     }
 
 
+def test_audit_reports_early_control_closure_without_changing_recorded_reward(cohort, rows):
+    case = cohort[1]
+    case.update(control="continue_required", prefix='{"task":"x', expected='{"task":"xyz"}')
+    row = rows[1]
+    row["output_response"] = '"}<|eot_id|>'
+    row["env_metrics"] = {
+        f"closure_region_v1/json_object/continue_required/{name}": value
+        for name, value in {
+            "syntax_complete": 1.0,
+            "content_preserved": 0.0,
+            "success": 0.0,
+            "trailing_content": 0.0,
+            "whole_response_success": 0.0,
+        }.items()
+    }
+    audit = audit_evaluation(cohort, rows, uid_source=UidSource.ROW_INDEX)
+    assert audit.complete
+    assert not audit.results[1].success
+    assert audit.summary()["control_outcomes"] == {"json_object/continue_required": {"reference_prefix_closed_early": 1}}
+
+
 @pytest.mark.parametrize(
     "failure", ["missing", "duplicate", "prefix", "unavailable", "metric", "reward", "infra", "legacy_scorer"]
 )
