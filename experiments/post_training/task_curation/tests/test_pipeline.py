@@ -7,6 +7,7 @@ import threading
 from dataclasses import replace
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -30,7 +31,7 @@ from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
-from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult
+from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult, error_chain
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
@@ -270,13 +271,18 @@ def decode_auxiliary_answer(row, context):
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
 @pytest.mark.parametrize("primary_override", ["root", "file"])
+@pytest.mark.parametrize("prepared", [False, True])
 def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
-    tmp_path, config, monkeypatch, mode, primary_override
+    tmp_path, config, monkeypatch, mode, primary_override, prepared
 ):
     primary = tmp_path / "input"
     primary.mkdir()
     file = primary / ("rows.jsonl" if primary_override == "root" else "sample.jsonl")
-    file.write_text('{"prompt": "First question"}\n{"prompt": "Second question"}\n')
+    file.write_text(
+        '{"dataset":"fixture","prompt":"First question"}\n' '{"dataset":"fixture","prompt":"Second question"}\n'
+    )
+    if prepared:
+        prepare_blend(str(file))
     auxiliary = tmp_path / "answers"
     auxiliary.mkdir()
     answer = auxiliary / "answer.txt"
@@ -285,7 +291,13 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
         math500(),
         name="local-inputs",
         source=HfSource(
-            "fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL, decode=decode_auxiliary_answer
+            "fixture/questions",
+            "a" * 40,
+            ("rows.jsonl",),
+            SourceFormat.JSONL,
+            decode=decode_auxiliary_answer,
+            prepare=prepare_blend if prepared else None,
+            prepared_component="fixture" if prepared else None,
         ),
         inputs={"answers": HfSource("fixture/answers", "a" * 40, ("answer.txt",), SourceFormat.JSONL)},
         convert=convert_fixture,
@@ -323,7 +335,10 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
             runtime.activate(context),
         ):
             first = run(original, max_concurrent=1)[0]
-            file.write_text('{"prompt": "Updated first question"}\n{"prompt": "Updated second question"}\n')
+            file.write_text(
+                '{"dataset":"fixture","prompt":"Updated first question"}\n'
+                '{"dataset":"fixture","prompt":"Updated second question"}\n'
+            )
             changed_primary = source_step(recipe, options)
             assert changed_primary.name != original.name
             answer.write_text("updated answer")
@@ -361,12 +376,73 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
             )
         assert not (tmp_path / "artifacts" / "task-curation" / "download").exists()
         manifest = json.loads(StoragePath(second.result.evidence["manifest"]).read_text())
-        expected_files = (
-            {"rows.jsonl": {"path": str(file.resolve()), "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}}
-            if primary_override == "file"
-            else {}
-        )
+        expected_files = {
+            "rows.jsonl": {"path": str(file.resolve()), "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
+        }
         assert manifest["source_file_overrides"] == expected_files
+    finally:
+        client.shutdown()
+
+
+def convert_with_changed_input(row, context, *, input_path: str):
+    Path(input_path).write_text('{"prompt":"Changed during conversion"}\n')
+    return convert_fixture(row, context)
+
+
+@pytest.mark.parametrize("changed_input", ["root", "file", "auxiliary", "during_conversion"])
+def test_reviewed_input_mutation_fails_instead_of_publishing_under_planned_identity(
+    tmp_path, config, monkeypatch, changed_input
+):
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    file = primary / "rows.jsonl"
+    file.write_text('{"prompt":"Original question"}\n')
+    auxiliary = tmp_path / "answers"
+    auxiliary.mkdir()
+    answer = auxiliary / "answer.txt"
+    answer.write_text("two")
+    recipe = replace(
+        math500(),
+        source=HfSource("fixture/questions", "a" * 40, (file.name,), SourceFormat.JSONL, decode=decode_auxiliary_answer),
+        inputs={"answers": HfSource("fixture/answers", "a" * 40, ("answer.txt",), SourceFormat.JSONL)},
+        convert=(
+            partial(convert_with_changed_input, input_path=str(file))
+            if changed_input == "during_conversion"
+            else convert_fixture
+        ),
+        rubric=None,
+        controls=None,
+        grader=None,
+    )
+    runtime = CampaignRuntime()
+    options = PipelineOptions(
+        SourceProcessingMode.FULL,
+        runtime,
+        inputs=InputOverrides(
+            root=str(primary) if changed_input != "file" else None,
+            files={file.name: file} if changed_input == "file" else {},
+            auxiliary={"answers": str(auxiliary)},
+        ),
+        recipe_settings=RecipeSettings(config=replace(config, review=None, machines=None)),
+    )
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    planned = source_step(recipe, options)
+    if changed_input in ("root", "file"):
+        file.write_text('{"prompt":"Changed before execution"}\n')
+    elif changed_input == "auxiliary":
+        answer.write_text("changed answer")
+    client = LocalClient()
+    try:
+        with (
+            set_current_client(client),
+            ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
+            runtime.activate(context),
+        ):
+            with pytest.raises(Exception) as failure:
+                run(planned, max_concurrent=1)
+        assert "Input overrides changed after planning" in error_chain(failure.value)
+        if changed_input != "during_conversion":
+            assert not (StoragePath(planned.path()) / "final").exists()
     finally:
         client.shutdown()
 

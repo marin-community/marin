@@ -127,7 +127,8 @@ def test_catalog_imports_saved_attempt_without_loading_current_artifact(tmp_path
     assert ReadView(root).point("sources", run_id="historic", name="historic")["processed_rows"] == 100
 
 
-def test_failed_retry_retains_old_manifest_without_attributing_its_counts_to_retry(tmp_path):
+@pytest.mark.parametrize("status", ["failed", "running"])
+def test_failed_retry_retains_old_manifest_without_attributing_its_counts_to_retry(tmp_path, status):
     artifact = tmp_path / "artifact"
     artifact.mkdir()
     original = b'{"mode":"quick","input_rows":100,"status":"completed"}'
@@ -138,8 +139,8 @@ def test_failed_retry_retains_old_manifest_without_attributing_its_counts_to_ret
         "status": "failed",
         "mode": "quick",
         "updated_at": "2026-10-11T11:00:01+00:00",
-        "counts": {"failed": 1},
-        "sources": [{"name": "retry", "path": str(artifact), "status": "failed", "error": "output already exists"}],
+        "counts": {status: 1},
+        "sources": [{"name": "retry", "path": str(artifact), "status": status, "error": "output already exists"}],
     }
     root = str(tmp_path / "catalog")
     append_run_catalog(
@@ -158,3 +159,49 @@ def test_failed_retry_retains_old_manifest_without_attributing_its_counts_to_ret
     assert view.resolve(json.loads(row["evidence_snapshots_json"])["manifest.json"]) == original
     assert view.resolve(json.loads(row["evidence_snapshots_json"])["telemetry.json"]) == partial
     assert "telemetry.json" in json.loads(row["evidence_errors_json"])
+
+
+def test_interrupted_running_source_retains_partial_phase_evidence(tmp_path):
+    artifact = tmp_path / "interrupted"
+    artifact.mkdir()
+    telemetry = json.dumps(
+        {
+            "attempt_started_at": "2026-10-11T11:00:00+00:00",
+            "status": "failed",
+            "error_type": "KeyboardInterrupt",
+            "source_wall_seconds": 1.0,
+            "phases": [
+                {
+                    "phase": "full_prepare",
+                    "status": "failed",
+                    "wall_seconds": 1.0,
+                    "error_type": "KeyboardInterrupt",
+                    "executions": [],
+                }
+            ],
+        }
+    ).encode()
+    (artifact / "telemetry.json").write_bytes(telemetry)
+    report = {
+        "status": "failed",
+        "mode": "full",
+        "updated_at": "2026-10-11T11:00:01+00:00",
+        "counts": {"running": 1},
+        "sources": [{"name": "interrupted", "path": str(artifact), "status": "running"}],
+    }
+    root = str(tmp_path / "catalog")
+    append_run_catalog(
+        root,
+        json.dumps(report).encode(),
+        run_id="interrupted",
+        report_path="report.json",
+        source_ids={"interrupted": "fixture:interrupted"},
+        started_at="2026-10-11T11:00:00+00:00",
+    )
+    view = ReadView(root)
+    row = view.point("sources", run_id="interrupted", name="interrupted")
+    assert row["processed_rows"] is None
+    assert row["telemetry_error_type"] == "KeyboardInterrupt"
+    assert view.resolve(json.loads(row["evidence_snapshots_json"])["telemetry.json"]) == telemetry
+    phase = view.point("phases", run_id="interrupted", name="interrupted", ordinal=0)
+    assert (phase["status"], phase["error_type"]) == ("failed", "KeyboardInterrupt")

@@ -37,6 +37,8 @@ downloads. Local file contents enter the artifact identity and provenance, so
 changing an input creates a new result. SAMPLE and FULL still run their normal
 checks and controls. Set the invocation's recipe `rubric=None` to skip model
 review while retaining those stages.
+Overrides are checked against the planned hashes before and after execution;
+changed inputs fail the artifact instead of publishing results under an old identity.
 
 Nemotron blend downloads include one shared JSONL-to-Parquet preparation per pinned
 file. `HfSource.prepare` runs after download inside the acquisition artifact;

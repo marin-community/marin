@@ -162,7 +162,7 @@ def _parsed_documents(evidence: Mapping[str, bytes]) -> tuple[dict[str, Any], di
 
 
 def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report_updated_at: str) -> SourceDocuments:
-    if outcome["status"] in ("queued", "running"):
+    if outcome["status"] == "queued":
         return SourceDocuments(outcome["name"], {}, ManifestEvidence.MISSING)
     root = StoragePath(outcome["path"])
     documents = {}
@@ -192,7 +192,7 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
         applicability = ManifestEvidence.MISSING
     elif "manifest.json" in errors:
         applicability = ManifestEvidence.UNCONFIRMED
-    elif outcome["status"] != "failed":
+    elif outcome["status"] not in ("failed", "running"):
         applicability = ManifestEvidence.CURRENT_ATTEMPT if current else ManifestEvidence.RETAINED_ARTIFACT
     elif current and telemetry["status"] == "completed":
         applicability = ManifestEvidence.CURRENT_ATTEMPT

@@ -23,6 +23,7 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed, CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
 from experiments.post_training.task_curation.local import run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
@@ -113,6 +114,33 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
 def answer_from_auxiliary(row, context):
     answer = (context.inputs["answers"] / "answer.txt").read_text()
     return exact_answer_task(row, prompt=row.data["prompt"], answers=(answer,), ignore_case=False)
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+def test_quick_blend_root_uses_current_raw_rows_with_missing_or_stale_preparation(local_source, tmp_path, prepared):
+    primary = tmp_path / "input"
+    primary.mkdir()
+    file = primary / "rows.jsonl"
+    file.write_text('{"dataset":"fixture","prompt":"Old question","answer":"old"}\n')
+    if prepared:
+        prepare_blend(str(file))
+    file.write_text('{"dataset":"fixture","prompt":"Current question","answer":"current"}\n')
+    source = replace(
+        local_source,
+        source=HfSource(
+            "fixture/questions",
+            "a" * 40,
+            (file.name,),
+            SourceFormat.JSONL,
+            prepare=prepare_blend,
+            prepared_component="fixture",
+        ),
+    )
+    output = tmp_path / "output"
+    run_recipes({source.name: source}, primary, output, inputs={}, max_workers=1, download_cache=tmp_path / "downloads")
+    task = converted_task(output, source.name)
+    assert task.context.events[0].content == "Current question"
+    assert verifyit_spec(cast(VerifyitGrader, task.grader)) == ExactSpec(("current",), ignore_case=False)
 
 
 def converted_task(output: Path, name: str) -> TaskSpec:
