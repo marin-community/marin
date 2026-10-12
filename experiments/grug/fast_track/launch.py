@@ -396,6 +396,7 @@ def build_h100_ladder_run(
     token_dump: bool = False,
     seed_xla_autotune_cache: bool = False,
     xla_autotune: XlaAutotune = XlaAutotune.CACHE,
+    watch_interval: int = WATCH_INTERVAL,
     token_dump_skip_layers: tuple[int, ...] = (),
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_frac: float = 0.5,
@@ -531,7 +532,7 @@ def build_h100_ladder_run(
     if xla_autotune == XlaAutotune.OFF and "--xla_gpu_autotune_level=0" not in os.environ.get("XLA_FLAGS", ""):
         raise ValueError("--xla-autotune off needs --xla_gpu_autotune_level=0 in the job's XLA_FLAGS")
     use_cache = rung.device == "GB200" and xla_autotune == XlaAutotune.CACHE
-    autotune_cache_path = _xla_autotune_cache_path(model, rung) if use_cache else None
+    autotune_cache_path = _xla_autotune_cache_path(model, rung, watch_interval) if use_cache else None
     if autotune_cache_path is not None and not seed_xla_autotune_cache and not _path_exists(autotune_cache_path):
         # Without a cache every rank autotunes and exchanges results, and that multi-process compile hangs ~7 times
         # in 8 on GB200. A one-GPU seed builds it in ~2 minutes.
@@ -576,7 +577,7 @@ def build_h100_ladder_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=WATCH_INTERVAL),
+            watch=WatchConfig(interval=watch_interval),
             progress_watchdog=ProgressWatchdogConfig(
                 step_timeout=STEP_TIMEOUT,
                 process_timeout=PROCESS_STALL_TIMEOUT,
@@ -735,11 +736,15 @@ def _path_exists(path: str) -> bool:
     return fsspec.core.url_to_fs(path)[0].exists(path)
 
 
-def _xla_autotune_cache_path(model: GrugModelConfig, rung: H100LadderRung) -> str:
+def _xla_autotune_cache_path(model: GrugModelConfig, rung: H100LadderRung, watch_interval: int) -> str:
     """Region-temp path of the shared XLA autotune results for this program: keyed by the full model config, the
-    rung's mesh, the job's XLA flags and jaxlib, so only runs that compile the same fusions share them. A new key
-    (any config change, including a changed default) needs a seed (``--seed-xla-autotune-cache``, ~2 min, one GPU)."""
-    identity = repr((model, rung, os.environ.get("XLA_FLAGS", ""), importlib.metadata.version("jaxlib")))
+    rung's mesh, the job's XLA flags, jaxlib and a non-default watch interval (the inline watch's statistics are
+    part of the step), so only runs that compile the same fusions share them. A new key (any config change,
+    including a changed default) needs a seed (``--seed-xla-autotune-cache``, ~2 min, one GPU)."""
+    parts = (model, rung, os.environ.get("XLA_FLAGS", ""), importlib.metadata.version("jaxlib"))
+    if watch_interval != WATCH_INTERVAL:
+        parts = (*parts, f"watch_interval={watch_interval}")
+    identity = repr(parts)
     key = hashlib.sha256(identity.encode()).hexdigest()[:24]
     return prefix_join(marin_temp_bucket(XLA_AUTOTUNE_CACHE_TTL_DAYS, "xla-autotune-results"), f"{key}.textproto")
 
@@ -841,6 +846,13 @@ def _layer_skip_rule(
     "--seed-xla-autotune-cache",
     is_flag=True,
     help="GB200: seed the shared XLA autotune cache from one node under a mock topology of the full rack, then stop.",
+)
+@click.option(
+    "--watch-interval",
+    type=click.IntRange(min=0),
+    default=WATCH_INTERVAL,
+    show_default=True,
+    help="Steps between logged parameter/gradient watch statistics; 0 turns the watch off.",
 )
 @click.option(
     "--xla-autotune",
@@ -994,6 +1006,7 @@ def main(
     token_dump: bool,
     seed_xla_autotune_cache: bool,
     xla_autotune: str,
+    watch_interval: int,
     token_dump_skip_layers: str | None,
     extra_mlp_start_frac: float,
     layer_skip_layers: str | None,
@@ -1044,6 +1057,7 @@ def main(
         token_dump=token_dump,
         seed_xla_autotune_cache=seed_xla_autotune_cache,
         xla_autotune=XlaAutotune(xla_autotune),
+        watch_interval=watch_interval,
         token_dump_skip_layers=(
             tuple(int(x) for x in token_dump_skip_layers.split(",")) if token_dump_skip_layers else ()
         ),
