@@ -719,6 +719,7 @@ members = [
     "marin-root",
     "marin-shellbox",
     "marin-taskcompendium",
+    "marin-taskforge",
     "marin-verifyit",
     "marin-zephyr",
 ]
@@ -7698,6 +7699,45 @@ provides-extras = ["pipeline"]
 [package.metadata.requires-dev]
 test = [
     { name = "marin-shellbox", extras = ["shellsim"], editable = "lib/shellbox" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
+name = "marin-taskforge"
+version = "0.1.0"
+source = { editable = "lib/taskforge" }
+dependencies = [
+    { name = "marin-rigging" },
+    { name = "marin-rolloutengine" },
+    { name = "marin-shellbox", extra = ["shellsim"] },
+    { name = "marin-taskcompendium" },
+    { name = "marin-verifyit", extra = ["math"] },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-shellbox", extras = ["shellsim"], editable = "lib/shellbox" },
+    { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
+    { name = "marin-verifyit", extras = ["math"], editable = "lib/verifyit" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
+
+[package.metadata.requires-dev]
+test = [
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },

@@ -203,6 +203,7 @@ members = [
     "lib/rolloutengine",
     "lib/shellbox",
     "lib/taskcompendium",
+    "lib/taskforge",
     "lib/zephyr",
     "lib/verifyit",
     "lib/finestore",
@@ -237,6 +238,7 @@ marin-shellbox = { workspace = true }
 marin-zephyr = { workspace = true }
 marin-verifyit = { workspace = true }
 marin-taskcompendium = { workspace = true }
+marin-taskforge = { workspace = true }
 marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
