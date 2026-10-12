@@ -14,6 +14,7 @@ from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
     ANSWER_CALL_NAME,
     CONVERSATION_ANSWERS,
+    TOOL_ARGUMENTS_OBJECT_ERROR,
     AnswerCall,
     AnswerType,
     AssistantToolCalls,
@@ -110,7 +111,7 @@ class _ShellboxTaskSession:
             if call.name in final_tools or answer_call:
                 return Transition(done=True)
             if not isinstance(call.arguments, dict):
-                observation = json.dumps({"error": "Tool arguments must be a JSON object"})
+                observation = json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR})
             elif self.shell_tool is None:
                 observation = json.dumps({"error": "No shell tool is available"})
             else:

@@ -42,6 +42,7 @@ from verifyit.spec import (
 
 SCHEMA_VERSION = "0.27"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
+TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
 
 class AnswerType(StrEnum):
@@ -134,7 +135,7 @@ class ConversationToolCall(BaseModel):
     def object_arguments(self) -> dict[str, JsonValue]:
         """Return the argument object or reject non-object submission evidence."""
         if not isinstance(self.arguments, dict):
-            raise SubmissionFailure("Tool arguments must be a JSON object")
+            raise SubmissionFailure(TOOL_ARGUMENTS_OBJECT_ERROR)
         return self.arguments
 
 
