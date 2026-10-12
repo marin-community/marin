@@ -3,7 +3,7 @@
 
 import json
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -115,6 +115,49 @@ class AssessmentTransport:
                 }
             observations.append(RequestObservation((task_id,), json.dumps(row)))
         return RequestOutput(tuple(requests), observations)
+
+
+@dataclass(frozen=True)
+class TruncatedAssessmentTransport:
+    root: str
+    token_limit: int
+
+    def __call__(self, requests):
+        result = AssessmentTransport(self.root)(requests)
+        observations = []
+        for request, observation in zip(requests, result.observations, strict=True):
+            if request["body"]["max_tokens"] <= self.token_limit:
+                row = json.loads(observation.output)
+                row["response"]["body"]["choices"][0]["finish_reason"] = "length"
+                observation = replace(observation, output=json.dumps(row))
+            observations.append(observation)
+        return replace(result, observations=observations)
+
+
+def test_assessment_recovers_truncated_judgment_with_larger_retry_budget(context, tmp_path):
+    curated = curated_source(
+        context, tmp_path, [{"Body": "Ada has two apples.", "Question": "How many?", "Answer": "2"}]
+    )
+    inputs = tmp_path / "inputs"
+    prepare_assessment(
+        context, curated_root=str(curated), sampling=AssessmentSampling(admitted=1), output_root=str(inputs)
+    )
+    judgments = tmp_path / "judgments"
+    grade_assessment(
+        context,
+        inputs_root=str(inputs),
+        rubric=ASSESSMENT_RUBRIC,
+        model=AssessmentModel("fixture", "revision", max_tokens=100, retry_max_tokens=200),
+        submit=TruncatedAssessmentTransport(str(tmp_path), token_limit=100),
+        cache_root=str(tmp_path / "cache"),
+        output_root=str(judgments),
+    )
+    report = assessment_summary(str(inputs), str(judgments))
+    assert report["assessment"]["admitted"]["reviewed"] == 1
+    assert report["assessment"]["admitted"]["grade"] == "good"
+    calls = [json.loads(row) for row in (tmp_path / "calls.jsonl").read_text().splitlines()]
+    assert [row["body"]["max_tokens"] for row in calls] == [100, 200]
+    assert calls[0]["custom_id"] == calls[1]["custom_id"]
 
 
 def test_assessment_retains_curation_evidence_and_retries_only_uncached_requests(context, tmp_path):

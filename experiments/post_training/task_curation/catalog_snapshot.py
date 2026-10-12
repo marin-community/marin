@@ -150,6 +150,7 @@ def _unavailable_assessment(record: dict[str, Any], files: dict[str, str]) -> di
 def _publication(
     store: DataStore, view: ReadView, run_id: str, sources: Iterable[RlDataSource], *, legacy_archive_url: str | None
 ) -> dict[str, Any]:
+    # Stored JSON uses lists; normalize tuple fields before comparing declarations.
     declarations = [
         json.loads(
             _json({name: value for name, value in source_row(source).items() if name not in LEGACY_REVIEW_FIELDS})

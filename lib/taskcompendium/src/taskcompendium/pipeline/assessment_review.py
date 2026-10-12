@@ -6,7 +6,7 @@
 import json
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import partial
 from typing import Any
 
@@ -21,6 +21,7 @@ from taskcompendium.pipeline.assessment import TaskJudgment, Verdict, read_json,
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
 from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.query_cache import cached_request_output
+from taskcompendium.pipeline.review import DEFAULT_REVIEW_RETRY_MAX_TOKENS
 from taskcompendium.pipeline.review_requests import RequestOutput, TypedBatchRecord, typed_batch_records
 
 ASSESSMENT_RUBRIC = """Assess the quality of this RL task from the supplied evidence.
@@ -60,6 +61,7 @@ class AssessmentModel:
     revision: str
     max_tokens: int = 4096
     max_attempts: int = 3
+    retry_max_tokens: int = DEFAULT_REVIEW_RETRY_MAX_TOKENS
 
 
 class IncompleteAssessment(RuntimeError):
@@ -173,11 +175,17 @@ def _grade_shard(
     assert shard.total_shards == 1, "Assessment transport and traces require one inference shard per source"
     packets = {row["task_id"]: row for row in rows}
     pending = dict(packets)
+    budgets = {task_id: model.max_tokens for task_id in packets}
     grades = {}
     for attempt in range(1, model.max_attempts + 1):
         if not pending:
             break
-        requests = [_request(packet, curation=curation, rubric=rubric, model=model) for packet in pending.values()]
+        requests = [
+            _request(
+                packet, curation=curation, rubric=rubric, model=replace(model, max_tokens=budgets[packet["task_id"]])
+            )
+            for packet in pending.values()
+        ]
         result = cached_request_output(
             requests,
             cache_root=cache_root,
@@ -208,6 +216,8 @@ def _grade_shard(
             }
             if value is not None:
                 pending.pop(record.task_id)
+            elif record.status == ReviewStatus.INVALID:
+                budgets[record.task_id] = max(budgets[record.task_id], model.retry_max_tokens)
     yield from (grades[task_id] for task_id in packets)
 
 

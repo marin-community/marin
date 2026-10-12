@@ -100,6 +100,10 @@ failures retain partial grades and fail the stage. Batch transport separately
 retries a failed HTTP request up to three times. Reruns reuse successful
 request-cache entries. Missing required evidence keeps the source's sampled
 quality unknown even when the model supplies a favorable opinion.
+Invalid structured replies, including token truncation, use the existing curation
+review retry budget of 8,192 tokens. First attempts use 4,096; transport failures
+do not increase the current budget. Valid cached judgments keep their original
+request budget.
 The cohort label is unknown for an empty sample, unavailable judgments or a
 missing TaskSpec. Otherwise bad takes precedence over some_issues, unknown,
 and good. Read the verdict counts alongside this conservative label. Missing

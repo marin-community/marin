@@ -22,7 +22,7 @@ from experiments.post_training.task_curation.campaign import CampaignArtifact, C
 from experiments.post_training.task_curation.config import RecipeSettings
 
 INPUTS_VERSION = "2026.10.12.8"
-JUDGMENTS_VERSION = "2026.10.12.3"
+JUDGMENTS_VERSION = "2026.10.12.4"
 REPORT_VERSION = "2026.10.12.3"
 
 
