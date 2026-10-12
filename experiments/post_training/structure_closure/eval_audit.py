@@ -9,6 +9,7 @@ import json
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from rolloutengine.closure_scoring import (
@@ -19,6 +20,22 @@ from rolloutengine.closure_scoring import (
 )
 
 from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
+
+
+class UidSource(StrEnum):
+    ROW_INDEX = "row_index"
+    CASE_ID = "case_id"
+
+
+def cases_by_uid(cases: Sequence[TokenizedCaseRecord], source: UidSource) -> dict[str, TokenizedCaseRecord]:
+    """Index the cohort using the ID convention recorded by its evaluation path."""
+    identities = [
+        str(index) if source == UidSource.ROW_INDEX else "structure-closure:" + case["case_id"]
+        for index, case in enumerate(cases)
+    ]
+    if len(set(identities)) != len(cases):
+        raise ValueError("Validation cohort contains duplicate evaluation identities")
+    return dict(zip(identities, cases, strict=True))
 
 
 @dataclass(frozen=True)
@@ -74,14 +91,17 @@ class EvaluationAudit:
         }
 
 
-def audit_evaluation(cases: Sequence[TokenizedCaseRecord], rows: Iterable[dict]) -> EvaluationAudit:
+def audit_evaluation(
+    cases: Sequence[TokenizedCaseRecord], rows: Iterable[dict], *, uid_source: UidSource
+) -> EvaluationAudit:
     """Check one sample per case, exact conditioning, and agreement with local scoring.
 
-    UIDs refer to the loaded dataset order. The caller must supply the exact
-    unfiltered validation cohort with closure rows first, as in the launch recipe.
+    Select row indices for batch evaluation or stable case IDs for step-wise
+    evaluation. Row indices require the exact unfiltered validation cohort with
+    closure rows first, as in the launch recipe.
     All row failures are retained; an incomplete audit cannot establish improvement.
     """
-    expected = {str(index): case for index, case in enumerate(cases)}
+    expected = cases_by_uid(cases, uid_source)
     seen: set[str] = set()
     results = []
     failures = []
@@ -115,7 +135,7 @@ def audit_evaluation(cases: Sequence[TokenizedCaseRecord], rows: Iterable[dict])
         except (KeyError, TypeError, ValueError) as error:
             failures.append(AuditFailure(uid, str(error)))
     return EvaluationAudit(
-        len(cases), observed, tuple(sorted(expected.keys() - seen, key=int)), tuple(failures), tuple(results)
+        len(cases), observed, tuple(uid for uid in expected if uid not in seen), tuple(failures), tuple(results)
     )
 
 
@@ -124,6 +144,7 @@ def main() -> None:
     parser.add_argument("--tokens", type=Path, required=True)
     parser.add_argument("--eval-dump", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--uid-source", type=UidSource, choices=list(UidSource), required=True)
     args = parser.parse_args()
     contents = (args.tokens / "validation.jsonl").read_bytes()
     manifest = json.loads((args.tokens / "manifest.json").read_text())
@@ -137,8 +158,9 @@ def main() -> None:
     if any(case["split"] != "validation" for case in cases):
         raise ValueError("Training cases cannot enter the validation audit")
     dump = args.eval_dump.read_bytes()
-    audit = audit_evaluation(cases, (json.loads(line) for line in dump.splitlines()))
+    audit = audit_evaluation(cases, (json.loads(line) for line in dump.splitlines()), uid_source=args.uid_source)
     report = {
+        "uid_source": args.uid_source,
         "validation_sha256": digest,
         "eval_dump_sha256": hashlib.sha256(dump).hexdigest(),
         **audit.summary(),

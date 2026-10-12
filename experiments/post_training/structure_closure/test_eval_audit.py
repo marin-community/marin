@@ -5,7 +5,7 @@ from copy import deepcopy
 
 import pytest
 
-from experiments.post_training.structure_closure.eval_audit import audit_evaluation
+from experiments.post_training.structure_closure.eval_audit import UidSource, audit_evaluation
 from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
 
 
@@ -56,7 +56,7 @@ def rows():
 
 
 def test_audit_keeps_identical_prompts_distinct_and_counts_model_failure(cohort, rows):
-    audit = audit_evaluation(cohort, reversed(rows))
+    audit = audit_evaluation(cohort, reversed(rows), uid_source=UidSource.ROW_INDEX)
     assert audit.complete
     assert [(row.case_id, row.success) for row in audit.results] == [("second", False), ("first", True)]
     assert audit.summary()["groups"]["json_object"] == {
@@ -92,7 +92,7 @@ def test_audit_rejects_incomplete_or_inconsistent_evidence(cohort, rows, failure
         }
     else:
         rows[1]["exception_type"] = "TimeoutError"
-    audit = audit_evaluation(cohort, rows)
+    audit = audit_evaluation(cohort, rows, uid_source=UidSource.ROW_INDEX)
     assert not audit.complete
     if failure == "missing":
         assert audit.missing_uids == ("1",)
@@ -104,7 +104,15 @@ def test_audit_rejects_incomplete_or_inconsistent_evidence(cohort, rows, failure
 def test_audit_reports_every_bad_row_in_one_pass(cohort, rows):
     rows[0]["prompt_token_ids"] = []
     rows[1]["verification"] = None
-    audit = audit_evaluation(cohort, rows)
+    audit = audit_evaluation(cohort, rows, uid_source=UidSource.ROW_INDEX)
     assert [failure.uid for failure in audit.failures] == ["0", "1"]
     assert not audit.complete
     assert audit.results == ()
+
+
+def test_audit_matches_stable_case_ids_when_output_order_changes(cohort, rows):
+    for case, row in zip(cohort, rows, strict=True):
+        row["uid"] = "structure-closure:" + case["case_id"]
+    audit = audit_evaluation(cohort, reversed(rows), uid_source=UidSource.CASE_ID)
+    assert audit.complete
+    assert [(row.case_id, row.success) for row in audit.results] == [("second", False), ("first", True)]
