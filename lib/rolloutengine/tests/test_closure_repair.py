@@ -149,6 +149,59 @@ def test_premature_close_is_not_reinforced_as_a_valid_repair():
     assert target is None
 
 
+@pytest.mark.parametrize(
+    "structure_format,prefix,required_response,drift,suffix",
+    [
+        (ClosureFormat.JSON, '"slash=\\\\', "", "n\\\\n", '"'),
+        (ClosureFormat.JSON, '"unfin', "ished", " extra", '"'),
+        (ClosureFormat.REASONING, "<|start_think|>Done.", "", " More thoughts", "<|end_think|>"),
+        (ClosureFormat.CODE_FENCE, "~~~~json\n{}\n", "", "```\n", "~~~~"),
+    ],
+)
+def test_unclosed_content_drift_repairs_latest_verified_reference_boundary(
+    structure_format, prefix, required_response, drift, suffix
+):
+    expected = prefix + required_response + suffix
+    prompt = codepoints("instruction\n" + prefix)
+    response = codepoints(required_response + drift)
+    target = verified_closure_target(
+        prompt,
+        response,
+        structure_prefix=prefix,
+        inspect=lambda value: closure_state(value, structure_format),
+        verify_complete=lambda value: score_closure(value, expected, structure_format).success,
+        encode=codepoints,
+        decode=text,
+    )
+    assert target is not None
+    assert target.kind == ClosureTargetKind.MISSING_SUFFIX
+    assert target.response_position == len(required_response)
+    assert text(list(target.repair_token_ids)) == suffix
+    repaired = text(prompt + response[: target.response_position] + list(target.repair_token_ids))
+    assert repaired == "instruction\n" + expected
+
+
+@pytest.mark.parametrize(
+    "prefix,response,expected",
+    [
+        ('"unfinished', " other words", '"unfinished content"'),
+        ('{"value":', " ", '{"value":1}'),
+        ('"done', ' extra"', '"done"'),
+    ],
+)
+def test_missing_closure_fallback_neither_invents_content_nor_changes_completed_structure(prefix, response, expected):
+    target = verified_closure_target(
+        codepoints(prefix),
+        codepoints(response),
+        structure_prefix=prefix,
+        inspect=json_closure_state,
+        verify_complete=lambda value: score_closure(value, expected, ClosureFormat.JSON).success,
+        encode=codepoints,
+        decode=text,
+    )
+    assert target is None
+
+
 @pytest.mark.parametrize("ending", ['"', '"]', '"}'])
 def test_split_utf8_character_preserves_exact_repair_history(ending):
     prefix = '["'

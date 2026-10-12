@@ -22,6 +22,21 @@ class ClosureTarget:
     repair_token_ids: tuple[int, ...]
 
 
+def _verified_closing_suffix(
+    structure: str,
+    inspect: Callable[[str], ClosureState],
+    verify_complete: Callable[[str], bool],
+) -> str | None:
+    state = inspect(structure)
+    suffix = state.completion_guard or state.closing_suffix
+    if (state.status != PrefixStatus.EXTENDABLE and not state.completion_guard) or not suffix:
+        return None
+    completed = structure + suffix
+    if inspect(completed).status != PrefixStatus.COMPLETE or not verify_complete(completed):
+        return None
+    return suffix
+
+
 def verified_closure_target(
     prompt_ids: Sequence[int],
     response_ids: Sequence[int],
@@ -32,7 +47,7 @@ def verified_closure_target(
     encode: Callable[[str], list[int]],
     decode: Callable[[list[int]], str],
 ) -> ClosureTarget | None:
-    """Select the first illegal token or a verified repair at generation end.
+    """Select an illegal-token alternative or a verified missing-closure repair.
 
     Inputs describe one completed model turn, not an infrastructure failure or
     a stitched conversation. The structure starts at the end of the prompt.
@@ -42,7 +57,10 @@ def verified_closure_target(
     when the closing sequence and trailing text share one token.
 
     For FTPO, retain history through ``response_position`` exclusively. For
-    missing-suffix SFT, append the repair there and mask all preceding tokens.
+    missing-suffix SFT, replace the remaining response with the repair and mask
+    all preceding tokens. If content drift prevents repair at generation end,
+    use the latest earlier token boundary with a verified closing-only repair.
+    Completed outer structures never use that fallback.
     No sampled history is re-encoded. Incomplete Unicode boundaries are not
     supervision positions; rewrites of stable decoded history raise.
     """
@@ -78,17 +96,28 @@ def verified_closure_target(
         structure, state, previous_text = next_structure, next_state, text
     if kind == ClosureTargetKind.MISSING_SUFFIX and state.completion_offset is not None:
         return None
-    suffix = state.completion_guard or state.closing_suffix
-    if (state.status != PrefixStatus.EXTENDABLE and not state.completion_guard) or not suffix:
-        return None
-    completed = structure + suffix
-    if inspect(completed).status != PrefixStatus.COMPLETE or not verify_complete(completed):
-        return None
-    repair = encode(suffix)
     conditioning = prompt + response[:position]
     conditioning_text = decode(conditioning)
     if conditioning_text != previous_text:
         return None
+    suffix = _verified_closing_suffix(structure, inspect, verify_complete)
+    if suffix is None:
+        for earlier_position in range(position - 1, -1, -1):
+            earlier_conditioning = prompt + response[:earlier_position]
+            earlier_text = decode(earlier_conditioning)
+            if earlier_text.endswith("\ufffd"):
+                continue
+            earlier_structure = structure_prefix + earlier_text[len(prompt_text) :]
+            suffix = _verified_closing_suffix(earlier_structure, inspect, verify_complete)
+            if suffix is not None:
+                position = earlier_position
+                conditioning = earlier_conditioning
+                conditioning_text = earlier_text
+                kind = ClosureTargetKind.MISSING_SUFFIX
+                break
+        if suffix is None:
+            return None
+    repair = encode(suffix)
     if not repair or decode(conditioning + repair) != conditioning_text + suffix:
         raise ValueError("Repair tokens do not preserve history and verified suffix")
     for stop in range(1, len(repair) + 1):
