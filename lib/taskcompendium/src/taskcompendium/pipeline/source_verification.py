@@ -46,7 +46,7 @@ from taskcompendium.pipeline.transforms import is_accepted
 from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.runtime.models import RolloutRecord
 
-SOURCE_VERIFICATION_REVISION = "10"
+SOURCE_VERIFICATION_REVISION = "13"
 VERIFICATION_REPORT_FILENAME = "verification.json"
 """The verified stage's report; a rerun at the same output reuses its matching control trials."""
 INFRA_ERROR_RETRIES = 2

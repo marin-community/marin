@@ -42,12 +42,12 @@ from taskcompendium.pipeline.models import (
     WorkspaceFiles,
 )
 from taskcompendium.pipeline.verification import answer_event, control_result
-from taskcompendium.runtime.environment import prepare_machine_spec, validate_machine_spec
+from taskcompendium.runtime.environment import prepare_machine_spec, setup_user, validate_machine_spec
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "7"
+CONTROLS_REVISION = "12"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -241,11 +241,14 @@ async def _oracle_attempt(
     workspace = prepared.workdir
     try:
         await upload_resources(
-            machine, (*task.resources.all, *task.resources.worker, *task.resources.oracle), ORACLE_TIMEOUT
+            machine,
+            (*task.resources.all, *task.resources.worker, *task.resources.oracle),
+            ORACLE_TIMEOUT,
+            user=setup_user(factory.backend),
         )
         commands = [Command(("mkdir", "-p", workspace), timeout=ORACLE_TIMEOUT)]
         commands.extend(
-            Command(("sh", "-c", setup), cwd=workspace, timeout=ORACLE_TIMEOUT, user="0")
+            Command(("sh", "-c", setup), cwd=workspace, timeout=ORACLE_TIMEOUT, user=setup_user(factory.backend))
             for setup in environment.setup_commands
         )
         commands.append(

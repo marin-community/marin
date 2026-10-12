@@ -130,7 +130,7 @@ def review_source(
 ) -> dict[str, Any]:
     """Prepare and review every eligible row, without source-level quality extrapolation."""
     assert isinstance(execution.reviewer, BatchReviewer)
-    prepare_source(staged, output, recipe, limit, execution)
+    prepare_source(staged, output, recipe, limit, execution, num_output_shards=1)
     return audit_prepared_source(output, None, output, recipe, review_config(execution.reviewer), execution).manifest
 
 

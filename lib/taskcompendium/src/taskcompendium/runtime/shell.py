@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import os
+import uuid
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -33,10 +34,10 @@ from taskcompendium.models import (
     TaskSpec,
     validate_output_paths,
 )
-from taskcompendium.runtime.environment import prepare_machine_spec, validate_machine_spec
+from taskcompendium.runtime.environment import prepare_machine_spec, setup_user, validate_machine_spec
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.output_capture import captured_output_files
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.staging import resource_files, write_archive
 
 OUTPUT_PATH = "/output/command_capture.txt"
 CONTROL_PATH = "/controls/reference.sh"
@@ -153,20 +154,26 @@ def machine_spec_identity(machine_spec: MachineSpec) -> dict[str, Any]:
     return identity
 
 
-async def upload_resources(machine: Machine, resources: Sequence[TaskResource], timeout: float) -> None:
+async def upload_resources(
+    machine: Machine, resources: Sequence[TaskResource], timeout: float, *, user: str | None
+) -> None:
     """Write task resources at their absolute paths, applying declared file modes."""
+    if not resources:
+        return
     with TemporaryDirectory() as directory:
-        for index, resource in enumerate(resources):
+        for resource in resources:
             if resource.mtime_ns is not None:
                 raise ValueError("Shell factory cannot mount resource timestamps")
-            local = Path(directory) / str(index)
-            local.write_bytes(resource_bytes(resource))
-            target = f"/{resource.path}"
-            await machine.upload(local, target)
-            if resource.mode is not None:
-                permissions = await machine.run(Command(("chmod", resource.mode, target), timeout=timeout))
-                if permissions.exit_code != 0:
-                    raise RuntimeError(f"Could not set resource permissions: {target}")
+        archive = Path(directory) / "resources.tar"
+        target = f"/tmp/taskcompendium-resources-{uuid.uuid4().hex}.tar"
+        # Batch resources into one upload to avoid a machine RPC for every file.
+        # File-only entries preserve existing guest directory ownership and modes.
+        write_archive(archive, resource_files(resources, ""), [])
+        await machine.upload(archive, target)
+        for arguments in (("tar", "-xf", target, "-C", "/"), ("rm", "-f", target)):
+            result = await machine.run(Command(arguments, cwd="/", timeout=timeout, user=user))
+            if result.exit_code != 0:
+                raise RuntimeError(f"Could not stage task resources: {result.stderr.decode(errors='replace')}")
 
 
 @dataclass
@@ -262,9 +269,15 @@ class ShellFactory:
             resources = list(task.resources.all)
             for role in self.mounted_roles:
                 resources.extend(roles[role])
-            await upload_resources(machine, resources, self.command_timeout)
+            await upload_resources(
+                machine, resources, self.command_timeout, user=setup_user(self.machine_factory.backend)
+            )
             for setup in requirements.setup_commands:
-                result = await machine.run(Command(("sh", "-c", setup), timeout=self.command_timeout, user="0"))
+                result = await machine.run(
+                    Command(
+                        ("sh", "-c", setup), timeout=self.command_timeout, user=setup_user(self.machine_factory.backend)
+                    )
+                )
                 if result.exit_code != 0:
                     raise RuntimeError("Shell environment setup failed")
         except BaseException:
