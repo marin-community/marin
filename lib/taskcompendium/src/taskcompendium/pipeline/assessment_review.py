@@ -186,6 +186,11 @@ def _grade_shard(
             _request(packet, curation=curation, rubric=rubric, model=model.model, max_tokens=budgets[packet["task_id"]])
             for packet in pending.values()
         ]
+        if attempt > 1:
+            # Keep first-attempt cache keys; retries constrain copying of long task IDs.
+            for request in requests:
+                schema = request["body"]["tools"][0]["function"]["parameters"]
+                schema["properties"]["task_id"]["const"] = request["custom_id"]
         result = cached_request_output(
             requests,
             cache_root=cache_root,

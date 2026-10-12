@@ -135,6 +135,53 @@ class TruncatedAssessmentTransport:
         return replace(result, observations=observations)
 
 
+@dataclass(frozen=True)
+class MismatchedIdentityTransport:
+    root: str
+
+    def __call__(self, requests):
+        result = AssessmentTransport(self.root)(requests)
+        observations = []
+        for request, observation in zip(requests, result.observations, strict=True):
+            schema = request["body"]["tools"][0]["function"]["parameters"]
+            if "const" not in schema["properties"]["task_id"]:
+                row = json.loads(observation.output)
+                function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
+                verdict = json.loads(function["arguments"])
+                verdict["task_id"] += "-typo"
+                function["arguments"] = json.dumps(verdict)
+                observation = replace(observation, output=json.dumps(row))
+            observations.append(observation)
+        return replace(result, observations=observations)
+
+
+def test_assessment_recovers_identity_mismatch_without_misattributing_grade(context, tmp_path):
+    curated = curated_source(
+        context, tmp_path, [{"Body": "Ada has two apples.", "Question": "How many?", "Answer": "2"}]
+    )
+    inputs = tmp_path / "inputs"
+    prepare_assessment(
+        context, curated_root=str(curated), sampling=AssessmentSampling(admitted=1), output_root=str(inputs)
+    )
+    judgments = tmp_path / "judgments"
+    grade_assessment(
+        context,
+        inputs_root=str(inputs),
+        rubric=ASSESSMENT_RUBRIC,
+        model=AssessmentModel("fixture", "revision"),
+        submit=MismatchedIdentityTransport(str(tmp_path)),
+        cache_root=str(tmp_path / "cache"),
+        output_root=str(judgments),
+    )
+    manifest = read_json(str(judgments / "manifest.json"))
+    rows = [row for path in manifest["grade_paths"] for row in load_parquet(path)]
+    expected = read_json(str(inputs / "manifest.json"))["sample"][0]["task_id"]
+    assert [(row["task_id"], row["status"], row["verdict"]) for row in rows] == [(expected, "reviewed", "good")]
+    calls = [json.loads(row) for row in (tmp_path / "calls.jsonl").read_text().splitlines()]
+    assert len(calls) == 2
+    assert calls[1]["body"]["tools"][0]["function"]["parameters"]["properties"]["task_id"]["const"] == expected
+
+
 def test_assessment_recovers_truncated_judgment_with_larger_retry_budget(context, tmp_path):
     curated = curated_source(
         context, tmp_path, [{"Body": "Ada has two apples.", "Question": "How many?", "Answer": "2"}]

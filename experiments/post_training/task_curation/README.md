@@ -104,6 +104,9 @@ Invalid structured replies, including token truncation, use the existing curatio
 review retry budget of 8,192 tokens. First attempts use 4,096; transport failures
 do not increase the current budget. Valid cached judgments keep their original
 request budget.
+Retries constrain the tool's task ID to the selected item, preventing a copied
+hash typo from misattributing a judgment. Identity validation still rejects any
+mismatch; the publisher never repairs model IDs after the fact.
 The cohort label is unknown for an empty sample, unavailable judgments or a
 missing TaskSpec. Otherwise bad takes precedence over some_issues, unknown,
 and good. Read the verdict counts alongside this conservative label. Missing
