@@ -1248,6 +1248,18 @@ def test_health_alert_announces_a_controller_retry_on_the_run_that_owns_the_task
     assert _reasons(health_alert_rows((_watched(),), signals, retries, {}, now)) == {"task_retried"}
 
 
+@pytest.mark.parametrize("phase", [None, 0.0], ids=["before-first-phase", "initializing"])
+def test_health_alert_announces_retry_before_replacement_trains(phase: float | None):
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    retries = finelog_result(cluster=["cw-a"], task_id=["/u/hero-a-coord/train/17"])
+    if phase is None:
+        signals = {}
+    else:
+        signals = _signals(now, {"phase": {"latest": phase}, "moe_drop_fraction": {"latest": 0.4}})
+
+    assert _reasons(health_alert_rows((_watched(),), signals, retries, {}, now)) == {"task_retried"}
+
+
 def test_run_health_alerts_stay_quiet_for_a_run_that_is_not_training():
     # A finished run leaves its last samples behind, an initializing attempt has
     # published none, and a silent one belongs to TrainingTelemetryGone.

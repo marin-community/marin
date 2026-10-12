@@ -429,9 +429,11 @@ def health_alert_rows(
 
     def reasons_for(run: WatchedRun) -> list[str]:
         metrics = _metrics(signals, run)
-        if not _is_training(metrics, now):
-            return []
         reasons = []
+        if retries.get((run.cluster, run.root_job), 0) > 0:
+            reasons.append("task_retried")
+        if not _is_training(metrics, now):
+            return reasons
         drops = _fresh(metrics.get(_DROP_FRACTION), now, _LATEST_FRESHNESS)
         if drops is not None and drops.latest > DROP_FRACTION_MAX:
             reasons.append("token_drops")
@@ -450,8 +452,6 @@ def health_alert_rows(
         # clusters), not a rollup that broke.
         if run.iris_state_age is not None and run.iris_state_age > IRIS_STATE_STALE_AGE:
             reasons.append("iris_state_stale")
-        if retries.get((run.cluster, run.root_job), 0) > 0:
-            reasons.append("task_retried")
         return reasons
 
     return _project(runs, reasons_for)
