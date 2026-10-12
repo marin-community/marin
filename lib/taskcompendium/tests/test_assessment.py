@@ -236,3 +236,43 @@ def test_assessment_locates_evidence_after_empty_physical_row_groups(context, tm
     packets = [row for path in manifest["packet_paths"] for row in load_parquet(path)]
     assert len(packets) == 2
     assert all(json.loads(row["packet_json"])["task"]["id"] == row["task_id"] for row in packets)
+
+
+def test_assessment_keeps_task_context_when_audit_views_repeat_large_payloads(context, tmp_path):
+    curated = curated_source(
+        context,
+        tmp_path,
+        [
+            {"Body": "Ada has two apples.", "Question": "How many apples?", "Answer": "2"},
+        ],
+    )
+    for view in ("normalize", "review", "verify"):
+        path = next((curated / view).glob("*.parquet"))
+        table = pq.read_table(path)
+        rows = table.to_pylist()
+        for row in rows:
+            row["normalization_changes"] = [
+                {
+                    "field": "prompt",
+                    "reason": "adapt answer delivery",
+                    "original": "original " * 20_000,
+                    "replacement": "replacement " * 20_000,
+                }
+            ]
+            if "raw_json" in row:
+                row["raw_json"] = json.dumps({"duplicated_source_blob": "x" * 200_000})
+        replacement = path.with_suffix(".rewritten")
+        pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), replacement)
+        replacement.replace(path)
+    inputs = tmp_path / "inputs"
+    sampling = AssessmentSampling(admitted=1)
+    prepare_assessment(context, curated_root=str(curated), sampling=sampling, output_root=str(inputs))
+    manifest = read_json(str(inputs / "manifest.json"))
+    (packet,) = [row for path in manifest["packet_paths"] for row in load_parquet(path)]
+    evidence = json.loads(packet["packet_json"])
+    assert evidence["task"]["id"] == packet["task_id"]
+    assert evidence["submission"]["answer_path"] is None
+    assert evidence["normalize"]["normalization_changes"][0]["original"]["truncated"]
+    assert "task_json" not in evidence["review"] and "task_json" not in evidence["verify"]
+    assert "raw_json" not in evidence["verify"]
+    assert len(packet["packet_json"]) <= sampling.max_packet_characters

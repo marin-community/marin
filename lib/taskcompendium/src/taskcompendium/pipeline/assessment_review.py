@@ -35,6 +35,9 @@ Assess the task independently: previous model reviews can contain false positive
 Distinguish declared requirements and previews from actual executed controls. A control suite is a
 sample, not proof that every task works. Private verifier/oracle resources are legitimate reviewer
 evidence; only material exposed to the solver can be answer leakage. Resource roles identify visibility.
+The submission section describes the runtime adapter. It can extract a conversation answer and stage
+it in a grader file; this does not require the solver to write that file. Use this contract when
+checking answer delivery. Missing previous model reviews alone are not a task defect.
 If required task context or reference evidence was omitted, use unknown. For an excluded item,
 explain its recorded rejection and any possible false exclusion without treating it as released data.
 """

@@ -115,9 +115,17 @@ curation remains visible in the assessment; model opinions cannot override it.
 Run large GCS-backed inputs in their storage region.
 Remote Zephyr scratch uses the current artifact prefix, so GCS campaigns keep
 their intermediate data in GCS too.
+It lives at `ARTIFACT_PREFIX/.zephyr/rl-data-campaign` remotely and
+`CACHE_DIR/.zephyr` locally. Zephyr gives each execution its own directory and
+removes it when releasing that execution.
 Selected evidence reads decode complete Parquet row groups, including task JSON
 for unselected rows in those groups. ID scans project only the required columns.
 The bounded packet set is written as one Parquet file after evidence projection.
+Packets include the runtime submission contract: conversation answers may be
+extracted and written to grader files by the adapter. Duplicate TaskSpec JSON
+and normalization text are omitted from review/verification sidecars; oversized
+source rows and normalization changes have explicit hashed previews. Full audit
+data remains in the curation output.
 
 Each campaign appends its reports and compact evidence to the FineStore catalog
 beside the campaign report. `assessment_runs` records ordinary pipeline keys,

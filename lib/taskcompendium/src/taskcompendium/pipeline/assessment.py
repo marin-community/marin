@@ -22,11 +22,20 @@ from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_parquet, open_file
 from zephyr.writers import write_parquet_file
 
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import (
+    CONVERSATION_ANSWERS,
+    AnswerType,
+    ScriptGrader,
+    TaskSpec,
+    VerifyitGrader,
+    verifyit_answer_file,
+    verifyit_spec,
+)
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
 from taskcompendium.pipeline.models import ReviewStatus
-from taskcompendium.pipeline.review import review_payload
+from taskcompendium.pipeline.review import private_evidence_summary, review_payload
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
+from taskcompendium.submission import submission_compatibility, submission_instruction
 
 PACKET_SCHEMA = pa.schema(
     [
@@ -37,6 +46,7 @@ PACKET_SCHEMA = pa.schema(
     ]
 )
 EVIDENCE_READ_BLOCK_BYTES = 1_048_576
+AUDIT_PREVIEW_CHARACTERS = 2048
 
 
 class Cohort(StrEnum):
@@ -73,6 +83,62 @@ class RowLocation:
     path: str
     row_group: int
     index: int
+
+
+@dataclass(frozen=True)
+class SubmissionContract:
+    answer_type: AnswerType
+    instruction: str | None
+    answer_path: str | None
+    conversation_path: str | None
+    output_paths: tuple[str, ...]
+    compatibility_reasons: tuple[str, ...]
+    handling: str
+
+
+def submission_contract(task: TaskSpec) -> SubmissionContract:
+    """Describe the existing runtime's answer extraction and grader-file staging."""
+    answer_path = None
+    conversation_path = None
+    handling = "No runnable grader is available; this is a declared source contract."
+    if isinstance(task.grader, ScriptGrader):
+        answer_path = task.grader.answer_path
+        conversation_path = task.grader.conversation_path
+        handling = (
+            "The runtime extracts the answer from the conversation using answer_format and writes it to answer_path "
+            "before invoking the script. The solver need not write that file."
+            if answer_path is not None
+            else "The runtime captures declared workspace outputs and available state."
+        )
+    elif isinstance(task.grader, VerifyitGrader):
+        if task.grader.environment is None:
+            handling = (
+                "In-process Verifyit receives the extracted submission directly; "
+                "answer_file does not require solver file delivery."
+            )
+        else:
+            answer_path = verifyit_answer_file(verifyit_spec(task.grader))
+            handling = (
+                "The runtime extracts the conversation answer using answer_format and stages it at answer_path "
+                "for Verifyit. The solver need not write that file."
+                if task.answer_type in CONVERSATION_ANSWERS
+                else "The runtime captures declared output files or state from the solver."
+            )
+    return SubmissionContract(
+        task.answer_type,
+        submission_instruction(task.answer_format) if task.answer_type in CONVERSATION_ANSWERS else None,
+        answer_path,
+        conversation_path,
+        task.output_paths,
+        submission_compatibility(task).reasons if task.answer_type in CONVERSATION_ANSWERS else (),
+        handling,
+    )
+
+
+def _audit_preview(value: str) -> str | dict[str, Any]:
+    if len(value) <= AUDIT_PREVIEW_CHARACTERS:
+        return value
+    return private_evidence_summary(value, "Full value retained in source audit", AUDIT_PREVIEW_CHARACTERS)
 
 
 def read_json(path: str) -> dict[str, Any]:
@@ -176,6 +242,16 @@ def _selected_locations(path: str, *, task_ids: frozenset[str]) -> Iterator[tupl
 def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampling) -> dict[str, Any]:
     evidence = {}
     omissions = []
+    for change in row.get("normalization_changes") or []:
+        for key in ("original", "replacement"):
+            if change[key] is not None:
+                if len(change[key]) > AUDIT_PREVIEW_CHARACTERS:
+                    omissions.append(f"{view}: normalization {change['field']} {key} preview truncated")
+                change[key] = _audit_preview(change[key])
+    if row.get("raw_json") is not None:
+        if len(row["raw_json"]) > AUDIT_PREVIEW_CHARACTERS:
+            omissions.append(f"{view}: original source row preview truncated")
+        row["raw_json"] = _audit_preview(row["raw_json"])
     if view == "normalize":
         task_json = row.pop("task_json")
         if task_json is None:
@@ -187,6 +263,7 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
             if task.id != row["task_id"]:
                 raise ValueError(f"TaskSpec ID disagrees with row: {row['task_id']}")
             evidence["task"] = review_payload(task)
+            evidence["submission"] = asdict(submission_contract(task))
     evidence[view] = row
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence.pop("task", None)
@@ -205,7 +282,14 @@ def _selected_evidence(
     with open_file(path, block_size=EVIDENCE_READ_BLOCK_BYTES) as stream:
         parquet = pq.ParquetFile(stream)
         for group, selected in groups.items():
-            table = parquet.read_row_group(group)
+            columns = [
+                name
+                for name in parquet.schema_arrow.names
+                if (name != "task_json" or view == "normalize")
+                and (name != "normalization_changes" or view == "normalize")
+                and (name != "raw_json" or view == "review")
+            ]
+            table = parquet.read_row_group(group, columns=columns)
             rows = table.take(pa.array(list(selected), type=pa.int64())).to_pylist()
             for task_id, row in zip(selected.values(), rows, strict=True):
                 if row["task_id"] != task_id:
