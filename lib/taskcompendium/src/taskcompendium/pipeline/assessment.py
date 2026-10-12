@@ -36,6 +36,7 @@ PACKET_SCHEMA = pa.schema(
         ("omissions", pa.list_(pa.string())),
     ]
 )
+EVIDENCE_READ_BLOCK_BYTES = 1_048_576
 
 
 class Cohort(StrEnum):
@@ -160,7 +161,7 @@ def _diagnostic_sample(groups: dict[str, tuple[int, list[dict]]], size: int, see
 
 def _selected_locations(path: str, *, task_ids: frozenset[str]) -> Iterator[tuple[str, RowLocation]]:
     values = pa.array(sorted(task_ids), type=pa.string())
-    with open_file(path, block_size=1_048_576) as stream:
+    with open_file(path, block_size=EVIDENCE_READ_BLOCK_BYTES) as stream:
         parquet = pq.ParquetFile(stream)
         for group in range(parquet.num_row_groups):
             if parquet.metadata.row_group(group).num_rows == 0:
@@ -201,7 +202,7 @@ def _selected_evidence(
 ) -> Iterator[dict[str, Any]]:
     """Decode each selected row group once, projecting only selected records."""
     view, path, groups = file
-    with open_file(path, block_size=1_048_576) as stream:
+    with open_file(path, block_size=EVIDENCE_READ_BLOCK_BYTES) as stream:
         parquet = pq.ParquetFile(stream)
         for group, selected in groups.items():
             table = parquet.read_row_group(group)

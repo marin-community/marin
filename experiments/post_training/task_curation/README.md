@@ -113,6 +113,8 @@ entries with `source` and `manifest` fields. Each adopted manifest must match
 the current source, dataset pin and recipe revision. Incomplete or gated
 curation remains visible in the assessment; model opinions cannot override it.
 Run large GCS-backed inputs in their storage region.
+Remote Zephyr scratch uses the current artifact prefix, so GCS campaigns keep
+their intermediate data in GCS too.
 Selected evidence reads decode complete Parquet row groups, including task JSON
 for unselected rows in those groups. ID scans project only the required columns.
 The bounded packet set is written as one Parquet file after evidence projection.

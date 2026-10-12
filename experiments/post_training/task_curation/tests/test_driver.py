@@ -201,9 +201,13 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     assert spec.env == {"NLTK_DATA": str(runtime.root / "share" / "nltk_data")}
 
 
-def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog):
+def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2/rl-grading")
     result = CliRunner().invoke(main, arguments(tmp_path))
     assert result.exit_code == 0, result.output
+    assert (
+        json.loads(result.output)["chunk_storage_prefix"] == "gs://marin-us-central2/rl-grading/.zephyr/rl-data-campaign"
+    )
     assert not (tmp_path / "report.json").exists()
 
 
@@ -329,7 +333,6 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
 def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path, monkeypatch, mode, rubric):
     monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    monkeypatch.setattr("experiments.post_training.task_curation.driver.CAMPAIGN_CHUNK_PREFIX", str(tmp_path / "chunks"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     source = replace(

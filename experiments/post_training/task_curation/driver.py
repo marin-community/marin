@@ -13,6 +13,8 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from iris.cluster.client.job_info import get_job_info
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.pipeline.assessment import AssessmentSampling
@@ -29,7 +31,6 @@ from experiments.post_training.task_curation.assessment import (
     assessment_pipeline,
 )
 from experiments.post_training.task_curation.campaign import (
-    CAMPAIGN_CHUNK_PREFIX,
     CampaignPool,
     CampaignRuntime,
     campaign_plan,
@@ -344,7 +345,11 @@ def main(
             concurrent_sources,
             worker_resources=worker_resources,
             coordinator_resources=ResourceConfig(cpu=1, ram=coordinator_memory or LOCAL_MEMORY, preemptible=False),
-            chunk_storage_prefix=str(cache_dir / ".zephyr") if cache_dir is not None else CAMPAIGN_CHUNK_PREFIX,
+            chunk_storage_prefix=(
+                str(cache_dir / ".zephyr")
+                if cache_dir is not None
+                else str(StoragePath(marin_prefix()) / ".zephyr/rl-data-campaign")
+            ),
         )
         if not do_run:
             plan = campaign_plan(steps, pool)

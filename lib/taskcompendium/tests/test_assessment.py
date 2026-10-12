@@ -226,6 +226,8 @@ def test_assessment_locates_evidence_after_empty_physical_row_groups(context, tm
         writer.write_table(table.slice(0, 0))
         writer.write_table(table)
     rewritten.replace(normalize)
+    metadata = pq.ParquetFile(normalize).metadata
+    assert metadata.num_row_groups == 2 and metadata.row_group(0).num_rows == 0
     inputs = tmp_path / "inputs"
     prepare_assessment(
         context, curated_root=str(curated), sampling=AssessmentSampling(admitted=2), output_root=str(inputs)
