@@ -1,0 +1,35 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "runs": [
+    {
+      "arm": "tis",
+      "run_id": "sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce",
+      "training_responses": 1024,
+      "evaluation_responses": 18072,
+      "membership": "a562b364dbcc5baeee3a00f93ca8c90fa7468b8a68101db4a6ba41a5dceb24d3",
+      "audit_passed": true
+    },
+    {
+      "arm": "sc",
+      "run_id": "sc-qwen-transfer-runtime-qual-sc-s0-a3-01a126ce",
+      "training_responses": 1024,
+      "evaluation_responses": 18072,
+      "membership": "a562b364dbcc5baeee3a00f93ca8c90fa7468b8a68101db4a6ba41a5dceb24d3",
+      "audit_passed": true
+    }
+  ],
+  "grader_files_unchanged_from_full_completion_qualification": {
+    "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+    "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+    "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+  },
+  "unchanged_dependency_lock_and_transport": true,
+  "predecessor_replay_evidence": [
+    "qwen_full_completion_qualification_tis_regrading.json",
+    "qwen_full_completion_qualification_sc_regrading.json",
+    "qwen_full_completion_sc_timeout_recovery.json"
+  ],
+  "replay_basis": "Frozen grading bytes, dependency lock, and response transport match prior paired full-completion qualification and replay; all new native records audited separately.",
+  "scope": "Paired exact-source real GPU runtime/capture/optimizer and full native corpus audit; two updates. Scientific40-update pilots and main effects remain unrun."
+}

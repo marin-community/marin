@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-12T19:35:14.535967+00:00",
+  "observed_at": "2026-10-12T20:10:50.512156+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -3109,7 +3109,8 @@
       "configuration_sha256": "5e9c78d010a155d4c1763141caadea2412b0b33664eecc6651415a506110e7c7",
       "allocated_seconds": 5119.052,
       "allocated_h100_hours": 11.37567111111111,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_qualification.json.gz"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a3-01a126ce/1",
@@ -3129,7 +3130,8 @@
       "configuration_sha256": "5e9c78d010a155d4c1763141caadea2412b0b33664eecc6651415a506110e7c7",
       "allocated_seconds": 5113.607,
       "allocated_h100_hours": 11.363571111111112,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_qualification.json.gz"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a3-01a126ce/2",
@@ -3149,7 +3151,8 @@
       "configuration_sha256": "5e9c78d010a155d4c1763141caadea2412b0b33664eecc6651415a506110e7c7",
       "allocated_seconds": 5119.052,
       "allocated_h100_hours": 11.37567111111111,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_qualification.json.gz"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a3-01a126ce/3",
@@ -3169,7 +3172,8 @@
       "configuration_sha256": "5e9c78d010a155d4c1763141caadea2412b0b33664eecc6651415a506110e7c7",
       "allocated_seconds": 5113.607,
       "allocated_h100_hours": 11.363571111111112,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_qualification.json.gz"
     },
     {
       "task_id": "/romain/sc-snowball-runtime-qual-sc-s0-a3-01a126ce/4",
@@ -3189,7 +3193,50 @@
       "configuration_sha256": "5e9c78d010a155d4c1763141caadea2412b0b33664eecc6651415a506110e7c7",
       "allocated_seconds": 5113.607,
       "allocated_h100_hours": 11.363571111111112,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_qualification.json.gz"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "45a637ea86bb138e",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791831662660",
+      "finished_at_ms": "1791834029274",
+      "node_name": "g73e294",
+      "terminal_reason": "",
+      "stage": "Qwen GPU qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "14b3fa62a7167beaa8bd8fb1ab40040531cdbc46faf9ef0462e3b84b0099183f",
+      "allocated_seconds": 2366.614,
+      "allocated_h100_hours": 5.259142222222223,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen0212_tis_qualification.json.gz"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "638d84de252b4185",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791831662660",
+      "finished_at_ms": "1791834023771",
+      "node_name": "g83d142",
+      "terminal_reason": "",
+      "stage": "Qwen GPU qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "14b3fa62a7167beaa8bd8fb1ab40040531cdbc46faf9ef0462e3b84b0099183f",
+      "allocated_seconds": 2361.111,
+      "allocated_h100_hours": 5.246913333333333,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen0212_tis_qualification.json.gz"
     }
   ],
   "terminal_h100_hours": 54.25557777777778,
@@ -3202,7 +3249,7 @@
     "SkyRL staleness qualification": 7.2194199999999995,
     "core GPU qualification": 4.532366666666666,
     "Snowball GPU qualification": 233.0384955555555,
-    "Qwen GPU qualification": 88.01464444444443,
+    "Qwen GPU qualification": 98.52069999999999,
     "Snowball noise calibration": 235.28845555555557,
     "Snowball incumbent qualification": 48.567502222222224
   },
@@ -3224,7 +3271,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "28e54de9fba8318621bd6f8de1884c0b1c2470da6050f1cb8d8756cb5d344f3b",
-      "allocated_h100_hours_so_far": 13.065697704950969
+      "allocated_h100_hours_so_far": 17.812311458057827
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce/1",
@@ -3242,43 +3289,97 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "28e54de9fba8318621bd6f8de1884c0b1c2470da6050f1cb8d8756cb5d344f3b",
-      "allocated_h100_hours_so_far": 13.065697704950969
+      "allocated_h100_hours_so_far": 17.812311458057827
     },
     {
-      "task_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce/0",
+      "task_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/0",
       "attempt_id": "0",
-      "attempt_uid": "45a637ea86bb138e",
+      "attempt_uid": "39402e0420b990fe",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791831662660",
+      "started_at_ms": "1791833855703",
       "finished_at_ms": "",
-      "node_name": "g73e294",
+      "node_name": "g83bf4c",
       "terminal_reason": "",
-      "stage": "Qwen GPU qualification",
+      "stage": "Snowball incumbent qualification",
       "cluster": "cw-us-east-02a",
       "priority": "batch",
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "14b3fa62a7167beaa8bd8fb1ab40040531cdbc46faf9ef0462e3b84b0099183f",
-      "allocated_h100_hours_so_far": 4.559724371168349
+      "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
+      "allocated_h100_hours_so_far": 4.432909235424465
     },
     {
-      "task_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce/1",
+      "task_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/1",
       "attempt_id": "0",
-      "attempt_uid": "638d84de252b4185",
+      "attempt_uid": "926234abbc98c8fd",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791831662660",
+      "started_at_ms": "1791833855703",
       "finished_at_ms": "",
-      "node_name": "g83d142",
+      "node_name": "g83c00a",
       "terminal_reason": "",
-      "stage": "Qwen GPU qualification",
+      "stage": "Snowball incumbent qualification",
       "cluster": "cw-us-east-02a",
       "priority": "batch",
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "14b3fa62a7167beaa8bd8fb1ab40040531cdbc46faf9ef0462e3b84b0099183f",
-      "allocated_h100_hours_so_far": 4.559724371168349
+      "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
+      "allocated_h100_hours_so_far": 4.432909235424465
+    },
+    {
+      "task_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/2",
+      "attempt_id": "0",
+      "attempt_uid": "1d287defe6585633",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791833855703",
+      "finished_at_ms": "",
+      "node_name": "g83d0f6",
+      "terminal_reason": "",
+      "stage": "Snowball incumbent qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
+      "allocated_h100_hours_so_far": 4.432909235424465
+    },
+    {
+      "task_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/3",
+      "attempt_id": "0",
+      "attempt_uid": "2956bfc7edbc0fe9",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791833855703",
+      "finished_at_ms": "",
+      "node_name": "g83d11c",
+      "terminal_reason": "",
+      "stage": "Snowball incumbent qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
+      "allocated_h100_hours_so_far": 4.432909235424465
+    },
+    {
+      "task_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/4",
+      "attempt_id": "0",
+      "attempt_uid": "6e89ff785635e9a1",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791833855703",
+      "finished_at_ms": "",
+      "node_name": "g845f9c",
+      "terminal_reason": "",
+      "stage": "Snowball incumbent qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
+      "allocated_h100_hours_so_far": 4.432909235424465
     }
   ]
 }
