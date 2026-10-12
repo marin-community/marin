@@ -11,7 +11,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from rolloutengine.closure_scoring import ClosureFormat, score_closure
+from rolloutengine.closure_scoring import ClosureFormat, closure_response_content, score_closure
 
 from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
 
@@ -89,14 +89,13 @@ def audit_evaluation(cases: Sequence[TokenizedCaseRecord], rows: Iterable[dict])
             verification = row.get("verification")
             if verification is None or verification["status"] != "verified":
                 raise ValueError("Verifier score is unavailable")
-            score = score_closure(
-                case["prefix"] + row["output_response"], case["expected"], ClosureFormat(case["format"])
-            )
+            content = closure_response_content(row["output_response"], stop_reason=row["stop_reason"])
+            score = score_closure(case["prefix"] + content, case["expected"], ClosureFormat(case["format"]))
             metric = f"closure/{case['family']}/{case['control']}"
             for name in ("syntax_complete", "content_preserved", "success"):
                 if row["env_metrics"][f"{metric}/{name}"] != float(getattr(score, name)):
                     raise ValueError(f"Saved {name} metric disagrees with rescored response")
-            if verification["score"] != float(score.success) or row["score"] != float(score.success):
+            if verification["score"] != float(score.success) or sum(row["score"]) != float(score.success):
                 raise ValueError("Reward/verifier score disagrees with rescored response")
             results.append(CaseResult(uid, case["case_id"], case["family"], case["control"], **asdict(score)))
         except (KeyError, TypeError, ValueError) as error:

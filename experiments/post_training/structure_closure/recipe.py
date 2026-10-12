@@ -137,7 +137,12 @@ def training_config(*, max_steps: int, eval_batch_size: int, learning_rate: floa
             "enable_http_endpoint": False,
             "chat_template": None,
             "sampling_params": {"temperature": 1.0, "top_p": 1.0, "top_k": -1, "logprobs": 32},
-            "engine_init_kwargs": {"moe_backend": "triton", "logprobs_mode": "raw_logprobs"},
+            "engine_init_kwargs": {
+                "moe_backend": "triton",
+                "logprobs_mode": "raw_logprobs",
+                "enable_auto_tools": True,
+                "tool_parser": "hermes",
+            },
         },
         "terminal_bench": {
             "harbor": {

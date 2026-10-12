@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from rolloutengine.closure_scoring import ClosureFormat, closure_response_content, score_closure
 from rolloutengine.structure_closure import (
     PrefixStatus,
     delimited_json_closure_state,
@@ -12,6 +13,33 @@ from rolloutengine.structure_closure import (
     paired_marker_closure_state,
     required_code_fence_state,
 )
+
+
+@pytest.mark.parametrize("marker", ["<|eot_id|>", "<|end_of_text|>"])
+@pytest.mark.parametrize(
+    "value,structure_format",
+    [
+        ('{"a":[1]}', ClosureFormat.JSON),
+        ('<tool_call>{"name":"shell","arguments":{}}</tool_call>', ClosureFormat.TOOL),
+        ("<|start_think|>done<|end_think|>", ClosureFormat.REASONING),
+        ("```json\n{}\n```", ClosureFormat.CODE_FENCE),
+    ],
+)
+def test_completed_structure_accepts_one_normal_turn_terminator(value, structure_format, marker):
+    content = closure_response_content(value + marker, stop_reason="stop")
+    assert score_closure(content, value, structure_format).success
+    repeated = closure_response_content(value + marker + marker, stop_reason="stop")
+    assert not score_closure(repeated, value, structure_format).success
+    truncated = closure_response_content(value + marker, stop_reason="length")
+    assert not score_closure(truncated, value, structure_format).success
+
+
+@pytest.mark.parametrize("response", ['{"a":[1<|eot_id|>', '{"a":"<|eot_id|>"}<|eot_id|>'])
+def test_turn_terminator_does_not_supply_missing_closers_or_erase_content(response):
+    content = closure_response_content(response, stop_reason="stop")
+    assert not score_closure(content, '{"a":[1]}', ClosureFormat.JSON).success
+    if '"<|eot_id|>"' in response:
+        assert score_closure(content, '{"a":"<|eot_id|>"}', ClosureFormat.JSON).success
 
 
 @pytest.mark.parametrize(

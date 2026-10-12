@@ -38,17 +38,18 @@ def rows():
             "uid": str(index),
             "prompt_token_ids": [17, 23],
             "output_response": response,
+            "stop_reason": "stop",
             "env_class": "structure_closure",
             "data_source": "structure-closure",
             "verification": {"status": "verified", "score": score},
-            "score": score,
+            "score": [0.0, score],
             "env_metrics": {
                 "closure/json_object/close_required/syntax_complete": score,
                 "closure/json_object/close_required/content_preserved": score,
                 "closure/json_object/close_required/success": score,
             },
         }
-        for index, (response, score) in enumerate((("}", 1.0), ("", 0.0)))
+        for index, (response, score) in enumerate((("}<|eot_id|>", 1.0), ("<|eot_id|>", 0.0)))
     ]
 
 
@@ -78,7 +79,7 @@ def test_audit_rejects_incomplete_or_inconsistent_evidence(cohort, rows, failure
     elif failure == "metric":
         rows[1]["env_metrics"]["closure/json_object/close_required/success"] = 1.0
     elif failure == "reward":
-        rows[1]["score"] = 1.0
+        rows[1]["score"] = [0.0, 1.0]
     else:
         rows[1]["exception_type"] = "TimeoutError"
     audit = audit_evaluation(cohort, rows)

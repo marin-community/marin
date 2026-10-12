@@ -17,6 +17,21 @@ from rolloutengine.structure_closure import (
 )
 from rolloutengine.tool_protocol import JSON_WHITESPACE, THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
+SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
+
+
+def closure_response_content(text: str, *, stop_reason: str) -> str:
+    """Remove one terminal Snowball control marker from a normally stopped turn.
+
+    Interior markers, repeated terminal markers, and truncated generations remain
+    subject to structural validation. Tool and reasoning closers are content.
+    """
+    if stop_reason == "stop":
+        for marker in SNOWBALL_TURN_END_MARKERS:
+            if text.endswith(marker):
+                return text[: -len(marker)]
+    return text
+
 
 class ClosureFormat(StrEnum):
     """Supported wire formats; tool and reasoning use Hermes and Snowball markers."""
