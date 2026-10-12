@@ -18,8 +18,8 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 from zephyr.context import ZephyrContext
 
-from experiments.datakit.reference_pipeline import TokenizerSpec
 from experiments.grug.fast_track import corpus_sample
+from experiments.grug.fast_track.contracts import TokenizerSpec
 from experiments.grug.fast_track.corpus_sample import (
     CorpusSampleConfig,
     CorpusSampleSpec,

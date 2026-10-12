@@ -3,10 +3,11 @@
 
 """H100 dense-vs-MoE scaling ladder for the 16k-vocab BPE tokenizer study.
 
-Rungs d512 / d768 / d1024 / d1280 map the model, data, and optimizer onto Hopper nodes and train on
-the in-region 16k BPE flat cache or a DataKit artifact from the same experiment. Each variant
-(dense / MoE) has a baseline recipe. A run data-matches or compute-matches it (``--match``, default
-data), or sets ``--batch-size`` / ``--num-steps`` explicitly. See README.md for launch commands.
+Rungs d512 / d768 / d1024 / d1280 map the model, data, and optimizer onto Hopper nodes. This command
+trains on the in-region 16k BPE flat cache. The Hero-mix and quality tracks supply their own
+``TrainingSource``. Each variant (dense / MoE) has a baseline recipe. A run data-matches or
+compute-matches it (``--match``, default data), or sets ``--batch-size`` / ``--num-steps`` explicitly.
+See README.md for launch commands.
 """
 
 import dataclasses
@@ -26,30 +27,19 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import LmDataConfig
-from levanter.tokenizers import tokenizer_content_hash
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
-from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
-from marin.execution.artifact import Artifact, read_artifact
+from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_spec import StepSpec
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.datakit.reference_pipeline import (
-    QUALITY_MODEL_VERSION,
-    TokenizerSpec,
-    quality_model_path,
-    sample_sources,
-    select_sources,
-)
-from experiments.datakit.store.mixture import FlatCacheComponent, MixtureWeighting, flat_cache_mixture
-from experiments.datakit.testbed.sampler import SampleManifest
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
@@ -57,12 +47,6 @@ from experiments.grug.fast_track.contracts import (
     FrozenBaselineComponent,
     FrozenBaselineManifest,
     ResolvedTrainingBudget,
-)
-from experiments.grug.fast_track.data_pipeline import (
-    FAST_TRACK_SAMPLE_PREFIX,
-    FastTrackDataStore,
-    build_fast_track_data,
-    store_mixture_for_step,
 )
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import GrugModelConfig
@@ -127,21 +111,6 @@ class MatchMode(StrEnum):
 
     DATA = "data"
     COMPUTE = "compute"
-
-
-class SourceMode(StrEnum):
-    """Select the training-data source for a fast-track run."""
-
-    CACHE = "cache"
-    SAMPLE = "sample"
-    REGISTRY = "registry"
-
-
-class Stage(StrEnum):
-    """Select the last fast-track stage to run."""
-
-    DATAKIT = "datakit"
-    TRAIN = "train"
 
 
 # Data. In-region 16k BPE-ladder cache (train split), document-shuffled so sequential reads interleave domains.
@@ -316,43 +285,23 @@ class FlatCacheTrainingSource:
     ) -> LmDataConfig:
         if tokenizer != self.manifest.tokenizer:
             raise ValueError(f"baseline tokenizer {self.manifest.tokenizer!r} does not match requested {tokenizer!r}")
-        training_data = flat_cache_mixture(
+        training_data = LmDataConfig(
             tokenizer=tokenizer,
-            caches={
-                component.name: FlatCacheComponent(cache_dir=component.cache_dir, weight=component.weight)
+            cache_dir=None,
+            components={
+                component.name: DatasetComponent(
+                    source=None,
+                    cache_dir=component.cache_dir,
+                    format=TextLmDatasetFormat(),
+                    tags=[component.name],
+                    flat_cache=True,
+                )
                 for component in self.manifest.components
             },
+            train_weights={component.name: component.weight for component in self.manifest.components},
+            auto_build_caches=False,
         )
         return _with_validation_components(ctx=ctx, training_data=training_data, validation=validation)
-
-
-@dataclasses.dataclass(frozen=True)
-class DataKitTrainingSource:
-    """Train on a mixture from one cached DataKit store."""
-
-    store: ArtifactStep[FastTrackDataStore]
-    weighting: MixtureWeighting = MixtureWeighting.TOKEN_PROPORTIONAL
-
-    def dependencies(self) -> tuple[ArtifactStep, ...]:
-        return (self.store,)
-
-    def data_config(
-        self,
-        *,
-        ctx: StepContext,
-        validation: Sequence[ArtifactStep[TokenizedCache]],
-        tokenizer: str,
-        budget: ResolvedTrainingBudget,
-    ) -> LmDataConfig:
-        data = store_mixture_for_step(
-            ctx=ctx,
-            store_step=self.store,
-            weighting=self.weighting,
-            min_tokens_per_component=SEQ_LEN,
-            tokenizer=tokenizer,
-            training_tokens=budget.token_count,
-        )
-        return _with_validation_components(ctx=ctx, training_data=data, validation=validation)
 
 
 def resolve_h100_ladder_budget(
@@ -588,31 +537,14 @@ def build_h100_ladder_run(
 _WANDB_PROJECT = "marin_moe"
 
 
-class WandbPolicy(StrEnum):
-    """Select the W&B credentials policy for an Iris coordinator."""
-
-    REQUIRED = "required"
-    ALLOW_DISABLED = "allow_disabled"
-    NOT_REQUIRED = "not_required"
-
-
-def submit_to_cluster(
-    run_id: str,
-    *,
-    target_cluster: str | None = None,
-    dependency_groups: Sequence[str] = (),
-    coordinator_args: Sequence[str] = (),
-    wandb_policy: WandbPolicy = WandbPolicy.REQUIRED,
-) -> NoReturn:
+def submit_to_cluster(run_id: str, *, target_cluster: str | None) -> NoReturn:
     """Run the current command in an Iris coordinator job."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
     if "--run" not in launch_args:
         launch_args.append("--run")
     wandb_key = os.environ.get("WANDB_API_KEY")
     wandb_mode = os.environ.get("WANDB_MODE")
-    if wandb_policy is WandbPolicy.REQUIRED and not wandb_key:
-        raise click.ClickException("Set WANDB_API_KEY.")
-    if wandb_policy is WandbPolicy.ALLOW_DISABLED and not wandb_key and wandb_mode != "disabled":
+    if not wandb_key and wandb_mode != "disabled":
         raise click.ClickException("Set WANDB_API_KEY, or set WANDB_MODE=disabled for an untracked run.")
     placement_args = ["--target-cluster", target_cluster] if target_cluster else ["--reserve", "H100"]
     cmd = [
@@ -625,79 +557,20 @@ def submit_to_cluster(
         "run",
         "--no-wait",
         "--enable-extra-resources",
-        *[item for group in dependency_groups for item in ("--extra", group)],
-        *coordinator_args,
         *placement_args,
         "--priority",
         "interactive",
         "--job-name",
         f"{run_id}-coord",
     ]
-    if wandb_policy is not WandbPolicy.NOT_REQUIRED and wandb_key:
+    if wandb_key:
         cmd.extend(["-e", "WANDB_API_KEY", wandb_key, "-e", "WANDB_PROJECT", _WANDB_PROJECT])
-    if wandb_policy is not WandbPolicy.NOT_REQUIRED and wandb_mode:
+    if wandb_mode:
         cmd.extend(["-e", "WANDB_MODE", wandb_mode])
     cmd.extend(["--", "python", "-m", "experiments.grug.fast_track.launch", *launch_args])
     printable = " ".join(shlex.quote("$WANDB_API_KEY" if wandb_key and c == wandb_key else c) for c in cmd)
     click.echo(f"submitting: {printable}", err=True)
     os.execvp(cmd[0], cmd)
-
-
-def _data_source_from_options(
-    *,
-    source_mode: SourceMode,
-    sources: str | None,
-    sample_prefix: str,
-) -> dict[str, StepSpec] | None:
-    if source_mode is SourceMode.CACHE:
-        if sources is not None:
-            raise click.UsageError("--sources requires a non-cache --source-mode")
-        return None
-
-    source_option = sources.strip() if sources is not None else None
-    source_names = tuple(name.strip() for name in (source_option or "").split(",") if name.strip())
-    if source_option is not None and source_option != "all" and not source_names:
-        raise click.UsageError("--sources must contain at least one source name")
-    if source_option == "all" and source_mode is not SourceMode.SAMPLE:
-        raise click.UsageError("--sources all requires --source-mode sample")
-
-    if source_mode is SourceMode.SAMPLE:
-        sample = read_artifact(sample_prefix, SampleManifest)
-        selected = sample_sources(sample_prefix)
-        if set(selected) != set(sample.source_paths):
-            raise ValueError(f"Sample sources differ from the completion record at {sample_prefix}")
-        if source_option in (None, "all"):
-            return selected
-        unknown = sorted(set(source_names) - set(selected))
-        if unknown:
-            raise click.UsageError(f"Unknown sample sources: {unknown}. Available sources: {sorted(selected)}")
-        return {name: selected[name] for name in source_names}
-    if not source_names:
-        raise click.UsageError("--source-mode registry requires --sources")
-    return select_sources(list(source_names))
-
-
-def _submit_fast_track(
-    run_id: str,
-    *,
-    target_cluster: str | None,
-    source_mode: SourceMode,
-    stop_after: Stage,
-) -> NoReturn:
-    uses_datakit = source_mode is not SourceMode.CACHE
-    if stop_after is Stage.DATAKIT:
-        wandb_policy = WandbPolicy.NOT_REQUIRED
-    elif uses_datakit:
-        wandb_policy = WandbPolicy.ALLOW_DISABLED
-    else:
-        wandb_policy = WandbPolicy.REQUIRED
-    submit_to_cluster(
-        run_id,
-        target_cluster=target_cluster,
-        dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS if uses_datakit else (),
-        coordinator_args=("--cpu", "8", "--memory", "32GB", "--disk", "32GB") if uses_datakit else (),
-        wandb_policy=wandb_policy,
-    )
 
 
 @click.command()
@@ -749,36 +622,6 @@ def _submit_fast_track(
     show_default=True,
     help="Iris cluster for the submitted job and its data.",
 )
-@click.option(
-    "--source-mode",
-    type=click.Choice([mode.value for mode in SourceMode]),
-    default=SourceMode.CACHE.value,
-    show_default=True,
-    help="Training-data source. Non-cache modes add DataKit to this experiment.",
-)
-@click.option("--sample-prefix", default=FAST_TRACK_SAMPLE_PREFIX, show_default=True, help="Normalized sample root.")
-@click.option("--sources", help="Comma-separated source names. Use 'all' only with sample mode.")
-@click.option("--quality-model", default=quality_model_path, help="DataKit quality model directory.")
-@click.option(
-    "--quality-model-version",
-    default=QUALITY_MODEL_VERSION,
-    show_default=True,
-    help="Stable identity for the quality model bytes.",
-)
-@click.option(
-    "--weighting",
-    type=click.Choice([weighting.value for weighting in MixtureWeighting]),
-    default=MixtureWeighting.TOKEN_PROPORTIONAL.value,
-    show_default=True,
-    help="DataKit bucket weights for training.",
-)
-@click.option(
-    "--stop-after",
-    type=click.Choice([stage.value for stage in Stage]),
-    default=Stage.TRAIN.value,
-    show_default=True,
-    help="Last end-to-end stage to run.",
-)
 @build_options
 def main(
     run_id: str,
@@ -793,43 +636,9 @@ def main(
     save_checkpoints: bool,
     submit: bool,
     target_cluster: str | None,
-    source_mode: str,
-    sample_prefix: str,
-    sources: str | None,
-    quality_model: str,
-    quality_model_version: str,
-    weighting: str,
-    stop_after: str,
-) -> ArtifactStep[ThroughputResult] | ArtifactStep[FastTrackDataStore]:
-    selected_source_mode = SourceMode(source_mode)
-    selected_stage = Stage(stop_after)
-    if selected_source_mode is SourceMode.CACHE and selected_stage is Stage.DATAKIT:
-        raise click.UsageError("--stop-after datakit requires a non-cache --source-mode")
-
+) -> ArtifactStep[ThroughputResult]:
     if submit:
-        _submit_fast_track(
-            run_id,
-            target_cluster=target_cluster,
-            source_mode=selected_source_mode,
-            stop_after=selected_stage,
-        )
-
-    data_sources = _data_source_from_options(
-        source_mode=selected_source_mode,
-        sources=sources,
-        sample_prefix=sample_prefix,
-    )
-    training_store = None
-    if data_sources is not None:
-        training_store = build_fast_track_data(
-            sources=data_sources,
-            quality_model=quality_model,
-            quality_model_version=quality_model_version,
-            tokenizer=TokenizerSpec(V16384_TOKENIZER, tokenizer_content_hash(V16384_TOKENIZER)),
-            tokenizer_vocab=V16384_VOCAB,
-        )
-        if selected_stage is Stage.DATAKIT:
-            return training_store
+        submit_to_cluster(run_id, target_cluster=target_cluster)
 
     return build_h100_ladder_run(
         run_id=run_id,
@@ -842,11 +651,6 @@ def main(
         save_checkpoints=save_checkpoints,
         seed=seed,
         data_seed=data_seed,
-        training_source=(
-            DataKitTrainingSource(store=training_store, weighting=MixtureWeighting(weighting))
-            if training_store is not None
-            else None
-        ),
     )
 
 

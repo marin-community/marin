@@ -88,7 +88,7 @@ Most promotable changes land in one of these files:
 - `adamh.py` — AdamH scale transform (the `adamh` LR group).
 - `router_metrics.py` — routing-stats telemetry (logging-only; never feeds the loss).
 - `launch.py` — ladder rungs, budget resolution (`--match`), Iris/W&B wiring.
-- `data_pipeline.py` — DataKit source, store mixture, and fast-track training wiring.
+- `contracts.py` — shared data contracts for the Hero-mix and quality tracks.
 
 ## Documentation & GitHub Issues
 
@@ -107,9 +107,9 @@ a shell variable. No `gcloud` / TPU auth is needed; this variant runs on H100.
 
 ## Job Submission
 
-Training jobs run on **Iris**, with one 8×H100 node per run. By default, `fast-track` uses the frozen
-16k-tokenizer reference cache. Use `--source-mode sample` to process the completed testbed sample
-through DataKit. Run the command locally to inspect the plan, or add `--submit` for cluster execution.
+Training jobs run on **Iris**, with one 8×H100 node per run. `fast-track` uses the frozen
+16k-tokenizer reference cache. Run the command locally to inspect the plan, or add `--submit` for
+cluster execution.
 
 ```bash
 uv run fast-track --submit --run-id <name> --size <size> [--dense] --version <v>
@@ -117,7 +117,7 @@ uv run fast-track --submit --run-id <name> --size <size> [--dense] --version <v>
 
 `--submit` wraps the launcher in `iris job run … -- python -m experiments.grug.fast_track.launch …
 --run` and forwards `$WANDB_API_KEY` to the job. The default cluster is `cw-us-east-02a`,
-where the frozen cache and testbed sample reside. The CPU coordinator requests no GPU capacity.
+where the frozen cache resides. The CPU coordinator requests no GPU capacity.
 Its child jobs request the training GPUs on the selected cluster.
 Use `--target-cluster` to select another cluster with access to the input data.
 Omit `--submit` to print the plan without a job submission.

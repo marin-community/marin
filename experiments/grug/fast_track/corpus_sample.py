@@ -32,12 +32,12 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.datakit import hero_data
-from experiments.datakit.reference_pipeline import TokenizerSpec
 from experiments.grug.fast_track.batching import bounded_batches
 from experiments.grug.fast_track.contracts import (
     TOKENIZATION_CHUNK_CHARS,
     TOKENIZATION_MAX_DOCUMENT_BYTES,
     TOKENIZATION_POLICY,
+    TokenizerSpec,
 )
 from experiments.grug.fast_track.label_exclusion import LabelExclusion
 from experiments.grug.fast_track.ranked_pool import RangeTokenTotal, ranked_pool, take_token_prefix

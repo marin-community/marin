@@ -20,6 +20,14 @@ TOKENIZATION_MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
+class TokenizerSpec:
+    """Tokenizer location and cache identity, not a revision enforced by the loader."""
+
+    name: str
+    identity: str
+
+
+@dataclass(frozen=True)
 class FrozenBaselineComponent:
     """One fixed cache in the baseline mixture."""
 

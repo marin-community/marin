@@ -10,7 +10,7 @@ from levanter.tokenizers import tokenizer_content_hash
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 
-from experiments.datakit.reference_pipeline import TokenizerSpec
+from experiments.grug.fast_track.contracts import TokenizerSpec
 from experiments.grug.fast_track.corpus_sample import (
     QUALITY_FRACTION,
     CorpusSampleSpec,

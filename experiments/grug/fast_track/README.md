@@ -3,14 +3,28 @@
 Self-contained grug variant with 16k vocab size for fast iteration. Dense and MoE baselines shown
 below from 9.4e16 to 4.3e19 FLOPs.
 
+## Tracks
+
+Three tracks use the same dense and MoE ladder. Each track changes one input and keeps the others fixed.
+
+| track | changes | data | command |
+|-------|---------|------|---------|
+| Model ladder | model, optimizer, or training recipe | frozen Hero cache | [`fast-track`](#launch-commands) |
+| Hero mix plus a new dataset | fraction `p` of the training tokens from a new dataset | `PreparedHeroSample` and a bounded Hugging Face prefix | [`add_dataset_cli`](#add-a-dataset) |
+| Quality classifier | document scorer that selects the training data | corpus-proportional raw pool from all registered sources | [`quality_cli`](#improve-a-quality-classifier) |
+
 ## Files
 
 | file | contents |
 |------|----------|
 | [`launch.py`](launch.py) | ladder rungs, budget resolution (`--match`), Iris/W&B wiring |
-| [`data_pipeline.py`](data_pipeline.py) | raw sources, DataKit artifact, and store mixture |
+| [`contracts.py`](contracts.py) | Shared data contracts, tokenization policy, and exposure cap |
+| [`hero_sample.py`](hero_sample.py), [`hero_sample_cli.py`](hero_sample_cli.py), [`hero_baseline_cli.py`](hero_baseline_cli.py) | Pinned Hero mixture sample and its matched control |
 | [`add_dataset.py`](add_dataset.py), [`add_dataset_cli.py`](add_dataset_cli.py) | Bounded Hugging Face prefix and simulated exposure |
-| [`quality_pipeline.py`](quality_pipeline.py) | Frozen embedding head, pool audit, and selected training cache |
+| [`corpus_sample.py`](corpus_sample.py), [`corpus_sample_cli.py`](corpus_sample_cli.py) | Corpus-proportional raw pool from all registered sources |
+| [`quality_labels.py`](quality_labels.py), [`quality_labels_cli.py`](quality_labels_cli.py), [`label_exclusion.py`](label_exclusion.py) | Frozen GLM labels, ridge head, and label exclusions |
+| [`quality.py`](quality.py), [`quality_features.py`](quality_features.py) | Quality-head interfaces and cached Harrier features |
+| [`quality_pipeline.py`](quality_pipeline.py), [`ranked_pool.py`](ranked_pool.py) | Scored pool, ranked selection, and selected training cache |
 | [`quality_cli.py`](quality_cli.py) | Quality-track command |
 | [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE |
 | [`train.py`](train.py) | trainer/eval/loss wiring and runtime (XLA) defaults |
@@ -22,8 +36,7 @@ below from 9.4e16 to 4.3e19 FLOPs.
 
 ## Results
 
-These recorded runs use the existing training cache (`--source-mode cache`).
-They do not measure the optional DataKit testbed sample.
+These recorded runs use the frozen Hero training cache.
 
 | size | variant | TPP | batch | active | total | steps | tokens | FLOPs | MFU | Paloma loss | Paloma bpb | uncheat bpb | runtime |
 |------|---------|----:|------:|-------:|------:|------:|-------:|------:|----:|------------:|-----------:|------------:|--------:|
@@ -45,33 +58,6 @@ moe: [d512](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d512) 
 [d768](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d768) ·
 [d1024](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d1024) ·
 [d1280](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d1280)
-
-## DataKit sample results
-
-These experiments used the implementation through commit `d3a6671929`, before the later model/data-track changes.
-These runs use the completed 25B-target sample across all 292 registered sources,
-with token-proportional training weights and training seed 0.
-DataKit produced 29,858,746,027 usable tokens, above the largest ladder budget.
-The input target estimates token counts. Filtering and the training tokenizer
-set the measured usable-token count.
-
-All eight runs completed on October 3, 2026, with verified final evaluations and
-permanent checkpoints at their full training budgets.
-BPB means bits per byte. Lower scores are better.
-Each macro score is the unweighted mean across evaluation dataset tags with observed tokens.
-
-| Model | Training tokens | Paloma macro BPB | Uncheatable macro BPB |
-|---|---:|---:|---:|
-| [d512 dense](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-dense) | 361,758,720 | 1.5345 | 1.2554 |
-| [d512 MoE](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-moe) | 1,250,426,880 | 1.3241 | 1.0166 |
-| [d768 dense](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d768-dense) | 1,069,547,520 | 1.3750 | 1.0715 |
-| [d768 MoE](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d768-moe) | 3,633,315,840 | 1.2067 | 0.8925 |
-| [d1024 dense](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d1024-dense) | 2,894,069,760 | 1.2635 | 0.9517 |
-| [d1024 MoE](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d1024-moe) | 9,720,299,520 | 1.1077 | 0.7950 |
-| [d1280 dense](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d1280-dense) | 5,230,297,088 | 1.1980 | 0.8868 |
-| [d1280 MoE](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d1280-moe) | 17,478,713,344 | 1.0573 | 0.7448 |
-
-The tokenizer comparison and scaling fit below use the existing-cache results.
 
 ## Tokenizer impact (16k vs 128k)
 
@@ -163,166 +149,9 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 | `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
 | `--submit` | Submit as an Iris H100 job. Omit to print the plan locally. |
 | `--target-cluster` | Select the Iris cluster for submission. The default is `cw-us-east-02a`. |
-| `--source-mode` | use the existing cache, a normalized sample, or a registry source |
-| `--weighting` | use token-proportional or uniform DataKit bucket weights |
 
 Results land in W&B `marin-community/marin_moe`; eval bpb keys are `eval/paloma/macro_bpb`,
 `eval/uncheatable_eval/macro_bpb` (MoE dropless eval logs under the normal `eval/` prefix).
-
-## End-to-end data runs
-
-The `fast-track` end-to-end mode runs the production DataKit graph at its small scale. It then reads
-the cluster-by-quality store, builds the training mixture, and starts training and evaluation.
-
-Run a short dense experiment on the curated sample:
-
-```bash
-uv run fast-track --submit --run-id data-token-weighted --size d512 --dense --source-mode sample \
-    --sources cp/arxiv_papers,cp/wikiteam,stack-v3 \
-    --num-steps 20 --batch-size 8 --weighting token_proportional --version 2026.09.23
-```
-
-Change only the mixture. The second command uses the same DataKit store:
-
-```bash
-uv run fast-track --submit --run-id data-uniform --size d512 --dense --source-mode sample \
-    --sources cp/arxiv_papers,cp/wikiteam,stack-v3 \
-    --num-steps 20 --batch-size 8 --weighting uniform --version 2026.09.23
-```
-
-Fast-track defaults to the frozen Hero cache. Explicit sample mode reads sources in
-`s3://marin-us-east-02a/marin/datakit/sample_25b_2026_10_02`.
-This sample has a 25B-token input target across all registered sources.
-Each source receives a share proportional to its estimated corpus size.
-The sample manifest records the source paths and explicit relative token weights.
-These targets use the registry's token estimates. The usable token count depends
-on filtering and the training tokenizer. The largest default ladder run requires
-17,478,713,344 usable tokens.
-The default cluster is `cw-us-east-02a`, where the sample resides.
-Use `--sources` to select a subset or `--sample-prefix` to select another completed sample.
-The sample root must contain the completion record from the materialization command below.
-
-Use `--source-mode registry --sources <name>` to start from a registered raw source.
-Use `--source-mode cache` to read the existing Hero training cache at
-`s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_shuf/train`.
-Use `--run` only in an Iris environment. Without `--run` or `--submit`, the command prints
-the artifact plan and does not start work. Set `WANDB_MODE=disabled` to run without a W&B record. The
-training mixture omits each bucket that has fewer tokens than one model sequence.
-Before training, fast-track compares the usable token count with the run's token budget.
-It rejects a DataKit store that is too small.
-
-Sample mode reads an existing normalized sample. It does not create a new
-sample. Registry mode includes the source download and normalization recipes.
-It processes the selected sources without a token limit.
-
-DataKit uses one fixed CPU worker pool for all Zephyr stages, including source
-download, normalization, embedding, quality scoring, deduplication, and store
-construction. Source recipes retain their task resource requests. The pipeline
-coordinator runs source-recipe, embedding, quality, assignment, and centroid-sampling drivers
-with bounded concurrency. These drivers do not create per-source Iris jobs.
-Centroid training remains a separate CPU job. Model training uses a separate 8×H100 job.
-The pipeline coordinator requests 8 CPUs and 32 GB RAM. The data pool contains
-one worker with 120 CPUs, 1900 GiB RAM, and 25 TiB disk, without a GPU reservation.
-This profile reserves about 94% of the allocatable CPU, RAM, and disk on an RNO2A H100 node.
-Up to 64 pipeline steps can submit work to this pool at the same time. This lets
-more sources supply tasks at once when each source has few shards.
-The coordinator allows 68 concurrent pipelines, including capacity for the
-centroid sampler's four nested pipelines.
-CPU and RAM requests control concurrent task admission. Task disk requests must
-fit the worker, but Zephyr does not account for concurrent disk use.
-
-The data artifact path includes the terminal DataKit store identity and tokenizer vocabulary size.
-Runs with the same recipe and version reuse that artifact, independent of their training run IDs.
-Changes to source recipes, tokenizer identity, or cluster configuration select a different artifact path.
-Set a new `fast-track --version` to rebuild the outer artifact while retaining unchanged upstream caches.
-
-The following command defines the DataKit sample from all registered sources:
-
-```bash
-uv run iris --cluster marin job run --no-wait \
-  --job-name fast-track-sample-25b-20261002 --target-cluster cw-us-east-02a \
-  --priority batch --cpu 8 --memory 32GB --disk 32GB --enable-extra-resources \
-  --extra cpu --extra datakit -- \
-  python -m experiments.datakit.materialize_zephyr_benchmark_sample \
-  --mode regenerate --data-prefix s3://marin-us-east-02a/marin \
-  --destination-prefix s3://marin-us-east-02a/marin/datakit/sample_25b_2026_10_02 \
-  --target-total-tokens-b 25 --max-concurrent 4
-```
-
-The sample builder reuses completed normalized artifacts from the current recipes.
-It writes the root completion record only after all source steps succeed.
-The record contains the selected source paths, token target, and mixture weights.
-Use `--sources <comma-separated-names>` to select sources with weights proportional
-to their estimated corpus sizes. This flag and `--source-mixture` are mutually exclusive.
-For a new sample version, change `--destination-prefix` and `--job-name`.
-Pass that destination to `fast-track --sample-prefix`.
-
-## Shuffled-token comparison
-
-`negative_control.py` reads a completed `FastTrackDataStore` and writes a separate
-training store. It shuffles tokens other than special tokens within each document,
-using a fixed seed.
-Document order, lengths, token counts, and special-token positions stay the same.
-The comparison uses token-proportional mixture weights and default fast-track
-training settings. Select a baseline with the same weighting, model settings,
-and training budget. Evaluation data stays the same.
-
-After the baseline data store finishes, submit the comparison with its
-`FastTrackDataStore` artifact directory as `--source-store`.
-The [end-to-end data commands](#end-to-end-data-runs) produce this artifact.
-Baseline and control training can run at the same time:
-
-```bash
-uv run iris --cluster marin job run --no-wait \
-  --job-name fast-track-shuffled-d512 --target-cluster cw-us-east-02a \
-  --priority interactive --cpu 2 --memory 8GB --disk 32GB --enable-extra-resources \
-  --extra cpu --extra datakit -e WANDB_API_KEY "$WANDB_API_KEY" -- \
-  python -m experiments.grug.fast_track.negative_control \
-  --source-store '<completed-baseline-data-artifact>' \
-  --run-id shuffled-d512-dense --size d512 --dense \
-  --shuffle-seed 0 --seed 0 --data-seed 0 --version 2026.10.02 --run
-```
-
-For the mixture-of-experts (MoE) comparison, omit `--dense` and select different job
-and run names. The two variants reuse the shuffled store when the source, shuffle
-seed, and version match. Each run uses its variant's default training budget and
-saves its final checkpoint. Compare final Paloma and uncheatable bits per byte
-(BPB) with a baseline of the same size, variant, training seed, and token budget.
-Higher BPB means worse prediction of the evaluation data.
-`--shuffle-seed` controls token permutation. `--seed` and `--data-seed` control model initialization and training data order.
-Use `--stop-after datakit` to build only the shuffled store.
-
-### Completed d512 controls on the 25B sample
-
-The October 3, 2026 controls use the completed sample across all 292 sources.
-The 25B target estimates input tokens from registry corpus sizes.
-Filtering and the training tokenizer determine the measured usable-token count.
-DataKit produced 29,858,746,027 usable tokens across 39 training buckets.
-The shuffled store preserves the document and token counts of all 40 output buckets.
-One output bucket contains only 974 tokens and has no training weight.
-
-The d512 models have a width of 512.
-The dense comparison uses 361,758,720 training tokens and 690 updates.
-The MoE comparison uses 1,250,426,880 training tokens and 2,385 updates.
-Each control matches its baseline's model, optimizer, training seed, mixture weights,
-token budget, and evaluation data. Training and token shuffling use seed 0.
-
-| Model | Paloma baseline BPB | Paloma shuffled BPB | Uncheatable baseline BPB | Uncheatable shuffled BPB |
-|---|---:|---:|---:|---:|
-| Dense | 1.5345 | 2.8840 | 1.2554 | 2.7451 |
-| MoE | 1.3241 | 2.8311 | 1.0166 | 2.6906 |
-
-The four runs succeeded with final evaluation records and permanent checkpoints.
-Token shuffling increased BPB on the two evaluation suites.
-These comparisons use one seed and do not estimate variation across seeds.
-
-For these controls, `--source-store` is
-`s3://marin-us-east-02a/marin/datakit/fast-track/ft-testbed-25b-20261002-rno-d512-dense/2026.10.02`.
-
-W&B records: [dense baseline](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-dense),
-[dense control](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-dense-negative),
-[MoE baseline](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-moe),
-and [MoE control](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-moe-negative).
 
 ## Prepare the reference pools
 
@@ -393,10 +222,10 @@ These limits reduce memory use but do not guarantee a fixed worker-memory bound 
 
 The add-dataset track tokenizes a Hugging Face prefix, limited by the calculated token cap and `--max-rows`.
 One Zephyr task streams the source in order and tokenizes bounded batches; it does not load the full dataset in memory.
-It combines that prefix with the frozen Hero cache.
-The frozen Hero components keep their relative proportions within the remaining `1-p` share.
+It combines that prefix with a `PreparedHeroSample`.
+The Hero components keep their relative proportions within the remaining `1-p` share.
 A fraction `p` assigns `p` of the training tokens to the new dataset.
-The frozen Hero cache receives `1-p`. Preparation does not run clustering, quality scoring, or the DataKit graph.
+The Hero sample receives `1-p`. Preparation does not run clustering, quality scoring, or the DataKit graph.
 
 Training requires `--baseline-artifact <PreparedHeroSample-path>` from the checked-in hero sampler.
 The control and treatment must use the same reference artifact.
