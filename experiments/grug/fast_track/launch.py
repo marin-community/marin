@@ -681,23 +681,12 @@ XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
 
 
 def _xla_autotune_cache_path(model: GrugModelConfig, rung: H100LadderRung) -> str:
-    """Region-temp path of the shared XLA autotune results for this program: keyed by the model, the rung's mesh,
-    the job's XLA flags and jaxlib, so only runs that compile the same fusions share them. The model enters by its
-    non-default fields only, so adding a config field leaves existing keys alone."""
-    identity = repr(
-        (_non_default_fields(model), rung, os.environ.get("XLA_FLAGS", ""), importlib.metadata.version("jaxlib"))
-    )
+    """Region-temp path of the shared XLA autotune results for this program: keyed by the full model config, the
+    rung's mesh, the job's XLA flags and jaxlib, so only runs that compile the same fusions share them. A new key
+    (any config change, including a changed default) needs a seed (``--seed-xla-autotune-cache``, ~2 min, one GPU)."""
+    identity = repr((model, rung, os.environ.get("XLA_FLAGS", ""), importlib.metadata.version("jaxlib")))
     key = hashlib.sha256(identity.encode()).hexdigest()[:24]
     return prefix_join(marin_temp_bucket(XLA_AUTOTUNE_CACHE_TTL_DAYS, "xla-autotune-results"), f"{key}.textproto")
-
-
-def _non_default_fields(config) -> dict[str, object]:
-    defaults = type(config)()
-    return {
-        f.name: getattr(config, f.name)
-        for f in dataclasses.fields(config)
-        if getattr(config, f.name) != getattr(defaults, f.name)
-    }
 
 
 def _layer_skip_rule(
