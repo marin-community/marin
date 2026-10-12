@@ -11,7 +11,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from threading import Lock
@@ -93,6 +93,7 @@ class SourceOutcome:
     status: str
     error: str | None = None
     result: PipelineResult | None = None
+    planned_evidence: dict[str, str] = field(default_factory=dict)
 
 
 class CampaignFailed(RuntimeError):
@@ -194,6 +195,7 @@ def run_campaign(
     report_path: str,
     source_ids: Mapping[str, str],
     mode: str = "sample",
+    evidence_paths: Mapping[str, dict[str, str]] | None = None,
 ) -> tuple[SourceOutcome, ...]:
     """Queue source builds, preserve peer outputs on failure, and write the campaign report.
 
@@ -204,7 +206,15 @@ def run_campaign(
         raise ValueError("Campaign source concurrency and worker count must be positive")
     if len({step.name for step in steps}) != len(steps):
         raise ValueError("Campaign source artifact names must be unique")
-    outcomes = {step.name: SourceOutcome(step.name, step.path(), OutcomeStatus.QUEUED) for step in steps}
+    outcomes = {
+        step.name: SourceOutcome(
+            step.name,
+            step.path(),
+            OutcomeStatus.QUEUED,
+            planned_evidence=(evidence_paths or {}).get(step.name, {}),
+        )
+        for step in steps
+    }
     run_id = uuid.uuid4().hex
     started_at = datetime.now(UTC).isoformat()
     report_lock = Lock()
@@ -223,7 +233,7 @@ def run_campaign(
 
     def started(step: ArtifactStep[CampaignArtifact]) -> None:
         with report_lock:
-            outcomes[step.name] = SourceOutcome(step.name, step.path(), OutcomeStatus.RUNNING)
+            outcomes[step.name] = replace(outcomes[step.name], status=OutcomeStatus.RUNNING)
             write_report(CampaignStatus.RUNNING)
 
     write_report(CampaignStatus.RUNNING)
@@ -256,7 +266,7 @@ def run_campaign(
                         logger.exception("Source failed: %s", step.name)
                         outcome = SourceOutcome(step.name, step.path(), OutcomeStatus.FAILED, error_chain(error))
                     with report_lock:
-                        outcomes[step.name] = outcome
+                        outcomes[step.name] = replace(outcome, planned_evidence=outcomes[step.name].planned_evidence)
                         write_report(CampaignStatus.RUNNING)
     except BaseException:
         write_report(CampaignStatus.FAILED)

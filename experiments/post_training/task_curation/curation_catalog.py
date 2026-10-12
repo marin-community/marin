@@ -153,7 +153,7 @@ def _parsed_documents(evidence: Mapping[str, bytes]) -> tuple[dict[str, Any], di
 def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report_updated_at: str) -> SourceDocuments:
     if outcome["status"] == "queued":
         return SourceDocuments(outcome["name"], {}, ManifestEvidence.MISSING)
-    root = StoragePath(outcome["path"])
+    root = _curation_root(outcome)
     documents = {}
     for name in (
         MANIFEST_FILENAME,
@@ -188,6 +188,11 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
     else:
         applicability = ManifestEvidence.UNCONFIRMED
     return SourceDocuments(outcome["name"], documents, applicability)
+
+
+def _curation_root(outcome: dict[str, Any]) -> StoragePath:
+    manifest = ((outcome.get("result") or {}).get("evidence") or {}).get("manifest")
+    return StoragePath(manifest).parent if manifest is not None else StoragePath(outcome["path"])
 
 
 def append_curation_catalog(
@@ -295,7 +300,7 @@ def append_curation_catalog(
                     ),
                     unprocessed_rows=manifest.get("unprocessed_rows"),
                     manifest_path=(
-                        str(StoragePath(outcome["path"]) / MANIFEST_FILENAME) if MANIFEST_FILENAME in evidence else None
+                        str(_curation_root(outcome) / MANIFEST_FILENAME) if MANIFEST_FILENAME in evidence else None
                     ),
                     manifest_sha256=digests.get(MANIFEST_FILENAME),
                     evidence_snapshots_json=_json(snapshots),

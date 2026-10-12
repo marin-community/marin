@@ -52,6 +52,7 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
   -m experiments.post_training.task_curation.driver \
   --mode sample --cache-dir ~/.cache/marin/rl-curation \
   --source aime24 --source svamp --quality-sample-size 5 \
+  --assess --assessment-sample-size 3 --excluded-sample-size 2 \
   --max-workers 2 --concurrent-sources 1 --review-concurrency 1 \
   --review-mode chat --model-revision YOUR_GLM_REVISION \
   --base-url YOUR_GLM_ENDPOINT --run
@@ -71,6 +72,27 @@ the pinned inputs; the local rollout can use real sources without overrides.
 Keep the same `--quality-sample-size` and `--seed` when moving from SAMPLE to
 FULL to reuse identical panel review requests. Changing either selects a new
 panel; the plan prints both values before execution.
+
+FULL appends assessment automatically; SAMPLE uses `--assess`. Use
+`--skip-assessment` to record a curation-only run. The assessment scans admitted
+IDs, samples excluded rows by primary reason, and prepares bounded packets from
+the selected TaskSpecs and curation sidecars. GLM gives each packet one judgment.
+The report separates admitted-task opinions from excluded-row diagnostics and
+executed controls. Assessment never changes row admission.
+
+The default assessment sample is 100 admitted tasks and up to 20 excluded rows.
+`--assessment-rubric FILE` adds criteria to the shared rubric. Changing rubric
+or model configuration reuses prepared packets; source changes use the ordinary
+upstream pipeline key. Implementation changes require explicit stage version
+bumps. Python source files do not enter assessment identity.
+
+Campaign evidence links point to `assessment_inputs`, `assessment_judgments`
+and `assessment_report`. Inputs contain a sample manifest, curation summary and
+packet parquet. Judgments contain grade parquet and paired request/response
+JSONL traces. A malformed or unavailable response is retried twice; remaining
+failures retain partial grades and fail the stage. Reruns reuse successful
+request-cache entries. Missing required evidence keeps the source's sampled
+quality unknown even when the model supplies a favorable opinion.
 
 ### Harbor compatibility view
 

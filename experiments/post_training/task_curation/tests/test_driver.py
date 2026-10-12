@@ -59,14 +59,24 @@ class ReviewHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         cast(ReviewHTTPServer, self.server).requests.append(body)
         task = json.loads(body["messages"][-1]["content"])
-        verdict = {
-            "task_id": task["id"],
-            "quality": "good",
-            "confidence": "high",
-            "reference_status": "consistent",
-            "defects": [],
-            "evidence": "Reference agrees with the task.",
-        }
+        tool = body["tool_choice"]["function"]["name"]
+        verdict = (
+            {
+                "task_id": task["id"],
+                "quality": "good",
+                "confidence": "high",
+                "reference_status": "consistent",
+                "defects": [],
+                "evidence": "Reference agrees with the task.",
+            }
+            if tool == "review_task"
+            else {
+                "task_id": task["task_id"],
+                "verdict": "good",
+                "explanation": "The reference agrees with the question.",
+                "evidence_ids": ["task"],
+            }
+        )
         result = {
             "choices": [
                 {
@@ -79,7 +89,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                                 "id": "review",
                                 "type": "function",
                                 "function": {
-                                    "name": "review_task",
+                                    "name": tool,
                                     "arguments": json.dumps(verdict),
                                 },
                             }
@@ -268,7 +278,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     input_file.write_text("1\n2\n3\n")
     source = number_source(input_file)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
-    options = ["--mode", mode, "--source", source.name, "--max-workers", "1"]
+    options = ["--mode", mode, "--skip-assessment", "--source", source.name, "--max-workers", "1"]
     if mode == "quick":
         output_root = tmp_path / "output"
         report = output_root / "campaign.json"
@@ -340,6 +350,7 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
     options = [
         "--mode",
         mode,
+        "--skip-assessment",
         "--max-workers",
         "1",
         "--coordinator-memory",
@@ -385,7 +396,17 @@ def test_local_reviewed_campaign_reuses_cached_source_graph(tmp_path, monkeypatc
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "original-prefix"))
     cache = tmp_path / "cache"
-    args = ["--mode", "full", "--cache-dir", str(cache), "--source", source.name, "--max-workers", "1"]
+    args = [
+        "--mode",
+        "full",
+        "--skip-assessment",
+        "--cache-dir",
+        str(cache),
+        "--source",
+        source.name,
+        "--max-workers",
+        "1",
+    ]
     runner = CliRunner()
     plan = runner.invoke(main, args)
     assert plan.exit_code == 0, plan.output
@@ -418,6 +439,7 @@ def test_local_full_recipe_exports_admitted_tasks_without_cluster_settings(tmp_p
         [
             "--mode",
             "full",
+            "--skip-assessment",
             "--cache-dir",
             str(cache),
             "--source",
@@ -492,3 +514,44 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
     rebuilt = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
     assert rebuilt["path"] != outcome["path"]
     assert len(review_server.requests) == 2
+
+
+def test_full_campaign_assesses_tasks_and_preserves_curation_counts(tmp_path, monkeypatch, review_server):
+    declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    source = replace(declared, config=replace(math500(), rubric=None, controls=None))
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
+    monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
+    staged = tmp_path / "input"
+    staged.mkdir()
+    (staged / "test.jsonl").write_text('{"problem":"One plus one?","answer":"2"}\n')
+    cache = tmp_path / "cache"
+    args = [
+        "--mode",
+        "full",
+        "--cache-dir",
+        str(cache),
+        "--source",
+        source.name,
+        "--input-root",
+        str(staged),
+        "--max-workers",
+        "1",
+        "--review-mode",
+        "chat",
+        "--model-revision",
+        "fixture",
+        "--base-url",
+        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
+        "--run",
+    ]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    outcome = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
+    report = json.loads(StoragePath(outcome["result"]["evidence"]["assessment_report"]).read_text())
+    assert report["assessment"]["admitted"]["grade"] == "good"
+    assert report["assessment"]["admitted"]["sample_count"] == 1
+    assert report["curation"]["admission_counts"]["admitted"] == 1
+    assert len(review_server.requests) == 1
+    repeated = CliRunner().invoke(main, args)
+    assert repeated.exit_code == 0, repeated.output
+    assert len(review_server.requests) == 1

@@ -394,6 +394,21 @@ accepted source, draws its control sample from all kept rows, and ends `gated`
 when its quality or verification gate rejects the source. Repeat
 `--source NAME` to run a subset.
 
+FULL runs append a post-curation assessment; SAMPLE can opt in with `--assess`.
+The shared stages prepare bounded evidence packets with Zephyr, request one GLM
+judgment per packet, and compute a report in Python. The default sample covers
+100 admitted tasks and up to 20 excluded diagnostic rows, grouped by primary
+reason. Their populations and verdict counts stay separate. These model
+opinions do not change curation admission or imply source-wide correctness.
+`--assessment-sample-size`, `--excluded-sample-size` and `--assessment-rubric`
+configure the pass; `--skip-assessment` records a curation-only run.
+
+Use `--cache-dir PATH` to run SAMPLE/FULL locally against small pinned sources
+and retain downloads, source artifacts, assessment artifacts and GLM query
+cache. Local workers need no Iris coordinator settings; package and image
+controls keep their environment prerequisites. See the
+[real-source local loop](../../experiments/post_training/task_curation/README.md#reviewed-local-loop-on-real-sources).
+
 ## Outputs
 
 Each source artifact `data/rl/<name>-<hash>` contains:
