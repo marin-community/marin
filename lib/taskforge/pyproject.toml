@@ -44,5 +44,5 @@ known-first-party = ["taskforge"]
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
 project-includes = ["src", "tests", "../../experiments/post_training/capability_driven_envs"]
-search-path = ["src", "../..", "../taskcompendium/src", "../shellbox/src", "../verifyit/src", "../rigging/src", "../iris/src"]
+search-path = ["src", "../..", "../taskcompendium/src", "../rigging/src", "../iris/src"]
 python-interpreter = "../../.venv/bin/python"

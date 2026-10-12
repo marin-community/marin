@@ -51,7 +51,7 @@ from taskforge.llm.client import (
     ToolCall,
     Usage,
 )
-from taskforge.llm.endpoint import API_ROOT, GLM_MODEL, resolve_glm_base_url
+from taskforge.llm.endpoint import API_ROOT, resolve_glm_base_url
 from taskforge.llm.policy import (
     CONTINUE_FINAL_MESSAGE_FIELDS,
     LLMPolicy,
@@ -71,8 +71,6 @@ CONNECT_TIMEOUT = 30.0
 WRITE_TIMEOUT = 120.0
 HEALTH_TIMEOUT = 20.0
 PROBE_SEGMENT = -1
-STRUCTURED_REPAIRS = 1
-"""Repair requests ``GlmClient.complete_structured`` spends after an invalid tool call."""
 
 
 class Pool(StrEnum):
@@ -84,12 +82,14 @@ class Pool(StrEnum):
 
 @dataclass(frozen=True)
 class GlmEndpoint:
-    """An OpenAI-compatible base URL ending in ``/v1``, its bearer token, and the pool it serves."""
+    """An OpenAI-compatible base URL ending in ``/v1``, its bearer token, and the pool it serves.
+
+    The model requests name is ``LLMProviderConfig.model``.
+    """
 
     base_url: str
     token: str = field(repr=False)
     pool: Pool
-    model: str = GLM_MODEL
 
     def __post_init__(self) -> None:
         if not self.base_url.endswith(API_ROOT):
@@ -211,15 +211,11 @@ class GlmClient:
 
     Args:
         endpoint: Where to send requests.
-        provider: Retries, backoff, the infrastructure hold, the stall timeout and the connection pool.
-
-    Raises:
-        ValueError: ``provider.model`` is not the endpoint's model.
+        provider: The model, retries, backoff, the infrastructure hold, the stall timeout, the
+            connection pool and the structured-call repair budget.
     """
 
     def __init__(self, endpoint: GlmEndpoint, provider: LLMProviderConfig):
-        if provider.model != endpoint.model:
-            raise ValueError(f"provider model {provider.model!r} is not the endpoint's {endpoint.model!r}")
         self.endpoint = endpoint
         self._provider = provider
         self._backoff = ExponentialBackoff(
@@ -233,7 +229,7 @@ class GlmClient:
 
     @property
     def model(self) -> str:
-        return self.endpoint.model
+        return self._provider.model
 
     async def __aenter__(self) -> Self:
         return self
@@ -310,11 +306,11 @@ class GlmClient:
     ) -> StructuredResult[T]:
         """Force one call of the strict tool ``name`` whose arguments ``output_type`` validates.
 
-        The tool's description is ``output_type``'s docstring. An invalid call gets
-        ``STRUCTURED_REPAIRS`` repair requests before ``StructuredOutputError``.
+        The tool's description is ``output_type``'s docstring. An invalid call gets the provider's
+        ``structured_repairs`` repair requests before ``StructuredOutputError``.
         """
         tool = StructuredTool(name=name, description=output_type.__doc__ or "", output_type=output_type)
-        return await complete_structured(self, messages, tool, policy, STRUCTURED_REPAIRS)
+        return await complete_structured(self, messages, tool, policy, self._provider.structured_repairs)
 
     async def _segment(
         self,
@@ -324,18 +320,15 @@ class GlmClient:
         segment: int,
         attempts: list[Attempt],
     ) -> _Stream:
-        """Send one request with retries and holds, appending every attempt to ``attempts``.
-
-        Attempt retries and health polls during holds follow separate copies of the backoff
-        schedule, so a hold does not inflate the delay before the next spent attempt.
-        """
+        """Send one request with retries and holds, appending every attempt to ``attempts``."""
+        # Separate schedules, so a hold does not inflate the delay before the next spent attempt.
         retry_backoff = self._backoff.copy()
         hold_backoff = self._backoff.copy()
         max_tokens = policy.max_tokens
         spent = 0
         hold_started: float | None = None
         while True:
-            body = request_body(self.endpoint.model, messages, max_tokens, policy, request_fields)
+            body = request_body(self._provider.model, messages, max_tokens, policy, request_fields)
             events: list[str] = []
             started_wall, started = time.time(), time.monotonic()
             try:

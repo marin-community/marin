@@ -5,8 +5,7 @@
 
 ``canonical_json`` is the one encoding Taskforge hashes: sorted keys, compact separators, UTF-8
 text, bytes as base64, and dataclasses and pydantic models by field. ``digest`` is the sha256 of
-it, so a cache key, a catalog hash and a step memo key agree on the same value. ``pretty_json`` is
-the indented form shown to models and written for people to read.
+it. ``pretty_json`` is the indented form shown to models and written for people to read.
 """
 
 import hashlib
