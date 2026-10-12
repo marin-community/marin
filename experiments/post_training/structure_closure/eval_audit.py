@@ -11,7 +11,12 @@ from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from rolloutengine.closure_scoring import ClosureFormat, closure_response_content, score_closure
+from rolloutengine.closure_scoring import (
+    CLOSURE_REGION_SCORER,
+    ClosureFormat,
+    closure_response_content,
+    score_closure_region,
+)
 
 from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
 
@@ -25,6 +30,8 @@ class CaseResult:
     syntax_complete: bool
     content_preserved: bool
     success: bool
+    trailing_content: bool
+    whole_response_success: bool
 
 
 @dataclass(frozen=True)
@@ -56,8 +63,15 @@ class EvaluationAudit:
                     content_preserved=int(result.content_preserved),
                     success=int(result.success),
                     failure=int(not result.success),
+                    trailing_content=int(result.trailing_content),
+                    whole_response_success=int(result.whole_response_success),
                 )
-        return {"complete": self.complete, **asdict(self), "groups": dict(sorted(groups.items()))}
+        return {
+            "scorer": CLOSURE_REGION_SCORER,
+            "complete": self.complete,
+            **asdict(self),
+            "groups": dict(sorted(groups.items())),
+        }
 
 
 def audit_evaluation(cases: Sequence[TokenizedCaseRecord], rows: Iterable[dict]) -> EvaluationAudit:
@@ -90,10 +104,10 @@ def audit_evaluation(cases: Sequence[TokenizedCaseRecord], rows: Iterable[dict])
             if verification is None or verification["status"] != "verified":
                 raise ValueError("Verifier score is unavailable")
             content = closure_response_content(row["output_response"], stop_reason=row["stop_reason"])
-            score = score_closure(case["prefix"] + content, case["expected"], ClosureFormat(case["format"]))
-            metric = f"closure/{case['family']}/{case['control']}"
-            for name in ("syntax_complete", "content_preserved", "success"):
-                if row["env_metrics"][f"{metric}/{name}"] != float(getattr(score, name)):
+            score = score_closure_region(case["prefix"] + content, case["expected"], ClosureFormat(case["format"]))
+            metric = f"{CLOSURE_REGION_SCORER}/{case['family']}/{case['control']}"
+            for name, value in asdict(score).items():
+                if row["env_metrics"][f"{metric}/{name}"] != float(value):
                     raise ValueError(f"Saved {name} metric disagrees with rescored response")
             if verification["score"] != float(score.success) or sum(row["score"]) != float(score.success):
                 raise ValueError("Reward/verifier score disagrees with rescored response")

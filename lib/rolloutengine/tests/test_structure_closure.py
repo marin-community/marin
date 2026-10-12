@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from rolloutengine.closure_scoring import ClosureFormat, closure_response_content, score_closure
+from rolloutengine.closure_scoring import ClosureFormat, closure_response_content, score_closure, score_closure_region
 from rolloutengine.structure_closure import (
     PrefixStatus,
     delimited_json_closure_state,
@@ -13,6 +13,57 @@ from rolloutengine.structure_closure import (
     paired_marker_closure_state,
     required_code_fence_state,
 )
+
+
+@pytest.mark.parametrize(
+    "structure_format,value",
+    [
+        (ClosureFormat.JSON, '{"a":[{"b":"} ]"}]}'),
+        (ClosureFormat.JSON, '"escaped \\" and \\\\"'),
+        (ClosureFormat.TOOL, '<tool_call>{"value":"</tool_call>"}</tool_call>'),
+        (ClosureFormat.REASONING, "<|start_think|>done<|end_think|>"),
+        (ClosureFormat.CODE_FENCE, '```json\n{"a":1}\n```'),
+    ],
+)
+def test_region_closure_separates_later_output_from_outer_completion(structure_format, value):
+    for tail in ("", "\n", "\nMore output", "\n" + value):
+        score = score_closure_region(value + tail, value, structure_format)
+        assert score.success
+        assert score.syntax_complete
+        assert score.content_preserved
+        assert score.trailing_content == bool(tail.strip())
+        assert score.whole_response_success == (not tail.strip())
+
+
+@pytest.mark.parametrize(
+    "structure_format,value,expected,syntax",
+    [
+        (ClosureFormat.JSON, '{"a":[]}', '{"a":[1]}', True),
+        (ClosureFormat.JSON, '{"a":[1}', '{"a":[1]}', False),
+        (ClosureFormat.JSON, '{"a":[1}\n{"a":[1]}', '{"a":[1]}', False),
+        (ClosureFormat.JSON, '"bad\\q"', '"good"', False),
+        (ClosureFormat.JSON, '"unfinished\\', '"finished"', False),
+        (ClosureFormat.TOOL, '<tool_call>{"a":1}</tool_', '<tool_call>{"a":1}</tool_call>', False),
+        (
+            ClosureFormat.TOOL,
+            '<tool_call><tool_call>{"a":1}</tool_call>',
+            '<tool_call>{"a":1}</tool_call>',
+            False,
+        ),
+        (
+            ClosureFormat.REASONING,
+            "<|start_think|><|start_think|>x<|end_think|>",
+            "<|start_think|>x<|end_think|>",
+            False,
+        ),
+        (ClosureFormat.CODE_FENCE, "```json\n{}\n```not-a-closing-line", "```json\n{}\n```", False),
+    ],
+)
+def test_region_closure_does_not_repair_invalid_or_premature_structure(structure_format, value, expected, syntax):
+    score = score_closure_region(value, expected, structure_format)
+    assert not score.success
+    assert score.syntax_complete == syntax
+    assert not score.content_preserved
 
 
 @pytest.mark.parametrize("marker", ["<|eot_id|>", "<|end_of_text|>"])

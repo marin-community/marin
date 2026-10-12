@@ -18,11 +18,18 @@ class PrefixStatus(StrEnum):
 
 @dataclass(frozen=True)
 class ClosureState:
+    """Prefix validity and the first outer completion boundary, when one exists.
+
+    Offsets count Python characters. A completed region followed by extra
+    content remains INVALID but retains its exclusive completion offset.
+    """
+
     status: PrefixStatus
     open_structures: tuple[str, ...]
     closing_suffix: str | None
     error_offset: int | None = None
     reason: str | None = None
+    completion_offset: int | None = None
 
 
 class _PrefixEnd(Exception):
@@ -207,14 +214,22 @@ def json_closure_state(prefix: str) -> ClosureState:
     parser = _JsonPrefix(prefix)
     try:
         parser.value()
+        completed_at = parser.position
         parser.skip_space()
         if parser.position != len(prefix):
-            parser.fail("Content after the complete JSON value")
+            return ClosureState(
+                PrefixStatus.INVALID,
+                (),
+                None,
+                parser.position,
+                "Content after the complete JSON value",
+                completed_at,
+            )
     except _PrefixEnd as error:
         return ClosureState(PrefixStatus.EXTENDABLE, tuple(parser.open), error.suffix)
     except _InvalidPrefix as error:
         return ClosureState(PrefixStatus.INVALID, tuple(parser.open), None, error.offset, error.reason)
-    return ClosureState(PrefixStatus.COMPLETE, (), "")
+    return ClosureState(PrefixStatus.COMPLETE, (), "", completion_offset=completed_at)
 
 
 def delimited_json_closure_state(prefix: str, *, opener: str, closer: str) -> ClosureState:
@@ -245,10 +260,11 @@ def delimited_json_closure_state(prefix: str, *, opener: str, closer: str) -> Cl
         return ClosureState(PrefixStatus.EXTENDABLE, (opener,), closer[len(remainder) :])
     if remainder.startswith(closer):
         tail = remainder[len(closer) :]
+        completed_at = offset + len(closer)
         if not tail.strip(_WHITESPACE):
-            return ClosureState(PrefixStatus.COMPLETE, (), "")
+            return ClosureState(PrefixStatus.COMPLETE, (), "", completion_offset=completed_at)
         offset += len(closer) + len(tail) - len(tail.lstrip(_WHITESPACE))
-        return ClosureState(PrefixStatus.INVALID, (), None, offset, "Content after closing marker")
+        return ClosureState(PrefixStatus.INVALID, (), None, offset, "Content after closing marker", completed_at)
     matching = 0
     while matching < min(len(remainder), len(closer)) and remainder[matching] == closer[matching]:
         matching += 1
@@ -277,10 +293,11 @@ def paired_marker_closure_state(prefix: str, *, opener: str, closer: str) -> Clo
         )
     if close_at >= 0:
         tail = body[close_at + len(closer) :]
+        completed_at = len(opener) + close_at + len(closer)
         if tail.strip(_WHITESPACE):
             offset = len(opener) + close_at + len(closer) + len(tail) - len(tail.lstrip(_WHITESPACE))
-            return ClosureState(PrefixStatus.INVALID, (), None, offset, "Content after closing marker")
-        return ClosureState(PrefixStatus.COMPLETE, (), "")
+            return ClosureState(PrefixStatus.INVALID, (), None, offset, "Content after closing marker", completed_at)
+        return ClosureState(PrefixStatus.COMPLETE, (), "", completion_offset=completed_at)
     for length in range(min(len(body), len(closer) - 1), 0, -1):
         if body.endswith(closer[:length]):
             return ClosureState(PrefixStatus.EXTENDABLE, (opener,), closer[length:])
@@ -309,9 +326,12 @@ def required_code_fence_state(prefix: str) -> ClosureState:
     for index, line in enumerate(lines[1:], 1):
         if closer_pattern.fullmatch(line):
             tail = "\n".join(lines[index + 1 :])
+            completed_at = offset + len(line)
             if tail.strip(_WHITESPACE):
-                return ClosureState(PrefixStatus.INVALID, (), None, offset + len(line) + 1, "Content after code fence")
-            return ClosureState(PrefixStatus.COMPLETE, (), "")
+                return ClosureState(
+                    PrefixStatus.INVALID, (), None, offset + len(line) + 1, "Content after code fence", completed_at
+                )
+            return ClosureState(PrefixStatus.COMPLETE, (), "", completion_offset=completed_at)
         offset += len(line) + 1
     last = lines[-1]
     if len(lines) > 1 and re.fullmatch(_FENCE_INDENT + re.escape(fence[0]) + "{0," + str(len(fence) - 1) + "}", last):

@@ -44,12 +44,14 @@ def rows():
             "verification": {"status": "verified", "score": score},
             "score": [0.0, score],
             "env_metrics": {
-                "closure/json_object/close_required/syntax_complete": score,
-                "closure/json_object/close_required/content_preserved": score,
-                "closure/json_object/close_required/success": score,
+                "closure_region_v1/json_object/close_required/syntax_complete": score,
+                "closure_region_v1/json_object/close_required/content_preserved": score,
+                "closure_region_v1/json_object/close_required/success": score,
+                "closure_region_v1/json_object/close_required/trailing_content": score,
+                "closure_region_v1/json_object/close_required/whole_response_success": 0.0,
             },
         }
-        for index, (response, score) in enumerate((("}<|eot_id|>", 1.0), ("<|eot_id|>", 0.0)))
+        for index, (response, score) in enumerate((("}\nextra output<|eot_id|>", 1.0), ("<|eot_id|>", 0.0)))
     ]
 
 
@@ -63,10 +65,14 @@ def test_audit_keeps_identical_prompts_distinct_and_counts_model_failure(cohort,
         "content_preserved": 1,
         "success": 1,
         "failure": 1,
+        "trailing_content": 1,
+        "whole_response_success": 0,
     }
 
 
-@pytest.mark.parametrize("failure", ["missing", "duplicate", "prefix", "unavailable", "metric", "reward", "infra"])
+@pytest.mark.parametrize(
+    "failure", ["missing", "duplicate", "prefix", "unavailable", "metric", "reward", "infra", "legacy_scorer"]
+)
 def test_audit_rejects_incomplete_or_inconsistent_evidence(cohort, rows, failure):
     if failure == "missing":
         rows.pop()
@@ -77,9 +83,13 @@ def test_audit_rejects_incomplete_or_inconsistent_evidence(cohort, rows, failure
     elif failure == "unavailable":
         rows[1]["verification"] = {"status": "unavailable", "score": None}
     elif failure == "metric":
-        rows[1]["env_metrics"]["closure/json_object/close_required/success"] = 1.0
+        rows[1]["env_metrics"]["closure_region_v1/json_object/close_required/success"] = 1.0
     elif failure == "reward":
         rows[1]["score"] = [0.0, 1.0]
+    elif failure == "legacy_scorer":
+        rows[1]["env_metrics"] = {
+            name.replace("closure_region_v1/", "closure/"): value for name, value in rows[1]["env_metrics"].items()
+        }
     else:
         rows[1]["exception_type"] = "TimeoutError"
     audit = audit_evaluation(cohort, rows)

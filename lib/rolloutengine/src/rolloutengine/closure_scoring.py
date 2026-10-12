@@ -18,6 +18,7 @@ from rolloutengine.structure_closure import (
 from rolloutengine.tool_protocol import JSON_WHITESPACE, THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
 SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
+CLOSURE_REGION_SCORER = "closure_region_v1"
 
 
 def closure_response_content(text: str, *, stop_reason: str) -> str:
@@ -47,6 +48,15 @@ class ClosureScore:
     syntax_complete: bool
     content_preserved: bool
     success: bool
+
+
+@dataclass(frozen=True)
+class ClosureRegionScore:
+    syntax_complete: bool
+    content_preserved: bool
+    success: bool
+    trailing_content: bool
+    whole_response_success: bool
 
 
 def closure_state(text: str, structure_format: ClosureFormat) -> ClosureState:
@@ -91,3 +101,20 @@ def score_closure(text: str, expected: str, structure_format: ClosureFormat) -> 
     else:
         preserved = text.rstrip(JSON_WHITESPACE) == expected.rstrip(JSON_WHITESPACE)
     return ClosureScore(True, preserved, preserved)
+
+
+def score_closure_region(text: str, expected: str, structure_format: ClosureFormat) -> ClosureRegionScore:
+    """Score the first outer structure; report output after its boundary separately.
+
+    Text includes the supplied structure prefix and generated continuation.
+    Never skip illegal leading syntax to search for a later valid structure.
+    Expected content still rejects premature completion of continue controls.
+    """
+    state = closure_state(text, structure_format)
+    if state.completion_offset is None:
+        return ClosureRegionScore(False, False, False, False, False)
+    score = score_closure(text[: state.completion_offset], expected, structure_format)
+    trailing = bool(text[state.completion_offset :].strip(JSON_WHITESPACE))
+    return ClosureRegionScore(
+        score.syntax_complete, score.content_preserved, score.success, trailing, score.success and not trailing
+    )
