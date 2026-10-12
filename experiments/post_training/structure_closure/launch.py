@@ -64,7 +64,7 @@ def build_run(*, parity_uri: str, parity_version: str, max_steps: int, learning_
             ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
-                step=model, tokenizer_uri=MODEL_REPOSITORY, tokenizer_revision=MODEL_REVISION, relative_path="."
+                step=model, tokenizer_uri=MODEL_REPOSITORY, tokenizer_revision=MODEL_REVISION, relative_path=""
             ),
             train_data=(ArtifactDataSource(data, relative_path="train.parquet"),),
             validation_data=(

@@ -260,12 +260,16 @@ def _validate_relative_file_path(name: str, value: str) -> None:
 
 @dataclass(frozen=True)
 class ArtifactHfModel:
-    """An exact HF export produced by another Marin artifact step."""
+    """An exact HF export; an empty relative path selects the artifact root."""
 
     step: ArtifactStep[LevanterCheckpoint]
     tokenizer_uri: str
     tokenizer_revision: str
     relative_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.relative_path is not None and any(part in (".", "..") for part in self.relative_path.split("/")):
+            raise ValueError("HF model relative_path must not contain dot segments; use '' for the artifact root")
 
     def deps(self) -> tuple[ArtifactStep, ...]:
         return (self.step,)
