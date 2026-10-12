@@ -101,8 +101,17 @@ class ExternalAgentSession:
         # Native agents may compact history or change the available tools.
         # Both require a new exact-token prefix instead of appending observations.
         if request.messages[: len(prefix)] != prefix or request.options != previous.request.options:
-            return Transition(done=False, reset_conversation=request.messages, next_options=request.options)
-        return Transition(done=False, observations=request.messages[len(prefix) :])
+            return Transition(
+                done=False,
+                reset_conversation=request.messages,
+                next_options=request.options,
+                next_prompt_token_ids=request.prompt_token_ids,
+            )
+        return Transition(
+            done=False,
+            observations=request.messages[len(prefix) :],
+            next_prompt_token_ids=request.prompt_token_ids,
+        )
 
     async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
         return await self.grader(messages, stop_reason=stop_reason)

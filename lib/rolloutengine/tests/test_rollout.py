@@ -363,6 +363,40 @@ async def test_external_agent_receives_engine_turns_and_controls_next_history(co
     )
 
 
+@pytest.mark.parametrize("compact", [False, True])
+async def test_external_agent_replays_exact_tokens_on_later_turns(compact):
+    first = ({"role": "user", "content": "Start."},)
+    observation = {"role": "tool", "tool_call_id": "write", "content": "Done."}
+    replay = (501, 502) if compact else (10, 11, 20, 90, 91)
+    requests = []
+
+    async def agent(complete):
+        turn = await complete(SessionStart(first, {}))
+        messages = ({"role": "user", "content": "Finish."},) if compact else (*first, turn.message, observation)
+        await complete(SessionStart(messages, {}, prompt_token_ids=replay))
+
+    async def grade(messages, *, stop_reason):
+        return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
+
+    async def model(request):
+        requests.append(request)
+        if len(requests) == 1:
+            assert request.prompt_token_ids is None
+            return ModelTurn({"role": "assistant", "content": "Working."}, (10, 11), (20,), (-0.5,), "stop")
+        assert request.prompt_token_ids == replay
+        return ModelTurn({"role": "assistant", "content": "12"}, replay, (21,), (-0.5,), "stop")
+
+    rollout_engine = ShellboxRolloutEngine(
+        model, {}, sessions={"agent": lambda task, machine: ExternalAgentSession(agent, grade)}
+    )
+    result = await rollout_engine.run(lowered(arithmetic_task(), task_session="agent"))
+
+    assert result.grade.reward == 1.0
+    assert result.prompt_token_ids == (replay if compact else (10, 11))
+    assert result.response_token_ids == ((21,) if compact else (20, 90, 91, 21))
+    assert result.loss_mask == ((1,) if compact else (1, 0, 0, 1))
+
+
 async def test_external_agent_is_cancelled_when_engine_generation_is_cancelled():
     model_entered = asyncio.Event()
     agent_closed = asyncio.Event()
@@ -471,7 +505,7 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
     runner = ShellboxRolloutEngine(model, {}, sessions={"fixture": lambda task, machine: Session()})
     task = lowered(arithmetic_task(), task_session="fixture")
     if alter_prefix:
-        with pytest.raises(RolloutContractError, match="initial replay token prefix"):
+        with pytest.raises(RolloutContractError, match="replay token prefix"):
             await runner.run(task)
         return
     result = await runner.run(task)

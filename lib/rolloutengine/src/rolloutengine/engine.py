@@ -152,6 +152,7 @@ class ShellboxRolloutEngine:
             raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
         messages = list(start.messages)
         options = start.options
+        replay_prompt_token_ids = start.prompt_token_ids
         completed = replace(completed, messages=tuple(messages))
         prompt: tuple[int, ...] = ()
         tokens: tuple[int, ...] = ()
@@ -173,7 +174,7 @@ class ShellboxRolloutEngine:
                                     options,
                                     tokens,
                                     assistant_index,
-                                    start.prompt_token_ids if index == 0 else None,
+                                    replay_prompt_token_ids,
                                 )
                             )
                     except GenerationLimitReached as limit:
@@ -198,13 +199,9 @@ class ShellboxRolloutEngine:
                         raise RolloutContractError("Model logprobs must align with response tokens")
                     if not turn.response_token_ids:
                         raise RolloutContractError("Model response contains no token evidence")
+                    if replay_prompt_token_ids is not None and turn.prompt_token_ids != replay_prompt_token_ids:
+                        raise RolloutContractError("Model transport changed the replay token prefix")
                     if assistant_index is None:
-                        if (
-                            index == 0
-                            and start.prompt_token_ids is not None
-                            and turn.prompt_token_ids != start.prompt_token_ids
-                        ):
-                            raise RolloutContractError("Model transport changed the initial replay token prefix")
                         prompt = turn.prompt_token_ids
                         tokens = prompt
                     if turn.prompt_token_ids[: len(tokens)] != tokens:
@@ -252,6 +249,7 @@ class ShellboxRolloutEngine:
                     stop_reason = turn.stop_reason
                     if transition.next_options is not None:
                         options = transition.next_options
+                    replay_prompt_token_ids = transition.next_prompt_token_ids
                     if transition.reset_conversation is not None and index + 1 < limits.max_turns:
                         messages = list(transition.reset_conversation)
                         prompt = tokens = masks = ()

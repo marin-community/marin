@@ -16,7 +16,7 @@ TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
 
 @dataclass(frozen=True)
 class ModelRequest:
-    """Request chat generation or an exact initial token-prefix replay.
+    """Request chat generation or an exact token-prefix replay.
 
     When prompt_token_ids is set, messages are retained for display only and
     options are completion sampling options, not chat-template options.
@@ -119,6 +119,7 @@ class Transition:
     grade: GradeResult | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
     next_options: dict[str, Any] | None = None
+    next_prompt_token_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)

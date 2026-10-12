@@ -267,8 +267,8 @@ Patch collection compares the final index with that revision, including agent co
 
 The model callable accepts `ModelRequest` and returns `ModelTurn` with a parsed assistant message and exact served token IDs.
 `ModelRequest.messages` contains public messages. `prefix_token_ids` contains the earlier served tokens that the next request must preserve.
-If `SessionStart.prompt_token_ids` is set, the first `ModelRequest.prompt_token_ids` carries that exact
-prefix to the model transport. The returned first turn must report the same prompt tokens.
+If `SessionStart.prompt_token_ids` is set, `ModelRequest.prompt_token_ids` carries that exact
+prefix to the model transport. The returned turn must report the same prompt tokens.
 `ModelTurn.prompt_token_ids` contains the exact prompt sent to inference. `response_token_ids` contains the sampled response.
 Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.
@@ -283,6 +283,8 @@ A conversation reset discards earlier turns from the training record when anothe
 The session supplies new public messages in `Transition.reset_conversation`.
 `Transition.next_options` replaces the model options for the next request, including when the agent
 changes its tool set after a conversation reset.
+`Transition.next_prompt_token_ids` forwards an exact prefix for the next model request, including
+after an agent compacts its conversation.
 The engine clears the accumulated prefix, turns, and token evidence, then starts a fresh prefix check.
 The reset preserves session state and workspace files.
 Final grading receives the new conversation and its subsequent turns.
