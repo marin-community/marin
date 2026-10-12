@@ -7,122 +7,107 @@ import hashlib
 import json
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
 from functools import partial
 from typing import Any
 
-import pyarrow as pa
 from finestore.layout import CommitToken
+from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.pipeline.models import Admission
-from taskcompendium.pipeline.source_verification import VerificationCounts
 
 CATALOG_DIRECTORY = "catalog"
-ADMISSIONS = tuple(admission.value for admission in Admission)
-CONTROL_COUNTS = tuple(field.name for field in fields(VerificationCounts))
-SOURCE_FIELDS = (
-    "source",
-    "source_dataset",
-    "source_revision",
-    "recipe_revision",
-    "implementation_revision",
-    "quality_revision",
-    "verification_revision",
-    "raw_population_count",
-    "raw_sample_count",
-    "raw_population_census",
-    "full_expansion",
-    "processed_rows",
-    "unprocessed_rows",
-)
-SOURCE_STRING_FIELDS = (
-    "run_id",
-    "name",
-    "atlas_id",
-    "artifact_path",
-    "campaign_status",
-    "error",
-    "status",
-    "mode",
-    "source",
-    "source_dataset",
-    "source_revision",
-    "recipe_revision",
-    "implementation_revision",
-    "quality_revision",
-    "verification_revision",
-    "manifest_path",
-    "manifest_sha256",
-    "evidence_snapshots_json",
-    "evidence_sha256_json",
-    "outputs_json",
-    "result_json",
-    "quality_status",
-    "verification_status",
-    "admission_counts_json",
-    "filter_counts_json",
-    "attempt_started_at",
-    "telemetry_status",
-    "telemetry_error_type",
-    "control_suite_json",
-    "verification_policy_json",
-    "source_input",
-    "input_overrides_json",
-    "manifest_evidence",
-    "evidence_errors_json",
-)
-SOURCE_SCHEMA = pa.schema(
-    [
-        *((name, pa.string()) for name in SOURCE_STRING_FIELDS),
-        *(
-            (name, pa.int64())
-            for name in (
-                "raw_population_count",
-                "raw_sample_count",
-                "processed_rows",
-                "unprocessed_rows",
-                "verification_sample_count",
-                "verification_eligible_count",
-                *ADMISSIONS,
-                *(f"controls_{name}" for name in CONTROL_COUNTS),
-            )
-        ),
-        *((name, pa.bool_()) for name in ("raw_population_census", "full_expansion", "rubric_enabled")),
-        ("verification_pass_fraction", pa.float64()),
-        ("source_wall_seconds", pa.float64()),
-    ]
-)
-RUN_SCHEMA = pa.schema(
-    [
-        *(
-            (name, pa.string())
-            for name in (
-                "run_id",
-                "status",
-                "mode",
-                "started_at",
-                "finished_at",
-                "report_updated_at",
-                "report_path",
-                "report_snapshot",
-                "report_sha256",
-                "status_counts_json",
-                "execution_json",
-            )
-        ),
-        ("source_count", pa.int64()),
-    ]
-)
-PHASE_SCHEMA = pa.schema(
-    [
-        *((name, pa.string()) for name in ("run_id", "name", "phase", "status", "error_type", "executions_json")),
-        ("ordinal", pa.int64()),
-        ("wall_seconds", pa.float64()),
-    ]
-)
+
+
+@dataclass(frozen=True)
+class CurationRun:
+    run_id: str
+    status: str
+    mode: str
+    started_at: str | None
+    finished_at: str | None
+    report_updated_at: str
+    report_path: str
+    report_snapshot: str
+    report_sha256: str
+    status_counts_json: str
+    execution_json: str | None
+    source_count: int
+
+
+@dataclass(frozen=True)
+class CurationSource:
+    run_id: str
+    name: str
+    atlas_id: str | None
+    artifact_path: str
+    campaign_status: str
+    error: str | None
+    status: str | None
+    mode: str
+    source: str | None
+    source_dataset: str | None
+    source_revision: str | None
+    recipe_revision: str | None
+    implementation_revision: str | None
+    quality_revision: str | None
+    verification_revision: str | None
+    manifest_path: str | None
+    manifest_sha256: str | None
+    evidence_snapshots_json: str
+    evidence_sha256_json: str
+    outputs_json: str
+    result_json: str
+    quality_status: str | None
+    verification_status: str | None
+    admission_counts_json: str | None
+    filter_counts_json: str | None
+    attempt_started_at: str | None
+    telemetry_status: str | None
+    telemetry_error_type: str | None
+    control_suite_json: str | None
+    verification_policy_json: str | None
+    source_input: str | None
+    input_overrides_json: str | None
+    manifest_evidence: str
+    evidence_errors_json: str
+    raw_population_count: int | None
+    raw_sample_count: int | None
+    processed_rows: int | None
+    unprocessed_rows: int | None
+    verification_sample_count: int | None
+    verification_eligible_count: int | None
+    admitted: int | None
+    rejected: int | None
+    deferred: int | None
+    no_grader: int | None
+    unverified: int | None
+    controls_checked: int | None
+    controls_passed: int | None
+    controls_failed: int | None
+    controls_defective: int | None
+    controls_unsupported: int | None
+    controls_infra_error: int | None
+    controls_inconsistent: int | None
+    raw_population_census: bool | None
+    full_expansion: bool | None
+    rubric_enabled: bool | None
+    verification_pass_fraction: float | None
+    source_wall_seconds: float | None
+
+
+@dataclass(frozen=True)
+class CurationPhase:
+    run_id: str
+    name: str
+    phase: str
+    status: str
+    error_type: str | None
+    executions_json: str
+    ordinal: int
+    wall_seconds: float
 
 
 @dataclass(frozen=True)
@@ -236,26 +221,28 @@ def append_curation_catalog(
     with DataStore.open(root, writer_id=run_id) as store:
         if store.read_view().point("runs", run_id=run_id) is not None:
             raise ValueError(f"Catalog invocation already exists: {run_id}")
-        store.table("runs", primary_key=("run_id",), schema=RUN_SCHEMA)
-        store.table("sources", primary_key=("run_id", "name"), schema=SOURCE_SCHEMA)
-        store.table("phases", primary_key=("run_id", "name", "ordinal"), schema=PHASE_SCHEMA)
+        store.table("runs", primary_key=("run_id",), schema=arrow_schema(CurationRun))
+        store.table("sources", primary_key=("run_id", "name"), schema=arrow_schema(CurationSource))
+        store.table("phases", primary_key=("run_id", "name", "ordinal"), schema=arrow_schema(CurationPhase))
         with store.transaction() as transaction:
             report_uri = transaction.write_object(f"runs/{run_id}/report.json", report_bytes)
             transaction.table("runs").add(
-                {
-                    "run_id": run_id,
-                    "status": report["status"],
-                    "mode": report["mode"],
-                    "started_at": started_at,
-                    "finished_at": report["updated_at"] if report["status"] != "running" else None,
-                    "report_updated_at": report["updated_at"],
-                    "report_path": report_path,
-                    "report_snapshot": report_uri,
-                    "report_sha256": hashlib.sha256(report_bytes).hexdigest(),
-                    "source_count": len(outcomes),
-                    "status_counts_json": _json(report["counts"]),
-                    "execution_json": _json(execution) if execution is not None else None,
-                }
+                asdict(
+                    CurationRun(
+                        run_id=run_id,
+                        status=report["status"],
+                        mode=report["mode"],
+                        started_at=started_at,
+                        finished_at=report["updated_at"] if report["status"] != "running" else None,
+                        report_updated_at=report["updated_at"],
+                        report_path=report_path,
+                        report_snapshot=report_uri,
+                        report_sha256=hashlib.sha256(report_bytes).hexdigest(),
+                        source_count=len(outcomes),
+                        status_counts_json=_json(report["counts"]),
+                        execution_json=_json(execution) if execution is not None else None,
+                    )
+                )
             )
             for outcome in outcomes:
                 document = by_name[outcome["name"]]
@@ -275,69 +262,90 @@ def append_curation_catalog(
                     digest = hashlib.sha256(payload).hexdigest()
                     snapshots[name] = transaction.write_object(f"evidence/{digest}/{name}", payload)
                     digests[name] = digest
-                source = {
-                    "run_id": run_id,
-                    "name": outcome["name"],
-                    "atlas_id": source_ids.get(outcome["name"]),
-                    "artifact_path": outcome["path"],
-                    "campaign_status": outcome["status"],
-                    "error": outcome.get("error"),
-                    "status": manifest.get("status"),
-                    "manifest_evidence": document.manifest_evidence.value,
-                    "evidence_errors_json": _json(errors),
-                    "mode": manifest.get("mode", report["mode"]),
-                    **{name: manifest.get(name) for name in SOURCE_FIELDS},
-                    "manifest_path": (
+                source = CurationSource(
+                    run_id=run_id,
+                    name=outcome["name"],
+                    atlas_id=source_ids.get(outcome["name"]),
+                    artifact_path=outcome["path"],
+                    campaign_status=outcome["status"],
+                    error=outcome.get("error"),
+                    status=manifest.get("status"),
+                    manifest_evidence=document.manifest_evidence.value,
+                    evidence_errors_json=_json(errors),
+                    mode=manifest.get("mode", report["mode"]),
+                    source=manifest.get("source"),
+                    source_dataset=manifest.get("source_dataset"),
+                    source_revision=manifest.get("source_revision"),
+                    recipe_revision=manifest.get("recipe_revision"),
+                    implementation_revision=manifest.get("implementation_revision"),
+                    quality_revision=manifest.get("quality_revision"),
+                    verification_revision=manifest.get("verification_revision"),
+                    raw_population_count=manifest.get("raw_population_count"),
+                    raw_sample_count=manifest.get("raw_sample_count"),
+                    raw_population_census=manifest.get("raw_population_census"),
+                    full_expansion=manifest.get("full_expansion"),
+                    processed_rows=(
+                        manifest["input_rows"] if manifest.get("mode") == "quick" else manifest.get("processed_rows")
+                    ),
+                    unprocessed_rows=manifest.get("unprocessed_rows"),
+                    manifest_path=(
                         str(StoragePath(outcome["path"]) / "manifest.json") if "manifest.json" in evidence else None
                     ),
-                    "manifest_sha256": digests.get("manifest.json"),
-                    "evidence_snapshots_json": _json(snapshots),
-                    "evidence_sha256_json": _json(digests),
-                    "outputs_json": _json(manifest.get("datasets", result.get("outputs", {}))),
-                    "result_json": _json(result),
-                    "quality_status": manifest.get("quality", {}).get("status"),
-                    "rubric_enabled": (
+                    manifest_sha256=digests.get("manifest.json"),
+                    evidence_snapshots_json=_json(snapshots),
+                    evidence_sha256_json=_json(digests),
+                    outputs_json=_json(manifest.get("datasets", result.get("outputs", {}))),
+                    result_json=_json(result),
+                    quality_status=manifest.get("quality", {}).get("status"),
+                    rubric_enabled=(
                         (parsed["review/manifest.json"]["rubric"] is not None)
                         if "rubric" in parsed.get("review/manifest.json", {})
                         else None
                     ),
-                    "verification_status": verification.get("status"),
-                    "verification_sample_count": verification.get("sample_count"),
-                    "verification_eligible_count": verification.get("eligible_count"),
-                    "verification_pass_fraction": verification.get("pass_fraction"),
-                    "control_suite_json": _json(verification["suite"]) if "suite" in verification else None,
-                    "verification_policy_json": _json(verification["policy"]) if "policy" in verification else None,
-                    "source_input": manifest.get("source_input"),
-                    "input_overrides_json": _json(manifest.get("source_file_overrides", {})) if manifest else None,
-                    "admission_counts_json": _json(admissions) if admissions is not None else None,
-                    "filter_counts_json": (
+                    verification_status=verification.get("status"),
+                    verification_sample_count=verification.get("sample_count"),
+                    verification_eligible_count=verification.get("eligible_count"),
+                    verification_pass_fraction=verification.get("pass_fraction"),
+                    control_suite_json=_json(verification["suite"]) if "suite" in verification else None,
+                    verification_policy_json=_json(verification["policy"]) if "policy" in verification else None,
+                    source_input=manifest.get("source_input"),
+                    input_overrides_json=_json(manifest.get("source_file_overrides", {})) if manifest else None,
+                    admission_counts_json=_json(admissions) if admissions is not None else None,
+                    filter_counts_json=(
                         _json(parsed["work/filtered/manifest.json"]) if "work/filtered/manifest.json" in parsed else None
                     ),
-                    "attempt_started_at": telemetry.get("attempt_started_at"),
-                    "source_wall_seconds": telemetry.get("source_wall_seconds", manifest.get("elapsed_seconds")),
-                    "telemetry_status": telemetry.get("status"),
-                    "telemetry_error_type": telemetry.get("error_type"),
-                    **{name: admissions.get(name, 0) if admissions is not None else None for name in ADMISSIONS},
-                    **{
-                        f"controls_{name}": counts.get(name, 0) if counts is not None else None
-                        for name in CONTROL_COUNTS
-                    },
-                }
-                if manifest.get("mode") == "quick":
-                    source["processed_rows"] = manifest["input_rows"]
-                transaction.table("sources").add(source)
+                    attempt_started_at=telemetry.get("attempt_started_at"),
+                    source_wall_seconds=telemetry.get("source_wall_seconds", manifest.get("elapsed_seconds")),
+                    telemetry_status=telemetry.get("status"),
+                    telemetry_error_type=telemetry.get("error_type"),
+                    admitted=admissions.get("admitted", 0) if admissions is not None else None,
+                    rejected=admissions.get("rejected", 0) if admissions is not None else None,
+                    deferred=admissions.get("deferred", 0) if admissions is not None else None,
+                    no_grader=admissions.get("no_grader", 0) if admissions is not None else None,
+                    unverified=admissions.get("unverified", 0) if admissions is not None else None,
+                    controls_checked=counts.get("checked", 0) if counts is not None else None,
+                    controls_passed=counts.get("passed", 0) if counts is not None else None,
+                    controls_failed=counts.get("failed", 0) if counts is not None else None,
+                    controls_defective=counts.get("defective", 0) if counts is not None else None,
+                    controls_unsupported=counts.get("unsupported", 0) if counts is not None else None,
+                    controls_infra_error=counts.get("infra_error", 0) if counts is not None else None,
+                    controls_inconsistent=counts.get("inconsistent", 0) if counts is not None else None,
+                )
+                transaction.table("sources").add(asdict(source))
                 for ordinal, phase in enumerate(telemetry.get("phases", [])):
                     transaction.table("phases").add(
-                        {
-                            "run_id": run_id,
-                            "name": outcome["name"],
-                            "ordinal": ordinal,
-                            "phase": phase["phase"],
-                            "status": phase["status"],
-                            "wall_seconds": phase["wall_seconds"],
-                            "error_type": phase.get("error_type"),
-                            "executions_json": _json(phase["executions"]),
-                        }
+                        asdict(
+                            CurationPhase(
+                                run_id=run_id,
+                                name=outcome["name"],
+                                ordinal=ordinal,
+                                phase=phase["phase"],
+                                status=phase["status"],
+                                wall_seconds=phase["wall_seconds"],
+                                error_type=phase.get("error_type"),
+                                executions_json=_json(phase["executions"]),
+                            )
+                        )
                     )
         assert transaction.token is not None
         return transaction.token
