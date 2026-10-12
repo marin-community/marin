@@ -12,7 +12,8 @@ and Read all views derive from it. Copy a nearby node and preserve its fields.
   strings. `status` is free text; include `failed` or `negative result` for the
   failure badge when applicable.
 - Set `parents` to a one-element array containing the immediate weight parent's
-  existing `id`. Follow the actual checkpoint and long-context extension variant.
+  existing `id`; model merges list every pinned parent checkpoint instead.
+  Follow the actual checkpoint and long-context extension variant.
   Architecture metadata and evaluation comparisons do not establish weight
   ancestry. Set `edge_kind` to `initialization` or
   `retained checkpoint` for progression within the same run.

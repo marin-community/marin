@@ -1,9 +1,9 @@
 # Snowball model family tree
 
 [Open the Snowball model family tree](https://public.applets.marina.oa.dev/a/d3b5517a-c119-4fd9-999d-362183422bf3/)
-to explore 118 model and run nodes across the 2.7T, 5.7T and 10T cooldown families
+to explore 126 model and run nodes across the 2.7T, 5.7T and 10T cooldown families
 without signing in. This is a curated snapshot of the evidence available on
-October 4, 2026. The stable URL opens the current applet revision.
+October 12, 2026. The stable URL opens the current applet revision.
 
 The lineage map opens with the whole tree visible and its shared pretrain centered.
 Click a node to expand its summary, algorithms, compute estimate and evidence.
@@ -30,6 +30,13 @@ including the Antidoom step-20 checkpoint trained with a frozen-reference KL
 penalty from public Antidoom step 12. The step-45 export's exact earlier weight
 ancestry remains qualified. Compute labels identify the estimate's scope; unknown
 training and rollout totals remain unknown.
+
+The October 12 snapshot adds the [weight-merging campaigns](https://github.com/marin-community/marin/issues/9975)
+(serial expert transfers and the campaign 2/3 DARE merges, each with one arrow
+from every pinned parent), the [BFCL recovery negative result](https://github.com/marin-community/marin/issues/10040)
+and the [protocol FTPO repair](https://github.com/marin-community/marin/issues/10043).
+The campaign 3 repository originally inherited the campaign 2 model card and
+provenance byte-for-byte; both were corrected on the Hub on October 12, 2026.
 
 ## Maintain the applet
 

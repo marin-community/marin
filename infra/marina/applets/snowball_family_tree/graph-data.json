@@ -4714,9 +4714,336 @@
         "basis": "Source record date; checkpoint completion not dated",
         "source": "https://github.com/marin-community/marin/issues/9225"
       }
+    },
+    {
+      "id": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "title": "Broad A/B mixture SFT · 216 sources · 4,750 updates",
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "parents": [
+        "lce-skew8"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "SFT",
+        "20% pretraining replay",
+        "√32 special-token rows",
+        "frozen router bias"
+      ],
+      "summary": "This full A/B mixture run scheduled 4,750 updates over 216 packed SFT sources plus long-context pretraining replay: 79.65% SFT (Nemotron SFTv3 dominant, then SWE traces, AgentTrove and GLM-5.2 distillations) and 20.35% replay, resuming from the unpublished base-157000 checkpoint with optimizer state and no warmup. Seven special-token rows in both embeddings and the LM head trained at √32-scaled learning rate while router biases stayed frozen; the exported checkpoint is step 161,750. No serving runtime or benchmark result has been validated for this export.",
+      "source": "https://huggingface.co/open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05/blob/main/README.md",
+      "flops": "≈3.83×10²¹ FLOPs · parameter proxy",
+      "notes": "6 × 2B active parameters × scheduled token positions; excludes attention and inherited pretraining. Recorded configuration: updates: 4750; batch: 256; sequence length: 262144; checkpoint step: 161750; base step: 157000; scheduled positions: 318767104000; sft share: 79.65%; replay share: 20.35%; special-token row lr scale: √32; approx active parameter flops: 3825205248000000000000; parent identity: base step 157000 documented on the card, skew8 branch inferred from the sibling September 20/21 runs' recorded configuration. canonical scope: experiment.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05/blob/main/README.md",
+          "text": "Mixture allocation, base step 157000, √32 special-token rows, frozen router biases, step 161750 export"
+        },
+        {
+          "url": "https://wandb.ai/marin-community/marin_moe_sft/runs/grug-67b-sft-20260929-special-token-lr-full-ab-4750-grouped",
+          "text": "Training run record"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/commit/ce7c77abcb0ada792cd6d76ba3d80db74c33a859",
+          "text": "Training source commit"
+        }
+      ],
+      "retained": [],
+      "confidence": "inferred; base step 157,000 documented, skew8 branch from sibling runs",
+      "status": "public checkpoint",
+      "stage": "SFT",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-05",
+        "basis": "Hub repository creation; checkpoint step 161,750 = base 157,000 + 4,750 updates",
+        "source": "https://huggingface.co/open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05"
+      }
+    },
+    {
+      "id": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09",
+      "title": "Serial NUPA/BFCL merge · shared 100%",
+      "model": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
+        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04",
+        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "serial expert transfer",
+        "shared-expert transfer",
+        "static merge"
+      ],
+      "summary": "Campaign 1 of the model-merging program first replaced 32 routed experts per layer of the September 23 sync step-92 RLVR checkpoint with Antidoom reference/KL step-20 experts selected by BFCL-Parity activation traces, then replaced every shared-expert projection with Antidoom step-12 weights. Fixed-policy scores: NUPA200 36.50%, BFCL-Parity/Pi 48.78%, MATH500 89.80%, GPQA-Diamond 52.19%, IFBench 27.33%. These are optimization results on repeatedly used benchmarks, not held-out evidence.",
+      "source": "https://github.com/marin-community/marin/issues/9975",
+      "flops": "FLOPs unknown · no training compute (weight construction)",
+      "notes": "Two static merges; no training compute. Recorded construction: intermediate: Step92 with 32 Step20 experts per layer chosen from BFCL-Parity traces; final: replaced every shared-expert projection with Antidoom step-12 weights; marin revision: dbb29180a835d77947da2ff301b1e0ea783403d9; parent revisions: Step92 fdc3c3c5, Step12 50fe2f48, Step20 fd07ef0f; source manifest sha256: b418e9c5d4ce59bf3a6bdd99203326760816e9f1d8cdfa9bcba1ea664bf566b6. canonical scope: model-merging campaign.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09/blob/main/README.md",
+          "text": "Construction, pinned parent revisions, evaluation scores and manifest hash"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/blob/dbb29180a835d77947da2ff301b1e0ea783403d9/experiments/weight_merging/recipes/routing-bfcl032-step92-native-metadata.json",
+          "text": "Intermediate recipe listing every transferred expert"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "Merge",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-09",
+        "basis": "Hub repository creation; static merges built the same day",
+        "source": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09"
+      }
+    },
+    {
+      "id": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared075-2026.10.09",
+      "title": "Serial NUPA/BFCL merge · shared 75%",
+      "model": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared075-2026.10.09",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
+        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04",
+        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "serial expert transfer",
+        "75/25 shared-expert blend",
+        "static merge"
+      ],
+      "summary": "Campaign 1 of the model-merging program first replaced 32 routed experts per layer of the September 23 sync step-92 RLVR checkpoint with Antidoom reference/KL step-20 experts selected by BFCL-Parity activation traces, then blended each shared-expert projection 75% Antidoom step-12 and 25% intermediate checkpoint. Fixed-policy scores: NUPA200 36.00%, BFCL-Parity/Pi 40.65%, MATH500 88.60%, GPQA-Diamond 51.35%, IFBench 30.00%. These are optimization results on repeatedly used benchmarks, not held-out evidence.",
+      "source": "https://github.com/marin-community/marin/issues/9975",
+      "flops": "FLOPs unknown · no training compute (weight construction)",
+      "notes": "Two static merges; no training compute. Recorded construction: intermediate: Step92 with 32 Step20 experts per layer chosen from BFCL-Parity traces; final: blended each shared-expert projection 75% Antidoom step-12 and 25% intermediate checkpoint; marin revision: dbb29180a835d77947da2ff301b1e0ea783403d9; parent revisions: Step92 fdc3c3c5, Step12 50fe2f48, Step20 fd07ef0f; source manifest sha256: 52834e4b96897adabab07f8a836045469c93f24cc93994807afc24d95a404ce9. canonical scope: model-merging campaign.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared075-2026.10.09/blob/main/README.md",
+          "text": "Construction, pinned parent revisions, evaluation scores and manifest hash"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/blob/dbb29180a835d77947da2ff301b1e0ea783403d9/experiments/weight_merging/recipes/routing-bfcl032-step92-native-metadata.json",
+          "text": "Intermediate recipe listing every transferred expert"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "Merge",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-09",
+        "basis": "Hub repository creation; static merges built the same day",
+        "source": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared075-2026.10.09"
+      }
+    },
+    {
+      "id": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared050-Attn025-2026.10.09",
+      "title": "Serial NUPA/BFCL merge · shared 50% + attention 25%",
+      "model": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared050-Attn025-2026.10.09",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
+        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04",
+        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "serial expert transfer",
+        "shared 50% + attention 25% blend",
+        "static merge"
+      ],
+      "summary": "Campaign 1 of the model-merging program first replaced 32 routed experts per layer of the September 23 sync step-92 RLVR checkpoint with Antidoom reference/KL step-20 experts selected by BFCL-Parity activation traces, then blended shared-expert projections 50% and attention tensors 25% with Antidoom step-12 weights. Fixed-policy scores: NUPA200 28.50%, BFCL-Parity/Pi 39.02%, MATH500 91.40%, GPQA-Diamond 52.02%, IFBench 30.00%. These are optimization results on repeatedly used benchmarks, not held-out evidence.",
+      "source": "https://github.com/marin-community/marin/issues/9975",
+      "flops": "FLOPs unknown · no training compute (weight construction)",
+      "notes": "Two static merges; no training compute. Recorded construction: intermediate: Step92 with 32 Step20 experts per layer chosen from BFCL-Parity traces; final: blended shared-expert projections 50% and attention tensors 25% with Antidoom step-12 weights; marin revision: dbb29180a835d77947da2ff301b1e0ea783403d9; parent revisions: Step92 fdc3c3c5, Step12 50fe2f48, Step20 fd07ef0f; source manifest sha256: 035d93f6dca500a7d98db92c6495e67b72d7753ed5a01576db1d8885df45fe8e. canonical scope: model-merging campaign.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared050-Attn025-2026.10.09/blob/main/README.md",
+          "text": "Construction, pinned parent revisions, evaluation scores and manifest hash"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/blob/dbb29180a835d77947da2ff301b1e0ea783403d9/experiments/weight_merging/recipes/routing-bfcl032-step92-native-metadata.json",
+          "text": "Intermediate recipe listing every transferred expert"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "Merge",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-09",
+        "basis": "Hub repository creation; static merges built the same day",
+        "source": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared050-Attn025-2026.10.09"
+      }
+    },
+    {
+      "id": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "title": "DARE-TIES merge · campaign 2 · dare-ties-02",
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "parents": [
+        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
+        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "DARE-TIES",
+        "expert-support merge"
+      ],
+      "summary": "Campaign 2 transferred the NUPA and BFCL specialist deltas into the Antidoom step-12 base with DARE-TIES inside the fixed R25 routed-expert support of 1,705 expert blocks: keep density 0.20, TIES trim 0.20, delta coefficients 0.50/0.50, scale 1.00, seed 0. 6.04% of Base scalars changed; NUPA200 scored 0.00 after the required ten-trace review and BFCL-Parity/Pi 45.53. Every non-weight file stayed byte-identical to Base, and this checkpoint became the base of the campaign-3 constrained merges.",
+      "source": "https://github.com/marin-community/marin/issues/9975",
+      "flops": "FLOPs unknown · no training compute (weight construction)",
+      "notes": "Static merge; no training compute. Recorded construction: method: dare_ties; support: R25 (1,705 expert blocks); keep density: 0.20; ties trim density: 0.20; nupa/bfcl delta coefficients: 0.5/0.5; scale: 1.0; seed: 0; changed percent: 6.037362616948686; base: Antidoom step-12 @50fe2f48; nupa: sync step-92 @fdc3c3c5; bfcl: reference/KL step-20 @fd07ef0f; scores percent: nupa200 0.0, bfcl_parity_pi 45.53. canonical scope: model-merging campaign.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10/blob/main/README.md",
+          "text": "DARE-TIES parameters, pinned parent revisions, changed fraction and scores"
+        },
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10/blob/main/merge-provenance.json",
+          "text": "Support rows, merge parameters and SHA256 hashes of all 48 source files"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "Merge",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-10",
+        "basis": "Hub repository creation",
+        "source": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10"
+      }
+    },
+    {
+      "id": "open-athena/Grug-67B-A2B-BFCL-Recovery",
+      "title": "BFCL DPO recovery initializer · run .304 step-1",
+      "model": "open-athena/Grug-67B-A2B-BFCL-Recovery",
+      "parents": [
+        "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "DPO",
+        "recovered warm start"
+      ],
+      "summary": "The BFCL multi-harness recovery campaign descended from Antidoom step-12 through the recovered .26 warm start and a two-update DPO run (.304); this export is that run's zero-indexed final step. The extended native experiment that initialized from it degraded BFCL-Parity from 34/123 to 10/123 after four updates and 0/123 after eight and 32 before cancellation, so the initializer is published for provenance, not as a recovered model: it did not pass the campaign's 30% bar. The inherited producer manifest does not describe the re-exported weights; publication verified the .304 receipt, shard sizes and fresh content hashes instead.",
+      "source": "https://github.com/marin-community/marin/issues/10040",
+      "flops": "FLOPs unknown · token accounting incomplete",
+      "notes": "DPO only; campaign rollout and preference-generation compute not totaled. Recorded configuration: dpo updates: 2; batch: 16 preference pairs; lr: 4e-6; dpo beta: 0.1; preference cache: 2352 pairs; pairs consumed: 32; bfcl-parity initializer: 34/123 (27.64%) in the extended experiment, 35/123 in a separate stochastic evaluation; extended run: 10/123 after 4 updates, 0/123 after 8 and 32; cancelled. canonical scope: BFCL recovery campaign.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-BFCL-Recovery/blob/main/README.md",
+          "text": "Warm-start lineage, DPO recipe, degradation numbers and publication verification limits"
+        },
+        {
+          "url": "https://huggingface.co/datasets/open-athena/BFCL-RL-Campaign-Artifacts-2026.10.11/tree/12096f05afc65fa3ec29e60e240d5efac624cb6b",
+          "text": "Public campaign evidence and limitations bundle"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint; negative result campaign",
+      "stage": "DPO",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-11",
+        "basis": "Hub repository creation; zero-update initializer export from run .304",
+        "source": "https://huggingface.co/open-athena/Grug-67B-A2B-BFCL-Recovery"
+      }
+    },
+    {
+      "id": "open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO",
+      "title": "BFCL protocol FTPO · repeated-opener repair",
+      "model": "open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO",
+      "parents": [
+        "open-athena/Grug-67B-A2B-BFCL-Recovery"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "FTPO",
+        "repeated_tool_opener boundary",
+        "frozen-reference MSE"
+      ],
+      "summary": "Final-token preference optimization targeted the repeated tool-call opener failure at its boundary: three optimizer updates from the BFCL-Recovery initializer with AdamW 4e-6, batch 16, MSE-to-reference 0.4 and a 0.05 target-logit penalty at tolerance 0.5 on 192 H100s. Repeated openers on the 156-case protocol diagnostic fell from 72 to 1 (98.6%); matched evaluations moved BFCL-Parity 24.39→34.96%, MATH-500 91.4→92.2%, HumanEval+ 52.44→68.90% and IFBench Loose 27.33→26.00%. The targeted reduction does not establish general tool-use reliability, and capability preservation remains unproven.",
+      "source": "https://github.com/marin-community/marin/issues/10043",
+      "flops": "FLOPs unknown · token accounting incomplete",
+      "notes": "Rollout generation, policy and reference passes not totaled. Recorded configuration: updates: 3 (the fourth configured batch had no eligible loss tokens); export: run 2026.10.12.2 global_step_4; lr: 4e-6; batch: 16; grad clip: 0.5; mse coefficient: 0.4; target-logit penalty: 0.05 at tolerance 0.5; boundary: repeated_tool_opener; hardware: 192 H100; input manifest sha256: d4c483af3bc474e321dcb67c7c60961ac486f3f900f5cc6f2e500cbb3b662e80. canonical scope: BFCL protocol campaign.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO/blob/main/README.md",
+          "text": "Initializer revision, FTPO objective, diagnostic construction and matched evaluations"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/pull/10045",
+          "text": "Implementation PR"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "FTPO",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-12",
+        "basis": "Hub repository creation; run 2026.10.12.2 global_step_4 export",
+        "source": "https://huggingface.co/open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO"
+      }
+    },
+    {
+      "id": "open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12",
+      "title": "DARE-linear merge · campaign 3 · dare-linear-02",
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12",
+      "parents": [
+        "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+        "laion/snowball-67b-a2b-relay-sft-allkimi-step1203"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "DARE-linear",
+        "specialist delta merge"
+      ],
+      "summary": "Campaign 3 merged the allkimi relay SWE/Terminal specialist into the campaign-2 DARE-TIES-02 base under a bit-for-bit budget: DARE-linear with keep 0.20 and scale 0.25 changed 1,581,121,835 of 67,078,882,816 scalars (2.36%) while every non-weight file stayed byte-identical. The tracker records SWE-Bench-100 33.00% + TB2.1 13.36% (sum 46.36) against Base 37.20 and Specialist 24.36; serial-01 reached 48.17 but dare-linear-02 is the published candidate. The original publication inherited the campaign-2 root card and provenance byte-for-byte from Base; both were corrected on October 12, 2026, with the measured construction record preserved under provenance/campaign3/.",
+      "source": "https://github.com/marin-community/marin/issues/9975",
+      "flops": "FLOPs unknown · no training compute (weight construction)",
+      "notes": "Static merge; no training compute. Recorded construction: method: dare-linear; keep: 0.20; scale: 0.25; support: 12.486% of Base scalars (8,375,500,800 elements); changed: 1,581,121,835 of 67,078,882,816 scalars (2.3571081816%); base: campaign-2 DARE-TIES-02 @153f5369; specialist: laion allkimi relay @ff664b48; swe-bench-100: 33.00 (100/100); tb2.1: 13.36 (262/267); construction audit: passed; publication correction: the original root README.md and merge-provenance.json inherited campaign-2 dare-ties-02 metadata byte-for-byte and were corrected on 2026-10-12, weights unchanged at revision 271c4b3c. canonical scope: model-merging campaign.",
+      "evidence": [
+        {
+          "url": "https://gist.github.com/penfever/f93b39b8cc6dd12674e5e083f80c63d4",
+          "text": "Campaign 3 artifact bundle: recipes, protocol and complete tracker pinning Base, Specialist and the published candidate"
+        },
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12/blob/main/README.md",
+          "text": "Corrected card: pinned parents, measured changed fraction and fixed-policy scores"
+        },
+        {
+          "url": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12/blob/main/provenance/campaign3/audit.json",
+          "text": "Measured construction audit: element counts, support, file hashes, passed=true"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "Merge",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-12",
+        "basis": "Hub repository creation",
+        "source": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12"
+      }
     }
   ],
   "unplaced": [],
-  "snapshot": "2026-10-04",
+  "snapshot": "2026-10-12",
   "methodology": "Source-estimated analytic FLOPs or explicitly scoped 6ND parameter proxies; unknown RL totals remain unknown."
 }
