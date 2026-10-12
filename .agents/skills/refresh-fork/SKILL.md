@@ -5,16 +5,14 @@ description: Refresh a named Marin external fork pin onto a newer upstream base 
 
 # Refresh a fork
 
-Read `AGENTS.md`. Rebase refreshable fork overlays onto `main-next`, validate
-the selected sources, re-pin Marin, and prepare any protected-branch promotion.
-An unattended run opens a draft Marin PR and names the required admin
-promotion; it never force-moves a stable branch. A `fork_main` source selector
-reuses an existing stable lineage and does not create a staging branch.
+Read `AGENTS.md` and the target descriptor. Select a source and replay the
+fork's patches onto `main-next` when a rebase is needed. A `fork_main` selector
+uses an existing stable source SHA.
 
-For `vllm-gpu`, follow `docs/vllm.md`: review and land the source on `main`,
-build and qualify the wheels, then test a Marin adoption PR. That source
-approval happens before the wheel build and Marin e2e. The staged-pin and
-post-e2e promotion steps below apply to the other rebased forks.
+For `vllm-gpu`, follow [the GPU guide](docs/vllm.md#source-release-and-adoption):
+review and land source on `main`, build and test the wheels, then test and open
+a Marin adoption PR. Other rebased forks test their staged sources before an
+admin moves `main`. The refresh agent never force-moves a protected branch.
 
 Refresh a `group` as one unit and one PR. Per-fork guidance lives beside this
 file: `docs/vllm.md` covers the `vllm`/`tpu-inference` group and the GPU release
@@ -169,7 +167,9 @@ overlay from a net diff. Diff each hand-ported `fix` against the fork's stable
 branch. Put the inventory, conflict map, and distance behind upstream in the
 blocker issue.
 
-## Pin at the staged tip
+## Update Marin pins
+
+For `vllm-gpu`, use the GPU guide's publication and adoption steps above.
 
 For rebased descriptor and isolated-project pins, point Marin at the exact
 `main-next` SHA so the e2e runs against the replayed code. For a `fork_main`
@@ -187,8 +187,6 @@ need the follow-up described below.
   record the exact existing main-line source and its upstream base without
   creating or promoting another branch. The section-by-section mechanics are
   in `docs/vllm.md`.
-- `pin = release:<path>` (`vllm-gpu`): follow `docs/vllm.md` for publication,
-  manifest import, the Marin e2e, and the CUDA/torch ABI caveat.
 - `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
@@ -272,13 +270,11 @@ blocker for the broken e2e and hold the refresh until it is fixed.
 
 ## Prepare the protected-branch promotion
 
-Once the e2e passes on `main-next`, create the rollback tag for the current stable
-tip and the date tag for the validated staged tip per `docs/promotion-protocol.md`.
-Push and verify those tags, then leave protected `main` unchanged. The
-draft Marin PR must identify each `main-next` to `main` hard swap that an admin
-must complete before merge.
-
-For `vllm-gpu`, use the source-approval step in `docs/vllm.md`.
+For `vllm-gpu`, follow the GPU guide's source-approval step before building.
+For other rebased forks, wait for the e2e to pass on `main-next`, then create
+and verify the rollback and date tags in `docs/promotion-protocol.md`. Leave
+protected `main` for the admin to update. The draft Marin PR must name each
+required source swap.
 
 A `fork_main` selector has no protected-branch promotion. Record the immutable
 source tag or ancestry proof in the PR instead.

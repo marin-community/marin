@@ -1,10 +1,8 @@
 # Prepare and promote `main-next`
 
-For descriptor and isolated-project pins, an unattended refresh prepares
-promotion after the fork's e2e passes against `main-next`, then opens the draft
-Marin PR. It creates immutable refs for the old
-and new tips and leaves the protected stable branch unchanged. An admin hard-swaps
-the stable branch after reviewing the draft PR and before that PR merges.
+For descriptor and isolated-project pins, run the fork's e2e on `main-next`,
+create immutable tags for the old and new tips, and open a draft Marin PR. An
+admin reviews that PR before replacing the protected stable branch.
 
 A refresh rebases our patches onto a new upstream base, so `main-next` does not
 descend from the current `main` — their upstream bases differ. The promotion is
@@ -64,7 +62,8 @@ tip. An admin checks those refs and performs the leased hard swap shown above
 before building wheels. For an ordinary fork patch, merge its reviewed PR to
 `main`.
 
-After source approval, follow `vllm.md` for the wheel build and Marin adoption.
+After source approval, follow [the GPU guide](vllm.md#source-release-and-adoption)
+for the wheel build and Marin adoption.
 A source swap alone does not change Marin's wheel pin.
 
 The TPU group selects an exact commit already on the shared lineage and never

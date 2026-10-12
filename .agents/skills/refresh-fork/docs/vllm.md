@@ -134,18 +134,18 @@ Marin test leaves production pins unchanged.
 
 1. Prepare and review the vLLM source change. For an upstream rebase, replay
    the overlay on `main-next` and audit the CUDA/Torch versions and compiled
-   Torch extension interface. An admin reviews the source and completes the backed-up swap to
-   `main` described in `promotion-protocol.md` before wheel builds. For an
+   Torch extension interface. An admin reviews the source and completes the
+   backed-up swap to `main` in `promotion-protocol.md` before wheel builds. For an
    ordinary patch, merge its reviewed vLLM PR to `main`. Keep the build and
    release automation in the selected source.
 
-For an unattended rebase, prepare a source-review handoff with the `main-next`
-compare link, old and new source SHAs, replay audit, and rollback and date tags.
-Wait for an admin to review and promote the source, then resume at the build.
+   For an unattended rebase, give the admin the `main-next` compare link, old
+   and new source SHAs, replay audit, and rollback and date tags. Wait for the
+   admin's review and source promotion before building.
 
 2. The build workflow builds both wheels, runs the existing H100 and GB200
-   qualification, and publishes one release after both jobs pass. Source
-   changes on `main` trigger it automatically. To start it manually:
+   qualification, and publishes one release after both jobs pass. Relevant
+   pushes to `main` trigger it automatically. To start it manually:
 
 ```sh
 gh workflow run marin-gpu-candidate.yaml \
@@ -176,15 +176,10 @@ SHA, both wheel hashes, and links to the fork qualification and Snowball results
 Review and merge that PR to adopt the wheels. There is no temporary candidate
 pin or later GPU publication step.
 
-Source approval precedes GPU qualification and Marin validation. Marin keeps
-its previous wheel until the adoption PR merges. If Snowball fails, leave the
-Marin pins in production unchanged and fix the failure before adoption. A later
-TPU refresh selects a main-line source independently.
-
-Existing staged GPU candidates remain available as evidence. The main-only
-workflow builds and qualifies a new release after the reviewed source reaches
-`main`. Reuse earlier test evidence only when the installed wheel, dependency
-profile, and tested behavior match; record that scope in the adoption PR.
+Old staged GPU candidates remain test evidence. Build a new release through
+the main-only workflow before adoption; its GPU jobs test that run's wheels.
+For Marin adoption, reuse earlier Marin results only when the exact wheel,
+dependency profile, and tested behavior match. State what was reused in the PR.
 
 ## Fork suite caveat
 
@@ -197,11 +192,5 @@ validation.
 - The TPU release workflow above is the required exact-pair gate. Its candidate
   manifest must name both source SHAs, the workflow SHA, and both wheel hashes;
   its qualification record must name that exact candidate tag.
-- `tests/cluster/vllm/test_snowball_backend_parity.py` is the GPU model parity
-  gate. Run it with `-m cluster -o addopts= --import-mode=importlib`; require
-  both H100 and GB200 qualification results from the fork release workflow.
-
-```sh
-uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
-  -m cluster -o addopts= --import-mode=importlib -vv -s
-```
+- The GPU adoption step above runs Snowball parity after both H100 and GB200
+  wheel tests pass.

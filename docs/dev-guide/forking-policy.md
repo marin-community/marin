@@ -48,14 +48,12 @@ There is no stored PAT.
 `MarinSkyRL` is pinned and refreshable through the skill on demand, but is not yet
 in the weekly rotation. A human runs the skill for a single fork the same way.
 
-The session runs the `refresh-fork` skill
-(`.agents/skills/refresh-fork/SKILL.md`), which owns the migration procedure:
-select a new upstream base or existing main-line source, replay Marin's overlays
-for overlay forks, stage rebases on `main-next`, re-pin Marin, run the fork's declared
-end-to-end test, and on green open one draft Marin PR requesting the descriptor's
-reviewer. On an unresolved external blocker it files a "can't migrate" issue
-instead of a PR. The GPU wheel refresh approves its source on `main` before
-building; its later Marin PR approves wheel adoption, as described below.
+The session follows `.agents/skills/refresh-fork/SKILL.md` and the fork's guide.
+It selects a source, replays Marin's patches when needed, and runs the declared
+tests before opening one adoption PR. The GPU guide requires source approval
+on `main` before building wheels. For other rebased forks, the admin reviews
+the adoption PR before moving `main`. An unresolved external blocker gets an
+issue assigned to the descriptor's owner.
 
 `config/external/migration.toml` is the per-fork descriptor. It records the
 upstream repository, the pin kind, the fork branch the pin tracks, how to select a
@@ -82,28 +80,14 @@ recorded as a baseline failure and left for its own fix.
 
 ## The vLLM GPU release pipeline
 
-Review and land source changes on the vLLM fork's `main`. This applies to an
-upstream refresh and to a patch authored in the fork. The build workflow
-(`marin-gpu-candidate.yaml`) builds x86_64 and aarch64 wheels from that commit,
-runs the existing H100 and GB200 qualification, and publishes one release after
-both jobs pass. A manual GPU build must also run from `main`.
+Review source on the vLLM fork's `main`, build both wheels, run the existing
+H100 and GB200 tests, and publish once. A developer or agent then tests those
+published wheels in Marin and opens one adoption PR. Marin uses the wheels
+after that PR merges.
 
-In an isolated Marin worktree, download the published manifest, import the
-exact wheels, and run the declared Snowball parity end-to-end:
-
-```sh
-uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
-uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
-  -m cluster -o addopts= --import-mode=importlib -vv -s
-```
-
-The updater writes `gpu.toml` (release tag, source SHA, version, Torch backend,
-and each architecture's URL and SHA-256) and regenerates the packaged pins. Open
-a Marin PR with those pins and the qualification and parity results. Review and
-merge that PR to adopt the wheels. Marin keeps its previous wheel until then.
-
-The refresh-fork vLLM guide contains the exact dispatch commands and the
-source-review handoff for unattended rebases.
+The [GPU guide](https://github.com/marin-community/marin/blob/main/.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
+contains the trigger table, exact commands, and admin handoff for upstream
+rebases. The same build and adoption process applies to ordinary fork patches.
 
 ## Promotion
 
@@ -114,10 +98,9 @@ hard swap to `main` before the PR merges. Descriptor pins already name the exact
 validated SHA; isolated projects restore their uv source to `main` and relock
 at that same SHA.
 
-For a vLLM GPU rebase, the admin reviews and promotes `main-next` before wheel
-builds. The later Marin PR adopts the published release. See
-`.agents/skills/refresh-fork/docs/promotion-protocol.md` for rollback tags and
-the leased source swap.
+For a vLLM GPU rebase, follow the GPU guide above. It uses the rollback tags
+and source swap in `.agents/skills/refresh-fork/docs/promotion-protocol.md`
+before wheel builds.
 
 The vLLM TPU selector is the exception: it reuses an exact commit already on
 the fork's `main` lineage, so it has no vLLM staging branch or protected-branch

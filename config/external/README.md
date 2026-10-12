@@ -15,10 +15,9 @@ selected lock with `uv run --frozen`; the external dependency updater advances
 only the top-level projects.
 
 `vllm/gpu.toml` records the published CUDA release, Torch backend, and exact
-wheel URL and SHA-256 for each architecture. The fork builds only from `main`,
-runs its existing GPU qualification, and publishes once. A Marin adoption PR
-updates the descriptor and runs Snowball parity before those pins reach Marin's
-`main`.
+wheel URL and SHA-256 for each architecture. The
+[GPU guide](https://github.com/marin-community/marin/blob/main/.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
+defines how the fork builds and tests wheels and how Marin adopts them.
 
 `vllm/tpu.toml` records an exact vLLM source from the fork's maintained `main`
 lineage and the matching `tpu-inference` SHA. The TPU stack runs from an
@@ -46,10 +45,10 @@ Update a GPU release from its published manifest with:
 uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
 ```
 
-The command updates `vllm/gpu.toml` and regenerates the packaged pins. It can
-advance from any published GPU release to a newer one. It validates and renders
-both outputs before replacing the existing descriptor. Run the Marin end-to-end
-in the proposed pin PR; merge that PR to adopt the release.
+The command updates `vllm/gpu.toml` and regenerates the packaged pins. It
+validates and renders both outputs before replacing the descriptor, so a
+rendering failure leaves the existing pins in place. Follow the GPU guide's
+Snowball test and adoption steps before merging those pins.
 
 Update TPU source pins in `vllm/tpu.toml`; those forks are not part of the
 nightly upgrade set.
