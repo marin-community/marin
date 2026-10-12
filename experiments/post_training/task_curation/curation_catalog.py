@@ -392,7 +392,10 @@ def append_curation_catalog(
                 elif outcome["status"] == "queued":
                     assessment_status = AssessmentStatus.SKIPPED
                     assessment_reason = "Source was not started before the campaign ended"
-                elif outcome["status"] in ("failed", "running") or assessment_report is None:
+                elif outcome["status"] == "running":
+                    assessment_status = AssessmentStatus.FAILED
+                    assessment_reason = outcome.get("error") or "Source was interrupted"
+                elif outcome["status"] == "failed" or assessment_report is None:
                     assessment_status = AssessmentStatus.FAILED
                     assessment_reason = outcome.get("error") or "Assessment report missing or invalid"
                 else:

@@ -21,7 +21,7 @@ from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_u
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import RecipeSettings
 
-INPUTS_VERSION = "2026.10.12.4"
+INPUTS_VERSION = "2026.10.12.5"
 JUDGMENTS_VERSION = "2026.10.12.3"
 REPORT_VERSION = "2026.10.12.3"
 

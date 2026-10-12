@@ -211,3 +211,26 @@ def test_empty_release_keeps_excluded_diagnosis(context, tmp_path):
     assert report["assessment"]["admitted"]["sample_count"] == 0
     assert report["assessment"]["admitted"]["grade"] == "unknown"
     assert report["assessment"]["excluded"]["sample_count"] == 1
+
+
+def test_assessment_locates_evidence_after_empty_physical_row_groups(context, tmp_path):
+    curated = curated_source(
+        context,
+        tmp_path,
+        [{"Body": f"Ada has {value} apples.", "Question": "How many apples?", "Answer": str(value)} for value in (1, 2)],
+    )
+    normalize = next((curated / "normalize").glob("*.parquet"))
+    table = pq.read_table(normalize)
+    rewritten = normalize.with_suffix(".rewritten")
+    with pq.ParquetWriter(rewritten, table.schema) as writer:
+        writer.write_table(table.slice(0, 0))
+        writer.write_table(table)
+    rewritten.replace(normalize)
+    inputs = tmp_path / "inputs"
+    prepare_assessment(
+        context, curated_root=str(curated), sampling=AssessmentSampling(admitted=2), output_root=str(inputs)
+    )
+    manifest = read_json(str(inputs / "manifest.json"))
+    packets = [row for path in manifest["packet_paths"] for row in load_parquet(path)]
+    assert len(packets) == 2
+    assert all(json.loads(row["packet_json"])["task"]["id"] == row["task_id"] for row in packets)

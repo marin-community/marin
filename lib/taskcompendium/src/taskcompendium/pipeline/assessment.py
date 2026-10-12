@@ -19,7 +19,7 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.input_file import InputFileSpec
-from zephyr.readers import iter_parquet_row_groups, load_parquet, open_file
+from zephyr.readers import load_parquet, open_file
 from zephyr.writers import write_parquet_file
 
 from taskcompendium.models import TaskSpec
@@ -160,11 +160,16 @@ def _diagnostic_sample(groups: dict[str, tuple[int, list[dict]]], size: int, see
 
 def _selected_locations(path: str, *, task_ids: frozenset[str]) -> Iterator[tuple[str, RowLocation]]:
     values = pa.array(sorted(task_ids), type=pa.string())
-    for group, table in enumerate(iter_parquet_row_groups(path, columns=["task_id"])):
-        matches = pc.call_function("is_in", [table["task_id"]], options=pc.SetLookupOptions(value_set=values))
-        indices = pc.call_function("indices_nonzero", [matches]).to_pylist()
-        for index in indices:
-            yield table["task_id"][index].as_py(), RowLocation(path, group, index)
+    with open_file(path, block_size=1_048_576) as stream:
+        parquet = pq.ParquetFile(stream)
+        for group in range(parquet.num_row_groups):
+            if parquet.metadata.row_group(group).num_rows == 0:
+                continue
+            table = parquet.read_row_group(group, columns=["task_id"])
+            matches = pc.call_function("is_in", [table["task_id"]], options=pc.SetLookupOptions(value_set=values))
+            indices = pc.call_function("indices_nonzero", [matches]).to_pylist()
+            for index in indices:
+                yield table["task_id"][index].as_py(), RowLocation(path, group, index)
 
 
 def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampling) -> dict[str, Any]:

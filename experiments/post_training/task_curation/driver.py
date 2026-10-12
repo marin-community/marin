@@ -204,6 +204,8 @@ def main(
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
     if curated_inventory is not None and (processing_mode != SourceProcessingMode.FULL or not assess):
         raise click.UsageError("--curated-inventory requires FULL assessment")
+    if curation_attempt and (processing_mode == SourceProcessingMode.QUICK or curated_inventory is not None):
+        raise click.UsageError("--curation-attempt requires a native SAMPLE/FULL curation run")
     if cache_dir is not None:
         cache_dir = cache_dir.expanduser().resolve()
     if input_root is not None and local_files:

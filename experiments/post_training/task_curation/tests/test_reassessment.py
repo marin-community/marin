@@ -46,7 +46,9 @@ def test_reassessment_adopts_incomplete_curated_source_without_producer_record(t
             assert adopted.result.outputs["final"] == manifest["datasets"]["final"]
             assert adopted.result.evidence["manifest"] == str(StoragePath(adopted.path) / "manifest.json")
             assert (StoragePath(adopted.path) / "telemetry.json").read_text() == telemetry
-            assert json.loads((tmp_path / "cache" / adopted.path).joinpath("manifest.json").read_text()) == manifest
+            restored = json.loads((StoragePath(adopted.path) / "manifest.json").read_text())
+            assert restored["datasets"] == manifest["datasets"]
+            assert restored["telemetry"] == str(StoragePath(adopted.path) / "telemetry.json")
             # A changed declaration must not receive grades from the earlier export.
             changed = tmp_path / "data" / "numbers-changed" / "2026.10.07.1"
             changed.mkdir(parents=True)

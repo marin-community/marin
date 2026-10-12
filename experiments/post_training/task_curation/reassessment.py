@@ -14,7 +14,7 @@ from taskcompendium.pipeline.models import SourceStatus
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.source import RlDataSource
 
-REASSESSMENT_VERSION = "2026.10.12.2"
+REASSESSMENT_VERSION = "2026.10.12.3"
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,8 @@ def _validated_curated(*, manifest_path: str, expected: CuratedSource, output_ro
         original = retained / filename
         if original.exists():
             (output / filename).write_bytes(original.read_bytes(), auto_mkdir=True)
+            if filename == "telemetry.json":
+                manifest["telemetry"] = str(output / filename)
     # An inconclusive control result remains evidence; reassessment changes no admission.
     result = PipelineResult(
         SourceStatus(manifest["status"]),
