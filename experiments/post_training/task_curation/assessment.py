@@ -21,7 +21,9 @@ from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_u
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import RecipeSettings
 
-ASSESSMENT_VERSION = "2026.10.12.2"
+INPUTS_VERSION = "2026.10.12.3"
+JUDGMENTS_VERSION = "2026.10.12.3"
+REPORT_VERSION = "2026.10.12.3"
 
 
 @dataclass(frozen=True)
@@ -41,7 +43,7 @@ class AssessmentStages:
 
 def assessment_evidence(stages: AssessmentStages) -> dict[str, str]:
     return {
-        "curation_manifest": str(StoragePath(stages.curated.path()) / "manifest.json"),
+        "manifest": str(StoragePath(stages.curated.path()) / "manifest.json"),
         "assessment_inputs": stages.inputs.path(),
         "assessment_judgments": stages.judgments.path(),
         "assessment_report": str(StoragePath(stages.report.path()) / "report.json"),
@@ -124,7 +126,7 @@ def assessment_pipeline(
     inputs = apply(
         f"rl-assessment/{source}/inputs",
         partial(_prepare, runtime),
-        version=ASSESSMENT_VERSION,
+        version=INPUTS_VERSION,
         curated_root=curated,
         sampling=settings.sampling,
         output_root=OUT,
@@ -133,7 +135,7 @@ def assessment_pipeline(
     judgments = apply(
         f"rl-assessment/{source}/judgments",
         partial(_judge, runtime, execution),
-        version=ASSESSMENT_VERSION,
+        version=JUDGMENTS_VERSION,
         inputs_root=inputs,
         rubric=settings.rubric,
         model=settings.model,
@@ -143,7 +145,7 @@ def assessment_pipeline(
     report = apply(
         f"rl-assessment/{source}/report",
         partial(_summarize, curated.artifact_type),
-        version=ASSESSMENT_VERSION,
+        version=REPORT_VERSION,
         artifact_type=CampaignArtifact,
         curated_root=curated,
         inputs_root=inputs,

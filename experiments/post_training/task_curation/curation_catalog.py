@@ -115,6 +115,21 @@ class CurationPhase:
 
 
 @dataclass(frozen=True)
+class CurationAssessment:
+    run_id: str
+    name: str
+    source_id: str | None
+    pipeline_key: str | None
+    status: str
+    reason: str | None
+    report_path: str | None
+    report_json: str | None
+    inputs_root: str | None
+    judgments_root: str | None
+    evidence_snapshots_json: str
+
+
+@dataclass(frozen=True)
 class SourceDocuments:
     """Small JSON evidence for an artifact, optionally supplied from a saved attempt."""
 
@@ -167,6 +182,21 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
         if path.exists():
             with path.open("rb") as stream:
                 documents[name] = stream.read()
+    paths = {**outcome.get("planned_evidence", {}), **((outcome.get("result") or {}).get("evidence") or {})}
+    for stage in ("assessment_inputs", "assessment_judgments"):
+        if stage not in paths:
+            continue
+        filenames = (
+            ("manifest.json", "telemetry.json", "curation.json")
+            if stage == "assessment_inputs"
+            else ("manifest.json", "telemetry.json")
+        )
+        for filename in filenames:
+            path = StoragePath(paths[stage]) / filename
+            if path.exists():
+                documents[f"{stage}/{filename}"] = path.read_bytes()
+    if "assessment_report" in paths and StoragePath(paths["assessment_report"]).exists():
+        documents["assessment_report.json"] = StoragePath(paths["assessment_report"]).read_bytes()
     parsed, errors = _parsed_documents(documents)
     telemetry = parsed.get(TELEMETRY_FILENAME, {})
     attempt = telemetry.get("attempt_started_at")
@@ -183,6 +213,9 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
         applicability = ManifestEvidence.UNCONFIRMED
     elif outcome["status"] not in ("failed", "running"):
         applicability = ManifestEvidence.CURRENT_ATTEMPT if current else ManifestEvidence.RETAINED_ARTIFACT
+    elif "assessment_inputs" in paths and parsed.get(".artifact.json", {}).get("result") is not None:
+        # A failed downstream judgment does not invalidate its completed curation dependency.
+        applicability = ManifestEvidence.CURRENT_ATTEMPT if current else ManifestEvidence.RETAINED_ARTIFACT
     elif current and telemetry["status"] == "completed":
         applicability = ManifestEvidence.CURRENT_ATTEMPT
     else:
@@ -191,7 +224,8 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
 
 
 def _curation_root(outcome: dict[str, Any]) -> StoragePath:
-    manifest = ((outcome.get("result") or {}).get("evidence") or {}).get("manifest")
+    paths = {**outcome.get("planned_evidence", {}), **((outcome.get("result") or {}).get("evidence") or {})}
+    manifest = paths.get("manifest")
     return StoragePath(manifest).parent if manifest is not None else StoragePath(outcome["path"])
 
 
@@ -233,6 +267,7 @@ def append_curation_catalog(
         store.table("runs", primary_key=("run_id",), schema=arrow_schema(CurationRun))
         store.table("sources", primary_key=("run_id", "name"), schema=arrow_schema(CurationSource))
         store.table("phases", primary_key=("run_id", "name", "ordinal"), schema=arrow_schema(CurationPhase))
+        store.table("assessment_runs", primary_key=("run_id", "name"), schema=arrow_schema(CurationAssessment))
         with store.transaction() as transaction:
             report_uri = transaction.write_object(f"runs/{run_id}/report.json", report_bytes)
             transaction.table("runs").add(
@@ -343,6 +378,36 @@ def append_curation_catalog(
                     controls_inconsistent=counts.get("inconsistent", 0) if counts is not None else None,
                 )
                 transaction.table("sources").add(asdict(source))
+                paths = {**outcome.get("planned_evidence", {}), **result.get("evidence", {})}
+                assessment_report = parsed.get("assessment_report.json")
+                if "assessment_report" not in paths:
+                    assessment_status = "skipped"
+                    assessment_reason = f"Assessment disabled in {source.mode} mode"
+                elif outcome["status"] in ("failed", "running", "queued") or assessment_report is None:
+                    assessment_status = "failed"
+                    assessment_reason = outcome.get("error") or "Assessment report missing or invalid"
+                else:
+                    assessment_status = "complete"
+                    assessment_reason = None
+                transaction.table("assessment_runs").add(
+                    asdict(
+                        CurationAssessment(
+                            run_id=run_id,
+                            name=outcome["name"],
+                            source_id=source_ids.get(outcome["name"]),
+                            pipeline_key=outcome.get("pipeline_key"),
+                            status=assessment_status,
+                            reason=assessment_reason,
+                            report_path=paths.get("assessment_report"),
+                            report_json=_json(assessment_report) if assessment_report is not None else None,
+                            inputs_root=paths.get("assessment_inputs"),
+                            judgments_root=paths.get("assessment_judgments"),
+                            evidence_snapshots_json=_json(
+                                {name: uri for name, uri in snapshots.items() if name.startswith("assessment_")}
+                            ),
+                        )
+                    )
+                )
                 for ordinal, phase in enumerate(telemetry.get("phases", [])):
                     transaction.table("phases").add(
                         asdict(

@@ -19,7 +19,7 @@ from threading import Lock
 from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.lazy import ArtifactStep, artifact_identity, run
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.models import SourceStatus
 from zephyr.context import ZephyrContext
@@ -94,6 +94,7 @@ class SourceOutcome:
     error: str | None = None
     result: PipelineResult | None = None
     planned_evidence: dict[str, str] = field(default_factory=dict)
+    pipeline_key: str | None = None
 
 
 class CampaignFailed(RuntimeError):
@@ -212,6 +213,7 @@ def run_campaign(
             step.path(),
             OutcomeStatus.QUEUED,
             planned_evidence=(evidence_paths or {}).get(step.name, {}),
+            pipeline_key=artifact_identity(step),
         )
         for step in steps
     }
@@ -266,7 +268,11 @@ def run_campaign(
                         logger.exception("Source failed: %s", step.name)
                         outcome = SourceOutcome(step.name, step.path(), OutcomeStatus.FAILED, error_chain(error))
                     with report_lock:
-                        outcomes[step.name] = replace(outcome, planned_evidence=outcomes[step.name].planned_evidence)
+                        outcomes[step.name] = replace(
+                            outcome,
+                            planned_evidence=outcomes[step.name].planned_evidence,
+                            pipeline_key=outcomes[step.name].pipeline_key,
+                        )
                         write_report(CampaignStatus.RUNNING)
     except BaseException:
         write_report(CampaignStatus.FAILED)

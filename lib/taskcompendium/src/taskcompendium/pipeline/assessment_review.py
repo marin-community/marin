@@ -111,6 +111,7 @@ def _request(packet: dict[str, Any], *, curation: dict[str, Any], rubric: str, m
                             "curation": curation,
                         },
                         ensure_ascii=False,
+                        sort_keys=True,
                     ),
                 },
             ],
@@ -157,7 +158,7 @@ def _valid_completion(output: str, task_id: str, *, packets: dict[str, dict[str,
 
 def _grade_shard(
     rows: Iterator[dict[str, Any]],
-    _: ShardInfo,
+    shard: ShardInfo,
     *,
     curation: dict[str, Any],
     rubric: str,
@@ -166,6 +167,7 @@ def _grade_shard(
     cache_root: str,
     output_root: str,
 ) -> Iterator[dict[str, Any]]:
+    assert shard.total_shards == 1, "Assessment transport and traces require one inference shard per source"
     packets = {row["task_id"]: row for row in rows}
     pending = dict(packets)
     grades = {}
@@ -196,7 +198,7 @@ def _grade_shard(
             grades[record.task_id] = {
                 "task_id": record.task_id,
                 "cohort": packets[record.task_id]["cohort"],
-                "status": "reviewed" if value is not None else "unavailable",
+                "status": ReviewStatus.REVIEWED if value is not None else ReviewStatus.UNAVAILABLE,
                 "verdict": value.verdict if value is not None else "unknown",
                 "explanation": value.explanation if value is not None else record.detail,
                 "evidence_ids": list(value.evidence_ids) if value is not None else [],
@@ -255,5 +257,5 @@ def grade_assessment(
                 "inputs_root": inputs_root,
             },
         )
-        if counts["unavailable"]:
+        if counts[ReviewStatus.UNAVAILABLE]:
             raise IncompleteAssessment(f"{counts['unavailable']} judgments unavailable; retained at {output_root}")

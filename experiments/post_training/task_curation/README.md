@@ -90,9 +90,28 @@ Campaign evidence links point to `assessment_inputs`, `assessment_judgments`
 and `assessment_report`. Inputs contain a sample manifest, curation summary and
 packet parquet. Judgments contain grade parquet and paired request/response
 JSONL traces. A malformed or unavailable response is retried twice; remaining
-failures retain partial grades and fail the stage. Reruns reuse successful
+failures retain partial grades and fail the stage. Batch transport separately
+retries a failed HTTP request up to three times. Reruns reuse successful
 request-cache entries. Missing required evidence keeps the source's sampled
 quality unknown even when the model supplies a favorable opinion.
+The cohort label is unknown for an empty sample, unavailable judgments or a
+missing TaskSpec. Otherwise bad takes precedence over some_issues, unknown,
+and good. Read the verdict counts alongside this conservative label. Missing
+prior reviews are optional context; executed control coverage is reported
+separately. Excluded counts cover processed non-admitted verification rows;
+unprocessed input rows stay in the curation summary.
+
+`--curated-inventory FILE_OR_URL` reassesses retained FULL outputs without
+repeating conversion, panel review or controls. The inventory contains `sources`
+entries with `source` and `manifest` fields. Each adopted manifest must match
+the current source, dataset pin and recipe revision. Incomplete or gated
+curation remains visible in the assessment; model opinions cannot override it.
+Run large GCS-backed inputs in their storage region.
+
+Each campaign appends its reports and compact evidence to the FineStore catalog
+beside the campaign report. `assessment_runs` records ordinary pipeline keys,
+complete reports, failed attempts with partial evidence, and disabled assessments
+with a skip reason. Catalog source counts retain their full or SAMPLE scope.
 
 ### Harbor compatibility view
 

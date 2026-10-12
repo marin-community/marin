@@ -42,6 +42,7 @@ from experiments.post_training.task_curation.config import (
 )
 from experiments.post_training.task_curation.local import local_artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines
+from experiments.post_training.task_curation.reassessment import reassessment_input, retained_sources
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import runnable_sources
 
@@ -119,6 +120,7 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
 @click.option("--assess/--skip-assessment", default=None, help="Automatic for FULL; opt in for SAMPLE. QUICK skips it.")
 @click.option("--assessment-sample-size", type=click.IntRange(min=1), default=100, show_default=True)
+@click.option("--curated-inventory", help="Full-run inventory of retained source/manifest entries to reassess.")
 @click.option("--excluded-sample-size", type=click.IntRange(min=0), default=20, show_default=True)
 @click.option(
     "--assessment-rubric", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Extra rubric criteria."
@@ -177,6 +179,7 @@ def main(
     verification_sample_size: int,
     assess: bool | None,
     assessment_sample_size: int,
+    curated_inventory: str | None,
     excluded_sample_size: int,
     assessment_rubric: Path | None,
     report_path: str | None,
@@ -192,6 +195,8 @@ def main(
     selected = _selected_sources(sources)
     runtime = CampaignRuntime()
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
+    if curated_inventory is not None and (processing_mode != SourceProcessingMode.FULL or not assess):
+        raise click.UsageError("--curated-inventory requires FULL assessment")
     if cache_dir is not None:
         cache_dir = cache_dir.expanduser().resolve()
     if input_root is not None and local_files:
@@ -290,7 +295,9 @@ def main(
     assessment = None
     if assess:
         if review is None or recipe_settings.review_cache is None:
-            raise click.UsageError("Assessment requires --model-revision, --review-mode and a review cache")
+            raise click.UsageError(
+                "Assessment requires --model-revision, --review-mode and a review cache; use --skip-assessment to skip"
+            )
         rubric = ASSESSMENT_RUBRIC
         if assessment_rubric is not None:
             rubric += "\nAdditional criteria:\n" + assessment_rubric.read_text()
@@ -304,7 +311,14 @@ def main(
             scope.enter_context(local_artifact_prefix(str(cache_dir)))
             if report_path is None:
                 report_path = str(cache_dir / "campaigns/campaign.json")
-        steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]
+        if curated_inventory is None:
+            steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]
+        else:
+            retained = retained_sources(curated_inventory)
+            missing = selected.keys() - retained.keys()
+            if missing:
+                raise click.UsageError(f"Retained inventory is missing sources: {', '.join(sorted(missing))}")
+            steps = [reassessment_input(source, retained[source.name]) for source in selected.values()]
         evidence_paths = {}
         if assessment is not None:
             stages = [

@@ -12,15 +12,18 @@ from functools import partial
 from typing import Any
 
 import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.input_file import InputFileSpec
-from zephyr.readers import load_parquet
+from zephyr.readers import iter_parquet_row_groups, load_parquet, open_file
 
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
+from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.review import review_payload
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 
@@ -61,6 +64,7 @@ class AssessmentSampling:
     excluded: int = 20
     seed: int = 0
     max_packet_characters: int = 64_000
+    max_task_json_characters: int = 4_000_000
 
 
 @dataclass(frozen=True)
@@ -154,39 +158,76 @@ def _diagnostic_sample(groups: dict[str, tuple[int, list[dict]]], size: int, see
 
 
 def _selected_locations(path: str, *, task_ids: frozenset[str]) -> Iterator[tuple[str, RowLocation]]:
-    for index, row in enumerate(load_parquet(InputFileSpec(path, columns=["task_id"]))):
-        if row["task_id"] in task_ids:
-            yield row["task_id"], RowLocation(path, index)
+    offset = 0
+    values = pa.array(sorted(task_ids), type=pa.string())
+    for table in iter_parquet_row_groups(path, columns=["task_id"]):
+        matches = pc.call_function("is_in", [table["task_id"]], options=pc.SetLookupOptions(value_set=values))
+        indices = pc.call_function("indices_nonzero", [matches]).to_pylist()
+        for index in indices:
+            yield table["task_id"][index].as_py(), RowLocation(path, offset + index)
+        offset += len(table)
 
 
-def _read_row(location: RowLocation) -> dict[str, Any]:
-    return next(load_parquet(InputFileSpec(location.path, row_start=location.index, row_end=location.index + 1)))
+def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampling) -> dict[str, Any]:
+    evidence = {}
+    omissions = []
+    if view == "normalize":
+        task_json = row.pop("task_json")
+        if task_json is None:
+            omissions.append("task: no converted TaskSpec")
+        elif len(task_json) > sampling.max_task_json_characters:
+            omissions.append("task: encoded TaskSpec exceeds evidence budget")
+        else:
+            task = TaskSpec.model_validate_json(task_json)
+            if task.id != row["task_id"]:
+                raise ValueError(f"TaskSpec ID disagrees with row: {row['task_id']}")
+            evidence["task"] = review_payload(task)
+    evidence[view] = row
+    if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
+        evidence.pop("task", None)
+        omissions.append("task: projected evidence exceeds packet budget")
+    if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
+        evidence = {view: {"task_id": row["task_id"], "omitted": "section exceeds packet budget"}}
+        omissions.append(f"{view}: evidence exceeds packet budget")
+    return {"task_id": row["task_id"], "evidence": evidence, "omissions": omissions}
+
+
+def _selected_evidence(
+    file: tuple[str, str, dict[int, str]], *, sampling: AssessmentSampling
+) -> Iterator[dict[str, Any]]:
+    """Decode each selected row group once, projecting only selected records."""
+    view, path, indices = file
+    with open_file(path, block_size=1_048_576) as stream:
+        parquet = pq.ParquetFile(stream)
+        offset = 0
+        for group in range(parquet.num_row_groups):
+            count = parquet.metadata.row_group(group).num_rows
+            selected = {
+                index - offset: task_id for index, task_id in indices.items() if offset <= index < offset + count
+            }
+            offset += count
+            if not selected:
+                continue
+            table = parquet.read_row_group(group)
+            rows = table.take(pa.array(list(selected), type=pa.int64())).to_pylist()
+            for task_id, row in zip(selected.values(), rows, strict=True):
+                if row["task_id"] != task_id:
+                    raise ValueError(f"Selected row changed after ID scan: {task_id}")
+                yield _project_evidence(view, row, sampling)
 
 
 def _packet(
-    selected: dict[str, Any], *, locations: dict[str, dict[str, RowLocation]], sampling: AssessmentSampling
+    selected: dict[str, Any], *, records: dict[str, list[dict[str, Any]]], sampling: AssessmentSampling
 ) -> dict[str, Any]:
     task_id = selected["task_id"]
     evidence = {}
     omissions = []
-    for view, indexed in locations.items():
-        location = indexed.get(task_id)
-        if location is None:
+    for record in records.get(task_id, []):
+        evidence.update(record["evidence"])
+        omissions.extend(record["omissions"])
+    for view in ("normalize", "review", "verify"):
+        if view not in evidence:
             omissions.append(f"{view}: no row evidence")
-            continue
-        row = _read_row(location)
-        if view == "normalize":
-            task_json = row.pop("task_json")
-            if task_json is None:
-                omissions.append("task: no converted TaskSpec")
-            elif len(task_json) > sampling.max_packet_characters * 8:
-                omissions.append("task: encoded TaskSpec exceeds evidence budget")
-            else:
-                task = TaskSpec.model_validate_json(task_json)
-                if task.id != task_id:
-                    raise ValueError(f"TaskSpec ID disagrees with row: {task_id}")
-                evidence["task"] = review_payload(task)
-        evidence[view] = row
     # Previous reviews are opinions. Preserve them as a separate cited evidence section.
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence.pop("task", None)
@@ -197,7 +238,7 @@ def _packet(
     return {
         "task_id": task_id,
         "cohort": selected["cohort"],
-        "packet_json": json.dumps(evidence, ensure_ascii=False, allow_nan=False),
+        "packet_json": json.dumps(evidence, ensure_ascii=False, allow_nan=False, sort_keys=True),
         "omissions": omissions,
     }
 
@@ -259,12 +300,27 @@ def prepare_assessment(
                 if len({task_id for task_id, _ in pairs}) != len(pairs):
                     raise ValueError(f"Duplicate selected ID in {view}")
                 locations[view] = dict(pairs)
+        with telemetry.phase("evidence") as phase:
+            files: dict[tuple[str, str], dict[int, str]] = defaultdict(dict)
+            for view, indexed in locations.items():
+                for task_id, location in indexed.items():
+                    files[view, location.path][location.index] = task_id
+            projected = execute_phase(
+                context,
+                Dataset.from_list([(view, path, indices) for (view, path), indices in files.items()]).flat_map(
+                    partial(_selected_evidence, sampling=sampling)
+                ),
+                telemetry=phase,
+            ).results
+            records: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in projected:
+                records[row["task_id"]].append(row)
         with telemetry.phase("packets") as phase:
             paths = execute_phase(
                 context,
                 Dataset.from_list(selected)
                 .reshard(min(PACKET_SHARDS, max(1, len(selected))))
-                .map(partial(_packet, locations=locations, sampling=sampling))
+                .map(partial(_packet, records=records, sampling=sampling))
                 .write_parquet(str(StoragePath(output_root) / "packets/part-{shard:05d}.parquet"), schema=PACKET_SCHEMA),
                 telemetry=phase,
             ).results
@@ -280,6 +336,9 @@ def prepare_assessment(
                 "admitted_population": admitted_count,
                 "excluded_population": sum(count for count, _ in groups.values()),
                 "excluded_reasons": {reason: count for reason, (count, _) in groups.items()},
+                "population_scope": (
+                    "Admitted final rows and processed non-admitted verify rows; unprocessed rows excluded"
+                ),
                 "sample": [{"task_id": row["task_id"], "cohort": row["cohort"]} for row in selected],
                 "packet_paths": paths,
             },
@@ -297,8 +356,9 @@ def assessment_summary(inputs_root: str, judgments_root: str) -> dict[str, Any]:
     for cohort in Cohort:
         rows = [row for row in grades if row["cohort"] == cohort]
         counts = Counter(row["verdict"] for row in rows)
-        missing = sum(bool(packets[row["task_id"]]["omissions"]) for row in rows)
-        complete = all(row["status"] == "reviewed" for row in rows)
+        missing = sum("task" not in json.loads(packets[row["task_id"]]["packet_json"]) for row in rows)
+        omissions = sum(bool(packets[row["task_id"]]["omissions"]) for row in rows)
+        complete = all(row["status"] == ReviewStatus.REVIEWED for row in rows)
         grade = Verdict.UNKNOWN
         if rows and complete and not missing:
             if counts[Verdict.BAD]:
@@ -310,9 +370,10 @@ def assessment_summary(inputs_root: str, judgments_root: str) -> dict[str, Any]:
         cohorts[cohort] = {
             "population": inputs[f"{cohort}_population"],
             "sample_count": len(rows),
-            "reviewed": sum(row["status"] == "reviewed" for row in rows),
+            "reviewed": sum(row["status"] == ReviewStatus.REVIEWED for row in rows),
             "verdict_counts": dict(counts),
             "missing_evidence": missing,
+            "packets_with_omissions": omissions,
             "grade": grade,
             "examples": [row for row in rows if row["verdict"] != Verdict.GOOD][:5],
         }
@@ -321,6 +382,10 @@ def assessment_summary(inputs_root: str, judgments_root: str) -> dict[str, Any]:
         "source": inputs["source"],
         "scope": inputs["scope"],
         "basis": "sampled_model_opinions",
+        "grade_rule": (
+            "Empty sample, missing TaskSpec or unavailable judgments give unknown; "
+            "otherwise bad takes precedence over some_issues, then unknown, then good"
+        ),
         "assessment": cohorts,
         "curation": read_json(str(StoragePath(inputs_root) / "curation.json")),
         "model": judgments["model"],
