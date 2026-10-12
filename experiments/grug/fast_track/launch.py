@@ -193,6 +193,9 @@ class H100LadderRung:
     attn_res_remat_attention: bool = False
     device: str = "H100"
     nodes: int = 1
+    # Sequential local-expert rounds of the ragged EP transport (``moe_ragged_chunks``): fewer rounds, fewer
+    # collectives, at the cost of the transport buffers' peak memory.
+    moe_ragged_chunks: int = 2
     # Hero-scale memory: bf16 device params with a pinned-host fp32 master and offloaded optimizer state.
     hero_memory: bool = False
 
@@ -232,6 +235,8 @@ def _h100_ladder_rung(size: str) -> H100LadderRung:
             baseline_batch=1024,
             device="GB200",
             hero_memory=True,
+            # One round: 17.54 s/step vs 17.71 s with two at the hero gate (lc1-gb200-rc1 vs prof201), and it fits.
+            moe_ragged_chunks=1,
         )
     raise ValueError(f"size must be one of {list(LADDER_SIZES)}, got {size!r}")
 
@@ -268,6 +273,7 @@ def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelCo
         attn_res_layer_backward=rung.attn_res_layer_backward,
         kda_save_chunk_states=rung.kda_save_chunk_states,
         attn_res_remat_attention=rung.attn_res_remat_attention,
+        moe_ragged_chunks=rung.moe_ragged_chunks,
     )
 
 
