@@ -113,6 +113,25 @@ class _ExpertMlp(Protocol):
         self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "C H"]
     ) -> tuple[Float[Array, "C H"], Float[Array, "Echunk H I2"], Float[Array, "Echunk I H"], Float[Array, "C"]]: ...
 
+    def backward_parts(
+        self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "C H"]
+    ) -> tuple[
+        Float[Array, "C H"], Float[Array, "C"], tuple[jax.Array, ...], Callable[..., tuple[jax.Array, jax.Array]]
+    ]:
+        """``backward`` as ``(dx, <y, dy>, wgrad_args, wgrad)`` with ``wgrad(*wgrad_args) = (dw13, dw2)``, so the
+        caller can run the weight gradients after sending ``dx``."""
+        ...
+
+
+def _whole_backward_parts(expert_mlp, residuals, cotangent):
+    """``backward_parts`` of an expert MLP whose weight gradients come out of ``backward`` itself."""
+    dx, dw13, dw2, output_dot = expert_mlp.backward(residuals, cotangent)
+    return dx, output_dot, (dw13, dw2), _weight_grads_as_given
+
+
+def _weight_grads_as_given(dw13: jax.Array, dw2: jax.Array) -> tuple[jax.Array, jax.Array]:
+    return dw13, dw2
+
 
 @dataclasses.dataclass(frozen=True)
 class _RaggedDotExpertMlp:
@@ -144,6 +163,8 @@ class _RaggedDotExpertMlp:
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         out = self._apply(x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes)
         return out, (x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, out)
+
+    backward_parts = _whole_backward_parts
 
     def backward(self, residuals, cotangent):
         x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, out = residuals
@@ -178,6 +199,8 @@ class _FusedRelu2ExpertMlp:
             x_dispatch, moe_w13_local, moe_w2_local, active_group_sizes, implementation=self.implementation
         )
 
+    backward_parts = _whole_backward_parts
+
     def backward(self, residuals, cotangent):
         return relu2_ragged_mlp_backward(residuals, cotangent, implementation=self.implementation)
 
@@ -207,6 +230,8 @@ class _SerialPairExpertMlp:
             active_group_sizes,
         )
         return y1 + y2, (res_a, res_b, y1)
+
+    backward_parts = _whole_backward_parts
 
     def backward(self, residuals, cotangent):
         res_a, res_b, y1 = residuals
@@ -242,6 +267,8 @@ class _CuteExpertMlp:
         )
         return _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_interleaved, moe_w2_local, cumulative_group_sizes)
 
+    backward_parts = _whole_backward_parts
+
     def backward(self, residuals, cotangent):
         from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad_backward  # noqa: PLC0415
 
@@ -272,6 +299,15 @@ class _CuteRelu2ExpertMlp:
         from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_backward  # noqa: PLC0415
 
         return _relu2_expert_mlp_quack_backward(residuals, cotangent)
+
+    def backward_parts(self, residuals, cotangent):
+        from levanter.grug._moe.sonic_cute import (  # noqa: PLC0415
+            _relu2_expert_mlp_quack_backward_input,
+            _relu2_expert_mlp_quack_wgrads,
+        )
+
+        dx, output_dot, wgrad_args = _relu2_expert_mlp_quack_backward_input(residuals, cotangent)
+        return dx, output_dot, wgrad_args, _relu2_expert_mlp_quack_wgrads
 
 
 @functools.cache
@@ -477,6 +513,8 @@ class _ExpertLayout:
     chunk_experts: int
     chunk_capacity: int
     expert_mlp: _ExpertMlp
+    # Pin each chunk's expert weight gradients under its input cotangent's return all-to-all.
+    overlap_weight_grads: bool = False
 
     @property
     def chunks(self) -> int:
@@ -756,14 +794,29 @@ def _routed_experts_backward(
                 with jax.named_scope("overlap"):
                     side_grads = side_vjp(side_cotangent)
                 out_dispatch_cotangent, side_grads = jax.lax.optimization_barrier((out_dispatch_cotangent, side_grads))
-            x_dispatch_cotangent, w13_cotangent, w2_cotangent, row_output_dot = layout.expert_mlp.backward(
-                expert_mlp_residuals, out_dispatch_cotangent
-            )
-            # Chunks read disjoint rows of the sorted buffer, so each writes its rows of one
-            # shared cotangent buffer, and the rows no chunk writes are the dropped assignments.
-            dispatch_cotangent = jax.lax.ragged_all_to_all(
-                x_dispatch_cotangent, dispatch_cotangent, *plan.return_params, axis_name="expert"
-            )
+            if layout.overlap_weight_grads:
+                x_dispatch_cotangent, row_output_dot, wgrad_args, wgrad = layout.expert_mlp.backward_parts(
+                    expert_mlp_residuals, out_dispatch_cotangent
+                )
+                # The weight gradients need nothing the transport sends: tie their inputs to dx and their
+                # results to the received buffer, so they run while dx is in flight.
+                x_dispatch_cotangent, wgrad_args = jax.lax.optimization_barrier((x_dispatch_cotangent, wgrad_args))
+                dispatch_cotangent = jax.lax.ragged_all_to_all(
+                    x_dispatch_cotangent, dispatch_cotangent, *plan.return_params, axis_name="expert"
+                )
+                w13_cotangent, w2_cotangent = wgrad(*wgrad_args)
+                dispatch_cotangent, w13_cotangent, w2_cotangent = jax.lax.optimization_barrier(
+                    (dispatch_cotangent, w13_cotangent, w2_cotangent)
+                )
+            else:
+                x_dispatch_cotangent, w13_cotangent, w2_cotangent, row_output_dot = layout.expert_mlp.backward(
+                    expert_mlp_residuals, out_dispatch_cotangent
+                )
+                # Chunks read disjoint rows of the sorted buffer, so each writes its rows of one
+                # shared cotangent buffer, and the rows no chunk writes are the dropped assignments.
+                dispatch_cotangent = jax.lax.ragged_all_to_all(
+                    x_dispatch_cotangent, dispatch_cotangent, *plan.return_params, axis_name="expert"
+                )
             # Each row's <y, dy> travels back to its assignment's sorted position like y did.
             output_dot = jax.lax.ragged_all_to_all(
                 row_output_dot[:, None], output_dot, *plan.return_params, axis_name="expert"
@@ -808,6 +861,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
     expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
+    overlap_weight_grads: bool = False,
     serial_pair: bool = False,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
@@ -898,6 +952,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         chunk_capacity=chunk_capacity,
         input_dim=x_local.shape[1],
         expert_mlp=expert_mlp,
+        overlap_weight_grads=overlap_weight_grads,
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.

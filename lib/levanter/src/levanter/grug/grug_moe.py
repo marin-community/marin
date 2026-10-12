@@ -471,6 +471,7 @@ def moe_mlp(
     expert_remat: bool = True,
     overlap: MoeOverlapWork | None = None,
     ragged_expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
+    ragged_overlap_weight_grads: bool = False,
     expert_serial_pair: bool = False,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
@@ -507,6 +508,8 @@ def moe_mlp(
     that implementation's expert GEMMs on simulated MXFP8 operands (`levanter.grug.mxfp8`).
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
+    `ragged_overlap_weight_grads` (``ragged_all_to_all``) pins each round's expert weight gradients under its
+    input cotangent's return all-to-all (same math).
     `expert_serial_pair` (``ragged_all_to_all`` ungated experts only) runs each expert's two neuron halves
     in series: ``y1 = mlp_a(x)``, ``y = y1 + mlp_b(x + y1)``.
 
@@ -680,7 +683,10 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = partial(
-                _moe_mlp_ep_ragged_a2a_local, expert_chunks=ragged_expert_chunks, serial_pair=expert_serial_pair
+                _moe_mlp_ep_ragged_a2a_local,
+                expert_chunks=ragged_expert_chunks,
+                serial_pair=expert_serial_pair,
+                overlap_weight_grads=ragged_overlap_weight_grads,
             )
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local

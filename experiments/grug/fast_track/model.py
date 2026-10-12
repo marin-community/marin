@@ -61,6 +61,7 @@ from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.fast_track import attention_rows_probe, router_soft_select, trace_capture
+from experiments.grug.fast_track.attn_res_source_grads import accumulate_source_grads_local
 from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights
 from experiments.grug.fast_track.key_offset import (
     apply_lag_groups,
@@ -807,6 +808,9 @@ class GrugModelConfig:
     partials under ``scan_offload_partials``) and hand it to the backward's per-layer recompute, so the recompute
     skips the expert down projection's consumers: the return all-to-all and the combine (the hero's saved
     ``grug_moe_routed_output``; needs the expert-side routing-weight gradient). Same math."""
+    attn_res_fused_source_grads: bool = False
+    """``scan_layers`` backward: update the AttnRes source cotangents with one Pallas kernel per layer instead of
+    XLA's fusion, which re-reads every token's gate cotangent once per source (``attn_res_source_grads``)."""
     scan_layers: bool = False
     """Run the AttnRes layer stack as a ``jax.lax.scan`` over ``global_every``-layer units on a fixed-shape
     history (``_AttnResHistory``), each layer rematerialized in the backward, instead of unrolling every layer.
@@ -862,6 +866,9 @@ class GrugModelConfig:
     """Low-precision recipe for attention/KDA projections, the fused router-latent-shared projection (router
     columns excluded), the latent up-projection, the shared expert and the routed experts; see ``Fp8Recipe``."""
     moe_ragged_chunks: int = 2
+    moe_overlap_weight_grads: bool = False
+    """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
+    all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
     moe_serial_pair: bool = False  # ragged experts: neuron halves in series, y1 + mlp_b(x + y1)
     """Sequential local-expert chunks of the ``ragged_all_to_all`` backend (each a dispatch, expert MLP and
     return); fewer chunks mean fewer, larger collectives at more transport-buffer memory."""
@@ -2780,8 +2787,7 @@ def moe_and_shared_fused(
             router = jnp.einsum("td,de->te", x_flat, weights[0], out_sharding=_batch_spec())
             parts = [router, *parts]
     elif not part_inputs:
-        fused = jnp.einsum("td,de->te", x_flat, jnp.concatenate(weights, axis=1), out_sharding=_batch_spec())
-        parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1)
+        parts = list(_fused_projection(x_flat, tuple(weights)))
     else:
         # Some projections read another stream (attn_res_sum_inputs): one GEMM per projection.
         moe_names = ["router", "latent"]
@@ -3536,6 +3542,7 @@ def _run_expert_bank(
             overlap=overlap,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
             expert_serial_pair=cfg.moe_serial_pair,
+            ragged_overlap_weight_grads=cfg.moe_overlap_weight_grads,
         )
     if cfg.fp8_recipe != Fp8Recipe.NONE:
         raise ValueError("fp8_recipe supports ungated ReLU^2 expert banks only")
@@ -4595,20 +4602,58 @@ def _accumulate_source_grads(
     d_mixes: tuple[jax.Array, ...],
     schedule: _BlockSchedule,
     layer_index: jax.Array,
+    fused: bool = False,
 ) -> tuple[jax.Array, jax.Array]:
-    """Add one layer's gate cotangents to the history's source cotangent: ``weights[n] * d_mix`` per gate.
+    """Add one layer's gate cotangents to the history's source cotangent: ``weights[n] * d_mix`` per gate;
+    ``fused`` (``attn_res_fused_source_grads``) runs the stack update as one Pallas kernel.
 
     At a block boundary the slot was written from the incoming partial, so its cotangent moves onto
     ``d_partial`` and the slot's (overwritten) previous value gets none."""
     boundary, slot = _roll_slot(schedule, layer_index)
     d_slot = jax.lax.dynamic_index_in_dim(d_sources, slot, axis=0, keepdims=False).astype(jnp.float32)
-    acc = d_sources.astype(jnp.float32)
     for weights, d_mix in zip(gate_weights, d_mixes, strict=True):
         d_slot = d_slot + jax.lax.dynamic_index_in_dim(weights, slot, axis=0, keepdims=False)[..., None] * d_mix
-        acc = acc + weights[..., None] * d_mix[None]
     d_partial = d_partial + jnp.where(boundary, d_slot, 0).astype(d_partial.dtype)
+    if fused:
+        updated = _fused_source_grads(d_sources, gate_weights, d_mixes)
+        # The rolled slot's previous value gets no cotangent; only that one source is rewritten.
+        zeroed = jnp.where(boundary, jnp.zeros_like(updated[0]), jax.lax.dynamic_index_in_dim(updated, slot, 0, False))
+        return jax.lax.dynamic_update_index_in_dim(updated, zeroed, slot, axis=0), d_partial
+    acc = d_sources.astype(jnp.float32)
+    for weights, d_mix in zip(gate_weights, d_mixes, strict=True):
+        acc = acc + weights[..., None] * d_mix[None]
     rolled = boundary & (jnp.arange(d_sources.shape[0]) == slot)
     return jnp.where(rolled[:, None, None, None], 0, acc).astype(d_sources.dtype), d_partial
+
+
+def _fused_source_grads(
+    d_sources: Float[Array, "N B S D"], gate_weights: tuple[jax.Array, ...], d_mixes: tuple[jax.Array, ...]
+) -> Float[Array, "N B S D"]:
+    """``d_sources + sum_g weights_g[..., None] * d_mix_g[None]`` in the Pallas kernel, per batch shard."""
+    n, _, s, d = d_sources.shape
+    stack, rows, tokens = P(None, _BATCH_AXES, None, None), P(None, _BATCH_AXES, None), P(_BATCH_AXES, None, None)
+
+    def local(ds, ws, dms):
+        lb = ds.shape[1]
+        out = accumulate_source_grads_local(
+            ds.reshape(n, lb * s, d),
+            tuple(w.reshape(n, lb * s).astype(jnp.float32) for w in ws),
+            tuple(m.reshape(lb * s, d).astype(jnp.float32) for m in dms),
+        )
+        return out.reshape(n, lb, s, d)
+
+    kernel = jax.shard_map(
+        local,
+        mesh=get_abstract_mesh(),
+        in_specs=(stack, tuple(rows for _ in gate_weights), tuple(tokens for _ in d_mixes)),
+        out_specs=stack,
+        check_vma=False,
+    )
+    return kernel(
+        reshard(d_sources, stack),
+        tuple(reshard(w, rows) for w in gate_weights),
+        tuple(reshard(m, tokens) for m in d_mixes),
+    )
 
 
 class LayerSkip(NamedTuple):
@@ -4631,6 +4676,46 @@ class _ScanArgs(NamedTuple):
     eps: float
     route_key: jax.Array | None
     offload_partials: bool
+
+
+@jax.custom_vjp
+def _fused_projection(x: jax.Array, weights: tuple[jax.Array, ...]) -> tuple[jax.Array, ...]:
+    """``x @ w`` for every ``w`` of ``weights`` as one GEMM over their concatenation. The backward feeds each
+    part's cotangent to its own GEMMs (``dx = sum_i d_i w_i^T``, ``dw_i = x^T d_i``) instead of differentiating
+    the split, whose transpose would materialize the concatenated ``[T, sum widths]`` cotangent. Same math."""
+    fused = jnp.einsum("td,de->te", x, jnp.concatenate(weights, axis=1), out_sharding=_batch_spec())
+    return tuple(jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1))
+
+
+def _fused_projection_fwd(x: jax.Array, weights: tuple[jax.Array, ...]):
+    return _fused_projection(x, weights), (x, weights)
+
+
+def _fused_projection_bwd(residuals, d_parts: tuple[jax.Array, ...]):
+    x, weights = residuals
+    dx = functools.reduce(
+        jnp.add,
+        (
+            jnp.einsum(
+                "te,de->td",
+                d.astype(x.dtype),
+                w.astype(x.dtype),
+                preferred_element_type=jnp.float32,
+                out_sharding=_batch_spec(),
+            )
+            for d, w in zip(d_parts, weights, strict=True)
+        ),
+    )
+    dws = tuple(
+        jnp.einsum("td,te->de", x, d.astype(x.dtype), out_sharding=_partition_spec_of(w) or P(None, None)).astype(
+            w.dtype
+        )
+        for d, w in zip(d_parts, weights, strict=True)
+    )
+    return dx.astype(x.dtype), dws
+
+
+_fused_projection.defvjp(_fused_projection_fwd, _fused_projection_bwd)
 
 
 @jax.custom_vjp
@@ -4800,7 +4885,13 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
                 )
                 d_layer, d_logits, d_partial, d_q, d_mixes = vjp_fn((d_history.logits, d_history.partial))
                 d_sources, d_partial = _accumulate_source_grads(
-                    d_history.sources, d_partial, gate_weights, d_mixes, plan.schedule, layer_index
+                    d_history.sources,
+                    d_partial,
+                    gate_weights,
+                    d_mixes,
+                    plan.schedule,
+                    layer_index,
+                    fused=layer_static.attn.cfg.attn_res_fused_source_grads,
                 )
                 d_layer, d_history, d_q = jax.lax.optimization_barrier(
                     (d_layer, _AttnResHistory(d_sources, d_logits, d_partial), d_q)

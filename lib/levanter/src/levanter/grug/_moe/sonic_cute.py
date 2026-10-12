@@ -170,14 +170,27 @@ def _relu2_expert_mlp_quack_backward(res, dy):
 
     Returns ``(dx, dw_up, dw_down, output_dot_cotangent)``.
     """
+    dx, output_dot_cotangent, wgrad_args = _relu2_expert_mlp_quack_backward_input(res, dy)
+    dw_up, dw_down = _relu2_expert_mlp_quack_wgrads(*wgrad_args)
+    return dx, dw_up, dw_down, output_dot_cotangent
+
+
+def _relu2_expert_mlp_quack_backward_input(res, dy):
+    """The input half of ``_relu2_expert_mlp_quack_backward``: ``(dx, <y, dy>, wgrad_args)``, where
+    ``_relu2_expert_mlp_quack_wgrads(*wgrad_args)`` gives ``(dw_up, dw_down)``."""
     x_dispatch, w_up, w_down, pre, cu = res
     d_pre, post, output_dot_cotangent = quack_dact_grouped_gemm(
         dy, w_down, pre, cu, activation=_QUACK_RELU2, **_QUACK_GATED_KW
     )
-    dw_down = quack_grouped_wgrad(post, dy, cu, **_QUACK_WGRAD_KW)
     dx = quack_grouped_gemm(d_pre, w_up, cu, b_major="k", **_QUACK_GROUPED_KW)
-    dw_up = quack_grouped_wgrad(x_dispatch, d_pre, cu, **_QUACK_WGRAD_KW)
-    return dx, dw_up, dw_down, output_dot_cotangent
+    return dx, output_dot_cotangent, (x_dispatch, d_pre, post, dy, cu)
+
+
+def _relu2_expert_mlp_quack_wgrads(x_dispatch, d_pre, post, dy, cu):
+    """``(dw_up, dw_down)`` of ``_relu2_expert_mlp_quack_backward``."""
+    return quack_grouped_wgrad(x_dispatch, d_pre, cu, **_QUACK_WGRAD_KW), quack_grouped_wgrad(
+        post, dy, cu, **_QUACK_WGRAD_KW
+    )
 
 
 def _moe_mlp_local_sonic_cute(
