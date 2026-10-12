@@ -97,3 +97,57 @@ def test_premature_close_is_not_reinforced_as_a_valid_repair():
         decode=text,
     )
     assert target is None
+
+
+@pytest.mark.parametrize("ending", ['"', '"]', '"}'])
+def test_split_utf8_character_preserves_exact_repair_history(ending):
+    prefix = '["'
+    response = list(("笹" + ending).encode())
+    target = verified_closure_target(
+        list(prefix.encode()),
+        response,
+        structure_prefix=prefix,
+        inspect=json_closure_state,
+        verify_complete=lambda value: json.loads(value) == ["笹"],
+        encode=lambda value: list(value.encode()),
+        decode=lambda tokens: bytes(tokens).decode(errors="replace"),
+    )
+    if ending == '"]':
+        assert target is None
+    else:
+        assert target is not None
+        assert target.response_position == 4
+        assert target.repair_token_ids == (ord("]"),)
+        assert target.kind == (
+            ClosureTargetKind.WRONG_TOKEN if ending.endswith("}") else ClosureTargetKind.MISSING_SUFFIX
+        )
+
+
+def test_truncated_utf8_does_not_create_repair_at_unstable_boundary():
+    prefix = '["笹'
+    target = verified_closure_target(
+        list(prefix.encode()),
+        [0xE7],
+        structure_prefix=prefix,
+        inspect=json_closure_state,
+        verify_complete=lambda value: json.loads(value) == ["笹"],
+        encode=lambda value: list(value.encode()),
+        decode=lambda tokens: bytes(tokens).decode(errors="replace"),
+    )
+    assert target is None
+
+
+def test_rewrite_of_stable_text_still_rejects_supervision():
+    def decode(tokens):
+        return '["x' if tokens[-1] == 1000 else text(tokens)
+
+    with pytest.raises(ValueError, match="rewrites its conditioning prefix"):
+        verified_closure_target(
+            codepoints('["a'),
+            [1000],
+            structure_prefix='["a',
+            inspect=json_closure_state,
+            verify_complete=lambda value: json.loads(value) == ["a"],
+            encode=codepoints,
+            decode=decode,
+        )

@@ -43,8 +43,8 @@ def verified_closure_target(
 
     For FTPO, retain history through ``response_position`` exclusively. For
     missing-suffix SFT, append the repair there and mask all preceding tokens.
-    No sampled history is re-encoded. Ambiguous decoded token boundaries raise
-    rather than becoming supervision.
+    No sampled history is re-encoded. Incomplete Unicode boundaries are not
+    supervision positions; rewrites of stable decoded history raise.
     """
     prompt = list(prompt_ids)
     response = list(response_ids)
@@ -62,6 +62,10 @@ def verified_closure_target(
         text = decode(prompt + response[: index + 1])
         if not text.startswith(previous_text):
             raise ValueError("Decoded response rewrites its conditioning prefix")
+        # Byte-split characters decode to a temporary replacement character.
+        # Wait for a stable boundary without changing the sampled token history.
+        if text.endswith("\ufffd"):
+            continue
         next_structure = structure_prefix + text[len(prompt_text) :]
         next_state = inspect(next_structure)
         if next_state.completion_offset is not None:
@@ -80,6 +84,8 @@ def verified_closure_target(
     repair = encode(suffix)
     conditioning = prompt + response[:position]
     conditioning_text = decode(conditioning)
+    if conditioning_text != previous_text:
+        return None
     if not repair or decode(conditioning + repair) != conditioning_text + suffix:
         raise ValueError("Repair tokens do not preserve history and verified suffix")
     for stop in range(1, len(repair) + 1):
