@@ -1591,13 +1591,18 @@ def test_fp8_dispatch_matches_full_precision_dispatch_across_shards():
 
 
 @pytest.mark.timeout(180)
-def test_pooled_wave_overlap_work_matches_running_it_separately():
+@pytest.mark.parametrize("implementation", ["fixed_pooled_wave_all_to_all", "ragged_all_to_all"])
+def test_overlap_work_matches_running_it_separately(implementation: MoeImplementation):
     """Work scheduled under the dispatch all-to-all (``MoeOverlapWork``) keeps the values and gradients of
     running it outside the MoE, and is pinned by barriers in both the forward and the backward."""
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
+    script = (
+        f"""
+        IMPLEMENTATION = {implementation!r}
+    """
+        + """
         import jax
         import jax.numpy as jnp
         import numpy as np
@@ -1635,7 +1640,7 @@ def test_pooled_wave_overlap_work_matches_running_it_separately():
         def loss(overlapped, x, combine_weights, w_up_gate, w_down, side_w):
             kwargs = dict(
                 activation=jax.nn.silu,
-                implementation="fixed_pooled_wave_all_to_all",
+                implementation=IMPLEMENTATION,
                 mesh=mesh,
                 capacity_factor=4.0,
                 pooled_transport_capacity_factor=4.0,
@@ -1662,16 +1667,21 @@ def test_pooled_wave_overlap_work_matches_running_it_separately():
         args = (x, combine_weights, w_up_gate, w_down, side_w)
         with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
             grad_fn = jax.value_and_grad(loss, argnums=(1, 2, 3, 4, 5))
+            jaxpr = jax.make_jaxpr(grad_fn, static_argnums=0)(True, *args)
+            # Two barriers around the dispatch all-to-all in the forward and two in the backward (the pooled
+            # path's are the forward pair's transposes; the ragged path pins its backward under the return
+            # all-to-all in its custom VJP, and adds one more that serializes its two default expert chunks).
+            expected_barriers = {"fixed_pooled_wave_all_to_all": 4, "ragged_all_to_all": 5}[IMPLEMENTATION]
+            assert count_barriers(jaxpr.jaxpr) == expected_barriers
+            if IMPLEMENTATION == "ragged_all_to_all" and jax.default_backend() == "cpu":
+                raise SystemExit(0)  # XLA:CPU cannot run ragged-all-to-all; the values are checked on GPU
             expected_loss, expected_gradients = jax.jit(grad_fn, static_argnums=0)(False, *args)
             actual_loss, actual_gradients = jax.jit(grad_fn, static_argnums=0)(True, *args)
-            jaxpr = jax.make_jaxpr(grad_fn, static_argnums=0)(True, *args)
-
-        # Two barriers around the dispatch all-to-all in the forward, and their two transposes.
-        assert count_barriers(jaxpr.jaxpr) == 4
         np.testing.assert_allclose(actual_loss, expected_loss, rtol=1e-5)
         for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
             np.testing.assert_allclose(actual_gradient, expected_gradient, rtol=1e-5, atol=1e-5)
     """
+    )
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(script)],
         env=env,

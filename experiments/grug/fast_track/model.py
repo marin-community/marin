@@ -264,6 +264,18 @@ class UngatedExpertActivation(StrEnum):
     RMS-normalized per token over the expert's hidden units. Fixed coefficients (Motif learns them per expert)."""
 
 
+class SharedExpertPlacement(StrEnum):
+    """Where the shared experts run relative to the routed experts (same math in every placement)."""
+
+    FUSED = "fused"
+    """Gate/up projections share the router/latent input GEMM."""
+    UNFUSED = "unfused"
+    """A separate GEMM, so the scheduler may (but need not) run the shared MLP under the EP transports."""
+    OVERLAP = "overlap"
+    """The whole shared MLP is pinned under the first EP dispatch all-to-all by optimization barriers
+    (``MoeOverlapWork``), forward and backward."""
+
+
 class Fp8Recipe(StrEnum):
     """Low-precision recipe for the projection and expert GEMMs (embeddings, router, lm head, norms, attention
     core and the optimizer stay in their usual precision)."""
@@ -700,11 +712,8 @@ class GrugModelConfig:
     kda_state_grads: StateGrads = StateGrads.XLA
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
     kda_state_block_v: int = 32
-    moe_shared_unfused: bool = False
-    """Compute the shared experts apart from the fused router/latent input GEMM, so the scheduler can overlap the
-    shared MLP with the routed experts' all-to-all transports (the GB200 hero's shared/transport overlap). Same
-    math; one more GEMM launch per layer."""
     """d_v tile of the fused KDA state pass: 64 with ``kda_state_grads=xla`` is 8% faster on GB200 (same math)."""
+    moe_shared_placement: SharedExpertPlacement = SharedExpertPlacement.FUSED
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a learned per-sublayer
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
@@ -898,6 +907,8 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
+        if self.moe_shared_placement != SharedExpertPlacement.FUSED and self.fp8_recipe != Fp8Recipe.NONE:
+            raise ValueError("fp8_recipe covers only moe_shared_placement=fused shared experts")
         if unknown := set(()) - set(LATENT_MIX_SITES):
             raise ValueError(f"latent_mix_sites: unknown sites {sorted(unknown)}")
         attn_latents = {
@@ -2444,7 +2455,7 @@ class MoEMLP(eqx.Module):
         noise of ``moe_gumbel_tau`` to the expert selection; ``router_tok_rows`` are the tokens' rows of the
         shared ``router_token_bias_rank`` table and ``router_seed_bias`` the ``router_bias_seed`` logit bias.
         ``overlap`` is ``[T, D]`` token-local work run under the first bank's dispatch all-to-all
-        (``moe_shared_overlap``) and added to the output."""
+        (``SharedExpertPlacement.OVERLAP``) and added to the output."""
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
@@ -2673,6 +2684,25 @@ def _shared_experts_tail(
     return shared_out
 
 
+def _shared_experts_local(
+    tokens: tuple[jax.Array, jax.Array],
+    params: tuple[jax.Array, jax.Array, jax.Array | None],
+    *,
+    cfg: "GrugModelConfig",
+    widths: tuple[int, ...],
+    gated: bool,
+) -> jax.Array:
+    """The shared experts on one EP shard's tokens (``SharedExpertPlacement.OVERLAP``): ``tokens`` is
+    (shared-expert input, MoE input), ``params`` the concatenated gate/up weights, the concatenated down weights
+    and the gate."""
+    shared_in, x_flat = tokens
+    w_gate_up, w_down, shared_gate = params
+    proj = jnp.einsum("td,de->te", shared_in, w_gate_up)
+    parts = jnp.split(proj, list(itertools.accumulate(widths[:-1])), axis=1)
+    num_shared = len(widths) // 2 if gated else len(widths)
+    return _shared_experts_tail(cfg, parts, num_shared, gated, w_down, x_flat, shared_gate, None)
+
+
 def moe_and_shared_fused(
     mlp: MoEMLP,
     shared: tuple[DenseMLP, ...],
@@ -2693,8 +2723,8 @@ def moe_and_shared_fused(
     run as one ``[D, sum widths]`` GEMM; the shared experts' down-projections run as one GEMM over
     their concatenated hidden units (the sum over shared experts happens in its accumulator). Same
     math as ``mlp(x) + sum(expert(x) for expert in shared)`` (~3% faster at d512); parameters stay
-    separate leaves. ``moe_shared_overlap`` instead runs the whole shared-expert MLP under the EP dispatch
-    all-to-all (``MoeOverlapWork``), so only the router and latent projections stay fused.
+    separate leaves. ``moe_shared_placement`` can move the shared experts out of the fused GEMM
+    (``SharedExpertPlacement``).
     """
     b, s, _ = x.shape
     x_flat = rearrange(x, "b s d -> (b s) d")
@@ -2706,11 +2736,21 @@ def moe_and_shared_fused(
     ]
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
     gate = None if shared_gate is None else unshard(shared_gate)
+    placement = mlp.cfg.moe_shared_placement
     overlap = None
-    # moe_shared_unfused: the shared experts' projections leave the fused input GEMM, so the shared MLP depends
-    # only on x and the scheduler can run it under the routed experts' dispatch and combine transports.
-    unfused = mlp.cfg.moe_shared_unfused and not part_inputs and mlp.cfg.fp8_recipe == Fp8Recipe.NONE
-    weights = moe_weights if unfused else moe_weights + shared_weights
+    if placement == SharedExpertPlacement.OVERLAP:
+        shared_in = (
+            rearrange(part_inputs["shared"], "b s d -> (b s) d") if part_inputs and "shared" in part_inputs else x_flat
+        )
+        overlap = MoeOverlapWork(
+            functools.partial(
+                _shared_experts_local, cfg=mlp.cfg, widths=tuple(w.shape[1] for w in shared_weights), gated=gated
+            ),
+            (shared_in, x_flat),
+            (jnp.concatenate(shared_weights, axis=1), w_down, gate),
+        )
+    unfused = placement == SharedExpertPlacement.UNFUSED and not part_inputs
+    weights = moe_weights if unfused or overlap is not None else moe_weights + shared_weights
     router_in_fused = bool(moe_weights)
     if not part_inputs and mlp.cfg.fp8_recipe != Fp8Recipe.NONE:
         # The router stays in high precision; the rest of the fused projection takes the low-precision recipe.
@@ -2748,6 +2788,8 @@ def moe_and_shared_fused(
 
     routed, stats = routed_mlp()
     if overlap is not None:
+        if shadow is not None:
+            raise ValueError("moe_shadow_width / moe_compress need moe_shared_placement other than overlap")
         return routed, stats
     if unfused:
         parts = [*parts, *(jnp.einsum("td,de->te", x_flat, w, out_sharding=_batch_spec()) for w in shared_weights)]
@@ -5575,7 +5617,7 @@ class Transformer(eqx.Module):
             raise ValueError("neuron_inputs needs MoE layers")
         _, metrics = self(token_ids, mask=mask, return_routing=True)
         if SHARED_PRE_KEY not in metrics:
-            raise ValueError("neuron_inputs needs ungated, fused shared experts (no moe_shared_overlap)")
+            raise ValueError("neuron_inputs needs ungated shared experts outside moe_shared_placement=overlap")
         return metrics[ROUTING_SELECTED_KEY], metrics[ROUTED_INPUT_KEY], metrics[SHARED_PRE_KEY]
 
     def layer_kinds(self) -> tuple[str, ...]:

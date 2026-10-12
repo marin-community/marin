@@ -514,8 +514,8 @@ def moe_mlp(
     ``scatter`` local path and the ``fixed_pooled_wave_all_to_all`` / ``ragged_all_to_all`` EP paths.
 
     `overlap` is independent token-local work (see `MoeOverlapWork`) whose output is appended as the last
-    return value. The expert-parallel pooled-wave path runs it under the dispatch all-to-all; every other
-    path just computes it.
+    return value. The expert-parallel pooled-wave and ragged paths run it under the dispatch all-to-all (and the
+    ragged path its backward under the return-cotangent all-to-all); every other path just computes it.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
     if expert_serial_pair and resolved_implementation != "ragged_all_to_all":
@@ -594,8 +594,18 @@ def moe_mlp(
             )
 
     ep_active = has_expert_axis and expert_axis_size > 1
-    if overlap is not None and ep_active and resolved_implementation != "fixed_pooled_wave_all_to_all":
-        raise ValueError(f"overlap requires fixed_pooled_wave_all_to_all under EP, got {resolved_implementation!r}")
+    if (
+        overlap is not None
+        and ep_active
+        and resolved_implementation
+        not in (
+            "fixed_pooled_wave_all_to_all",
+            "ragged_all_to_all",
+        )
+    ):
+        raise ValueError(
+            f"overlap requires fixed_pooled_wave_all_to_all or ragged_all_to_all under EP, got {resolved_implementation!r}"
+        )
     if overlap is not None and not ep_active:
         # No EP all-to-all to hide under: run the work in place and append it to the result.
         result = moe_mlp(

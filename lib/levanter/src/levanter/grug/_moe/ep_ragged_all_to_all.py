@@ -26,7 +26,7 @@ import logging
 import math
 from collections.abc import Callable
 from enum import auto, IntEnum
-from typing import NamedTuple, Protocol
+from typing import Any, NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
@@ -550,8 +550,12 @@ def _routed_experts_forward(
     moe_w2_local: Float[Array, "Elocal I H"],
     routing: _ExpertRouting,
     layout: _ExpertLayout,
-) -> tuple[Float[Array, "Tlocal H"], tuple[_ChunkResiduals, ...]]:
+    overlap: "_OverlapInputs | None" = None,
+) -> tuple[Float[Array, "Tlocal H"], tuple[_ChunkResiduals, ...], Any, Any]:
+    """Returns ``(out, chunk_residuals, side, side_vjp)``; ``side`` (and its pullback) is the ``overlap`` work's
+    output, run under the first chunk's dispatch all-to-all (None without ``overlap``)."""
     assignments = sorted_x.shape[0]
+    side = side_vjp = None
     plans = _chunk_plans(routing, layout)
     # Rows no chunk writes are the dropped assignments, which the combine skips. The experts may
     # write a width O other than the H they read (``latent_out_dim``).
@@ -575,7 +579,16 @@ def _routed_experts_forward(
                 # to it. (Dispatching chunk c+1 during chunk c's MLP measured 3 ms per layer
                 # slower in a rematted four-GPU layer scan.)
                 source, _ = jax.lax.optimization_barrier((sorted_x, chunk_residuals[-1].expert_mlp))
-            x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
+            if overlap is not None and chunk_index == 0:
+                # Optimization barriers tie the overlap's inputs to the dispatch source and its output to the
+                # dispatched rows, so it runs while the dispatch all-to-all is in flight (as the pooled-wave path).
+                source, tokens = jax.lax.optimization_barrier((source, overlap.tokens))
+                x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
+                with jax.named_scope("overlap"):
+                    side, side_vjp = jax.vjp(overlap.fn, tokens, overlap.params)
+                x_dispatch, side = jax.lax.optimization_barrier((x_dispatch, side))
+            else:
+                x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
             out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
                 x_dispatch,
@@ -599,7 +612,15 @@ def _routed_experts_forward(
             tokens_per_shard=layout.tokens_per_shard,
             topk=layout.topk,
         ).astype(sorted_x.dtype)
-    return out, tuple(chunk_residuals)
+    return out, tuple(chunk_residuals), side, side_vjp
+
+
+class _OverlapInputs(NamedTuple):
+    """``MoeOverlapWork`` inside the EP shard: ``fn(tokens, params)``."""
+
+    fn: Callable[[tuple[jax.Array, ...], Any], jax.Array]
+    tokens: tuple[jax.Array, ...]
+    params: Any
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(5,))
@@ -629,17 +650,58 @@ def _routed_experts(
     output is saved for the backward, a recompute for the backward runs only the dispatch and
     the gate/up projection.
     """
-    out, _residuals = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+    out, _residuals, _, _ = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
     return out
 
 
 def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout):
-    out, chunk_residuals = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+    out, chunk_residuals, _, _ = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
+    )
     return out, (weights, routing, chunk_residuals)
 
 
 def _routed_experts_bwd(layout, residuals, out_cotangent):
     weights, routing, chunk_residuals = residuals
+    return _routed_experts_backward(layout, weights, routing, chunk_residuals, out_cotangent)[0]
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(7, 8))
+def _routed_experts_overlapped(
+    sorted_x, weights, moe_w13_local, moe_w2_local, routing, overlap_tokens, overlap_params, layout, overlap_fn
+):
+    """``_routed_experts`` plus ``overlap_fn(overlap_tokens, overlap_params)`` run under the first dispatch
+    all-to-all, and its backward under the first return-cotangent all-to-all. Returns ``(out, side)``."""
+    overlap = _OverlapInputs(overlap_fn, overlap_tokens, overlap_params)
+    out, _, side, _ = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap)
+    return out, side
+
+
+def _routed_experts_overlapped_fwd(
+    sorted_x, weights, moe_w13_local, moe_w2_local, routing, overlap_tokens, overlap_params, layout, overlap_fn
+):
+    overlap = _OverlapInputs(overlap_fn, overlap_tokens, overlap_params)
+    out, chunk_residuals, side, side_vjp = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap
+    )
+    return (out, side), (weights, routing, chunk_residuals, side_vjp)
+
+
+def _routed_experts_overlapped_bwd(layout, overlap_fn, residuals, cotangents):
+    del overlap_fn
+    weights, routing, chunk_residuals, side_vjp = residuals
+    out_cotangent, side_cotangent = cotangents
+    routed, (d_tokens, d_params) = _routed_experts_backward(
+        layout, weights, routing, chunk_residuals, out_cotangent, side_vjp, side_cotangent
+    )
+    return (*routed, d_tokens, d_params)
+
+
+def _routed_experts_backward(
+    layout, weights, routing, chunk_residuals, out_cotangent, side_vjp=None, side_cotangent=None
+):
+    """Cotangents of ``(sorted_x, weights, moe_w13_local, moe_w2_local, routing)``, and with ``side_vjp`` the
+    overlap's ``(d_tokens, d_params)``, pulled back under the first return-cotangent all-to-all."""
     assignments = routing.sorted_indices.shape[0]
     out_dim = out_cotangent.shape[1]
     weights_f32 = weights.astype(jnp.float32)
@@ -683,10 +745,17 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
                 plan.return_params.recv_sizes,
                 site=_TransportBufferSite.RETURN_COTANGENT,
             )
+            first = chunk_index == layout.chunks - 1
+            if side_vjp is not None and first:
+                returned_cotangent, side_cotangent = jax.lax.optimization_barrier((returned_cotangent, side_cotangent))
             # Each transport's cotangent travels back along its mirror transfer.
             out_dispatch_cotangent = jax.lax.ragged_all_to_all(
                 returned_cotangent, out_dispatch_init, *plan.dispatch_params, axis_name="expert"
             )
+            if side_vjp is not None and first:
+                with jax.named_scope("overlap"):
+                    side_grads = side_vjp(side_cotangent)
+                out_dispatch_cotangent, side_grads = jax.lax.optimization_barrier((out_dispatch_cotangent, side_grads))
             x_dispatch_cotangent, w13_cotangent, w2_cotangent, row_output_dot = layout.expert_mlp.backward(
                 expert_mlp_residuals, out_dispatch_cotangent
             )
@@ -710,16 +779,18 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
         weights_cotangent = jnp.where(
             divisible, assignment_output_dot / jnp.where(divisible, weights_f32, 1), 0
         ).astype(weights.dtype)
-    return (
+    routed = (
         dispatch_cotangent,
         weights_cotangent,
         jnp.concatenate(moe_w13_cotangents[::-1], axis=0),
         jnp.concatenate(moe_w2_cotangents[::-1], axis=0),
         None,
     )
+    return routed, (side_grads if side_vjp is not None else (None, None))
 
 
 _routed_experts.defvjp(_routed_experts_fwd, _routed_experts_bwd)
+_routed_experts_overlapped.defvjp(_routed_experts_overlapped_fwd, _routed_experts_overlapped_bwd)
 
 
 def _moe_mlp_ep_ragged_a2a_local(
@@ -729,6 +800,8 @@ def _moe_mlp_ep_ragged_a2a_local(
     token_valid_local: Bool[Array, "Tlocal"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    overlap_tokens: tuple[jax.Array, ...] | None = None,
+    overlap_params: Any = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -736,7 +809,10 @@ def _moe_mlp_ep_ragged_a2a_local(
     token_sharding_axes: tuple[str, ...],
     expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     serial_pair: bool = False,
-) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
+    overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
+) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
+    """``overlap_fn`` (with ``overlap_tokens`` / ``overlap_params``, see ``MoeOverlapWork``) runs under the first
+    dispatch all-to-all and its backward under the first return-cotangent all-to-all; its output is appended."""
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -826,9 +902,16 @@ def _moe_mlp_ep_ragged_a2a_local(
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.
     weights = jnp.where(accepted, combine_weights_local, 0)
-    out_local = _routed_experts(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+    side = None
+    if overlap_fn is None:
+        out_local = _routed_experts(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+    else:
+        out_local, side = _routed_experts_overlapped(
+            sorted_x, weights, moe_w13_local, moe_w2_local, routing, overlap_tokens, overlap_params, layout, overlap_fn
+        )
 
     with jax.named_scope("combine"):
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(accepted_group_sizes, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
-    return out_local, CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))
+    drops = CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))
+    return (out_local, drops) if side is None else (out_local, drops, side)
