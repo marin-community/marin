@@ -112,10 +112,14 @@ count at temperature 1. The async gate requires step 0 sampled reward in
 `--eval-minimum-score` selects an exploratory sampled-score stopping threshold.
 The checked-in gate preset and async spec use 0.65. A stopping step ends
 training; checkpoints and HF export require their explicit flags.
-The 0.65 threshold comes from a [calibration run](https://wandb.ai/dogml/marin-cat-count-canary/runs/1jr0tjpg)
-with a different runtime. This evidence does not establish the threshold for the TaskSession runtime.
-The [TaskSession validation](../task_sessions/validation.py) checks training and exports,
-but does not recalibrate the canary gate.
+The [threshold calibration](https://wandb.ai/dogml/marin-cat-count-canary/runs/1jr0tjpg) supplies the 0.65 gate.
+The TaskSession runtime at SkyRL `dd76a5c0` passed the
+[full async spec](https://github.com/marin-community/MarinSkyRL/blob/dd76a5c0021faa8a605a099d3ad5f389c83dfa9a/skyrl-train/ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async.json)
+in a [seed-17 run](https://wandb.ai/marin-community/rav_moe/runs/yzukrdt2).
+Sampled evaluation reward on the training split increased from 0.2389 at step 0 to 0.6728 at step 10.
+Only the W&B project differs from the default recipe.
+This single run does not establish calibration across seeds.
+The [TaskSession validation](../task_sessions/validation.py) separately checks multi-turn training and HF exports.
 Megatron logs `policy/dp_weight_checksum_mismatch` after every optimizer step;
 any mismatch fails the spec. The grouped step metric keeps the maximum across
 optimizer windows. Greedy, held-out and extrapolation scores are reported only.
@@ -131,7 +135,7 @@ responses that are exact. `eval/sampled/train/avg_score` is the stopping signal.
 Exact responses contain lowercase `cat` words separated by single spaces,
 with no punctuation or extra text. The scorer removes outer whitespace and
 trailing end-of-turn markers. `avg_score` is the shaped reward, not the exact
-rate. The [scorer](https://github.com/marin-community/MarinSkyRL/blob/c96f6d25f59959096c3b179a51e67c0af6c99536/skyrl-gym/skyrl_gym/envs/cat_count/reward.py)
+rate. The [scorer](https://github.com/marin-community/MarinSkyRL/blob/dd76a5c0021faa8a605a099d3ad5f389c83dfa9a/skyrl-gym/skyrl_gym/envs/cat_count/reward.py)
 defines partial-count rewards and penalties.
 
 `--model` selects `qwen2.5-0.5b-instruct`, `qwen2.5-0.5b`, or `qwen3-0.6b`.
