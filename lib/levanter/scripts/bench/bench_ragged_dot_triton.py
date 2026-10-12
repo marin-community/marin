@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Time the Pallas-Triton grouped GEMM behind ``haliax.nn.ragged_dot`` on one GPU.
+"""Time the Pallas-Triton grouped GEMM behind ``haliax.nn.ragged_dot`` on one or more GPUs.
 
 A routed-expert MLP runs three grouped-GEMM layouts per weight. With ``M`` routed rows, ``G``
 local experts and an expert weight ``[G, K, N]``:
@@ -16,6 +16,10 @@ since hipBLASLt's grouped GEMM rejects bf16 on gfx950), and for a dense ``jnp.ma
 same FLOPs. Tile-map blocks follow this device's entry in ``_TILE_MAP_CONFIGS``.
 Each timing warms up for ``--warmup-seconds``, then reports the median of ``--repeats`` windows of
 back-to-back calls.
+
+With ``--devices N``, every call runs on the first ``N`` local GPUs at once, as one SPMD program in
+which each GPU computes its own copy of the case, the way a training step launches the expert GEMMs
+from one process. Times and TFLOP/s stay per GPU, so they compare directly with ``--devices 1``.
 
 With ``--sweep``, the script instead times the tile-map kernel for every block configuration in a
 bounded grid, optionally sharded across processes with ``--shard i/n`` so one node's GPUs can
@@ -42,6 +46,9 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+from jax import shard_map
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +61,8 @@ LAYOUTS = [layout.value for layout in ragged_dot_module.RaggedLayout]
 KERNEL_FAMILIES = [family.value for family in ragged_dot_module.TritonKernelFamily]
 # June expert MLP per GPU: hidden 2560, expert intermediate 1280 with gate and up fused.
 DEFAULT_WEIGHTS = ("w13:2560x2560", "w2:1280x2560")
+# Every input and output is stacked along this mesh axis, one copy of the case per device.
+DEVICE_AXIS = "device"
 
 # Default sweep grid; each axis can be narrowed from the command line.
 SWEEP_GRID = {
@@ -124,7 +133,27 @@ def balanced_group_sizes(rows: int, groups: int) -> jax.Array:
     return base.at[: rows % groups].add(1)
 
 
-def case_inputs(case: Case, dtype) -> tuple[jax.Array, jax.Array, jax.Array]:
+def local_mesh(device_count: int) -> Mesh:
+    devices = jax.local_devices()
+    if not 1 <= device_count <= len(devices):
+        raise ValueError(f"--devices must be between 1 and the {len(devices)} local devices, got {device_count}")
+    return Mesh(devices[:device_count], (DEVICE_AXIS,))
+
+
+def per_device(x: jax.Array, mesh: Mesh) -> jax.Array:
+    """A copy of ``x`` on every device of ``mesh``, stacked along the leading axis."""
+    shards = [jax.device_put(x, device) for device in mesh.devices.flat]
+    shape = (len(shards) * x.shape[0], *x.shape[1:])
+    return jax.make_array_from_single_device_arrays(shape, NamedSharding(mesh, P(DEVICE_AXIS)), shards)
+
+
+def spmd(fn: Callable, mesh: Mesh) -> Callable:
+    """``fn`` run on every device of ``mesh`` at once, each on its own block of the leading axis."""
+    spec = P(DEVICE_AXIS)
+    return jax.jit(shard_map(fn, mesh=mesh, in_specs=spec, out_specs=spec, check_vma=False))
+
+
+def case_inputs(case: Case, dtype, mesh: Mesh) -> tuple[jax.Array, ...]:
     key_a, key_b = jax.random.split(jax.random.key(0))
     group_sizes = balanced_group_sizes(case.rows, case.groups)
     if case.layout == "fwd":
@@ -136,7 +165,7 @@ def case_inputs(case: Case, dtype) -> tuple[jax.Array, jax.Array, jax.Array]:
     else:
         lhs = jax.random.normal(key_a, (case.rows, case.k), dtype)
         rhs = jax.random.normal(key_b, (case.rows, case.n), dtype)
-    return lhs, rhs, group_sizes
+    return tuple(per_device(x, mesh) for x in (lhs, rhs, group_sizes))
 
 
 def time_call(fn: Callable, args, *, warmup_seconds: float, window_seconds: float, repeats: int):
@@ -165,40 +194,41 @@ def time_call(fn: Callable, args, *, warmup_seconds: float, window_seconds: floa
     return compile_time, sorted(windows)[len(windows) // 2]
 
 
-def implementations(case: Case, args) -> list[Timed]:
+def implementations(case: Case, args, mesh: Mesh) -> list[Timed]:
     """Both Triton kernel families, plus XLA and a dense matmul unless skipped."""
     layout = ragged_dot_module.RaggedLayout(case.layout)
-    bf16_inputs = case_inputs(case, jnp.bfloat16)
+    bf16_inputs = case_inputs(case, jnp.bfloat16, mesh)
     timed = []
     for family in args.kernel_families:
         kernels = ragged_dot_module._TRITON_KERNELS[ragged_dot_module.TritonKernelFamily(family)]
-        fn = jax.jit(lambda lhs, rhs, gs, kernels=kernels: kernels(lhs, rhs, gs, layout))
+        fn = spmd(lambda lhs, rhs, gs, kernels=kernels: kernels(lhs, rhs, gs, layout), mesh)
         timed.append(Timed(f"triton_{family}", "bfloat16", fn, bf16_inputs, describe_triton_config(case, family)))
     if not args.skip_xla:
         dim_nums = ragged_dot_module._LAYOUT_DIM_NUMS[layout]
-        xla = jax.jit(
-            lambda lhs, rhs, gs: jax.lax.ragged_dot_general(lhs, rhs, gs, ragged_dot_dimension_numbers=dim_nums)
+        xla = spmd(
+            lambda lhs, rhs, gs: jax.lax.ragged_dot_general(lhs, rhs, gs, ragged_dot_dimension_numbers=dim_nums), mesh
         )
-        timed.append(Timed("xla", args.xla_dtype, xla, case_inputs(case, DTYPES[args.xla_dtype]), ""))
+        timed.append(Timed("xla", args.xla_dtype, xla, case_inputs(case, DTYPES[args.xla_dtype], mesh), ""))
     if not args.skip_dense:
         key_a, key_b = jax.random.split(jax.random.key(1))
         dense_inputs = (
-            jax.random.normal(key_a, (case.rows, case.k), jnp.bfloat16),
-            jax.random.normal(key_b, (case.k, case.n), jnp.bfloat16),
+            per_device(jax.random.normal(key_a, (case.rows, case.k), jnp.bfloat16), mesh),
+            per_device(jax.random.normal(key_b, (case.k, case.n), jnp.bfloat16), mesh),
         )
-        timed.append(Timed("dense_matmul", "bfloat16", jax.jit(jnp.matmul), dense_inputs, ""))
+        timed.append(Timed("dense_matmul", "bfloat16", spmd(jnp.matmul, mesh), dense_inputs, ""))
     return timed
 
 
-def sweep_implementations(case: Case, configs: list) -> list[Timed]:
+def sweep_implementations(case: Case, configs: list, mesh: Mesh) -> list[Timed]:
     """The tile-map kernel once per distinct block config after fitting the configs to this case."""
     layout = ragged_dot_module.RaggedLayout(case.layout)
-    inputs = case_inputs(case, jnp.bfloat16)
+    inputs = case_inputs(case, jnp.bfloat16, mesh)
     fitted = dict.fromkeys(config.fit(*triton_problem_dims(case)) for config in configs)
     timed = []
     for config in fitted:
-        fn = jax.jit(
-            lambda lhs, rhs, gs, config=config: ragged_dot_module._tile_map_pallas_call(lhs, rhs, gs, layout, config)
+        fn = spmd(
+            lambda lhs, rhs, gs, config=config: ragged_dot_module._tile_map_pallas_call(lhs, rhs, gs, layout, config),
+            mesh,
         )
         timed.append(Timed("triton_tile_map", "bfloat16", fn, inputs, str(dataclasses.asdict(config))))
     return timed
@@ -243,14 +273,14 @@ def git_sha() -> str:
         return "unknown"
 
 
-def run_metadata() -> dict:
+def run_metadata(mesh: Mesh) -> dict:
     """The ``BenchRow`` fields that describe the run rather than the case."""
-    device = jax.devices()[0]
+    device = mesh.devices.flat[0]
     return dict(
         kernel="ragged_dot",
         backend=device.platform,
         device_type=device.device_kind,
-        device_count=1,
+        device_count=mesh.size,
         git_sha=git_sha(),
         xla_flags=os.environ.get("XLA_FLAGS", ""),
         backend_env=f"jax={jax.__version__} RAGGED_DOT_IMPL={os.environ.get('RAGGED_DOT_IMPL', '')}",
@@ -290,6 +320,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--xla-dtype", choices=sorted(DTYPES), default="float16")
     parser.add_argument("--skip-xla", action="store_true")
     parser.add_argument("--skip-dense", action="store_true")
+    parser.add_argument(
+        "--devices", type=int, default=1, help="run every call on this many local GPUs at once, one case per GPU"
+    )
     parser.add_argument("--sweep", action="store_true", help="time the tile-map kernel over the block-config grid")
     parser.add_argument("--shard", default="0/1", help="i/n: run every n-th sweep config starting at i")
     for field, values in SWEEP_GRID.items():
@@ -304,7 +337,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    metadata = run_metadata()
+    mesh = local_mesh(args.devices)
+    metadata = run_metadata(mesh)
     logger.info("%s", metadata)
     cases = [
         Case(name, layout, rows, args.groups, k, n)
@@ -319,7 +353,8 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("a") as out:
         for case in cases:
-            for timed in sweep_implementations(case, configs) if args.sweep else implementations(case, args):
+            timeds = sweep_implementations(case, configs, mesh) if args.sweep else implementations(case, args, mesh)
+            for timed in timeds:
                 row = bench_row(case, timed, metadata, timing)
                 out.write(json.dumps(dataclasses.asdict(row)) + "\n")
                 out.flush()
