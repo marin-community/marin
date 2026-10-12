@@ -4,11 +4,9 @@
 """Shellbox task operations and public model request preparation."""
 
 import json
-from collections.abc import Mapping
-from contextlib import AsyncExitStack
 from typing import Any
 
-from shellbox.machine import Machine, MachineFactory
+from shellbox.machine import Machine
 from taskcompendium.chat import assistant_message
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
@@ -31,9 +29,7 @@ from taskcompendium.submission import (
     submission_instruction,
 )
 
-from rolloutengine.cleanup import _Cleanup
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
-from rolloutengine.grading import _grade_rollout
+from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, TaskGrader, Transition
 from rolloutengine.spec import LoweredTaskSpec
 
 WORKSPACE_INSTRUCTION = (
@@ -83,15 +79,11 @@ class _ShellboxTaskSession:
         self,
         lowered: LoweredTaskSpec,
         machine: Machine | None,
-        factories: Mapping[str, MachineFactory],
-        cleanup: _Cleanup,
-        resources: AsyncExitStack,
+        grader: TaskGrader,
     ):
         self.lowered = lowered
         self.machine = machine
-        self.factories = factories
-        self.cleanup = cleanup
-        self.resources = resources
+        self.grader = grader
         self.shell_tool = resolve_shell_tool(lowered.task, lowered.session.shell_tool)
 
     async def prepare(self) -> SessionStart:
@@ -131,15 +123,7 @@ class _ShellboxTaskSession:
         return Transition(done=False, observations=tuple(observations))
 
     async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
-        return await _grade_rollout(
-            self.lowered,
-            messages,
-            self.machine,
-            self.factories,
-            self.cleanup,
-            self.resources,
-            stop_reason=stop_reason,
-        )
+        return await self.grader(messages, stop_reason=stop_reason)
 
     async def close(self) -> None:
         pass

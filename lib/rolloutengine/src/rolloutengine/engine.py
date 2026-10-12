@@ -7,6 +7,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
+from typing import Any
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -29,6 +30,7 @@ from rolloutengine.contracts import (
     TaskSession,
     Transition,
 )
+from rolloutengine.grading import _grade_rollout
 from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
 from rolloutengine.machines import _prepare_machine
 from rolloutengine.spec import LoweredTaskSpec
@@ -118,11 +120,18 @@ class ShellboxRolloutEngine:
             )
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
+
+        async def grade(messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
+            return await _grade_rollout(
+                lowered, messages, machine, self.factories, cleanup, resources, stop_reason=stop_reason
+            )
+
+        session_factories: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] = {
+            **self.sessions,
+            SHELLBOX_SESSION: lambda selected, selected_machine: _ShellboxTaskSession(selected, selected_machine, grade),
+        }
         try:
-            if lowered.session.task_session == SHELLBOX_SESSION:
-                session = _ShellboxTaskSession(lowered, machine, self.factories, cleanup, resources)
-            else:
-                session = self.sessions[lowered.session.task_session](lowered, machine)
+            session = session_factories[lowered.session.task_session](lowered, machine)
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)

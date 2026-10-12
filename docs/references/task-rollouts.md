@@ -48,7 +48,7 @@ Other deadlines accept `None` or a finite, positive value.
 
 `backend` identifies a factory in the engine's `factories` mapping.
 `task_session` identifies a factory in its `sessions` mapping.
-The reserved session identifier `shellbox` selects the engine's shell-tool session.
+The reserved session identifier `shellbox` selects the built-in shell-tool session.
 Custom session factories receive `(lowered, machine)` and return a fresh session for each attempt.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
@@ -92,6 +92,11 @@ It calls these session methods:
 3. `grade(messages, stop_reason=...)` returns the final `GradeResult`.
 4. `close()` releases session resources before machine cleanup.
 
+The session is the task harness. It can assemble the system prompt and available tools
+in `prepare()`, inspect `ModelTurn.text` or its parsed message in `advance()`, execute
+tools, and return observations or a new conversation for the next model turn.
+The built-in `shellbox` session follows the same lifecycle as registered sessions.
+Its preflight checks reject tools and environments it does not support.
 The engine owns model calls, conversation accumulation, and exact-token accounting.
 Each model request returns one turn, then `advance` executes that turn's operations.
 Completion, a generation limit, the turn limit, or the cumulative turn deadline starts final grading.

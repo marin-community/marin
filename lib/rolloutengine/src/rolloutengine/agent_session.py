@@ -10,15 +10,11 @@ from typing import Any, Protocol
 
 from taskcompendium.grading_result import GradeResult
 
-from rolloutengine.contracts import ModelTurn, RolloutContractError, SessionStart, Transition
+from rolloutengine.contracts import ModelTurn, RolloutContractError, SessionStart, TaskGrader, Transition
 
 
 class AgentCompletion(Protocol):
     async def __call__(self, request: SessionStart) -> ModelTurn: ...
-
-
-class AgentGrader(Protocol):
-    async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
 
 
 @dataclass(frozen=True)
@@ -39,7 +35,7 @@ class AgentTaskSession:
     def __init__(
         self,
         run_agent: Callable[[AgentCompletion], Awaitable[None]],
-        grader: AgentGrader,
+        grader: TaskGrader,
     ):
         self.run_agent = run_agent
         self.grader = grader

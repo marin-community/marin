@@ -131,7 +131,7 @@ class RolloutStep:
 
 
 class TaskSession(Protocol):
-    """Task operations without model inference or token processing."""
+    """Prepare model requests, handle model turns, and grade one task attempt."""
 
     async def prepare(self) -> SessionStart: ...
 
@@ -140,3 +140,7 @@ class TaskSession(Protocol):
     async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
 
     async def close(self) -> None: ...
+
+
+class TaskGrader(Protocol):
+    async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
