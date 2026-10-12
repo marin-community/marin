@@ -10,10 +10,13 @@ SonicMoE is also Apache-2.0.
 """
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+import functools
 import os
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from jax.typing import DTypeLike
@@ -182,6 +185,36 @@ else:
     _token_scatter_rows_kernel = None
 
 
+# Calls whose kernel module is already loaded on every local device (``_triton_call``).
+_LOADED_CALLS: set[str] = set()
+
+
+def _triton_call(*args: Array, **kwargs):
+    """``jt.triton_call`` that first loads the kernel's module on every local device.
+
+    jaxlib loads a jax-triton kernel's module lazily at its first launch, inside the running
+    executable. ``cuModuleLoadData`` then waits for the GPU to drain, and on a multi-process mesh
+    the GPU holds collectives spinning on peers that are themselves blocked in the same load:
+    a first-step deadlock at 100% GPU. Running the call once on zeros at trace time, outside the
+    trace, loads the module while no executable is mid-launch (jaxlib caches module images by
+    kernel name and PTX, so the traced call reuses it).
+    """
+    key = repr((tuple((a.shape, a.dtype) for a in args), sorted(kwargs.items(), key=lambda item: item[0])))
+    if key not in _LOADED_CALLS:
+        # JAX's trace and mesh contexts are thread-local: a fresh thread runs the call eagerly on one device.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_run_on_zeros, [jax.ShapeDtypeStruct(a.shape, a.dtype) for a in args], kwargs).result()
+        _LOADED_CALLS.add(key)
+    return jt.triton_call(*args, **kwargs)
+
+
+def _run_on_zeros(avals: list[jax.ShapeDtypeStruct], kwargs: dict) -> None:
+    call = jax.jit(functools.partial(jt.triton_call, **kwargs))
+    for device in jax.local_devices():
+        zeros = [jax.device_put(np.zeros(a.shape, a.dtype), device) for a in avals]
+        jax.block_until_ready(call(*zeros))
+
+
 def _require_sonic_deps() -> None:
     if jt is None or _sonic_token_gather_sum_kernel is None or _sonic_token_gather_sum_bwd_kernel is None:
         raise ImportError(
@@ -213,7 +246,7 @@ def unwritten_buffer(shape: tuple[int, ...], dtype: DTypeLike, marker: Int[Array
     different markers get two buffers.
     """
     _require_sonic_deps()
-    return jt.triton_call(
+    return _triton_call(
         marker,
         kernel=_write_nothing_kernel,
         out_shape=jax.ShapeDtypeStruct(shape, dtype),
@@ -244,7 +277,7 @@ def sonic_scatter_rows(
     weights_flat = (
         jnp.zeros((1,), jnp.float32) if weights is None else weights.reshape(tokens * topk).astype(jnp.float32)
     )
-    return jt.triton_call(
+    return _triton_call(
         x,
         weights_flat,
         keep.reshape(tokens * topk).astype(jnp.int8),
@@ -299,7 +332,7 @@ def _sonic_gather_sum_impl(
         (tokens, hidden_dim),
         dispatch_output.dtype if output_dtype is None else output_dtype,
     )
-    return jt.triton_call(
+    return _triton_call(
         dispatch_output,
         weights_flat,
         positions_flat,
@@ -362,7 +395,7 @@ def _sonic_gather_sum_bwd_impl(
     block_h, _block_k, num_warps = _sonic_kernel_config(hidden_dim)
     dx_shape = jax.ShapeDtypeStruct(dispatch_output.shape, dispatch_output.dtype)
     dw_shape = jax.ShapeDtypeStruct(weights_flat.shape, jnp.float32)
-    return jt.triton_call(
+    return _triton_call(
         dout,
         dispatch_output,
         weights_flat,
