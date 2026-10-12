@@ -187,7 +187,7 @@ def _grade_shard(
             for packet in pending.values()
         ]
         if attempt > 1:
-            # Keep first-attempt cache keys; retries constrain copying of long task IDs.
+            # Pin retry IDs to the transport identity without changing first-attempt cache keys.
             for request in requests:
                 schema = request["body"]["tools"][0]["function"]["parameters"]
                 schema["properties"]["task_id"]["const"] = request["custom_id"]

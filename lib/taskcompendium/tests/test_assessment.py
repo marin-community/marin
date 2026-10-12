@@ -157,11 +157,13 @@ class MismatchedIdentityTransport:
 
 def test_assessment_recovers_identity_mismatch_without_misattributing_grade(context, tmp_path):
     curated = curated_source(
-        context, tmp_path, [{"Body": "Ada has two apples.", "Question": "How many?", "Answer": "2"}]
+        context,
+        tmp_path,
+        [{"Body": f"Ada has {value} apples.", "Question": "How many?", "Answer": str(value)} for value in (2, 3)],
     )
     inputs = tmp_path / "inputs"
     prepare_assessment(
-        context, curated_root=str(curated), sampling=AssessmentSampling(admitted=1), output_root=str(inputs)
+        context, curated_root=str(curated), sampling=AssessmentSampling(admitted=2), output_root=str(inputs)
     )
     judgments = tmp_path / "judgments"
     grade_assessment(
@@ -175,11 +177,19 @@ def test_assessment_recovers_identity_mismatch_without_misattributing_grade(cont
     )
     manifest = read_json(str(judgments / "manifest.json"))
     rows = [row for path in manifest["grade_paths"] for row in load_parquet(path)]
-    expected = read_json(str(inputs / "manifest.json"))["sample"][0]["task_id"]
-    assert [(row["task_id"], row["status"], row["verdict"]) for row in rows] == [(expected, "reviewed", "good")]
+    expected = {row["task_id"] for row in read_json(str(inputs / "manifest.json"))["sample"]}
+    assert {(row["task_id"], row["status"], row["verdict"]) for row in rows} == {
+        (task_id, "reviewed", "good") for task_id in expected
+    }
     calls = [json.loads(row) for row in (tmp_path / "calls.jsonl").read_text().splitlines()]
-    assert len(calls) == 2
-    assert calls[1]["body"]["tools"][0]["function"]["parameters"]["properties"]["task_id"]["const"] == expected
+    assert len(calls) == 4
+    first, retried = calls[:2], calls[2:]
+    assert all(
+        "const" not in row["body"]["tools"][0]["function"]["parameters"]["properties"]["task_id"] for row in first
+    )
+    assert {row["custom_id"] for row in retried} == expected
+    for row in retried:
+        assert row["body"]["tools"][0]["function"]["parameters"]["properties"]["task_id"]["const"] == row["custom_id"]
 
 
 def test_assessment_recovers_truncated_judgment_with_larger_retry_budget(context, tmp_path):
