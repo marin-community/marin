@@ -19,8 +19,14 @@ from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
 
 
-@pytest.mark.docker
-@pytest.mark.parametrize("factory_type", [DockerMachineFactory, GvisorMachineFactory])
+@pytest.mark.parametrize(
+    "factory_type",
+    [
+        pytest.param(DockerMachineFactory, marks=pytest.mark.docker),
+        # Requires a Docker host with runsc registered.
+        pytest.param(GvisorMachineFactory, marks=pytest.mark.manual),
+    ],
+)
 def test_image_build_and_registry_cache_work_with_only_docker_on_path(tmp_path, monkeypatch, factory_type):
     executable = shutil.which("docker")
     assert executable is not None
