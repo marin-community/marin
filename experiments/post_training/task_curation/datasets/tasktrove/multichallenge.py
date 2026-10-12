@@ -14,9 +14,8 @@ source has no controls and its kept rows are admitted without them.
 import tomllib
 
 from taskcompendium.convert.answers import source_defect, unsupported
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.delivery import rewritten_task
-from taskcompendium.convert.tasktrove import archive_file
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -26,8 +25,9 @@ from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
@@ -85,9 +85,10 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec 
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
                 title="laion/nemotron-gym-multichallenge-advanced-v4",
@@ -100,12 +101,11 @@ def sources() -> list[RlDataSource]:
                     "preserves the source's explicit positive or negated pass condition."
                 ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-multichallenge",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_multichallenge),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 grader=GRADER_PACKAGES,

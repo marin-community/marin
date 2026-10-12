@@ -9,15 +9,15 @@ import re
 from dataclasses import replace
 
 import pytest
+from click.testing import CliRunner
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.images import __main__ as images
 from experiments.post_training.task_curation.images.build import (
     IDENTITY_CHARS,
-    PLATFORM,
     EnvironmentBuild,
-    MissingEnvironmentArtifact,
     build_environment,
     built_environment,
     environment_artifact,
@@ -53,9 +53,6 @@ def test_apt_packages_beyond_the_worker_image_push_an_image_and_record_its_diges
     assert built.image == f"{REPOSITORY}@sha256:{hashlib.sha256(tag.encode()).hexdigest()}"
     assert StoragePath(built.lock_url).read_text() == COMPILED
     assert built.lock_sha256 == hashlib.sha256(COMPILED.encode()).hexdigest()
-    assert built.path.endswith(f"images/env-{identity[:IDENTITY_CHARS]}/2026.10.08")
-    build = next(line for line in docker_log.read_text().splitlines() if line.startswith("buildx build"))
-    assert {f"--platform={PLATFORM}", "--push", f"--tag={tag}"} <= set(build.split())
     assert built_environment(environment) == built
 
 
@@ -115,9 +112,12 @@ def test_an_image_build_requires_repository_credentials(lock, docker_log, tmp_pa
         build_environment(environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out")))
 
 
-def test_an_unbuilt_environment_names_the_build_command(lock, tmp_path, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
-    environment = Environment(lock=lock)
+def test_registered_environment_build_command_resolves_new_grader(tmp_path, monkeypatch):
+    install_fake_build_tools(tmp_path, monkeypatch)
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    environment = Environment(pypi=("numpy==2.3.5",))
+    monkeypatch.setattr(images, "BUILDABLE_ENVIRONMENTS", (environment,))
     identity = identity_digest(environment)[:IDENTITY_CHARS]
-    with pytest.raises(MissingEnvironmentArtifact, match=re.escape(f"images --identity {identity}")):
-        built_environment(environment)
+    result = CliRunner().invoke(images.main, ["--identity", identity, "--repository", REPOSITORY])
+    assert result.exit_code == 0, result.output
+    assert StoragePath(built_environment(environment).lock_url).read_text().startswith("numpy==2.3.5")

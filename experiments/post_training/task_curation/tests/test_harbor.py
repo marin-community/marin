@@ -7,21 +7,21 @@ import os
 import shlex
 import subprocess
 import tarfile
+import tomllib
 from pathlib import Path
 from typing import cast
+from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from harbor_config.models.task.config import TaskConfig, VerifierEnvironmentMode
 from taskcompendium.convert.answers import answer_task
-from taskcompendium.convert.verifyit_build import verifyit_build_context
 from taskcompendium.grader import verifyit_package
-from taskcompendium.harbor.export import UnsupportedHarborTask, harbor_record
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
+    CommandSemantics,
     DockerBuildContext,
     EnvironmentRequirements,
     FileReward,
@@ -38,15 +38,17 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.grade import grade, read_output
-from verifyit.spec import ExactSpec, JsonSchemaSpec, McqSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
+from verifyit.spec import ExactSpec, JsonSchemaSpec, MathSpec, McqSpec, PytestSpec, ScriptSpec, parse_spec, render_spec
 
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import qa
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
-from experiments.post_training.task_curation.pipeline import HfSource
-from experiments.post_training.task_curation.sources import all_pipelines, all_sources
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
+from experiments.post_training.task_curation.sources import all_sources
 from experiments.post_training.task_curation.tasktrove.export import main
+from experiments.post_training.task_curation.tasktrove.harbor_export import UnsupportedHarborTask, harbor_record
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 
 GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64
@@ -91,6 +93,25 @@ def normalized_row() -> tuple[dict, TaskSpec]:
     }, task
 
 
+def test_harbor_rejects_unresolved_package_lock_despite_source_dockerfile(normalized_row):
+    row, task = normalized_row
+    task = task.model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="/unavailable/requirements.lock"
+            )
+        }
+    )
+    with pytest.raises(UnsupportedHarborTask, match="package locks"):
+        harbor_record(
+            {**row, "task_json": task.model_dump_json()},
+            fallback_actor_image=BASE_IMAGE,
+            verifyit_package_root=VERIFYIT_PACKAGE,
+            grader_image=GRADER_IMAGE,
+            family="fixture",
+        )
+
+
 def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(normalized_row) -> None:
     row, _ = normalized_row
     record = harbor_record(
@@ -101,10 +122,10 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
         family="fixture",
     )
     files = archive_files(record.task_binary)
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    config = tomllib.loads(files["task.toml"].decode())
     assert files["environment/Dockerfile"].decode().startswith("FROM python:3.12-slim\nWORKDIR /app\n")
-    assert config.verifier.environment_mode == VerifierEnvironmentMode.SHARED
-    assert config.verifier.environment is None
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert "environment" not in config["verifier"]
     assert "tests/Dockerfile" not in files
     assert not any(path.startswith("tests/public/") for path in files)
     assert not any(path.startswith("solution/") for path in files)
@@ -114,7 +135,7 @@ def test_harbor_lowering_preserves_delivery_and_private_resource_boundaries(norm
     assert files["tests/private.txt"] == b"private reference"
     assert files["environment/files/app/input.txt"] == b"public input"
     assert b"/app/answer.txt" in files["instruction.md"]
-    assert not config.artifacts
+    assert not config["artifacts"]
     assert archive_files(record.solution_binary)["solution/solve.sh"] == b"echo gold > /app/answer.txt\n"
 
 
@@ -154,17 +175,33 @@ def test_harbor_mcqa_file_format_matches_its_grader(normalized_row, tmp_path, le
     assert grade(spec, tmp_path, tmp_path).reward == reward
 
 
+def test_harbor_rejects_simulated_shell_semantics(normalized_row):
+    row, task = normalized_row
+    requirements = task.environment_requirements.model_copy(
+        update={"docker_image": None, "command_semantics": CommandSemantics.SHELL_SIMULATOR}
+    )
+    task = task.model_copy(update={"environment_requirements": requirements})
+    with pytest.raises(UnsupportedHarborTask, match="shell simulator semantics"):
+        harbor_record(
+            {**row, "task_json": task.model_dump_json()},
+            grader_image=GRADER_IMAGE,
+            family="qa",
+            fallback_actor_image=BASE_IMAGE,
+        )
+
+
 @pytest.mark.parametrize("role", ["actor", "grader"])
 def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(normalized_row, role):
     row, converted = normalized_row
     converted = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "generic"})})
     environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=DockerBuildContext(
             files=(
                 inline_resource("Dockerfile", b"FROM source:latest\nCOPY required.bin /required.bin\n"),
                 inline_resource("required.bin", b"source environment data"),
             )
-        )
+        ),
     )
     if role == "actor":
         task = converted.model_copy(update={"environment_requirements": environment})
@@ -180,8 +217,11 @@ def test_harbor_rejects_unbuilt_context_instead_of_substituting_fallback_image(n
         )
 
 
-@pytest.mark.parametrize("answer_type", [AnswerType.TEXT, AnswerType.FILE])
-def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path, answer_type) -> None:
+@pytest.mark.parametrize(
+    "answer_type,output_path",
+    [(AnswerType.TEXT, None), (AnswerType.FILE, "/app/solution.py"), (AnswerType.FILE, "/app")],
+)
+def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_path, answer_type, output_path) -> None:
     row, converted = normalized_row
     task = converted.model_copy(update={"source": converted.source.model_copy(update={"dataset": "generic"})})
     output = "app/answer.txt"
@@ -190,11 +230,13 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
         task = task.model_copy(
             update={
                 "answer_type": AnswerType.FILE,
-                "output_paths": ("/app/solution.py",),
+                "output_paths": (output_path,),
                 "grader": ScriptGrader(
                     argv=("bash", "/tests/test.sh"),
                     answer_path=None,
-                    environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                    ),
                     reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format="number"),)),
                 ),
                 "resources": task.resources.model_copy(
@@ -207,7 +249,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
             "worker": (
                 *task.resources.worker,
                 inline_resource(output, b"initial contents"),
-                inline_resource("app/staging-input.txt", b"public input"),
+                inline_resource("inputs/staging-input.txt", b"public input"),
             )
         }
     )
@@ -234,7 +276,7 @@ def test_harbor_public_staging_preserves_submitted_edits(normalized_row, tmp_pat
     command[-2:] = [str(public) + "/.", str(workspace)]
     subprocess.run(command, check=True)
     assert submitted.read_text() == "agent's edited contents"
-    assert (workspace / "app/staging-input.txt").read_text() == "public input"
+    assert (workspace / "inputs/staging-input.txt").read_text() == "public input"
     submitted.unlink()
     subprocess.run(command, check=True)
     assert not submitted.exists()
@@ -330,10 +372,10 @@ def test_harbor_cli_joins_registry_metadata_and_accounts_for_unsupported_rows(no
     files = archive_files(exported[0]["task_binary"])
     assert {"instruction.md", "task.toml", "environment/Dockerfile", "tests/test.sh"} <= files.keys()
     assert not any(path.startswith("solution/") for path in files)
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.metadata["tasktrove_path"] == exported[0]["path"] == row["original_path"]
-    assert config.metadata["tasktrove_source"] == exported[0]["source"] == row["source_row"].split("/", 1)[0]
-    assert config.metadata["taskcompendium_id"] == converted.id
+    config = tomllib.loads(files["task.toml"].decode())
+    assert config["metadata"]["tasktrove_path"] == exported[0]["path"] == row["original_path"]
+    assert config["metadata"]["tasktrove_source"] == exported[0]["source"] == row["source_row"].split("/", 1)[0]
+    assert config["metadata"]["taskcompendium_id"] == converted.id
     assert report["source_id"] == source.info.id
 
 
@@ -342,7 +384,7 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
     source = next(source for source in qa.sources() if source.name == "knowledge-openqa")
     question = "Which planet is known as the red planet?"
     original = f"Write your concise final answer to `/app/response.txt`.\n\n{question}"
-    pipeline = all_pipelines()[source.name]
+    pipeline = cast(CurationRecipe, source.config)
     task = converted_task(
         pipeline,
         tasktrove_row(
@@ -371,7 +413,7 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
         family=source.info.family,
     )
     files = archive_files(record.task_binary)
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
+    config = tomllib.loads(files["task.toml"].decode())
     instruction = files["instruction.md"].decode()
     assert "/app/response.txt" not in instruction
     assert files["tests/source/test.sh"] == b"#!/bin/bash\nexit 99\n"
@@ -380,7 +422,7 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
     workspace = tmp_path / "app"
     workspace.mkdir()
     candidate = "Mars, with a complete explanation.\n"
-    assert not config.artifacts
+    assert not config["artifacts"]
     transferred = workspace / Path(answer_path).relative_to("/app")
     transferred.write_text(candidate)
     # Exercise the judge's file-read boundary without calling any judge model.
@@ -388,52 +430,135 @@ def test_harbor_judge_receives_canonical_text_at_declared_path(tmp_path) -> None
     assert read_output(spec, workspace) == candidate
 
 
+@pytest.mark.docker
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mode", ["inductive", "transductive"])
 def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp_path):
     source = next(source for source in arc.sources() if source.name == f"tasktrove-arc_{mode}")
     grid = [[0, 1], [2, 9]]
     data = {"test_cases": [{"input": grid, "output": grid}]} if mode == "inductive" else {"expected_output": grid}
     task = converted_task(
-        all_pipelines()[source.name],
+        cast(CurationRecipe, source.config),
         tasktrove_row(
-            {"instruction.md": b"Solve the grid puzzle.", "tests/verifier_data.json": json.dumps(data).encode()}
+            {
+                "instruction.md": b"Solve the grid puzzle.",
+                "tests/verifier_data.json": json.dumps(data).encode(),
+                "environment/Dockerfile": b"FROM python:3.11-slim\nWORKDIR /app\n",
+            }
         ),
     )
     record = harbor_record(
-        {"task_json": task.model_dump_json(), "original_path": "arc.tar.gz", "source_row": "arc/tasks.parquet:0"},
+        {
+            "task_json": task.model_dump_json(),
+            "original_path": "arc.tar.gz",
+            "source_row": (
+                (arc.INDUCTIVE_CONFIG if mode == "inductive" else arc.TRANSDUCTIVE_CONFIG) + "/tasks.parquet:0"
+            ),
+        },
         fallback_actor_image=BASE_IMAGE,
         verifyit_package_root=VERIFYIT_PACKAGE,
         grader_image=GRADER_IMAGE,
         family=source.info.family,
     )
     files = archive_files(record.task_binary)
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert tuple(artifact.source for artifact in config.artifacts) == task.output_paths
+    config = tomllib.loads(files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert not config["artifacts"]
+    assert files["environment/Dockerfile"].startswith(b"FROM python:3.11-slim\n")
     assert not any(path.startswith("environment/files/tests/") for path in files)
+    path = "solution.py" if mode == "inductive" else "answer.txt"
+    positive = arc.literal_transform(grid) if mode == "inductive" else arc.grid_text(grid)
+    negative = "def transform(grid): return [[8]]" if mode == "inductive" else "8"
+    assert grade_in_exported_image(files, path, (positive, negative), tmp_path) == [1, 0]
+
+
+def grade_in_exported_image(files, answer_path, candidates, tmp_path):
     for path, content in files.items():
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        if path.endswith((".py", ".sh", ".toml")):
-            content = (
-                content.decode()
-                .replace("/tests", str(tmp_path / "tests"))
-                .replace("/app/", str(tmp_path / "app") + "/")
-                .replace("/logs/", str(tmp_path / "logs") + "/")
-                .encode()
-            )
         target.write_bytes(content)
-    (tmp_path / "app").mkdir()
-    answer_path = tmp_path / "app" / ("solution.py" if mode == "inductive" else "answer.txt")
-    positive = arc.literal_transform(grid) if mode == "inductive" else arc.grid_text(grid)
-    negative = "def transform(grid): return [[8]]" if mode == "inductive" else "8"
-    for candidate, expected in [(positive, 1), (negative, 0)]:
-        # Inductive grading removes hidden config before executing the candidate.
-        if mode == "inductive":
-            (tmp_path / "tests/config.json").write_bytes(files["tests/config.json"])
-        answer_path.write_text(candidate)
-        result = subprocess.run(["bash", str(tmp_path / "tests/test.sh")], capture_output=True, text=True)
-        assert result.returncode == 0, result.stderr
-        assert float((tmp_path / "logs/verifier/reward.txt").read_text()) == expected
+    image = f"taskcuration-harbor-test:{uuid4().hex}"
+    subprocess.run(["docker", "build", "-t", image, str(tmp_path / "environment")], check=True)
+    try:
+        (tmp_path / "app").mkdir()
+        (tmp_path / "logs").mkdir()
+        rewards = []
+        for candidate in candidates:
+            # Some graders remove private files before executing candidate code.
+            for path, content in files.items():
+                if path.startswith("tests/"):
+                    (tmp_path / path).write_bytes(content)
+            (tmp_path / "app" / answer_path).write_text(candidate)
+            reward = tmp_path / "logs/reward.txt"
+            reward.unlink(missing_ok=True)
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network=none",
+                    "-e",
+                    "PYTHONDONTWRITEBYTECODE=1",
+                    "-v",
+                    f"{tmp_path / 'tests'}:/tests",
+                    "-v",
+                    f"{tmp_path / 'app'}:/app",
+                    "-v",
+                    f"{tmp_path / 'logs'}:/logs/verifier",
+                    image,
+                    "bash",
+                    "/tests/test.sh",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, result.stderr
+            assert reward.exists(), result.stdout + result.stderr
+            rewards.append(float(reward.read_text()))
+        return rewards
+    finally:
+        subprocess.run(["docker", "image", "rm", image], check=True)
+
+
+@pytest.mark.docker
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize(
+    "spec, resources, answer_path, candidates",
+    [
+        (MathSpec(expected="42"), (), "answer.txt", ("42", "43")),
+        (
+            PytestSpec(paths=("/tests/test_solution.py",)),
+            (
+                inline_resource(
+                    "test_solution.py", b"from solution import add\n\ndef test_add(): assert add(2, 3) == 5\n"
+                ),
+            ),
+            "solution.py",
+            ("def add(a, b): return a + b", "def add(a, b): return a - b"),
+        ),
+    ],
+)
+def test_harbor_source_image_supplies_grader_dependencies(
+    normalized_row, spec, resources, answer_path, candidates, tmp_path
+):
+    row, original = normalized_row
+    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE)
+    task = original.model_copy(
+        update={
+            "grader": verifyit_package(spec, environment=environment).grader,
+            "answer_type": AnswerType.FILE if isinstance(spec, PytestSpec) else AnswerType.TEXT,
+            "output_paths": (f"/app/{answer_path}",),
+            "resources": original.resources.model_copy(update={"verifier": resources}),
+        }
+    )
+    record = harbor_record(
+        {**row, "task_json": task.model_dump_json()},
+        fallback_actor_image=BASE_IMAGE,
+        verifyit_package_root=VERIFYIT_PACKAGE,
+        grader_image=GRADER_IMAGE,
+        family="fixture",
+    )
+    assert grade_in_exported_image(archive_files(record.task_binary), answer_path, candidates, tmp_path) == [1, 0]
 
 
 @pytest.mark.parametrize(
@@ -442,16 +567,27 @@ def test_harbor_arc_runs_shipped_scorer_and_preserves_submission_paths(mode, tmp
 def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
     source = next(source for source in arc.sources() if source.name == "tasktrove-arc_transductive")
     task = converted_task(
-        all_pipelines()[source.name],
-        tasktrove_row({"instruction.md": b"Solve.", "tests/verifier_data.json": b'{"expected_output":[[1]]}'}),
+        cast(CurationRecipe, source.config),
+        tasktrove_row(
+            {
+                "instruction.md": b"Solve.",
+                "tests/verifier_data.json": b'{"expected_output":[[1]]}',
+                "environment/Dockerfile": b"FROM python:3.11-slim\nWORKDIR /app\n",
+            }
+        ),
     )
     task = task.model_copy(
         update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+            ),
             "resources": task.resources.model_copy(update={"verifier": (inline_resource("grade.py", script.encode()),)}),
             "grader": ScriptGrader(
                 argv=("python3", "/tests/grade.py"),
                 answer_path=None,
-                environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+                environment=EnvironmentRequirements(
+                    command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE
+                ),
                 reward=StdoutReward(),
             ),
         }
@@ -484,6 +620,7 @@ def test_harbor_stdout_failures_do_not_emit_a_reward(script, tmp_path):
 def repository_task(normalized_row) -> TaskSpec:
     _, task = normalized_row
     environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
         capabilities=("git_repository",),
         docker_build=verifyit_build_context("FROM python:3.12-slim\nWORKDIR /testbed\n", (), package=VERIFYIT_PACKAGE),
     )
@@ -545,10 +682,10 @@ def test_harbor_repository_uses_shared_actor_state(repository_task, tmp_path):
             row, fallback_actor_image=BASE_IMAGE, verifyit_package_root=VERIFYIT_PACKAGE, grader_image=None, family="swe"
         ).task_binary
     )
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.verifier.environment_mode == "shared"
-    assert config.verifier.environment is None
-    assert not config.artifacts
+    config = tomllib.loads(files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert "environment" not in config["verifier"]
+    assert not config["artifacts"]
     assert "tests/Dockerfile" not in files and "tests/verifier.toml" not in files
     assert not any(path.startswith("tests/public/") for path in files)
     context = cast(DockerBuildContext, task.environment_requirements.docker_build)
@@ -596,7 +733,7 @@ def test_openqa_keeps_conversion_but_filters_disclosed_reference():
     source = next(source for source in qa.sources() if source.name == "science-openqa")
     reference = "alpha beta gamma"
     task = converted_task(
-        all_pipelines()[source.name],
+        cast(CurationRecipe, source.config),
         tasktrove_row(
             {
                 "instruction.md": f"Prove the answer is {reference}.".encode(),
@@ -632,7 +769,7 @@ print(float(answer == actor_dependency.expected))
     package = verifyit_package(
         ScriptSpec(path="check.py", workspace=str(workspace)),
         (inline_resource("check.py", checker),),
-        environment=EnvironmentRequirements(docker_image=GRADER_IMAGE),
+        environment=EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE),
     )
     task = original.model_copy(
         update={
@@ -649,9 +786,9 @@ print(float(answer == actor_dependency.expected))
             family="fixture",
         ).task_binary
     )
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.verifier.environment_mode == VerifierEnvironmentMode.SHARED
-    assert not config.artifacts
+    config = tomllib.loads(files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert not config["artifacts"]
     tests = tmp_path / "tests"
     for name, content in files.items():
         if name.startswith("tests/"):

@@ -65,9 +65,9 @@ def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCal
             ),
             content=validated.content,
         )
-    if validated.content is None:
-        raise ValueError("Chat response requires assistant content or function calls")
-    return TextMessage(role="assistant", content=validated.content)
+    # Reasoning-only provider responses have no answer, even when finish_reason is stop.
+    # An empty final submission is valid evidence; the task grader decides its score.
+    return TextMessage(role="assistant", content=validated.content or "")
 
 
 def _conversation_events(messages: list[dict[str, Any]]) -> tuple[ConversationEvent, ...]:

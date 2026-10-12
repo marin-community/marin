@@ -24,7 +24,7 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import (
     IDENTITY_FIELDS,
@@ -118,12 +118,13 @@ class SourcePipelineConfig:
     """Campaign settings shared by every source.
 
     ``machines`` runs sandbox grader controls; ``None`` permits only in-process graders.
+    ``review=None`` supports recipes without a model-review rubric.
     """
 
     mode: SourceProcessingMode
     quality_policy: SourceQualityPolicy
     verification_policy: SourceVerificationPolicy
-    review: ReviewConfig
+    review: ReviewConfig | None
     execution: AuditExecution
     filter_policy: FilterPolicy
     normalized_shards: int
@@ -961,6 +962,8 @@ def run_source_pipeline(
         )
     if config is None or config.mode != mode:
         raise ValueError("Reviewed modes require a matching source pipeline configuration")
+    if recipe.rubric is not None and config.review is None:
+        raise ValueError("A recipe with a rubric requires review configuration")
     telemetry = SourceTelemetry(canonical_source, output_path)
     run = _SourceRun(
         recipe, context, source_input, StoragePath(output_path), config, telemetry, source_overrides, parquet_shard_bytes
@@ -1036,10 +1039,11 @@ def _run_quick(
 
     Model review, resource budgets, deduplication, mechanical checks and grader controls do not run.
     The output is unreviewed and has no production admission or ``final/`` view.
-    Existing outputs are rejected so a failed rerun cannot mix old and new shards.
+    Existing conversion payloads are rejected so a failed rerun cannot mix old and new shards.
+    The artifact executor may create its bookkeeping files before this stage begins.
     """
     output = StoragePath(output_path)
-    if output.exists():
+    if (output / "normalize").exists() or (output / "manifest.json").exists():
         raise FileExistsError(f"Conversion output already exists: {output_path}")
     result = write_conversion(
         conversion_stage(

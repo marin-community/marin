@@ -35,6 +35,7 @@ from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
+    CommandSemantics,
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
@@ -60,7 +61,9 @@ from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
-GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=FIXTURE_IMAGE, compatible_backends=(Backend.DOCKER,))
+GRADER_ENVIRONMENT = EnvironmentRequirements(
+    docker_image=FIXTURE_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS
+)
 GRADER_MACHINE = MachineSpec(RegistryImage(FIXTURE_IMAGE))
 VERIFYIT_ENTRYPOINT = ("python3", "-c", "from verifyit.grade import main; raise SystemExit(main())")
 REWARD_TXT = "/logs/verifier/reward.txt"

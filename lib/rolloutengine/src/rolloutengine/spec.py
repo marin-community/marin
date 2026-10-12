@@ -6,6 +6,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import NetworkPolicy
 from taskcompendium.models import TaskSpec
+from taskcompendium.runtime.shell import ShellToolConfig
 
 
 class MachineRuntimeSpec(BaseModel):
@@ -39,6 +40,7 @@ class TaskSessionSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     task_session: str = Field(min_length=1)
+    shell_tool: ShellToolConfig = ShellToolConfig()
     max_turns: int = Field(gt=0)
     model_turn_timeout: float | None = Field(gt=0)
     command_timeout: float | None = Field(gt=0)

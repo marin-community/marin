@@ -16,7 +16,6 @@ from typing import Any
 
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import rewritten_task
-from taskcompendium.convert.tasktrove import ANSWER_PATH, archive_file, archive_resources, archive_script_grader
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -36,14 +35,21 @@ from taskcompendium.pipeline.models import (
     Reply,
 )
 from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import DEFAULT_OUTPUT
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    VERIFIER_DATA,
+    archive_file,
+    archive_resources,
+    archive_script_grader,
+)
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 WITNESS_PATH = "solution/answer.json"
-GRADER_FILES = ("tests/verifier.py", "tests/verifier_data.json")
+GRADER_FILES = ("tests/verifier.py", VERIFIER_DATA)
 DELIVERY = (
     "write your final calendar as a JSON list to `/app/answer.txt`",
     "return your final calendar as a JSON list in the assistant response",
@@ -123,7 +129,7 @@ def convert_calendar(row: RawRow, context: ConversionContext) -> TaskSpec | Norm
     if defect is not None:
         return source_defect("invalid_witness", defect)
     grader = archive_script_grader(
-        row.data, required=GRADER_FILES, environment=required_grader_environment(context), answer_path=ANSWER_PATH
+        row.data, required=GRADER_FILES, environment=required_grader_environment(context), answer_path=DEFAULT_OUTPUT
     )
     if isinstance(grader, ImportRejection):
         return grader
@@ -152,7 +158,7 @@ def calendar_golden(task: TaskSpec) -> Reply | None:
     return None if witness is None else answer_reply(task, witness)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     sources = (
         (
             "tasktrove-calendar",
@@ -189,12 +195,12 @@ def sources() -> list[RlDataSource]:
     return [
         RlDataSource(
             info=info,
-            pipeline=RlDataPipeline(
+            pipeline=process_rows,
+            config=CurationRecipe(
                 name=name,
                 source=tasktrove_source(config),
                 convert=TaskTroveConverter(config, convert_calendar),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=rubric,
                 controls=Controls(golden=calendar_golden),

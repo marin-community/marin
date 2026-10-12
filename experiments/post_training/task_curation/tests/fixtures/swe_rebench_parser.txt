@@ -1,5 +1,5 @@
 # Source excerpt from the pinned SWE-rebench Go task.
-# Preserve the original functions used by this regression; other language parsers are omitted.
+# The Elixir parser models the archived parser's unbulleted trace format.
 
 import json
 import re
@@ -8,6 +8,8 @@ from pathlib import Path
 _PYTEST_STATUSES = ("PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS")
 
 _GO_RE = re.compile(r"^\s*---\s+(PASS|FAIL|SKIP):\s+(\S+)")
+_ELIXIR_PASS_RE = re.compile(r"^\s*test\s+(.+?)\s+\([\d.]+ms\)")
+_ELIXIR_FAIL_RE = re.compile(r"^\s*\d+\)\s+test\s+(.+?)\s+\(")
 
 
 def parse_log_pytest(log):
@@ -34,8 +36,23 @@ def parse_log_gotest(log):
     return out
 
 
+def parse_log_elixir(log):
+    out = {}
+    for line in log.split("\n"):
+        passed = _ELIXIR_PASS_RE.match(line)
+        if passed:
+            out[passed.group(1)] = "PASSED"
+        failed = _ELIXIR_FAIL_RE.match(line)
+        if failed:
+            out[failed.group(1)] = "FAILED"
+    return out
 
-PARSERS = {"parse_log_pytest": parse_log_pytest, "parse_log_gotest": parse_log_gotest}
+
+PARSERS = {
+    "parse_log_pytest": parse_log_pytest,
+    "parse_log_gotest": parse_log_gotest,
+    "parse_log_elixir": parse_log_elixir,
+}
 
 
 def _dispatch(test_output, parser_name):

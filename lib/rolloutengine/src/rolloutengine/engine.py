@@ -270,7 +270,7 @@ class ShellboxRolloutEngine:
             messages = list(completed.messages)
         try:
             async with asyncio.timeout(limits.verifier_timeout):
-                grade = await session.grade(tuple(messages))
+                grade = await session.grade(tuple(messages), stop_reason=stop_reason)
         except asyncio.CancelledError:
             if not attempt.expired() or owner.cancelling() > cancellation_count + 1:
                 raise

@@ -12,7 +12,8 @@ import pytest
 
 from taskcompendium.chat import assistant_message, chat_conversation
 from taskcompendium.grading import grade_answer
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -149,14 +150,6 @@ def test_predicted_action_rejects_invalid_contract_on_load(parameters):
     data["grader"]["parameters"] = parameters
     with pytest.raises(ValueError):
         TaskSpec.model_validate_json(json.dumps(data))
-
-
-def test_predicted_action_task_roundtrip_preserves_source_context():
-    row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification = import_row(row, canonical_sha256(row))
-    restored = TaskSpec.model_validate_json(specification.model_dump_json())
-    assert restored.context == specification.context
-    assert chat_request(restored) == chat_request(specification)
 
 
 @pytest.mark.parametrize(

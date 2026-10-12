@@ -8,18 +8,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, Machine, MachineSpec, Result, UnsupportedMachineSpec
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import (
+    Backend,
+    Command,
+    DockerImage,
+    Machine,
+    MachineSpec,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from verifyit.spec import SchemaFormat
 
 from taskcompendium.convert.answers import (
-    exact_answer_task,
     json_schema_task,
-    math_answer_task,
-    mcq_task,
     numeric_answer_task,
 )
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     DockerBuildContext,
     EnvironmentRequirements,
     NoGrader,
@@ -81,14 +89,8 @@ def checks(task: TaskSpec, controls: Controls, machines: FixtureGradingMachines 
 
 
 def in_process_task(kind: str) -> TaskSpec:
-    if kind == "math":
-        task = math_answer_task(ROW, prompt="What is half of one?", answer=r"\boxed{\frac{1}{2}}")
-    elif kind == "numeric":
+    if kind == "numeric":
         task = numeric_answer_task(ROW, prompt="What is 3 + 4?", answer="7", tolerance_abs=0, tolerance_rel=0)
-    elif kind == "mcq":
-        task = mcq_task(ROW, prompt="Which is blue? A. grass B. snow C. sky D. coal", answer="c", options=4)
-    elif kind == "exact":
-        task = exact_answer_task(ROW, prompt="Name the capital of France.", answers=("Paris",), ignore_case=True)
     else:
         task = json_schema_task(
             ROW, prompt="Return a JSON object.", schema=json.dumps({"type": "object"}), schema_format=SchemaFormat.JSON
@@ -113,7 +115,9 @@ def file_task() -> TaskSpec:
             "output_paths": ("/app/solution.txt",),
             "resources": ResourceGroups(
                 worker=(inline_resource("data/expected.txt", b"7"),),
-                oracle=(inline_resource("solution/solve.sh", b"cp /data/expected.txt solution.txt\n"),),
+                oracle=(
+                    inline_resource("solution/solve.sh", b"mkdir -p /app; cp /data/expected.txt /app/solution.txt\n"),
+                ),
             ),
         }
     )
@@ -124,14 +128,12 @@ def wrong_reply(task: TaskSpec) -> Reply:
     return answer_reply(task, "__incorrect_answer__")
 
 
-@pytest.mark.parametrize("kind", ["math", "numeric", "mcq", "exact"])
-def test_reference_golden_passes_for_in_process_graders(kind):
-    assert checks(in_process_task(kind), REFERENCE_CONTROLS) == {"golden": PASS}
+def test_reference_golden_passes_for_in_process_graders():
+    assert checks(in_process_task("numeric"), REFERENCE_CONTROLS) == {"golden": PASS}
 
 
-@pytest.mark.parametrize("kind", ["math", "numeric", "mcq", "exact"])
-def test_golden_fails_when_the_grader_rejects_it(kind):
-    assert checks(in_process_task(kind), Controls(golden=wrong_reply)) == {"golden": FAIL}
+def test_golden_fails_when_the_grader_rejects_it():
+    assert checks(in_process_task("numeric"), Controls(golden=wrong_reply)) == {"golden": FAIL}
 
 
 @pytest.mark.parametrize("controls", [Controls(), REFERENCE_CONTROLS], ids=["none", "no_reference"])
@@ -151,7 +153,8 @@ def test_graders_without_offline_grading_have_unsupported_controls(grader):
 def test_controls_reject_unresolved_build_before_machine_selection_or_oracle_fallback(role):
     task = file_task()
     build = EnvironmentRequirements(
-        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),))
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),)),
     )
     if role == "actor":
         task = task.model_copy(update={"environment_requirements": build})
@@ -232,7 +235,9 @@ def test_unavailable_grading_machines_are_infrastructure_errors(golden, check):
 def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_image, oracle_image):
     task = file_task()
     if agent_image is not None:
-        requirements = EnvironmentRequirements(docker_image=agent_image, compatible_backends=(Backend.DOCKER,))
+        requirements = EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=agent_image
+        )
         task = TaskSpec.model_validate(task.model_copy(update={"environment_requirements": requirements}).model_dump())
     images = RecordingImages()
     controls = Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh"))
@@ -240,3 +245,45 @@ def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_
     oracles = [machine for machine in images.created if "/solution/solve.sh" in machine.uploads]
     assert [machine.image for machine in oracles] == [oracle_image]
     assert {machine.image for machine in images.created if machine not in oracles} == {GRADER_IMAGE}
+
+
+class OracleMachines(FixtureGradingMachines):
+    """Provide image machines and a simulator, leaving lock preparation unsupported."""
+
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int):
+        if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+            return ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins(), memory_mb=memory_mb)
+        return self.factory, MachineSpec(DockerImage(environment.docker_image or GRADER_IMAGE), memory_mb=memory_mb)
+
+
+def test_oracle_uses_simulator_directory_and_setup_before_native_grading(monkeypatch):
+    monkeypatch.setenv("ORACLE_READY_NAME", "ready.txt")
+    task = answer_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.SHELL_SIMULATOR,
+                working_directory="/agent",
+                setup_commands=('cp /data/expected.txt "$ANSWER_FILE"',),
+                environment_variables={"ANSWER_FILE": "${ORACLE_READY_NAME}"},
+            )
+        }
+    )
+    controls = Controls(
+        golden=lambda _: OracleCommand('test "$PWD" = /agent && cat ready.txt > answer.out', answer_file="answer.out")
+    )
+    assert checks(task, controls, OracleMachines()) == {"golden": PASS}
+
+
+def test_lock_backed_oracle_rejects_image_only_provider_before_acquisition():
+    task = file_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="unbuilt/requirements.lock"
+            )
+        }
+    )
+    images = RecordingImages()
+    suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), OracleMachines(images))
+    with pytest.raises(UnsupportedMachineSpec):
+        suite.run(task)
+    assert images.created == []

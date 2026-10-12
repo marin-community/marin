@@ -249,7 +249,8 @@ def inference_mesh(num_chips: int, tensor_parallel_size: int) -> MeshConfig:
             num_chips,
             data,
         )
-    # Snowball's raw PartitionSpecs name expert and context even when both dimensions are inactive.
+    # Snowball's explicit PartitionSpecs name both axes even when they do not shard this slice.
+    # Keep them on the serving mesh so its forward pass can reshard tokens and expert weights.
     return MeshConfig(axes={"replica": 1, "data": data, "model": tensor_parallel_size, "expert": 1, "context": 1})
 
 

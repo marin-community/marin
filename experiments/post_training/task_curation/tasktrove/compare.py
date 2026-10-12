@@ -16,10 +16,8 @@ from pathlib import Path
 from typing import Any
 
 import click
-import verifyit
 from taskcompendium.harbor import snapshots
 from taskcompendium.harbor.compare import ParityReport, write_archive_diff
-from taskcompendium.harbor.export import UnsupportedHarborTask, archive_bytes, archive_file_mode, harbor_payload
 from taskcompendium.harbor.records import NormalizedIndex
 from taskcompendium.harbor.snapshots import TaskSnapshot, file_map_snapshot, snapshot_from_dict, task_snapshot
 from taskcompendium.models import AnswerType, TaskSpec
@@ -27,9 +25,14 @@ from taskcompendium.models import AnswerType, TaskSpec
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
-from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
+from experiments.post_training.task_curation.tasktrove.harbor_export import (
+    UnsupportedHarborTask,
+    archive_bytes,
+    archive_file_mode,
+    harbor_payload,
+)
 from experiments.post_training.task_curation.tasktrove.reference import REFERENCE_COMPRESSION_LEVEL
 
 FROZEN_PATHS = (
@@ -142,17 +145,18 @@ def compare_source(
     selected_path: str | None = None,
 ) -> dict[str, Any]:
     """Stream one exact source population and persist every matching or mismatching task."""
-    pipeline = source.pipeline
-    assert pipeline is not None and isinstance(pipeline.source, HfSource)
-    if len(pipeline.source.files) != 1:
+    dataset = source.dataset
+    if dataset is None:
+        raise ValueError(f"Missing source dataset identity: {source.name}")
+    if len(source.files) != 1:
         raise ValueError(f"Expected one pinned TaskTrove file for {source.name}")
-    config = pipeline.source.files[0].split("/", 1)[0]
+    config = source.files[0].split("/", 1)[0]
     manifest = json.loads((normalized / "manifest.json").read_text())
-    raw_file = source_file_path(manifest, pipeline.source.files[0], raw)
+    raw_file = source_file_path(manifest, source.files[0], raw)
     if (manifest["source"], manifest["source_dataset"], manifest["source_revision"]) != (
         source.name,
-        pipeline.source.repo,
-        pipeline.source.revision,
+        dataset.name,
+        dataset.revision,
     ):
         raise ValueError(f"Normalized input provenance does not match {source.name}")
     if "input_rows" not in manifest:
@@ -291,9 +295,7 @@ def main(
     catalog = {
         source.name: source
         for source in all_sources().values()
-        if source.pipeline is not None
-        and isinstance(source.pipeline.source, HfSource)
-        and source.pipeline.source.repo == TASKTROVE_REPO
+        if source.pipeline is not None and source.dataset is not None and source.dataset.name == TASKTROVE_REPO
     }
     unknown = set(selected) - catalog.keys()
     if unknown:
@@ -324,17 +326,8 @@ def main(
         ),
         "python": sys.version,
         "package_versions": {
-            name: importlib.metadata.version(name)
-            for name in ("pyarrow", "pydantic", "tomlkit", "tomli-w", "harbor-config")
+            name: importlib.metadata.version(name) for name in ("pyarrow", "pydantic", "tomlkit", "tomli-w")
         },
-        "implementation_files": [
-            file_identity(path)
-            for path in sorted(
-                {Path(__file__), Path(__file__).with_name("reference.py")}
-                | set(Path(snapshots.__file__).parent.glob("*.py"))
-                | set(Path(verifyit.__file__).parent.rglob("*.py"))
-            )
-        ],
         "grader_image": grader_image,
         "sources": names,
         "results": {},
