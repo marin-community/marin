@@ -12,7 +12,6 @@ resolve against ``MARIN_PREFIX``, so they must be staged in the ferry's region.
 
 import logging
 
-from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.timing import log_time
@@ -22,6 +21,7 @@ from experiments.datakit.reference_pipeline import (
     PipelineScale,
     quality_model_path,
     reference_datakit_steps,
+    run_reference_steps,
     shared_zephyr_context,
 )
 from infra.ci.run_status import run_status
@@ -60,5 +60,5 @@ def run_reference_ferry(
         output_prefix=output_prefix,
     )
     with run_status(status_path, marin_prefix=output_prefix):
-        with log_time(f"{ferry_name} total wall time"), zephyr_context:
-            StepRunner().run(steps.all_steps, max_concurrent=FERRY_MAX_CONCURRENT_STEPS)
+        with log_time(f"{ferry_name} total wall time"):
+            run_reference_steps(steps, zephyr_context, max_concurrent=FERRY_MAX_CONCURRENT_STEPS)
