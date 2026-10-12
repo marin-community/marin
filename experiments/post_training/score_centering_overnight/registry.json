@@ -1243,11 +1243,12 @@
       "configuration_sha256": "82f0c656f81cdb301a41761245b64312d78a73e8e32766c1ed4695706930a72a",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a3-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "09cee83279fe9243f74cac5d37762675edd66dfd1a6e1a921e322c23edf34df4",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen0212_sc_qualification.json.gz"
     },
     {
       "job_id": "/romain/sc-snowball-runtime-qual-sc-s0-a3-01a126ce",
@@ -1260,12 +1261,29 @@
       "configuration_sha256": "5e9c78d010a155d4c1763141caadea2412b0b33664eecc6651415a506110e7c7",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-runtime-qual-sc-s0-a3-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "fbaa26afd32d314d1475688b8469e15009d823d24164b0cdfdaceb956bb99248",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_qualification_v4/tis-detach.yaml",
+      "configuration_sha256": "14b3fa62a7167beaa8bd8fb1ab40040531cdbc46faf9ef0462e3b84b0099183f",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "5c6c69d44be90a5a25be832b14d86404b835f439af9fdced4ab39f461cc4f30d",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-12T18:28:22.328045+00:00"
+  "observed_at": "2026-10-12T19:35:14.535967+00:00"
 }
