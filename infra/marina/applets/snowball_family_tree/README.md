@@ -47,7 +47,11 @@ View counts are computed automatically.
 ## Check and submit
 
 From the repository root, check that every new ID is unique, its parent exists,
-the parent chain has no cycle and its cooldown agrees with `lane`. Then run:
+the parent chain has no cycle and its cooldown agrees with `lane`. For merge
+nodes or layout changes also run `node
+infra/marina/applets/snowball_family_tree/verify_layout.js`, which drives the
+scripts under a stub DOM and checks that every visible node is placed once and
+every parent arrow ends at its child. Then run:
 
 ```bash
 uv run marina validate infra/marina/applets/snowball_family_tree

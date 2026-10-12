@@ -239,7 +239,8 @@ function layout() {
   );
   roots.forEach((n) => measure(n, 0));
   positions = new Map();
-  const paths = [];
+  const paths = [],
+    crossEdges = [];
   function place(n, left, top) {
     const block = blocks.get(n.id),
       x = left + (block.width - BLOCK_BORDER - block.nodeWidth) / 2,
@@ -261,28 +262,35 @@ function layout() {
       let colLeft = childLeft;
       row.forEach((c, col) => {
         const childBlock = blocks.get(c.id);
-        place(
-          c,
-          colLeft + (block.columnWidths[col] - childBlock.width) / 2,
-          rowTop,
-        );
-        const target = positions.get(c.id),
-          sx = x + pos.width / 2,
-          sy = top + pos.height,
-          tx = target.x + target.width / 2,
-          ty = target.y;
-        const firstBus = top + pos.height + levelGap / 2,
-          bus = rowTop - levelGap / 2,
-          rail = left + block.width - 10;
-        const d =
-          rowIndex === 0
-            ? `M${sx},${sy} V${bus} H${tx} V${ty}`
-            : `M${sx},${sy} V${firstBus} H${rail} V${bus} H${tx} V${ty}`;
-        const color =
-          n.org === "community" ? "var(--community)" : "var(--athena)";
-        paths.push(
-          `<path class="edge ${c.confidence === "inferred" ? "inferred" : ""}" style="stroke:${color}" data-from="${esc(n.id)}" data-to="${esc(c.id)}" d="${d}" marker-end="url(#arrow)"><title>${esc(n.title)} → ${esc(c.title)}</title></path>`,
-        );
+        // A node with several parents is placed once, under its first visible
+        // parent; the other parents connect by cross-edge after every node
+        // has its final position.
+        if (c.parents.find((p) => visible.has(p)) !== n.id) {
+          crossEdges.push([n, c]);
+        } else {
+          place(
+            c,
+            colLeft + (block.columnWidths[col] - childBlock.width) / 2,
+            rowTop,
+          );
+          const target = positions.get(c.id),
+            sx = x + pos.width / 2,
+            sy = top + pos.height,
+            tx = target.x + target.width / 2,
+            ty = target.y;
+          const firstBus = top + pos.height + levelGap / 2,
+            bus = rowTop - levelGap / 2,
+            rail = left + block.width - 10;
+          const d =
+            rowIndex === 0
+              ? `M${sx},${sy} V${bus} H${tx} V${ty}`
+              : `M${sx},${sy} V${firstBus} H${rail} V${bus} H${tx} V${ty}`;
+          const color =
+            n.org === "community" ? "var(--community)" : "var(--athena)";
+          paths.push(
+            `<path class="edge ${c.confidence === "inferred" ? "inferred" : ""}" style="stroke:${color}" data-from="${esc(n.id)}" data-to="${esc(c.id)}" d="${d}" marker-end="url(#arrow)"><title>${esc(n.title)} → ${esc(c.title)}</title></path>`,
+          );
+        }
         colLeft += block.columnWidths[col] + gap;
       });
       rowTop += block.rowHeights[rowIndex] + gap;
@@ -293,6 +301,19 @@ function layout() {
     place(n, cursor, pad);
     cursor += blocks.get(n.id).width + gap;
   });
+  // Remaining merge-parent arrows, routed from each parent into the child's
+  // final position with a bus just above the child.
+  for (const [from, to] of crossEdges) {
+    const a = positions.get(from.id),
+      b = positions.get(to.id);
+    if (!a || !b) continue;
+    const d = `M${a.x + a.width / 2},${a.y + a.height} V${b.y - levelGap / 2} H${b.x + b.width / 2} V${b.y}`;
+    const color =
+      from.org === "community" ? "var(--community)" : "var(--athena)";
+    paths.push(
+      `<path class="edge ${to.confidence === "inferred" ? "inferred" : ""}" style="stroke:${color}" data-from="${esc(from.id)}" data-to="${esc(to.id)}" d="${d}" marker-end="url(#arrow)"><title>${esc(from.title)} → ${esc(to.title)}</title></path>`,
+    );
+  }
   canvasWidth = cursor - gap + pad;
   canvasHeight =
     Math.max(...roots.map((n) => blocks.get(n.id).height)) + 2 * pad;
