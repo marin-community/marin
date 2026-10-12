@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
+from analysis_json import read_json
 
 
 def stage(job_id: str) -> str:
@@ -62,8 +63,10 @@ def main() -> None:
         frozen[job_id] = (path, config)
 
     audits = {}
-    for path in (campaign / "results").glob("*.json"):
-        value = json.loads(path.read_text())
+    for path in (campaign / "results").glob("*.json*"):
+        if not (path.name.endswith(".json") or path.name.endswith(".json.gz")):
+            continue
+        value = read_json(path)
         if isinstance(value, dict) and value.get("audit_passed") is True:
             audits[value["run_id"]] = str(path.relative_to(repository))
 

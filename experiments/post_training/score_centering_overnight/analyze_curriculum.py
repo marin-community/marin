@@ -13,6 +13,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml
+from analysis_json import read_json, write_json
 from analyze_skyrl import allocated_hours, paired_interval
 
 mpl.use("Agg")
@@ -110,7 +111,8 @@ def main() -> None:
     runs = []
     for config in configs:
         run_id = config["run"]["id"]
-        audit = json.loads((args.audit_dir / f"{run_id}.json").read_text())
+        path = args.audit_dir / f"{run_id}.json"
+        audit = read_json(path if path.exists() else path.with_suffix(".json.gz"))
         runs.append(summarize(config, audit, args.cache_dir / run_id, costs))
     assert len({run["source"] for run in runs}) == 1
     members = set(json.loads(args.common_source_rows.read_text())) if args.common_source_rows else None
@@ -155,7 +157,7 @@ def main() -> None:
         report["pilot_difference"] = float(differences[0])
         report["scope"] = "One exploratory paired seed; no population interval or equivalence claim."
     args.output.mkdir(parents=True, exist_ok=True)
-    (args.output / "paired_curriculum_results.json").write_text(json.dumps(report, indent=2) + "\n")
+    write_json(args.output / "paired_curriculum_results.json.gz", report)
     figure, axes = plt.subplots(2, 3, figsize=(14, 8))
     for run in runs:
         color = "#007b83" if run["score_centering"] else "#c36c44"

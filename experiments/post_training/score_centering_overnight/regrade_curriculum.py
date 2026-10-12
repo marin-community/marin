@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
+from analysis_json import read_json, write_json
 from grading_text import grading_text
 from skyrl_gym.envs.aime.utils import verify
 from skyrl_gym.envs.gsm8k.utils import compute_score
@@ -107,7 +108,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
-    audited = json.loads(args.audit.read_text())
+    audited = read_json(args.audit)
     assert audited["audit_passed"] and audited["run_id"] == config["run"]["id"]
     source_hashes = {
         phase: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -199,8 +200,7 @@ def main() -> None:
         "native_failures_not_regraded": native_errors,
         "regrading_passed": not discrepancies,
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    write_json(args.output, report)
     print(
         json.dumps(
             {

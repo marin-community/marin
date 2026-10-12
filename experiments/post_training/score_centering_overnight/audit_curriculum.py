@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import boto3
 import torch
 import yaml
+from analysis_json import write_json
 from audit_skyrl import collect
 from botocore.config import Config
 from skyrl_train.objective.score_centering import ppo_tis_score_centering_correction
@@ -345,8 +346,7 @@ def main() -> None:
         Bucket=checkpoint.netloc, Key=checkpoint.path.lstrip("/") + "/latest_ckpt_global_step.txt"
     )["Body"].read()
     assert int(marker) == result["completed_updates"]
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, indent=2) + "\n")
+    write_json(args.output, result)
     print(
         json.dumps(
             {
