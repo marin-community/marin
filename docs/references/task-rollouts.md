@@ -117,7 +117,7 @@ from rolloutengine.agent_session import AgentTaskSession
 from rolloutengine.engine import ShellboxRolloutEngine
 
 
-def agent_session(lowered, machine, default_grader):
+def agent_session(_lowered, machine, default_grader):
     return AgentTaskSession(partial(run_agent, machine), default_grader)
 
 engine = ShellboxRolloutEngine(model, factories, sessions={"agent": agent_session})
