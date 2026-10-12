@@ -57,8 +57,8 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def protocol_recipe(updates: int, learning_rate: float) -> str:
-    """Set the FTPO learning rate while retaining other source-v125 optimizer settings."""
+def protocol_recipe(updates: int, learning_rate: float, ftpo_lambda_mse: float) -> str:
+    """Set FTPO learning rate and reference regularization for the protocol experiment."""
     source = Path(__file__).parents[1] / "bfcl_rl/v125_async.yaml"
     baseline = yaml.safe_load(source.read_text())["skyrl"]
     optimizer = {**baseline["trainer"]["policy"]["optimizer_config"], "lr": learning_rate}
@@ -111,7 +111,10 @@ def protocol_recipe(updates: int, learning_rate: float) -> str:
                 "optimizer_config": optimizer,
             },
             "ref": {"sequence_parallel_size": 1, "megatron_config": megatron_config(REFERENCE_PARALLELISM)},
-            "algorithm": {"use_kl_loss": False, "ftpo": {"boundary": "repeated_tool_opener"}},
+            "algorithm": {
+                "use_kl_loss": False,
+                "ftpo": {"boundary": "repeated_tool_opener", "lambda_mse": ftpo_lambda_mse},
+            },
             "rollout_buffer": {"max_staleness_steps": 0, "max_in_flight": 32, "batch_policy": "full_batch"},
             "step_phase_budgets": {"evaluation": 21600, "policy_training": 7200, "checkpoint_work": 7200},
             "callbacks": [
@@ -179,7 +182,9 @@ def protocol_recipe(updates: int, learning_rate: float) -> str:
     return yaml.safe_dump(recipe, sort_keys=False)
 
 
-def protocol_spec(input_uri: str, input_version: str, updates: int, learning_rate: float) -> SkyRLSpec:
+def protocol_spec(
+    input_uri: str, input_version: str, updates: int, learning_rate: float, ftpo_lambda_mse: float
+) -> SkyRLSpec:
     inputs = ArtifactStep.adopt(
         user_owned_name("data/online-skill-acquisition-inputs"), input_version, input_uri, kind=Artifact
     )
@@ -194,7 +199,7 @@ def protocol_spec(input_uri: str, input_version: str, updates: int, learning_rat
     return SkyRLSpec(
         name=name,
         version=resolve_version(name, None),
-        config_yaml=protocol_recipe(updates, learning_rate),
+        config_yaml=protocol_recipe(updates, learning_rate, ftpo_lambda_mse),
         runtime=SkyRLRuntime(SkyRLRuntimeProfile.MEGATRON),
         model=ArtifactHfModel(checkpoint, MODEL, MODEL_REVISION, relative_path=""),
         train_data=(ArtifactDataSource(inputs, relative_path="bfcl-training.parquet"),),
@@ -213,15 +218,18 @@ def protocol_spec(input_uri: str, input_version: str, updates: int, learning_rat
 @click.option("--input-version", required=True)
 @click.option("--updates", type=click.IntRange(min=1), required=True)
 @click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), required=True)
+@click.option("--ftpo-lambda-mse", type=click.FloatRange(min=0), required=True)
 @rl_build_options
-def main(input_uri: str, input_version: str, updates: int, learning_rate: float) -> ArtifactStep:
+def main(input_uri: str, input_version: str, updates: int, learning_rate: float, ftpo_lambda_mse: float) -> ArtifactStep:
     execution = replace(
         COLLECTION_EXECUTION,
         wandb_entity="nyu-dice-lab",
         coordinator_timeout_hours=72,
         job_timeout_seconds=72 * 3600,
     )
-    return skyrl_step(protocol_spec(input_uri, input_version, updates, learning_rate), execution, export_hf=True)
+    return skyrl_step(
+        protocol_spec(input_uri, input_version, updates, learning_rate, ftpo_lambda_mse), execution, export_hf=True
+    )
 
 
 if __name__ == "__main__":
