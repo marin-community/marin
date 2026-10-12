@@ -29,7 +29,6 @@ from experiments.post_training.capability_driven_envs.generate_tasks import (
 )
 from experiments.post_training.capability_driven_envs.program_prompt import (
     EXAMPLE_PROGRAM,
-    SUBMIT_TOOL,
     ProgramSubmission,
 )
 
@@ -55,15 +54,15 @@ class CannedModel:
 
     def __init__(self, rejected: frozenset[str] = frozenset()):
         self.rejected = rejected
-        self.tools: list[str] = []
+        self.output_types: list[type[BaseModel]] = []
 
     async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
         raise AssertionError("the driver asks only for structured output")
 
     async def complete_structured[T: BaseModel](
-        self, messages: Sequence[Message], output_type: type[T], *, name: str, policy: LLMPolicy
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
-        self.tools.append(name)
+        self.output_types.append(output_type)
         if any(capability in str(messages[-1]["content"]) for capability in self.rejected):
             raise StructuredOutputError(ValueError("no tool call"), (COMPLETION, COMPLETION))
         value = output_type.model_validate({"source": EXAMPLE_PROGRAM.read_text()})
@@ -116,7 +115,7 @@ def test_driver_saves_each_task_and_its_completions_once_at_the_end(tmp_path: Pa
 
     item_ids = [f"{CAPABILITY}--00", f"{CAPABILITY}--01"]
     assert json.loads((output / SUMMARY_FILE).read_text()) == dict.fromkeys(item_ids, TASK_STATUS)
-    assert model.tools == [SUBMIT_TOOL, SUBMIT_TOOL]
+    assert model.output_types == [ProgramSubmission, ProgramSubmission]
     for item_id in item_ids:
         item_dir = output / item_id
         assert TaskSpec.model_validate_json((item_dir / "task.json").read_text()).id == item_id

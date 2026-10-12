@@ -10,10 +10,10 @@ import pytest
 from taskforge.llm.client import (
     AttemptOutcome,
     Completion,
+    ContextExhausted,
     FinishReason,
-    GlmContextExhausted,
-    GlmRequestRejected,
-    GlmUnavailable,
+    ModelRequestRejected,
+    ModelUnavailable,
 )
 from taskforge.llm.glm_client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import CONTINUE_PROMPT, GLM_MAX_OUTPUT_TOKENS, LLMPolicy, Message
@@ -73,7 +73,7 @@ def test_tool_call_deltas_are_joined(fake_glm, run):
 @pytest.mark.parametrize(
     ("completion_tokens", "finish"), [(64, FinishReason.LENGTH), (63, FinishReason.TOOL_CALLS)], ids=["at", "under"]
 )
-def test_tool_call_reply_that_spent_its_whole_budget_is_reported_as_length(fake_glm, run, completion_tokens, finish):
+def test_tool_call_reply_that_used_its_whole_budget_is_reported_as_length(fake_glm, run, completion_tokens, finish):
     fake_glm.stream(
         tool_calls=(("shell", '{"command": "cat <<EOF'),), finish="tool_calls", completion_tokens=completion_tokens
     )
@@ -84,7 +84,7 @@ def test_tool_call_reply_that_spent_its_whole_budget_is_reported_as_length(fake_
     assert json.loads(completion.attempts[0].events[-2])["choices"][0]["finish_reason"] == "tool_calls"
 
 
-def test_retryable_statuses_spend_attempts_then_succeed(fake_glm, run):
+def test_retryable_statuses_are_retried_then_succeed(fake_glm, run):
     fake_glm.status(429, "slow down", {"Retry-After": "0"})
     fake_glm.status(503, "unavailable")
     fake_glm.stream(content="ok")
@@ -121,20 +121,20 @@ def test_aborted_or_malformed_stream_is_retried(fake_glm, run, stream):
 def test_exhausted_attempts_raise_unavailable_with_record(fake_glm, run):
     fake_glm.status(500, "boom")
     fake_glm.status(502, "boom")
-    with pytest.raises(GlmUnavailable) as error:
+    with pytest.raises(ModelUnavailable) as error:
         run(max_attempts=2)
     assert outcomes(error.value) == [AttemptOutcome.RETRYABLE_STATUS] * 2
 
 
 def test_client_error_is_not_retried(fake_glm, run):
     fake_glm.status(401, "bad token")
-    with pytest.raises(GlmRequestRejected) as error:
+    with pytest.raises(ModelRequestRejected) as error:
         run()
     assert error.value.status == 401
     assert len(fake_glm.requests) == 1
 
 
-def test_route_404_holds_without_spending_an_attempt(fake_glm, run):
+def test_route_404_holds_without_counting_an_attempt(fake_glm, run):
     fake_glm.status(404, '{"error": "no route for model glm-5.3"}')
     fake_glm.status(404, '{"error": "no route for model glm-5.3"}')
     fake_glm.stream(content="back")
@@ -157,7 +157,7 @@ def test_hold_gives_up_after_hold_timeout(fake_glm, run):
     fake_glm.health_workers.clear()
     fake_glm.health_workers.append({"high": 0, "bulk": 5})
     fake_glm.status(503, "no workers")
-    with pytest.raises(GlmUnavailable, match="hold"):
+    with pytest.raises(ModelUnavailable, match="hold"):
         run(hold_timeout=0.05)
 
 
@@ -166,12 +166,12 @@ def test_hold_gives_up_after_hold_timeout(fake_glm, run):
     [(500, {"high": 0}), (200, {"bulk": 0})],
     ids=["health-500", "pool-not-reported"],
 )
-def test_failure_spends_an_attempt_unless_health_reports_the_pool_empty(fake_glm, run, health_status, workers):
+def test_failure_counts_an_attempt_unless_health_reports_the_pool_empty(fake_glm, run, health_status, workers):
     fake_glm.health_status = health_status
     fake_glm.health_workers.clear()
     fake_glm.health_workers.append(workers)
     fake_glm.status(503, "busy")
-    with pytest.raises(GlmUnavailable, match="attempts exhausted"):
+    with pytest.raises(ModelUnavailable, match="attempts exhausted"):
         run(max_attempts=1, hold_timeout=60.0)
 
 
@@ -193,24 +193,12 @@ def test_stream_without_done_is_retried(fake_glm, run):
     assert outcomes(completion) == [AttemptOutcome.INCOMPLETE_STREAM, AttemptOutcome.COMPLETED]
 
 
-def test_context_overflow_lowers_max_tokens_to_remaining_context(fake_glm, run):
+def test_context_overflow_raises_without_lowering_max_tokens(fake_glm, run):
     fake_glm.status(400, CONTEXT_ERROR)
-    fake_glm.stream(content="x", finish="length", prompt_tokens=140_000, completion_tokens=1)
-    fake_glm.stream(content="full answer")
-    completion = run()
-    assert completion.content == "full answer"
-    assert [r["max_tokens"] for r in fake_glm.requests] == [GLM_MAX_OUTPUT_TOKENS, 1, 262_144 - 140_000]
-    assert [a.segment for a in completion.attempts] == [0, -1, 0]
-
-
-def test_context_overflow_that_the_lowered_budget_does_not_fix_is_rejected(fake_glm, run):
-    for _ in range(2):
-        fake_glm.status(400, CONTEXT_ERROR)
-        fake_glm.stream(content="x", finish="length", prompt_tokens=140_000, completion_tokens=1)
-    with pytest.raises(GlmContextExhausted):
+    with pytest.raises(ContextExhausted) as error:
         run()
-    remaining = 262_144 - 140_000
-    assert [r["max_tokens"] for r in fake_glm.requests] == [GLM_MAX_OUTPUT_TOKENS, 1, remaining, 1]
+    assert error.value.status == 400
+    assert [r["max_tokens"] for r in fake_glm.requests] == [GLM_MAX_OUTPUT_TOKENS]
 
 
 def test_length_finish_continues_from_partial_output(fake_glm, run):
@@ -257,7 +245,6 @@ def test_length_with_a_tool_call_is_not_continued(fake_glm, run):
 def test_continuation_that_no_longer_fits_returns_the_partial_output(fake_glm, run):
     fake_glm.stream(content="long answer", finish="length", prompt_tokens=140_020, completion_tokens=122_124)
     fake_glm.status(400, CONTEXT_ERROR)
-    fake_glm.status(400, CONTEXT_ERROR)
     completion = run()
     assert completion.content == "long answer"
     assert completion.finish_reason is FinishReason.LENGTH
@@ -265,16 +252,7 @@ def test_continuation_that_no_longer_fits_returns_the_partial_output(fake_glm, r
     assert [(a.segment, a.outcome) for a in completion.attempts] == [
         (0, AttemptOutcome.COMPLETED),
         (1, AttemptOutcome.CONTEXT_OVERFLOW),
-        (-1, AttemptOutcome.CONTEXT_OVERFLOW),
     ]
-
-
-def test_prompt_that_fills_the_context_is_rejected(fake_glm, run):
-    fake_glm.status(400, CONTEXT_ERROR)
-    fake_glm.status(400, CONTEXT_ERROR)
-    with pytest.raises(GlmContextExhausted):
-        run()
-    assert [r["max_tokens"] for r in fake_glm.requests] == [GLM_MAX_OUTPUT_TOKENS, 1]
 
 
 def test_continuations_stop_at_policy_bound(fake_glm, run):

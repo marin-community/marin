@@ -5,21 +5,23 @@
 
 ``GlmClient`` implements ``taskforge.llm.client.ModelClient``; ``LLMProviderConfig`` sets how it
 calls the provider. Every request streams, so a stall (no token for ``stall_timeout`` seconds) is
-detected without a wall-clock cap. Retryable failures (408, 429, 5xx, transport errors, stalls,
-truncated, malformed, or aborted streams) spend one of ``max_attempts`` with exponential backoff. A missing
-relay route (404 whose body names the route), or a retryable failure while ``/health`` answers 200
-and reports zero workers for the endpoint's pool, is an infrastructure hold: the client waits for
-the pool to come back, up to ``hold_timeout``, without spending an attempt. A ``/health`` that is
-unreachable or does not report the pool never causes a hold. A 400 saying the prompt plus
-``max_tokens`` exceeds the context window lowers ``max_tokens`` to the remaining context, measured
-by a one-token probe of the same prompt. When the prompt alone fills the window, or the measured
-remaining context does not lower ``max_tokens`` (the router and the server count the prompt
-differently), ``GlmContextExhausted`` is raised, and a continuation that hits it ends the call with
-the output gathered so far.
+detected without a wall-clock cap. Each retryable failure (408, 429, 5xx, transport errors, stalls,
+truncated, malformed, or aborted streams) counts against ``max_attempts`` and is retried with
+exponential backoff. A missing relay route (404 whose body names the route), or a retryable failure
+while ``/health`` answers 200 and reports zero workers for the endpoint's pool, is an
+infrastructure hold: the client waits for the pool to come back, up to ``hold_timeout``, and the
+failure does not count against ``max_attempts``. A ``/health`` that is unreachable or does not
+report the pool never causes a hold.
+
+A 400 saying the prompt plus ``max_tokens`` exceeds the context window raises ``ContextExhausted``
+at once; the client never lowers ``max_tokens`` and never truncates the prompt. A prompt that long
+is a sign that its parts belong in files, read by the model in an agentic environment, rather than
+in one request. A continuation that overflows the window ends the call with the output gathered so
+far and ``finish_reason == "length"``.
 
 vLLM's GLM tool parser reports a reply cut off by ``max_tokens`` inside a tool call as
 ``finish_reason == "tool_calls"`` with the partial arguments (measured live). A ``tool_calls``
-segment that spent its whole ``max_tokens`` is therefore reported as ``LENGTH``; the raw events in
+segment that used its whole ``max_tokens`` is therefore reported as ``LENGTH``; the raw events in
 ``Attempt.events`` keep what the server sent. A call that ends exactly on the budget is reported
 as cut too.
 """
@@ -30,7 +32,7 @@ import logging
 import re
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import TracebackType
 from typing import Self
@@ -43,10 +45,10 @@ from taskforge.llm.client import (
     Attempt,
     AttemptOutcome,
     Completion,
+    ContextExhausted,
     FinishReason,
-    GlmContextExhausted,
-    GlmRequestRejected,
-    GlmUnavailable,
+    ModelRequestRejected,
+    ModelUnavailable,
     StructuredResult,
     ToolCall,
     Usage,
@@ -60,7 +62,7 @@ from taskforge.llm.policy import (
     continuation_messages,
     reasoning_continuation_messages,
 )
-from taskforge.llm.structured import StructuredTool, complete_structured
+from taskforge.llm.structured import StructuredTool, complete_structured, tool_name
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +72,6 @@ ERROR_BODY_LIMIT = 2000
 CONNECT_TIMEOUT = 30.0
 WRITE_TIMEOUT = 120.0
 HEALTH_TIMEOUT = 20.0
-PROBE_SEGMENT = -1
 
 
 class Pool(StrEnum):
@@ -184,7 +185,7 @@ def _status_failure(response: httpx.Response, body: str) -> _AttemptFailed:
         return _AttemptFailed(AttemptOutcome.CONTEXT_OVERFLOW, body, status)
     if status in RETRYABLE_STATUSES:
         return _AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, body, status, _retry_after(response))
-    raise GlmRequestRejected(status, body)
+    raise ModelRequestRejected(status, body)
 
 
 def request_body(
@@ -263,7 +264,7 @@ class GlmClient:
         while True:
             try:
                 stream = await self._segment(conversation, policy, fields, len(segments), attempts)
-            except GlmContextExhausted:
+            except ContextExhausted:
                 if not segments:
                     raise
                 logger.warning("GLM context is full after %d segments; returning the partial output", len(segments))
@@ -302,14 +303,21 @@ class GlmClient:
         )
 
     async def complete_structured[T: BaseModel](
-        self, messages: Sequence[Message], output_type: type[T], *, name: str, policy: LLMPolicy
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
-        """Force one call of the strict tool ``name`` whose arguments ``output_type`` validates.
+        """Return a reply that ``output_type`` validates, as a forced call of a strict tool.
 
-        The tool's description is ``output_type``'s docstring. An invalid call gets the provider's
-        ``structured_repairs`` repair requests before ``StructuredOutputError``.
+        The tool is named ``tool_name(output_type)`` (the class name in snake case) and described
+        by ``output_type``'s docstring; its parameters are ``output_type``'s JSON schema. vLLM
+        enforces that schema by structured decoding (xgrammar) on the tool's parameters, applied
+        after the reasoning block. The client still validates the arguments with ``output_type``,
+        which covers what the grammar cannot: pydantic validators, and a reply cut off by the
+        output limit. An invalid reply is sent back for correction up to the provider's
+        ``structured_repairs`` times before ``StructuredOutputError``.
         """
-        tool = StructuredTool(name=name, description=output_type.__doc__ or "", output_type=output_type)
+        tool = StructuredTool(
+            name=tool_name(output_type), description=output_type.__doc__ or "", output_type=output_type
+        )
         return await complete_structured(self, messages, tool, policy, self._provider.structured_repairs)
 
     async def _segment(
@@ -321,11 +329,11 @@ class GlmClient:
         attempts: list[Attempt],
     ) -> _Stream:
         """Send one request with retries and holds, appending every attempt to ``attempts``."""
-        # Separate schedules, so a hold does not inflate the delay before the next spent attempt.
+        # Separate schedules, so a hold does not inflate the delay before the next counted retry.
         retry_backoff = self._backoff.copy()
         hold_backoff = self._backoff.copy()
         max_tokens = policy.max_tokens
-        spent = 0
+        failures = 0
         hold_started: float | None = None
         while True:
             body = request_body(self._provider.model, messages, max_tokens, policy, request_fields)
@@ -347,18 +355,7 @@ class GlmClient:
                     )
                 )
                 if failure.outcome is AttemptOutcome.CONTEXT_OVERFLOW:
-                    if max_tokens == 1:
-                        raise GlmContextExhausted(failure.detail) from failure
-                    remaining = await self._remaining_context(messages, policy, request_fields, failure.detail, attempts)
-                    if remaining >= max_tokens:
-                        # The router's 400 and vLLM's usage disagree on the prompt length; retrying
-                        # at the same budget would get the same 400 forever.
-                        raise GlmContextExhausted(
-                            f"context overflow at max_tokens={max_tokens}, measured remaining {remaining}: "
-                            f"{failure.detail}"
-                        ) from failure
-                    max_tokens = remaining
-                    continue
+                    raise ContextExhausted(failure.detail) from failure
                 if failure.outcome is AttemptOutcome.ROUTE_MISSING or await self._pool_empty():
                     if hold_started is None:
                         hold_started = time.monotonic()
@@ -366,13 +363,13 @@ class GlmClient:
                     continue
                 hold_started = None
                 hold_backoff = self._backoff.copy()
-                spent += 1
-                if spent >= self._provider.max_attempts:
-                    raise GlmUnavailable(f"GLM attempts exhausted after {spent}: {failure}", attempts) from failure
+                failures += 1
+                if failures >= self._provider.max_attempts:
+                    raise ModelUnavailable(f"GLM attempts exhausted after {failures}: {failure}", attempts) from failure
                 delay = max(retry_backoff.next_interval(), failure.retry_after)
                 logger.warning(
                     "GLM attempt %d/%d failed (%s); retrying in %.1fs",
-                    spent,
+                    failures,
                     self._provider.max_attempts,
                     failure,
                     delay,
@@ -447,31 +444,11 @@ class GlmClient:
             raise _AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "stream lacked finish_reason or usage")
         stream.finished = time.monotonic()
 
-    async def _remaining_context(
-        self,
-        messages: Sequence[Message],
-        policy: LLMPolicy,
-        request_fields: Mapping[str, object],
-        detail: str,
-        attempts: list[Attempt],
-    ) -> int:
-        """Measure the prompt with a one-token request; return the context left for output."""
-        match = CONTEXT_LIMIT_PATTERN.search(detail)
-        assert match is not None
-        probe = replace(policy, max_tokens=1, max_continuations=0)
-        stream = await self._segment(messages, probe, request_fields, PROBE_SEGMENT, attempts)
-        assert stream.usage is not None
-        remaining = int(match.group(1)) - stream.usage.prompt_tokens
-        if remaining < 1:
-            raise GlmContextExhausted(detail)
-        logger.info("GLM prompt has %d tokens; lowering max_tokens to %d", stream.usage.prompt_tokens, remaining)
-        return remaining
-
     async def _pool_empty(self) -> bool:
         """Whether ``/health`` answers 200 and reports zero workers in this endpoint's pool.
 
         An unreachable ``/health``, a non-200 answer, or one that does not name the pool returns
-        False, so the failure that prompted the check spends an attempt instead of holding.
+        False, so the failure that prompted the check counts against ``max_attempts`` instead of holding.
         """
         try:
             response = await self._http.get(
@@ -488,7 +465,7 @@ class GlmClient:
         """Wait, polling ``/health``, until the pool is no longer reported empty; raise once ``deadline`` passes."""
         while True:
             if time.monotonic() >= deadline:
-                raise GlmUnavailable(f"GLM infrastructure hold exceeded {self._provider.hold_timeout}s", attempts)
+                raise ModelUnavailable(f"GLM infrastructure hold exceeded {self._provider.hold_timeout}s", attempts)
             await asyncio.sleep(backoff.next_interval())
             if not await self._pool_empty():
                 return

@@ -7,10 +7,12 @@
 provider: the model, retries and their backoff, the infrastructure hold, the stall timeout and the
 connection pool.
 
-``max_tokens`` starts at the model's output limit. When a prompt is long enough that the limit
-does not fit, the client lowers it to the remaining context; there is no escalation ladder.
-When a reply stops on ``finish_reason == "length"`` the client keeps the partial output and
-continues, up to ``max_continuations`` times, in one of two ways measured live on GLM-5.3:
+``max_tokens`` defaults to the model's output limit and is never lowered: a prompt too long for
+that limit to fit the context window is an error (``ContextExhausted``), not something the client
+works around, and nothing is ever truncated. A prompt that long is a sign that its parts belong in
+files and the model in an agentic environment that reads them. When a reply stops on
+``finish_reason == "length"`` the client keeps the partial output and continues, up to
+``max_continuations`` times, in one of two ways measured live on GLM-5.3:
 
 * Cut off in the answer: the partial answer becomes the assistant turn and a user turn asks the
   model to continue. (vLLM ``continue_final_message`` is unusable here: the reasoning parser files
@@ -75,14 +77,15 @@ class LLMProviderConfig:
 
     Attributes:
         model: The model id requests name; it must match the endpoint's model.
-        max_attempts: Spent attempts per request before ``GlmUnavailable``; holds do not count.
-        hold_timeout: Seconds an infrastructure hold may last before ``GlmUnavailable``.
+        max_attempts: Attempts per request (each continuation is its own request); when the last one
+            fails the call raises ``ModelUnavailable``. Holds do not count.
+        hold_timeout: Seconds an infrastructure hold may last before ``ModelUnavailable``.
         backoff_initial: First delay, in seconds, between attempts and between health polls.
         backoff_maximum: Largest delay, in seconds.
         backoff_factor: Growth of the delay after each wait.
         stall_timeout: Seconds with no streamed token before an attempt is abandoned.
         max_connections: httpx connection-pool size; sized for hundreds of concurrent calls.
-        structured_repairs: Repair requests a structured call spends after an invalid tool call.
+        structured_repairs: How many times an invalid tool call is sent back for correction before the call fails.
     """
 
     model: str

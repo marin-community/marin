@@ -42,7 +42,6 @@ from taskforge.llm.structured import StructuredOutputError
 
 from experiments.post_training.capability_driven_envs.catalog import CapabilityIdea, load_capability_ideas
 from experiments.post_training.capability_driven_envs.program_prompt import (
-    SUBMIT_TOOL,
     ProgramSubmission,
     program_messages,
 )
@@ -139,7 +138,7 @@ async def generate_task(
     """Ask GLM for a program for ``idea`` and run it; a model or program failure is recorded, not raised."""
     messages = program_messages(idea)
     try:
-        result = await client.complete_structured(messages, ProgramSubmission, name=SUBMIT_TOOL, policy=policy)
+        result = await client.complete_structured(messages, ProgramSubmission, policy)
     except StructuredOutputError as error:
         return GeneratedTask(item_id, messages, error.completions, None, None, str(error))
     run = await run_program(result.value.source, item_id, program_timeout)

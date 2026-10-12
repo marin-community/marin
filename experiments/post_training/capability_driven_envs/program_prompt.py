@@ -16,10 +16,10 @@ from pydantic import BaseModel, Field, field_validator
 from taskcompendium.models import TaskSpec
 from taskforge.content_hash import pretty_json
 from taskforge.llm.policy import Message
+from taskforge.llm.structured import tool_name
 
 from experiments.post_training.capability_driven_envs.catalog import CapabilityIdea, capability_idea_record
 
-SUBMIT_TOOL = "submit_task_program"
 EXAMPLE_PROGRAM = Path(__file__).with_name("example_program.py")
 
 SYSTEM_PROMPT = """\
@@ -57,7 +57,7 @@ USER_PROMPT = """\
 {capability}
 ```
 
-Write the program for this capability and submit it with `{tool}`.
+Write the program for this capability and submit it through the `{tool}` tool.
 """
 
 
@@ -81,5 +81,5 @@ def program_messages(idea: CapabilityIdea) -> list[Message]:
     system = SYSTEM_PROMPT.format(
         schema=json.dumps(TaskSpec.model_json_schema(), indent=2), example=EXAMPLE_PROGRAM.read_text()
     )
-    user = USER_PROMPT.format(capability=pretty_json(capability_idea_record(idea)), tool=SUBMIT_TOOL)
+    user = USER_PROMPT.format(capability=pretty_json(capability_idea_record(idea)), tool=tool_name(ProgramSubmission))
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

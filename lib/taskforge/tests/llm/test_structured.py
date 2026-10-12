@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from taskforge.llm.client import StructuredResult
 from taskforge.llm.glm_client import GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.llm.structured import StructuredOutputError, StructuredTool, complete_structured
+from taskforge.llm.structured import StructuredOutputError, StructuredTool, complete_structured, tool_name
 
 
 class Capital(BaseModel):
@@ -88,14 +88,26 @@ def test_repairs_stop_at_max_repairs(fake_glm, run):
     assert [c.content for c in error.value.completions] == ["none", "still none", "and again"]
 
 
-def test_client_method_names_the_tool_and_describes_it_with_the_output_docstring(fake_glm, fast_provider):
-    fake_glm.stream(tool_calls=(("answer", '{"city": "Paris", "millions": 2.1}'),))
+class HTTPRequestLog(BaseModel):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("output_type", "name"), [(Capital, "capital"), (HTTPRequestLog, "http_request_log")], ids=["word", "acronym"]
+)
+def test_tool_name_is_the_class_name_in_snake_case(output_type, name):
+    assert tool_name(output_type) == name
+
+
+def test_client_method_names_the_tool_after_the_output_type_and_describes_it_with_its_docstring(fake_glm, fast_provider):
+    fake_glm.stream(tool_calls=(("capital", '{"city": "Paris", "millions": 2.1}'),))
 
     async def go() -> StructuredResult[Capital]:
         endpoint = GlmEndpoint(base_url=fake_glm.base_url, token="test-token", pool=Pool.HIGH)
         async with GlmClient(endpoint, fast_provider) as client:
-            return await client.complete_structured(MESSAGES, Capital, name="answer", policy=LLMPolicy())
+            return await client.complete_structured(MESSAGES, Capital, LLMPolicy())
 
     assert asyncio.run(go()).value.city == "Paris"
     function = fake_glm.requests[0]["tools"][0]["function"]
-    assert (function["name"], function["description"]) == ("answer", "Record the answer")
+    assert (function["name"], function["description"]) == ("capital", "Record the answer")
+    assert fake_glm.requests[0]["tool_choice"] == {"type": "function", "function": {"name": "capital"}}

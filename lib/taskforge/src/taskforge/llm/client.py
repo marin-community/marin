@@ -4,13 +4,16 @@
 """The model surface: call records, the errors a call raises, and the ``ModelClient`` protocol.
 
 Every logical call is a ``Completion``: the concatenation of its continuation segments, with the
-``Attempt`` record of every HTTP request it made. ``GlmRequestRejected`` is a rejection a retry
-cannot fix, ``GlmContextExhausted`` a prompt that fills the context window, and ``GlmUnavailable``
-retries or the infrastructure hold running out.
+``Attempt`` record of every HTTP request it made.
 
 ``ModelClient`` is the one interface callers reach a model through: free-text ``complete`` and
-``complete_structured``, which forces one call of a strict tool and returns its validated arguments
-with every completion the call took. ``taskforge.llm.glm_client.GlmClient`` implements it.
+``complete_structured``, which returns a reply validated as a pydantic model with every completion
+the call took. ``taskforge.llm.glm_client.GlmClient`` implements it.
+
+The errors here are the ``ModelClient`` protocol's, and any implementation raises them:
+``ModelRequestRejected`` is a rejection a retry cannot fix, ``ContextExhausted`` a prompt too long
+for the model's context window, and ``ModelUnavailable`` retries or the infrastructure hold
+running out.
 """
 
 from collections.abc import Sequence
@@ -70,8 +73,7 @@ class Usage:
 class Attempt:
     """One HTTP request, successful or not, with the raw SSE ``data:`` payloads it received.
 
-    ``segment`` is the continuation index; -1 marks the one-token probe that measures a prompt
-    after a context-overflow rejection.
+    ``segment`` is the continuation index.
     """
 
     segment: int
@@ -104,23 +106,23 @@ class Completion:
     attempts: tuple[Attempt, ...]
 
 
-class GlmRequestRejected(Exception):
+class ModelRequestRejected(Exception):
     """The server rejected the request in a way a retry cannot fix."""
 
     def __init__(self, status: int, body: str):
-        super().__init__(f"GLM rejected request with HTTP {status}: {body}")
+        super().__init__(f"model server rejected request with HTTP {status}: {body}")
         self.status = status
         self.body = body
 
 
-class GlmContextExhausted(GlmRequestRejected):
-    """The prompt alone fills the context window, so no output token fits."""
+class ContextExhausted(ModelRequestRejected):
+    """The prompt plus the requested output does not fit the model's context window."""
 
     def __init__(self, body: str):
         super().__init__(400, body)
 
 
-class GlmUnavailable(Exception):
+class ModelUnavailable(Exception):
     """Retries or the infrastructure hold ran out; ``attempts`` holds the record."""
 
     def __init__(self, message: str, attempts: Sequence[Attempt]):
@@ -137,10 +139,12 @@ class StructuredResult[T]:
 
 
 class ModelClient(Protocol):
-    """A model: ``model`` names it, ``complete`` samples a reply, ``complete_structured`` forces one call of
-    a strict tool named ``name`` whose arguments ``output_type`` validates.
+    """A model: ``model`` names it, ``complete`` samples a reply, ``complete_structured`` returns a
+    reply that ``output_type`` validates.
 
-    A transient failure raises ``GlmUnavailable``; a request no retry can fix raises ``GlmRequestRejected``.
+    Every implementation raises the errors of this module: ``ModelUnavailable`` once transient
+    failures run out, ``ContextExhausted`` for a prompt that does not fit the context window, and
+    ``ModelRequestRejected`` for any other request no retry can fix.
     """
 
     @property
@@ -149,5 +153,5 @@ class ModelClient(Protocol):
     async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion: ...
 
     async def complete_structured[T: BaseModel](
-        self, messages: Sequence[Message], output_type: type[T], *, name: str, policy: LLMPolicy
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]: ...
