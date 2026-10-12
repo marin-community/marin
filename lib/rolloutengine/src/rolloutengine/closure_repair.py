@@ -38,6 +38,8 @@ def verified_closure_target(
     a stitched conversation. The structure starts at the end of the prompt.
     ``verify_complete`` must check required content, not merely syntax. A
     syntactically valid but premature close is not repaired by this selector.
+    Text after a completed outer structure is not a closure error, including
+    when the closing sequence and trailing text share one token.
 
     For FTPO, retain history through ``response_position`` exclusively. For
     missing-suffix SFT, append the repair there and mask all preceding tokens.
@@ -62,6 +64,8 @@ def verified_closure_target(
             raise ValueError("Decoded response rewrites its conditioning prefix")
         next_structure = structure_prefix + text[len(prompt_text) :]
         next_state = inspect(next_structure)
+        if next_state.completion_offset is not None:
+            return None
         if next_state.status == PrefixStatus.INVALID:
             position = index
             kind = ClosureTargetKind.WRONG_TOKEN

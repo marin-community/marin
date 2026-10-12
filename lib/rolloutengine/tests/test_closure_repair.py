@@ -6,6 +6,7 @@ import json
 import pytest
 
 from rolloutengine.closure_repair import ClosureTargetKind, verified_closure_candidates, verified_closure_target
+from rolloutengine.closure_scoring import ClosureFormat, closure_state, score_closure
 from rolloutengine.structure_closure import json_closure_state
 
 
@@ -15,6 +16,34 @@ def codepoints(text: str) -> list[int]:
 
 def text(tokens: list[int]) -> str:
     return "".join(map(chr, tokens))
+
+
+@pytest.mark.parametrize(
+    "structure_format,prefix,suffix",
+    [
+        (ClosureFormat.JSON, '{"x":1', "}"),
+        (ClosureFormat.JSON, '["x"', "]"),
+        (ClosureFormat.TOOL, '<tool_call>{"x":1}', "</tool_call>"),
+        (ClosureFormat.REASONING, "<|start_think|>done", "<|end_think|>"),
+        (ClosureFormat.CODE_FENCE, "```json\n{}\n", "```"),
+    ],
+)
+def test_token_completing_outer_structure_and_adding_text_is_not_a_closure_error(structure_format, prefix, suffix):
+    sampled_token = 1_000_000
+
+    def decode(tokens):
+        return "".join(suffix + "\nextra" if token == sampled_token else chr(token) for token in tokens)
+
+    target = verified_closure_target(
+        codepoints(prefix),
+        [sampled_token],
+        structure_prefix=prefix,
+        inspect=lambda value: closure_state(value, structure_format),
+        verify_complete=lambda value: score_closure(value, prefix + suffix, structure_format).success,
+        encode=codepoints,
+        decode=decode,
+    )
+    assert target is None
 
 
 @pytest.mark.parametrize("response", ["", " ", "]", " ]discarded later text"])
