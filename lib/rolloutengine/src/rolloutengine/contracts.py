@@ -16,10 +16,17 @@ TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
 
 @dataclass(frozen=True)
 class ModelRequest:
+    """Request chat generation or an exact initial token-prefix replay.
+
+    With prompt_token_ids, messages are display-only and options are completion
+    sampling options. The transport must not apply a chat template to the IDs.
+    """
+
     messages: tuple[dict[str, Any], ...]
     options: dict[str, Any]
     prefix_token_ids: tuple[int, ...]
     assistant_message_index: int | None
+    prompt_token_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -28,6 +35,7 @@ class SessionStart:
 
     messages: tuple[dict[str, Any], ...]
     options: dict[str, Any]
+    prompt_token_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)

@@ -83,6 +83,41 @@ GRADER_ENVIRONMENT = EnvironmentRequirements(
 )
 
 
+@pytest.mark.parametrize("alter_prefix", [False, True])
+async def test_session_replays_exact_initial_tokens_and_rejects_transport_changes(alter_prefix):
+    prefix = (128000, 42, 128005)
+
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Replay case"},), {}, prompt_token_ids=prefix)
+
+        async def advance(self, turn):
+            return Transition(done=True)
+
+        async def grade(self, messages, *, stop_reason):
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    async def model(request):
+        assert request.prompt_token_ids == prefix
+        served = (*prefix[:-1], 99) if alter_prefix else prefix
+        return ModelTurn({"role": "assistant", "content": "done"}, served, (5, 6), (-0.1, -0.2), "stop")
+
+    runner = ShellboxRolloutEngine(model, {}, sessions={"fixture": lambda task, machine: Session()})
+    task = lowered(arithmetic_task(), task_session="fixture")
+    if alter_prefix:
+        with pytest.raises(RolloutContractError, match="initial replay token prefix"):
+            await runner.run(task)
+        return
+    result = await runner.run(task)
+    assert result.prompt_token_ids == prefix
+    assert result.response_token_ids == (5, 6)
+    assert result.loss_mask == (1, 1)
+    assert result.logprobs == (-0.1, -0.2)
+
+
 @pytest.mark.docker
 @pytest.mark.parametrize("attack", [None, "source", "archive"])
 async def test_artifact_collection_cannot_read_root_files_through_candidate_path_changes(attack):
