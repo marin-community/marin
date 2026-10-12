@@ -106,7 +106,7 @@ async def test_external_agent_receives_engine_turns_and_controls_next_history(co
         return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
     model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
-    result = await engine(model, sessions={"agent": lambda task, machine: ExternalAgentSession(agent, grade)}).run(
+    result = await engine(model, sessions={"agent": lambda _task, _machine: ExternalAgentSession(agent, grade)}).run(
         lowered(arithmetic_task(), task_session="agent")
     )
 
@@ -132,15 +132,16 @@ async def test_external_agent_is_cancelled_when_engine_generation_is_cancelled()
         finally:
             agent_closed.set()
 
-    async def model(request):
+    async def model(_request):
         model_entered.set()
         await asyncio.Future()
 
     async def grade(messages, *, stop_reason):
+        del messages, stop_reason
         raise AssertionError("Cancellation must not grade an unfinished model call")
 
     runner = ShellboxRolloutEngine(
-        model, {}, sessions={"agent": lambda task, machine: ExternalAgentSession(agent, grade)}
+        model, {}, sessions={"agent": lambda _task, _machine: ExternalAgentSession(agent, grade)}
     )
     pending = asyncio.create_task(runner.run(lowered(arithmetic_task(), task_session="agent")))
     await asyncio.wait_for(model_entered.wait(), timeout=5)
@@ -156,11 +157,12 @@ async def test_external_agent_failure_retains_the_generated_turn():
         raise RuntimeError("Installed agent failed after receiving its response")
 
     async def grade(messages, *, stop_reason):
+        del messages, stop_reason
         raise AssertionError("The agent failure must be reported before grading")
 
     runner = engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
-        sessions={"agent": lambda task, machine: ExternalAgentSession(agent, grade)},
+        sessions={"agent": lambda _task, _machine: ExternalAgentSession(agent, grade)},
     )
     with pytest.raises(RolloutInterrupted) as caught:
         await runner.run(lowered(arithmetic_task(), task_session="agent"))
@@ -168,6 +170,28 @@ async def test_external_agent_failure_retains_the_generated_turn():
     assert isinstance(caught.value.__cause__, RuntimeError)
     assert caught.value.rollout.response_token_ids == (20,)
     assert caught.value.rollout.loss_mask == (1,)
+
+
+async def test_external_agent_cleanup_preserves_prior_cancellation():
+    agent_task = None
+
+    async def agent(complete):
+        nonlocal agent_task
+        agent_task = asyncio.current_task()
+        await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
+
+    async def grade(messages, *, stop_reason):
+        del messages, stop_reason
+        raise AssertionError("An interrupted agent must not be graded")
+
+    session = ExternalAgentSession(agent, grade)
+    await session.prepare()
+    assert agent_task is not None
+    agent_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await agent_task
+    with pytest.raises(asyncio.CancelledError):
+        await session.close()
 
 
 @pytest.mark.parametrize("next_options", [{}, {"tool_choice": "none"}])
@@ -183,6 +207,7 @@ async def test_session_replaces_model_options_after_conversation_reset(next_opti
             return SessionStart(({"role": "user", "content": "Use a tool."},), initial_options)
 
         async def advance(self, turn):
+            del turn
             self.turns += 1
             if self.turns == 1:
                 return Transition(done=False, reset_conversation=revised_messages, next_options=next_options)
@@ -195,7 +220,7 @@ async def test_session_replaces_model_options_after_conversation_reset(next_opti
             pass
 
     model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
-    result = await engine(model, sessions={"fixture": lambda task, machine: Session()}).run(
+    result = await engine(model, sessions={"fixture": lambda _task, _machine: Session()}).run(
         lowered(arithmetic_task(), task_session="fixture")
     )
 

@@ -4,6 +4,7 @@
 """Let an external agent request generations from the shared rollout loop."""
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -11,6 +12,8 @@ from typing import Any, Protocol
 from taskcompendium.grading_result import GradeResult
 
 from rolloutengine.contracts import ModelTurn, RolloutContractError, SessionStart, Transition
+
+logger = logging.getLogger(__name__)
 
 
 class AgentCompletion(Protocol):
@@ -108,9 +111,13 @@ class ExternalAgentSession:
         self.closed = True
         if self.agent is None:
             return
-        if not self.agent.done():
+        cancelled_for_cleanup = not self.agent.done() and self.agent.cancelling() == 0
+        if cancelled_for_cleanup:
             self.agent.cancel()
         try:
-            await self.agent
+            await asyncio.shield(self.agent)
         except asyncio.CancelledError:
-            pass
+            current = asyncio.current_task()
+            if not cancelled_for_cleanup or (current is not None and current.cancelling()):
+                raise
+            logger.debug("Cancelled the external agent during session cleanup")

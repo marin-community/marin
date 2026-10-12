@@ -12,16 +12,16 @@ from enum import StrEnum
 from pathlib import Path
 
 from rolloutengine.closure_scoring import (
-    REASONING_CLOSER,
-    REASONING_OPENER,
-    TOOL_CLOSER,
-    TOOL_OPENER,
     ClosureFormat,
     ClosureScore,
     closure_state,
     score_closure,
 )
 from rolloutengine.structure_closure import PrefixStatus, json_closure_state
+from rolloutengine.tool_protocol import THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
+
+JSON_FENCE_OPEN = "```json\n"
+CLOSE_REQUIRED = "close_required"
 
 
 class Split(StrEnum):
@@ -94,10 +94,10 @@ def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list
         (Family.ARRAY, array_text, len(array_text) - 1),
         (Family.NESTED, nested_text, len(nested_text) - 2),
         (Family.STRING, string_text, len(string_text) - 1),
-        (Family.TOOL, TOOL_OPENER + tool_body + TOOL_CLOSER, len(TOOL_OPENER + tool_body)),
-        (Family.REASONING, REASONING_OPENER + reason_body + REASONING_CLOSER, len(REASONING_OPENER + reason_body)),
-        (Family.FENCE, "```json\n" + fence_body + "\n```", len("```json\n" + fence_body + "\n")),
-        (Family.REPEATED_OPENER, TOOL_OPENER + tool_body + TOOL_CLOSER, len(TOOL_OPENER)),
+        (Family.TOOL, TOOL_OPEN + tool_body + TOOL_CLOSE, len(TOOL_OPEN + tool_body)),
+        (Family.REASONING, THINK_OPEN + reason_body + THINK_CLOSE, len(THINK_OPEN + reason_body)),
+        (Family.FENCE, JSON_FENCE_OPEN + fence_body + "\n```", len(JSON_FENCE_OPEN + fence_body + "\n")),
+        (Family.REPEATED_OPENER, TOOL_OPEN + tool_body + TOOL_CLOSE, len(TOOL_OPEN)),
     ]
     cases = []
     for family, expected, close_cut in specifications:
@@ -105,11 +105,11 @@ def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list
         # Fences use an unfinished opener info string when the answer is empty.
         content_at = expected.find(task_id)
         continue_cut = content_at + max(1, len(task_id) // 2) if content_at >= 0 else len("```j")
-        boundaries = [("close_required", close_cut), ("continue_required", continue_cut)]
+        boundaries = [(CLOSE_REQUIRED, close_cut), ("continue_required", continue_cut)]
         if family == Family.STRING:
             boundaries.append(("escape_continue_required", expected.index("\\") + 1))
         for control, cut in boundaries:
-            if family == Family.REPEATED_OPENER and control == "close_required":
+            if family == Family.REPEATED_OPENER and control == CLOSE_REQUIRED:
                 control = "opener_retention"
             prefix = expected[:cut]
             state = syntax_state(prefix, family)

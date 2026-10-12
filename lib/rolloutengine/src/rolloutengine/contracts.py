@@ -31,7 +31,7 @@ class ModelRequest:
 
 @dataclass(frozen=True)
 class SessionStart:
-    """The initial conversation and model options for one task session."""
+    """Initial messages and options, with an optional exact prompt token prefix."""
 
     messages: tuple[dict[str, Any], ...]
     options: dict[str, Any]

@@ -15,11 +15,7 @@ from rolloutengine.structure_closure import (
     paired_marker_closure_state,
     required_code_fence_state,
 )
-
-TOOL_OPENER = "<tool_call>"
-TOOL_CLOSER = "</tool_call>"
-REASONING_OPENER = "<|start_think|>"
-REASONING_CLOSER = "<|end_think|>"
+from rolloutengine.tool_protocol import JSON_WHITESPACE, THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
 
 class ClosureFormat(StrEnum):
@@ -42,9 +38,9 @@ def closure_state(text: str, structure_format: ClosureFormat) -> ClosureState:
     if structure_format == ClosureFormat.JSON:
         return json_closure_state(text)
     if structure_format == ClosureFormat.TOOL:
-        return delimited_json_closure_state(text, opener=TOOL_OPENER, closer=TOOL_CLOSER)
+        return delimited_json_closure_state(text, opener=TOOL_OPEN, closer=TOOL_CLOSE)
     if structure_format == ClosureFormat.REASONING:
-        return paired_marker_closure_state(text, opener=REASONING_OPENER, closer=REASONING_CLOSER)
+        return paired_marker_closure_state(text, opener=THINK_OPEN, closer=THINK_CLOSE)
     if structure_format == ClosureFormat.CODE_FENCE:
         return required_code_fence_state(text)
     raise ValueError(f"Unsupported closure format: {structure_format}")
@@ -52,7 +48,7 @@ def closure_state(text: str, structure_format: ClosureFormat) -> ClosureState:
 
 def _json_content(text: str, structure_format: ClosureFormat) -> str:
     if structure_format == ClosureFormat.TOOL:
-        text = text[len(TOOL_OPENER) :].rstrip(" \t\r\n")[: -len(TOOL_CLOSER)]
+        text = text[len(TOOL_OPEN) :].rstrip(JSON_WHITESPACE)[: -len(TOOL_CLOSE)]
     # Canonical serialization ignores object order and whitespace, but preserves
     # distinctions such as true versus 1 that Python container equality loses.
     return json.dumps(json.loads(text), sort_keys=True, ensure_ascii=True, allow_nan=False)
@@ -78,5 +74,5 @@ def score_closure(text: str, expected: str, structure_format: ClosureFormat) -> 
             return ClosureScore(True, False, False)
         preserved = candidate == reference
     else:
-        preserved = text.rstrip(" \t\r\n") == expected.rstrip(" \t\r\n")
+        preserved = text.rstrip(JSON_WHITESPACE) == expected.rstrip(JSON_WHITESPACE)
     return ClosureScore(True, preserved, preserved)

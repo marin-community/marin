@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Joint closure-loss recipe for the protocol-FTPO initializer (Marin issue #10061)."""
+"""Joint closure-loss recipe for the protocol-FTPO initializer."""
 
 from copy import deepcopy
 
@@ -61,9 +61,6 @@ def training_config(*, max_steps: int, eval_batch_size: int, learning_rate: floa
             "epochs": 2,
             "max_steps": max_steps,
             "update_epochs_per_batch": 1,
-            "train_batch_size": plan.train_batch_size,
-            "policy_mini_batch_size": plan.policy_mini_batch_size,
-            "micro_train_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
             "micro_forward_batch_size_per_gpu": 1,
             "eval_batch_size": eval_batch_size,
             "eval_before_train": True,
@@ -112,12 +109,6 @@ def training_config(*, max_steps: int, eval_batch_size: int, learning_rate: floa
             },
             "ref": {"megatron_config": geometry},
             "placement": {
-                "colocate_all": plan.colocate_all,
-                "colocate_policy_ref": True,
-                "policy_num_nodes": plan.policy_num_nodes,
-                "policy_num_gpus_per_node": plan.policy_num_gpus_per_node,
-                "ref_num_nodes": plan.policy_num_nodes,
-                "ref_num_gpus_per_node": plan.policy_num_gpus_per_node,
                 "policy_strict_spread_pg": True,
             },
             "rollout_buffer": {
@@ -136,12 +127,6 @@ def training_config(*, max_steps: int, eval_batch_size: int, learning_rate: floa
             "weight_sync_transport": "expert_block",
             "weight_sync_pause": {"mode": "keep", "clear_cache": True},
             "expert_block_sync": {"timeout_seconds": 600, "verify": True},
-            "num_inference_engines": plan.num_inference_engines,
-            "inference_engine_tensor_parallel_size": plan.inference_engine_tensor_parallel_size,
-            "inference_engine_pipeline_parallel_size": plan.inference_engine_pipeline_parallel_size,
-            "inference_engine_data_parallel_size": plan.inference_engine_data_parallel_size,
-            "inference_engine_expert_parallel_size": plan.inference_engine_expert_parallel_size,
-            "n_samples_per_prompt": plan.n_samples_per_prompt,
             "eval_n_samples_per_prompt": 1,
             "gpu_memory_utilization": 0.75,
             "max_num_seqs": 64,
