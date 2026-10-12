@@ -1136,11 +1136,12 @@
       "configuration_sha256": "bc96dbfac95686f84e0977ef7f88bc9a856b8bee6740c397ca577740678df76a",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-runtime-qual-sc-s0-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "9523a77b3c8a910d27756016f7ffa2cbbe2953a72a0c94dd819e770fa60fe47b",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball617_qualification.json"
     },
     {
       "job_id": "/romain/sc-qwen-transfer-runtime-qual-tis-s0-a2-01a126ce",
@@ -1160,5 +1161,5 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-12T04:25:25.181753+00:00"
+  "observed_at": "2026-10-12T05:52:29.299397+00:00"
 }
