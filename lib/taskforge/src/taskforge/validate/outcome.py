@@ -66,7 +66,8 @@ class Cause(StrEnum):
     GRADER_INVALID_REWARD = "grader_invalid_reward"
     GRADER_EXECUTION = "grader_execution"
     GRADER_INFRA = "grader_infra"
-    """An infrastructure grade with no ``GradingFailure``."""
+    """An infrastructure grade with no ``GradingFailure``: TaskCompendium found no grading machine
+    factory, or the grading machine failed. Infrastructure, like ``MACHINE_START``, not a task defect."""
     INVALID_TASK = "invalid_task"
     """The grader reported the task itself invalid (TaskCompendium ``Outcome.INVALID_TASK``)."""
     VERIFIER_SKIPPED = "verifier_skipped"
@@ -89,6 +90,7 @@ RETRYABLE = frozenset(
         Cause.TOOL_EXECUTION,
         Cause.GRADER_RAISED,
         Cause.GRADER_TIMEOUT,
+        Cause.GRADER_INFRA,
     }
 )
 """Causes a fresh attempt can fix. The rest are properties of the task, the grader or the model."""

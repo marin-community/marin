@@ -16,7 +16,7 @@ trial passes the count already on disk and overwrites no file.
 
 ``lower`` is validation's: a task with environment requirements or files gets a ShellSim task machine
 with no network and the factory's limits, no task gets a verifier machine, and the session's limits
-come from ``EngineSettings``, ``TrialPlan.deadlines`` and ``VERIFIER_TIMEOUT``. A task whose answer
+come from ``TrialPlan.limits`` and ``VERIFIER_TIMEOUT``. A task whose answer
 format cannot carry its answer (``submission_compatibility``) or that the factories cannot run
 (``sandbox.factories.task_refusals``) is not started: each of its trials is one
 ``SUBMISSION_UNSUPPORTED`` or ``MACHINE_UNSUPPORTED`` attempt naming why.
@@ -61,32 +61,16 @@ VERIFIER_TIMEOUT = 420.0
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """The machine factories ``ShellboxRolloutEngine`` runs on, what they can run, and the session
-    limits validation imposes on every trial.
+    """What this host can run: the machine factories ``ShellboxRolloutEngine`` runs on, and what they
+    can provide.
 
-    ``factories`` and ``capabilities`` are keyed by shellbox ``Backend`` value, as
-    ``machine_factories`` and ``factory_capabilities`` return them. ``command_timeout`` bounds one
-    shell command and ``tool_turn_timeout`` one tool turn, so the first must be shorter.
-    ``model_turn_timeout`` bounds one model call. ``cleanup_timeout`` bounds each cleanup action
-    (closing a session or machine); the engine records a cleanup that fails or overruns in
-    ``grade.diagnostics``.
+    Both are keyed by shellbox ``Backend`` value, as ``machine_factories`` and ``factory_capabilities``
+    return them. They are facts of the host, not bounds of the run; the limits every trial runs under
+    are the validation policy's ``SessionLimits``.
     """
 
     factories: Mapping[str, MachineFactory]
     capabilities: Mapping[str, FactoryCapabilities]
-    max_turns: int
-    command_timeout: float
-    tool_turn_timeout: float
-    model_turn_timeout: float
-    cleanup_timeout: float
-
-    def __post_init__(self) -> None:
-        if self.max_turns < 1:
-            raise ValueError("EngineSettings needs max_turns >= 1")
-        if not 0 < self.command_timeout < self.tool_turn_timeout:
-            raise ValueError("EngineSettings needs 0 < command_timeout < tool_turn_timeout")
-        if self.model_turn_timeout <= 0 or self.cleanup_timeout <= 0:
-            raise ValueError("EngineSettings needs positive model_turn_timeout and cleanup_timeout")
 
     def engine(self, model: RolloutModel) -> ShellboxRolloutEngine:
         return ShellboxRolloutEngine(model, self.factories)
@@ -104,28 +88,47 @@ def submission_refusal(task: TaskSpec) -> str | None:
 
 
 @dataclass(frozen=True)
-class Deadlines:
-    """The total-turn and attempt deadlines, in seconds, that validation imposes on every trial.
+class SessionLimits:
+    """The turn and time limits, in seconds, that the validation policy imposes on every trial.
 
-    ``total_turn_timeout`` bounds the model's turns together: when it expires the engine grades the
-    state the agent left (stop reason ``total_turn_timeout``), or reports no grade when no turn had
-    completed (``Cause.AGENT_TIMEOUT``). ``attempt_timeout`` bounds the whole attempt, machine start
-    and grading included. They are a property of the validation run, not of the task, so ``lower``
-    puts them in the session rather than the ``TaskSpec`` holding them.
+    They are part of ``ValidationPolicy``, so the run root's ``policy.json`` pins them and a relaunch
+    under other limits is refused rather than reusing attempts settled under these. They are a
+    property of the validation run, not of the task, so ``lower`` puts them in the session rather
+    than the ``TaskSpec``.
+
+    ``max_turns`` bounds the model's turns and ``model_turn_timeout`` one model call.
+    ``command_timeout`` bounds one shell command and ``tool_turn_timeout`` one tool turn, so the first
+    must be shorter. ``total_turn_timeout`` bounds the model's turns together: when it expires the
+    engine grades the state the agent left (stop reason ``total_turn_timeout``), or reports no grade
+    when no turn had completed (``Cause.AGENT_TIMEOUT``). ``attempt_timeout`` bounds the whole
+    attempt, machine start and grading included. ``cleanup_timeout`` bounds each cleanup action
+    (closing a session or machine); the engine records a cleanup that fails or overruns in
+    ``grade.diagnostics``.
     """
 
+    max_turns: int
+    model_turn_timeout: float
+    command_timeout: float
+    tool_turn_timeout: float
     total_turn_timeout: float
     attempt_timeout: float
+    cleanup_timeout: float
 
     def __post_init__(self) -> None:
+        if self.max_turns < 1:
+            raise ValueError("SessionLimits need max_turns >= 1")
+        if not 0 < self.command_timeout < self.tool_turn_timeout:
+            raise ValueError("SessionLimits need 0 < command_timeout < tool_turn_timeout")
         if not 0 < self.total_turn_timeout < self.attempt_timeout:
-            raise ValueError("Deadlines need 0 < total_turn_timeout < attempt_timeout")
+            raise ValueError("SessionLimits need 0 < total_turn_timeout < attempt_timeout")
+        if self.model_turn_timeout <= 0 or self.cleanup_timeout <= 0:
+            raise ValueError("SessionLimits need positive model_turn_timeout and cleanup_timeout")
 
 
-def lower(task: TaskSpec, settings: EngineSettings, deadlines: Deadlines) -> LoweredTaskSpec:
+def lower(task: TaskSpec, limits: SessionLimits) -> LoweredTaskSpec:
     """The ``LoweredTaskSpec`` a trial of ``task`` runs: a ShellSim task machine when the task has
     environment requirements or files to install on one (RolloutEngine refuses such a task without it),
-    no verifier machine, and the shellbox session under ``settings`` and ``deadlines``."""
+    no verifier machine, and the shellbox session under ``limits``."""
     task_machine = None
     resources = task.resources
     if task.environment_requirements != EnvironmentRequirements() or resources.all or resources.worker:
@@ -142,14 +145,14 @@ def lower(task: TaskSpec, settings: EngineSettings, deadlines: Deadlines) -> Low
         )
     session = TaskSessionSpec(
         task_session=SHELLBOX_SESSION,
-        max_turns=settings.max_turns,
-        model_turn_timeout=settings.model_turn_timeout,
-        command_timeout=settings.command_timeout,
-        tool_turn_timeout=settings.tool_turn_timeout,
-        total_turn_timeout=deadlines.total_turn_timeout,
-        attempt_timeout=deadlines.attempt_timeout,
+        max_turns=limits.max_turns,
+        model_turn_timeout=limits.model_turn_timeout,
+        command_timeout=limits.command_timeout,
+        tool_turn_timeout=limits.tool_turn_timeout,
+        total_turn_timeout=limits.total_turn_timeout,
+        attempt_timeout=limits.attempt_timeout,
         verifier_timeout=VERIFIER_TIMEOUT,
-        cleanup_timeout=settings.cleanup_timeout,
+        cleanup_timeout=limits.cleanup_timeout,
     )
     return LoweredTaskSpec(
         task=task, runtime=TaskRuntimeSpec(task_machine=task_machine, verifier_machine=None), session=session
@@ -176,8 +179,8 @@ class RetryBackoff:
 
 @dataclass(frozen=True)
 class TrialPlan:
-    """Which item the trials belong to, how many run, their deadlines, how they retry, and where they
-    are recorded.
+    """Which item the trials belong to, how many run, their session limits, how they retry, and where
+    they are recorded.
 
     ``max_retries`` bounds retries of ``RETRYABLE`` causes and ``token_contract_retries`` those of
     ``TOKEN_CONTRACT``. Each trial waits on its own ``retry_backoff.schedule()``.
@@ -188,7 +191,7 @@ class TrialPlan:
     round: int
     kind: TrialKind
     k: int
-    deadlines: Deadlines
+    limits: SessionLimits
     max_retries: int
     token_contract_retries: int
     retry_backoff: RetryBackoff
@@ -202,7 +205,7 @@ class TrialPlan:
 
 
 async def run_trials(task: TaskSpec, plan: TrialPlan, settings: EngineSettings, model: RolloutModel) -> list[Outcome]:
-    """Run ``plan.k`` trials of ``task`` under ``plan.deadlines`` and ``settings`` concurrently;
+    """Run ``plan.k`` trials of ``task`` under ``plan.limits`` on ``settings`` concurrently;
     return one final outcome per trial, in order."""
     async with asyncio.TaskGroup() as group:
         trials = [group.create_task(run_trial(task, plan, settings, model, str(index))) for index in range(plan.k)]
@@ -212,10 +215,10 @@ async def run_trials(task: TaskSpec, plan: TrialPlan, settings: EngineSettings, 
 async def run_trial(
     task: TaskSpec, plan: TrialPlan, settings: EngineSettings, model: RolloutModel, trial: str
 ) -> Outcome:
-    """Run one trial of ``task``, lowered under ``settings`` and ``plan.deadlines``, attempting it again
+    """Run one trial of ``task``, lowered under ``plan.limits`` and run on ``settings``, attempting it again
     after a backoff while it fails for a retryable cause or, within ``plan.token_contract_retries``,
     a broken token contract."""
-    lowered = lower(task, settings, plan.deadlines)
+    lowered = lower(task, plan.limits)
     unsupported = submission_refusal(lowered.task)
     if unsupported is not None:
         return _refuse(lowered, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None))

@@ -127,11 +127,13 @@ class Loop[IdeaT]:
         ledger: The run's ledger. It must write each item's entries to ``root / "ledger"`` (a
             ``JsonlLedger`` there, or a ledger that also writes one); ``EventLog.append`` refuses one
             that does not on the first event.
-        engine: Run-wide engine settings for validation trials.
-        rollout_models: Builds each solver trial's model, recording under the trial's step.
+        engine: What this host can run validation trials on.
+        rollout_models: Builds each solver trial's model, recording under the trial's step and
+            sampling under the validation policy's ``sampling``.
         model: The model client proposing and building call, through a ``RecordedModel``.
         sampling: The sampling of every proposing and building call.
-        describe_idea: The JSON-serialisable record of an idea, written once to its ``idea.json``.
+        describe_idea: The JSON-serialisable record of an idea, written once to its ``idea.json``
+            and compared with it on every later ``run_idea``.
         transitions: The next stage for each stage and exit; checked by ``check_transitions``.
     """
 
@@ -196,14 +198,24 @@ async def run_idea[IdeaT](loop: Loop[IdeaT], idea_id: str, idea: IdeaT) -> tuple
     zero proposals is re-proposed up to ``policy.max_idea_reproposals`` times; then the idea is
     ``IDEA_EXHAUSTED`` and yields nothing. A resumed idea returns its recorded batch without a call.
     The idea's record and its batch's proposals are kept in the idea's directory.
+
+    Raises:
+        ValueError: the idea's record differs from the ``idea.json`` this root holds for ``idea_id``.
     """
     item_id = idea_item_id(idea_id)
     log = EventLog(loop.root, loop.ledger, item_id)
     idea_dir = loop.root / ITEMS_DIR / item_id
     batch_dir = idea_dir / PROPOSALS_DIR
     idea_dir.mkdir(parents=True, exist_ok=True)
-    if not (idea_dir / IDEA_FILE).exists():
-        write_atomic(idea_dir / IDEA_FILE, pretty_json(loop.describe_idea(idea)).encode())
+    record = pretty_json(loop.describe_idea(idea)).encode()
+    idea_file = idea_dir / IDEA_FILE
+    if not idea_file.exists():
+        write_atomic(idea_file, record)
+    elif idea_file.read_bytes() != record:
+        raise ValueError(
+            f"idea {idea_id} changed since {loop.root} recorded it in {idea_file}; relaunch with the idea this root "
+            "started with, or use a new run root"
+        )
     while True:
         state = derive_idea_state(log.entries())
         if state.items is not None:

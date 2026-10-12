@@ -26,7 +26,7 @@ from taskforge.validate.attempts import trial_files
 from taskforge.validate.calibration import CalibrationBand, CalibrationSummary, summarize, write_summary
 from taskforge.validate.outcome import Outcome, TrialKind
 from taskforge.validate.solver import ModelFactory, ValidationSite, run_solver
-from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, task_digest
+from taskforge.validate.trials import EngineSettings, RetryBackoff, SessionLimits, task_digest
 
 CALIBRATION_FILE = "calibration.json"
 
@@ -38,8 +38,9 @@ class ValidationPolicy:
     Attributes:
         k: Solver trials.
         band: Solve rates that count as calibrated.
-        sampling: The solver's sampling; ``max_continuations`` must be 0.
-        deadlines: The total-turn and attempt deadlines validation imposes on every trial.
+        sampling: The solver's sampling, passed to every trial's ``ModelFactory``; ``max_continuations``
+            must be 0.
+        limits: The turn and time limits of every trial's session.
         max_retries: Per-trial retries of ``RETRYABLE`` causes.
         token_contract_retries: Per-trial retries of ``TOKEN_CONTRACT``.
         retry_backoff: Wait between a trial's attempts.
@@ -48,7 +49,7 @@ class ValidationPolicy:
     k: int
     band: CalibrationBand
     sampling: LLMPolicy
-    deadlines: Deadlines
+    limits: SessionLimits
     max_retries: int
     token_contract_retries: int
     retry_backoff: RetryBackoff

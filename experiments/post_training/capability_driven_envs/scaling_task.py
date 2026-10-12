@@ -27,6 +27,7 @@ from taskcompendium.grader import GraderPackage
 from taskcompendium.models import AnswerType, PlainText, Source, TaskResource, TaskSpec
 from taskforge.builder.sdk import BuildContext
 from taskforge.builder.step import SDK_VERSION, program, step
+from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.proposal.model import TaskProposal
 from taskforge.spec.draft import answer_grader, assemble, file, requirements
@@ -150,8 +151,11 @@ def _shell_call(command: str) -> dict[str, Any]:
     return {"role": "assistant", "content": None, "tool_calls": [call]}
 
 
-def scripted_solver(record: CallLedger) -> RolloutModel:
-    """The rollout model of solver trial ``record.step`` (``solver/<index>``): odd indices skip the scaling."""
+def scripted_solver(record: CallLedger, sampling: LLMPolicy) -> RolloutModel:
+    """The rollout model of solver trial ``record.step`` (``solver/<index>``): odd indices skip the scaling.
+
+    It is scripted, so it ignores ``sampling``.
+    """
     skips_scaling = int(record.step.rsplit("/", 1)[-1]) % 2 == 1
 
     async def model(request: ModelRequest) -> ModelTurn:

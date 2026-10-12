@@ -18,7 +18,7 @@ Reading top to bottom, a reader learns:
    second run reuses every settled trial;
 5. ``decide`` is a pure rule table from the summary to a decision, steered by ``BandRules``;
 6. a ``Loop`` coordinates the same functions through the default transition table, one event per
-   stage, and a relaunch on the same root changes nothing;
+   stage, and a relaunch on the same root changes nothing, while one with a changed idea is refused;
 7. an unavailable model fails the item at its stage, and a relaunch re-enters that stage.
 """
 
@@ -56,7 +56,7 @@ from taskforge.validate.calibration import CalibrationBand, FindingKind, load_su
 from taskforge.validate.outcome import Graded, TrialKind
 from taskforge.validate.run import CALIBRATION_FILE, ValidationPolicy, load_validation, run_validation
 from taskforge.validate.solver import ModelFactory, ValidationSite
-from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff, RolloutModel, task_digest
+from taskforge.validate.trials import EngineSettings, RetryBackoff, RolloutModel, SessionLimits, task_digest
 
 SOURCE = Source(dataset="walkthrough", revision="r1", row="0", importer_revision="test")
 ITEM = "IDEA--0"
@@ -66,7 +66,15 @@ VALIDATION = ValidationPolicy(
     k=4,
     band=CalibrationBand(min_solve_rate=0.125, max_solve_rate=0.875),
     sampling=LLMPolicy(max_continuations=0),
-    deadlines=Deadlines(total_turn_timeout=30.0, attempt_timeout=60.0),
+    limits=SessionLimits(
+        max_turns=4,
+        model_turn_timeout=20.0,
+        command_timeout=10.0,
+        tool_turn_timeout=20.0,
+        total_turn_timeout=30.0,
+        attempt_timeout=60.0,
+        cleanup_timeout=10.0,
+    ),
     max_retries=1,
     token_contract_retries=0,
     retry_backoff=BACKOFF,
@@ -131,22 +139,14 @@ def reply_turns(reply: str) -> tuple[dict, ...]:
     return ({"role": "assistant", "content": None, "tool_calls": [call]}, {"role": "assistant", "content": reply})
 
 
-def alternating_solver(record: CallLedger) -> RolloutModel:
+def alternating_solver(record: CallLedger, sampling: LLMPolicy) -> RolloutModel:
     """Solver trial ``solver/<index>``: an even index replies the product, an odd one a wrong sum."""
     index = int(record.step.rsplit("/", 1)[-1])
     return scripted(reply_turns("42" if index % 2 == 0 else "13"))
 
 
 def engine() -> EngineSettings:
-    return EngineSettings(
-        factories=machine_factories(),
-        capabilities=factory_capabilities(),
-        max_turns=4,
-        command_timeout=10.0,
-        tool_turn_timeout=20.0,
-        model_turn_timeout=20.0,
-        cleanup_timeout=10.0,
-    )
+    return EngineSettings(factories=machine_factories(), capabilities=factory_capabilities())
 
 
 async def test_the_stage_functions_carry_a_proposal_to_an_accepted_task_when_called_directly(
@@ -279,17 +279,29 @@ async def test_the_loop_runs_one_event_per_stage_and_a_relaunch_changes_nothing(
     assert proposal_source.calls == 1
 
 
+async def test_a_relaunch_with_a_changed_idea_under_the_same_id_is_refused(tmp_path, proposal_source):
+    # 6. An idea id names one idea per root: a changed record cannot reuse the old batch.
+    root = tmp_path / "run"
+    await run_idea(loop_for(root, proposal_source.propose, alternating_solver), "IDEA", "idea")
+    before = ledger_bytes(root)
+
+    with pytest.raises(ValueError, match=r"idea IDEA changed .* use a new run root"):
+        await run_idea(loop_for(root, proposal_source.propose, alternating_solver), "IDEA", "another idea")
+    assert ledger_bytes(root) == before
+    assert proposal_source.calls == 1
+
+
 class UnavailableOnce:
     """A solver ``ModelFactory`` whose first request for a model finds the model unavailable."""
 
     def __init__(self) -> None:
         self.asked = 0
 
-    def __call__(self, record: CallLedger) -> RolloutModel:
+    def __call__(self, record: CallLedger, sampling: LLMPolicy) -> RolloutModel:
         self.asked += 1
         if self.asked == 1:
             raise GlmUnavailable("the hold ran out", ())
-        return alternating_solver(record)
+        return alternating_solver(record, sampling)
 
 
 async def test_an_unavailable_model_fails_the_item_at_validation_and_a_relaunch_resumes_there(

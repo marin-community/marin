@@ -58,7 +58,6 @@ DEFECT_CAUSES: frozenset[Cause] = frozenset(
         Cause.GRADER_EMPTY_REWARD,
         Cause.GRADER_INVALID_REWARD,
         Cause.GRADER_EXECUTION,
-        Cause.GRADER_INFRA,
         Cause.VERIFIER_SKIPPED,
         Cause.NO_GRADE,
         Cause.INVALID_TASK,
@@ -66,7 +65,8 @@ DEFECT_CAUSES: frozenset[Cause] = frozenset(
         Cause.AGENT_TIMEOUT,
     }
 )
-"""The ungraded causes that are task defects. The other causes outside ``RETRYABLE`` are not the
+"""The ungraded causes that are task defects. Infrastructure failures, the grader's machine included
+(``GRADER_INFRA``), are ``RETRYABLE`` instead. The other causes outside ``RETRYABLE`` are not the
 task's: the host cannot run it (``MACHINE_UNSUPPORTED``, ``SUBMISSION_UNSUPPORTED``), or the model
 or classifier failed (``MODEL_REJECTED``, ``UNCLASSIFIED``)."""
 

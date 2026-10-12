@@ -54,8 +54,10 @@ uv run --package marin-taskforge --frozen python -m \
     experiments.post_training.capability_driven_envs.driver --root /tmp/capability-run
 ```
 
-It prints the path of `summary.json`, which lists every item's terminal and every accepted task with
-its draft directory and band. A relaunch on the same root resumes every item from its event log.
+It prints the path of `summary.json`, which lists the terminal of every item under the root, those of
+earlier runs with other `--capability` selections included, and every accepted task with its draft
+directory and band. A relaunch on the same root resumes every item from its event log; a relaunch
+under another policy, session limits included, or with a changed idea under the same id is refused.
 
 A solver model must raise `taskforge.llm.client.GlmUnavailable` for a transient failure; anything
 else leaves its trial `UNCLASSIFIED`, which no retry runs again and review rejects.

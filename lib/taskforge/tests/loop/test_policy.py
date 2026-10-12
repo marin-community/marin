@@ -12,7 +12,7 @@ from taskforge.loop.policy import POLICY_FILE, LoopPolicy, install_policy
 from taskforge.review.rules import BandChoice, BandRules
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
-from taskforge.validate.trials import Deadlines, RetryBackoff
+from taskforge.validate.trials import RetryBackoff, SessionLimits
 
 
 def code_built_policy() -> LoopPolicy:
@@ -29,7 +29,15 @@ def code_built_policy() -> LoopPolicy:
             k=4,
             band=CalibrationBand(min_solve_rate=0, max_solve_rate=1),
             sampling=LLMPolicy(max_continuations=0),
-            deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
+            limits=SessionLimits(
+                max_turns=4,
+                model_turn_timeout=20,
+                command_timeout=10,
+                tool_turn_timeout=20,
+                total_turn_timeout=30,
+                attempt_timeout=60,
+                cleanup_timeout=10,
+            ),
             max_retries=0,
             token_contract_retries=0,
             retry_backoff=backoff,
@@ -48,8 +56,18 @@ def test_the_policy_is_written_once_and_a_code_built_relaunch_is_accepted(tmp_pa
     assert isinstance(first.validation.band.max_solve_rate, float)
 
 
-def test_a_relaunch_under_another_policy_is_refused(tmp_path):
+def more_session_turns(policy: LoopPolicy) -> LoopPolicy:
+    validation = policy.validation
+    return replace(policy, validation=replace(validation, limits=replace(validation.limits, max_turns=8)))
+
+
+@pytest.mark.parametrize(
+    "change",
+    [lambda policy: replace(policy, max_build_revisions=2), more_session_turns],
+    ids=["loop bound", "session limit"],
+)
+def test_a_relaunch_under_another_policy_is_refused(tmp_path, change):
     install_policy(tmp_path, code_built_policy())
 
     with pytest.raises(ValueError, match="use a new run root"):
-        install_policy(tmp_path, replace(code_built_policy(), max_build_revisions=2))
+        install_policy(tmp_path, change(code_built_policy()))

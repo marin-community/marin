@@ -6,9 +6,9 @@
 Every catalog capability (or each ``--capability`` named) becomes an idea that ``RecordSource``
 proposes from; ``scaling_task.PROGRAM`` builds each proposal without a model and ``scripted_solver``
 runs its validation trials. The loop keeps each item's rounds (its draft, ``task.json`` among it)
-under ``ROOT/items/``; this script writes ``ROOT/summary.json``, every item's terminal and every
-accepted task, and prints its path. A relaunch on the same root resumes every item from its event
-log::
+under ``ROOT/items/``; this script writes ``ROOT/summary.json``, the terminal of every item under the
+root (from earlier runs with other ``--capability`` selections too) and every accepted task, and
+prints its path. A relaunch on the same root resumes every item from its event log::
 
     uv run --package marin-taskforge --frozen python -m \\
         experiments.post_training.capability_driven_envs.driver --root /tmp/capability-run
@@ -24,13 +24,13 @@ from pathlib import Path
 from pydantic import TypeAdapter
 from taskforge.atomic_file import write_atomic
 from taskforge.builder.author import adopt
-from taskforge.builder.run import DRAFT_DIR, item_id_for, run_build
-from taskforge.ledger.jsonl import JsonlLedger, read_entries
+from taskforge.builder.run import DRAFT_DIR, run_build
+from taskforge.ledger.jsonl import LEDGER_SUFFIX, JsonlLedger, ledger_files, read_entries
 from taskforge.llm.client import NoModel
 from taskforge.llm.policy import LLMPolicy
-from taskforge.loop.events import EventKind, ProposalOrigin, Terminal, events
+from taskforge.loop.events import EventKind, ProposalOrigin, Terminal, derive_state, events
 from taskforge.loop.policy import LoopPolicy, install_policy
-from taskforge.loop.program import ITEMS_DIR, LEDGER_DIR, ROUNDS_DIR, Loop, run_idea, run_item
+from taskforge.loop.program import IDEA_PREFIX, ITEMS_DIR, LEDGER_DIR, ROUNDS_DIR, Loop, run_idea, run_item
 from taskforge.loop.stages import Stages
 from taskforge.review.decision import BandOutcome
 from taskforge.review.rules import BandChoice, BandRules, decide
@@ -39,7 +39,7 @@ from taskforge.triage.verdict import accept
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy, run_validation
 from taskforge.validate.solver import ModelFactory
-from taskforge.validate.trials import Deadlines, EngineSettings, RetryBackoff
+from taskforge.validate.trials import EngineSettings, RetryBackoff, SessionLimits
 
 from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,
@@ -68,7 +68,15 @@ def capability_policy(k: int, proposals_per_idea: int) -> LoopPolicy:
             k=k,
             band=CalibrationBand(min_solve_rate=0.125, max_solve_rate=0.875),
             sampling=LLMPolicy(max_continuations=0),
-            deadlines=Deadlines(total_turn_timeout=60.0, attempt_timeout=120.0),
+            limits=SessionLimits(
+                max_turns=8,
+                model_turn_timeout=60.0,
+                command_timeout=30.0,
+                tool_turn_timeout=60.0,
+                total_turn_timeout=60.0,
+                attempt_timeout=120.0,
+                cleanup_timeout=30.0,
+            ),
             max_retries=1,
             token_contract_retries=0,
             retry_backoff=BACKOFF,
@@ -77,16 +85,8 @@ def capability_policy(k: int, proposals_per_idea: int) -> LoopPolicy:
 
 
 def engine_settings() -> EngineSettings:
-    """The ShellSim factories, and the session limits of every validation trial."""
-    return EngineSettings(
-        factories=machine_factories(),
-        capabilities=factory_capabilities(),
-        max_turns=8,
-        command_timeout=30.0,
-        tool_turn_timeout=60.0,
-        model_turn_timeout=60.0,
-        cleanup_timeout=30.0,
-    )
+    """The ShellSim factories and what they can run."""
+    return EngineSettings(factories=machine_factories(), capabilities=factory_capabilities())
 
 
 def capability_loop(root: Path, policy: LoopPolicy, rollout_models: ModelFactory) -> Loop[CapabilityIdea]:
@@ -135,9 +135,9 @@ class AcceptedTask:
 
 @dataclass(frozen=True)
 class RunSummary:
-    """Every item's terminal, and the accepted ones' tasks."""
+    """Every item's terminal (``None`` for an item a stopped run left mid-stage), and the accepted ones' tasks."""
 
-    items: dict[str, Terminal]
+    items: dict[str, Terminal | None]
     accepted: dict[str, AcceptedTask]
 
 
@@ -157,17 +157,27 @@ def accepted_task(root: Path, item_id: str) -> AcceptedTask:
     )
 
 
+def run_summary(root: Path) -> RunSummary:
+    """Every proposal item under ``root``, each with the terminal its event log derives to; idea logs are skipped."""
+    items: dict[str, Terminal | None] = {}
+    for path in ledger_files(root / LEDGER_DIR):
+        item_id = path.name.removesuffix(LEDGER_SUFFIX)
+        if not item_id.startswith(IDEA_PREFIX):
+            items[item_id] = derive_state(read_entries(path)).terminal
+    accepted = {item: accepted_task(root, item) for item, terminal in items.items() if terminal is Terminal.ACCEPTED}
+    return RunSummary(items=items, accepted=accepted)
+
+
 async def run(
     root: Path, ideas: Mapping[str, CapabilityIdea], policy: LoopPolicy, rollout_models: ModelFactory
 ) -> RunSummary:
-    """Carry every idea's proposals to a terminal, one item at a time, and write ``summary.json``."""
+    """Carry every idea's proposals to a terminal, one item at a time, then write ``run_summary(root)`` as
+    ``summary.json``."""
     loop = capability_loop(root, policy, rollout_models)
-    items: dict[str, Terminal] = {}
     for idea_id, idea in ideas.items():
         for proposal in await run_idea(loop, idea_id, idea):
-            items[item_id_for(proposal)] = await run_item(loop, proposal, ProposalOrigin.GENERATED)
-    accepted = {item: accepted_task(root, item) for item, terminal in items.items() if terminal is Terminal.ACCEPTED}
-    summary = RunSummary(items=items, accepted=accepted)
+            await run_item(loop, proposal, ProposalOrigin.GENERATED)
+    summary = run_summary(root)
     write_atomic(root / SUMMARY_FILE, SUMMARY.dump_json(summary, indent=2))
     return summary
 

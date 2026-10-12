@@ -4,7 +4,7 @@
 """Every bound of one run, stated in the run's ``policy.json``; no field has a default.
 
 ``POLICY`` reads and writes a ``LoopPolicy`` as JSON. Every field of ``LoopPolicy``, of its
-``ValidationPolicy`` and of that policy's ``band``, ``sampling`` and ``deadlines``, and of the
+``ValidationPolicy`` and of that policy's ``band``, ``sampling`` and ``limits``, and of the
 ``band_rules``, is required and an unknown key is an error, so a run config states each bound. A
 ``RetryBackoff`` is written as its four fields (``initial``, ``maximum``, ``factor``, ``jitter``), all
 required; a ``BandChoice`` as its value (``accept`` or ``reject``).
@@ -26,7 +26,7 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.review.rules import BandRules
 from taskforge.validate.calibration import CalibrationBand
 from taskforge.validate.run import ValidationPolicy
-from taskforge.validate.trials import Deadlines, RetryBackoff
+from taskforge.validate.trials import RetryBackoff, SessionLimits
 
 POLICY_FILE = "policy.json"
 
@@ -108,7 +108,7 @@ _VALIDATION_JSON = _strict_dataclass(
         RetryBackoff: _strict_dataclass(RetryBackoff, {}),
         CalibrationBand: _strict_dataclass(CalibrationBand, {}),
         LLMPolicy: _strict_dataclass(LLMPolicy, {}),
-        Deadlines: _strict_dataclass(Deadlines, {}),
+        SessionLimits: _strict_dataclass(SessionLimits, {}),
     },
 )
 _LOOP_JSON = _strict_dataclass(
