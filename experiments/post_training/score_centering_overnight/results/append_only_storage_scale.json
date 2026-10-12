@@ -1,0 +1,11 @@
+{
+  "scope": "CPU storage scaling qualification, no training-effect estimate. Actual sink/archive writer, persisted120000records and archive-only reconstruction.",
+  "records": 120000,
+  "archives": 40000,
+  "first5000_median_seconds": 0.0015186155214905739,
+  "last5000_median_seconds": 0.0015323322732001543,
+  "total_seconds": 72.99507873086259,
+  "rebuild_seconds": 9.03268000902608,
+  "duplicates_suppressed_after_rebuild": 3,
+  "passed": true
+}

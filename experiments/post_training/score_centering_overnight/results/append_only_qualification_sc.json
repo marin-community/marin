@@ -1,0 +1,89 @@
+{
+  "run_id": "sc-skyrl-publication-qual-sc-s0-a1-01a126ce",
+  "runtime": {
+    "entrypoint": "skyrl_train.entrypoints.main_base",
+    "experiments_dir": "/app/experiments",
+    "launcher_commit": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "profile": "megatron",
+    "task_env": {},
+    "training_type": "sync"
+  },
+  "completed_updates": 3,
+  "score_centering": true,
+  "sampler_refresh_period": 1,
+  "matches_authors_completion_grading": true,
+  "full_completion_grade_differences_in_native_archives": {
+    "eval": 0,
+    "train": 0
+  },
+  "scientific_scope": "faithful completion grading",
+  "historical_eval_version_metadata": "Older sources report step-1. Actual clean evaluation follows post-update sync at the stated global_step. Preserve raw metadata.",
+  "primary_endpoint_completed_updates": 3,
+  "supplemental_eval_steps": [],
+  "evaluation_membership_sha256": "820112c34dcbfff77fd53f08069c40f14151e18ca30f1d23eae1cfdc6bdc1c07",
+  "native_archive_training_gaps": {},
+  "complete_original_training_groups": null,
+  "learner_evidence": [
+    {
+      "completed_updates_before_batch": 0,
+      "sampler_completed_updates": 0,
+      "sampler_age_updates": 0,
+      "retained_rows": 2,
+      "retained_loss_tokens": 86,
+      "chosen_tokens_in_head": 86,
+      "mean_omitted_mass": 0.00015169382095336914,
+      "pre_update_correction_abs_mean": 0.0,
+      "centering_applied": true
+    },
+    {
+      "completed_updates_before_batch": 1,
+      "sampler_completed_updates": 1,
+      "sampler_age_updates": 0,
+      "retained_rows": 2,
+      "retained_loss_tokens": 112,
+      "chosen_tokens_in_head": 112,
+      "mean_omitted_mass": 8.636713027954102e-05,
+      "pre_update_correction_abs_mean": 0.0,
+      "centering_applied": true
+    },
+    {
+      "completed_updates_before_batch": 2,
+      "sampler_completed_updates": 2,
+      "sampler_age_updates": 0,
+      "retained_rows": 2,
+      "retained_loss_tokens": 321,
+      "chosen_tokens_in_head": 321,
+      "mean_omitted_mass": 0.00032019615173339844,
+      "pre_update_correction_abs_mean": 0.0,
+      "centering_applied": true
+    }
+  ],
+  "quality": [
+    {
+      "completed_updates": 0,
+      "correct": 34.0,
+      "responses": 512,
+      "quality": 0.06640625
+    },
+    {
+      "completed_updates": 1,
+      "correct": 60.0,
+      "responses": 512,
+      "quality": 0.1171875
+    },
+    {
+      "completed_updates": 2,
+      "correct": 57.0,
+      "responses": 512,
+      "quality": 0.111328125
+    },
+    {
+      "completed_updates": 3,
+      "correct": 66.0,
+      "responses": 512,
+      "quality": 0.12890625
+    }
+  ],
+  "nonzero_gradient_updates": 3,
+  "audit_passed": true
+}
