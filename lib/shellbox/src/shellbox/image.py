@@ -3,11 +3,9 @@
 
 """Resolve registry images and Dockerfiles into local, pinned OCI layouts."""
 
-import fcntl
 import hashlib
 import json
 import os
-import re
 import subprocess
 import tempfile
 import threading
@@ -69,14 +67,12 @@ def image_source_key(source: RegistryImage | DockerfileSource) -> str:
 class ImageCache:
     """Reuse prepared sources within one Python process.
 
-    Mutable registry references are snapshots for the lifetime of this cache.
-    Digest-pinned references also share their prepared layout across processes.
+    Registry references are snapshots for the lifetime of this cache.
     Dockerfile contexts are fingerprinted on each call so edits cause a new build.
     """
 
-    def __init__(self, directory: Path, *, skopeo: Path, authfile: Path | None = None, policy: Path | None = None):
+    def __init__(self, directory: Path, *, authfile: Path | None = None, policy: Path | None = None):
         self.directory = directory
-        self.skopeo = skopeo
         self.authfile = authfile
         self.policy = policy
         self._images: dict[str, PreparedImage] = {}
@@ -95,7 +91,6 @@ class ImageCache:
             image = prepare_image(
                 source,
                 self.directory,
-                skopeo=self.skopeo,
                 authfile=self.authfile,
                 policy=self.policy,
             )
@@ -104,8 +99,8 @@ class ImageCache:
 
 
 @cache
-def process_image_cache(directory: Path, skopeo: Path, authfile: Path | None, policy: Path | None) -> ImageCache:
-    return ImageCache(directory.resolve(), skopeo=skopeo, authfile=authfile, policy=policy)
+def process_image_cache(directory: Path, authfile: Path | None, policy: Path | None) -> ImageCache:
+    return ImageCache(directory.resolve(), authfile=authfile, policy=policy)
 
 
 def _run(*args: str) -> None:
@@ -140,7 +135,6 @@ def prepare_image(
     source: RegistryImage | DockerfileSource,
     cache: Path,
     *,
-    skopeo: Path,
     authfile: Path | None = None,
     policy: Path | None = None,
 ) -> PreparedImage:
@@ -152,35 +146,9 @@ def prepare_image(
     cache.mkdir(parents=True, exist_ok=True)
     if isinstance(source, RegistryImage) and ("://" in source.reference or not source.reference.strip()):
         raise ValueError("RegistryImage requires a container image reference without a URL scheme")
-    # Explicit signature policies must be evaluated by Skopeo rather than bypassed
-    # by a persistent cache hit. Tags remain process-local snapshots.
-    if isinstance(source, RegistryImage) and re.search(r"@sha256:[0-9a-f]{64}$", source.reference) and policy is None:
-        key = hashlib.sha256(source.reference.encode()).hexdigest()
-        reference = cache / f".registry-{key}"
-        with (cache / f".registry-{key}.lock").open("w") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            if reference.is_symlink():
-                layout = reference.resolve(strict=True)
-                return PreparedImage(layout, _manifest_digest(layout), source)
-            image = _prepare_image(source, cache, skopeo=skopeo, authfile=authfile, policy=policy)
-            # The selected OCI manifest can differ from the registry's pinned
-            # manifest after platform selection and media-type conversion.
-            reference.symlink_to(image.layout.name)
-            return image
-    return _prepare_image(source, cache, skopeo=skopeo, authfile=authfile, policy=policy)
-
-
-def _prepare_image(
-    source: RegistryImage | DockerfileSource,
-    cache: Path,
-    *,
-    skopeo: Path,
-    authfile: Path | None,
-    policy: Path | None,
-) -> PreparedImage:
     with tempfile.TemporaryDirectory(prefix="image-", dir=cache) as temporary:
         layout = Path(temporary) / "oci"
-        skopeo_args = [str(skopeo)]
+        skopeo_args = ["skopeo"]
         skopeo_args.extend(("--policy", str(policy)) if policy is not None else ("--insecure-policy",))
         skopeo_args.extend(("--override-os", "linux", "--override-arch", "amd64", "copy"))
         if authfile is not None:
@@ -215,30 +183,3 @@ def _prepare_image(
             except FileExistsError:
                 pass  # Another process published this content-addressed layout.
         return PreparedImage(destination, digest, source)
-
-
-def load_docker_image(image: PreparedImage, *, skopeo: Path, policy: Path | None = None) -> str:
-    """Load a prepared OCI layout into Docker under a digest-derived local tag."""
-    tag = f"harbor-prepared:sha256-{image.manifest_digest.split(':', 1)[1]}"
-    lock_path = image.layout.parent / f".{image.manifest_digest.replace(':', '-')}.docker.lock"
-    with lock_path.open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        inspect = subprocess.run(("docker", "image", "inspect", tag), capture_output=True)
-        if inspect.returncode:
-            algorithm, digest = image.manifest_digest.split(":", 1)
-            manifest = json.loads((image.layout / "blobs" / algorithm / digest).read_bytes())
-            args = [str(skopeo)]
-            args.extend(("--policy", str(policy)) if policy is not None else ("--insecure-policy",))
-            source = f"oci:{image.layout}:{OCI_TAG}"
-            if any("zstd" in layer["mediaType"] for layer in manifest["layers"]):
-                # Docker's manifest conversion rejects zstd before Skopeo can recompress it.
-                # Keep the pinned cache unchanged and bridge through a gzip OCI transport.
-                with tempfile.TemporaryDirectory(prefix="docker-", dir=image.layout.parent) as temporary:
-                    compressed = f"oci:{Path(temporary) / 'oci'}:{OCI_TAG}"
-                    _run(
-                        *args, "copy", "--dest-compress-format", "gzip", "--dest-compress-level", "1", source, compressed
-                    )
-                    _run(*args, "copy", compressed, f"docker-daemon:{tag}")
-            else:
-                _run(*args, "copy", source, f"docker-daemon:{tag}")
-    return tag

@@ -177,7 +177,7 @@ explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation
 Conversation-only tasks need no machine. Memory settings are advisory sizing hints.
 
 Built environments export gzip layers, including inherited base-image layers,
-for the workers' Skopeo acquisition path. Compression enters built-image cache
+for Docker and OCI consumers. Compression enters built-image cache
 identity; lock-backed worker environments retain their existing identities.
 
 ## Graders and controls

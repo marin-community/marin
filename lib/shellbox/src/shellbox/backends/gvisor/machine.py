@@ -68,15 +68,8 @@ class GvisorMachineFactory(DockerMachineFactory):
 
     backend: Backend = Backend.GVISOR
 
-    def __init__(
-        self,
-        *,
-        skopeo: Path | None = None,
-        image_cache: Path | None = None,
-        authfile: Path | None = None,
-        policy: Path | None = None,
-    ):
-        super().__init__(skopeo=skopeo, image_cache=image_cache, authfile=authfile, policy=policy, runtime="runsc")
+    def __init__(self):
+        super().__init__(runtime="runsc")
 
     async def create(self, spec: MachineSpec) -> GvisorMachine:
         machine = await super().create(spec)

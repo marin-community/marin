@@ -254,8 +254,8 @@ def _push_image(context: Path, tag: str) -> str:
             "build",
             f"--platform={PLATFORM}",
             "--provenance=false",
-            # The pinned base contains zstd layers; Docker schema2 zstd manifests fail
-            # during Skopeo acquisition. Recompress inherited layers as well as new ones.
+            # Export inherited layers with the selected compression too, so OCI
+            # consumers can convert the image to Docker's schema2 format.
             f"--output=type=registry,compression={IMAGE_COMPRESSION},force-compression=true",
             f"--tag={tag}",
             *package_contexts,

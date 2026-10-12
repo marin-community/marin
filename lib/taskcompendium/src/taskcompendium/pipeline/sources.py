@@ -229,8 +229,8 @@ def conversion_shards(
     if spec.prepared_component is not None:
         prepared = []
         for shard in shards:
-            # Overrides read the supplied file directly; preparation belongs to
-            # the immutable acquisition artifact, not to neighboring local files.
+            # Prepared files belong to the immutable acquisition artifact.
+            # Overrides read their supplied files directly.
             if shard.read_path is not None:
                 prepared.append(shard)
                 continue
