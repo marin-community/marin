@@ -7,7 +7,7 @@ import argparse
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -21,6 +21,7 @@ class ReleaseFixture:
     config: ReleaseConfig
     events: Path
     fail_checks: bool = False
+    fail_snapshot: bool = False
 
 
 @pytest.fixture
@@ -77,6 +78,7 @@ def release_environment(tmp_path, monkeypatch):
             "worker-disk-gb",
             "url-prefix",
             "output",
+            "asset-output",
         ):
             parser.add_argument("--" + name)
         for name in ("all", "copy-assets", "simple"):
@@ -95,7 +97,7 @@ def release_environment(tmp_path, monkeypatch):
             (state / "graph.json").write_text(json.dumps({"assets": [asset]}))
             (state / "results.json").write_text(json.dumps({"roots": ["toolchain/llvm:guest"], "prefix": args.store}))
             source = Path(args.store) / asset["path"]
-            source.parent.mkdir(parents=True)
+            source.parent.mkdir(parents=True, exist_ok=True)
             source.write_bytes(b"guest clang")
         elif args.operation == "check":
             if fixture.fail_checks:
@@ -105,11 +107,16 @@ def release_environment(tmp_path, monkeypatch):
             output = Path(args.output)
             output.mkdir(parents=True, exist_ok=True)
             if args.copy_assets:
-                target = output / asset["path"]
+                target = Path(args.asset_output or args.output) / asset["path"]
                 if not target.exists():
                     target.parent.mkdir(parents=True)
                     target.write_bytes((Path(args.store) / asset["path"]).read_bytes())
             assert (Path(config.publication_prefix) / asset["path"]).read_bytes() == b"guest clang"
+            if args.output == config.publication_prefix:
+                assert (output / "releases" / fixture.config.version / "catalog.json").is_file()
+                assert (output / "release-version").read_text() == fixture.config.version
+            elif fixture.fail_snapshot:
+                raise subprocess.CalledProcessError(1, arguments)
             (output / "catalog.json").write_text(json.dumps({"assets": [asset]}))
         return subprocess.CompletedProcess(arguments, 0)
 
@@ -126,6 +133,16 @@ def test_release_publishes_checked_snapshot_and_reuses_cached_output(release_env
     assert stable == json.loads((publication / "releases" / config.version / "catalog.json").read_text())
     assert stable["assets"][0]["url"] == "https://ports.example.org/assets/immutable/clang.wasm"
     assert (publication / "assets/immutable/clang.wasm").read_bytes() == b"guest clang"
+    older = replace(config, version="2026.10.11")
+    run(ports_release(older))
+    assert (publication / "releases" / older.version / "catalog.json").is_file()
+    assert (publication / "release-version").read_text() == config.version
+    exports = [
+        json.loads(line)["output"]
+        for line in events.read_text().splitlines()
+        if json.loads(line)["operation"] == "export"
+    ]
+    assert exports.count(config.publication_prefix) == 1
     before = events.read_bytes()
     shutil.rmtree(config.work_directory)
     shutil.rmtree(config.source_repository)
@@ -134,14 +151,15 @@ def test_release_publishes_checked_snapshot_and_reuses_cached_output(release_env
     assert not Path(config.work_directory).exists()
 
 
-def test_release_failed_guest_checks_preserve_published_catalog(release_environment):
-    config, events = release_environment.config, release_environment.events
+@pytest.mark.parametrize("failure", ["checks", "snapshot"])
+def test_release_failures_preserve_published_catalog(release_environment, failure):
+    config = release_environment.config
     publication = Path(config.publication_prefix)
     publication.mkdir()
     (publication / "catalog.json").write_bytes(b"existing catalog")
-    release_environment.fail_checks = True
+    release_environment.fail_checks = failure == "checks"
+    release_environment.fail_snapshot = failure == "snapshot"
     with pytest.raises(RuntimeError):
         run(ports_release(config))
     assert (publication / "catalog.json").read_bytes() == b"existing catalog"
-    assert not (publication / "releases").exists()
-    assert [json.loads(line)["operation"] for line in events.read_text().splitlines()] == ["build", "check"]
+    assert not (publication / "releases" / config.version / "catalog.json").exists()

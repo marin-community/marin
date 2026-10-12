@@ -17,6 +17,8 @@ from urllib.parse import urljoin
 import click
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
+from marin.execution.step_status import step_lock
+from packaging.version import Version
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
@@ -29,6 +31,9 @@ WORKER_IMAGE = (
     "ghcr.io/marin-community/iris-task@sha256:47f018672e5c868ac4fcec30901a522197a52c33ccecbec31d70d18d535322cc"
 )
 STATE_FILES = ("graph.json", "results.json")
+RELEASE_DIRECTORY = "releases"
+CATALOG_FILENAME = "catalog.json"
+RUNTIME_FIELDS = ("work_directory", "max_workers", "worker_cpus", "worker_memory_gb", "worker_disk_gb")
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,7 @@ class ReleaseConfig:
     worker_disk_gb: int = 100
 
     def __post_init__(self) -> None:
+        Version(self.version)
         if not re.fullmatch(r"[0-9a-f]{40}", self.source_revision):
             raise ValueError("source_revision must be a full Git commit SHA")
 
@@ -137,7 +143,7 @@ def check_ports(config: StageConfig) -> None:
 
 
 def publish_ports(config: StageConfig) -> None:
-    """Promote checked assets before publishing catalogs that reference them."""
+    """Publish snapshots before promoting the newest version to the stable catalog."""
     state = _state(config, "export")
     _ports(
         config,
@@ -146,42 +152,37 @@ def publish_ports(config: StageConfig) -> None:
         "--url-prefix",
         config.release.asset_url_prefix,
         "--output",
-        config.release.publication_prefix,
+        str(StoragePath(config.release.publication_prefix) / RELEASE_DIRECTORY / config.release.version),
         "--copy-assets",
+        "--asset-output",
+        config.release.publication_prefix,
         "--simple",
     )
-    _ports(
-        config,
-        state,
-        "export",
-        "--url-prefix",
-        config.release.asset_url_prefix,
-        "--output",
-        str(StoragePath(config.release.publication_prefix) / "releases" / config.release.version),
-        "--simple",
-    )
+    publication = StoragePath(config.release.publication_prefix)
+    with step_lock(str(StoragePath(config.output_path).parent / ".promotion"), "ports stable catalog", force_rerun=True):
+        current = publication / "release-version"
+        if current.exists() and Version(current.read_text()) > Version(config.release.version):
+            return
+        current.write_text(config.release.version)
+        _ports(
+            config,
+            state,
+            "export",
+            "--url-prefix",
+            config.release.asset_url_prefix,
+            "--output",
+            config.release.publication_prefix,
+            "--simple",
+        )
 
 
 def _release_config(config: ReleaseConfig, ctx: StepContext) -> ReleaseConfig:
-    return replace(
-        config,
-        work_directory=ctx.runtime_arg("work_directory"),
-        max_workers=ctx.runtime_arg("max_workers"),
-        worker_cpus=ctx.runtime_arg("worker_cpus"),
-        worker_memory_gb=ctx.runtime_arg("worker_memory_gb"),
-        worker_disk_gb=ctx.runtime_arg("worker_disk_gb"),
-    )
+    return replace(config, **{name: ctx.runtime_arg(name) for name in RUNTIME_FIELDS})
 
 
 def ports_release(config: ReleaseConfig) -> ArtifactStep[Artifact]:
     """Declare build, check, and publication dependencies without executing."""
-    runtime = {
-        "work_directory": config.work_directory,
-        "max_workers": config.max_workers,
-        "worker_cpus": config.worker_cpus,
-        "worker_memory_gb": config.worker_memory_gb,
-        "worker_disk_gb": config.worker_disk_gb,
-    }
+    runtime = {name: getattr(config, name) for name in RUNTIME_FIELDS}
     build = ArtifactStep(
         name="shellsim/buildomatic/build",
         version=config.version,
@@ -250,8 +251,8 @@ def main(
         configure_coreweave_s3()
         run(handle)
         base = url_prefix.rstrip("/") + "/"
-        click.echo(f"Catalog: {urljoin(base, 'catalog.json')}")
-        click.echo(f"Snapshot: {urljoin(base, f'releases/{version}/catalog.json')}")
+        click.echo(f"Catalog: {urljoin(base, CATALOG_FILENAME)}")
+        click.echo(f"Snapshot: {urljoin(base, f'{RELEASE_DIRECTORY}/{version}/{CATALOG_FILENAME}')}")
     else:
         click.echo(lower(handle))
 
