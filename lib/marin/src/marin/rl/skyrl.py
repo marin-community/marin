@@ -804,11 +804,6 @@ def _launch_config_yaml(
         },
         "inputs": {
             "model": {**asdict(model), "chat_template": None},
-            "data_kind": (
-                _declared_config_value(recipe, "data.kind")
-                if _declared_config_value(recipe, "data.kind") is not _MISSING_CONFIG_VALUE
-                else "tasks"
-            ),
             "train_data": [_launch_data_source(source) for source in train_data],
             "validation_data": [_launch_data_source(source) for source in validation_data],
         },

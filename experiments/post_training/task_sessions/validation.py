@@ -45,6 +45,7 @@ from experiments.post_training.cat_count_canary.launcher import (
     run_canary,
     training_config,
 )
+from experiments.post_training.task_sessions.data import answer_task_record
 
 BATCH_SIZE = 8
 RUN_NAME = "checkpoints/task-session-validation"
@@ -63,16 +64,10 @@ class ValidationDataConfig:
 
 def validation_record(index: int, split: str) -> dict:
     if index % 2 == 0:
-        count = 1 + index % 13
-        # Parquet needs one ground-truth type. Cat-count grading reads extra_info.n.
-        return {
-            **cat_count_record(count, split, index),
-            "reward_spec": {"method": "rule", "ground_truth": str(count)},
-        }
+        return cat_count_record(1 + index % 13, split, index)
     left, right = 3 + index % 11, 2 + index % 7
-    return {
-        "data_source": "task_session_math",
-        "prompt": [
+    return answer_task_record(
+        [
             {
                 "role": "user",
                 "content": (
@@ -81,10 +76,15 @@ def validation_record(index: int, split: str) -> dict:
                 ),
             }
         ],
-        "env_class": "gsm8k_multi_turn",
-        "reward_spec": {"method": "rule", "ground_truth": str(left * right)},
-        "extra_info": {"index": index, "split": split},
-    }
+        dataset="task_session_math",
+        split=split,
+        index=index,
+        extras={
+            "reward_spec": {"method": "rule", "ground_truth": str(left * right)},
+            "extra_info": {"index": index, "split": split},
+        },
+        config={"reward_method": "strict"},
+    )
 
 
 def write_validation_data(config: ValidationDataConfig) -> None:
@@ -106,6 +106,9 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
         group_size=GROUP_SIZE,
         micro_train_batch_size=MICRO_BATCH_SIZE,
     )
+    config["environment"]["task_sessions"]["sources"] = {
+        "task_session_math": {"session": {"task_session": "gsm8k_multi_turn"}},
+    }
     config["context_budget"] = {
         "request_window_tokens": 1024,
         "max_new_tokens_per_turn": 128,

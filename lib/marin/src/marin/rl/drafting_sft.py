@@ -102,7 +102,7 @@ def draft_sft_plan(
             "max_new_tokens_per_turn": max_new_tokens_per_turn,
             "max_turns": 1,
         },
-        "environment": {"env_class": environment},
+        "environment": {"task_sessions": {"session": {"task_session": environment}}},
         "trainer": {
             "strategy": "megatron",
             "flash_attn": False,
@@ -154,7 +154,7 @@ def draft_sft_plan(
             },
             "sampling_params": {"temperature": 1.0, "top_p": 1.0},
         },
-        "data": {"kind": "parquet", "train_data": [], "val_data": []},
+        "data": {"train_data": [], "val_data": []},
         "extra_env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
     }
     # One whole-node rollout engine and one dedicated DraftTrainer node sit

@@ -165,8 +165,7 @@ PROTECTED_SETTINGS = (
             "generator.run_engines_locally",
             "generator.enable_http_endpoint",
             "generator.backend",
-            "environment.env_class",
-            "data.kind",
+            "environment.task_sessions.session.task_session",
         }
     )
 )
@@ -242,7 +241,7 @@ def training_config(
             "max_new_tokens_per_turn": 64,
             "max_turns": 1,
         },
-        "environment": {"env_class": ENV_CLASS},
+        "environment": {"task_sessions": {"session": {"task_session": ENV_CLASS}}},
         "trainer": {
             "strategy": "megatron",
             "flash_attn": False,
@@ -306,7 +305,7 @@ def training_config(
             "eval_n_samples_per_prompt": 1,
             "inference_stats_interval": 1,
         },
-        "data": {"kind": "parquet", "shuffle": False, "train_data": [], "val_data": []},
+        "data": {"shuffle": False, "train_data": [], "val_data": []},
     }
     _materialize_role_plan_config(config, plan)
     if choice.chat_template_kwargs is not None:
@@ -404,7 +403,7 @@ def build_run(
     prefetch_rows = config["trainer"]["rollout_buffer"]["max_staleness_steps"] * batch_size
     train_rows = batch_size * max_steps + prefetch_rows
     identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(config) + repr(train_ns))}"
-    data_identity = fingerprint_hash(repr((train_ns, train_rows, seed)))
+    data_identity = fingerprint_hash(repr(("task_spec", train_ns, train_rows, seed)))
     data_name = f"documents/{EXPERIMENT_NAME}/{data_identity}"
     data = cat_count_data_step(
         data_name,

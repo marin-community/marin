@@ -7,6 +7,9 @@ import gzip
 import json
 from pathlib import Path
 
+from taskcompendium.grader import grader_config
+from taskcompendium.models import TaskSpec
+
 from experiments.post_training import iceball_micro
 
 
@@ -17,14 +20,13 @@ def test_gsm8k_record_matches_skyrl_reward_schema() -> None:
         3,
     )
 
-    assert record["prompt"] == [
-        {
-            "role": "user",
-            "content": 'What is 20 + 22? Let\'s think step by step and output the final answer after "####".',
-        }
-    ]
-    assert record["reward_spec"] == {"method": "rule", "ground_truth": "42"}
-    assert record["extra_info"]["index"] == 3
+    task = TaskSpec.model_validate_json(record["task_spec"])
+    assert (
+        task.context.events[0].content
+        == 'What is 20 + 22? Let\'s think step by step and output the final answer after "####".'
+    )
+    assert grader_config(task)["extras"]["reward_spec"]["ground_truth"] == "42"
+    assert grader_config(task)["extras"]["extra_info"]["index"] == 3
 
 
 def test_fineweb_slice_streams_only_the_declared_prefix(tmp_path: Path, monkeypatch) -> None:
