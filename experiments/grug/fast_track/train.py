@@ -33,6 +33,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -1670,9 +1671,9 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
             jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index])
             for x in (tokens[start : start + batch_size], segments[start : start + batch_size])
         ]
-        parts.append(
-            {k: np.asarray(v) for k, v in jax.device_get(step(state.params, state.pending_qb_betas, *batch)).items()}
-        )
+        # Gather the batch-sharded outputs onto every process (a multi-process run cannot device_get them).
+        outputs = multihost_utils.process_allgather(step(state.params, state.pending_qb_betas, *batch), tiled=True)
+        parts.append({k: np.asarray(v) for k, v in outputs.items()})
     if jax.process_index() != 0:
         return
     buffer = io.BytesIO()
