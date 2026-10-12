@@ -132,6 +132,27 @@ beside the campaign report. `assessment_runs` records ordinary pipeline keys,
 complete reports, failed attempts with partial evidence, and disabled assessments
 with a skip reason. Catalog source counts retain their full or SAMPLE scope.
 
+SAMPLE/FULL also publishes a complete inventory snapshot from these catalog
+records. It archives sampled packets, judgments and inference traces before
+changing the current snapshot pointer. A failed retry keeps a previous grade
+only when its report pipeline key matches. A changed key with a failed assessment
+has no current grade. Sources without conversion pipelines remain inventory
+entries with an explicit skip reason. Authored legacy ratings are excluded.
+
+Read the current snapshot without rereading source parquet:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.catalog_snapshot \
+  --catalog-root /path/to/cache/campaigns/catalog --output /path/to/catalog.json
+```
+
+`publish_catalog(root, run_id, sources)` publishes a retained terminal invocation
+from the same catalog. Run publication in the data's storage region: it reads
+sampled packets and traces to preserve them. SAMPLE and overridden input counts
+never replace a declaration's full-source count. Curation failures and executed
+verification coverage remain separate from assessment opinions.
+
 ### Harbor compatibility view
 
 ```bash

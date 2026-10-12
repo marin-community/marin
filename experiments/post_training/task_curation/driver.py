@@ -31,21 +31,24 @@ from experiments.post_training.task_curation.assessment import (
     assessment_pipeline,
 )
 from experiments.post_training.task_curation.campaign import (
+    CampaignFailed,
     CampaignPool,
     CampaignRuntime,
     campaign_plan,
     run_campaign,
 )
+from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.config import (
     InputOverrides,
     PipelineOptions,
     RecipeSettings,
 )
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
 from experiments.post_training.task_curation.local import local_artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.reassessment import reassessment_input, retained_sources
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
-from experiments.post_training.task_curation.sources import runnable_sources
+from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 
 LOCAL_MAX_WORKERS = 4
 LOCAL_MEMORY = "4g"
@@ -81,6 +84,13 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
     except ImportError as error:
         raise click.UsageError("--image-backend daytona requires the Shellbox daytona extra") from error
     return DaytonaMachineFactory()
+
+
+def _publish_campaign(report_path: str, selected: dict[str, RlDataSource]) -> None:
+    path = StoragePath(report_path)
+    report = json.loads(path.read_text())
+    sources = {**all_sources(), **{source.info.id: source for source in selected.values()}}
+    publish_catalog(str(path.parent / CATALOG_DIRECTORY), report["run_id"], sources.values())
 
 
 @click.command(help=__doc__)
@@ -363,15 +373,20 @@ def main(
             scope.callback(client.shutdown)
             scope.enter_context(set_current_client(client))
         assert report_path is not None
-        run_campaign(
-            steps,
-            runtime=runtime,
-            pool=pool,
-            report_path=report_path,
-            mode=processing_mode,
-            source_ids={step.name: source.info.id for step, source in zip(steps, selected.values(), strict=True)},
-            evidence_paths=evidence_paths,
-        )
+        try:
+            run_campaign(
+                steps,
+                runtime=runtime,
+                pool=pool,
+                report_path=report_path,
+                mode=processing_mode,
+                source_ids={step.name: source.info.id for step, source in zip(steps, selected.values(), strict=True)},
+                evidence_paths=evidence_paths,
+            )
+        except CampaignFailed:
+            _publish_campaign(report_path, selected)
+            raise
+        _publish_campaign(report_path, selected)
 
 
 if __name__ == "__main__":
