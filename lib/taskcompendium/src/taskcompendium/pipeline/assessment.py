@@ -114,6 +114,8 @@ def submission_contract(task: TaskSpec) -> SubmissionContract:
                 "and stages the conversation at conversation_path."
             )
         )
+        if answer_path is not None:
+            handling += " The runtime also stages the conversation at conversation_path."
     elif isinstance(task.grader, VerifyitGrader):
         if task.grader.environment is None:
             handling = (
@@ -127,8 +129,8 @@ def submission_contract(task: TaskSpec) -> SubmissionContract:
                 "for Verifyit. The solver need not write that file."
                 if task.answer_type in CONVERSATION_ANSWERS
                 else (
-                    "The runtime captures answer_path when configured and declared output files from the solver "
-                    "workspace; supplied state can be graded without an answer file."
+                    "The runtime captures declared output files from the solver workspace, plus answer_path when "
+                    "configured. Supplied state can be graded without an answer file."
                 )
             )
     return SubmissionContract(
@@ -274,7 +276,7 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
     evidence[view] = row
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence.pop("task", None)
-        omissions.append("task: projected evidence exceeds packet budget; available submission contract retained")
+        omissions.append("task: projected evidence exceeds packet budget")
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence = {view: {"task_id": row["task_id"], "omitted": "section exceeds packet budget"}}
         omissions.append(f"{view}: evidence exceeds packet budget")
