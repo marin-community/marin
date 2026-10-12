@@ -13,7 +13,7 @@ import datetime
 import json
 import math
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -21,7 +21,7 @@ from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
 from verifyit.file_ops.read import read_text
-from verifyit.grade import InvalidTask, Reward, read_output, scored
+from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
 from verifyit.modes.extract import unwrap_fence
 from verifyit.spec import JsonSchemaSpec, SchemaFormat
 
@@ -52,20 +52,25 @@ def load_schema(path: Path) -> dict:
     """The JSON Schema at ``path``. Raises ``InvalidTask`` when it is absent or not a schema."""
     if not path.is_file():
         raise InvalidTask(f"schema file not found: {path}")
+    return parse_schema(read_text(path), str(path))
+
+
+def parse_schema(text: str, name: str) -> dict:
+    """The JSON Schema in ``text``, read from the file ``name``. Raises ``InvalidTask`` for a non-schema."""
     try:
-        schema = json.loads(read_text(path))
+        schema = json.loads(text)
     except (ValueError, RecursionError) as error:
-        raise InvalidTask(f"schema file {path} is not JSON: {error}") from error
+        raise InvalidTask(f"schema file {name} is not JSON: {error}") from error
     if not isinstance(schema, dict):
-        raise InvalidTask(f"schema file {path} must hold a JSON object")
+        raise InvalidTask(f"schema file {name} must hold a JSON object")
     try:
         if has_nonfinite_number(schema):
-            raise InvalidTask(f"schema file {path} contains a nonfinite number")
+            raise InvalidTask(f"schema file {name} contains a nonfinite number")
         validator_for(schema).check_schema(schema)
     except RecursionError as error:
-        raise InvalidTask(f"schema file {path} exceeds nesting limit") from error
+        raise InvalidTask(f"schema file {name} exceeds nesting limit") from error
     except SchemaError as error:
-        raise InvalidTask(f"schema file {path} is not a valid JSON Schema: {error.message}") from error
+        raise InvalidTask(f"schema file {name} is not a valid JSON Schema: {error.message}") from error
     return schema
 
 
@@ -112,14 +117,37 @@ def grade_json_schema_candidate(schema: dict, instance: Any) -> Reward:
     )
 
 
+def grade_json_document(schema: dict, candidate_format: SchemaFormat, text: str) -> Reward:
+    """Parse a document and return the full schema verdict with diagnostics."""
+    try:
+        instance = parse_candidate(unwrap_fence(text), candidate_format)
+    except (ValueError, yaml.YAMLError, RecursionError) as error:
+        return scored(0.0, reason="parse_error", error=str(error))
+    return grade_json_schema_candidate(schema, instance)
+
+
+def validate_json_schema(spec: JsonSchemaSpec) -> None:
+    """Validate an in-process contract whose schema is a tests-directory resource."""
+    empty_output_policy(spec)
+    schema = PurePosixPath(spec.schema)
+    if not isinstance(spec.format, SchemaFormat):
+        raise InvalidTask("json-schema format must be json, yaml or toml")
+    if not spec.schema or schema.is_absolute() or ".." in schema.parts:
+        raise InvalidTask("json-schema schema must be a path under the tests directory")
+
+
+def grade_json_resource_candidate(spec: JsonSchemaSpec, text: str, schema_data: bytes) -> Reward:
+    """Grade document text against a schema supplied as UTF-8 resource bytes."""
+    try:
+        schema_text = schema_data.decode()
+    except UnicodeDecodeError as error:
+        raise InvalidTask(f"schema file {spec.schema} is not UTF-8") from error
+    return grade_json_document(parse_schema(schema_text, spec.schema), spec.format, text)
+
+
 def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
     schema = load_schema(tests_dir / spec.schema)
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
-    try:
-        instance = parse_candidate(unwrap_fence(text), spec.format)
-    except (ValueError, yaml.YAMLError, RecursionError) as error:
-        return scored(0.0, reason="parse_error", error=str(error))
-
-    return grade_json_schema_candidate(schema, instance)
+    return grade_json_document(schema, spec.format, text)

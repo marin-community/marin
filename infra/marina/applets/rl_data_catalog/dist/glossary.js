@@ -25,10 +25,10 @@
     ["Revision / SHA", "A commit or content hash identifying the exact dataset, model checkpoint, or verifier code. MSkyRL means MarinSkyRL."],
     ["Dataset content equivalence", "A saved proof that the reviewed data file and component selection are unchanged at a later repository revision. Historical judgments can still apply when only the README changed; their actual review date and executed revision remain unchanged. This proof does not establish verifier code applicability."],
     ["Execution implementation applicability", "A saved check of the task loader, worker launcher, native identity check, and their code dependencies against the original difficulty run. Whole-file hashes remain recorded even when unrelated quality-review code changes. This check covers execution code, not model judgments or changed model settings."],
-    ["Canonical source / family", "Canonical source names the parent dataset or blend. Component rows describe its distinct task subsets. Family describes the task domain."],
-    ["Environment / interaction", "Environment runs the task, such as Gym or Harbor. Interaction describes support for one response or multiple conversation turns."],
+    ["Dataset / family", "Dataset identifies the pinned conversion input. Component rows describe selected subsets. Family describes the task domain."],
+    ["Input rows / interaction", "Input rows count the selected dataset population before conversion or curation. Unknown counts stay blank; generators have no fixed count. Interaction describes support for one response or multiple conversation turns."],
     ["RLVR / Alignment / Agentic", "RLVR uses verifiable rewards; Alignment uses preferences or behavior objectives; Agentic tasks involve actions or tools."],
-    ["Tags / applicability", "Tags label review findings. Applicability records which dataset revision an imported review is known to describe."],
+    ["Tags / applicability", "Source tags describe task types, interaction and search aliases; review tags label findings. Applicability records which dataset revision an imported review is known to describe."],
     ["Imported review / runtime review", "Task Trove is a catalog of tasks executed in Harbor. Imported reviews preserve its earlier audits. Runtime reviews include new task attempts and actual verifier execution."],
   ];
   const guide = document.createElement("aside");

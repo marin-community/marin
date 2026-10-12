@@ -381,9 +381,8 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     vf = vortex.open(spec.path)
     dataset = vf.to_dataset()
 
-    # Empty vortex files have no schema, so column projection would fail
-    num_rows = dataset.count_rows()
-    if num_rows == 0:
+    # Schema-less empty files cannot be projected by Vortex.
+    if not dataset.schema.names and dataset.count_rows() == 0:
         return
 
     # Vortex rejects empty projections. Read one column to retain row counts,
@@ -393,6 +392,7 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         columns = [dataset.schema.names[0]]
 
     if spec.row_start is not None or spec.row_end is not None:
+        num_rows = dataset.count_rows()
         start = 0 if spec.row_start is None else spec.row_start
         end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
         indices = pa.array(np.arange(start, end, dtype=np.uint64))

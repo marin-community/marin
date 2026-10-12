@@ -32,6 +32,10 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
+External fork refreshes use [refresh-fork](.agents/skills/refresh-fork/SKILL.md).
+For vLLM GPU wheels, read its [trigger and test table](.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
+and source, release, and adoption procedure.
+
 ## Handle Requests
 
 If a request comes from Slack or GitHub and appears to be a simple question,
@@ -76,7 +80,7 @@ uv run --no-project infra/ci/run_tests.py
   cluster tests. Run excluded markers only when the user or a dedicated task
   guide explicitly requests them; otherwise defer them to CI.
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
-- In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
+- Never read or write large amounts of data across GCS regions; GCS storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
 ## Communication & Commits

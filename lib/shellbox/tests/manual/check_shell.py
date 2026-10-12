@@ -8,12 +8,29 @@ import asyncio
 from pathlib import Path
 
 from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory
-from shellbox.machine import MachineSpec, QemuBundle, ShellStatus
+from shellbox.machine import Command, MachineSpec, QemuBundle, ShellStatus
 
 
 async def main(bundle: Path) -> None:
-    machine = await QemuMachineFactory(Acceleration.TCG).create(MachineSpec(QemuBundle(bundle)))
+    machine = await QemuMachineFactory(Acceleration.TCG).create(MachineSpec(QemuBundle(bundle), cpus=2))
     try:
+        # ACPI-free discovery must retain both CPUs and the virtio shell transport.
+        cpus = await machine.run(Command(("cat", "/sys/devices/system/cpu/online")))
+        assert cpus.exit_code == 0 and cpus.stdout.strip() == b"0-1", cpus
+        descriptors = await machine.run(
+            Command(
+                (
+                    "/bin/bash",
+                    "-c",
+                    "cat <(printf 'process-substitution\\n'); "
+                    "printf 'stdin\\n' | cat /dev/stdin; "
+                    "printf 'stdout\\n' >> /dev/stdout; printf 'stderr\\n' >> /dev/stderr",
+                )
+            )
+        )
+        assert descriptors.exit_code == 0, descriptors
+        assert descriptors.stdout == b"process-substitution\nstdin\nstdout\n", descriptors
+        assert descriptors.stderr == b"stderr\n", descriptors
         shell = await machine.open_shell()
         for command in ("cd /tmp", "export HARBOR_VALUE=hello", "harbor_function() { printf '%s' \"$HARBOR_VALUE\"; }"):
             result = await shell.execute(command, wait=5)

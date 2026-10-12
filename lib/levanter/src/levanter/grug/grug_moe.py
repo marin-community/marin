@@ -454,6 +454,16 @@ def moe_mlp(
     `token_valid` excludes invalid positions from dispatch, capacity accounting,
     and expert gradients. Omitted validity treats every token as valid.
 
+    With `implementation="ragged_all_to_all"` on an expert axis of size two or
+    more, SiLU experts with bfloat16 or float32 tokens on an SM100 GPU with
+    QuACK installed take the combine-weight gradient on the expert side, from
+    the expert MLP's own backward, so the backward keeps neither the expert
+    outputs nor their return transport. That gradient is zero at a zero weight,
+    and zero or inexact wherever `|w * dout|` falls below the cotangent dtype's
+    smallest normal number, 2^-126, which only output cotangents near underflow
+    reach. Every other path, float16 included, differentiates the combine
+    weights exactly.
+
     Set `report_capacity_overflow=True` to also return sender and receiver
     capacity drops plus padding-skipped assignment counts.
 

@@ -22,11 +22,9 @@ from marin.processing.classification.deduplication.cluster_verify import (
     CLUSTER_DUPLICATE_SCHEMA,
     ClusterVerificationLimits,
     ClusterVerifiedFuzzyDupsAttrData,
-    verify_cluster_text,
-)
-from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     VerifiedFuzzyDupsArtifact,
     VerifiedFuzzyDupsPerSource,
+    verify_cluster_text,
 )
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file

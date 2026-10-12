@@ -49,3 +49,8 @@ pythonpath = ["src"]
 addopts = "--durations=10 -v"
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"
+
+[tool.black]
+line-length = 121
+target-version = ["py312"]
+preview = true

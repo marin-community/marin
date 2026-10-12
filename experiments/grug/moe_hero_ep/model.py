@@ -30,6 +30,7 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -59,7 +60,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
-from levanter.kernels.pallas.short_conv import short_conv
+from levanter.kernels.triton.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -115,6 +116,14 @@ OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
 LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
+# The routed experts' combined output, before the latent up projection. At the hero shapes it is
+# 402 MB per layer, 18 GiB of HBM across 48 layers. With the QuACK expert MLP, the ragged backend
+# takes the routing-weight gradient on the expert side, so its backward reads neither the expert
+# down projection nor the return transport, and saving this value leaves the recompute only the
+# dispatch and the gate/up projection. The routing weights are positive renormalized sigmoids and
+# the cotangents bf16, so that gradient loses precision only where an output cotangent element is
+# below 2^-126 / w.
+MOE_OUTPUT_REMAT_NAME = "grug_moe_routed_output"
 
 
 def _batch_spec() -> P:
@@ -146,6 +155,20 @@ def _token_spec() -> P:
 def _activation_spec(x: Float[Array, "B S D"]) -> P:
     """Preserve the input residual layout after an MLP flattens and restores tokens."""
     return _partition_spec_of(x) or _batch_spec()
+
+
+def _router_top_k(logits: Float[Array, "T E"], k: int) -> Int[Array, "T K"]:
+    """Per-token top-k expert indices, in ``jax.lax.top_k``'s order, from a fused GPU kernel.
+
+    XLA sorts every row of a few hundred logits in full; the kernel selects in registers.
+    """
+    token_spec = _token_spec()
+    return shard_map(
+        lambda local: top_k_indices(local, k),
+        mesh=get_abstract_mesh(),
+        in_specs=P(*token_spec, None),
+        out_specs=P(*token_spec, None),
+    )(reshard(logits, P(*token_spec, None)))
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -487,7 +510,7 @@ class ShortConv(eqx.Module):
     (``weight[0]=1``, later taps 0) makes it a pass-through at step 0. Weights are tiny (``W*C``) and
     routed to Adam. Context shards exchange a left halo of ``W-1`` sequence positions.
 
-    The body dispatches to ``levanter.kernels.pallas.short_conv``, which selects a fused Pallas
+    The body dispatches to ``levanter.kernels.triton.short_conv``, which selects a streaming Triton
     kernel on GPU and the pad-and-shift weighted sum everywhere else; see that module's docstring.
     """
 
@@ -1001,8 +1024,8 @@ class MoEMLP(eqx.Module):
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
+        selected_experts = _router_top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+        qb_alpha = jnp.take_along_axis(biased_logits, selected_experts[:, -1:], axis=-1)
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
@@ -1103,6 +1126,7 @@ class MoEMLP(eqx.Module):
             sender_dropped_assignments = _zero_dropped_assignments()
             receiver_dropped_assignments = _zero_dropped_assignments()
             skipped_assignments = padding_skipped_assignments(token_valid_flat, topk=self.cfg.num_experts_per_token)
+        routed_flat = tree_checkpoint_name(routed_flat, MOE_OUTPUT_REMAT_NAME)
         router_stats["capacity_overflow"] = dropped_assignments
         router_stats["sender_capacity_overflow"] = sender_dropped_assignments
         router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
@@ -1289,7 +1313,7 @@ class Transformer(eqx.Module):
             # Adding names is therefore not free. The carry alone fits. The carry plus the
             # attention residuals exceeds the host memory the run has.
             remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
-                names_which_can_be_saved=[],
+                names_which_can_be_saved=[MOE_OUTPUT_REMAT_NAME],
                 names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
                 offload_src="device",
                 offload_dst="pinned_host",

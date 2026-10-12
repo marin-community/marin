@@ -15,7 +15,6 @@ from typing import IO
 import pytest
 import yaml
 from marin.execution.artifact import Artifact
-from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
@@ -37,8 +36,6 @@ from marin.rl.skyrl import (
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
-
-from experiments.post_training.tasktrove.rl_smoke import smoke_step
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -462,28 +459,6 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert run.iris_job_id == "01KNOEXPORT"
 
 
-def test_tasktrove_smoke_renders_serializable_launch_document(tmp_path: Path) -> None:
-    release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
-    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit@abc123"}))
-    with build_context(BuildContext(versions=VersionCodex(default="2026.09.10"))):
-        step = smoke_step(release)
-    config = step.build_config(
-        StepContext.for_run(
-            output_path=str(tmp_path / "output"),
-            prefix=str(tmp_path),
-            runtime_args=step.runtime_args,
-            deps=step.deps,
-        )
-    )
-    launch = yaml.safe_load(config.launch_config_yaml)
-    source = json.loads(json.dumps(launch))["inputs"]["train_data"][0]
-
-    assert source["kind"] == "tasktrove_parquet"
-    assert source["uri"] == str(tmp_path / "tasks/part-00000.parquet")
-    assert source["verifier_ref"] == "verifyit@abc123"
-    assert source["selection"]["tag_match"] == "all"
-
-
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
     release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
     (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit@abc123"}))
@@ -497,6 +472,7 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
             limit=160,
             seed=17,
         ),
+        relative_path="tasks.parquet",
     )
     context = StepContext.for_run(
         output_path=str(tmp_path / "output"),
@@ -507,8 +483,8 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
 
     resolved = source.resolve(context)
 
-    assert resolved.uri == str(tmp_path / "tasks/part-00000.parquet")
-    assert resolved.relative_path == "part-00000.parquet"
+    assert resolved.uri == str(tmp_path / "tasks.parquet")
+    assert resolved.relative_path == "tasks.parquet"
     assert resolved.verifier_ref == "verifyit@abc123"
     assert resolved.selection.sources == ("source-a", "source-b")
     assert resolved.selection.tags == ("bash", "terminal")

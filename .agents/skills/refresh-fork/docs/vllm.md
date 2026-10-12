@@ -104,6 +104,28 @@ gh workflow run marin-gpu-release.yaml \
 GPU wheels build only from `main`. The same process applies after an upstream
 refresh or a patch authored in the fork.
 
+### Triggers and tests
+
+| Event | Who starts the work | Checks and result |
+| --- | --- | --- |
+| vLLM source PR opened or updated | Automatic PR CI | CPU import, release-metadata, and lint checks. |
+| Reviewed patch merged or reviewed refresh promoted to vLLM `main` | Automatic fork build workflow | Build both wheels, run the existing H100 and GB200 wheel tests and serving smoke, then publish once. |
+| Manual GPU build on vLLM `main` | Developer or refresh agent | Run the same build, qualification, and publication workflow. Use this for release-automation changes excluded from the automatic trigger. |
+| Published wheel selected for Marin | Adoption agent in an isolated Marin worktree | Update exact pins, run the full Snowball cluster parity test, and open a Marin adoption PR with the results. |
+| Marin adoption PR opened or updated | Automatic PR CI, then review | Run ordinary affected CI. Merge the reviewed pin PR to use those wheels in Marin. |
+
+The full Snowball cluster test needs an explicit agent or developer launch; it
+is excluded from ordinary PR CI. vLLM's scheduled nightly smoke checks fork
+health separately from the exact-wheel release and adoption gates. A MarinSkyRL
+dependency refresh also qualifies its combined training and serving profile
+under the trainer owner's procedure.
+
+Publication makes the wheels available after the fork's wheel tests pass.
+Marin adoption waits for its application tests and the reviewed pin PR. A failed
+Marin test leaves production pins unchanged.
+
+### Source, release, and adoption
+
 1. Prepare and review the vLLM source change. For an upstream rebase, replay
    the overlay on `main-next` and audit the CUDA, Torch, and stable-extension
    boundaries. An admin reviews the source and completes the backed-up swap to
@@ -152,6 +174,11 @@ Source approval precedes GPU qualification and Marin validation. Marin keeps
 its previous wheel until the adoption PR merges. If Snowball fails, leave the
 Marin pins in production unchanged and fix the failure before adoption. A later
 TPU refresh selects a main-line source independently.
+
+Existing staged GPU candidates remain available as evidence. The main-only
+workflow builds and qualifies a new release after the reviewed source reaches
+`main`. Reuse earlier test evidence only when the installed wheel, dependency
+profile, and tested behavior match; record that scope in the adoption PR.
 
 ## Fork suite caveat
 

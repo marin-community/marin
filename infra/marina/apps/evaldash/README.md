@@ -144,7 +144,18 @@ a cell whose metric or kind differs is rejected rather than ranked against unlik
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
 their columns remain populated while benchmarks are rerun.
 
-The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-24-verified`. Historical labels remain selectable, and `cohort=all` selects the newest admissible run per benchmark across cohorts. The UI marks those views with an asterisk because their settings are not verified as comparable. A named verified cohort admits only records with its approved benchmark config, evaluator revision, and thinking mode. Models with different normalized source YAMLs have separate comparison names ending in `@<12-character digest>`.
+The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-24-verified`.
+The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
+and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
+belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
+in the selected cohort and benchmarks.
+
+Historical cohort labels remain selectable. `cohort=all` selects the newest admissible run per
+benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
+it. The UI marks all-cohort and unverified historical views with an asterisk because their settings
+are not verified as comparable. A named verified cohort admits only records with its approved
+benchmark config, evaluator revision, and thinking mode. Models with different normalized source
+YAMLs have separate comparison names ending in `@<12-character digest>`.
 
 Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share

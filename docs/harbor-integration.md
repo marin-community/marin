@@ -141,9 +141,9 @@ secret source declarations in `experiments/evaluation/evals.py`.
 
 ## Ownership boundary
 
-Marin does not install or import Harbor, `harbor_config`, Daytona, or Harbor's path runtime. The
-root workspace lock contains none of those packages. `marin.external_dependencies.HARBOR` identifies
-the exact Git revision used by two isolated calls:
+Marin's Harbor evaluation runs in isolated uv environments. The root workspace also locks an
+optional Harbor dependency for TaskCompendium's adapters. Evaluation uses the exact Git revision
+identified by `marin.external_dependencies.HARBOR` for two isolated calls:
 
 1. Preflight parses YAML or JSON with Harbor's Pydantic models, rejects unsupported launch shapes,
    validates a placeholder model/endpoint overlay, loads the dataset through Harbor to count tasks,
@@ -159,7 +159,7 @@ Temporary policy and overlay files are owner-readable and removed after each iso
 ### Trial error taxonomy
 
 Preflight snapshots Harbor's infrastructure, agent, passthrough, and undecided error categories from
-the pinned `harbor-config` environment. Marin uses that snapshot to classify trial results and records
+the pinned Harbor runtime in the isolated environment. Marin uses that snapshot to classify trial results and records
 the Harbor commit SHA in `record.json`. Undecided errors are known to Harbor but have no default scoring
 policy; Marin leaves them ungraded and counts them against the completion gate. Names absent from all
 four categories fail the run as an infrastructure failure, so taxonomy changes cannot silently alter

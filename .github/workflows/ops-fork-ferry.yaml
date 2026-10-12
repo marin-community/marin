@@ -60,7 +60,9 @@ jobs:
           title: Fork ferry ${{ matrix.unit }}
           goal: >-
             Use the refresh-fork skill to refresh ${{ matrix.forks }} toward
-            upstream: stage the refresh, pin Marin as the descriptor directs (a
-            fork branch tip, or a promoted release wheel re-pinned from its
-            manifest), run the fork's e2e, and on green open the Marin pin PR
-            (or file the descriptor's blocker issue on a real external blocker).
+            upstream, following the descriptor and fork-specific promotion order.
+            For vllm-gpu, prepare the source-review handoff and wait for admin
+            promotion to main before building wheels. After publication, run
+            Marin's e2e and open the adoption PR. For other fork units, follow
+            the skill's staged-source test and pin procedure. File the descriptor's
+            blocker issue on a real external blocker.

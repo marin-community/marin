@@ -18,6 +18,10 @@ from verifyit.grade import Status
         ("A", "AE", "MCQ", 1),
         ("0", "0.01", "Numeric", 1),
         ("0", "0.0100001", "Numeric", 0),
+        # Source subtraction rounds this difference above binary float 0.01.
+        ("1", "1.01", "Numeric", 0),
+        ("0.01", "0.02", "Numeric", 1),
+        ("1e308", "-1e308", "Numeric", 0),
         ("1000000000", "1000000000.05", "Numeric", 0),
         ("2", "2 is the answer", "Integer", 0),
         ("2", "nan", "Numeric", 0),

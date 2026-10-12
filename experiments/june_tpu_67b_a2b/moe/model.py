@@ -112,6 +112,10 @@ class GrugModelConfig:
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
+    pooled_transport_capacity_factor: float | None = None
+    """Sender pool capacity per destination shard; required by ``fixed_pooled_wave_all_to_all`` only."""
+    num_expert_waves: int = 1
+    """Static wave count for ``fixed_pooled_wave_all_to_all``; must divide the local expert count."""
     ce_implementation: str | None = None
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
     backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
@@ -516,6 +520,8 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
+                pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
+                num_expert_waves=cfg.num_expert_waves,
             ),
             routed_moe=QBRoutedMoE(
                 num_experts_per_token=cfg.num_experts_per_token,

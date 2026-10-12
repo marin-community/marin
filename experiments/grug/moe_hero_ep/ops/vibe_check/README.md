@@ -30,17 +30,19 @@ Use the Actions summary for Iris job links, status, and errors.
 Each checkpoint job requests **64 GB200 GPUs** across 16 nodes, one NVL72 rack
 block. The sampler puts one prompt row on each GPU, so the batch equals the GPU
 count and the prompt bank fits in a single pass per sample. Three samples take
-approximately two hours, against a six-hour job timeout. With `submission=all`,
-two checkpoint jobs can run concurrently when 128 GPUs and the corresponding node
-resources are available. The backfill skips
+approximately two hours, against a six-hour job timeout. Two checkpoint jobs run
+concurrently when 128 GPUs and the corresponding node resources are available.
+With `submission=all`, the backfill submits every unfinished request. It skips
 completed results, active jobs, and requests that exhausted their retries. The
 checkpoint selection comes from [`hero_checkpoint_paths()`](../../checkpoints.py),
 which reads the current hero run and its ancestors.
 
-The workflow runs hourly. With its default, `submission=next`, it submits no new
-request while jobs for the current sampling specification are active. Otherwise,
-it submits at most one unfinished request. Priorities are `batch`, `interactive`,
-or `production`. A manual invocation saves its selected priority for subsequent
+The workflow runs hourly. With its default, `submission=next`, it keeps at most two
+jobs for the current sampling specification active. It submits unfinished requests
+only into free slots. One sample set takes about 40 hours with the queue wait, and
+the hero writes a permanent checkpoint about every 28 hours. One active job falls
+behind, and the newest-first order then never samples the older checkpoints.
+Priorities are `batch`, `interactive`, or `production`. A manual invocation saves its selected priority for subsequent
 attempts of all discovered requests. Active jobs retain their assigned priority.
 Future checkpoints use batch priority unless a manual invocation sets a different
 priority.

@@ -54,7 +54,6 @@ def probe_block(settings: ProbeSettings) -> dict:
             },
         },
         "generator": {
-            "require_exact_chat_transport": True,
             "enable_prefix_caching": settings.cache_mode != "off",
             "engine_init_kwargs": {
                 "logprobs_mode": "processed_logprobs",
