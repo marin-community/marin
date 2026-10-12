@@ -6,7 +6,7 @@
 import json
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from functools import partial
 from typing import Any
 
@@ -91,7 +91,9 @@ def _curation_context(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _request(packet: dict[str, Any], *, curation: dict[str, Any], rubric: str, model: AssessmentModel) -> dict[str, Any]:
+def _request(
+    packet: dict[str, Any], *, curation: dict[str, Any], rubric: str, model: str, max_tokens: int
+) -> dict[str, Any]:
     evidence = json.loads(packet["packet_json"])
     allowed = sorted({*evidence, "curation"})
     schema = TaskJudgment.model_json_schema()
@@ -101,7 +103,7 @@ def _request(packet: dict[str, Any], *, curation: dict[str, Any], rubric: str, m
         "method": "POST",
         "url": "/v1/chat/completions",
         "body": {
-            "model": model.model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": rubric},
                 {
@@ -134,7 +136,7 @@ def _request(packet: dict[str, Any], *, curation: dict[str, Any], rubric: str, m
             "tool_choice": {"type": "function", "function": {"name": TOOL_NAME}},
             "parallel_tool_calls": False,
             "chat_template_kwargs": {"reasoning_effort": "low"},
-            "max_tokens": model.max_tokens,
+            "max_tokens": max_tokens,
         },
     }
 
@@ -181,9 +183,7 @@ def _grade_shard(
         if not pending:
             break
         requests = [
-            _request(
-                packet, curation=curation, rubric=rubric, model=replace(model, max_tokens=budgets[packet["task_id"]])
-            )
+            _request(packet, curation=curation, rubric=rubric, model=model.model, max_tokens=budgets[packet["task_id"]])
             for packet in pending.values()
         ]
         result = cached_request_output(

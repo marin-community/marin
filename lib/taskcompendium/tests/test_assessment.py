@@ -129,6 +129,7 @@ class TruncatedAssessmentTransport:
             if request["body"]["max_tokens"] <= self.token_limit:
                 row = json.loads(observation.output)
                 row["response"]["body"]["choices"][0]["finish_reason"] = "length"
+                row["response"]["body"]["choices"][0]["message"] = {"role": "assistant", "content": ""}
                 observation = replace(observation, output=json.dumps(row))
             observations.append(observation)
         return replace(result, observations=observations)
