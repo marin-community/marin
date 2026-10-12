@@ -1,0 +1,218 @@
+{
+  "selection_status": "pending the predeclared noise0.05 calibration",
+  "selection_rule": "Lowest tested scale with >=5% capped loss tokens OR pooled p99 absolute log gap >=log(2), >=10% native behavior passes and <1% execution/grading failures.",
+  "completed_scales": [
+    {
+      "run_id": "sc-snowball-noise-calibration-001-tis-s0-a1-01a126ce",
+      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+      "relative_initial_noise": 0.01,
+      "calibration_only": true,
+      "physical_behavior_responses": 6144,
+      "native_passes": 2343,
+      "native_execution_or_grading_errors": 1,
+      "native_pass_fraction": 0.38134765625,
+      "native_error_fraction": 0.00016276041666666666,
+      "max_per_update_pooled_capped_fraction": 0.0010348474606871605,
+      "max_per_update_pooled_abs_log_gap_p99": 0.4901015448570248,
+      "stress_threshold_met": false,
+      "usability_threshold_met": true,
+      "eligible_scale": false,
+      "metrics": [
+        {
+          "update": 1,
+          "loss_tokens": 555351.0,
+          "capped_fraction": 0.00100116862449795,
+          "gap_abs_p99": 0.48374152183532715,
+          "raw_metrics_sha256": "eb1acd98d892db6621ec60f60d68eecf7ae8791dff6da9d9085b95e59f6ac96a"
+        },
+        {
+          "update": 2,
+          "loss_tokens": 592679.0,
+          "capped_fraction": 0.0009381131967529655,
+          "gap_abs_p99": 0.48119719982147086,
+          "raw_metrics_sha256": "0a3920331b2d2b535704fc10521b8b16011ac8b642b7f2985c164fa04fc9f120"
+        },
+        {
+          "update": 3,
+          "loss_tokens": 475013.0,
+          "capped_fraction": 0.0009641841170378029,
+          "gap_abs_p99": 0.48332061767578127,
+          "raw_metrics_sha256": "53efb56e394eb749fd51c60ca4c7256e7db7b2586b5111ced70e1e5a0e2022dd"
+        },
+        {
+          "update": 4,
+          "loss_tokens": 567076.0,
+          "capped_fraction": 0.0009928122162818909,
+          "gap_abs_p99": 0.48054826259613037,
+          "raw_metrics_sha256": "18386d5d3c3d59133794b909dc881e83f51c097a2859d2b51ec0ae4912809b04"
+        },
+        {
+          "update": 5,
+          "loss_tokens": 441746.0,
+          "capped_fraction": 0.001018684939481318,
+          "gap_abs_p99": 0.4742774903774247,
+          "raw_metrics_sha256": "f41512de7b906f63794a70b8f23cee713d76689e293d2e458d1cc460e476a0a0"
+        },
+        {
+          "update": 6,
+          "loss_tokens": 450908.0,
+          "capped_fraction": 0.0009891153313219547,
+          "gap_abs_p99": 0.4802669572830196,
+          "raw_metrics_sha256": "87223098983a456fc10ee395d3746efc7e3833aaaa54c5b15355af4b55892353"
+        },
+        {
+          "update": 7,
+          "loss_tokens": 349810.0,
+          "capped_fraction": 0.0010348474606871605,
+          "gap_abs_p99": 0.4901015448570248,
+          "raw_metrics_sha256": "522e9ff0f813ff788ee460a5a4fffe0a363d3d315dbceecc025ffad1df38c640"
+        },
+        {
+          "update": 8,
+          "loss_tokens": 346499.0,
+          "capped_fraction": 0.00103030598256737,
+          "gap_abs_p99": 0.4750953578948993,
+          "raw_metrics_sha256": "6d52324139ee9d5669685d9cfe21f898fbb7108cd3fb1bd9efea69faadafed23"
+        },
+        {
+          "update": 9,
+          "loss_tokens": 313352.0,
+          "capped_fraction": 0.0008935637888498604,
+          "gap_abs_p99": 0.48294155836105285,
+          "raw_metrics_sha256": "25d4adca76feaf92f490cb4f3d3448f3056b74c647814dac4a837f97e04be1cb"
+        },
+        {
+          "update": 10,
+          "loss_tokens": 298736.0,
+          "capped_fraction": 0.0009171977872028947,
+          "gap_abs_p99": 0.4818106293678289,
+          "raw_metrics_sha256": "0a8132f194cb42b7b6fd707bbf598fb6187eddd7ff8c34943be199bf373d2f66"
+        },
+        {
+          "update": 11,
+          "loss_tokens": 287828.0,
+          "capped_fraction": 0.0009484831243753433,
+          "gap_abs_p99": 0.48013790130614975,
+          "raw_metrics_sha256": "19b10f02ba8a6a089f4b4ffd680c2165070d854165e7cc6abb38457d177c9a96"
+        },
+        {
+          "update": 12,
+          "loss_tokens": 277174.0,
+          "capped_fraction": 0.000959685945417732,
+          "gap_abs_p99": 0.4800521945953373,
+          "raw_metrics_sha256": "8fc593637820aec006f57db6f9c65a8a7a2dff10eb738afa5bf73d0f9b0ae7d6"
+        }
+      ],
+      "audit_sha256": "929af330483314e663d8f0c1001157595650cd973624cf8fe8c0fd8e7d6307e0",
+      "decision": "This scale is below both stress thresholds in all twelve updates; do not select it.",
+      "quality_basis": "Native retained verdicts; frozen source replay reported separately. Masked failure placeholders are not original responses."
+    },
+    {
+      "run_id": "sc-snowball-noise-calibration-002-tis-s0-a1-01a126ce",
+      "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+      "relative_initial_noise": 0.02,
+      "calibration_only": true,
+      "physical_behavior_responses": 6144,
+      "native_passes": 2285,
+      "native_execution_or_grading_errors": 0,
+      "native_pass_fraction": 0.3719075520833333,
+      "native_error_fraction": 0.0,
+      "max_per_update_pooled_capped_fraction": 0.0019702943973243237,
+      "max_per_update_pooled_abs_log_gap_p99": 0.6106135964393626,
+      "stress_threshold_met": false,
+      "usability_threshold_met": true,
+      "eligible_scale": false,
+      "metrics": [
+        {
+          "update": 1,
+          "loss_tokens": 678955.0,
+          "capped_fraction": 0.001771840499714017,
+          "gap_abs_p99": 0.598481187820433,
+          "raw_metrics_sha256": "3320b5eb86bd166ebd3dc7656bbf58117349d931f36ec3a5f2ebfae978ac0081"
+        },
+        {
+          "update": 2,
+          "loss_tokens": 597108.0,
+          "capped_fraction": 0.0019159013172611594,
+          "gap_abs_p99": 0.6106135964393626,
+          "raw_metrics_sha256": "fe2e6ac5e33289d47633911dc23a896ec5d8774517ccf8aeece4cfca27643a46"
+        },
+        {
+          "update": 3,
+          "loss_tokens": 510789.0,
+          "capped_fraction": 0.0018559523159638047,
+          "gap_abs_p99": 0.6097279262542724,
+          "raw_metrics_sha256": "8812a0621b73d7c4568ff0124a878af0970cb0615dbfa86de26347a7a30d76d9"
+        },
+        {
+          "update": 4,
+          "loss_tokens": 631185.0,
+          "capped_fraction": 0.0018188011599704623,
+          "gap_abs_p99": 0.5966469192504892,
+          "raw_metrics_sha256": "7cf22a35cc8d43096a00fab08ebeae763873cc379b7381f5ab52b1a15c12b620"
+        },
+        {
+          "update": 5,
+          "loss_tokens": 597965.0,
+          "capped_fraction": 0.0017609726637601852,
+          "gap_abs_p99": 0.6000589656829833,
+          "raw_metrics_sha256": "8ee4b4f7ee774adce0dfa254824eb5c20f354ae1dd5e4776f76d45c3372ed41e"
+        },
+        {
+          "update": 6,
+          "loss_tokens": 598799.0,
+          "capped_fraction": 0.0017652000533416867,
+          "gap_abs_p99": 0.6005520671606068,
+          "raw_metrics_sha256": "2f967c2d6a079e7bf6254b6b11e9b76f21a3d2c3ac62bc3dcd5ca82566f6e391"
+        },
+        {
+          "update": 7,
+          "loss_tokens": 449679.0,
+          "capped_fraction": 0.0019702943973243237,
+          "gap_abs_p99": 0.6007134532928462,
+          "raw_metrics_sha256": "74154bcf3dec87b7a6ab359042a07d7beb918804d04d52ae35651d78ecff701f"
+        },
+        {
+          "update": 8,
+          "loss_tokens": 478278.0,
+          "capped_fraction": 0.0015764889540150762,
+          "gap_abs_p99": 0.5867747259140008,
+          "raw_metrics_sha256": "38a873f4cedf5f5f4d9033c4f23487b07b91cdd1db34b939fe5d02d64e73b2d9"
+        },
+        {
+          "update": 9,
+          "loss_tokens": 435620.0,
+          "capped_fraction": 0.0016436344012618065,
+          "gap_abs_p99": 0.5890658712387083,
+          "raw_metrics_sha256": "c652aa569ee40785100af860dae5bf4027ed21f400dde36d59c9450003262a3c"
+        },
+        {
+          "update": 10,
+          "loss_tokens": 347796.0,
+          "capped_fraction": 0.0017740284092724323,
+          "gap_abs_p99": 0.593091028928756,
+          "raw_metrics_sha256": "e8c3048b7cdc3abcd9d042cd82353f46fb75c63f9468fe68ea0cf3c0f43fff09"
+        },
+        {
+          "update": 11,
+          "loss_tokens": 386997.0,
+          "capped_fraction": 0.001710607553832233,
+          "gap_abs_p99": 0.5949257659912084,
+          "raw_metrics_sha256": "4f8b4a1a41324fc57378cc207cfabd4b3031b4616d9bbd698ccad6ee783827d8"
+        },
+        {
+          "update": 12,
+          "loss_tokens": 343576.0,
+          "capped_fraction": 0.0015658835181966424,
+          "gap_abs_p99": 0.5743989050388336,
+          "raw_metrics_sha256": "35258397169e38c0fea619a59cd1fbbc66b6d731d9937e23ac04e00c243b392e"
+        }
+      ],
+      "audit_sha256": "18da8945220b3fd4500e95b3c47003c0b3506b4d9c1171f80dbc41e9a7779627",
+      "decision": "This scale is below both stress thresholds in all twelve updates; do not select it.",
+      "quality_basis": "Native retained verdicts; frozen source replay reported separately. Masked failure placeholders are not original responses."
+    }
+  ],
+  "main_starting_horizon": 1200,
+  "required_main_paired_seeds": 3
+}
