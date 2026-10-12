@@ -69,9 +69,7 @@ def record(error, nodeid=None):
         if isinstance(error, ImportError) and error.path:
             filename = error.path
     failure = {"kind": kind, "filename": filename, "nodeid": nodeid}
-    if isinstance(error, ModuleNotFoundError):
-        failure["missing_module"] = error.name or ""
-    elif isinstance(error, ImportError):
+    if isinstance(error, ImportError):
         failure["missing_module"] = error.name or ""
     if isinstance(error, AttributeError) and isinstance(error.obj, type(sys)):
         failure["module"] = object.__getattribute__(error.obj, "__dict__").get("__file__", "")
@@ -363,7 +361,6 @@ def _candidate_error_files(
 
 
 def _candidate_module_path(module: str, workspace: Path) -> str:
-    """Map a workspace-qualified module to its file inside the workspace."""
     if module == workspace.name:
         return "__init__.py"
     return module.removeprefix(workspace.name + ".").replace(".", "/")
