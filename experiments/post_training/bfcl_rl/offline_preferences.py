@@ -44,11 +44,11 @@ from experiments.post_training.bfcl_rl.offline_curate import (
     NativeCollectionInput,
     NativeCollectionScope,
     collection_native_evidence,
+    trace_from_evidence,
 )
 from experiments.post_training.bfcl_rl.offline_data import (
     NativeAssistantCaptureError,
     native_chat_document,
-    native_model_trace,
     native_prompt_sha256,
 )
 from experiments.post_training.bfcl_rl.preferences import RolloutOutcome, VerifiedRollout, select_training_pairs
@@ -192,19 +192,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                         )
                         continue
                     try:
-                        trace = native_model_trace(
-                            identity=evidence.identity,
-                            seed=source.seed,
-                            retained_record=evidence.record,
-                            retained_uri=evidence.retained_uri,
-                            native_trace_uri=evidence.native_uri,
-                            trial_result=evidence.trial,
-                            literal_entries=evidence.literal_entries,
-                            partition=partition,
-                            assistant_prefill="<think>\n",
-                            model_tokenizer=f"{source.model.model}@{source.model.revision}",
-                            tool_call_format=evidence.tool_call_format,
-                        )
+                        trace = trace_from_evidence(evidence, source, partition)
                     except NativeAssistantCaptureError as error:
                         exclude_native_branch(
                             excluded_branches, selected, evidence, source_id, "unproven_assistant_history", error=error

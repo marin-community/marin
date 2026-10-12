@@ -204,7 +204,7 @@ def test_export_pinned_tokenizer_revision(tmp_path, monkeypatch):
     )
     snapshots = {("test/tokenizer", None): old_tokenizer, ("test/tokenizer", "snapshot"): pinned_tokenizer}
 
-    def from_pretrained(model_name_or_path, *, revision=None, **kwargs):
+    def from_pretrained(model_name_or_path, *, revision=None, **_kwargs):
         return snapshots[model_name_or_path, revision]
 
     monkeypatch.setattr(AutoTokenizer, "from_pretrained", from_pretrained)

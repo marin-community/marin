@@ -68,6 +68,7 @@ ROLE_PLAN = SkyRLRolePlan(
     n_samples_per_prompt=2,
 )
 MODEL_VERSION = "2026.10.08.304"
+MODEL_CHECKPOINT_PATH = "hf/step-1"
 MODEL_NAME = "models/bfcl-rl-recovery-dpo-native"
 MODEL_URI = prefix_join(prefix_join("s3://marin-us-east-02a/marin/users/benfeuer", MODEL_NAME), MODEL_VERSION)
 INPUT_NAME = "data/bfcl-rl-final-dpo-inputs"
@@ -178,7 +179,7 @@ def final_dpo_recipe(scale: RunScale) -> str:
             },
             {
                 "type": "best_checkpoint",
-                "initial_model_uri": prefix_join(MODEL_URI, "hf/step-1"),
+                "initial_model_uri": prefix_join(MODEL_URI, MODEL_CHECKPOINT_PATH),
                 "expected_tasks": PARITY_TASK_COUNT,
                 "minimum_scored_tasks": 111,
             },
@@ -225,7 +226,7 @@ def final_dpo_spec(input_version: str, scale: RunScale) -> SkyRLSpec:
         version=resolve_version(name, None),
         config_yaml=final_dpo_recipe(scale),
         runtime=SkyRLRuntime(SkyRLRuntimeProfile.MEGATRON),
-        model=ArtifactHfModel(checkpoint, tokenizer.model, tokenizer.revision, relative_path="hf/step-1"),
+        model=ArtifactHfModel(checkpoint, tokenizer.model, tokenizer.revision, relative_path=MODEL_CHECKPOINT_PATH),
         train_data=(ArtifactDataSource(inputs, relative_path=data_file),),
         validation_data=(ArtifactDataSource(inputs, relative_path="bfcl_parity"),),
         topology=SkyRLTopology(num_nodes=24, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),

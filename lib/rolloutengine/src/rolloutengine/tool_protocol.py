@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import NoReturn
 
 from verifyit.json_objects import unique_object
 
@@ -15,6 +15,7 @@ TOOL_OPEN = "<tool_call>"
 TOOL_CLOSE = "</tool_call>"
 THINK_OPEN = "<|start_think|>"
 THINK_CLOSE = "<|end_think|>"
+JSON_WHITESPACE = " \t\r\n"
 _MARKER = re.compile("|".join(re.escape(marker) for marker in (TOOL_OPEN, THINK_OPEN, THINK_CLOSE)))
 
 
@@ -34,7 +35,7 @@ class ToolCallRegion:
     status: ToolCallStatus
 
 
-def _reject_constant(value: str) -> Any:
+def _reject_constant(value: str) -> NoReturn:
     raise ValueError(f"Non-JSON constant: {value}")
 
 
@@ -44,7 +45,7 @@ _JSON = json.JSONDecoder(object_pairs_hook=unique_object, parse_constant=_reject
 def _call_region(text: str, start: int) -> ToolCallRegion:
     payload_start = start + len(TOOL_OPEN)
     position = payload_start
-    while position < len(text) and text[position] in " \t\r\n":
+    while position < len(text) and text[position] in JSON_WHITESPACE:
         position += 1
     if text.startswith(TOOL_OPEN, position):
         return ToolCallRegion(start, payload_start, position + len(TOOL_OPEN), ToolCallStatus.REPEATED_OPENER)
@@ -59,7 +60,7 @@ def _call_region(text: str, start: int) -> ToolCallRegion:
         or not isinstance(payload.get("arguments"), dict)
     ):
         return ToolCallRegion(start, payload_start, end, ToolCallStatus.INVALID_ENVELOPE)
-    while end < len(text) and text[end] in " \t\r\n":
+    while end < len(text) and text[end] in JSON_WHITESPACE:
         end += 1
     if not text.startswith(TOOL_CLOSE, end):
         return ToolCallRegion(start, payload_start, end, ToolCallStatus.MISSING_CLOSER)

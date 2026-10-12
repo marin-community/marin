@@ -66,7 +66,6 @@ def offline_collection_step(
         "gdn_prefill_backend": "triton",
         "limit_mm_per_prompt": {"image": 0, "video": 0},
     }
-    # Seed the teacher engines independently for each collection pass.
     recipe["trainer"]["seed"] = seed
     recipe["trainer"]["eval_batch_size"] = generation_batch_size
     model_step = ArtifactStep.adopt(

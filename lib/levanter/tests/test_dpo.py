@@ -828,7 +828,7 @@ def test_dpo_exports_completed_update_intervals_and_final_checkpoint(tmp_path, u
             self.hooks = TrainerHooks()
 
     class FileConverter:
-        def save_pretrained(self, model, path, **kwargs):
+        def save_pretrained(self, model, path, **_kwargs):
             # A second export of the same update must fail, including the forced final hook.
             destination = Path(path)
             destination.mkdir()

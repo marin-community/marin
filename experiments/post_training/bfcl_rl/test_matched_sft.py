@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import haliax as hax
 import numpy as np
@@ -24,6 +24,14 @@ from experiments.post_training.bfcl_rl.matched_sft_data import matched_sft_data_
 from experiments.post_training.bfcl_rl.matched_sft_optimize import matched_sft_optimizer_step
 from experiments.post_training.bfcl_rl.optimize import RecoveryOptimization, recovery_optimizer_step
 from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCache, write_recovery_cache
+
+
+@dataclass(frozen=True)
+class SourceCache:
+    cache: RecoveryPreferenceCache
+    partition: BFCLPartition
+    rows: list[dict]
+    manifest: dict
 
 
 @pytest.fixture
@@ -65,11 +73,11 @@ def source_cache(tmp_path):
         max_length=16,
         selection_manifest_uri=str(path / "selection.json"),
     )
-    return source, partition, rows, manifest
+    return SourceCache(source, partition, rows, manifest)
 
 
 def test_chosen_projection_matches_real_dpo_reader_order_tokens_masks_and_attention(tmp_path, source_cache):
-    source, partition, rows, _ = source_cache
+    source, partition, rows = source_cache.cache, source_cache.partition, source_cache.rows
     projected = project_chosen_exposure(source, partition, seed=42, presentations=8, output_path=str(tmp_path / "sft"))
     position = hax.Axis("position", 16)
     control = PreferenceLmDataConfig(
@@ -112,7 +120,8 @@ def test_chosen_projection_matches_real_dpo_reader_order_tokens_masks_and_attent
 
 
 def test_chosen_projection_rejects_holdout_with_valid_source_ledger(tmp_path, source_cache):
-    source, partition, rows, manifest = source_cache
+    source, partition = source_cache.cache, source_cache.partition
+    rows, manifest = source_cache.rows, source_cache.manifest
     manifest["preferences"][0]["chosen"].update(task_source_id="holdout-id", task_digest="holdout-digest")
     path = tmp_path / "holdout-source"
     write_recovery_cache(rows, manifest, str(path))
@@ -124,7 +133,7 @@ def test_chosen_projection_rejects_holdout_with_valid_source_ledger(tmp_path, so
 
 
 def test_matched_optimizer_rejects_projection_from_a_different_control(tmp_path, source_cache):
-    source, partition, _, _ = source_cache
+    source, partition = source_cache.cache, source_cache.partition
     projected = project_chosen_exposure(source, partition, seed=42, presentations=16, output_path=str(tmp_path / "sft"))
     model = MODELS["student"]
     source = source.model_copy(

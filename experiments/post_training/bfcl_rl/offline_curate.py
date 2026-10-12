@@ -111,6 +111,25 @@ class NativeCollectionEvidence:
     tool_call_format: LiteralToolCallFormat
 
 
+def trace_from_evidence(
+    evidence: NativeCollectionEvidence, source: NativeCollectionInput, partition: BFCLPartition
+) -> NativeModelTrace:
+    """Join collection evidence to the captured assistant-token history."""
+    return native_model_trace(
+        identity=evidence.identity,
+        seed=source.seed,
+        retained_record=evidence.record,
+        retained_uri=evidence.retained_uri,
+        native_trace_uri=evidence.native_uri,
+        trial_result=evidence.trial,
+        literal_entries=evidence.literal_entries,
+        partition=partition,
+        assistant_prefill="<think>\n",
+        model_tokenizer=f"{source.model.model}@{source.model.revision}",
+        tool_call_format=evidence.tool_call_format,
+    )
+
+
 @dataclass(frozen=True)
 class OfflineCorpusConfig:
     collections: tuple[OfflineCollectionInput, ...]
@@ -288,19 +307,7 @@ def collection_teacher_traces(
     for evidence in collection_native_evidence(collection, partition, audit_path):
         if evidence.retained.rollout.outcome is not RolloutOutcome.CORRECT:
             continue
-        yield native_model_trace(
-            identity=evidence.identity,
-            seed=source.seed,
-            retained_record=evidence.record,
-            retained_uri=evidence.retained_uri,
-            native_trace_uri=evidence.native_uri,
-            trial_result=evidence.trial,
-            literal_entries=evidence.literal_entries,
-            partition=partition,
-            assistant_prefill="<think>\n",
-            model_tokenizer=f"{collection.model.model}@{collection.model.revision}",
-            tool_call_format=evidence.tool_call_format,
-        )
+        yield trace_from_evidence(evidence, collection, partition)
 
 
 def build_offline_corpus(config: OfflineCorpusConfig) -> SftTokenStore:
