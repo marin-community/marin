@@ -1,0 +1,222 @@
+schema_version: 1
+run:
+  id: sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce
+  attempt_id: initial
+  seed: 0
+  submission: detach
+  export_hf: false
+runtime:
+  launcher_commit: 0212d03c68bf1cf366776dfe08f99c6a33d43779
+  profile: megatron
+iris:
+  cluster: cw-us-east-02a
+  cluster_config: /home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/cw-us-east-02a-client.yaml
+  job_name: sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce
+  priority: batch
+  max_retries: 0
+  timeout: 259200
+  allocation:
+    num_nodes: 2
+    gpus_per_node: 8
+    gpu_variant: H100
+    cpu: 32
+    memory: 256GB
+    disk: 500GB
+ray:
+  spill_dir: /tmp/skyrl-ray-spill
+  rendezvous_dir: s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/rendezvous
+  log_dir: s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/ray-logs
+artifacts:
+  checkpoint_root: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/checkpoints
+  export_root: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/exports
+  attempts_root: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/attempts
+  resolved_config_uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/resolved-launch.yaml
+  terminal_manifest_uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/terminal.json
+inputs:
+  model:
+    uri: Qwen/Qwen3-0.6B
+    identity: c1899de289a04d12100db370d81485cdf75e47ca
+    local_path: Qwen/Qwen3-0.6B
+    tokenizer_uri: Qwen/Qwen3-0.6B
+    tokenizer_revision: c1899de289a04d12100db370d81485cdf75e47ca
+  data_kind: parquet
+  train_data:
+  - kind: directory
+    uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/qwen-transfer-01a126ce/seed0/paper-window
+    identity: curriculum-rl-pool@2026.08.29.1:seed0:paper-window:01a126ce
+    local_path: /tmp/marinskyrl/data/qwen-curriculum-paper-window
+    relative_path: train.parquet
+  validation_data:
+  - kind: directory
+    uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/qwen-transfer-01a126ce/seed0/paper-window
+    identity: curriculum-rl-pool@2026.08.29.1:seed0:paper-window:01a126ce
+    local_path: /tmp/marinskyrl/data/qwen-curriculum-paper-window
+    relative_path: validation.parquet
+skyrl:
+  entrypoint: standard
+  context_budget:
+    request_window_tokens: 512
+    max_new_tokens_per_turn: 512
+    max_prompt_tokens: 511
+    max_turns: 1
+  data:
+    shuffle: false
+  environment:
+    env_class: gsm8k
+    task_sessions:
+      gsm8k:
+        reward_method: strict
+      aime:
+        allow_general_math_reference: true
+  trajectory_runner:
+    rollout_workers:
+      num_workers: 2
+      cpus_per_worker: 2
+      executor_threads: 64
+  trainer:
+    strategy: megatron
+    flash_attn: true
+    use_sample_packing: false
+    gradient_checkpointing: true
+    epochs: 50
+    max_steps: 40
+    update_epochs_per_batch: 1
+    train_batch_size: 64
+    policy_mini_batch_size: 64
+    micro_train_batch_size_per_gpu: 1
+    micro_forward_batch_size_per_gpu: 1
+    eval_before_train: true
+    eval_interval: 20
+    ckpt_interval: 40
+    resume_mode: none
+    logger: console
+    training_metrics: true
+    rollout_spans: true
+    policy_train_spans: true
+    rollout_buffer:
+      max_staleness_steps: 0
+      batch_policy: full_batch
+      max_in_flight: 64
+      object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/groups
+    algorithm:
+      advantage_estimator: grpo
+      grpo_norm_by_std: false
+      advantage_batch_normalize: false
+      policy_loss_type: regular
+      loss_reduction: token_mean
+      use_kl_loss: false
+      use_kl_in_reward: false
+      off_policy_correction: custom
+      off_policy_correction_rules:
+      - kind: token
+        action: truncate
+        high: 2.0
+      score_centering_topk: 128
+      score_centering_enabled: true
+      eps_clip_low: 0.2
+      eps_clip_high: 0.2
+      reference_binary_rewards: true
+    policy:
+      sequence_parallel_size: 1
+      model:
+        revision: c1899de289a04d12100db370d81485cdf75e47ca
+      optimizer_config:
+        optimizer: sgd
+        lr: 0.01
+        weight_decay: 0.0
+        max_grad_norm: 0.0
+        num_warmup_steps: 0
+        scheduler: constant_with_warmup
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        context_parallel_size: 1
+        expert_model_parallel_size: 1
+        expert_tensor_parallel_size: 1
+        optimizer_checkpoint_sharding_type: dp_reshardable
+        logprob_chunk_size: 512
+        optimizer_config_kwargs:
+          sgd_momentum: 0.0
+          use_distributed_optimizer: false
+        ddp_config:
+          use_distributed_optimizer: false
+    placement:
+      colocate_all: false
+      colocate_policy_ref: true
+      policy_num_nodes: 1
+      policy_num_gpus_per_node: 8
+    offload_optimizer_during_rollouts: true
+    dump_data_batch: true
+    dump_data_batch_rows: 2
+    callbacks:
+    - type: checkpoint
+      save_steps: 40
+      save_on_train_end: true
+    - type: evaluation
+      eval_steps: 20
+      eval_before_train: true
+      eval_on_train_end: false
+  generator:
+    backend: vllm
+    model_dtype: bfloat16
+    vllm_attention_backend: FLASH_ATTN
+    run_engines_locally: true
+    weight_sync_backend: nccl
+    num_inference_engines: 8
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_data_parallel_size: 1
+    inference_engine_expert_parallel_size: 1
+    n_samples_per_prompt: 8
+    eval_n_samples_per_prompt: 8
+    enable_http_endpoint: true
+    chat_template_kwargs:
+      enable_thinking: false
+    gpu_memory_utilization: 0.6
+    enable_prefix_caching: false
+    weight_sync_pause:
+      mode: keep
+      clear_cache: true
+    engine_init_kwargs:
+      logprobs_mode: processed_logprobs
+      generation_config: vllm
+      load_format: auto
+      revision: c1899de289a04d12100db370d81485cdf75e47ca
+      tokenizer_revision: c1899de289a04d12100db370d81485cdf75e47ca
+    sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
+      min_p: 0.0
+      logprobs: 128
+    eval_sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
+      logprobs: null
+    sampler_weight_noise_scale: 0.05
+    sampler_weight_noise_seed: 0
+    max_num_seqs: 128
+    max_num_batched_tokens: 4096
+    enable_chunked_prefill: true
+    enforce_eager: true
+    trajectory_retention:
+      enabled: true
+      phases:
+      - train
+      - eval
+      sample_fraction: 1.0
+      sample_count_per_step: 0
+      max_bytes_per_step: null
+      max_bytes_per_run: null
+      required: true
+      reuse_publication_process: true
+      append_only: true
+      publish_timeout_seconds: 600.0
+      shutdown_timeout_seconds: 120.0
+      publication_retries: 2
+    preserve_full_response_text: true
+  extra_env:
+    NVTE_FLASH_ATTN: '1'
+    NVTE_FUSED_ATTN: '0'
+    NVTE_UNFUSED_ATTN: '0'
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
