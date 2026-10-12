@@ -1,6 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
+import pytest
+
 from experiments.post_training.structure_closure.benchmark import Family, score_case, syntax_state, task_cases
 
 
@@ -58,3 +62,29 @@ def test_escape_control_does_not_offer_a_closing_only_repair():
     assert syntax_state(case.prefix, case.family).closing_suffix is None
     assert not score_case(case, '"').success
     assert score_case(case, case.expected[len(case.prefix) :]).success
+
+
+@pytest.mark.parametrize("task_id", ["case_1", "case_2", "case_3", "case_4"])
+def test_varied_fences_require_the_opening_marker_length_and_character(task_id):
+    case = next(
+        case
+        for case in task_cases(task_id, [], "validation", "source")
+        if case.family == Family.FENCE and case.control == "close_required"
+    )
+    marker = case.expected.rsplit("\n", 1)[1]
+    assert score_case(case, marker).success
+    assert not score_case(case, marker[:-1]).syntax_complete
+    wrong_character = "~" if marker[0] == "`" else "`"
+    assert not score_case(case, wrong_character * len(marker)).syntax_complete
+
+
+@pytest.mark.parametrize("task_id,ending", [("case_4", '\\"'), ("case_0", "\u263a"), ("case_1", "\n\t")])
+def test_escaped_string_endings_are_complete_content_before_the_final_quote(task_id, ending):
+    case = next(
+        case
+        for case in task_cases(task_id, [], "validation", "source")
+        if case.family == Family.STRING and case.control == "close_required"
+    )
+    assert json.loads(case.prefix + '"').endswith(ending)
+    assert score_case(case, '"').success
+    assert syntax_state(case.prefix, case.family).closing_suffix == '"'

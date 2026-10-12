@@ -20,8 +20,16 @@ from rolloutengine.closure_scoring import (
 from rolloutengine.structure_closure import PrefixStatus, json_closure_state
 from rolloutengine.tool_protocol import THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
-JSON_FENCE_OPEN = "```json\n"
 CLOSE_REQUIRED = "close_required"
+STRING_ENDINGS = (
+    ' quote=" slash=\\ end',
+    ' finalquote="',
+    " finalslash=\\",
+    ' slashquote=\\"',
+    " control=\n\t",
+    " unicode=\u263a",
+)
+FENCE_MARKERS = ("```", "~~~~", "````", "~~~", "`````", "~~~~~")
 
 
 class Split(StrEnum):
@@ -81,7 +89,10 @@ def compact_json(value: object) -> str:
 def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list[ClosureCase]:
     """Create known-content synthetic probes, never inferred tool-intent repairs."""
     # The sentinel is transformed task metadata, not a claim about a natural failure.
-    sentinel = task_id + ' quote=" slash=\\ end'
+    task_digest = hashlib.sha256(task_id.encode()).digest()
+    sentinel = task_id + STRING_ENDINGS[task_digest[0] % len(STRING_ENDINGS)]
+    fence_marker = FENCE_MARKERS[task_digest[1] % len(FENCE_MARKERS)]
+    fence_open = fence_marker + "json\n"
     object_text = compact_json({"task": task_id})
     array_text = compact_json([task_id])
     nested_text = compact_json({"task": task_id, "answers": [answer]})
@@ -96,7 +107,7 @@ def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list
         (Family.STRING, string_text, len(string_text) - 1),
         (Family.TOOL, TOOL_OPEN + tool_body + TOOL_CLOSE, len(TOOL_OPEN + tool_body)),
         (Family.REASONING, THINK_OPEN + reason_body + THINK_CLOSE, len(THINK_OPEN + reason_body)),
-        (Family.FENCE, JSON_FENCE_OPEN + fence_body + "\n```", len(JSON_FENCE_OPEN + fence_body + "\n")),
+        (Family.FENCE, fence_open + fence_body + "\n" + fence_marker, len(fence_open + fence_body + "\n")),
         (Family.REPEATED_OPENER, TOOL_OPEN + tool_body + TOOL_CLOSE, len(TOOL_OPEN)),
     ]
     cases = []
@@ -104,7 +115,7 @@ def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list
         # A known nonempty task identifier supplies the continue-required control.
         # Fences use an unfinished opener info string when the answer is empty.
         content_at = expected.find(task_id)
-        continue_cut = content_at + max(1, len(task_id) // 2) if content_at >= 0 else len("```j")
+        continue_cut = content_at + max(1, len(task_id) // 2) if content_at >= 0 else len(fence_marker) + 1
         boundaries = [(CLOSE_REQUIRED, close_cut), ("continue_required", continue_cut)]
         if family == Family.STRING:
             boundaries.append(("escape_continue_required", expected.index("\\") + 1))
@@ -196,7 +207,12 @@ def build_benchmark(source: Path, split_file: Path, output: Path):
         hashes[cohort] = hashlib.sha256(data.encode()).hexdigest()
     manifest = {
         "status": "candidate-not-frozen",
-        "kind": "oracle-derived-closure-with-reference-continuation-controls",
+        "kind": "oracle-derived-varied-closure-with-reference-continuation-controls",
+        "variant_assignment": (
+            "sha256(task_id): byte 0 selects string ending; byte 1 selects fence marker; modulo variant count"
+        ),
+        "string_endings": STRING_ENDINGS,
+        "fence_markers": FENCE_MARKERS,
         "counts": dict(counts),
         "cases": len(cases),
         "hashes": hashes,
@@ -204,7 +220,9 @@ def build_benchmark(source: Path, split_file: Path, output: Path):
         "partition_sha256": hashlib.sha256(partition_file.read_bytes()).hexdigest(),
         "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "limitation": (
-            "Known-content probes isolate serialization; natural failure and free-generation transfer are not measured."
+            "Candidate probes require separate structural, content and continuation-control audits. "
+            "The combined content-preserving score does not isolate closure. "
+            "Natural failure and free-generation transfer are not measured."
         ),
     }
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
