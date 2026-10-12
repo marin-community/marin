@@ -41,12 +41,14 @@ def request_key(question: str, references: tuple[str, ...], candidate: str) -> R
 class CachedJudge:
     """Replay recorded labels and send only newly unresolved requests to MiniMax."""
 
-    def __init__(self, examples: list[dict], prior: dict, allow_live: bool):
+    def __init__(self, examples: list[dict], prior: dict | None, allow_live: bool):
         self.pending: dict[RequestKey, deque[EquivalenceJudgment]] = defaultdict(deque)
         self.allow_live = allow_live
         self.cached_used = 0
         self.live_used = 0
         self.prior_blank_credited = 0
+        if prior is None:
+            return
         for index, trial in enumerate(prior["trials"]):
             document, repeat = divmod(index, 10)
             example = examples[document]
@@ -130,20 +132,24 @@ def read_sources(path: Path) -> list[Source]:
         )
         for row in rows
     ]
-    if len(sources) != 21 or len({source.model for source in sources}) != 21:
-        raise ValueError("expected 21 unique OlympiadBench sources")
+    if not sources or len({source.model for source in sources}) != len(sources):
+        raise ValueError("expected nonempty, unique OlympiadBench sources")
     return sources
 
 
-def regrade(source: Source, prior_prefix: str, base_url: str, judge_model: str, allow_live: bool) -> dict:
+def regrade(source: Source, prior_prefix: str | None, base_url: str, judge_model: str, allow_live: bool) -> dict:
     """Run Evalchemy's full native OlympiadBench grader on the frozen answers."""
     examples, rows = source_examples(source)
-    prior_uri = f"{prior_prefix.rstrip('/')}/results/{source.model.replace('/', '--')}.json"
-    prior, prior_hash = read_json(prior_uri)
-    if prior["model"] != source.model or prior["source"] != source.uri or prior["num_trials"] != 300:
-        raise ValueError(f"{source.model}: prior judge ablation does not match this source")
-    if prior["num_judge_failed"]:
-        raise ValueError(f"{source.model}: prior judge ablation has failed verdicts")
+    prior_uri = None
+    prior = None
+    prior_hash = None
+    if prior_prefix is not None:
+        prior_uri = f"{prior_prefix.rstrip('/')}/results/{source.model.replace('/', '--')}.json"
+        prior, prior_hash = read_json(prior_uri)
+        if prior["model"] != source.model or prior["source"] != source.uri or prior["num_trials"] != 300:
+            raise ValueError(f"{source.model}: prior judge ablation does not match this source")
+        if prior["num_judge_failed"]:
+            raise ValueError(f"{source.model}: prior judge ablation has failed verdicts")
     cache = CachedJudge(examples, prior, allow_live)
     benchmark = OlympiadBenchBenchmark(
         n_repeat=10,
@@ -163,7 +169,7 @@ def regrade(source: Source, prior_prefix: str, base_url: str, judge_model: str, 
     trials = []
     for index, row in enumerate(rows):
         document, repeat = divmod(index, 10)
-        prior_trial = prior["trials"][index]
+        prior_trial = prior["trials"][index] if prior is not None else None
         grade = examples[document]["equivalence_grades"][repeat]
         corrected = bool(examples[document]["sample_metrics_by_repeat"][repeat]["accuracy"])
         trials.append(
@@ -173,9 +179,9 @@ def regrade(source: Source, prior_prefix: str, base_url: str, judge_model: str, 
                 "reference_answer": examples[document]["answer"],
                 "candidate_answer": examples[document]["model_answers"][repeat],
                 "source_correct": bool(row["metrics"]["accuracy"]),
-                "prior_minimax_correct": prior_trial["new_correct"],
+                "prior_minimax_correct": prior_trial["new_correct"] if prior_trial is not None else None,
                 "corrected_correct": corrected,
-                "prior_grade": prior_trial["equivalence_grade"],
+                "prior_grade": prior_trial["equivalence_grade"] if prior_trial is not None else None,
                 "corrected_grade": grade,
             }
         )
@@ -189,7 +195,7 @@ def regrade(source: Source, prior_prefix: str, base_url: str, judge_model: str, 
         "tracker_score": source.old_score,
         "prior_minimax_result": prior_uri,
         "prior_minimax_sha256": prior_hash,
-        "prior_minimax_score": prior["new_score"],
+        "prior_minimax_score": prior["new_score"] if prior is not None else None,
         "corrected_score": corrected_score,
         "num_trials": 300,
         "num_judge_failed": scored["num_judge_failed"],
@@ -197,7 +203,11 @@ def regrade(source: Source, prior_prefix: str, base_url: str, judge_model: str, 
         "cached_judge_verdicts": cache.cached_used,
         "new_judge_verdicts": cache.live_used,
         "prior_blank_credited": cache.prior_blank_credited,
-        "changed_trials": sum(trial["prior_minimax_correct"] != trial["corrected_correct"] for trial in trials),
+        "changed_trials": sum(
+            (trial["prior_minimax_correct"] if prior is not None else trial["source_correct"])
+            != trial["corrected_correct"]
+            for trial in trials
+        ),
         "evalchemy_commit": EVALCHEMY_COMMIT,
         "judge_model": judge_model,
         "judge_request_extra_body": JUDGE_EXTRA_BODY,
@@ -208,7 +218,7 @@ def regrade(source: Source, prior_prefix: str, base_url: str, judge_model: str, 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sources", type=Path, required=True)
-    parser.add_argument("--prior-prefix", required=True)
+    parser.add_argument("--prior-prefix", help="Reuse exact verdicts from an existing MiniMax replay")
     parser.add_argument("--judge-config", type=Path, required=True)
     parser.add_argument("--output-prefix", required=True)
     parser.add_argument("--model", action="append", default=[])
@@ -256,7 +266,7 @@ def main() -> None:
             LOGGER.info(
                 "%s: %.3f -> %.3f; cache=%d live=%d changed=%d",
                 source.model,
-                result["prior_minimax_score"],
+                result["prior_minimax_score"] if result["prior_minimax_score"] is not None else source.old_score,
                 result["corrected_score"],
                 result["cached_judge_verdicts"],
                 result["new_judge_verdicts"],

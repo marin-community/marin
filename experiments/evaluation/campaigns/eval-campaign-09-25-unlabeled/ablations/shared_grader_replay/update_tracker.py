@@ -27,26 +27,30 @@ def read_result(uri: str) -> dict | None:
         return json.load(source)
 
 
-def update_tracker(tracker: Path, sources: Path, output_prefix: str) -> list[tuple[str, str, str]]:
+def update_tracker(
+    tracker: Path, sources: Path, output_prefix: str, benchmarks: tuple[str, ...] = BENCHMARKS
+) -> list[tuple[str, str, str]]:
     """Apply verified replay links and scores while preserving every other cell."""
     manifest = yaml.safe_load(sources.read_text())["models"]
     by_model = {row["model"]: row["benchmarks"] for row in manifest}
-    if len(manifest) != 21 or len(by_model) != 21:
-        raise ValueError("expected 21 unique source models")
+    if not manifest or len(by_model) != len(manifest):
+        raise ValueError("expected nonempty, unique source models")
     original = tracker.read_text()
     lines = original.splitlines(keepends=True)
     headers = [part.strip() for part in lines[0].split("|")[1:-1]]
-    columns = {benchmark: headers.index(benchmark) + 1 for benchmark in BENCHMARKS}
+    columns = {benchmark: headers.index(benchmark) + 1 for benchmark in benchmarks}
     seen = set()
     changed = []
     for line_index in range(3, len(lines)):
         line = lines[line_index]
         parts = line.rstrip("\n").split("|")
         model = parts[1].strip()
-        if model not in by_model or model in seen:
-            raise ValueError(f"tracker model absent or duplicated in frozen manifest: {model}")
+        if model not in by_model:
+            continue
+        if model in seen:
+            raise ValueError(f"duplicate tracker model in frozen manifest: {model}")
         seen.add(model)
-        for benchmark in BENCHMARKS:
+        for benchmark in benchmarks:
             source = by_model[model][benchmark]
             uri = f"{output_prefix.rstrip('/')}/results/{benchmark}/{model.replace('/', '--')}.json"
             result = read_result(uri)
@@ -89,9 +93,10 @@ def main() -> None:
     parser.add_argument("--tracker", type=Path, required=True)
     parser.add_argument("--sources", type=Path, required=True)
     parser.add_argument("--output-prefix", required=True)
+    parser.add_argument("--benchmark", choices=BENCHMARKS, action="append")
     args = parser.parse_args()
     configure_coreweave_s3()
-    changed = update_tracker(args.tracker, args.sources, args.output_prefix)
+    changed = update_tracker(args.tracker, args.sources, args.output_prefix, tuple(args.benchmark or BENCHMARKS))
     for model, benchmark, replacement in changed:
         print(f"{model} {benchmark}: {replacement}")
     print(f"updated {len(changed)} tracker cells")
