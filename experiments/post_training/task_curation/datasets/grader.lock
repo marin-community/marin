@@ -888,12 +888,7 @@ frozenlist==1.8.0 \
 fsspec==2026.9.0 \
     --hash=sha256:0f08147951c8cb31d844c3547d631053b127863b60be04cf06e121333ee0e2fe \
     --hash=sha256:8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f
-    # via
-    #   dask
-    #   universal-pathlib
-harbor-config @ https://github.com/marin-community/harbor/archive/6b2e76e1dae5c084eed05edefefffcec8c0c1ad9.tar.gz#subdirectory=packages/harbor-config \
-    --hash=sha256:3d7defc9fbc6096be8aa0991d105f311971e4385c909f9487ede26587504f7aa
-    # via -r grader.in
+    # via dask
 hypothesis==6.168.5 \
     --hash=sha256:01a4d3773f285e75551eeef12df058e6316b666bcc3ec187c5eb52a893fbb015 \
     --hash=sha256:0333aa5129ba3019a83fb81a7f0fc238180e415a9edddd9a15101f8deaaa517e \
@@ -1769,10 +1764,6 @@ partd==1.4.2 \
     --hash=sha256:978e4ac767ec4ba5b86c6eaa52e5a2a3bc748a2ca839e8cc798f1cc6ce6efb0f \
     --hash=sha256:d022c33afbdc8405c226621b015e8067888173d85f7f5ecebb3cafed9a20f02c
     # via dask
-pathlib-abc==0.5.2 \
-    --hash=sha256:4c9d94cf1b23af417ce7c0417b43333b06a106c01000b286c99de230d95eefbb \
-    --hash=sha256:fcd56f147234645e2c59c7ae22808b34c364bb231f685ddd9f96885aed78a94c
-    # via universal-pathlib
 pathlib2==2.3.7.post1 \
     --hash=sha256:5266a0fd000452f1b3467d782f079a4343c63aaa119221fbdc4e39577489ca5b \
     --hash=sha256:9fe0edad898b83c0c3e199c842b27ed216645d2e177757b2dd67384d4113c641
@@ -2025,9 +2016,7 @@ pycparser==3.0 \
 pydantic==2.13.5 \
     --hash=sha256:346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73 \
     --hash=sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08
-    # via
-    #   fastapi
-    #   harbor-config
+    # via fastapi
 pydantic-core==2.46.5 \
     --hash=sha256:013d6f3483d81e02e7c328831808f336c8596ee33b4bd4026b9ffb1e960b8942 \
     --hash=sha256:03b9666e41e35d8909852ba191a0607520f81b74eaf12ccf8737005dbb313821 \
@@ -2270,7 +2259,6 @@ pyyaml==6.0.3 \
     # via
     #   -r grader.in
     #   dask
-    #   harbor-config
     #   reasoning-gym
     #   responses
 rdkit==2025.9.3 \
@@ -2719,10 +2707,6 @@ shellingham==1.5.4 \
     --hash=sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686 \
     --hash=sha256:8dbca0739d487e5bd35ab3ca4b36e11c4078f3a234bfce294b0a0291363404de
     # via typer
-shortuuid==1.0.13 \
-    --hash=sha256:3bb9cf07f606260584b1df46399c0b87dd84773e7b25912b7e391e30797c5e72 \
-    --hash=sha256:a482a497300b49b4953e15108a7913244e1bb0d41f9d332f5e9925dba33a3c5a
-    # via harbor-config
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
@@ -2837,10 +2821,6 @@ threadpoolctl==3.7.0 \
     --hash=sha256:61348cfb77d53b9242e0017029244b559b810c142ced65b4e21eeca1843959a7 \
     --hash=sha256:cd8b60b5641b45c67bbf73c64c843235fc2d8a480c87389f52f5dbee893b86be
     # via scikit-learn
-toml==0.10.2 \
-    --hash=sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b \
-    --hash=sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f
-    # via harbor-config
 tomli-w==1.2.0 \
     --hash=sha256:188306098d013b691fcadc011abd66727d3c414c571bb01b1a174ba8c983cf90 \
     --hash=sha256:2dd14fac5a47c27be9cd4c976af5a12d87fb1f0b4512f81d69cce3b35ae25021
@@ -2868,7 +2848,6 @@ typing-extensions==4.16.0 \
     #   anyio
     #   beautifulsoup4
     #   fastapi
-    #   harbor-config
     #   opentelemetry-api
     #   pydantic
     #   pydantic-core
@@ -2886,10 +2865,6 @@ tzdata==2026.5 \
     --hash=sha256:8cc73c0a0bfca7dbfa59235d60b2eff82231dee33f53d206db1acd9173cfc0a7 \
     --hash=sha256:b683bd1b6659ddcd810ff02ad09ba821d4bf1065072805063eb35c49617905ac
     # via pandas
-universal-pathlib==0.3.10 \
-    --hash=sha256:4487cbc90730a48cfb64f811d99e14b6faed6d738420cd5f93f59f48e6930bfb \
-    --hash=sha256:dfaf2fb35683d2eb1287a3ed7b215e4d6016aa6eaf339c607023d22f90821c66
-    # via harbor-config
 urllib3==2.8.0 \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
     --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63

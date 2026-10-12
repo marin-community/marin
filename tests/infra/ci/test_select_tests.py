@@ -327,7 +327,7 @@ def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Pat
 
     assert leg_paths(matrix, "verifyit") == ["lib/verifyit/tests/test_grade.py"]
     assert leg_paths(matrix, "marin") == ["tests/test_verifier.py"]
-    verifier_leg = next(leg for leg in matrix if leg.package == "verifyit")
+    verifier_leg = next(leg for leg in matrix if leg.package == "marin-verifyit")
     assert verifier_leg.extras == "--extra all"
 
 
@@ -372,9 +372,9 @@ def _tpu_lock(
     name = "marin-root"
     version = "0.1.0"
     source = {{ editable = "." }}
-    dependencies = [{{ name = "verifyit" }}]
+    dependencies = [{{ name = "marin-verifyit" }}]
     [[package]]
-    name = "verifyit"
+    name = "marin-verifyit"
     version = "0.1.0"
     source = {{ {source} }}
     [[package]]
@@ -420,11 +420,11 @@ def _tpu_manifest(verifier_source: str = "workspace") -> str:
     [project]
     name = "marin-root"
     requires-python = ">=3.12"
-    dependencies = ["verifyit"]
+    dependencies = ["marin-verifyit"]
     [tool.uv.workspace]
     members = [{_verifier_members(verifier_source)}]
     [tool.uv.sources]
-    verifyit = {source}
+    marin-verifyit = {source}
     """
 
 

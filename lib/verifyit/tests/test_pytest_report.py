@@ -153,6 +153,18 @@ def test_pytest_candidate_missing_dependency_stays_unscored(tmp_path):
         grade_pytest.grade(_spec(), tmp_path, workspace)
 
 
+def test_pytest_missing_candidate_submodule_scores_zero_then_repaired_package_passes(tmp_path):
+    workspace = _project(tmp_path, FIXED, "from returns.io import IO\ndef test_io():\n    assert IO(3).value == 3\n")
+    package = workspace / "returns"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    failure = grade_pytest.grade(_spec(), tmp_path, workspace)
+    assert (failure.status, failure.reward) == (Status.SCORED, 0.0)
+    (package / "io.py").write_text("class IO:\n    def __init__(self, value):\n        self.value = value\n")
+    success = grade_pytest.grade(_spec(), tmp_path, workspace)
+    assert (success.status, success.reward) == (Status.SCORED, 1.0)
+
+
 def test_pytest_setup_manifest_source_failure_stays_unscored(tmp_path):
     workspace = _project(tmp_path, FIXED)
     (workspace / "conftest.py").write_text("from calc import add\n")

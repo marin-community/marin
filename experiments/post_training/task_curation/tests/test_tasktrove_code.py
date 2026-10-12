@@ -6,27 +6,37 @@
 import json
 import os
 import subprocess
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
-from harbor_config.models.task.config import TaskConfig
-from taskcompendium.convert.executable import solve_script
-from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH, archive_files, unpack_task_binary
-from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH
-from taskcompendium.harbor.export import harbor_record
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.grade import Status, grade
 from verifyit.spec import ScriptSpec, StdioSpec
 
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import (
     code,
     nl2bash,
     python_tests,
     structured_outputs,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    SOLVE_SH,
+    TEST_SH,
+    archive_files,
+    unpack_task_binary,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import solve_script
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH
+from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.tasktrove.harbor_export import (
+    harbor_payload,
+    harbor_record,
 )
 from experiments.post_training.task_curation.tests.conversion import (
     BASE_IMAGE,
@@ -38,11 +48,10 @@ from experiments.post_training.task_curation.tests.conversion import (
 
 pytest_plugins = ("lib.verifyit.tests.test_judge",)
 
-PIPELINES = {
-    source.name: source.pipeline
+RECIPES = {
+    source.name: cast(CurationRecipe, source.config)
     for module in (code, python_tests, nl2bash, structured_outputs)
     for source in module.sources()
-    if source.pipeline is not None
 }
 
 CODENET = (Path(__file__).parent / "fixtures/codenet.tar.gz").read_bytes()
@@ -118,16 +127,9 @@ ROWS: dict[str, dict] = {
         SUM_PROMPT, {**stdio_dirs(SUM_CASES["inputs"], SUM_CASES["outputs"]), "solution/solution.py": SUM_SOLUTION}
     ),
     "tasktrove-nl2bash": nl2bash_row({"expected_output": "notes.txt\n"}),
-    "tasktrove-curriculum_easy": python_row("tests/test_curriculum.py"),
-    "tasktrove-curriculum_medium": python_row("tests/test_curriculum.py"),
     "tasktrove-e2egit": python_row(),
-    "tasktrove-e2egit_large": python_row(),
-    "tasktrove-multifile": python_row("tests/test_multifile.py"),
     "tasktrove-pymethods": python_row(),
-    "tasktrove-pymethods_large": python_row(),
     "tasktrove-unitsyn": python_row(),
-    "tasktrove-unitsyn_large": python_row(),
-    "tasktrove-stack_pytest": python_row(),
     "tasktrove-structured_outputs": structured_row(NAME_SCHEMA, "json"),
 }
 
@@ -143,9 +145,21 @@ def resource_map(resources) -> dict[str, bytes]:
     return {resource.path: resource_bytes(resource) for resource in resources}
 
 
-@pytest.mark.parametrize("name", sorted(ROWS))
+@pytest.mark.parametrize(
+    "name",
+    [
+        "tasktrove-code_contests",
+        "tasktrove-codeforces",
+        "tasktrove-competitive_coding",
+        "tasktrove-taco",
+        "tasktrove-nl2bash",
+        "tasktrove-pymethods",
+        "tasktrove-unitsyn",
+        "tasktrove-structured_outputs",
+    ],
+)
 def test_conversion_keeps_hidden_tests_and_oracles_private(name):
-    task = converted_task(PIPELINES[name], ROWS[name])
+    task = converted_task(RECIPES[name], ROWS[name])
     # Hidden tests and oracle files never reach the agent's machine.
     worker = {resource.path for resource in task.resources.worker}
     assert not any(path.startswith(("tests/", "solution/", "cases/")) for path in worker)
@@ -191,33 +205,50 @@ def test_conversion_keeps_hidden_tests_and_oracles_private(name):
             "gold_in_instruction",
         ),
         ("tasktrove-e2egit", archive(SUM_PROMPT, {}), ImportFailureKind.UNSUPPORTED, "unsupported_variant"),
-        (
-            "tasktrove-pymethods",
-            archive(
-                "Implement the requested helper.",
-                {"tests/test_solution.py": b"from helpers import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"},
-            ),
-            ImportFailureKind.UNSUPPORTED,
-            "unsupported_public_output_contract",
-        ),
     ],
 )
 def test_ungradable_archives_are_rejected_with_typed_cause(name, row, kind, reason):
-    rejection = convert_row(PIPELINES[name], row)
+    rejection = convert_row(RECIPES[name], row)
     assert isinstance(rejection, ImportRejection)
     assert (rejection.kind, rejection.reason) == (kind, reason)
 
 
-def test_python_tests_infer_module_file_from_hidden_test_imports():
-    row = archive(
-        "Implement `add(a, b)` returning the sum of two integers.",
-        {"tests/test_solution.py": b"from calculator import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"},
+def test_python_source_preserves_prompt():
+    instruction = "Implement the requested helper.\n"
+    result = cast(
+        NormalizedTask,
+        convert_row(
+            RECIPES["tasktrove-e2egit"],
+            archive(
+                instruction,
+                {"tests/test_solution.py": b"from helpers import add\n\ndef test_add():\n    assert add(2, 3) == 5\n"},
+            ),
+        ),
     )
-    result = convert_row(PIPELINES["tasktrove-e2egit"], row)
-    assert isinstance(result, NormalizedTask)
-    assert result.task.output_paths == ("/app/calculator.py",)
-    prompt = result.task.context.events[0].content
-    assert prompt.endswith("Delivery: write the requested implementation to `/app/calculator.py`.\n")
+    assert result.task.context.events[0].content == instruction
+    assert not result.changes
+
+
+def test_python_directory_source_exports_shared_without_capture_and_isolated_with_capture():
+    task = converted_task(RECIPES["tasktrove-e2egit"], python_row())
+    row = {"task_json": task.model_dump_json(), "source_row": "fixture/tasks.parquet:0", "original_path": "fixture"}
+    options = {
+        "grader_image": BASE_IMAGE,
+        "fallback_actor_image": BASE_IMAGE,
+        "family": "python",
+        "verifyit_package_root": VERIFYIT_PACKAGE,
+    }
+    payload = harbor_payload(row, **options)
+    config = tomllib.loads(payload.files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert not config["artifacts"] and "tests/Dockerfile" not in payload.files
+    assert payload.files["instruction.md"].decode() == task.context.events[0].content
+    # Without TaskTrove's shared source recipe, Harbor needs an isolated transfer contract.
+    isolated = task.model_copy(update={"source": task.source.model_copy(update={"dataset": "fixture"})})
+    payload = harbor_payload({**row, "task_json": isolated.model_dump_json()}, **options)
+    config = tomllib.loads(payload.files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "separate"
+    assert config["artifacts"] == [{"source": "/app", "destination": "app"}]
 
 
 def local_stdio(task: TaskSpec, workspace: Path) -> StdioSpec:
@@ -228,7 +259,7 @@ def local_stdio(task: TaskSpec, workspace: Path) -> StdioSpec:
 
 
 def test_codeforces_oracle_passes_on_hidden_cases(tmp_path):
-    task = converted_task(PIPELINES["tasktrove-codeforces"], ROWS["tasktrove-codeforces"])
+    task = converted_task(RECIPES["tasktrove-codeforces"], ROWS["tasktrove-codeforces"])
     write_verifier(task, tmp_path / "tests")
     workspace = tmp_path / "app"
     spec = local_stdio(task, workspace)
@@ -242,7 +273,7 @@ def test_codeforces_oracle_passes_on_hidden_cases(tmp_path):
 @pytest.mark.parametrize("exit_code, expected_reward", [(0, 1.0), (7, 0.0)])
 def test_codeforces_source_runner_and_converted_grader_agree_on_exit_status(tmp_path, exit_code, expected_reward):
     # The submission prints every expected output, so only its exit status decides the reward.
-    pipeline = PIPELINES["tasktrove-codeforces"]
+    pipeline = RECIPES["tasktrove-codeforces"]
     source = archive_files(unpack_task_binary(ROWS["tasktrove-codeforces"], fixture_context(pipeline)))
     task = converted_task(pipeline, ROWS["tasktrove-codeforces"])
     tests = tmp_path / "tests"
@@ -277,7 +308,7 @@ def test_codeforces_source_runner_and_converted_grader_agree_on_exit_status(tmp_
     [("notes.txt\n", 1.0), ("./notes.txt\nextra.log\n", 1.0), ("unexpected error: missing input\n", 0.0)],
 )
 def test_nl2bash_checker_grades_the_captured_output(tmp_path, capture, reward):
-    task = converted_task(PIPELINES["tasktrove-nl2bash"], ROWS["tasktrove-nl2bash"])
+    task = converted_task(RECIPES["tasktrove-nl2bash"], ROWS["tasktrove-nl2bash"])
     write_verifier(task, tmp_path / "tests")
     assert isinstance(task.grader, VerifyitGrader)
     spec = verifyit_spec(task.grader)
@@ -289,7 +320,7 @@ def test_nl2bash_checker_grades_the_captured_output(tmp_path, capture, reward):
 
 
 def test_nl2bash_oracle_seeds_from_the_mounted_oracle_script():
-    task = converted_task(PIPELINES["tasktrove-nl2bash"], ROWS["tasktrove-nl2bash"])
+    task = converted_task(RECIPES["tasktrove-nl2bash"], ROWS["tasktrove-nl2bash"])
     oracle = resource_map(task.resources.oracle)
     assert "bash /tests/setup_files/setup_seeds.sh" in oracle[SOLVE_SH].decode()
     assert oracle["tests/setup_files/setup_seeds.sh"] == SEED_SCRIPT
@@ -301,7 +332,7 @@ def test_nl2bash_oracle_seeds_from_the_mounted_oracle_script():
     [({"expected_output": None}, ImportFailureKind.SOURCE_DEFECT), (None, ImportFailureKind.CONVERTER_ERROR)],
 )
 def test_nl2bash_without_expected_output_is_rejected(verifier_data, kind):
-    rejection = convert_row(PIPELINES["tasktrove-nl2bash"], nl2bash_row(verifier_data))
+    rejection = convert_row(RECIPES["tasktrove-nl2bash"], nl2bash_row(verifier_data))
     assert isinstance(rejection, ImportRejection)
     assert rejection.kind is kind and rejection.detail
 
@@ -309,7 +340,7 @@ def test_nl2bash_without_expected_output_is_rejected(verifier_data, kind):
 def test_structured_outputs_ask_for_the_answer_in_the_reply():
     footer = f"{structured_outputs.SUBMISSION_FOOTER}Your chat reply is NOT graded; only `/app/answer.txt` is read.\n"
     result = convert_row(
-        PIPELINES["tasktrove-structured_outputs"], structured_row(NAME_SCHEMA, "json", STRUCTURED_PROMPT + footer)
+        RECIPES["tasktrove-structured_outputs"], structured_row(NAME_SCHEMA, "json", STRUCTURED_PROMPT + footer)
     )
     assert isinstance(result, NormalizedTask)
     prompt = cast(str, result.task.context.events[-1].content)
@@ -326,7 +357,7 @@ def test_structured_outputs_reject_a_required_field_the_schema_forbids():
         "required": ["name", "age"],
         "additionalProperties": False,
     }
-    rejection = convert_row(PIPELINES["tasktrove-structured_outputs"], structured_row(schema, "json"))
+    rejection = convert_row(RECIPES["tasktrove-structured_outputs"], structured_row(schema, "json"))
     assert isinstance(rejection, ImportRejection)
     assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "unsatisfiable_schema")
 
@@ -345,7 +376,7 @@ def test_structured_outputs_reject_a_required_field_the_schema_forbids():
 def test_structured_outputs_require_grounding_after_valid_format(
     tmp_path, fake_judge, monkeypatch, schema_type, candidate, label, reward
 ):
-    pipeline = PIPELINES["tasktrove-structured_outputs"]
+    pipeline = RECIPES["tasktrove-structured_outputs"]
     task = converted_task(pipeline, structured_row(NAME_SCHEMA, schema_type))
     tests = tmp_path / "tests"
     write_verifier(task, tests)
@@ -362,7 +393,7 @@ def test_structured_outputs_require_grounding_after_valid_format(
 
 
 def test_structured_outputs_invalid_format_scores_zero_before_grounding(tmp_path, fake_judge):
-    task = converted_task(PIPELINES["tasktrove-structured_outputs"], structured_row(NAME_SCHEMA, "json"))
+    task = converted_task(RECIPES["tasktrove-structured_outputs"], structured_row(NAME_SCHEMA, "json"))
     tests = tmp_path / "tests"
     write_verifier(task, tests)
     workspace = tmp_path / "app"
@@ -386,7 +417,7 @@ def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tm
     )
     recipe = b"FROM python:3.12-slim\nWORKDIR /app\nRUN mkdir /source-dependency\n"
     data["environment/Dockerfile"] = recipe
-    task = converted_task(PIPELINES[f"tasktrove-{name}"], archive(SUM_PROMPT, data))
+    task = converted_task(RECIPES[f"tasktrove-{name}"], archive(SUM_PROMPT, data))
     record = harbor_record(
         {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
         grader_image=None,
@@ -395,13 +426,13 @@ def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tm
     )
     files = archive_files(
         unpack_task_binary(
-            {"path": "fixture", "task_binary": record.task_binary}, fixture_context(PIPELINES[f"tasktrove-{name}"])
+            {"path": "fixture", "task_binary": record.task_binary}, fixture_context(RECIPES[f"tasktrove-{name}"])
         )
     ).files
     assert files["environment/Dockerfile"].decode().split("# --- verifyit ---")[0].strip() == recipe.decode().strip()
-    config = TaskConfig.model_validate_toml(files["task.toml"].decode())
-    assert config.verifier.environment_mode == "shared"
-    assert not config.artifacts and "tests/Dockerfile" not in files
+    config = tomllib.loads(files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert not config["artifacts"] and "tests/Dockerfile" not in files
     assert not any(path.startswith(("environment/tests/", "environment/solution/", "solution/")) for path in files)
     tests = tmp_path / "tests"
     write_verifier(task, tests)

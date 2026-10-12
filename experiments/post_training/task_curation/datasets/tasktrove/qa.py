@@ -12,9 +12,8 @@ multiple-choice source grades the option letter in process.
 import re
 
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.tasktrove import archive_resources
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
@@ -24,7 +23,8 @@ from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.pipeline import RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 MCQA_CONFIG = "laion__nemotron-gym-knowledge-mcqa-v2"
@@ -228,7 +228,7 @@ def convert_knowledge_mcqa(row: RawRow, _context: ConversionContext) -> TaskSpec
     return rewritten_task(task, original=instruction, reason=MCQA_REWRITE_REASON)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     openqa = (
         (
             "knowledge-openqa",
@@ -266,13 +266,13 @@ def sources() -> list[RlDataSource]:
     return [
         *(
             RlDataSource(
+                pipeline=process_rows,
                 info=info,
-                pipeline=RlDataPipeline(
+                config=CurationRecipe(
                     name=name,
                     source=tasktrove_source(config),
                     convert=TaskTroveConverter(config, convert_openqa),
                     version="3",
-                    environment=ShellSim(),
                     intended_use=IntendedUse.TRAIN,
                     rubric=OPENQA_RUBRIC,
                     grader=GRADER_PACKAGES,
@@ -281,6 +281,7 @@ def sources() -> list[RlDataSource]:
             for name, config, info in openqa
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id=f"Task Trove:{MCQA_CONFIG}",
                 title="laion/nemotron-gym-knowledge-mcqa-v2",
@@ -293,12 +294,11 @@ def sources() -> list[RlDataSource]:
                     "and subsample hard: 617k rows is a third of the corpus."
                 ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="tasktrove-knowledge_mcqa",
                 source=tasktrove_source(MCQA_CONFIG),
                 convert=TaskTroveConverter(MCQA_CONFIG, convert_knowledge_mcqa),
                 version="5",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=KNOWLEDGE_MCQA_RUBRIC,
                 controls=Controls(golden=reference_reply),

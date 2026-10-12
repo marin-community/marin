@@ -19,18 +19,18 @@ from typing import Any
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB, THREAD_ENVIRONMENT, python_reply
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from taskcompendium.convert.tasktrove import ANSWER_PATH
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import grader_config
 from taskcompendium.models import TaskResource, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
+from verifyit.spec import DEFAULT_OUTPUT
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
-from experiments.post_training.task_curation.pipeline import HfSource, RlDataPipeline, ShellSim
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 LCB_VERIFIER = SourceReference(
@@ -109,7 +109,7 @@ def scored_task(
         config,
         environment=required_grader_environment(context),
         timeout=GRADER_TIMEOUT,
-        answer_path=ANSWER_PATH,
+        answer_path=DEFAULT_OUTPUT,
         env=THREAD_ENVIRONMENT,
     )
     return conversation_task(row, events=_with_instruction(events, instruction), package=package, evidence=evidence)
@@ -293,9 +293,10 @@ def reference_solution(task: TaskSpec) -> Reply | None:
 CONTROLS = Controls(golden=reference_solution, memory_mb=CODE_GRADER_MEMORY_MB)
 
 
-def sources() -> list[RlDataSource]:
+def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:apps",
                 title="codeparrot/apps",
@@ -304,22 +305,21 @@ def sources() -> list[RlDataSource]:
                 tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/lcb"),
                 verifier=LCB_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="apps",
                 source=HfSource(
                     "codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", ("train.jsonl",), SourceFormat.JSONL
                 ),
                 convert=convert_apps,
                 version="2",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=APPS_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:eurus2_code",
                 title="PRIME-RL/Eurus-2-RL-Data · code",
@@ -328,7 +328,7 @@ def sources() -> list[RlDataSource]:
                 tags=("rlvr", "single-turn", "license:mit", "gym/lcb"),
                 verifier=LCB_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="eurus2_code",
                 source=HfSource(
                     "PRIME-RL/Eurus-2-RL-Data",
@@ -339,15 +339,14 @@ def sources() -> list[RlDataSource]:
                 ),
                 convert=convert_eurus2_code,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=EURUS2_CODE_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:verifiable_code",
                 title="open-r1/verifiable-coding-problems-python",
@@ -356,7 +355,7 @@ def sources() -> list[RlDataSource]:
                 tags=("rlvr", "single-turn", "gym/lcb"),
                 verifier=LCB_VERIFIER,
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="verifiable_code",
                 source=HfSource(
                     "open-r1/verifiable-coding-problems-python",
@@ -366,15 +365,14 @@ def sources() -> list[RlDataSource]:
                 ),
                 convert=convert_verifiable_code,
                 version="2",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=VERIFIABLE_CODE_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
+            pipeline=process_rows,
             info=SourceInfo(
                 id="MarinSkyRL:gretel_text_to_sql",
                 title="gretelai/synthetic_text_to_sql",
@@ -390,7 +388,7 @@ def sources() -> list[RlDataSource]:
                     ),
                 ),
             ),
-            pipeline=RlDataPipeline(
+            config=CurationRecipe(
                 name="gretel_text_to_sql",
                 source=HfSource(
                     "gretelai/synthetic_text_to_sql",
@@ -400,12 +398,10 @@ def sources() -> list[RlDataSource]:
                 ),
                 convert=convert_gretel_text_to_sql,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=GRETEL_TEXT_TO_SQL_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
     ]

@@ -13,12 +13,11 @@ import pytest
 from shellbox.machine import Backend, Machine, MachineFactory, MachineSpec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import EnvironmentRequirements, ResourceGroups, ScriptGrader
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, ScriptGrader
 from taskcompendium.runtime.resources import inline_resource
 
 from rolloutengine.lowering import lower_task
-
-from .test_rollout import TWELVE, ReplayModel, arithmetic_task, engine, lowered, machine_runtime
+from rolloutengine.test_support import TWELVE, ReplayModel, arithmetic_task, engine, lowered, machine_runtime
 
 SCRIPT = b"""
 import os
@@ -73,7 +72,7 @@ def lock_environment(tmp_path):
         json.dumps({"result": {"lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(), "data": []}})
     )
     return EnvironmentRequirements(
-        compatible_backends=(Backend.LOCAL,),
+        command_semantics=CommandSemantics.LINUX_PROCESS,
         packages_lock=str(lock),
         setup_commands=("printf ready > /app/ready",),
         environment_variables={"GRADER_SETTING": "configured"},

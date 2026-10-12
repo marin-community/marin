@@ -63,22 +63,29 @@ Export restores source actor recipes and bundles current Verifyit; use
 Export builds no images and runs no graders. Comparisons cover the emitted
 recipes, files and execution settings; image tags and build-time downloads
 retain the source's reproducibility limits.
-
-[`harbor_export_step`](tasktrove/export.py) binds this export to a normalized
-artifact and records verifier payload identity. For the smoke input, first run
-QUICK with `--source tasktrove-nl2bash --output-root /tmp/curation-quick`. Then
-adopt that output and plan export plus training:
+The exporter does not install Harbor or validate every generated `task.toml`
+against Harbor's schema. The manifest records this limit. After extracting a
+`task.toml` from `task_binary`, check it with the pinned external Harbor runtime:
 
 ```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.rl_smoke --version 2026.10.09 \
-  --normalized-name data/rl/tasktrove-nl2bash --normalized-version 2026.10.09 \
-  --normalized-source /tmp/curation-quick/tasktrove-nl2bash \
-  --grader-image '<registry/image>@sha256:<digest>'
+uv run --project config/external/harbor --frozen python -c \
+  'from pathlib import Path; from harbor_config.models.task.config import TaskConfig; TaskConfig.model_validate_toml(Path("task.toml").read_text())'
 ```
 
-The default only prints the graph. `--run` executes it; the normalized input must
-be accessible to the coordinator. See [images/](images/README.md) for grader builds.
+[`harbor_export_step`](tasktrove/export.py) binds this export to a normalized
+artifact. It records a hash of verifier files and configuration in `manifest.json`.
+
+Artifact reuse follows explicit versions. Bump the source recipe version when
+conversion or bundled grader code changes, the affected pipeline stage revision
+for shared processing changes, and the export version for Harbor lowering or
+bundled verifier changes. Download identities still follow pinned source bytes.
+
+The nl2bash RL smoke is unsupported. Its export uses shared grading and Docker
+build recipes. The grader runs on the same machine as the agent.
+SkyRL Harbor tasks require prebuilt images and a separate verifier machine.
+
+The [TaskSession validation recipe](../task_sessions/validation.py) uses tasks
+that count `cat` words and two-turn math tasks. It does not exercise Harbor tasks.
 
 ### Full TaskTrove content comparison
 

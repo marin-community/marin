@@ -4,25 +4,38 @@
 import glob
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import uuid
+from pathlib import Path
+from unittest.mock import patch
 
 import equinox as eqx
 import fsspec
+import huggingface_hub
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import pytest
 import safetensors
 import transformers
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
+from iris.cluster.platforms.types import find_free_port
+from iris.cluster.types import Entrypoint
+from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV, MultiGpuHook
+from jax.experimental import multihost_utils
 from jax.random import PRNGKey
+from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
+from rigging.tunnel import terminate_process_group
 from transformers import GPT2Config as HfGpt2Config
 
+import levanter.compat.hf_export as hf_export
 import levanter.compat.hf_checkpoints as hf_checkpoints
 from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
@@ -32,6 +45,7 @@ from levanter.compat.hf_checkpoints import (
     _convert_to_jnp,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.helpers import use_test_mesh
 from levanter.utils.byte_budget import HostByteBudget
 
@@ -50,7 +64,18 @@ def test_conversion_to_jnp_bfloat16():
     assert_trees_all_close(x_jnp, jnp.arange(10, dtype=jnp.bfloat16) / 3.14)
 
 
-def test_save_sharded_checkpoints(local_gpt2_tokenizer_path):
+def test_save_sharded_checkpoints(local_gpt2_tokenizer_path, monkeypatch):
+    uploaded = {}
+
+    def upload_file(*, path_or_fileobj, path_in_repo, **kwargs):
+        uploaded[path_in_repo] = Path(path_or_fileobj).read_bytes()
+
+    def upload_folder(*, folder_path, **kwargs):
+        uploaded.update({path.name: path.read_bytes() for path in Path(folder_path).iterdir() if path.is_file()})
+
+    monkeypatch.setattr(hf_checkpoints, "repo_exists", lambda *args, **kwargs: True)
+    monkeypatch.setattr(huggingface_hub, "upload_file", upload_file)
+    monkeypatch.setattr(huggingface_hub, "upload_folder", upload_folder)
     nano_config = Gpt2Config(
         hidden_dim=64,
         num_heads=2,
@@ -64,11 +89,16 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path):
     mp = jmp.get_policy("f32")
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "unrelated.txt").write_text("Keep existing files out of HF uploads.")
         with use_test_mesh():
             nano_model = Gpt2LMHeadModel.init(converter.Vocab, nano_config, key=PRNGKey(3))
             nano_model = mp.cast_to_param(nano_model)
 
-            converter.save_pretrained(nano_model, tmpdir, max_shard_size=1024)
+            converter.save_pretrained(nano_model, tmpdir, max_shard_size=1024, upload_to_hf="test/export")
+
+        assert uploaded == {
+            path.name: path.read_bytes() for path in Path(tmpdir).iterdir() if path.name != "unrelated.txt"
+        }
 
         # make sure we saved a few different files
 
@@ -88,7 +118,8 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path):
         )
 
 
-def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch):
+def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     config = Gpt2Config(
         hidden_dim=32, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
@@ -110,6 +141,7 @@ def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokeniz
 
         def concurrent_put(self, *args, **kwargs):
             nonlocal upload_count
+            assert Path(args[0]).parent.parent == tmp_path
             with upload_lock:
                 upload_count += 1
                 this_upload = upload_count
@@ -138,7 +170,7 @@ def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokeniz
             if name.endswith(".safetensors")
         ]
         with monkeypatch.context() as patch:
-            patch.setattr(hf_checkpoints, "HostByteBudget", make_budget)
+            patch.setattr(hf_export, "HostByteBudget", make_budget)
             converter.save_pretrained(
                 model, budget_path, export_host_budget_bytes=1, max_concurrent_shards=4, **options
             )
@@ -146,6 +178,87 @@ def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokeniz
         budget_files = {os.path.basename(name): fs.cat(name) for name in fs.find(budget_path)}
         assert budget_files == serial_files
         assert budgets[0].peak_bytes == 2 * max(shard_payloads)
+        assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("scheme", ["", "file://"])
+def test_hf_export_preserves_scalar_and_singleton_shapes_without_scratch(tmp_path, monkeypatch, scheme):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "unavailable-scratch"))
+    destination = tmp_path / "export"
+    weights = {"scalar": jnp.asarray(0.5, dtype=jnp.bfloat16), "singleton": jnp.asarray([0.5], dtype=jnp.bfloat16)}
+    with use_test_mesh():
+        hf_export.save_hf_shards(
+            {SAFE_TENSORS_MODEL: weights},
+            lambda _keys: weights,
+            scheme + str(destination),
+            export_host_budget_bytes=8,
+            max_concurrent_shards=1,
+        )
+
+    with safetensors.safe_open(destination / SAFE_TENSORS_MODEL, framework="np") as shard:
+        for key, value in weights.items():
+            exported = shard.get_tensor(key)
+            assert exported.shape == value.shape
+            assert exported.dtype == value.dtype
+            assert exported.tobytes() == jax.device_get(value).tobytes()
+
+
+def _export_on_cpu_rank(coordinator, destination, expected):
+    jax.distributed.initialize(
+        coordinator_address=coordinator,
+        num_processes=2,
+        process_id=int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV]),
+        local_device_ids=[0],
+    )
+    mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)
+    with jax.set_mesh(mesh):
+        bank = jax.make_array_from_callback(
+            expected.shape, NamedSharding(mesh, P("expert", None, None)), lambda index: expected[index]
+        )
+        weights = {"bank": bank}
+        shards = {f"model-{i}.safetensors": weights for i in range(2)}
+        options = dict(
+            export_host_budget_bytes=1,
+            max_concurrent_shards=2,
+            tensor_names={"bank": tuple(f"expert.{i}" for i in range(4))},
+        )
+        with patch.object(hf_export, "save_file", side_effect=OSError("write interrupted")):
+            with pytest.raises((OSError, RuntimeError)):
+                hf_export.save_hf_shards(shards, lambda _keys: weights, destination, **options)
+        multihost_utils.sync_global_devices("after-failed-export")
+        hf_export.save_hf_shards(shards, lambda _keys: weights, destination, **options)
+    jax.distributed.shutdown()
+
+
+def test_hf_shard_writer_failure_keeps_two_cpu_ranks_matched(tmp_path):
+    expected = np.arange(24, dtype=np.float32).reshape(4, 3, 2)
+    entrypoint = Entrypoint.from_callable(
+        _export_on_cpu_rank, f"127.0.0.1:{find_free_port()}", str(tmp_path), expected
+    )
+    for name, contents in entrypoint.workdir_files.items():
+        (tmp_path / name).write_bytes(contents)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key.lower() not in ("http_proxy", "https_proxy", "all_proxy")
+    }
+    env.update(
+        JAX_PLATFORMS="cpu",
+        XLA_FLAGS="--xla_force_host_platform_device_count=1",
+        IRIS_PYTHON=sys.executable,
+        IRIS_WORKDIR=str(tmp_path),
+    )
+    command = MultiGpuHook(nproc=2).wrap(entrypoint.command)
+    with subprocess.Popen([sys.executable, *command[1:]], env=env, start_new_session=True) as process:
+        try:
+            assert process.wait(timeout=45) == 0
+        finally:
+            terminate_process_group(process)
+    for shard in range(2):
+        actual = safetensors.numpy.load_file(tmp_path / f"model-{shard}.safetensors")
+        assert set(actual) == {f"expert.{i}" for i in range(4)}
+        for i in range(4):
+            assert actual[f"expert.{i}"].tobytes() == expected[i].tobytes()
 
 
 # A simple wrapper to include diverse dtypes in a model

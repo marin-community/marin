@@ -7,6 +7,7 @@ import hashlib
 import json
 
 from taskcompendium.models import (
+    CommandSemantics,
     DockerBuildContext,
     EnvironmentRequirements,
     ResourceGroups,
@@ -43,7 +44,7 @@ def test_review_bounds_private_and_build_files_without_changing_the_task():
     assert isinstance(task, TaskSpec)
     large = inline_resource("large", b"x" * 100_000)
     build = DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest\n"), large))
-    environment = EnvironmentRequirements(docker_build=build)
+    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=build)
     task = task.model_copy(
         update={
             "environment_requirements": environment,

@@ -345,7 +345,7 @@ jobs:
       # TaskCompendium supplies the locked Shellbox base package. Backend extras
       # remain optional; tests skip the SDK-dependent adapters when absent.
       - name: Test Shellbox
-        run: uv run --package taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
+        run: uv run --package marin-taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
 
   taskcompendium:
     name: taskcompendium-unit
@@ -361,7 +361,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - name: Test TaskCompendium
-        run: uv run --package taskcompendium --frozen --extra pipeline --group test pytest lib/taskcompendium/tests -q
+        run: uv run --package marin-taskcompendium --frozen --extra pipeline --group test pytest lib/taskcompendium/tests -q
 
       - name: Type-check TaskCompendium
         working-directory: lib/taskcompendium
@@ -379,10 +379,10 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-          cache-dependency-glob: "lib/rolloutengine/uv.lock"
+          cache-dependency-glob: "uv.lock"
       - name: Test rollout execution and private grading
         run: >-
-          uv run --project lib/rolloutengine --frozen --group test pytest
+          uv run --package marin-rolloutengine --frozen --group test pytest
           -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
           lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py -q
 
@@ -394,7 +394,7 @@ jobs:
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
-          uv run --project lib/rolloutengine --frozen --group test pytest \
+          uv run --package marin-rolloutengine --frozen --group test pytest \
             -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py \
             lib/shellbox/tests/test_daytona_machine.py \
             lib/rolloutengine/tests/test_rollout.py -m docker -q
