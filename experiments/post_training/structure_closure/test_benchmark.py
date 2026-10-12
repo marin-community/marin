@@ -13,6 +13,19 @@ def test_reference_continuations_cover_each_family_and_preserve_content():
         assert not score_case(case, "").success
 
 
+def test_close_probes_supply_content_only_in_the_prefix_while_continue_controls_supply_a_reference():
+    cases = task_cases("example_1234", [{"search": {"query": "unique payload"}}], "validation", "source")
+    for case in cases:
+        if case.control == "close_required":
+            assert "example_1234" not in case.instruction
+            assert case.expected not in case.instruction
+            suffix = syntax_state(case.prefix, case.family).closing_suffix
+            assert suffix is not None
+            assert score_case(case, suffix).success
+        else:
+            assert case.expected in case.instruction
+
+
 def test_premature_closure_cannot_pass_continue_controls():
     cases = task_cases("example_1234", [], "validation", "source")
     tested = set()
