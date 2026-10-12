@@ -1,0 +1,39 @@
+{
+  "scope": "Completed qualifier runtime retention only; scientific main endpoints remain separate.",
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-runtime-qual-sc-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 3128,
+      "bytes": 487441636,
+      "manifest_sha256": "36f209cb5e10a307cbb2bb5d772d87c845ad3290c1e83444fe6dec9410b0b9e9",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 3128,
+      "bytes": 487456891,
+      "manifest_sha256": "5fcfe4b95b12738b3a8f7756c70bb46ab98c72e7e79ecc7b102b28326cd68dd6",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-tis-s0-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-snowball-runtime-qual-sc-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 7920,
+      "bytes": 3668677221,
+      "manifest_sha256": "ef3e1bfbe374db8be3782984f696ec52f39fdcf96bbdfde7072f6169bd6e846d",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-runtime-qual-sc-s0-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-snowball-incumbent-runtime-qual-s0-a1-01a126ce",
+      "source": "617023fc729e4a6b9151ab5d4c59e96fbb18a445",
+      "objects": 8174,
+      "bytes": 809179604,
+      "manifest_sha256": "41e6a7ce4d04bb6c8eff5230c4b717edd857762c0e05ab22a536894daf7c393d",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-runtime-qual-s0-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    }
+  ],
+  "total_objects": 22350,
+  "total_bytes": 5452755352
+}
