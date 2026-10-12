@@ -24,6 +24,7 @@ from enum import StrEnum
 from typing import Any
 
 import click
+import fsspec
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -509,6 +510,14 @@ def build_h100_ladder_run(
         disk=disk,
         replicas=1 if seed_xla_autotune_cache else rung.nodes,
     )
+    autotune_cache_path = _xla_autotune_cache_path(model, rung) if rung.device == "GB200" else None
+    if autotune_cache_path is not None and not seed_xla_autotune_cache and not _path_exists(autotune_cache_path):
+        # Without a cache every rank autotunes and exchanges results, and that multi-process compile hangs ~7 times
+        # in 8 on GB200. A one-GPU seed builds it in ~2 minutes.
+        raise ValueError(
+            f"No XLA autotune cache for this GB200 program ({autotune_cache_path}). Seed it first: rerun this "
+            "command with --seed-xla-autotune-cache."
+        )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     eval_tag = tokenizer.rsplit("/", 1)[-1]
@@ -586,7 +595,7 @@ def build_h100_ladder_run(
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 token_dump_path=(prefix_join(ctx.output_path, "token_dump.npz") if token_dump else None),
                 token_dump_skip_layers=token_dump_skip_layers,
-                xla_autotune_cache_path=_xla_autotune_cache_path(model, rung) if rung.device == "GB200" else None,
+                xla_autotune_cache_path=autotune_cache_path,
                 xla_autotune_seed_topology=(f"1x{rung.global_device_count}x1" if seed_xla_autotune_cache else None),
                 layer_skip=layer_skip,
                 extra_mlp_start_frac=extra_mlp_start_frac,
@@ -684,6 +693,10 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 
 
 XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
+
+
+def _path_exists(path: str) -> bool:
+    return fsspec.core.url_to_fs(path)[0].exists(path)
 
 
 def _xla_autotune_cache_path(model: GrugModelConfig, rung: H100LadderRung) -> str:
