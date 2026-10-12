@@ -7,12 +7,20 @@ import argparse
 import json
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from marin.execution.lazy import run
 
 from experiments.ports.release import ReleaseConfig, ports_release
+
+
+@dataclass
+class ReleaseFixture:
+    config: ReleaseConfig
+    events: Path
+    fail_checks: bool = False
 
 
 @pytest.fixture
@@ -51,7 +59,7 @@ def release_environment(tmp_path, monkeypatch):
     )
     original_run = subprocess.run
     events = tmp_path / "events.jsonl"
-    fail_checks = []
+    fixture = ReleaseFixture(config, events)
 
     def fake_run(arguments, **kwargs):
         if arguments[1:3] != ["-m", "ports"]:
@@ -90,7 +98,7 @@ def release_environment(tmp_path, monkeypatch):
             source.parent.mkdir(parents=True)
             source.write_bytes(b"guest clang")
         elif args.operation == "check":
-            if fail_checks:
+            if fixture.fail_checks:
                 raise subprocess.CalledProcessError(1, arguments)
             assert json.loads((state / "results.json").read_text())["roots"] == ["toolchain/llvm:guest"]
         else:
@@ -106,11 +114,11 @@ def release_environment(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(arguments, 0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    return config, events, fail_checks
+    return fixture
 
 
 def test_release_publishes_checked_snapshot_and_reuses_cached_output(release_environment):
-    config, events, _ = release_environment
+    config, events = release_environment.config, release_environment.events
     handle = ports_release(config)
     run(handle)
     publication = Path(config.publication_prefix)
@@ -127,11 +135,11 @@ def test_release_publishes_checked_snapshot_and_reuses_cached_output(release_env
 
 
 def test_release_failed_guest_checks_preserve_published_catalog(release_environment):
-    config, events, fail_checks = release_environment
+    config, events = release_environment.config, release_environment.events
     publication = Path(config.publication_prefix)
     publication.mkdir()
     (publication / "catalog.json").write_bytes(b"existing catalog")
-    fail_checks.append(True)
+    release_environment.fail_checks = True
     with pytest.raises(RuntimeError):
         run(ports_release(config))
     assert (publication / "catalog.json").read_bytes() == b"existing catalog"

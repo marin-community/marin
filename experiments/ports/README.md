@@ -11,7 +11,8 @@ The worker image is pinned to the Buildomatic 0.1.35 image; update the runtime a
 image together when native compiler identity changes. The default prints a plan:
 
 ```sh
-uv run python -m experiments.ports.release --source-revision <full-sha> --version 2026.10.12
+MARIN_PREFIX=s3://marin-us-east-02a/marin \
+  uv run python -m experiments.ports.release --source-revision <full-sha> --version 2026.10.12
 ```
 
 Add `--run` to execute. Worker count, CPUs, RAM, disk, and persistent driver work

@@ -12,11 +12,14 @@ import subprocess
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
+from urllib.parse import urljoin
 
 import click
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.log_setup import configure_logging
 
 CACHE_PREFIX = "s3://marin-us-east-02a/marin/shellsim/buildomatic/v2"
 PUBLICATION_PREFIX = "s3://marin-us-east-02a/marin/shellsim/ports"
@@ -154,7 +157,7 @@ def publish_ports(config: StageConfig) -> None:
         "--url-prefix",
         config.release.asset_url_prefix,
         "--output",
-        f"{config.release.publication_prefix}/releases/{config.release.version}",
+        str(StoragePath(config.release.publication_prefix) / "releases" / config.release.version),
         "--simple",
     )
 
@@ -212,10 +215,12 @@ def ports_release(config: ReleaseConfig) -> ArtifactStep[Artifact]:
 @click.option("--version", required=True, help="Immutable release version; bump when source or runtime changes.")
 @click.option("--url-prefix", default=ASSET_URL_PREFIX, show_default=True)
 @click.option("--work-directory", default="build/ports-release", show_default=True)
-@click.option("--max-workers", default=8, type=click.IntRange(1, 32), show_default=True)
-@click.option("--worker-cpus", default=64, type=click.IntRange(min=1), show_default=True)
-@click.option("--worker-memory-gb", default=32, type=click.IntRange(min=1), show_default=True)
-@click.option("--worker-disk-gb", default=100, type=click.IntRange(min=1), show_default=True)
+@click.option("--max-workers", default=ReleaseConfig.max_workers, type=click.IntRange(1, 32), show_default=True)
+@click.option("--worker-cpus", default=ReleaseConfig.worker_cpus, type=click.IntRange(min=1), show_default=True)
+@click.option(
+    "--worker-memory-gb", default=ReleaseConfig.worker_memory_gb, type=click.IntRange(min=1), show_default=True
+)
+@click.option("--worker-disk-gb", default=ReleaseConfig.worker_disk_gb, type=click.IntRange(min=1), show_default=True)
 @click.option("--run", "do_run", is_flag=True, help="Execute the graph; default prints a plan without submitting jobs.")
 def main(
     source_revision: str,
@@ -228,6 +233,7 @@ def main(
     worker_disk_gb: int,
     do_run: bool,
 ) -> None:
+    configure_logging()
     handle = ports_release(
         ReleaseConfig(
             source_revision,
@@ -241,9 +247,11 @@ def main(
         )
     )
     if do_run:
+        configure_coreweave_s3()
         run(handle)
-        click.echo(f"Catalog: {PUBLICATION_PREFIX}/catalog.json")
-        click.echo(f"Snapshot: {PUBLICATION_PREFIX}/releases/{version}/catalog.json")
+        base = url_prefix.rstrip("/") + "/"
+        click.echo(f"Catalog: {urljoin(base, 'catalog.json')}")
+        click.echo(f"Snapshot: {urljoin(base, f'releases/{version}/catalog.json')}")
     else:
         click.echo(lower(handle))
 
