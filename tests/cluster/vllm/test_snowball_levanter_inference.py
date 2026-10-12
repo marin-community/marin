@@ -297,7 +297,8 @@ def test_snowball_tpu_checkpoint_matches_levanter_inference_goldens(
                 "v6e-8",
                 cpu=64,
                 ram="256g",
-                disk="100g",
+                # Checkpoint arrays stream from GCS; fit the available boot disk.
+                disk="64g",
                 regions=("us-east5",),
             ),
             environment=create_environment(

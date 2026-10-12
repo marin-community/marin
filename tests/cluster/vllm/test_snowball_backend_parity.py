@@ -101,7 +101,8 @@ def _tpu_vllm_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
             "v6e-8",
             cpu=160,
             ram="640g",
-            disk="100g",
+            # Weights stream from GCS; fit the workers' available boot disk.
+            disk="64g",
             regions=("us-east5",),
         ),
         environment=create_environment(extras=["tpu"], sync_packages=["marin-core"]),
