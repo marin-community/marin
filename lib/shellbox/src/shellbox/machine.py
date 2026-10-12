@@ -87,7 +87,10 @@ class DockerImage:
 
 @dataclass(frozen=True)
 class ShellSimBuiltins:
-    """ShellSim's built-in commands and virtual filesystem, without an OCI image."""
+    """Built-ins plus explicitly selected portable catalog software."""
+
+    pypi_packages: tuple[str, ...] | None = None
+    tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

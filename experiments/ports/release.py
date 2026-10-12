@@ -1,0 +1,252 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Publish checked guest ports with shared immutable assets and versioned catalogs.
+
+Marin caches stage records; Buildomatic owns recipe scheduling and BATCH worker
+placement. A source checkout is needed only while an uncached stage executes.
+"""
+
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+import click
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, StepContext, lower, run
+from rigging.filesystem.storage_path import StoragePath
+
+CACHE_PREFIX = "s3://marin-us-east-02a/marin/shellsim/buildomatic/v2"
+PUBLICATION_PREFIX = "s3://marin-us-east-02a/marin/shellsim/ports"
+ASSET_URL_PREFIX = "https://ports.oa.dev"
+SOURCE_REPOSITORY = "https://github.com/rjpower/shellsim.git"
+WORKER_IMAGE = (
+    "ghcr.io/marin-community/iris-task@sha256:47f018672e5c868ac4fcec30901a522197a52c33ccecbec31d70d18d535322cc"
+)
+STATE_FILES = ("graph.json", "results.json")
+
+
+@dataclass(frozen=True)
+class ReleaseConfig:
+    """Pinned source and image, with driver storage and worker resources explicit."""
+
+    source_revision: str
+    version: str
+    work_directory: str
+    cache_prefix: str = CACHE_PREFIX
+    publication_prefix: str = PUBLICATION_PREFIX
+    asset_url_prefix: str = ASSET_URL_PREFIX
+    source_repository: str = SOURCE_REPOSITORY
+    worker_image: str = WORKER_IMAGE
+    max_workers: int = 8
+    worker_cpus: int = 64
+    worker_memory_gb: int = 32
+    worker_disk_gb: int = 100
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[0-9a-f]{40}", self.source_revision):
+            raise ValueError("source_revision must be a full Git commit SHA")
+
+
+@dataclass(frozen=True)
+class StageConfig:
+    release: ReleaseConfig
+    output_path: str
+    input_path: str | None = None
+
+
+def _checkout(release: ReleaseConfig) -> Path:
+    """Reuse a pinned checkout without installing or building the source SDK."""
+    root = Path(release.work_directory).resolve() / "source" / release.source_revision
+    root.mkdir(parents=True, exist_ok=True)
+    if not (root / ".git").is_dir():
+        subprocess.run(["git", "init", str(root)], check=True)
+    current = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"], capture_output=True, text=True)
+    if current.returncode == 0 and current.stdout.strip() == release.source_revision:
+        return root
+    subprocess.run(
+        ["git", "-C", str(root), "fetch", "--depth=1", release.source_repository, release.source_revision], check=True
+    )
+    subprocess.run(["git", "-C", str(root), "checkout", "--detach", release.source_revision], check=True)
+    return root
+
+
+def _state(config: StageConfig, stage: str) -> Path:
+    state = Path(config.release.work_directory).resolve() / "state" / config.release.version / stage
+    state.mkdir(parents=True, exist_ok=True)
+    if config.input_path is not None:
+        for name in STATE_FILES:
+            (StoragePath(config.input_path) / name).download_to(str(state / name))
+    return state
+
+
+def _save_state(state: Path, output_path: str) -> None:
+    StoragePath(output_path).mkdirs(exist_ok=True)
+    for name in STATE_FILES:
+        (StoragePath(output_path) / name).upload_from(str(state / name))
+
+
+def _ports(config: StageConfig, state: Path, operation: str, *arguments: str) -> None:
+    release = config.release
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "ports",
+            operation,
+            "--state",
+            str(state),
+            "--store",
+            release.cache_prefix,
+            "--backend",
+            "iris",
+            "--iris-image",
+            release.worker_image,
+            "--max-workers",
+            str(release.max_workers),
+            "--worker-cpus",
+            str(release.worker_cpus),
+            "--worker-memory-gb",
+            str(release.worker_memory_gb),
+            "--worker-disk-gb",
+            str(release.worker_disk_gb),
+            *arguments,
+        ],
+        cwd=_checkout(release),
+        check=True,
+    )
+
+
+def build_ports(config: StageConfig) -> None:
+    """Build every guest recipe with BATCH workers and the existing sccache store."""
+    state = _state(config, "build")
+    _ports(config, state, "build", "--all")
+    _save_state(state, config.output_path)
+
+
+def check_ports(config: StageConfig) -> None:
+    """Run the recipe graph's guest checks before any catalog becomes public."""
+    state = _state(config, "check")
+    _ports(config, state, "check")
+    _save_state(state, config.output_path)
+
+
+def publish_ports(config: StageConfig) -> None:
+    """Promote checked assets before publishing catalogs that reference them."""
+    state = _state(config, "export")
+    _ports(
+        config,
+        state,
+        "export",
+        "--url-prefix",
+        config.release.asset_url_prefix,
+        "--output",
+        config.release.publication_prefix,
+        "--copy-assets",
+        "--simple",
+    )
+    _ports(
+        config,
+        state,
+        "export",
+        "--url-prefix",
+        config.release.asset_url_prefix,
+        "--output",
+        f"{config.release.publication_prefix}/releases/{config.release.version}",
+        "--simple",
+    )
+
+
+def _release_config(config: ReleaseConfig, ctx: StepContext) -> ReleaseConfig:
+    return replace(
+        config,
+        work_directory=ctx.runtime_arg("work_directory"),
+        max_workers=ctx.runtime_arg("max_workers"),
+        worker_cpus=ctx.runtime_arg("worker_cpus"),
+        worker_memory_gb=ctx.runtime_arg("worker_memory_gb"),
+        worker_disk_gb=ctx.runtime_arg("worker_disk_gb"),
+    )
+
+
+def ports_release(config: ReleaseConfig) -> ArtifactStep[Artifact]:
+    """Declare build, check, and publication dependencies without executing."""
+    runtime = {
+        "work_directory": config.work_directory,
+        "max_workers": config.max_workers,
+        "worker_cpus": config.worker_cpus,
+        "worker_memory_gb": config.worker_memory_gb,
+        "worker_disk_gb": config.worker_disk_gb,
+    }
+    build = ArtifactStep(
+        name="shellsim/buildomatic/build",
+        version=config.version,
+        artifact_type=Artifact,
+        run=build_ports,
+        build_config=lambda ctx: StageConfig(_release_config(config, ctx), ctx.output_path),
+        runtime_args=runtime,
+    )
+    checked = ArtifactStep(
+        name="shellsim/buildomatic/checked",
+        version=config.version,
+        artifact_type=Artifact,
+        run=check_ports,
+        build_config=lambda ctx: StageConfig(_release_config(config, ctx), ctx.output_path, ctx.artifact_path(build)),
+        runtime_args=runtime,
+        deps=(build,),
+    )
+    return ArtifactStep(
+        name="shellsim/buildomatic/published",
+        version=config.version,
+        artifact_type=Artifact,
+        run=publish_ports,
+        build_config=lambda ctx: StageConfig(_release_config(config, ctx), ctx.output_path, ctx.artifact_path(checked)),
+        runtime_args=runtime,
+        deps=(checked,),
+    )
+
+
+@click.command()
+@click.option("--source-revision", required=True, help="Full Shellsim source commit SHA, including ports recipes.")
+@click.option("--version", required=True, help="Immutable release version; bump when source or runtime changes.")
+@click.option("--url-prefix", default=ASSET_URL_PREFIX, show_default=True)
+@click.option("--work-directory", default="build/ports-release", show_default=True)
+@click.option("--max-workers", default=8, type=click.IntRange(1, 32), show_default=True)
+@click.option("--worker-cpus", default=64, type=click.IntRange(min=1), show_default=True)
+@click.option("--worker-memory-gb", default=32, type=click.IntRange(min=1), show_default=True)
+@click.option("--worker-disk-gb", default=100, type=click.IntRange(min=1), show_default=True)
+@click.option("--run", "do_run", is_flag=True, help="Execute the graph; default prints a plan without submitting jobs.")
+def main(
+    source_revision: str,
+    version: str,
+    work_directory: str,
+    url_prefix: str,
+    max_workers: int,
+    worker_cpus: int,
+    worker_memory_gb: int,
+    worker_disk_gb: int,
+    do_run: bool,
+) -> None:
+    handle = ports_release(
+        ReleaseConfig(
+            source_revision,
+            version,
+            work_directory,
+            asset_url_prefix=url_prefix,
+            max_workers=max_workers,
+            worker_cpus=worker_cpus,
+            worker_memory_gb=worker_memory_gb,
+            worker_disk_gb=worker_disk_gb,
+        )
+    )
+    if do_run:
+        run(handle)
+        click.echo(f"Catalog: {PUBLICATION_PREFIX}/catalog.json")
+        click.echo(f"Snapshot: {PUBLICATION_PREFIX}/releases/{version}/catalog.json")
+    else:
+        click.echo(lower(handle))
+
+
+if __name__ == "__main__":
+    main()

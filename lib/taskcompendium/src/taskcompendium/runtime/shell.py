@@ -242,7 +242,7 @@ class ShellFactory:
         validate_output_paths(task.output_paths)
         requirements = task.environment_requirements
         if (
-            set(requirements.capabilities) - {"shell", "filesystem"}
+            set(requirements.capabilities) - {"shell", "filesystem", "python"}
             or requirements.tool_providers
             or any(tool is None or definition.name != tool.definition.name for definition in task.interaction_tools)
         ):

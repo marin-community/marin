@@ -21,6 +21,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     GradingAttempt,
     PlainText,
+    PortableSoftware,
     ResourceGroups,
     ScriptGrader,
     Source,
@@ -59,6 +60,12 @@ def specification():
     [
         {"environment_requirements": EnvironmentRequirements(capabilities=("browser",))},
         {"environment_requirements": EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR)},
+        {
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.SHELL_SIMULATOR,
+                portable_software=PortableSoftware(pypi_packages=("numpy",), tools=("clang",)),
+            )
+        },
         {
             "environment_requirements": EnvironmentRequirements(
                 command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="org/image@sha256:" + "a" * 64
