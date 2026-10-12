@@ -45,6 +45,7 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
+from marin.inference.model_preparation import precache_inference_model
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ _ORCHESTRATOR_ROLE = "orchestrator"
 _JUDGE_ROLE = "judge"
 _ORCHESTRATOR_CPU = 4.0
 _ORCHESTRATOR_MEMORY = "16g"
-_ORCHESTRATOR_DISK = "16g"
+_ORCHESTRATOR_DISK = "80g"
 _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
 _HOSTED_JUDGE_STARTUP_ATTEMPTS = 3
@@ -610,6 +611,25 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
         api_model=batch.api_model,
         priority=batch.priority_band,
     )
+    warmup_configs = [inference]
+    if batch.judge is not None:
+        warmup_configs.append(
+            inference_config_for_model(
+                batch.judge.model,
+                batch.judge.accelerator,
+                env_vars=runtime_env,
+                capability_origin=batch.capability_origin,
+                api_model=batch.judge.api_model,
+                priority=batch.priority_band,
+            )
+        )
+    try:
+        for config in warmup_configs:
+            logger.info("Pre-caching %s before inference startup", config.model.model_id)
+            precache_inference_model(config)
+    except Exception as exc:
+        _record_unstarted(batch, batch.evaluations, exc, {_ORCHESTRATOR_ROLE: orchestrator_job_id}, {}, [])
+        raise
     try:
         with remote_inference(inference) as session:
             return _evaluate_with_hosted_judge(

@@ -282,6 +282,7 @@ def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
         ),
     )
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
+    monkeypatch.setattr("marin.evaluation.runner.precache_inference_model", lambda _config: None)
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
         lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
@@ -362,6 +363,52 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     assert record.judge is not None
     assert record.judge.model.name == "judge"
     assert record.judge.hardware.accelerator == "H100x1"
+
+
+def test_model_and_judge_weights_are_ready_before_gpu_startup(tmp_path, monkeypatch):
+    def remote(config):
+        assert (tmp_path / "candidate.weights").read_bytes() == b"candidate"
+        assert (tmp_path / "judge.weights").read_bytes() == b"judge"
+        return nullcontext(_remote_session(f"https://{config.model.model_id}.example/v1"))
+
+    def populate(config):
+        model = config.model.model_id
+        (tmp_path / f"{model}.weights").write_bytes(model.encode())
+
+    _patch_inference_runtime(monkeypatch, remote)
+    monkeypatch.setattr("marin.evaluation.runner.precache_inference_model", populate)
+    evaluation = _evaluation(tmp_path, "one", _successful_evaluation)
+    batch = _hosted_judge_batch(tmp_path, (evaluation,))
+
+    run_evaluation_batch(batch)
+
+    record = read_record(str(tmp_path / "records" / "run-one" / "record.json"))
+    assert record.status is RunStatus.SUCCEEDED
+
+
+def test_model_cache_failure_records_unstarted_evals_as_infrastructure(tmp_path, monkeypatch):
+    def remote(_config):
+        raise AssertionError("GPU startup cannot precede a completed cache")
+
+    def interrupted_cache(_config):
+        raise OSError("mirror upload interrupted")
+
+    _patch_inference_runtime(monkeypatch, remote)
+    monkeypatch.setattr("marin.evaluation.runner.precache_inference_model", interrupted_cache)
+    evaluations = (
+        _evaluation(tmp_path, "one", _successful_evaluation),
+        _evaluation(tmp_path, "two", _successful_evaluation),
+    )
+    batch = _hosted_judge_batch(tmp_path, evaluations)
+
+    with pytest.raises(OSError, match="mirror upload interrupted"):
+        run_evaluation_batch(batch)
+
+    for evaluation in evaluations:
+        record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
+        assert record.status is RunStatus.INFRA_FAILED
+        assert record.metrics == {}
+        assert record.jobs == {"orchestrator": "/orchestrator"}
 
 
 def test_run_evaluation_batch_does_not_bind_execution_to_direct_endpoint(tmp_path, monkeypatch):

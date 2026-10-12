@@ -213,7 +213,7 @@ def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig 
 
 
 def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedModelConfig, int]:
-    # Keep model-cache and Transformers imports inside accelerator workers.
+    # Resolve serving geometry inside accelerator workers.
     from marin.inference.model_preparation import (  # noqa: PLC0415
         read_attention_heads,
         resolve_model_path,
