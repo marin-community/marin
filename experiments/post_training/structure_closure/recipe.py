@@ -67,7 +67,7 @@ def training_config(*, max_steps: int, eval_batch_size: int, learning_rate: floa
             "evaluation_runner": "harbor",
             "eval_interval": 1,
             "ckpt_interval": 1,
-            "hf_save_interval": -1,
+            "hf_save_interval": max_steps,
             "max_ckpts_to_keep": 2,
             "resume_mode": "none",
             "logger": "wandb",
