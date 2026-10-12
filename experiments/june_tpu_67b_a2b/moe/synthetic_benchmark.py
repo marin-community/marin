@@ -43,6 +43,7 @@ from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.jax_utils import multihost_broadcast_sync
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
@@ -207,7 +208,9 @@ def main() -> None:
         # jnp.roll in the next-token loss slices the (1, seq_len) token grid to (1, 1), and under an explicit mesh JAX
         # drops the sharding of that slice, then rejects concatenating it with the (1, seq_len - 1) remainder.
         raise ValueError("a global batch of 1 fails in the loss under explicit mesh axes; pass --batch-size 2 or more")
-    run_id = args.run_id or f"june-{args.size}-{time.strftime('%Y%m%d-%H%M%S')}"
+    # Every process takes rank 0's id: each one's clock can give a different timestamp, which would split the run's
+    # logs and profiles across several ids.
+    run_id = multihost_broadcast_sync(args.run_id or f"june-{args.size}-{time.strftime('%Y%m%d-%H%M%S')}")
 
     trainer = TrainerConfig(
         id=run_id,
