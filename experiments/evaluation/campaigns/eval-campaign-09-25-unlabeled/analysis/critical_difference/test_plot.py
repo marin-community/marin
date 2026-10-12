@@ -68,3 +68,32 @@ def test_cruxeval_counts_only_output_tasks(monkeypatch) -> None:
     assert selector == "metrics:pass_rate:None"
     assert count == 2
     assert basis == "cruxeval_output_sample_rewards"
+
+
+def test_tblite_fractional_rewards_use_observed_variance(monkeypatch) -> None:
+    plot = load_plot()
+
+    class SampleTable:
+        def to_pylist(self, **_kwargs):
+            return [{"metrics": {"reward": value}, "filter": None} for value in (0.0, 0.5, 1.0)]
+
+    class SampleView:
+        def __init__(self, _url):
+            pass
+
+        def scan(self, _table, **_kwargs):
+            return SampleTable()
+
+    class Filesystem:
+        def exists(self, _path):
+            return True
+
+    monkeypatch.setattr(plot, "ReadView", SampleView)
+    monkeypatch.setattr(plot, "filesystem_for", lambda url: (Filesystem(), url))
+    monkeypatch.setattr(plot, "read_json", lambda _: {"status": "succeeded", "coverage": {"tblite": {"n_scored": 3}}})
+    cell = plot.Cell("model", "ot-tblite-recovery", 0.5, "s3://bucket/results")
+    result = plot.cell_statistics(cell, {})
+    assert result["trial_count"] == 3
+    assert result["raw_reward_mean"] == 0.5
+    assert math.isclose(result["sem"], 1 / math.sqrt(12), abs_tol=1e-12)
+    assert math.isclose(result["adjusted_sem"], 1 / math.sqrt(12 * 0.9), abs_tol=1e-12)

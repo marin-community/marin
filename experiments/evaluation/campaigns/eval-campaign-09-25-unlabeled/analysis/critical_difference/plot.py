@@ -34,10 +34,10 @@ SURVIVAL = 0.9
 DRAWS = 100_000
 SEED = 20260924
 SCORE = re.compile(r"^([01](?:\.\d+)?)\s+\((s3://[^)]+)\)$")
-CONTINUOUS = frozenset({"truthfulqa", "mrcr", "SOTOPIA-hard", "cruxeval"})
+CONTINUOUS = frozenset({"truthfulqa", "mrcr", "SOTOPIA-hard", "cruxeval", "ot-tblite-recovery"})
 SNOWBALL_FLOPS = 1.2440924703713099e23
 SHARED100_MODEL = "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09"
-STATISTICS_VERSION = "recovered-metrics-v4"
+STATISTICS_VERSION = "recovered-metrics-v5"
 
 
 @dataclass(frozen=True)
