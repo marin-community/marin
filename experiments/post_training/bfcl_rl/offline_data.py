@@ -406,7 +406,7 @@ def build_verified_sft_store(
     num_shards: int,
     max_workers: int,
 ) -> SftTokenStore:
-    """Write normalized, deduplicated student traces with assistant-only loss masks.
+    """Write normalized, deduplicated traces with assistant-only loss masks.
 
     The selection manifest retains every accepted trace's run, seed, model,
     harness, task digest and raw evidence locations across content deduplication.
