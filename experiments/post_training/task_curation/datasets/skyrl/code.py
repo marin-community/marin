@@ -123,9 +123,17 @@ def convert_apps(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRe
         tests = json.loads(encoded)
     except json.JSONDecodeError:
         return source_defect("invalid_test_contract", "input_output is not valid JSON")
+    except ValueError:
+        return unsupported(
+            "unsupported_test_contract", "input_output contains an integer beyond Python's JSON parser digit limit"
+        )
     inputs, outputs = (tests.get("inputs"), tests.get("outputs")) if isinstance(tests, dict) else (None, None)
     if not isinstance(inputs, list) or not inputs or not isinstance(outputs, list) or len(inputs) != len(outputs):
         return source_defect("invalid_test_contract", "Paired nonempty inputs and outputs are required")
+    try:
+        json.dumps(tests, allow_nan=False)
+    except ValueError:
+        return source_defect("nonfinite_test_contract", "input_output contains a non-finite number")
     # APPS leaves ``solutions`` empty when it has none; anything else must be a JSON list.
     try:
         solutions = json.loads(row.data.get("solutions") or "[]")
@@ -311,7 +319,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", ("train.jsonl",), SourceFormat.JSONL
                 ),
                 convert=convert_apps,
-                version="2",
+                version="4",
                 intended_use=IntendedUse.TRAIN,
                 rubric=APPS_RUBRIC,
                 controls=CONTROLS,
