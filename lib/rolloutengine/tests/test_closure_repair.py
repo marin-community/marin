@@ -256,7 +256,9 @@ def test_rewrite_of_stable_text_still_rejects_supervision():
         )
 
 
-@pytest.mark.parametrize("response", ["```", "```\nextra", "```<tool_call>"])
+@pytest.mark.parametrize(
+    "response", ["```", "```\nextra", "```<tool_call>", "```<tool_call>\n```", "```<tool_call>\n```\nextra"]
+)
 def test_fence_closing_line_must_stay_valid_when_generation_continues(response):
     prefix = "```json\n{}\n"
     target = verified_closure_target(

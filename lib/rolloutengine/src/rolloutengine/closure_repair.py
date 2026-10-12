@@ -69,6 +69,11 @@ def verified_closure_target(
     prompt_text = decode(prompt)
     if not prompt_text.endswith(structure_prefix):
         raise ValueError("Structure prefix does not match the exact prompt tokens")
+    generated_text = decode(prompt + response)
+    if not generated_text.startswith(prompt_text):
+        raise ValueError("Decoded response rewrites its conditioning prefix")
+    if inspect(structure_prefix + generated_text[len(prompt_text) :]).completion_offset is not None:
+        return None
     previous_text = prompt_text
     structure = structure_prefix
     state = inspect(structure)
