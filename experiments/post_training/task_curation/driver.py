@@ -191,7 +191,14 @@ def main(
             }
             click.echo(json.dumps(plan, indent=2))
             return
-        run_local_steps(steps, output_root, runtime=runtime, max_workers=max_workers, download_cache=download_cache)
+        run_local_steps(
+            steps,
+            output_root,
+            runtime=runtime,
+            max_workers=max_workers,
+            download_cache=download_cache,
+            source_ids={name: source.info.id for name, source in selected.items()},
+        )
         return
     if input_root is not None or local_files or auxiliary or output_root is not None or download_cache is not None:
         raise click.UsageError("Local input, output, and download-cache options require --mode quick")
@@ -234,7 +241,14 @@ def main(
     if not do_run:
         click.echo(json.dumps(campaign_plan(steps, pool), indent=2))
         return
-    run_campaign(steps, runtime=runtime, pool=pool, report_path=report_path, mode=processing_mode)
+    run_campaign(
+        steps,
+        runtime=runtime,
+        pool=pool,
+        report_path=report_path,
+        mode=processing_mode,
+        source_ids={step.name: source.info.id for step, source in zip(steps, selected.values(), strict=True)},
+    )
 
 
 if __name__ == "__main__":

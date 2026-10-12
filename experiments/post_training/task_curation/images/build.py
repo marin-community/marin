@@ -49,6 +49,7 @@ PLATFORM = "linux/amd64"
 PYTHON_VERSION = "3.12"
 PYTHON_PLATFORM = "x86_64-unknown-linux-gnu"
 ENVIRONMENT_ARTIFACT_VERSION = "2026.10.08"
+IMAGE_COMPRESSION = "gzip"
 BUILD_COMMAND = "uv run python -m experiments.post_training.task_curation.images --identity {identity}"
 
 
@@ -84,7 +85,7 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
     """Everything that determines what building ``environment`` produces."""
     if environment.image is not None:
         raise ValueError(f"An image environment is used as-is, not built: {environment.image}")
-    return {
+    identity = {
         "pypi": sorted(environment.pypi),
         "lock_sha256": hashlib.sha256(environment.lock.read_bytes()).hexdigest() if environment.lock else None,
         "apt": sorted(environment.apt),
@@ -95,6 +96,9 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
         "runtime": runtime_files(),
         "placement": placement(environment).value,
     }
+    if placement(environment) == Placement.BUILT_IMAGE:
+        identity["image_compression"] = IMAGE_COMPRESSION
+    return identity
 
 
 def identity_digest(environment: Environment) -> str:
@@ -250,7 +254,9 @@ def _push_image(context: Path, tag: str) -> str:
             "build",
             f"--platform={PLATFORM}",
             "--provenance=false",
-            "--push",
+            # Export inherited layers with the selected compression too, so OCI
+            # consumers can convert the image to Docker's schema2 format.
+            f"--output=type=registry,compression={IMAGE_COMPRESSION},force-compression=true",
             f"--tag={tag}",
             *package_contexts,
             str(context),

@@ -17,18 +17,23 @@ affected versions when they change.
 import hashlib
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Any
 
+import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.nemotron_ultra import PLACEHOLDER_FIELD, blend_component
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, IntendedUse
+from taskcompendium.pipeline.sources import prepared_component_path, prepared_manifest_path
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset, ShardInfo
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_parquet
+from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation.datasets.arc.arc import ULTRA_ARC_CONTROLS, convert_ultra_arc
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
@@ -93,6 +98,44 @@ PLACEHOLDER_INPUTS = {
     ),
 }
 PLACEHOLDER_SPLITS = {DAPO: "train", SKYWORK: "math"}
+
+
+BLEND_SCHEMA = pa.schema([("component", pa.string()), ("source_index", pa.int64()), ("raw_json", pa.large_binary())])
+
+
+def indexed_blend_rows(rows: Iterator[dict], _shard: ShardInfo) -> Iterator[dict]:
+    for index, row in enumerate(rows):
+        yield {
+            "component": blend_component(row),
+            "source_index": index,
+            "raw_json": json.dumps(row, ensure_ascii=False).encode(),
+        }
+
+
+def write_blend_component(component: str, rows: Iterator[dict], *, source: str) -> dict:
+    result = write_parquet_file(rows, str(prepared_component_path(StoragePath(source), component)), schema=BLEND_SCHEMA)
+    return {"component": component, **result}
+
+
+def prepare_blend(path: str, context: ZephyrContext) -> dict:
+    """Prepare component files once, retaining the source's original row IDs."""
+    results = context.execute(
+        Dataset.from_list([path])
+        .load_jsonl()
+        .map_shard(indexed_blend_rows)
+        .group_by(
+            key=lambda row: row["component"],
+            reducer=partial(write_blend_component, source=path),
+            sort_by=lambda row: row["source_index"],
+            num_output_shards=context.max_workers,
+        )
+    ).results
+    manifest = {
+        "source_rows": sum(result["count"] for result in results),
+        "components": {result["component"]: result["count"] for result in results},
+    }
+    prepared_manifest_path(StoragePath(path)).write_text(json.dumps(manifest, sort_keys=True), auto_mkdir=True)
+    return manifest
 
 
 @lru_cache(maxsize=1)
@@ -1436,9 +1479,11 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
                 SourceFormat.JSONL,
                 select=select,
                 decode=component.decode,
+                prepare=prepare_blend,
+                prepared_component=name,
             ),
             convert=component.convert,
-            version="2",
+            version="3",
             intended_use=IntendedUse.TRAIN,
             rubric=component.rubric,
             controls=component.controls,

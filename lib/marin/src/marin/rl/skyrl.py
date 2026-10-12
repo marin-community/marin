@@ -13,13 +13,14 @@ import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 import fsspec
 import yaml
 from iris.cluster.client.job_info import get_job_info
 from pydantic import BaseModel
+from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -32,7 +33,6 @@ from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_r
 from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
-_LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
@@ -545,6 +545,10 @@ def _validate_skyrl_backend_constraints(
     if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
 
+    for key in ("use_conversation_multi_turn", "require_exact_chat_transport"):
+        if _declared_config_value(config, f"generator.{key}") is not _MISSING_CONFIG_VALUE:
+            raise ValueError(f"SkyRL task sessions do not support generator.{key}. Remove this setting.")
+
     use_kl_loss = _declared_config_value(config, "trainer.algorithm.use_kl_loss")
     if use_kl_loss is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")
@@ -588,7 +592,6 @@ class SkyRLRunConfig:
     output: SkyRLOutputPaths
     export_hf: bool
     draft_checkpoint_root: str | None
-    launcher_requirement: str
 
 
 class SkyRLRun(Artifact):
@@ -620,17 +623,17 @@ class _SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-def _launcher_command(requirement: str, config_path: str) -> list[str]:
+def _launcher_command(config_path: str) -> list[str]:
+    workspace_root = find_project_root(Path(__file__))
+    if workspace_root is None:
+        raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
     return [
         "uv",
         "run",
         "--isolated",
-        "--no-project",
-        "--prerelease=allow",
-        "--python",
-        _LAUNCHER_PYTHON,
-        "--with",
-        requirement,
+        "--project",
+        str(workspace_root / "config/external" / MARIN_SKYRL.config_name),
+        "--frozen",
         "marinskyrl",
         "iris",
         "launch",
@@ -667,7 +670,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
             launch_file.write(config.launch_config_yaml)
             launch_file.flush()
-            completed = _run_launcher(_launcher_command(config.launcher_requirement, launch_file.name))
+            completed = _run_launcher(_launcher_command(launch_file.name))
         if not completed.stdout.strip():
             raise RuntimeError(
                 f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
@@ -882,7 +885,6 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
-            launcher_requirement=MARIN_SKYRL.requirement(),
         )
 
     return ArtifactStep(
