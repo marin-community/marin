@@ -44,7 +44,9 @@ def copy_verified_weight(fs: fsspec.AbstractFileSystem, source: str, destination
         logger.info("Verified and cached %s", weight.filename)
 
 
-def warm_uploaded_model(model_config: Path, cache_path: str, manifest_path: str, workers: int) -> str:
+def warm_uploaded_model(
+    model_config: Path, cache_path: str, manifest_path: str, workers: int, source: str | None = None
+) -> str:
     """Populate the canonical cache from verified source weights and pinned HF metadata."""
     model = load_model_config(model_config)
     if model.revision is None:
@@ -56,10 +58,13 @@ def warm_uploaded_model(model_config: Path, cache_path: str, manifest_path: str,
         raise ValueError("HF metadata does not identify the pinned snapshot")
     manifest_file = Path(hf_hub_download(model.location, manifest_path, revision=model.revision))
     manifest = json.loads(manifest_file.read_text())
-    source = manifest["checkpoint"]
+    if source is None:
+        source = manifest["checkpoint"]
+        objects = {item["name"]: item for item in manifest["objects"]}
+    else:
+        objects = {item["path"]: item for item in manifest["files"]}
     if urlsplit(source).netloc != urlsplit(cache_path).netloc:
         raise ValueError("Warmup source and cache must use the same regional bucket")
-    objects = {item["name"]: item for item in manifest["objects"]}
     weights = []
     for sibling in info.siblings:
         if not sibling.rfilename.endswith(".safetensors"):
@@ -92,11 +97,12 @@ def main() -> None:
     parser.add_argument("--model-config", required=True, type=Path)
     parser.add_argument("--cache-path", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument("--source", help="Regional export for a published producer manifest with a files list")
     parser.add_argument("--workers", required=True, type=int)
     args = parser.parse_args()
     configure_logging()
     configure_coreweave_s3()
-    print(warm_uploaded_model(args.model_config, args.cache_path, args.manifest, args.workers))
+    print(warm_uploaded_model(args.model_config, args.cache_path, args.manifest, args.workers, args.source))
 
 
 if __name__ == "__main__":
