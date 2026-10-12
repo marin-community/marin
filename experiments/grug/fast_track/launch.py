@@ -78,13 +78,6 @@ LADDER_SIZES = H100_LADDER_SIZES + GB200_SIZES
 # and every rank hangs in the driver's module load (lc1-gb200-tp1..tp4). It must be set before the CUDA driver
 # initializes, so it goes in the job environment, not the training process.
 GB200_CUDA_MODULE_LOADING = "CUDA_MODULE_LOADING=EAGER"
-# Every rank compiles against XLA's GB200 device description instead of its own GPU's. XLA's memory-aware
-# scheduling and rematerialization run against the reported device memory, which differs by a few hundred KB
-# between GPUs and process starts; our step is far above that limit, so a rank whose GPU reported more memory
-# compiled a different program and the gang deadlocked on mismatched collectives (lc1-gb200-noemb1 attempt 0:
-# 63 ranks one HLO hash, 1 another). XLA's spec file with our CUDA 13.0 / cuDNN 9.19 runtime versions; the path
-# is relative to the job's working directory (the bundle root). Same step time (lc1-gb200-tc2: 17.17 s).
-GB200_TARGET_CONFIG_FLAG = "--xla_gpu_target_config_filename=experiments/grug/fast_track/gb200_target_config.txtpb"
 # Seconds the first (compiled, preloaded) GB200 step may run before the trainer exits so the gang restarts: a normal
 # first step finishes in about a minute; a startup deadlock never does.
 GB200_FIRST_STEP_TIMEOUT = 420.0
@@ -621,6 +614,11 @@ def build_h100_ladder_run(
                 xla_autotune_cache_path=autotune_cache_path,
                 preload_library_kernels=rung.device == "GB200",
                 first_step_timeout=GB200_FIRST_STEP_TIMEOUT if rung.device == "GB200" else None,
+                shared_executable_dir=(
+                    prefix_join(marin_temp_bucket(SHARED_EXECUTABLE_TTL_DAYS, "train-step-executables"), run_id)
+                    if rung.device == "GB200" and not seed_xla_autotune_cache
+                    else None
+                ),
                 xla_autotune_seed_topology=(f"1x{rung.global_device_count}x1" if seed_xla_autotune_cache else None),
                 layer_skip=layer_skip,
                 extra_mlp_start_frac=extra_mlp_start_frac,
@@ -705,13 +703,6 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str, j
     os.execvp(cmd[0], cmd)
 
 
-def _with_xla_flag(job_env: tuple[str, ...], flag: str) -> tuple[str, ...]:
-    """``job_env`` with ``flag`` appended to its ``XLA_FLAGS`` entry (added when there is none)."""
-    if not any(item.startswith("XLA_FLAGS=") for item in job_env):
-        return (*job_env, f"XLA_FLAGS={flag}")
-    return tuple(f"{item} {flag}" if item.startswith("XLA_FLAGS=") else item for item in job_env)
-
-
 def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     """``iris job run -e KEY VALUE`` pairs for ``--job-env KEY=VALUE`` (the dispatcher forwards ``XLA_*`` and friends
     from the coordinator to the train child)."""
@@ -725,6 +716,7 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 
 
 XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
+SHARED_EXECUTABLE_TTL_DAYS = 7
 
 
 def _path_exists(path: str) -> bool:
@@ -1021,7 +1013,7 @@ def main(
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
         if size in GB200_SIZES:
-            job_env = (*_with_xla_flag(job_env, GB200_TARGET_CONFIG_FLAG), GB200_CUDA_MODULE_LOADING)
+            job_env = (*job_env, GB200_CUDA_MODULE_LOADING)
         _submit_to_cluster(run_id, target_cluster, priority, job_env)  # re-execs iris; never returns
     return build_h100_ladder_run(
         run_id=run_id,

@@ -34,7 +34,9 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from jax._src import distributed as jax_distributed
 from jax.experimental import multihost_utils
+from jax.experimental.serialize_executable import deserialize_and_load, serialize
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -61,6 +63,7 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
@@ -312,6 +315,11 @@ class GrugTrainerConfig:
     # this many seconds after its dispatch, so the scheduler restarts a gang that deadlocked at startup (a lazy
     # kernel load inside the step on GB200). None: wait forever.
     first_step_timeout: float | None = None
+    # Process 0 compiles the train step and writes the executable here; the other processes load it instead of
+    # compiling their own. XLA's memory-aware scheduling and remat read each GPU's own reported memory, which
+    # differs by a few hundred KB between ranks and starts, and a step above the limit then compiles to a
+    # different program on some rank (mismatched collectives, a 100%-GPU deadlock). None: every process compiles.
+    shared_executable_dir: str | None = None
     # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
     layer_skip: LayerSkipRule | None = None
     # When the extra_mlp_layers MLPs switch on, as a fraction of training (0: from the start).
@@ -1526,7 +1534,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                     if train_step_hlo is None:
                         # Compile ahead of time and run the executable directly: its HLO is then free to read.
-                        compiled_step = train_step.lower(state_leaves, batch).compile()
+                        lowered_step = train_step.lower(state_leaves, batch)
+                        if config.trainer.shared_executable_dir is not None and jax.process_count() > 1:
+                            compiled_step = _compile_on_process_zero(lowered_step, config.trainer.shared_executable_dir)
+                        else:
+                            compiled_step = lowered_step.compile()
                         train_step_hlo = compiled_step.as_text()
                         # Every rank must compile the same program; a mismatch deadlocks its collectives.
                         logger.info(
@@ -1909,6 +1921,36 @@ def _warn_on_long_gc(phase: str, info: dict) -> None:
 
 
 FIRST_STEP_HANG_EXIT_CODE = 75
+# Seconds the other processes wait for process 0 to compile and publish the shared train-step executable.
+SHARED_EXECUTABLE_TIMEOUT = 3600
+
+
+def _compile_on_process_zero(lowered: jax.stages.Lowered, directory: str) -> jax.stages.Compiled:
+    """``lowered`` compiled once on process 0 and loaded from its serialized executable everywhere else, so every
+    process runs byte-identical code. Keyed by the lowered program, which is identical across processes."""
+    key = hashlib.sha256(lowered.as_text().encode()).hexdigest()[:24]
+    path = prefix_join(directory, f"train_step-{key}.jaxexec")
+    client = jax_distributed.global_state.client
+    assert client is not None, "a shared executable needs the JAX distributed client"
+    if jax.process_index() == 0:
+        start = time.perf_counter()
+        compiled = lowered.compile()
+        payload, _, _ = serialize(compiled)
+        with fsspec.open(path, "wb") as f:
+            f.write(payload)
+        logger.info(
+            "Compiled the train step in %.0f s and shared it (%d MB) at %s",
+            time.perf_counter() - start,
+            len(payload) >> 20,
+            path,
+        )
+    client.wait_at_barrier(f"shared_train_step_{key}", SHARED_EXECUTABLE_TIMEOUT * 1000)
+    if jax.process_index() == 0:
+        return compiled
+    with fsspec.open(path, "rb") as f:
+        payload = f.read()
+    _, in_tree = jax.tree_util.tree_flatten(lowered.args_info)
+    return deserialize_and_load(payload, in_tree, lowered.out_tree)
 
 
 def _exit_on_first_step_hang(timeout: float) -> None:
