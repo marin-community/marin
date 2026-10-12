@@ -36,7 +36,7 @@ launcher installs both exact pins together.
    Record its full SHA and upstream base in the descriptor. Cite the tag and
    package-equivalence command in the PR.
 3. Try the exact pair. Run dependency resolution, both wheel builds, a clean
-   install, the native/import boundary, and focused compatibility tests before
+   install, compiled extension imports, and focused compatibility tests before
    using a TPU. Repair ordinary vLLM API drift in tpu-inference, preferably by
    rebasing onto a newer compatible upstream release or porting its fix.
 4. If a correct repair requires changing vLLM source, stop the TPU-only path.
@@ -109,16 +109,22 @@ refresh or a patch authored in the fork.
 | Event | Who starts the work | Checks and result |
 | --- | --- | --- |
 | vLLM source PR opened or updated | Automatic PR CI | CPU import, release-metadata, and lint checks. |
-| Reviewed patch merged or reviewed refresh promoted to vLLM `main` | Automatic fork build workflow | Build both wheels, run the existing H100 and GB200 wheel tests and serving smoke, then publish once. |
+| Relevant push after a reviewed patch or refresh reaches vLLM `main` | Automatic fork build workflow | Build both wheels, run the existing H100 and GB200 wheel tests and serving smoke, then publish once. |
 | Manual GPU build on vLLM `main` | Developer or refresh agent | Run the same build, qualification, and publication workflow. Use this for release-automation changes excluded from the automatic trigger. |
 | Published wheel selected for Marin | Adoption agent in an isolated Marin worktree | Update exact pins, run the full Snowball cluster parity test, and open a Marin adoption PR with the results. |
 | Marin adoption PR opened or updated | Automatic PR CI, then review | Run ordinary affected CI. Merge the reviewed pin PR to use those wheels in Marin. |
 
-The full Snowball cluster test needs an explicit agent or developer launch; it
-is excluded from ordinary PR CI. vLLM's scheduled nightly smoke checks fork
-health separately from the exact-wheel release and adoption gates. A MarinSkyRL
-dependency refresh also qualifies its combined training and serving profile
-under the trainer owner's procedure.
+The fork workflow's `paths-ignore` lists documentation, release-automation, and
+cache-maintenance files excluded from automatic builds. The full Snowball
+cluster test needs an explicit agent or developer launch and is excluded from
+ordinary PR CI. It compares Snowball token probabilities with stored reference
+values through Marin's Levanter and vLLM backends. This exercises the model and
+application paths beyond the fork's small Qwen serving smoke.
+
+vLLM's scheduled nightly smoke checks fork health separately from the
+exact-wheel release and adoption gates. A MarinSkyRL dependency refresh also
+qualifies Snowball and Hero on H100 and GB200 in its combined training and
+serving profile. The trainer owner's adoption PR records those results.
 
 Publication makes the wheels available after the fork's wheel tests pass.
 Marin adoption waits for its application tests and the reviewed pin PR. A failed
@@ -127,8 +133,8 @@ Marin test leaves production pins unchanged.
 ### Source, release, and adoption
 
 1. Prepare and review the vLLM source change. For an upstream rebase, replay
-   the overlay on `main-next` and audit the CUDA, Torch, and stable-extension
-   boundaries. An admin reviews the source and completes the backed-up swap to
+   the overlay on `main-next` and audit the CUDA/Torch versions and compiled
+   Torch extension interface. An admin reviews the source and completes the backed-up swap to
    `main` described in `promotion-protocol.md` before wheel builds. For an
    ordinary patch, merge its reviewed vLLM PR to `main`. Keep the build and
    release automation in the selected source.

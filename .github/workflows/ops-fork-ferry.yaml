@@ -64,5 +64,5 @@ jobs:
             For vllm-gpu, prepare the source-review handoff and wait for admin
             promotion to main before building wheels. After publication, run
             Marin's e2e and open the adoption PR. For other fork units, follow
-            the skill's staged-source test and pin procedure. File the descriptor's
+            the configured validation and promotion procedure. File the descriptor's
             blocker issue on a real external blocker.
