@@ -4,8 +4,9 @@
 import json
 import os
 import shutil
+import threading
 from dataclasses import replace
-from functools import partial
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 
@@ -25,7 +26,6 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation import pipeline as processor
-from experiments.post_training.task_curation.campaign import CampaignPool
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
@@ -46,6 +46,70 @@ from experiments.post_training.task_curation.tests.image_builds import (
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 CONTROLLER_URL = "http://controller.invalid"
+
+
+class ReviewHTTPServer(ThreadingHTTPServer):
+    def __init__(self):
+        self.requests: list[dict] = []
+        super().__init__(("127.0.0.1", 0), ReviewHandler)
+
+
+class ReviewHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        cast(ReviewHTTPServer, self.server).requests.append(body)
+        task = json.loads(body["messages"][-1]["content"])
+        verdict = {
+            "task_id": task["id"],
+            "quality": "good",
+            "confidence": "high",
+            "reference_status": "consistent",
+            "defects": [],
+            "evidence": "Reference agrees with the task.",
+        }
+        result = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "review",
+                                "type": "function",
+                                "function": {
+                                    "name": "review_task",
+                                    "arguments": json.dumps(verdict),
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+        payload = json.dumps(result).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, message, *args):
+        pass
+
+
+@pytest.fixture
+def review_server():
+    server = ReviewHTTPServer()
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def math500() -> CurationRecipe:
@@ -251,10 +315,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
 def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path, monkeypatch, mode, rubric):
     monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    monkeypatch.setattr(
-        "experiments.post_training.task_curation.driver.CampaignPool",
-        partial(CampaignPool, chunk_storage_prefix=str(tmp_path / "chunks")),
-    )
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.CAMPAIGN_CHUNK_PREFIX", str(tmp_path / "chunks"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     source = replace(
@@ -375,3 +436,59 @@ def test_local_full_recipe_exports_admitted_tasks_without_cluster_settings(tmp_p
     assert len(tasks) == 1
     assert tasks[0]["source_row"] == "test.jsonl:0"
     assert outcome["status"] == "completed"
+
+
+def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, monkeypatch, review_server):
+    declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    source = replace(
+        declared,
+        config=replace(
+            math500(),
+            source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+            controls=None,
+        ),
+    )
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
+    monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
+    staged = tmp_path / "input"
+    staged.mkdir()
+    (staged / "rows.jsonl").write_text(
+        "\n".join(json.dumps({"problem": f"What is {value} plus one?", "answer": str(value + 1)}) for value in range(6))
+    )
+    cache = tmp_path / "cache"
+    args = [
+        "--mode",
+        "sample",
+        "--cache-dir",
+        str(cache),
+        "--source",
+        source.name,
+        "--input-root",
+        str(staged),
+        "--quality-sample-size",
+        "2",
+        "--max-workers",
+        "1",
+        "--review-mode",
+        "chat",
+        "--review-concurrency",
+        "1",
+        "--model-revision",
+        "fixture",
+        "--base-url",
+        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
+        "--run",
+    ]
+    runner = CliRunner()
+    first = runner.invoke(main, [*args, "--normalized-shards", "1"])
+    assert first.exit_code == 0, first.output
+    outcome = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
+    manifest = json.loads((StoragePath(outcome["path"]) / "manifest.json").read_text())
+    assert manifest["raw_population_count"] == 6 and manifest["raw_sample_count"] == 2
+    assert len(review_server.requests) == 2
+    assert (cache / "review-cache").exists()
+    repeated = runner.invoke(main, [*args, "--normalized-shards", "2"])
+    assert repeated.exit_code == 0, repeated.output
+    rebuilt = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
+    assert rebuilt["path"] != outcome["path"]
+    assert len(review_server.requests) == 2

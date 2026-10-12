@@ -31,8 +31,8 @@ QUICK needs no review model, controller, worker image or coordinator settings.
 Repeat `--source` for a cohort and use a fresh output root each pass. Downloads
 are cached under `~/.cache/marin` (`--cache-dir` overrides this).
 `--input-root PATH` uses already staged files from the declared revision;
-`--input NAME PATH` overrides an auxiliary input. These local input options,
-`--output-root` selects QUICK outputs or local reviewed campaign reports.
+`--input NAME PATH` overrides an auxiliary input. `--output-root` selects QUICK
+outputs; reviewed local runs use `--report-path` for their report location.
 
 For a local fixture, replace `--input-root` with
 `--input-file LOGICAL_PATH LOCAL_FILE`, repeated as needed. The logical path must
@@ -59,12 +59,18 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
 
 Local reviewed runs need no worker image or controller for in-process graders.
 The default report is `CACHE_DIR/campaigns/campaign.json`, with its retained run
-catalog beside it. `--report-path` or `--output-root` chooses another report
+catalog beside it. `--report-path` chooses another report
 location. Review requests are cached under `CACHE_DIR/review-cache` unless
 `--review-cache` selects another location. `GLM_BULK_TOKEN` supplies credentials.
 Package-backed and image graders retain their normal environment prerequisites.
+`--image-backend` and `--controller-url` can explicitly select a remote image
+grader while curation runs locally; worker-image and coordinator flags apply only
+to Iris execution.
 Use `--input-root`, `--input-file` or `--input` only when deliberately replacing
 the pinned inputs; the local rollout can use real sources without overrides.
+Keep the same `--quality-sample-size` and `--seed` when moving from SAMPLE to
+FULL to reuse identical panel review requests. Changing either selects a new
+panel; the plan prints both values before execution.
 
 ### Harbor compatibility view
 

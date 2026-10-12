@@ -27,6 +27,7 @@ from zephyr.context import ZephyrContext
 from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, append_curation_catalog
 
 logger = logging.getLogger(__name__)
+CAMPAIGN_CHUNK_PREFIX = "s3://marin-us-east-02a/marin/tmp/rl-data-campaign"
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,7 @@ class CampaignPool:
     coordinator_resources: ResourceConfig = field(kw_only=True)
     concurrent_sources: int = 10
     worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="8g"))
-    chunk_storage_prefix: str = "s3://marin-us-east-02a/marin/tmp/rl-data-campaign"
+    chunk_storage_prefix: str = CAMPAIGN_CHUNK_PREFIX
 
 
 @dataclass(frozen=True)
