@@ -7,6 +7,7 @@ import faulthandler
 import functools
 import gc
 import glob
+import hashlib
 import io
 import json
 import logging
@@ -307,6 +308,10 @@ class GrugTrainerConfig:
     # Before the first step, run each cuBLAS call of the compiled train step once alone on each local device
     # (``library_kernels``), so no kernel library loads mid-step (a first-step deadlock on GB200).
     preload_library_kernels: bool = False
+    # Exit the process (``FIRST_STEP_HANG_EXIT_CODE``) when the first step, compiled and preloaded, has not finished
+    # this many seconds after its dispatch, so the scheduler restarts a gang that deadlocked at startup (a lazy
+    # kernel load inside the step on GB200). None: wait forever.
+    first_step_timeout: float | None = None
     # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
     layer_skip: LayerSkipRule | None = None
     # When the extra_mlp_layers MLPs switch on, as a fraction of training (0: from the start).
@@ -1375,6 +1380,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         train_step = _flat_train_step(train_step_fn, state_treedef)
         # The train step's optimized HLO, set when the first step compiles it ahead of time.
         train_step_hlo: str | None = None
+        first_step_watchdog: threading.Timer | None = None
 
         eval_interval = eval_cfg.steps_per_eval if eval_cfg is not None and eval_cfg.steps_per_eval else None
         last_ready_time: float | None = None
@@ -1384,7 +1390,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             donated) the state-dependent work runs too; without it the step was finished lagged, behind the next
             dispatch, and the callbacks see only its step number and loss."""
             nonlocal state, state_leaves, last_loss, last_step_duration, host_gap_start, hlo_written, last_ready_time
-            nonlocal autotune_published
+            nonlocal autotune_published, first_step_watchdog
             metrics, step = rec.metrics, rec.step
             # A host float, and no device math on the metrics below: a device op would queue behind the step
             # dispatched after this one and wait for it, undoing the overlap.
@@ -1401,6 +1407,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     _write_train_step_hlo(train_step_hlo, config.trainer.hlo_dump_path)
                 hlo_written = True
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
+            if first_step_watchdog is not None:
+                first_step_watchdog.cancel()
+                first_step_watchdog = None
             if autotune_cache_loaded is False and not autotune_published:
                 # The first finished step: train_step compiled, so its autotune results are on disk.
                 _publish_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
@@ -1519,9 +1528,25 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         # Compile ahead of time and run the executable directly: its HLO is then free to read.
                         compiled_step = train_step.lower(state_leaves, batch).compile()
                         train_step_hlo = compiled_step.as_text()
+                        # Every rank must compile the same program; a mismatch deadlocks its collectives.
+                        logger.info(
+                            "train step HLO sha256 %s (%d chars) on process %d, device memory limit %s",
+                            hashlib.sha256(train_step_hlo.encode()).hexdigest()[:16],
+                            len(train_step_hlo),
+                            jax.process_index(),
+                            (jax.local_devices()[0].memory_stats() or {}).get("bytes_limit"),
+                        )
                         if config.trainer.preload_library_kernels:
                             load_library_kernels(train_step_hlo, jax.local_devices())
                         train_step = compiled_step
+                        if config.trainer.first_step_timeout is not None:
+                            first_step_watchdog = threading.Timer(
+                                config.trainer.first_step_timeout,
+                                _exit_on_first_step_hang,
+                                (config.trainer.first_step_timeout,),
+                            )
+                            first_step_watchdog.daemon = True
+                            first_step_watchdog.start()
                     dispatch_start = time.perf_counter()
                     state_leaves, metrics, inline_watch_stats = train_step(state_leaves, batch)
                     state = jax.tree.unflatten(state_treedef, state_leaves)
@@ -1881,6 +1906,15 @@ def _warn_on_long_gc(phase: str, info: dict) -> None:
     pause = time.perf_counter() - _gc_start.get("t", time.perf_counter())
     if pause > GC_PAUSE_WARN:
         logger.warning("gc gen%d pause %.3f s on process %d", info.get("generation", -1), pause, jax.process_index())
+
+
+FIRST_STEP_HANG_EXIT_CODE = 75
+
+
+def _exit_on_first_step_hang(timeout: float) -> None:
+    logger.error("First train step not finished %.0f s after dispatch: exiting so the job restarts", timeout)
+    faulthandler.dump_traceback(all_threads=True)
+    os._exit(FIRST_STEP_HANG_EXIT_CODE)
 
 
 def _write_train_step_hlo(text: str, path: str) -> None:

@@ -78,6 +78,9 @@ LADDER_SIZES = H100_LADDER_SIZES + GB200_SIZES
 # and every rank hangs in the driver's module load (lc1-gb200-tp1..tp4). It must be set before the CUDA driver
 # initializes, so it goes in the job environment, not the training process.
 GB200_CUDA_MODULE_LOADING = "CUDA_MODULE_LOADING=EAGER"
+# Seconds the first (compiled, preloaded) GB200 step may run before the trainer exits so the gang restarts: a normal
+# first step finishes in about a minute; a startup deadlock never does.
+GB200_FIRST_STEP_TIMEOUT = 420.0
 DEFAULT_WANDB_PROJECT = "marin_moe"
 # Default tokens-per-active-param budgets defining each variant's baseline: dense compute-optimal, MoE 3x.
 DENSE_TPP = 20
@@ -115,6 +118,15 @@ _BASELINE_FLOPS_PER_EXAMPLE: dict[tuple[str, bool], int] = {
     ("d1280", False): 9_975_229_317_120,
     ("d1280", True): 9_242_400_522_240,
 }
+
+
+class XlaAutotune(StrEnum):
+    """How a GB200 run gets its XLA kernel choices."""
+
+    CACHE = "cache"
+    """Load the shared autotune results seeded for this program (``--seed-xla-autotune-cache``)."""
+    OFF = "off"
+    """No autotuning (``--xla_gpu_autotune_level=0`` in the job's XLA_FLAGS): library heuristics pick the kernels."""
 
 
 class Recipe(StrEnum):
@@ -378,6 +390,7 @@ def build_h100_ladder_run(
     dump_hlo: bool = False,
     token_dump: bool = False,
     seed_xla_autotune_cache: bool = False,
+    xla_autotune: XlaAutotune = XlaAutotune.CACHE,
     token_dump_skip_layers: tuple[int, ...] = (),
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_frac: float = 0.5,
@@ -510,7 +523,10 @@ def build_h100_ladder_run(
         disk=disk,
         replicas=1 if seed_xla_autotune_cache else rung.nodes,
     )
-    autotune_cache_path = _xla_autotune_cache_path(model, rung) if rung.device == "GB200" else None
+    if xla_autotune == XlaAutotune.OFF and "--xla_gpu_autotune_level=0" not in os.environ.get("XLA_FLAGS", ""):
+        raise ValueError("--xla-autotune off needs --xla_gpu_autotune_level=0 in the job's XLA_FLAGS")
+    use_cache = rung.device == "GB200" and xla_autotune == XlaAutotune.CACHE
+    autotune_cache_path = _xla_autotune_cache_path(model, rung) if use_cache else None
     if autotune_cache_path is not None and not seed_xla_autotune_cache and not _path_exists(autotune_cache_path):
         # Without a cache every rank autotunes and exchanges results, and that multi-process compile hangs ~7 times
         # in 8 on GB200. A one-GPU seed builds it in ~2 minutes.
@@ -597,6 +613,7 @@ def build_h100_ladder_run(
                 token_dump_skip_layers=token_dump_skip_layers,
                 xla_autotune_cache_path=autotune_cache_path,
                 preload_library_kernels=rung.device == "GB200",
+                first_step_timeout=GB200_FIRST_STEP_TIMEOUT if rung.device == "GB200" else None,
                 xla_autotune_seed_topology=(f"1x{rung.global_device_count}x1" if seed_xla_autotune_cache else None),
                 layer_skip=layer_skip,
                 extra_mlp_start_frac=extra_mlp_start_frac,
@@ -808,6 +825,13 @@ def _layer_skip_rule(
     help="GB200: seed the shared XLA autotune cache from one node under a mock topology of the full rack, then stop.",
 )
 @click.option(
+    "--xla-autotune",
+    type=click.Choice([m.value for m in XlaAutotune]),
+    default=XlaAutotune.CACHE.value,
+    show_default=True,
+    help="GB200 kernel choice: the seeded autotune cache, or off (needs --xla_gpu_autotune_level=0 in XLA_FLAGS).",
+)
+@click.option(
     "--token-dump-skip-layers",
     default=None,
     help="Comma-separated layers: the token dump also records each token's loss with every token skipping them.",
@@ -951,6 +975,7 @@ def main(
     dump_hlo: bool,
     token_dump: bool,
     seed_xla_autotune_cache: bool,
+    xla_autotune: str,
     token_dump_skip_layers: str | None,
     extra_mlp_start_frac: float,
     layer_skip_layers: str | None,
@@ -1000,6 +1025,7 @@ def main(
         dump_hlo=dump_hlo,
         token_dump=token_dump,
         seed_xla_autotune_cache=seed_xla_autotune_cache,
+        xla_autotune=XlaAutotune(xla_autotune),
         token_dump_skip_layers=(
             tuple(int(x) for x in token_dump_skip_layers.split(",")) if token_dump_skip_layers else ()
         ),

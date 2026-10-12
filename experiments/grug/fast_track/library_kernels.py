@@ -51,38 +51,53 @@ _DTYPES = {
 
 
 def library_call_modules(hlo_text: str) -> list[tuple[str, list[str]]]:
-    """One single-``dot`` HLO module per distinct cuBLAS GEMM in ``hlo_text``, with its operand types."""
+    """One HLO module per distinct cuBLAS GEMM in ``hlo_text`` that XLA rewrites back into the same call: the
+    ``dot`` with its operand shapes and layouts, dimension numbers, output type and ``grad_x``/``grad_y``
+    attributes, times ``alpha`` and plus the third operand when ``beta`` is 1. Returns (text, operand types)."""
     lines = hlo_text.splitlines()
     types = {m["name"]: m["type"] for m in map(_DEFINITION.match, lines) if m is not None}
-    modules: dict[tuple[str, tuple[str, ...], str], tuple[str, list[str]]] = {}
+    modules: dict[str, tuple[str, list[str]]] = {}
     for line in lines:
         match = _CALL.match(line)
         if match is None or match["target"] not in LIBRARY_CALL_TARGETS:
             continue
-        # The GEMM's own operands come first; a bias or scale operand only feeds its epilogue.
-        inline = re.findall(rf"({_ARRAY_TYPE}) %", match["operands"])
-        names = re.findall(r"%([\w.\-]+)", match["operands"])
-        operand_types = inline[:2] if inline else [types[n] for n in names[:2] if n in types]
-        result = _FIRST_RESULT.match(match["result"])
-        if result is None or len(operand_types) != 2:
-            raise ValueError(f"unparsed cuBLAS call: {line.strip()[:300]}")
         attrs = match["attrs"]
         config_start = attrs.index("backend_config=") + len("backend_config=")
         config, _ = json.JSONDecoder().raw_decode(attrs[config_start:])
-        dims = config["gemm_backend_config"]["dot_dimension_numbers"]
+        gemm = config["gemm_backend_config"]
+        if gemm.get("epilogue", "DEFAULT") != "DEFAULT" or gemm.get("beta", 0) not in (0, 1):
+            raise ValueError(f"unsupported cuBLAS epilogue: {line.strip()[:300]}")
+        inline = re.findall(rf"({_ARRAY_TYPE}) %", match["operands"])
+        names = re.findall(r"%([\w.\-]+)", match["operands"])
+        operand_types = inline if inline else [types[n] for n in names if n in types]
+        operand_types = operand_types[: 3 if gemm.get("beta", 0) == 1 else 2]
+        result = _FIRST_RESULT.match(match["result"])
+        if result is None or len(operand_types) != (3 if gemm.get("beta", 0) == 1 else 2):
+            raise ValueError(f"unparsed cuBLAS call: {line.strip()[:300]}")
+        out = result[1]
+        dims = gemm["dot_dimension_numbers"]
         dot_dims = ", ".join(
             f"{name}_dims={{{','.join(dims.get(f'{name}_dimensions', []))}}}"
             for name in ("lhs_batch", "lhs_contracting", "rhs_batch", "rhs_contracting")
         )
-        key = (result[1], tuple(operand_types), dot_dims)
-        if key in modules:
-            continue
-        text = (
-            "HloModule library_call\n\nENTRY main {\n"
-            f"  p0 = {operand_types[0]} parameter(0)\n  p1 = {operand_types[1]} parameter(1)\n"
-            f"  ROOT dot = {result[1]} dot(p0, p1), {dot_dims}\n}}\n"
-        )
-        modules[key] = (text, operand_types)
+        grads = [f'{g}="true"' for g in ("grad_x", "grad_y") if gemm.get(g)]
+        frontend = f", frontend_attributes={{{','.join(grads)}}}" if grads else ""
+        body = [f"  p{i} = {t} parameter({i})" for i, t in enumerate(operand_types)]
+        body.append(f"  dot = {out} dot(p0, p1), {dot_dims}{frontend}")
+        root = "dot"
+        alpha = gemm.get("alpha_real", 1)
+        if alpha != 1:
+            dtype = _SHAPE.match(out)[1]
+            body.append(f"  alpha = {dtype}[] constant({alpha!r})")
+            body.append(f"  alpha_b = {out} broadcast(alpha), dimensions={{}}")
+            body.append(f"  scaled = {out} multiply(dot, alpha_b)")
+            root = "scaled"
+        if len(operand_types) == 3:
+            body.append(f"  sum = {out} add({root}, p2)")
+            root = "sum"
+        body[-1] = body[-1].replace(f"  {root} = ", f"  ROOT {root} = ", 1)
+        text = "HloModule library_call\n\nENTRY main {\n" + "\n".join(body) + "\n}\n"
+        modules.setdefault(text, (text, operand_types))
     return list(modules.values())
 
 
@@ -95,20 +110,33 @@ def _zeros(type_text: str, device: jax.Device) -> jax.Array:
 
 
 def load_library_kernels(hlo_text: str, devices: list[jax.Device]) -> None:
-    """Compile and run every distinct library call of ``hlo_text`` once on zeros on each of ``devices``."""
+    """Compile and run every distinct cuBLAS GEMM of ``hlo_text`` once on zeros on each of ``devices``."""
     start = time.perf_counter()
     modules = library_call_modules(hlo_text)
+    misses = 0
     for text, operand_types in modules:
         mlir = xla_client._xla.mlir.hlo_to_stablehlo(_hlo.hlo_module_from_text(text).as_serialized_hlo_module_proto())
         for device in devices:
-            options = xla_client.CompileOptions()
-            options.env_option_overrides = _COMPILE_OVERRIDES
-            executable = device.client.compile_and_load(mlir, xla_client.DeviceList((device,)), options)
+            try:
+                # With the shared autotune results the rebuilt GEMM must hit them, so it picks the program's kernel.
+                executable = device.client.compile_and_load(
+                    mlir, xla_client.DeviceList((device,)), xla_client.CompileOptions()
+                )
+            except jax.errors.JaxRuntimeError as error:
+                if "autotun" not in str(error).lower():
+                    raise
+                # A miss autotunes instead: every candidate kernel loads, the program's among them.
+                misses += 1
+                logger.warning("cuBLAS warm-up GEMM missed the autotune results:\n%s", text)
+                options = xla_client.CompileOptions()
+                options.env_option_overrides = _COMPILE_OVERRIDES
+                executable = device.client.compile_and_load(mlir, xla_client.DeviceList((device,)), options)
             results = executable.execute_sharded([_zeros(t, device) for t in operand_types])
             jax.block_until_ready(results.consume_with_handlers([lambda arrays: arrays]))
     logger.info(
-        "Loaded the kernels of %d distinct cuBLAS GEMMs on %d devices in %.1f s",
+        "Loaded the kernels of %d distinct cuBLAS GEMMs on %d devices in %.1f s (%d autotune misses)",
         len(modules),
         len(devices),
         time.perf_counter() - start,
+        misses,
     )
