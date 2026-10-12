@@ -709,10 +709,11 @@ class GrugModelConfig:
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
     attn_res_num_blocks: int = 8
-    attn_res_two_phase: bool = False
+    attn_res_two_phase: bool = True
     """``scan_layers``: each layer mixes the history for its attention and MLP gates in one pass over the sources
     (Kimi's two-phase Block AttnRes: inter-block mix + log-sum-exp per gate, then an online-softmax merge with the
-    partial), instead of one pass per gate. Same math; the inter-block mix is rounded to the sources' dtype."""
+    partial), instead of one pass per gate: ~1.5% faster at the GB200 hero gate (lc1-gb200-tp5). Same math; the
+    inter-block mix is rounded to the sources' dtype."""
     attn_res_plain_sum: bool = False
     """Every AttnRes gate (and the final gate) returns the plain sum of its sources instead of a softmax mix: the
     standard residual stream (embedding + every earlier sublayer output), keeping the AttnRes loop's features

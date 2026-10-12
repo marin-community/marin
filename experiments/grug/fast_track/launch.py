@@ -72,6 +72,11 @@ H100_LADDER_SIZES = ("d512", "d768", "d1024", "d1280", "d1536")
 # Hero-shaped validation rung on one GB200 rack as the hero uses it: 16 nodes x 4 GPUs, expert parallel over all 64.
 GB200_SIZES = ("gb200-d6144",)
 LADDER_SIZES = H100_LADDER_SIZES + GB200_SIZES
+# GB200 runs load every CUDA module at startup: a run that loads the shared XLA autotune cache autotunes nothing at
+# compile time, so kernels (e.g. XLA's CUB sort) would first load lazily inside the first step while NCCL kernels spin,
+# and every rank hangs in the driver's module load (lc1-gb200-tp1..tp4). It must be set before the CUDA driver
+# initializes, so it goes in the job environment, not the training process.
+GB200_CUDA_MODULE_LOADING = "CUDA_MODULE_LOADING=EAGER"
 DEFAULT_WANDB_PROJECT = "marin_moe"
 # Default tokens-per-active-param budgets defining each variant's baseline: dense compute-optimal, MoE 3x.
 DENSE_TPP = 20
@@ -967,6 +972,8 @@ def main(
     target_cluster: str | None,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
+        if size in GB200_SIZES:
+            job_env = (*job_env, GB200_CUDA_MODULE_LOADING)
         _submit_to_cluster(run_id, target_cluster, priority, job_env)  # re-execs iris; never returns
     return build_h100_ladder_run(
         run_id=run_id,
