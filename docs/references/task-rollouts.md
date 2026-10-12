@@ -49,7 +49,9 @@ Other deadlines accept `None` or a finite, positive value.
 `backend` identifies a factory in the engine's `factories` mapping.
 `task_session` identifies a factory in its `sessions` mapping.
 The reserved session identifier `shellbox` selects the built-in shell-tool session.
-Custom session factories receive `(lowered, machine)` and return a fresh session for each attempt.
+Custom session factories receive `(lowered, machine, default_grader)` and return a fresh session for each attempt.
+The default grader applies the task's `TaskSpec` grader and can be passed to a session that controls its own tools.
+Sessions with their own grading logic can ignore it.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
 A grader with an environment requires a `verifier_machine` selection. Every other grader requires `verifier_machine=None`.
@@ -104,8 +106,8 @@ Ordinary task sessions return observations to the engine, which calls the model.
 An agent that controls its own prompt and tool loop can use `AgentTaskSession` from
 `rolloutengine.agent_session`. Its coroutine sends each `SessionStart` to an async
 completion callback and receives the exact `ModelTurn` produced by the engine.
-Only one completion request may be pending at a time. Pass a `session_wrapper` to
-`ShellboxRolloutEngine` to combine that agent with the selected session's grader.
+Only one completion request may be pending at a time. Register the agent as a
+session factory and select its name in `TaskSessionSpec.task_session`.
 Given a model callable, machine factories, and an async `run_agent(machine, complete)` callback:
 
 ```python
@@ -115,14 +117,14 @@ from rolloutengine.agent_session import AgentTaskSession
 from rolloutengine.engine import ShellboxRolloutEngine
 
 
-def wrap_session(session, machine):
-    return AgentTaskSession(partial(run_agent, machine), session.grade)
+def agent_session(lowered, machine, default_grader):
+    return AgentTaskSession(partial(run_agent, machine), default_grader)
 
-engine = ShellboxRolloutEngine(model, factories, session_wrapper=wrap_session)
+engine = ShellboxRolloutEngine(model, factories, sessions={"agent": agent_session})
 ```
 
-The engine closes the wrapper before the selected session and task machine.
-Agents that provide their own grader can instead use the existing `sessions` registry.
+The engine closes the selected session before the task machine.
+Agents with their own grader can pass that callback to `AgentTaskSession` instead.
 The default session exposes `shell(command: string)` when the task declares the shell capability.
 Each command runs through `bash -c`. Files persist between commands; shell variables do not.
 TaskSpec can own the shell interface when its prompt names a particular tool. Declare the

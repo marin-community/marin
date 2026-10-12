@@ -3,11 +3,15 @@
 
 """Public rollout protocols, records, and exceptions."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
+from shellbox.machine import Machine
 from taskcompendium.grading_result import GradeResult
+
+from rolloutengine.spec import LoweredTaskSpec
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
@@ -144,3 +148,6 @@ class TaskSession(Protocol):
 
 class TaskGrader(Protocol):
     async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
+
+
+TaskSessionFactory = Callable[[LoweredTaskSpec, Machine | None, TaskGrader], TaskSession]

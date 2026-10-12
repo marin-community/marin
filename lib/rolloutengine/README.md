@@ -7,8 +7,8 @@ Callers supply a model callable, machine factories, and optional `TaskSession`
 factories. Each session prepares model requests, handles responses and tools,
 and grades the attempt. The built-in `shellbox` session uses the same execution
 loop as registered sessions and handles shell tools. `AgentTaskSession` adapts
-an agent that controls its own prompt and tool loop; `session_wrapper` can pair
-it with the selected session's grader.
+an agent that controls its own prompt and tool loop. Its factory can use the
+default grader supplied by the engine.
 For text, number, JSON, and native-action answers, it adds the task's answer-format instruction and tools to the model request.
 For workspace-state tasks, this session adds shell and final-response instructions to the model request.
 Importers retain the task problem without these interface instructions.

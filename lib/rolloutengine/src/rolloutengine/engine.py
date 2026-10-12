@@ -9,7 +9,7 @@ from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
 from typing import Any
 
-from shellbox.machine import Machine, MachineFactory
+from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import conversation_messages
@@ -28,6 +28,7 @@ from rolloutengine.contracts import (
     RolloutOperation,
     RolloutStep,
     TaskSession,
+    TaskSessionFactory,
     Transition,
 )
 from rolloutengine.grading import _grade_rollout
@@ -51,24 +52,18 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
 
 
 class ShellboxRolloutEngine:
-    """Generate exact-token rollouts from lowered single-stage tasks.
-
-    A session wrapper may replace conversation control while retaining the
-    selected session's grader. The engine closes both sessions separately.
-    """
+    """Generate exact-token rollouts from lowered single-stage tasks."""
 
     def __init__(
         self,
         model: Callable[[ModelRequest], Awaitable[ModelTurn]],
         factories: Mapping[str, MachineFactory],
         *,
-        sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
-        session_wrapper: Callable[[TaskSession, Machine | None], TaskSession] | None = None,
+        sessions: Mapping[str, TaskSessionFactory] | None = None,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
-        self.session_wrapper = session_wrapper
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
@@ -126,23 +121,15 @@ class ShellboxRolloutEngine:
                 lowered, messages, machine, self.factories, cleanup, resources, stop_reason=stop_reason
             )
 
-        session_factories: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] = {
+        session_factories: Mapping[str, TaskSessionFactory] = {
             **self.sessions,
-            SHELLBOX_SESSION: lambda selected, selected_machine: _ShellboxTaskSession(selected, selected_machine, grade),
+            SHELLBOX_SESSION: _ShellboxTaskSession,
         }
         try:
-            session = session_factories[lowered.session.task_session](lowered, machine)
+            session = session_factories[lowered.session.task_session](lowered, machine, grade)
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
-        if self.session_wrapper is not None:
-            try:
-                wrapped = self.session_wrapper(session, machine)
-            except Exception as error:
-                raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
-            if wrapped is not session:
-                resources.push_async_callback(cleanup.run, "wrapped_session_close", wrapped.close)
-            session = wrapped
         return await self._run_session(lowered, session, attempt)
 
     async def _run_session(
