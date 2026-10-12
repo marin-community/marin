@@ -86,47 +86,6 @@ def deploy(config: ProxyConfig) -> pulumi.Output[str]:
         push=True,
     )
     labels = {"app.kubernetes.io/name": NAME}
-    deployment = k8s.apps.v1.Deployment(
-        NAME,
-        metadata={"name": NAME, "namespace": NAMESPACE},
-        spec={
-            "replicas": config.replicas,
-            "selector": {"matchLabels": labels},
-            "template": {
-                "metadata": {"labels": labels},
-                "spec": {
-                    "automountServiceAccountToken": False,
-                    "securityContext": {"runAsNonRoot": True, "runAsUser": 65532, "runAsGroup": 65532},
-                    "containers": [
-                        {
-                            "name": "proxy",
-                            "image": image.ref,
-                            "args": ["--prefix", config.prefix],
-                            "ports": [{"name": "http", "containerPort": PORT}],
-                            "envFrom": [{"secretRef": {"name": READONLY_SECRET}}],
-                            "resources": {
-                                "requests": {"cpu": config.cpu_request, "memory": config.memory_request},
-                                "limits": {"cpu": config.cpu_limit, "memory": config.memory_limit},
-                            },
-                            "securityContext": {
-                                "allowPrivilegeEscalation": False,
-                                "readOnlyRootFilesystem": True,
-                                "capabilities": {"drop": ["ALL"]},
-                            },
-                            "readinessProbe": {"tcpSocket": {"port": "http"}},
-                        }
-                    ],
-                },
-            },
-        },
-        opts=options,
-    )
-    service = k8s.core.v1.Service(
-        NAME,
-        metadata={"name": NAME, "namespace": NAMESPACE},
-        spec={"selector": labels, "ports": [{"name": "http", "port": PORT, "targetPort": "http"}]},
-        opts=pulumi.ResourceOptions(provider=provider, depends_on=[deployment]),
-    )
     network_policy = k8s.apiextensions.CustomResource(
         "ports-proxy-network",
         api_version="cilium.io/v2",
@@ -177,6 +136,47 @@ def deploy(config: ProxyConfig) -> pulumi.Output[str]:
             ],
         },
         opts=options,
+    )
+    deployment = k8s.apps.v1.Deployment(
+        NAME,
+        metadata={"name": NAME, "namespace": NAMESPACE},
+        spec={
+            "replicas": config.replicas,
+            "selector": {"matchLabels": labels},
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "automountServiceAccountToken": False,
+                    "securityContext": {"runAsNonRoot": True, "runAsUser": 65532, "runAsGroup": 65532},
+                    "containers": [
+                        {
+                            "name": "proxy",
+                            "image": image.ref,
+                            "args": ["--prefix", config.prefix],
+                            "ports": [{"name": "http", "containerPort": PORT}],
+                            "envFrom": [{"secretRef": {"name": READONLY_SECRET}}],
+                            "resources": {
+                                "requests": {"cpu": config.cpu_request, "memory": config.memory_request},
+                                "limits": {"cpu": config.cpu_limit, "memory": config.memory_limit},
+                            },
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "readOnlyRootFilesystem": True,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                            "readinessProbe": {"tcpSocket": {"port": "http"}},
+                        }
+                    ],
+                },
+            },
+        },
+        opts=pulumi.ResourceOptions(provider=provider, depends_on=[network_policy]),
+    )
+    service = k8s.core.v1.Service(
+        NAME,
+        metadata={"name": NAME, "namespace": NAMESPACE},
+        spec={"selector": labels, "ports": [{"name": "http", "port": PORT, "targetPort": "http"}]},
+        opts=pulumi.ResourceOptions(provider=provider, depends_on=[deployment]),
     )
     ingress = k8s.networking.v1.Ingress(
         "ports-proxy-https",

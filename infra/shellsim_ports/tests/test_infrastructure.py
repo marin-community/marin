@@ -5,6 +5,7 @@
 
 import pulumi
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
+from pulumi.runtime.mocks import MockMonitor
 
 from infra.shellsim_ports.infrastructure import ProxyConfig, deploy
 
@@ -24,11 +25,25 @@ class RecordingMocks(Mocks):
         raise AssertionError(f"Unexpected external lookup: {args.token}")
 
 
+class RecordingMonitor(MockMonitor):
+    def __init__(self, mocks: Mocks) -> None:
+        super().__init__(mocks)
+        self.dependencies: dict[str, list[str]] = {}
+        self.urns: dict[str, str] = {}
+
+    def RegisterResource(self, request):
+        self.dependencies[request.type] = list(request.dependencies)
+        response = super().RegisterResource(request)
+        self.urns[request.type] = response.urn
+        return response
+
+
 @pulumi.runtime.test
 def test_proxy_manifests_keep_credentials_external_and_limit_network(monkeypatch):
     monkeypatch.setenv("KUBECONFIG", "/not-read-by-mocks")
     mocks = RecordingMocks()
-    pulumi.runtime.set_mocks(mocks, project="marin-shellsim-ports", stack="test", preview=True)
+    monitor = RecordingMonitor(mocks)
+    pulumi.runtime.set_mocks(mocks, project="marin-shellsim-ports", stack="test", preview=True, monitor=monitor)
     url = deploy(
         ProxyConfig(
             cluster="cw-us-east-02a",
@@ -50,7 +65,9 @@ def test_proxy_manifests_keep_credentials_external_and_limit_network(monkeypatch
         assert resources["pulumi:providers:kubernetes"]["kubeconfig"] == ""
         assert resources["pulumi:providers:kubernetes"]["context"] == "marin-gpu_US-EAST-02A"
         assert "apiToken" not in resources["pulumi:providers:cloudflare"]
-        policy = resources["kubernetes:cilium.io/v2:CiliumNetworkPolicy"]["spec"]
+        policy_type = "kubernetes:cilium.io/v2:CiliumNetworkPolicy"
+        assert monitor.urns[policy_type] in monitor.dependencies["kubernetes:apps/v1:Deployment"]
+        policy = resources[policy_type]["spec"]
         dns_rule = next(rule for rule in policy["egress"] if "toEndpoints" in rule)
         assert dns_rule["toEndpoints"] == [
             {
