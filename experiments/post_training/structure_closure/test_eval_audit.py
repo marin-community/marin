@@ -137,3 +137,37 @@ def test_audit_matches_stable_case_ids_when_output_order_changes(cohort, rows):
     audit = audit_evaluation(cohort, reversed(rows), uid_source=UidSource.CASE_ID)
     assert audit.complete
     assert [(row.case_id, row.success) for row in audit.results] == [("second", False), ("first", True)]
+
+
+def test_audit_separates_repeated_openers_from_valid_calls_with_changed_content(cohort, rows):
+    for case, row, response, complete in zip(
+        cohort,
+        rows,
+        ('{"name":"other","arguments":{}}</tool_call>', "<tool_call><tool_call>"),
+        (True, False),
+        strict=True,
+    ):
+        case.update(
+            family="repeated_opener_retention",
+            control="opener_retention",
+            format="tool",
+            prefix="<tool_call>",
+            expected='<tool_call>{"name":"expected","arguments":{}}</tool_call>',
+        )
+        row.update(output_response=response, verification={"status": "verified", "score": 0.0}, score=[0.0])
+        row["env_metrics"] = {
+            f"closure_region_v1/repeated_opener_retention/opener_retention/{name}": value
+            for name, value in {
+                "syntax_complete": float(complete),
+                "content_preserved": 0.0,
+                "success": 0.0,
+                "trailing_content": 0.0,
+                "whole_response_success": 0.0,
+            }.items()
+        }
+    audit = audit_evaluation(cohort, rows, uid_source=UidSource.ROW_INDEX)
+    assert audit.complete
+    assert [result.success for result in audit.results] == [False, False]
+    assert audit.summary()["tool_protocol"] == {
+        "repeated_opener_retention/opener_retention": {"valid": 1, "repeated_opener": 1}
+    }

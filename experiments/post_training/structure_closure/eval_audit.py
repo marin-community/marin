@@ -20,6 +20,7 @@ from rolloutengine.closure_scoring import (
     continuation_outcome,
     score_closure_region,
 )
+from rolloutengine.tool_protocol import ToolCallStatus, tool_call_regions
 
 from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
 
@@ -52,6 +53,7 @@ class CaseResult:
     trailing_content: bool
     whole_response_success: bool
     control_outcome: ContinuationOutcome | None
+    tool_protocol_status: ToolCallStatus | None
 
 
 @dataclass(frozen=True)
@@ -75,9 +77,14 @@ class EvaluationAudit:
     def summary(self) -> dict:
         groups: dict[str, Counter] = {}
         control_outcomes: dict[str, Counter] = {}
+        tool_protocol: dict[str, Counter] = {}
         for result in self.results:
             if result.control_outcome is not None:
                 control_outcomes.setdefault(f"{result.family}/{result.control}", Counter())[result.control_outcome] += 1
+            if result.tool_protocol_status is not None:
+                tool_protocol.setdefault(f"{result.family}/{result.control}", Counter())[
+                    result.tool_protocol_status
+                ] += 1
             for key in (result.family, f"{result.family}/{result.control}"):
                 counts = groups.setdefault(key, Counter())
                 counts.update(
@@ -95,6 +102,7 @@ class EvaluationAudit:
             **asdict(self),
             "groups": dict(sorted(groups.items())),
             "control_outcomes": dict(sorted(control_outcomes.items())),
+            "tool_protocol": dict(sorted(tool_protocol.items())),
         }
 
 
@@ -139,6 +147,12 @@ def audit_evaluation(
             if verification["score"] != float(score.success) or sum(row["score"]) != float(score.success):
                 raise ValueError("Reward/verifier score disagrees with rescored response")
             control_outcome = None
+            tool_protocol_status = None
+            if case["format"] == ClosureFormat.TOOL:
+                regions = tool_call_regions(case["prefix"] + content, initial_thinking=False)
+                if not regions or regions[0].start != 0:
+                    raise ValueError("Tool cohort does not start with an outside-thinking tool call")
+                tool_protocol_status = regions[0].status
             if case["control"] in ("continue_required", "escape_continue_required"):
                 control_outcome = continuation_outcome(
                     case["prefix"] + content, case["expected"], ClosureFormat(case["format"])
@@ -151,6 +165,7 @@ def audit_evaluation(
                     case["control"],
                     **asdict(score),
                     control_outcome=control_outcome,
+                    tool_protocol_status=tool_protocol_status,
                 )
             )
         except (KeyError, TypeError, ValueError) as error:
