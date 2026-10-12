@@ -32,8 +32,16 @@
       "bytes": 809179604,
       "manifest_sha256": "41e6a7ce4d04bb6c8eff5230c4b717edd857762c0e05ab22a536894daf7c393d",
       "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-runtime-qual-s0-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 8174,
+      "bytes": 738525270,
+      "manifest_sha256": "ffe01c1c518ff3246d63b8fc02134c2744007c381a57825fa4d963e4fb665673",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
     }
   ],
-  "total_objects": 22350,
-  "total_bytes": 5452755352
+  "total_objects": 30524,
+  "total_bytes": 6191280622
 }
