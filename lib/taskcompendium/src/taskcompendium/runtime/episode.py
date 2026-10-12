@@ -76,6 +76,8 @@ async def run_episode(
             for call in response.calls:
                 if call.name not in {tool.name for tool in tools}:
                     observation = json.dumps({"error": "Tool is not advertised"})
+                elif not isinstance(call.arguments, dict):
+                    observation = json.dumps({"error": "Tool arguments must be a JSON object"})
                 else:
                     observation = await environment.step(FunctionCall(name=call.name, arguments=call.arguments))
                 events.append(ToolResult(call_id=call.call_id, content=observation))

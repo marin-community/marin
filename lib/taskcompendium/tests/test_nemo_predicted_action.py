@@ -284,6 +284,17 @@ def test_imported_final_call_constraints_distinguish_invalid_submission(require_
     assert request["parallel_tool_calls"] is False
 
 
+@pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
+def test_nonobject_final_arguments_are_scored_submission_failures(arguments):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification = import_row(row, canonical_sha256(row))
+    final = assistant_message(_action(row["expected_action"]["name"], arguments))
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
+    result = grade_answer(specification, attempt)
+    assert (result.status, result.reward) == ("submission_failure", 0.0)
+    assert final.calls[0].arguments == json.loads(arguments)
+
+
 def test_imported_parallel_actions_accept_multiple_final_calls():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["responses_create_params"]["parallel_tool_calls"] = True

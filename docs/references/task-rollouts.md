@@ -87,7 +87,7 @@ The verifier machine uses its own configured default user.
 The engine installs `resources.all` and `resources.worker` on the task machine before session preparation.
 It calls these session methods:
 
-1. `prepare()` returns `SessionStart`: public messages and model options.
+1. `prepare()` returns `SessionStart`: public messages, model options, and optionally exact initial prompt tokens.
 2. `advance(turn)` executes task operations and returns `Transition`: observations, completion, and optional per-turn grades or credit.
 3. `grade(messages, stop_reason=...)` returns the final `GradeResult`.
 4. `close()` releases session resources before machine cleanup.
@@ -95,7 +95,12 @@ It calls these session methods:
 The engine owns model calls, conversation accumulation, and exact-token accounting.
 Each model request returns one turn, then `advance` executes that turn's operations.
 Completion, a generation limit, the turn limit, or the cumulative turn deadline starts final grading.
-A session does not call the model.
+Ordinary task sessions return observations to the engine, which calls the model.
+For an installed agent, pass `agent=` to `ShellboxRolloutEngine`. The agent receives the task machine
+and an async completion callback. It sends each `SessionStart` to that callback and receives the exact
+`ModelTurn` produced by the engine. Only one completion request may be pending at a time. The engine
+keeps the Shellbox session's isolated grader and closes the agent before releasing the task machine.
+This mode requires the built-in `shellbox` task session.
 The default session exposes `shell(command: string)` when the task declares the shell capability.
 Each command runs through `bash -c`. Files persist between commands; shell variables do not.
 TaskSpec can own the shell interface when its prompt names a particular tool. Declare the
@@ -262,6 +267,8 @@ Patch collection compares the final index with that revision, including agent co
 
 The model callable accepts `ModelRequest` and returns `ModelTurn` with a parsed assistant message and exact served token IDs.
 `ModelRequest.messages` contains public messages. `prefix_token_ids` contains the earlier served tokens that the next request must preserve.
+If `SessionStart.prompt_token_ids` is set, the first `ModelRequest.prompt_token_ids` carries that exact
+prefix to the model transport. The returned first turn must report the same prompt tokens.
 `ModelTurn.prompt_token_ids` contains the exact prompt sent to inference. `response_token_ids` contains the sampled response.
 Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.
@@ -274,6 +281,8 @@ Model tokens have loss mask 1. Observation tokens have mask 0 and log probabilit
 The caller applies its training and failure policies when it projects the record.
 A conversation reset discards earlier turns from the training record when another turn is available.
 The session supplies new public messages in `Transition.reset_conversation`.
+`Transition.next_options` replaces the model options for the next request, including when the agent
+changes its tool set after a conversation reset.
 The engine clears the accumulated prefix, turns, and token evidence, then starts a fresh prefix check.
 The reset preserves session state and workspace files.
 Final grading receives the new conversation and its subsequent turns.

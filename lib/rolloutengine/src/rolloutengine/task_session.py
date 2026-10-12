@@ -109,7 +109,9 @@ class _ShellboxTaskSession:
             answer_call = isinstance(self.lowered.task.answer_format, AnswerCall) and call.name == ANSWER_CALL_NAME
             if call.name in final_tools or answer_call:
                 return Transition(done=True)
-            if self.shell_tool is None:
+            if not isinstance(call.arguments, dict):
+                observation = json.dumps({"error": "Tool arguments must be a JSON object"})
+            elif self.shell_tool is None:
                 observation = json.dumps({"error": "No shell tool is available"})
             else:
                 observation = await run_shell_call(
