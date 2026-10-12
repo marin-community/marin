@@ -185,6 +185,10 @@ ROUTING_SELECTED_KEY = "routing_selected_per_layer"
 # Per-layer routed-expert inputs and shared-expert pre-activations for ``Transformer.neuron_inputs`` (the
 # neuron-health dump); passthroughs, so the training forward drops them.
 _ROUTED_INPUT = "routed_input"
+# ``scan_save_routed_output``: a layer's combined routed-expert output ``[T, L]`` (a stat the scan collects and
+# strips), and the extras key that hands the saved value back to the backward's recompute.
+_ROUTED_COMBINE = "routed_combine"
+_SAVED_ROUTED = "saved_routed"
 # Per-layer moe_compress / moe_shadow_width loss and metrics, stacked over layers like the router stats.
 _COMPRESS_LOSS = "compress_loss"
 _DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA)
@@ -798,6 +802,11 @@ class GrugModelConfig:
     """With ``scan_layers``, keep the scan's backward residuals in pinned host memory: the per-layer incoming AttnRes
     partials (one ``[B, S, D]`` per scanned layer, 33 GiB per GPU at hero width, brought back one unit at a time in
     the reverse scan) and the final history sources. As the GB200 hero offloads its layer carry. Same math."""
+    scan_save_routed_output: bool = False
+    """``scan_layers``: keep each layer's combined routed-expert output from the forward (offloaded with the
+    partials under ``scan_offload_partials``) and hand it to the backward's per-layer recompute, so the recompute
+    skips the expert down projection's consumers: the return all-to-all and the combine (the hero's saved
+    ``grug_moe_routed_output``; needs the expert-side routing-weight gradient). Same math."""
     scan_layers: bool = False
     """Run the AttnRes layer stack as a ``jax.lax.scan`` over ``global_every``-layer units on a fixed-shape
     history (``_AttnResHistory``), each layer rematerialized in the backward, instead of unrolling every layer.
@@ -907,6 +916,8 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
+        if self.scan_save_routed_output and not self.scan_layers:
+            raise ValueError("scan_save_routed_output saves the routed output across the scan_layers backward")
         if self.moe_shared_placement != SharedExpertPlacement.FUSED and self.fp8_recipe != Fp8Recipe.NONE:
             raise ValueError("fp8_recipe covers only moe_shared_placement=fused shared experts")
         if unknown := set(()) - set(LATENT_MIX_SITES):
@@ -2446,8 +2457,11 @@ class MoEMLP(eqx.Module):
         router_seed_bias: Float[Array, "B S E"] | None = None,
         router_embed: Float[Array, "B S D"] | None = None,
         null_routing: bool = False,
+        saved_routed: Float[Array, "T L"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``router_embed`` is the token embedding the router reads under ``router_on_embed``.
+        ``saved_routed`` is this call's combined expert output from the forward (``scan_save_routed_output``):
+        the recompute returns it, with the gradient still flowing through the experts.
         ``null_routing`` (a ``moe_null_layers`` layer) routes top-2K over the real and null columns.
         ``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller
         computed them already (fused with other projections of the same input). ``hash_token_ids`` picks
@@ -2614,6 +2628,10 @@ class MoEMLP(eqx.Module):
             overflows.append(overflow)
             col += bank_k
         routed_flat = functools.reduce(jnp.add, outputs)
+        if saved_routed is not None:
+            routed_flat = _saved_value(routed_flat, saved_routed.astype(routed_flat.dtype))
+        if self.cfg.scan_save_routed_output:
+            router_stats[_ROUTED_COMBINE] = routed_flat
         if null_layer and self.null_gain is not None:
             routed_flat = routed_flat * self.null_gain.astype(routed_flat.dtype)
         if null_out is not None:
@@ -2716,6 +2734,7 @@ def moe_and_shared_fused(
     shadow: DenseMLP | None = None,
     router_embed: Float[Array, "B S D"] | None = None,
     null_routing: bool = False,
+    saved_routed: Float[Array, "T L"] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -2784,6 +2803,7 @@ def moe_and_shared_fused(
             overlap=overlap,
             router_embed=router_embed,
             null_routing=null_routing,
+            saved_routed=saved_routed,
         )
 
     routed, stats = routed_mlp()
@@ -3274,6 +3294,7 @@ class Block(eqx.Module):
         router_seed_bias: Float[Array, "B S E"] | None = None,
         router_embed: Float[Array, "B S D"] | None = None,
         null_routing: bool = False,
+        saved_routed: Float[Array, "T L"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
@@ -3304,6 +3325,7 @@ class Block(eqx.Module):
                 None,
                 router_embed,
                 null_routing,
+                saved_routed,
             )
         else:
             out, stats = self.mlp(
@@ -3314,6 +3336,7 @@ class Block(eqx.Module):
                 router_seed_bias=router_seed_bias,
                 router_embed=router_embed,
                 null_routing=null_routing,
+                saved_routed=saved_routed,
             )
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
@@ -4244,6 +4267,7 @@ def _route_kwargs(
             None if extras is None else extras.get("router_hist"),
         ),
         "null_routing": physical_layer in cfg.moe_null_layers,
+        "saved_routed": None if extras is None else extras.get(_SAVED_ROUTED),
     }
 
 
@@ -4463,6 +4487,7 @@ def _scan_history_layer(
     eps: float,
     route_key: jax.Array | None,
     probes: tuple[jax.Array, ...] | None = None,
+    saved_routed: jax.Array | None = None,
 ) -> tuple[_AttnResHistory, dict[str, jax.Array], tuple[jax.Array, ...]]:
     """``_attn_res_layer`` on the fixed-shape history, at a traced ``layer_index``.
 
@@ -4547,8 +4572,9 @@ def _scan_history_layer(
         return reshard(mixed.astype(sources.dtype), _batch_spec()), z, mean_weights
 
     noise_key = None if route_key is None else jax.random.fold_in(route_key, layer_index)
+    extras = None if saved_routed is None else {_SAVED_ROUTED: saved_routed}
     partial, stats = _attn_res_sublayers(
-        layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, None, None
+        layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, None, extras
     )
     if unsupported := set(stats) & set(_DIFFERENTIABLE_STATS):
         raise ValueError(f"scan_layers does not carry the differentiable layer stats {sorted(unsupported)}")
@@ -4607,9 +4633,30 @@ class _ScanArgs(NamedTuple):
     offload_partials: bool
 
 
-def _to_memory_kind(x: jax.Array, memory_kind: str) -> jax.Array:
-    """``x`` moved to ``memory_kind`` (``pinned_host`` / ``device``), keeping its sharding."""
-    return jax.device_put(x, jax.typeof(x).sharding.with_memory_kind(memory_kind))
+@jax.custom_vjp
+def _saved_value(computed: jax.Array, saved: jax.Array) -> jax.Array:
+    """``saved`` as the value and ``computed``'s gradient path: the recompute's output takes the forward's saved
+    copy, so nothing reads ``computed`` and XLA drops the ops that only produced it, while the cotangent still
+    reaches the ops that produced ``computed`` (their VJP needs no value from it)."""
+    del computed
+    return saved
+
+
+def _saved_value_fwd(computed: jax.Array, saved: jax.Array) -> tuple[jax.Array, None]:
+    del computed
+    return saved, None
+
+
+def _saved_value_bwd(_, g: jax.Array) -> tuple[jax.Array, jax.Array]:
+    return g, jnp.zeros_like(g)
+
+
+_saved_value.defvjp(_saved_value_fwd, _saved_value_bwd)
+
+
+def _to_memory_kind(x, memory_kind: str):
+    """Every array of the pytree ``x`` moved to ``memory_kind`` (``pinned_host`` / ``device``), keeping its sharding."""
+    return jax.tree.map(lambda a: jax.device_put(a, jax.typeof(a).sharding.with_memory_kind(memory_kind)), x)
 
 
 def _unit_layer(units: dict[bool, Block], layer: _UnitLayer) -> Block:
@@ -4624,6 +4671,7 @@ def _run_unit_layer(
     unit_layer: _UnitLayer,
     args: _ScanArgs,
     probes: tuple[jax.Array, ...] | None = None,
+    saved_routed: jax.Array | None = None,
 ) -> tuple[_AttnResHistory, dict[str, jax.Array], tuple[jax.Array, ...]]:
     return _scan_history_layer(
         layer,
@@ -4637,17 +4685,18 @@ def _run_unit_layer(
         args.eps,
         args.route_key,
         probes,
+        saved_routed,
     )
 
 
 def _layer_history(
-    layer_diff, logits, partial, queries, probes, *, sources, layer_static, layer_index, unit_layer, args
+    layer_diff, logits, partial, queries, probes, *, sources, layer_static, layer_index, unit_layer, args, saved_routed
 ):
     """``_run_unit_layer``'s ``(logits, partial)`` as a function of the differentiable inputs (the backward's
     ``jax.vjp``), with the gates' source weights as aux. ``sources`` is the final history, held constant."""
     layer = eqx.combine(_cast_floats(layer_diff, sources.dtype), layer_static)
     history, _, gate_weights = _run_unit_layer(
-        layer, _AttnResHistory(sources, logits, partial), queries, layer_index, unit_layer, args, probes
+        layer, _AttnResHistory(sources, logits, partial), queries, layer_index, unit_layer, args, probes, saved_routed
     )
     return (history.logits, history.partial), gate_weights
 
@@ -4662,17 +4711,20 @@ def _scan_forward(
         unit_diff, unit_static, u = xs
         dtype = history.sources.dtype
         units = {kind: eqx.combine(_cast_floats(unit_diff[kind], dtype), unit_static[kind]) for kind in unit_diff}
-        partials, stats = [], []
+        partials, stats, routed = [], [], []
         for j, unit_layer in enumerate(plan.unit):
             partials.append(history.partial)
             history, layer_stats, _ = _run_unit_layer(
                 _unit_layer(units, unit_layer), history, queries, len(plan.unit) * u + j, unit_layer, args
             )
+            if _ROUTED_COMBINE in layer_stats:
+                layer_stats = dict(layer_stats)
+                routed.append(layer_stats.pop(_ROUTED_COMBINE))
             stats.append(layer_stats)
         if not save_partials:
             return history, (tuple(stats), None)
-        saved = jnp.stack(partials)
-        # Offloaded per unit as the scan produces it, so the stacked residual lives in pinned host memory.
+        saved = (jnp.stack(partials), tuple(routed))
+        # Offloaded per unit as the scan produces it, so the stacked residuals live in pinned host memory.
         return history, (tuple(stats), _to_memory_kind(saved, "pinned_host") if args.offload_partials else saved)
 
     xs = (units_diff, args.units_static, jnp.arange(plan.num_units, dtype=jnp.int32))
@@ -4716,9 +4768,9 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
 
     def unit_step(carry, xs):
         d_history, d_queries = carry
-        unit_diff, unit_static, unit_partials, u = xs
+        unit_diff, unit_static, (unit_partials, unit_routed), u = xs
         if args.offload_partials:
-            unit_partials = _to_memory_kind(unit_partials, "device")
+            unit_partials, unit_routed = _to_memory_kind((unit_partials, unit_routed), "device")
         d_unit: dict[bool, list[Block | None]] = {kind: [None] * plan.kind_count(kind) for kind in unit_diff}
         for j in reversed(range(len(plan.unit))):
             unit_layer = plan.unit[j]
@@ -4739,6 +4791,7 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
                     layer_index=layer_index,
                     unit_layer=unit_layer,
                     args=args,
+                    saved_routed=unit_routed[j] if unit_routed else None,
                 )
                 num_gates = 2 + (layer_diff.attn_res_query_shared is not None)
                 probes = tuple(jnp.zeros_like(partial_in, dtype=jnp.float32) for _ in range(num_gates))
