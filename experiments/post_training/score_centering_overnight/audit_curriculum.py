@@ -32,6 +32,7 @@ def audit(
     max_eval_errors: int = 0,
     max_train_errors: int = 0,
     recorded_learner_steps: bool = False,
+    ordinary_incumbent: bool = False,
 ) -> dict:
     resolved = yaml.safe_load((root / "resolved-launch.yaml").read_text())["config"]
     assert resolved["runtime"]["launcher_commit"] == config["runtime"]["launcher_commit"]
@@ -44,23 +45,62 @@ def audit(
     batch_size = trainer["train_batch_size"] * group_size
     assert trainer["policy_mini_batch_size"] == trainer["train_batch_size"]
     assert trainer["update_epochs_per_batch"] == 1
-    assert algorithm["score_centering_topk"] == 128
     assert algorithm["score_centering_enabled"] == config["skyrl"]["trainer"]["algorithm"]["score_centering_enabled"]
-    assert algorithm["off_policy_correction_rules"] == [{"kind": "token", "action": "truncate", "high": 2.0}]
+    if ordinary_incumbent:
+        assert "incumbent" in config["run"]["id"]
+        assert algorithm["score_centering_topk"] == 0 and not algorithm["score_centering_enabled"]
+        assert algorithm["off_policy_correction_rules"] == []
+        assert trainer["rollout_buffer"]["batch_policy"] == "full_batch"
+        assert recorded_learner_steps
+    else:
+        assert algorithm["score_centering_topk"] == 128
+        assert algorithm["off_policy_correction_rules"] == [{"kind": "token", "action": "truncate", "high": 2.0}]
     evidence = []
     for step in range(1, updates + 1):
         metrics = json.loads((root / "exports/training_metrics" / f"train-{step:08d}.json").read_text())
         assert metrics["policy/policy_update_steps"] == 1 and metrics["policy/skipped_steps"] == 0
         assert math.isfinite(metrics["policy/raw_grad_norm"])
         expected_age = (step - 1) % refresh_period
-        assert metrics["async/staleness_max"] == metrics["async/staleness_min"] == expected_age
-        assert metrics["policy/log_ratio_abs_max"] == 0 and metrics["policy/ppo_clip_ratio"] == 0
+        if ordinary_incumbent:
+            assert (
+                0
+                <= metrics["async/staleness_min"]
+                <= metrics["async/staleness_max"]
+                <= trainer["rollout_buffer"]["max_staleness_steps"]
+            )
+            assert math.isfinite(metrics["policy/log_ratio_abs_max"])
+            assert 0 <= metrics["policy/ppo_clip_ratio"] <= 1
+        else:
+            assert metrics["async/staleness_max"] == metrics["async/staleness_min"] == expected_age
+            assert metrics["policy/log_ratio_abs_max"] == 0 and metrics["policy/ppo_clip_ratio"] == 0
         if not platform_scope:
             assert metrics["async/rejected_count"] == 0
         batch = pickle.loads((root / "exports/dumped_data" / f"global_step_{step}_training_input.pkl").read_bytes())
         assert batch.metadata["global_step"] == step and batch.metadata["source_batch_size"] == batch_size
-        assert torch.all(batch["rollout_staleness"] == expected_age)
         mask = batch["loss_mask"].bool()
+        if ordinary_incumbent:
+            ages = batch["rollout_staleness"]
+            assert torch.all((ages >= 0) & (ages <= trainer["rollout_buffer"]["max_staleness_steps"]))
+            assert torch.isfinite(batch["action_log_probs"][mask]).all()
+            assert torch.all(
+                batch["attention_mask"].sum(-1) <= config["skyrl"]["context_budget"]["request_window_tokens"]
+            )
+            evidence.append(
+                {
+                    "step": step,
+                    "gradient_norm": metrics["policy/raw_grad_norm"],
+                    "consumed_loss_tokens": metrics["async/performance/consumed_loss_tokens"],
+                    "retained_rows": batch.batch_size,
+                    "captured_loss_tokens": int(mask.sum()),
+                    "actual_sampler_age_min": metrics["async/staleness_min"],
+                    "actual_sampler_age_max": metrics["async/staleness_max"],
+                    "pooled_active_log_ratio_abs_max": metrics["policy/log_ratio_abs_max"],
+                    "ppo_clip_ratio": metrics["policy/ppo_clip_ratio"],
+                    "candidate_evidence": "Not requested by ordinary incumbent: no natural head, TIS or centering.",
+                }
+            )
+            continue
+        assert torch.all(batch["rollout_staleness"] == expected_age)
         q, old = batch["score_behavior_logprobs"][mask], batch["score_old_logprobs"][mask]
         ids = batch["score_topk_indices"][mask]
         chosen = batch["rollout_logprobs"][mask]
@@ -115,6 +155,7 @@ def audit(
     quality = {}
     evaluation_rows = {}
     errors = []
+    prefetch_records = 0
     inventory = {
         item["Key"].split("/attempts/", 1)[-1]: item for item in json.loads((root / "object_inventory.json").read_text())
     }
@@ -130,6 +171,23 @@ def audit(
                     continue
                 row = json.loads(gzip.decompress(archive.read(name)))
                 phase, step = row["phase"], row["global_step"]
+                if ordinary_incumbent and phase == "train":
+                    assert (
+                        0
+                        <= step - 1 - row["provenance"]["model_version_step"]
+                        <= trainer["rollout_buffer"]["max_staleness_steps"]
+                    )
+                    if step > updates:
+                        assert step <= updates + trainer["rollout_buffer"]["max_staleness_steps"]
+                        assert (
+                            row["prompt"]["token_ids"] == row["trajectory"]["environment_extras"]["reference_prompt_ids"]
+                        )
+                        assert (
+                            len(row["prompt"]["token_ids"]) + len(row["response"]["token_ids"])
+                            <= config["skyrl"]["context_budget"]["request_window_tokens"]
+                        )
+                        prefetch_records += 1
+                        continue
                 if phase == "train" and refresh_period > 1 and not recorded_learner_steps:
                     # This calibration stays within the first frozen input epoch.
                     consumed_step = int(row["trajectory"]["instance_id"]) // trainer["train_batch_size"] + 1
@@ -137,7 +195,7 @@ def audit(
                     assert step == 1 + ((consumed_step - 1) // refresh_period) * refresh_period
                     assert row["provenance"]["model_version_step"] == step - 1
                     step = consumed_step
-                elif phase == "train" and recorded_learner_steps:
+                elif phase == "train" and recorded_learner_steps and not ordinary_incumbent:
                     assert row["provenance"]["model_version_step"] == ((step - 1) // refresh_period) * refresh_period
                 counts[(phase, step)] += 1
                 if row["disposition"]["exception_type"] or row["verification_result"]["status"] == "error":
@@ -221,6 +279,8 @@ def audit(
         "completed_updates": updates,
         "sampler_refresh_period": refresh_period,
         "recorded_learner_steps": recorded_learner_steps,
+        "ordinary_incumbent": ordinary_incumbent,
+        "unconsumed_prefetch_records": prefetch_records,
         "audit_scope": "platform qualification" if platform_scope else "complete native curriculum run",
         "source_task_errors": errors,
         "evaluation_error_accounting": "Retained execution failures receive zero quality in the fixed denominator.",
@@ -258,6 +318,7 @@ def main() -> None:
     parser.add_argument("--max-eval-errors", type=int, default=0)
     parser.add_argument("--max-train-errors", type=int, default=0)
     parser.add_argument("--recorded-learner-steps", action="store_true")
+    parser.add_argument("--ordinary-incumbent", action="store_true")
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     client = boto3.client(
@@ -277,6 +338,7 @@ def main() -> None:
         max_eval_errors=args.max_eval_errors,
         max_train_errors=args.max_train_errors,
         recorded_learner_steps=args.recorded_learner_steps,
+        ordinary_incumbent=args.ordinary_incumbent,
     )
     checkpoint = urlparse(config["artifacts"]["checkpoint_root"])
     marker = client.get_object(
