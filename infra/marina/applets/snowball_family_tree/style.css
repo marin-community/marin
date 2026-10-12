@@ -272,13 +272,6 @@ select {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-.child-count {
-  font:
-    10px ui-monospace,
-    monospace;
-  color: var(--muted);
-  margin-top: 10px;
-}
 .node.descendant {
   box-shadow: 0 0 0 2px #116a7833;
 }
@@ -430,12 +423,6 @@ select {
     monospace;
   color: #88571f;
   margin: 8px 0;
-}
-.compact .node .summary {
-  display: none;
-}
-.compact .node .model {
-  margin-bottom: 4px;
 }
 .edges {
   position: absolute;

@@ -22,9 +22,11 @@ const COOLDOWN_ROOTS = {
 const TIMELINE_ROWS = 6;
 const SCRUBBER_STEPS = Number($("#timeline-scrub").max);
 const SEPT21 = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21";
+const PRETRAIN = "pretrain";
+const HF_URL = "https://huggingface.co/";
 let detailId = null,
   resultsDismissed = false,
-  selected = "pretrain",
+  selected = PRETRAIN,
   zoom = 1,
   expandedNode = null,
   overviewMode = true,
@@ -61,7 +63,7 @@ function descendants(id, set = new Set()) {
 }
 function shortTitle(n) {
   const labels = {
-    pretrain: "67B A2B pretrain",
+    [PRETRAIN]: "67B A2B pretrain",
     "base-2.7": "2.7T cooldown",
     "base-5.7": "5.7T cooldown",
     "base-10": "10T cooldown",
@@ -106,7 +108,7 @@ function card(n, presentation = "map") {
   return `<article class="node ${n.org === "community" ? "community" : ""} ${expanded ? "expanded" : "collapsed"} ${selected === n.id ? "selected" : ""}" data-node="${esc(n.id)}" ${reading ? "" : `id="node-${esc(n.id)}"`} aria-label="${esc(n.title)}">
  <h2>${reading ? esc(n.title) : `<button class="node-toggle" data-expand="${esc(n.id)}" aria-expanded="${expanded}" aria-label="${expanded ? "Collapse" : "Expand"} ${esc(n.title)}">${esc(expanded ? n.title : shortTitle(n))}</button>`}</h2>
  <div class="node-brief"><span>${esc(n.stage)}</span><span>${children.get(n.id).length ? "↳ " + children.get(n.id).length : "leaf"}</span></div>
- <div class="node-full"><div class="node-top"><span class="org-label">${esc(n.org)}</span><span class="kind">${esc(n.stage || "Experiment")}</span></div>${n.model ? `<span class="model">${esc(n.model)}</span>` : ""}${/failed|negative result|collapsed final/.test(n.status) ? '<div class="badge">NEGATIVE RESULT / FAILED TRIAL</div>' : ""}${n.confidence !== "documented" ? `<div class="badge">${esc(n.confidence || "Qualified provenance")}</div>` : ""}<p class="summary">${esc(n.summary)}</p><div class="tags">${n.algorithms.map((a) => `<span class="tag">${esc(a)}</span>`).join("")}</div><div class="compute">${esc(n.flops || "FLOPs unknown")}</div><div class="node-foot"><a href="${esc(n.source)}" target="_blank" rel="noopener noreferrer">${sourceName(n.source)} ↗</a>${n.model ? `<a href="https://huggingface.co/${esc(n.model)}" target="_blank" rel="noopener noreferrer">Weights ↗</a>` : ""}<button type="button" data-select="${esc(n.id)}">Details</button></div>${n.parents.length ? `<div class="from">${n.edge_kind === "retained checkpoint" ? "Earlier checkpoint" : "Initialized from"} ${n.parents.map((p) => `<button data-jump="${esc(p)}">${esc(byId.get(p)?.title || p)}</button>`).join(" + ")}</div>` : ""}</div></article>`;
+ <div class="node-full"><div class="node-top"><span class="org-label">${esc(n.org)}</span><span class="kind">${esc(n.stage || "Experiment")}</span></div>${n.model ? `<span class="model">${esc(n.model)}</span>` : ""}${/failed|negative result|collapsed final/.test(n.status) ? '<div class="badge">NEGATIVE RESULT / FAILED TRIAL</div>' : ""}${n.confidence !== "documented" ? `<div class="badge">${esc(n.confidence || "Qualified provenance")}</div>` : ""}<p class="summary">${esc(n.summary)}</p><div class="tags">${n.algorithms.map((a) => `<span class="tag">${esc(a)}</span>`).join("")}</div><div class="compute">${esc(n.flops || "FLOPs unknown")}</div><div class="node-foot"><a href="${esc(n.source)}" target="_blank" rel="noopener noreferrer">${sourceName(n.source)} ↗</a>${n.model ? `<a href="${HF_URL}${esc(n.model)}" target="_blank" rel="noopener noreferrer">Weights ↗</a>` : ""}<button type="button" data-select="${esc(n.id)}">Details</button></div>${n.parents.length ? `<div class="from">${n.edge_kind === "retained checkpoint" ? "Earlier checkpoint" : "Initialized from"} ${n.parents.map((p) => `<button data-jump="${esc(p)}">${esc(byId.get(p)?.title || p)}</button>`).join(" + ")}</div>` : ""}</div></article>`;
 }
 function ordered(list) {
   const result = [],
@@ -122,16 +124,6 @@ function ordered(list) {
   }
   list.forEach(add);
   return result;
-}
-function matches(n) {
-  const query = $("#search").value.trim().toLowerCase(),
-    family = $("#family").value,
-    org = $("#org").value;
-  return (
-    (family === "all" || n.lane === family) &&
-    (org === "all" || n.org === org) &&
-    (!query || JSON.stringify(n).toLowerCase().includes(query))
-  );
 }
 function treeMembers() {
   const family = $("#family").value;
@@ -185,7 +177,7 @@ function layout() {
     kids.forEach((c) => measure(c, depth + 1));
     // Broad sibling sets wrap inside their parent's branch, keeping every node visible.
     const columns =
-      n.id === "pretrain" ? kids.length : Math.min(2, Math.max(1, kids.length));
+      n.id === PRETRAIN ? kids.length : Math.min(2, Math.max(1, kids.length));
     const rows = [];
     for (let i = 0; i < kids.length; i += columns)
       rows.push(kids.slice(i, i + columns));
@@ -365,33 +357,6 @@ function highlight() {
     );
   });
 }
-function applyFilter() {
-  const matched = nodes.filter(matches),
-    relevant = new Set();
-  matched.forEach((n) => ancestors(n.id, relevant));
-  document
-    .querySelectorAll("#world [data-node]")
-    .forEach((e) => e.classList.toggle("dim", !relevant.has(e.dataset.node)));
-  document
-    .querySelectorAll("#read-grid [data-node]")
-    .forEach((e) => (e.hidden = !matches(byId.get(e.dataset.node))));
-  const filtered = $("#search").value.trim();
-  $("#results").hidden = !filtered || viewMode !== "map" || resultsDismissed;
-  $("#results").innerHTML =
-    `<span>${matched.length} matches</span>` +
-    matched
-      .slice(0, 8)
-      .map((n) => `<button data-jump="${esc(n.id)}">${esc(n.title)}</button>`)
-      .join("");
-  $("#read-status").textContent =
-    `${matched.length} matching nodes · all summaries and checkpoint evidence`;
-  $("#filter-status").textContent =
-    viewMode === "timeline"
-      ? "Play to reveal checkpoints · scrub to explore · click for details"
-      : matched.length === nodes.length
-        ? "Wheel to zoom · drag to pan · click a node to expand"
-        : `${matched.length} matches · ancestors retained for context`;
-}
 function detail(id) {
   const n = byId.get(id);
   if (!n) return;
@@ -401,7 +366,7 @@ function detail(id) {
   const path = ordered(nodes.filter((x) => ancestors(id).has(x.id)));
   const evidence = n.evidence || [];
   const shortLabels = {
-    pretrain: "Shared pretrain",
+    [PRETRAIN]: "Shared pretrain",
     "base-2.7": "2.7T cooldown",
     "base-5.7": "5.7T cooldown",
     "base-10": "10T cooldown",
@@ -416,7 +381,7 @@ function detail(id) {
       )
       .join('<span aria-hidden="true">→</span>');
   $("#detail-content").innerHTML =
-    `<span class="kicker">Selected lineage / ${esc(n.lane)}</span><h2>${esc(n.title)}</h2><div class="detail-model">${esc(n.model || n.artifact || "Native training run / checkpoint")}</div><div class="tags">${n.algorithms.map((a) => `<span class="tag">${esc(a)}</span>`).join("")}</div><p>${esc(n.summary)}</p><a class="source-link" target="_blank" rel="noopener noreferrer" href="${esc(n.source)}">${sourceName(n.source)} ↗</a>${n.model ? `<a class="source-link" target="_blank" rel="noopener noreferrer" href="https://huggingface.co/${esc(n.model)}">Hugging Face ↗</a>` : ""}<section><h3>Direct children · ${children.get(id).length}</h3>${
+    `<span class="kicker">Selected lineage / ${esc(n.lane)}</span><h2>${esc(n.title)}</h2><div class="detail-model">${esc(n.model || "Native training run / checkpoint")}</div><div class="tags">${n.algorithms.map((a) => `<span class="tag">${esc(a)}</span>`).join("")}</div><p>${esc(n.summary)}</p><a class="source-link" target="_blank" rel="noopener noreferrer" href="${esc(n.source)}">${sourceName(n.source)} ↗</a>${n.model ? `<a class="source-link" target="_blank" rel="noopener noreferrer" href="${HF_URL}${esc(n.model)}">Hugging Face ↗</a>` : ""}<section><h3>Direct children · ${children.get(id).length}</h3>${
       children.get(id).length
         ? `<ul>${children
             .get(id)
@@ -426,7 +391,7 @@ function detail(id) {
             )
             .join("")}</ul>`
         : "<p>No documented children in this record.</p>"
-    }<button class="btn branch-button" data-focus="${esc(id)}">Focus this branch</button></section><section><h3>Compute / canonical checkpoint</h3><p><strong>${esc(n.flops || "FLOPs unknown")}</strong></p><p>${esc(n.notes || "No additional compute accounting was established in the available source.")}</p></section><section><h3>Weight lineage / saved-state chain</h3><div class="pathline">${path.map((x) => `<button data-jump="${esc(x.id)}">${esc(x.title)}</button>`).join("<br>↓<br>")}</div></section>${(n.retained || []).length ? `<section><h3>Retained checkpoints / aliases</h3><ul>${n.retained.map((x) => (typeof x === "string" ? `<li>${esc(x)}</li>` : `<li><a target="_blank" rel="noopener noreferrer" href="${esc(x.url)}">${esc(x.label || x.model || x.url)}</a>${x.note ? "<br>" + esc(x.note) : ""}</li>`)).join("")}</ul></section>` : ""}<section><h3>Evidence / ${esc(n.confidence || "documented")}</h3>${evidence.length ? `<ul>${evidence.map((x) => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.label || sourceName(x.url))} ↗</a><br>${esc(x.text || x.note || "")}</li>`).join("")}</ul>` : "<p>The canonical experiment record above establishes this branch.</p>"}</section>`;
+    }<button class="btn branch-button" data-focus="${esc(id)}">Focus this branch</button></section><section><h3>Compute / canonical checkpoint</h3><p><strong>${esc(n.flops || "FLOPs unknown")}</strong></p><p>${esc(n.notes || "No additional compute accounting was established in the available source.")}</p></section><section><h3>Weight lineage / saved-state chain</h3><div class="pathline">${path.map((x) => `<button data-jump="${esc(x.id)}">${esc(x.title)}</button>`).join("<br>↓<br>")}</div></section>${(n.retained || []).length ? `<section><h3>Retained checkpoints / aliases</h3><ul>${n.retained.map((x) => `<li><a target="_blank" rel="noopener noreferrer" href="${esc(x.url)}">${esc(x.label || x.model || x.url)}</a>${x.note ? "<br>" + esc(x.note) : ""}</li>`).join("")}</ul></section>` : ""}<section><h3>Evidence / ${esc(n.confidence || "documented")}</h3>${evidence.length ? `<ul>${evidence.map((x) => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.label || sourceName(x.url))} ↗</a><br>${esc(x.text || x.note || "")}</li>`).join("")}</ul>` : "<p>The canonical experiment record above establishes this branch.</p>"}</section>`;
   highlight();
 }
 function centerNode(id, behavior = "instant") {
@@ -441,6 +406,14 @@ function centerNode(id, behavior = "instant") {
     top: Math.max(0, pos.y * zoom + offsetY - 24),
     behavior,
   });
+}
+function sizeWorkspace() {
+  const workspace = $(".workspace");
+  workspace.style.height =
+    innerWidth > 760
+      ? Math.max(360, innerHeight - workspace.getBoundingClientRect().top) +
+        "px"
+      : "";
 }
 function expandNode(id) {
   selected = id;
@@ -502,18 +475,13 @@ document.addEventListener("click", (e) => {
     focusBranch(focus.dataset.focus);
   }
 });
-$("#search").addEventListener("input", () => {
-  resultsDismissed = false;
-  applyFilter();
-});
-$("#org").addEventListener("input", applyFilter);
 $("#family").addEventListener("input", () => {
   focusRoot = null;
   expandedNode = null;
   overviewMode = true;
   selected =
     $("#family").value === "all"
-      ? "pretrain"
+      ? PRETRAIN
       : COOLDOWN_ROOTS[$("#family").value];
   render();
 });
@@ -578,24 +546,20 @@ $("#fit").onclick = overview;
 $("#fit-side").onclick = overview;
 $("#head").onclick = () => {
   setMode("map");
-  detail("pretrain");
+  detail(PRETRAIN);
   requestAnimationFrame(() => {
     layout();
     if (overviewMode) fitTree();
-    centerNode("pretrain");
+    centerNode(PRETRAIN);
   });
 };
 $("#reset-tree").onclick = () => {
-  setMode("map");
   focusRoot = null;
   $("#family").value = "all";
   $("#search").value = "";
   $("#org").value = "all";
-  selected = "pretrain";
-  expandedNode = null;
-  $("#collapse-node").disabled = true;
-  overviewMode = true;
-  render();
+  selected = PRETRAIN;
+  overview();
 };
 $("#viewport").addEventListener(
   "wheel",
@@ -648,257 +612,6 @@ window.addEventListener("resize", () => {
     if (overviewMode) fitTree();
     else applyZoom();
   }
-});
-let timelineFamily = "10T",
-  timelineNodes = [],
-  timelineRoot = null,
-  timelineStart = 0,
-  timelineEnd = 0,
-  timelineTime = 0,
-  timelineFrame = null,
-  timelineLast = null,
-  timelineLastDay = null;
-const DAY = 86400000;
-const TEN_T_TIMELINE_START = Date.parse("2026-09-07T00:00:00Z");
-const fullDate = new Intl.DateTimeFormat("en-US", {
-  month: "long",
-  day: "numeric",
-  year: "numeric",
-  timeZone: "UTC",
-});
-const shortDate = new Intl.DateTimeFormat("en-US", {
-  month: "short",
-  day: "numeric",
-  timeZone: "UTC",
-});
-function nodeTime(n) {
-  return n.timeline.date
-    ? Date.parse(n.timeline.date + "T00:00:00Z")
-    : timelineEnd;
-}
-function stopTimeline() {
-  if (timelineFrame !== null) cancelAnimationFrame(timelineFrame);
-  timelineFrame = null;
-  timelineLast = null;
-  if ($("#timeline-play")) {
-    $("#timeline-play").textContent = "Play";
-    $("#timeline-play").classList.remove("active");
-  }
-}
-function timelineSource(n) {
-  const issue = n.source.match(/\/issues\/\d+/)
-    ? n.source
-    : (n.evidence || [])
-        .map((e) => e.url)
-        .find((url) =>
-          /github\.com\/marin-community\/marin\/issues\/\d+/.test(url),
-        );
-  return `<a href="${esc(issue || n.source)}" target="_blank" rel="noopener noreferrer">${sourceName(issue || n.source)} ↗</a>${n.model ? `<a href="https://huggingface.co/${esc(n.model)}" target="_blank" rel="noopener noreferrer">Weights ↗</a>` : ""}`;
-}
-function timelineModels(list, label) {
-  $("#timeline-model-label").textContent = label;
-  $("#timeline-model-list").innerHTML = list
-    .map(
-      (n) =>
-        `<div><button class="timeline-model-name" data-time-node="${esc(n.id)}" title="${esc(n.model || n.title)}">${esc(n.model || n.title)}</button>${timelineSource(n)}</div>`,
-    )
-    .join("");
-}
-function sizeWorkspace() {
-  const workspace = $(".workspace");
-  workspace.style.height =
-    innerWidth > 760
-      ? Math.max(360, innerHeight - workspace.getBoundingClientRect().top) +
-        "px"
-      : "";
-}
-function setupTimeline(autoplay = true) {
-  stopTimeline();
-  timelineFamily = $("#timeline-family").value;
-  timelineRoot = byId.get(COOLDOWN_ROOTS[timelineFamily]);
-  timelineNodes = ordered(
-    nodes.filter((n) => n.lane === timelineFamily && n.id !== timelineRoot.id),
-  );
-  const order = new Map(timelineNodes.map((n, i) => [n.id, i]));
-  timelineNodes.sort(
-    (a, b) =>
-      (a.timeline.date || "9999").localeCompare(b.timeline.date || "9999") ||
-      order.get(a.id) - order.get(b.id),
-  );
-  timelineStart =
-    timelineFamily === "10T" ? TEN_T_TIMELINE_START : nodeTime(timelineRoot);
-  timelineEnd = Math.max(
-    timelineStart + DAY,
-    ...timelineNodes.filter((n) => n.timeline.date).map(nodeTime),
-  );
-  timelineTime = timelineStart;
-  timelineLastDay = null;
-  const columns = Math.ceil(timelineNodes.length / TIMELINE_ROWS);
-  $("#timeline-events").style.setProperty("--timeline-rows", TIMELINE_ROWS);
-  $("#timeline-events").style.gridTemplateColumns =
-    `repeat(${columns},minmax(0,1fr))`;
-  $("#timeline-events").innerHTML = timelineNodes
-    .map(
-      (n) =>
-        `<button class="timeline-event ${n.org === "community" ? "community" : ""}" data-time-node="${esc(n.id)}" aria-label="${esc(n.title)} · ${esc(n.timeline.date || "Date unresolved")}" title="${esc(n.title)}" disabled><strong>${esc(shortTitle(n))}</strong><span>${esc(n.timeline.date ? shortDate.format(nodeTime(n)) : "Undated")} · ${esc(n.stage)}</span></button>`,
-    )
-    .join("");
-  $("#timeline-origin").innerHTML =
-    `<span class="kicker">Fixed antecedent</span><button data-time-node="${esc(timelineRoot.id)}">${esc(timelineRoot.title)}</button><p>Shared 67B A2B pretrain<br>↓<br>${esc(timelineRoot.title)}</p>${timelineSource(timelineRoot)}`;
-  $("#timeline-ticks").style.gridTemplateColumns =
-    `repeat(${columns},minmax(0,1fr))`;
-  $("#timeline-ticks").innerHTML = Array.from({ length: columns }, (_, i) => {
-    const group = timelineNodes.slice(
-        i * TIMELINE_ROWS,
-        (i + 1) * TIMELINE_ROWS,
-      ),
-      first = group[0],
-      last = group[group.length - 1];
-    return `<span>${first.timeline.date ? shortDate.format(nodeTime(first)) : "Undated"}${last.timeline.date !== first.timeline.date ? " – " + (last.timeline.date ? shortDate.format(nodeTime(last)) : "undated") : ""}</span>`;
-  }).join("");
-  $("#tree-caption").textContent =
-    `${timelineFamily} timeline · ${timelineNodes.length + 1} nodes · temporal grouping under one cooldown; original lineage remains in Details`;
-  detail(timelineRoot.id);
-  sizeWorkspace();
-  paintTimeline();
-  if (autoplay && !matchMedia("(prefers-reduced-motion: reduce)").matches)
-    playTimeline();
-}
-function paintTimeline() {
-  const revealed = timelineNodes.filter((n) => nodeTime(n) <= timelineTime),
-    visible = new Set(revealed.map((n) => n.id));
-  document.querySelectorAll(".timeline-event").forEach((e) => {
-    const shown = visible.has(e.dataset.timeNode);
-    e.classList.toggle("revealed", shown);
-    e.disabled = !shown;
-    e.classList.toggle("selected", selected === e.dataset.timeNode);
-  });
-  $("#timeline-clock").textContent = fullDate.format(timelineTime);
-  $("#timeline-scrub").value = Math.round(
-    ((timelineTime - timelineStart) / (timelineEnd - timelineStart)) *
-      SCRUBBER_STEPS,
-  );
-  $("#timeline-scrub").setAttribute(
-    "aria-valuetext",
-    fullDate.format(timelineTime),
-  );
-  $("#timeline-count").textContent =
-    `${revealed.length + 1} / ${timelineNodes.length + 1} nodes`;
-  $("#timeline-empty").hidden = revealed.length > 0;
-  const day = Math.floor(timelineTime / DAY);
-  if (day !== timelineLastDay) {
-    timelineLastDay = day;
-    timelineModels(
-      revealed.length ? revealed : [timelineRoot],
-      "Model names / source records · newest at right",
-    );
-    $("#timeline-model-list").scrollLeft = $(
-      "#timeline-model-list",
-    ).scrollWidth;
-  }
-}
-function playTimeline() {
-  if (timelineFrame !== null) return;
-  if (timelineTime >= timelineEnd) {
-    timelineTime = timelineStart;
-    timelineLastDay = null;
-    paintTimeline();
-  }
-  $("#timeline-play").textContent = "Pause";
-  $("#timeline-play").classList.add("active");
-  timelineLast = null;
-  function frame(now) {
-    if (timelineLast !== null)
-      timelineTime = Math.min(
-        timelineEnd,
-        timelineTime +
-          ((now - timelineLast) * (timelineEnd - timelineStart)) /
-            Number($("#timeline-speed").value),
-      );
-    timelineLast = now;
-    paintTimeline();
-    if (timelineTime >= timelineEnd) {
-      stopTimeline();
-      return;
-    }
-    timelineFrame = requestAnimationFrame(frame);
-  }
-  timelineFrame = requestAnimationFrame(frame);
-}
-function selectTimelineNode(id) {
-  const n = byId.get(id);
-  if (!n) return;
-  stopTimeline();
-  if (n.lane !== timelineFamily && n.id !== "pretrain") {
-    $("#timeline-family").value = n.lane;
-    setupTimeline(false);
-  }
-  if (n.id === "pretrain") {
-    detail(id);
-    timelineModels([n], "Shared pretraining root");
-    return;
-  }
-  timelineTime = Math.max(timelineTime, nodeTime(n));
-  paintTimeline();
-  detail(id);
-  sizeWorkspace();
-  document
-    .querySelectorAll(".timeline-event")
-    .forEach((e) => e.classList.toggle("selected", e.dataset.timeNode === id));
-  timelineModels([n], "Selected model / source record");
-  $("#detail-content").insertAdjacentHTML(
-    "afterbegin",
-    `<p class="timeline-date-basis"><strong>${esc(n.timeline.date ? fullDate.format(nodeTime(n)) : "Date unresolved")}</strong><br>${esc(n.timeline.basis)} · <a href="${esc(n.timeline.source)}" target="_blank" rel="noopener noreferrer">Date evidence ↗</a></p>`,
-  );
-}
-$("#timelinebutton").onclick = () => {
-  setMode("timeline");
-  setupTimeline();
-};
-$("#timeline-family").onchange = () => setupTimeline();
-function toggleTimeline() {
-  timelineFrame !== null ? stopTimeline() : playTimeline();
-}
-$("#timeline-play").onclick = toggleTimeline;
-document.addEventListener("keydown", (e) => {
-  if (
-    viewMode !== "timeline" ||
-    e.code !== "Space" ||
-    e.altKey ||
-    e.ctrlKey ||
-    e.metaKey ||
-    e.shiftKey
-  )
-    return;
-  if (
-    e.target.closest(
-      'input,textarea,select,[contenteditable]:not([contenteditable="false"])',
-    )
-  )
-    return;
-  e.preventDefault();
-  if (!e.repeat) toggleTimeline();
-});
-$("#timeline-restart").onclick = () => setupTimeline();
-$("#timeline-all").onclick = () => {
-  stopTimeline();
-  timelineTime = timelineEnd;
-  paintTimeline();
-};
-$("#timeline-scrub").oninput = () => {
-  stopTimeline();
-  timelineTime =
-    timelineStart +
-    ((timelineEnd - timelineStart) * Number($("#timeline-scrub").value)) /
-      SCRUBBER_STEPS;
-  paintTimeline();
-};
-document.addEventListener("click", (e) => {
-  const target = e.target.closest("[data-time-node]");
-  if (target) selectTimelineNode(target.dataset.timeNode);
-});
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) stopTimeline();
 });
 
 $("#count").textContent = nodes.length;
