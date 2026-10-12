@@ -14,7 +14,7 @@ from taskcompendium.pipeline.models import SourceStatus
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.source import RlDataSource
 
-REASSESSMENT_VERSION = "2026.10.12.1"
+REASSESSMENT_VERSION = "2026.10.12.2"
 
 
 @dataclass(frozen=True)
@@ -56,11 +56,17 @@ def _validated_curated(*, manifest_path: str, expected: CuratedSource, output_ro
     if manifest["processed_rows"] + manifest["unprocessed_rows"] != manifest["raw_population_count"]:
         raise ValueError("Retained curation population accounting is inconsistent")
     views = manifest["datasets"]
+    retained = StoragePath(manifest_path).parent
+    output = StoragePath(output_root)
+    for filename in ("telemetry.json", "identity.json", "work/filtered/manifest.json", "review/manifest.json"):
+        original = retained / filename
+        if original.exists():
+            (output / filename).write_bytes(original.read_bytes(), auto_mkdir=True)
     # An inconclusive control result remains evidence; reassessment changes no admission.
     result = PipelineResult(
         SourceStatus(manifest["status"]),
         {name: views[name] for name in ("normalize", "final")},
-        {**{name: views[name] for name in ("download", "review", "verify")}, "manifest": manifest_path},
+        {**{name: views[name] for name in ("download", "review", "verify")}, "manifest": str(output / "manifest.json")},
         ("adopt_curated",),
     )
     write_json(str(StoragePath(output_root) / "manifest.json"), manifest)
@@ -71,11 +77,10 @@ def reassessment_input(source: RlDataSource, root: str) -> ArtifactStep[Campaign
     """Keep the original producer's name/version as the adopted upstream key."""
     path = StoragePath(root)
     original = ArtifactStep.adopt(
-        f"retained-curation/{path.parent.name}",
+        f"data/rl/{path.parent.name}",
         path.name,
         str(path / "manifest.json"),
         kind=Artifact,
-        config={"producer": f"data/rl/{path.parent.name}@{path.name}"},
     )
     dataset = source.dataset
     expected = CuratedSource(

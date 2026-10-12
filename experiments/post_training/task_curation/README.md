@@ -80,6 +80,12 @@ the selected TaskSpecs and curation sidecars. GLM gives each packet one judgment
 The report separates admitted-task opinions from excluded-row diagnostics and
 executed controls. Assessment never changes row admission.
 
+Incomplete quality or control outcomes are retained as curation artifacts so
+assessment can diagnose them. The campaign still fails after saving its reports.
+Use a new `--curation-attempt` to rerun incomplete controls under a new source key;
+pinned downloads and exact successful model requests remain cached. An assessment
+failure retries only the failed grading stage.
+
 The default assessment sample is 100 admitted tasks and up to 20 excluded rows.
 `--assessment-rubric FILE` adds criteria to the shared rubric. Changing rubric
 or model configuration reuses prepared packets; source changes use the ordinary
@@ -107,6 +113,9 @@ entries with `source` and `manifest` fields. Each adopted manifest must match
 the current source, dataset pin and recipe revision. Incomplete or gated
 curation remains visible in the assessment; model opinions cannot override it.
 Run large GCS-backed inputs in their storage region.
+Selected evidence reads decode complete Parquet row groups, including task JSON
+for unselected rows in those groups. ID scans project only the required columns.
+The bounded packet set is written as one Parquet file after evidence projection.
 
 Each campaign appends its reports and compact evidence to the FineStore catalog
 beside the campaign report. `assessment_runs` records ordinary pipeline keys,

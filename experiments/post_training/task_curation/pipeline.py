@@ -89,6 +89,7 @@ from experiments.post_training.task_curation.images.build import (
 from experiments.post_training.task_curation.source import RlDataSource
 
 PIPELINE_VERSION = "2026.10.07.1"
+CURATION_VERSION = "2026.10.12.1"
 QUICK_VERSION = "2026.10.10.2"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
@@ -397,8 +398,6 @@ def _pipeline_result(result: ConversionResult | SourcePipelineResult) -> Pipelin
             {"manifest": result.manifest_path},
             ("normalize",),
         )
-    if result.status == SourceStatus.INCOMPLETE:
-        raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
     review_manifest = json.loads((StoragePath(result.review_path) / "manifest.json").read_text())
     manifest = json.loads(StoragePath(result.manifest_path).read_text())
     telemetry = json.loads(StoragePath(manifest["telemetry"]).read_text())
@@ -423,10 +422,6 @@ def _pipeline_result(result: ConversionResult | SourcePipelineResult) -> Pipelin
 
 class RlDataArtifact(CampaignArtifact):
     manifest: dict[str, Any]
-
-
-class SourcePipelineIncomplete(RuntimeError):
-    """The quality gate could not decide or a control trial hit an infrastructure error; evidence is retained."""
 
 
 def review_rubric(pipeline: CurationRecipe) -> ReviewRubric | None:
@@ -770,13 +765,15 @@ def _reviewed_step(
         grader_built = built_environment(pipeline.grader)
         grader_step = environment_artifact(pipeline.grader)
     identity = pipeline_identity(pipeline, config, grader_built)
+    assert options.recipe_settings is not None
+    identity["curation_attempt"] = options.recipe_settings.curation_attempt
     overrides = options.inputs
     if overrides.root is not None or overrides.files or overrides.auxiliary:
         identity["input_overrides"] = _input_overrides_identity(pipeline, overrides)
     digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:16]
     return ArtifactStep(
         name=f"data/rl/{pipeline.name}-{digest}",
-        version=PIPELINE_VERSION,
+        version=CURATION_VERSION,
         artifact_type=RlDataArtifact,
         run=partial(_run_source, pipeline, config, options),
         build_config=partial(_source_run, identity, overrides, downloaded, inputs, grader_step),

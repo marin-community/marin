@@ -403,6 +403,12 @@ opinions do not change curation admission or imply source-wide correctness.
 `--assessment-sample-size`, `--excluded-sample-size` and `--assessment-rubric`
 configure the pass; `--skip-assessment` records a curation-only run.
 
+Incomplete curation produces retained artifacts and downstream assessment, then
+the campaign reports failure. `--curation-attempt N` selects a new curation key
+when controls need a retry; successful exact review requests and pinned downloads
+remain cached. `--curated-inventory FILE_OR_URL` adopts existing FULL manifests
+after checking source pins and recipe revisions, retaining their control outcomes.
+
 Use `--cache-dir PATH` to run SAMPLE/FULL locally against small pinned sources
 and retain downloads, source artifacts, assessment artifacts and GLM query
 cache. Local workers need no Iris coordinator settings; package and image
@@ -456,6 +462,11 @@ counts, admissions, control outcomes, phase evidence and output pointers.
 telemetry, identity and filter-count snapshots are named FineStore objects with
 SHA-256 digests. Failed sources remain visible; missing statistics are null.
 QUICK does not imply review, verification or admission.
+
+`assessment_runs` records the ordinary report-pipeline key, complete reports,
+failed attempts with partial-evidence pointers, and skip reasons. Assessment
+status is independent of the curation outcome: an incomplete curation run can
+have a complete diagnostic assessment. Job progress stays in the executor.
 
 ```python
 from finestore.reader import ReadView

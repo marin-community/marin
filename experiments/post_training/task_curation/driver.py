@@ -118,6 +118,12 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
 @click.option("--seed", type=int, default=0)
 @click.option("--quality-sample-size", type=click.IntRange(min=1), default=SOURCE_QUALITY_SAMPLE_SIZE, show_default=True)
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
+@click.option(
+    "--curation-attempt",
+    type=click.IntRange(min=0),
+    default=0,
+    help="New curation key for retrying incomplete controls; successful review requests remain cached.",
+)
 @click.option("--assess/--skip-assessment", default=None, help="Automatic for FULL; opt in for SAMPLE. QUICK skips it.")
 @click.option("--assessment-sample-size", type=click.IntRange(min=1), default=100, show_default=True)
 @click.option("--curated-inventory", help="Full-run inventory of retained source/manifest entries to reassess.")
@@ -177,6 +183,7 @@ def main(
     seed: int,
     quality_sample_size: int,
     verification_sample_size: int,
+    curation_attempt: int,
     assess: bool | None,
     assessment_sample_size: int,
     curated_inventory: str | None,
@@ -289,6 +296,7 @@ def main(
         seed=seed,
         quality_sample_size=quality_sample_size,
         verification_sample_size=verification_sample_size,
+        curation_attempt=curation_attempt,
         execution=AuditExecution(max_workers=max_workers, worker_resources=worker_resources),
     )
     options = PipelineOptions(processing_mode, runtime, inputs=inputs, recipe_settings=recipe_settings)

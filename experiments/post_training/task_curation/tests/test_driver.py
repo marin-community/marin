@@ -51,6 +51,7 @@ CONTROLLER_URL = "http://controller.invalid"
 class ReviewHTTPServer(ThreadingHTTPServer):
     def __init__(self):
         self.requests: list[dict] = []
+        self.review_available = True
         super().__init__(("127.0.0.1", 0), ReviewHandler)
 
 
@@ -60,6 +61,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
         cast(ReviewHTTPServer, self.server).requests.append(body)
         task = json.loads(body["messages"][-1]["content"])
         tool = body["tool_choice"]["function"]["name"]
+        if tool == "review_task" and not cast(ReviewHTTPServer, self.server).review_available:
+            self.send_error(503)
+            return
         verdict = (
             {
                 "task_id": task["id"],
@@ -555,3 +559,58 @@ def test_full_campaign_assesses_tasks_and_preserves_curation_counts(tmp_path, mo
     repeated = CliRunner().invoke(main, args)
     assert repeated.exit_code == 0, repeated.output
     assert len(review_server.requests) == 1
+
+
+def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_path, monkeypatch, review_server):
+    declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    source = replace(declared, config=replace(math500(), controls=None))
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
+    monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
+    review_server.review_available = False
+    staged = tmp_path / "input"
+    staged.mkdir()
+    (staged / "test.jsonl").write_text(
+        '{"problem":"One plus one?","answer":"2"}\n{"problem":"Two plus one?","answer":"3"}\n'
+    )
+    cache = tmp_path / "cache"
+    args = [
+        "--mode",
+        "full",
+        "--cache-dir",
+        str(cache),
+        "--input-root",
+        str(staged),
+        "--max-workers",
+        "1",
+        "--quality-sample-size",
+        "1",
+        "--review-mode",
+        "chat",
+        "--model-revision",
+        "fixture",
+        "--review-concurrency",
+        "1",
+        "--base-url",
+        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
+        "--run",
+    ]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    campaign = json.loads((cache / "campaigns/campaign.json").read_text())
+    outcome = campaign["sources"][0]
+    assert campaign["status"] == "failed" and outcome["status"] == "incomplete"
+    report = json.loads(StoragePath(outcome["result"]["evidence"]["assessment_report"]).read_text())
+    assert report["curation"]["quality"]["status"] == "incomplete"
+    assert report["assessment"]["admitted"]["sample_count"] == 0
+    assert report["assessment"]["excluded"]["reviewed"] == 1
+    assert len(review_server.requests) == 4
+    repeated = CliRunner().invoke(main, args)
+    assert repeated.exit_code != 0
+    assert len(review_server.requests) == 4
+    review_server.review_available = True
+    retried = CliRunner().invoke(main, [*args, "--curation-attempt", "1"])
+    assert retried.exit_code == 0, retried.output
+    recovered = json.loads((cache / "campaigns/campaign.json").read_text())
+    assert recovered["sources"][0]["status"] == "completed"
+    assert recovered["sources"][0]["path"] != outcome["path"]
+    assert len(review_server.requests) == 7

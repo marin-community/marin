@@ -278,7 +278,7 @@ def run_campaign(
         write_report(CampaignStatus.FAILED)
         raise
     ordered = tuple(outcomes[step.name] for step in steps)
-    failed = any(outcome.status == OutcomeStatus.FAILED for outcome in ordered)
+    failed = any(outcome.status in (OutcomeStatus.FAILED, SourceStatus.INCOMPLETE) for outcome in ordered)
     write_report(CampaignStatus.FAILED if failed else CampaignStatus.COMPLETED)
     if failed:
         raise CampaignFailed(f"Campaign failed; retained source outcomes at {report_path}")

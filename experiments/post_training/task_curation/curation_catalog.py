@@ -146,6 +146,12 @@ class ManifestEvidence(StrEnum):
     MISSING = "missing"
 
 
+class AssessmentStatus(StrEnum):
+    COMPLETE = "complete"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -381,13 +387,16 @@ def append_curation_catalog(
                 paths = {**outcome.get("planned_evidence", {}), **result.get("evidence", {})}
                 assessment_report = parsed.get("assessment_report.json")
                 if "assessment_report" not in paths:
-                    assessment_status = "skipped"
+                    assessment_status = AssessmentStatus.SKIPPED
                     assessment_reason = f"Assessment disabled in {source.mode} mode"
-                elif outcome["status"] in ("failed", "running", "queued") or assessment_report is None:
-                    assessment_status = "failed"
+                elif outcome["status"] == "queued":
+                    assessment_status = AssessmentStatus.SKIPPED
+                    assessment_reason = "Source was not started before the campaign ended"
+                elif outcome["status"] in ("failed", "running") or assessment_report is None:
+                    assessment_status = AssessmentStatus.FAILED
                     assessment_reason = outcome.get("error") or "Assessment report missing or invalid"
                 else:
-                    assessment_status = "complete"
+                    assessment_status = AssessmentStatus.COMPLETE
                     assessment_reason = None
                 transaction.table("assessment_runs").add(
                     asdict(

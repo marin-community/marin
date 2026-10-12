@@ -20,6 +20,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import iter_parquet_row_groups, load_parquet, open_file
+from zephyr.writers import write_parquet_file
 
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
@@ -35,7 +36,6 @@ PACKET_SCHEMA = pa.schema(
         ("omissions", pa.list_(pa.string())),
     ]
 )
-PACKET_SHARDS = 4
 
 
 class Cohort(StrEnum):
@@ -70,6 +70,7 @@ class AssessmentSampling:
 @dataclass(frozen=True)
 class RowLocation:
     path: str
+    row_group: int
     index: int
 
 
@@ -85,13 +86,13 @@ def write_json(path: str, value: dict[str, Any]) -> None:
 
 def _indexed_rows(path: str, *, excluded: bool) -> Iterator[dict[str, Any]]:
     columns = ["task_id", "admission", "filter_reasons"] if excluded else ["task_id"]
-    for index, row in enumerate(load_parquet(InputFileSpec(path, columns=columns))):
+    for row in load_parquet(InputFileSpec(path, columns=columns)):
         reason = None
         if excluded:
             if row["admission"] == "admitted":
                 continue
             reason = (row["filter_reasons"] or [row["admission"]])[0]
-        yield {"task_id": row["task_id"], "path": path, "index": index, "reason": reason}
+        yield {"task_id": row["task_id"], "reason": reason}
 
 
 def _task_id(row: dict[str, Any]) -> str:
@@ -158,14 +159,12 @@ def _diagnostic_sample(groups: dict[str, tuple[int, list[dict]]], size: int, see
 
 
 def _selected_locations(path: str, *, task_ids: frozenset[str]) -> Iterator[tuple[str, RowLocation]]:
-    offset = 0
     values = pa.array(sorted(task_ids), type=pa.string())
-    for table in iter_parquet_row_groups(path, columns=["task_id"]):
+    for group, table in enumerate(iter_parquet_row_groups(path, columns=["task_id"])):
         matches = pc.call_function("is_in", [table["task_id"]], options=pc.SetLookupOptions(value_set=values))
         indices = pc.call_function("indices_nonzero", [matches]).to_pylist()
         for index in indices:
-            yield table["task_id"][index].as_py(), RowLocation(path, offset + index)
-        offset += len(table)
+            yield table["task_id"][index].as_py(), RowLocation(path, group, index)
 
 
 def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampling) -> dict[str, Any]:
@@ -193,21 +192,13 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
 
 
 def _selected_evidence(
-    file: tuple[str, str, dict[int, str]], *, sampling: AssessmentSampling
+    file: tuple[str, str, dict[int, dict[int, str]]], *, sampling: AssessmentSampling
 ) -> Iterator[dict[str, Any]]:
     """Decode each selected row group once, projecting only selected records."""
-    view, path, indices = file
+    view, path, groups = file
     with open_file(path, block_size=1_048_576) as stream:
         parquet = pq.ParquetFile(stream)
-        offset = 0
-        for group in range(parquet.num_row_groups):
-            count = parquet.metadata.row_group(group).num_rows
-            selected = {
-                index - offset: task_id for index, task_id in indices.items() if offset <= index < offset + count
-            }
-            offset += count
-            if not selected:
-                continue
+        for group, selected in groups.items():
             table = parquet.read_row_group(group)
             rows = table.take(pa.array(list(selected), type=pa.int64())).to_pylist()
             for task_id, row in zip(selected.values(), rows, strict=True):
@@ -301,10 +292,12 @@ def prepare_assessment(
                     raise ValueError(f"Duplicate selected ID in {view}")
                 locations[view] = dict(pairs)
         with telemetry.phase("evidence") as phase:
-            files: dict[tuple[str, str], dict[int, str]] = defaultdict(dict)
+            files: dict[tuple[str, str], dict[int, dict[int, str]]] = {}
             for view, indexed in locations.items():
                 for task_id, location in indexed.items():
-                    files[view, location.path][location.index] = task_id
+                    files.setdefault((view, location.path), {}).setdefault(location.row_group, {})[
+                        location.index
+                    ] = task_id
             projected = execute_phase(
                 context,
                 Dataset.from_list([(view, path, indices) for (view, path), indices in files.items()]).flat_map(
@@ -315,15 +308,12 @@ def prepare_assessment(
             records: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for row in projected:
                 records[row["task_id"]].append(row)
-        with telemetry.phase("packets") as phase:
-            paths = execute_phase(
-                context,
-                Dataset.from_list(selected)
-                .reshard(min(PACKET_SHARDS, max(1, len(selected))))
-                .map(partial(_packet, records=records, sampling=sampling))
-                .write_parquet(str(StoragePath(output_root) / "packets/part-{shard:05d}.parquet"), schema=PACKET_SCHEMA),
-                telemetry=phase,
-            ).results
+        with telemetry.phase("packets"):
+            packet_path = str(StoragePath(output_root) / "packets/part-00000.parquet")
+            write_parquet_file(
+                (_packet(row, records=records, sampling=sampling) for row in selected), packet_path, schema=PACKET_SCHEMA
+            )
+            paths = [packet_path]
         write_json(str(StoragePath(output_root) / "curation.json"), manifest)
         write_json(
             str(StoragePath(output_root) / "manifest.json"),
