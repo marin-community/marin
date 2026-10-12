@@ -24,6 +24,7 @@ NAME = "shellsim-ports"
 NAMESPACE = "iris"
 READONLY_SECRET = "shellsim-ports-readonly"
 IMAGE_TAG = "ghcr.io/marin-community/iris-task:shellsim-ports-proxy"
+PORT = 8080
 
 
 @dataclass(frozen=True)
@@ -50,11 +51,11 @@ def stack_config() -> ProxyConfig:
         hostname=config.require("hostname"),
         source_revision=source_revision,
         prefix=config.require("prefix"),
-        replicas=config.get_int("replicas") or 2,
-        cpu_request=config.get("cpu_request") or "100m",
-        cpu_limit=config.get("cpu_limit") or "1",
-        memory_request=config.get("memory_request") or "128Mi",
-        memory_limit=config.get("memory_limit") or "512Mi",
+        replicas=config.get_int("replicas") or ProxyConfig.replicas,
+        cpu_request=config.get("cpu_request") or ProxyConfig.cpu_request,
+        cpu_limit=config.get("cpu_limit") or ProxyConfig.cpu_limit,
+        memory_request=config.get("memory_request") or ProxyConfig.memory_request,
+        memory_limit=config.get("memory_limit") or ProxyConfig.memory_limit,
     )
 
 
@@ -101,7 +102,7 @@ def deploy(config: ProxyConfig) -> pulumi.Output[str]:
                             "name": "proxy",
                             "image": image.ref,
                             "args": ["--prefix", config.prefix],
-                            "ports": [{"name": "http", "containerPort": 8080}],
+                            "ports": [{"name": "http", "containerPort": PORT}],
                             "envFrom": [{"secretRef": {"name": READONLY_SECRET}}],
                             "resources": {
                                 "requests": {"cpu": config.cpu_request, "memory": config.memory_request},
@@ -123,7 +124,7 @@ def deploy(config: ProxyConfig) -> pulumi.Output[str]:
     service = k8s.core.v1.Service(
         NAME,
         metadata={"name": NAME, "namespace": NAMESPACE},
-        spec={"selector": labels, "ports": [{"name": "http", "port": 8080, "targetPort": "http"}]},
+        spec={"selector": labels, "ports": [{"name": "http", "port": PORT, "targetPort": "http"}]},
         opts=pulumi.ResourceOptions(provider=provider, depends_on=[deployment]),
     )
     network_policy = k8s.apiextensions.CustomResource(
@@ -149,7 +150,7 @@ def deploy(config: ProxyConfig) -> pulumi.Output[str]:
                             }
                         },
                     ],
-                    "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+                    "toPorts": [{"ports": [{"port": str(PORT), "protocol": "TCP"}]}],
                 }
             ],
             "egress": [
@@ -195,7 +196,7 @@ def deploy(config: ProxyConfig) -> pulumi.Output[str]:
                             {
                                 "path": "/",
                                 "pathType": "Prefix",
-                                "backend": {"service": {"name": NAME, "port": {"number": 8080}}},
+                                "backend": {"service": {"name": NAME, "port": {"number": PORT}}},
                             }
                         ]
                     },
