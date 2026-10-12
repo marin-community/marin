@@ -523,18 +523,24 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
     assert len(review_server.requests) == 2
 
 
-def test_full_campaign_assesses_tasks_and_preserves_curation_counts(tmp_path, monkeypatch, review_server):
+@pytest.mark.parametrize("mode, flags, admitted", [("full", [], 3), ("sample", ["--assess"], 2)])
+def test_campaign_assesses_tasks_and_preserves_curation_scope(
+    tmp_path, monkeypatch, review_server, mode, flags, admitted
+):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     source = replace(declared, config=replace(math500(), rubric=None, controls=None))
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
     staged.mkdir()
-    (staged / "test.jsonl").write_text('{"problem":"One plus one?","answer":"2"}\n')
+    (staged / "test.jsonl").write_text(
+        "\n".join(json.dumps({"problem": f"What is {value} plus one?", "answer": str(value + 1)}) for value in range(3))
+    )
     cache = tmp_path / "cache"
     args = [
         "--mode",
-        "full",
+        mode,
+        *flags,
         "--cache-dir",
         str(cache),
         "--source",
@@ -542,6 +548,10 @@ def test_full_campaign_assesses_tasks_and_preserves_curation_counts(tmp_path, mo
         "--input-root",
         str(staged),
         "--max-workers",
+        "1",
+        "--quality-sample-size",
+        "2",
+        "--assessment-sample-size",
         "1",
         "--review-mode",
         "chat",
@@ -557,7 +567,11 @@ def test_full_campaign_assesses_tasks_and_preserves_curation_counts(tmp_path, mo
     report = json.loads(StoragePath(outcome["result"]["evidence"]["assessment_report"]).read_text())
     assert report["assessment"]["admitted"]["grade"] == "good"
     assert report["assessment"]["admitted"]["sample_count"] == 1
-    assert report["curation"]["admission_counts"]["admitted"] == 1
+    assert report["assessment"]["admitted"]["population"] == admitted
+    assert report["scope"] == mode
+    assert report["curation"]["admission_counts"]["admitted"] == admitted
+    assert report["curation"]["raw_population_count"] == 3
+    assert report["curation"]["processed_rows"] == admitted
     assert len(review_server.requests) == 1
     repeated = CliRunner().invoke(main, args)
     assert repeated.exit_code == 0, repeated.output

@@ -312,7 +312,6 @@ def _packet(
     for view in ("normalize", "review", "verify"):
         if view not in evidence:
             omissions.append(f"{view}: no row evidence")
-    # Previous reviews are opinions. Preserve them as a separate cited evidence section.
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence.pop("task", None)
         omissions.append("task: projected evidence exceeds packet budget")

@@ -47,7 +47,7 @@ from experiments.post_training.task_curation.reassessment import reassessment_in
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import runnable_sources
 
-QUICK_MAX_WORKERS = 4
+LOCAL_MAX_WORKERS = 4
 LOCAL_MEMORY = "4g"
 LOCAL_NORMALIZED_SHARDS = 4
 WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
@@ -225,7 +225,7 @@ def main(
             raise click.UsageError("QUICK requires --output-root")
         selected = {name: selected[name] for name in dict.fromkeys(sources)}
         cache_dir = cache_dir if cache_dir is not None else Path.home() / ".cache/marin"
-        max_workers = max_workers if max_workers is not None else QUICK_MAX_WORKERS
+        max_workers = max_workers if max_workers is not None else LOCAL_MAX_WORKERS
         output_root = output_root.resolve()
         options = PipelineOptions(processing_mode, runtime, inputs=inputs)
         steps = {name: cast(CurationPipeline, source.pipeline)(source, options) for name, source in selected.items()}
@@ -272,7 +272,7 @@ def main(
         raise click.UsageError("SAMPLE/FULL requires --worker-image")
     if report_path is None and cache_dir is None:
         raise click.UsageError("SAMPLE/FULL requires --report-path")
-    max_workers = max_workers if max_workers is not None else QUICK_MAX_WORKERS
+    max_workers = max_workers if max_workers is not None else LOCAL_MAX_WORKERS
     worker_resources = ResourceConfig(
         cpu=1 if cache_dir is not None else 2,
         ram=LOCAL_MEMORY if cache_dir is not None else "8g",

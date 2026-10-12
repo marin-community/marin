@@ -17,7 +17,7 @@ from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import load_parquet
 from zephyr.writers import write_jsonl_file
 
-from taskcompendium.pipeline.assessment import TaskJudgment, read_json, validate_coverage, write_json
+from taskcompendium.pipeline.assessment import TaskJudgment, Verdict, read_json, validate_coverage, write_json
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
 from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.query_cache import cached_request_output
@@ -202,7 +202,7 @@ def _grade_shard(
                 "task_id": record.task_id,
                 "cohort": packets[record.task_id]["cohort"],
                 "status": ReviewStatus.REVIEWED if value is not None else ReviewStatus.UNAVAILABLE,
-                "verdict": value.verdict if value is not None else "unknown",
+                "verdict": value.verdict if value is not None else Verdict.UNKNOWN,
                 "explanation": value.explanation if value is not None else record.detail,
                 "evidence_ids": list(value.evidence_ids) if value is not None else [],
             }
