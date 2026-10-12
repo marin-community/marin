@@ -583,6 +583,11 @@ def _validate_skyrl_recipe(
     config = _parsed_config(config_yaml)
     _validate_runtime_strategy(config, runtime)
     _validate_role_plan_config(config, topology.role_plan)
+    if (
+        _declared_config_value(config, "generator.weight_sync_transport") == "expert_block"
+        and topology.role_plan.colocate_all
+    ):
+        raise ValueError("SkyRL expert_block requires non-colocated inference workers")
     _validate_entrypoint_config(config, topology.role_plan)
     _validate_skyrl_backend_constraints(config, topology)
 

@@ -283,6 +283,25 @@ def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
         )
 
 
+@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
+def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
+    # Evaluation previously passed preflight, then failed in the GPU engine factory.
+    spec = _spec()
+    recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
+    runtime = SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON)
+    with pytest.raises(ValueError, match="expert_block requires non-colocated"):
+        dataclasses.replace(spec, config_yaml=recipe, runtime=runtime)
+
+    separate = dataclasses.replace(spec.topology.role_plan, colocate_all=False)
+    accepted = dataclasses.replace(
+        spec,
+        config_yaml=recipe,
+        runtime=runtime,
+        topology=dataclasses.replace(spec.topology, num_nodes=2, role_plan=separate),
+    )
+    assert accepted.topology.num_nodes * accepted.topology.gpus_per_node == 8
+
+
 def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
     spec = _spec()
     base = skyrl_step(spec, _execution())
