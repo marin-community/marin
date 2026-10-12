@@ -1,0 +1,67 @@
+{
+  "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+  "scope": "Paired runtime qualification; three updates, not a main effect estimate.",
+  "runs": [
+    {
+      "arm": "tis",
+      "run_id": "sc-skyrl-publication-qual-tis-s0-a0-01a126ce",
+      "completed_updates": 3,
+      "admission_seconds": [
+        25.991193441674113,
+        24.607991052791476,
+        31.348677024245262
+      ],
+      "cycle_seconds": [
+        87.16273763403296,
+        90.99258148856461,
+        106.32826190628111
+      ],
+      "policy_training_seconds": [
+        14.778832072392106,
+        12.227325931191444,
+        13.487781280651689
+      ],
+      "native_archive_training_gaps": {},
+      "full_completion_grade_differences": {
+        "eval": 0,
+        "train": 0
+      },
+      "evaluation_membership_sha256": "820112c34dcbfff77fd53f08069c40f14151e18ca30f1d23eae1cfdc6bdc1c07"
+    },
+    {
+      "arm": "sc",
+      "run_id": "sc-skyrl-publication-qual-sc-s0-a0-01a126ce",
+      "completed_updates": 3,
+      "admission_seconds": [
+        22.616083274944685,
+        27.156117575941607,
+        29.35951378394384
+      ],
+      "cycle_seconds": [
+        89.47270891803782,
+        94.59096771897748,
+        101.6728442349704
+      ],
+      "policy_training_seconds": [
+        14.49563618004322,
+        12.306464583030902,
+        12.215944007970393
+      ],
+      "native_archive_training_gaps": {},
+      "full_completion_grade_differences": {
+        "eval": 0,
+        "train": 0
+      },
+      "evaluation_membership_sha256": "820112c34dcbfff77fd53f08069c40f14151e18ca30f1d23eae1cfdc6bdc1c07"
+    }
+  ],
+  "required_records_verified_per_arm": {
+    "training": 1536,
+    "evaluation": 2048
+  },
+  "previous_source_group_admission_seconds_range": [
+    285,
+    338
+  ],
+  "main_recovery": "First a2 full300 run before expansion; same scientific recipe and72h execution ceiling."
+}

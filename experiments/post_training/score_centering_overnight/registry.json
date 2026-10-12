@@ -836,7 +836,8 @@
       "status": "terminal",
       "priority_band": 3,
       "bundle_id": "ce1824ebb5ed376c7937cbf170b427cfdd42323d491c2fcd195aaa4497d96198",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise005_calibration.json"
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a1-01a126ce",
@@ -934,14 +935,49 @@
       "configuration_sha256": "f6edeec7082b925ddc94566495345a30a4a3a90428d10d4d7e63a8b8a9b61c78",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-publication-qual-sc-s0-a0-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "c586ec82dccf53ac76b77a7423eb009ea34d3520e98e27e097fb8453f7b09679",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "allocation_note": "Task CLI reports SchedulingGated with Kueue insufficient unused quota for16 H100 GPUs. No node or execution start is recorded; building is the backend Pending state here.",
-      "allocation_evidence": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/reused-publication-sc-task-describe.txt"
+      "allocation_evidence": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/reused-publication-sc-task-describe.txt",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/publication_qualification_sc.json"
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_qualification_v3/sc-detach.yaml",
+      "configuration_sha256": "eba335746237bd62f90924947613d8aed63d73bc1a6f35c8e6276ba54ed70641",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "4cc56133abbd632e153fca275eebe2544b1644687b405f00d45ef6364f4f38c9",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-skyrl-publication-qual-tis-s0-a0-01a126ce",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+      "configuration": "experiments/post_training/score_centering_overnight/publication_qualification_v3/tis-detach.yaml",
+      "configuration_sha256": "f6176f1472edae6c4bf36c789d85e4994328fa4d5acfd1b0468361aa0384b489",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-publication-qual-tis-s0-a0-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "dd511d6088a4b08d2b7c737a7db3eccc1da8571578dd0ea24aaeb8f6ebded2d3",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-12T03:10:30.590206+00:00"
+  "observed_at": "2026-10-12T03:26:50.870436+00:00"
 }

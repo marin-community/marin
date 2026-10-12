@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-12T03:10:30.590206+00:00",
+  "observed_at": "2026-10-12T03:26:50.870436+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -1860,7 +1860,8 @@
       "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
       "allocated_seconds": 7460.318,
       "allocated_h100_hours": 16.578484444444445,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise005_calibration.json"
     },
     {
       "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/1",
@@ -1880,7 +1881,8 @@
       "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
       "allocated_seconds": 7454.805,
       "allocated_h100_hours": 16.566233333333333,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise005_calibration.json"
     },
     {
       "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/2",
@@ -1900,7 +1902,8 @@
       "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
       "allocated_seconds": 7454.805,
       "allocated_h100_hours": 16.566233333333333,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise005_calibration.json"
     },
     {
       "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/3",
@@ -1920,7 +1923,8 @@
       "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
       "allocated_seconds": 7449.265,
       "allocated_h100_hours": 16.553922222222223,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise005_calibration.json"
     },
     {
       "task_id": "/romain/sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce/4",
@@ -1940,7 +1944,50 @@
       "configuration_sha256": "eeb7f49454ca2c53bc7eab7f62cfa2d5ff867a15de268f10467d616d04aef0a1",
       "allocated_seconds": 7454.805,
       "allocated_h100_hours": 16.566233333333333,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball_noise005_calibration.json"
+    },
+    {
+      "task_id": "/romain/sc-skyrl-publication-qual-sc-s0-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "b1974b1f5471c6b2",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791774193574",
+      "finished_at_ms": "1791774841086",
+      "node_name": "g73b716",
+      "terminal_reason": "",
+      "stage": "SkyRL qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+      "configuration_sha256": "f6edeec7082b925ddc94566495345a30a4a3a90428d10d4d7e63a8b8a9b61c78",
+      "allocated_seconds": 647.512,
+      "allocated_h100_hours": 1.4389155555555555,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/publication_qualification_sc.json"
+    },
+    {
+      "task_id": "/romain/sc-skyrl-publication-qual-sc-s0-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "a0bb02bcb8856f9c",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791774193574",
+      "finished_at_ms": "1791774841086",
+      "node_name": "g83b852",
+      "terminal_reason": "",
+      "stage": "SkyRL qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+      "configuration_sha256": "f6edeec7082b925ddc94566495345a30a4a3a90428d10d4d7e63a8b8a9b61c78",
+      "allocated_seconds": 647.512,
+      "allocated_h100_hours": 1.4389155555555555,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/publication_qualification_sc.json"
     }
   ],
   "terminal_h100_hours": 54.25557777777778,
@@ -1948,7 +1995,7 @@
     "reference diagnostics": 14.997133333333334,
     "reference qualification": 1.1350711111111111,
     "reference main": 28.411202222222222,
-    "SkyRL qualification": 19.18600888888889,
+    "SkyRL qualification": 22.063840000000003,
     "SkyRL main": 777.1104555555557,
     "SkyRL staleness qualification": 7.2194199999999995,
     "core GPU qualification": 4.532366666666666,
@@ -1974,7 +2021,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "1de3e1719239b1ab9ebc57974051b7cb5fa3912844e9baff0c4f29c0c6d78922",
-      "allocated_h100_hours_so_far": 33.63814934624566
+      "allocated_h100_hours_so_far": 35.81654985745748
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a1-01a126ce/1",
@@ -1992,7 +2039,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "1de3e1719239b1ab9ebc57974051b7cb5fa3912844e9baff0c4f29c0c6d78922",
-      "allocated_h100_hours_so_far": 33.63814934624566
+      "allocated_h100_hours_so_far": 35.81654985745748
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a1-01a126ce/0",
@@ -2010,7 +2057,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "2e2596b7e62b2b6a78e4ec31c7e744637f7f712ae11537234ac6eb0727898cbf",
-      "allocated_h100_hours_so_far": 31.474444902208116
+      "allocated_h100_hours_so_far": 33.65284541341993
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a1-01a126ce/1",
@@ -2028,7 +2075,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "2e2596b7e62b2b6a78e4ec31c7e744637f7f712ae11537234ac6eb0727898cbf",
-      "allocated_h100_hours_so_far": 31.474444902208116
+      "allocated_h100_hours_so_far": 33.65284541341993
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a1-01a126ce/0",
@@ -2046,7 +2093,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "a06ec8c4692316b64a7bea73293f8f2ec90bc3b7ea5bb86891b27139d1f06685",
-      "allocated_h100_hours_so_far": 25.60877601305644
+      "allocated_h100_hours_so_far": 27.787176524268258
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a1-01a126ce/1",
@@ -2064,7 +2111,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "a06ec8c4692316b64a7bea73293f8f2ec90bc3b7ea5bb86891b27139d1f06685",
-      "allocated_h100_hours_so_far": 25.60877601305644
+      "allocated_h100_hours_so_far": 27.787176524268258
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a1-01a126ce/0",
@@ -2082,7 +2129,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "488e5790e14bf9a709a2c021c062cccd248042c0dbac433fae9d965c4f4c1c81",
-      "allocated_h100_hours_so_far": 25.55753156873915
+      "allocated_h100_hours_so_far": 27.735932079950967
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a1-01a126ce/1",
@@ -2100,7 +2147,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "488e5790e14bf9a709a2c021c062cccd248042c0dbac433fae9d965c4f4c1c81",
-      "allocated_h100_hours_so_far": 25.55753156873915
+      "allocated_h100_hours_so_far": 27.735932079950967
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s1-a1-01a126ce/0",
@@ -2118,7 +2165,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "10e84b58d18b09cb40b74ad9fa1821c294bdff1c2a2ed295b1b2b2770a547eb6",
-      "allocated_h100_hours_so_far": 17.562302680015563
+      "allocated_h100_hours_so_far": 19.740703191227382
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s1-a1-01a126ce/1",
@@ -2136,7 +2183,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "10e84b58d18b09cb40b74ad9fa1821c294bdff1c2a2ed295b1b2b2770a547eb6",
-      "allocated_h100_hours_so_far": 17.562302680015563
+      "allocated_h100_hours_so_far": 19.740703191227382
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a1-01a126ce/0",
@@ -2154,7 +2201,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "418984cb88e2b5cdd2938697e0a00c9a8d94711abae6b732db9f828491697725",
-      "allocated_h100_hours_so_far": 15.018333791097005
+      "allocated_h100_hours_so_far": 17.196734302308823
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a1-01a126ce/1",
@@ -2172,7 +2219,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "418984cb88e2b5cdd2938697e0a00c9a8d94711abae6b732db9f828491697725",
-      "allocated_h100_hours_so_far": 15.018333791097005
+      "allocated_h100_hours_so_far": 17.196734302308823
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a1-01a126ce/0",
@@ -2190,7 +2237,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "dd93236aef37ae02e9b26dca2336438a26ca0031b7b5efffcba8bbad7ce930f2",
-      "allocated_h100_hours_so_far": 15.018333791097005
+      "allocated_h100_hours_so_far": 17.196734302308823
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a1-01a126ce/1",
@@ -2208,7 +2255,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "dd93236aef37ae02e9b26dca2336438a26ca0031b7b5efffcba8bbad7ce930f2",
-      "allocated_h100_hours_so_far": 15.018333791097005
+      "allocated_h100_hours_so_far": 17.196734302308823
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-sc-s0-a1-01a126ce/0",
@@ -2226,7 +2273,7 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "6fe63cf91ac38c7e9272f86abbf26d07f4665c3ce09430b5289123b7cf927180",
-      "allocated_h100_hours_so_far": 15.018333791097005
+      "allocated_h100_hours_so_far": 17.196734302308823
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-sc-s0-a1-01a126ce/1",
@@ -2244,43 +2291,79 @@
       "gpus": 8,
       "source": "61506a73f05b7d42d09d530d70627b1983a1233f",
       "configuration_sha256": "6fe63cf91ac38c7e9272f86abbf26d07f4665c3ce09430b5289123b7cf927180",
-      "allocated_h100_hours_so_far": 14.993304902182684
+      "allocated_h100_hours_so_far": 17.171705413394506
     },
     {
-      "task_id": "/romain/sc-skyrl-publication-qual-sc-s0-a0-01a126ce/0",
+      "task_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/0",
       "attempt_id": "0",
-      "attempt_uid": "b1974b1f5471c6b2",
+      "attempt_uid": "a6c910e3a5bd110b",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791774193574",
+      "started_at_ms": "1791775325117",
       "finished_at_ms": "",
       "node_name": "g73b716",
       "terminal_reason": "",
-      "stage": "SkyRL qualification",
+      "stage": "Qwen GPU qualification",
       "cluster": "cw-us-east-02a",
       "priority": "batch",
       "gpus": 8,
       "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
-      "configuration_sha256": "f6edeec7082b925ddc94566495345a30a4a3a90428d10d4d7e63a8b8a9b61c78",
-      "allocated_h100_hours_so_far": 0.9711471245023939
+      "configuration_sha256": "eba335746237bd62f90924947613d8aed63d73bc1a6f35c8e6276ba54ed70641",
+      "allocated_h100_hours_so_far": 0.635007635222541
     },
     {
-      "task_id": "/romain/sc-skyrl-publication-qual-sc-s0-a0-01a126ce/1",
+      "task_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a2-01a126ce/1",
       "attempt_id": "0",
-      "attempt_uid": "a0bb02bcb8856f9c",
+      "attempt_uid": "30610a4b240a5803",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791774193574",
+      "started_at_ms": "1791775325117",
       "finished_at_ms": "",
       "node_name": "g83b852",
+      "terminal_reason": "",
+      "stage": "Qwen GPU qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+      "configuration_sha256": "eba335746237bd62f90924947613d8aed63d73bc1a6f35c8e6276ba54ed70641",
+      "allocated_h100_hours_so_far": 0.635007635222541
+    },
+    {
+      "task_id": "/romain/sc-skyrl-publication-qual-tis-s0-a0-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "cbbc98c58d89dce4",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791775330817",
+      "finished_at_ms": "",
+      "node_name": "g83d56a",
       "terminal_reason": "",
       "stage": "SkyRL qualification",
       "cluster": "cw-us-east-02a",
       "priority": "batch",
       "gpus": 8,
       "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
-      "configuration_sha256": "f6edeec7082b925ddc94566495345a30a4a3a90428d10d4d7e63a8b8a9b61c78",
-      "allocated_h100_hours_so_far": 0.9711471245023939
+      "configuration_sha256": "f6176f1472edae6c4bf36c789d85e4994328fa4d5acfd1b0468361aa0384b489",
+      "allocated_h100_hours_so_far": 0.6223409689797296
+    },
+    {
+      "task_id": "/romain/sc-skyrl-publication-qual-tis-s0-a0-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "e8c3a3e713c087fd",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791775325117",
+      "finished_at_ms": "",
+      "node_name": "g83d862",
+      "terminal_reason": "",
+      "stage": "SkyRL qualification",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "b8eddebe1bbc98b72801572e58a53a4b2680a02b",
+      "configuration_sha256": "f6176f1472edae6c4bf36c789d85e4994328fa4d5acfd1b0468361aa0384b489",
+      "allocated_h100_hours_so_far": 0.635007635222541
     }
   ]
 }
