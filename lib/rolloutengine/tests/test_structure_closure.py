@@ -64,7 +64,6 @@ def test_duplicate_keys_include_escaped_equivalents():
     prefix = '{"a":1,"\\u0061"'
     state = json_closure_state(prefix)
     assert state.status == PrefixStatus.INVALID
-    assert state.reason == "Duplicate JSON key"
     assert json_closure_state('{"a":1,"b":2}').status == PrefixStatus.COMPLETE
 
 

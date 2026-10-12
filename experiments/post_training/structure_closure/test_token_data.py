@@ -13,7 +13,7 @@ from experiments.post_training.structure_closure.benchmark import (
     syntax_state,
     task_cases,
 )
-from experiments.post_training.structure_closure.token_data import case_tokens
+from experiments.post_training.structure_closure.token_data import tokenized_case_record
 
 
 def test_conditional_target_keeps_prompt_tokens_when_joint_bpe_would_merge():
@@ -29,7 +29,7 @@ def test_conditional_target_keeps_prompt_tokens_when_joint_bpe_would_merge():
     case = ClosureCase(
         "case", "task", "train", Family.STRING, "continue_required", "instructions", '"abc', '"abcdef"', "source"
     )
-    record = case_tokens(case, tokenizer)
+    record = tokenized_case_record(case, tokenizer)
     prompt = "instructions\nASSISTANT:" + case.prefix
     assert tokenizer.decode(record["prompt_token_ids"], clean_up_tokenization_spaces=False) == prompt
     assert (

@@ -32,6 +32,7 @@ MODEL_URI = (
     "2026.10.12.2/exports/global_step_4/policy"
 )
 DATA_URI = "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-copy-tasks-v1"
+CLUSTER = "cw-us-east-02a"
 
 
 def build_run(*, parity_uri: str, parity_version: str, max_steps: int, learning_rate: float) -> ArtifactStep:
@@ -75,14 +76,14 @@ def build_run(*, parity_uri: str, parity_version: str, max_steps: int, learning_
             seed=42,
         ),
         IrisSkyRLExecution(
-            cluster="cw-us-east-02a",
-            cluster_config="lib/iris/config/cw-us-east-02a.yaml",
+            cluster=CLUSTER,
+            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
             cpu=48,
             memory="1800GB",
             disk="2TB",
             priority="interactive",
             max_retries=0,
-            target_cluster="cw-us-east-02a",
+            target_cluster=CLUSTER,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=24,
             wandb_entity=None,

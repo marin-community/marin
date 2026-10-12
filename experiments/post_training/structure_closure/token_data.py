@@ -8,13 +8,30 @@ import hashlib
 import json
 from collections import Counter
 from pathlib import Path
+from typing import TypedDict
 
 from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.structure_closure.benchmark import ClosureCase, Family, closure_format, score_case
+from experiments.post_training.structure_closure.benchmark import ClosureCase, Family, Split, closure_format, score_case
 
 
-def case_tokens(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> dict:
+class TokenizedCaseRecord(TypedDict):
+    case_id: str
+    task_id: str
+    split: str
+    family: str
+    control: str
+    format: str
+    instruction: str
+    prefix: str
+    expected: str
+    prompt_token_ids: list[int]
+    target_token_ids: list[int]
+    prompt_sha256: str
+    canonical_joint_encoding_matches: bool
+
+
+def tokenized_case_record(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> TokenizedCaseRecord:
     """Render the pinned template and verify prefix-preserving conditional targets."""
     rendered = tokenizer.apply_chat_template(
         [{"role": "user", "content": case.instruction}],
@@ -63,13 +80,14 @@ def prepare_tokens(cases_directory: Path, initializer: Path, output: Path, conte
     if output.exists():
         raise FileExistsError(output)
     tokenizer = PreTrainedTokenizerFast.from_pretrained(initializer, local_files_only=True)
-    manifest = json.loads((cases_directory / "manifest.json").read_text())
+    manifest_path = cases_directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
     output.mkdir(parents=True)
     failures = []
     counts = Counter()
     max_prompt = max_target = noncanonical = 0
     output_hashes = {}
-    for split in ("train", "validation"):
+    for split in Split:
         source = cases_directory / f"{split}.jsonl"
         if hashlib.sha256(source.read_bytes()).hexdigest() != manifest["hashes"][split]:
             raise ValueError(f"Source hash mismatch: {split}")
@@ -79,7 +97,7 @@ def prepare_tokens(cases_directory: Path, initializer: Path, output: Path, conte
                 raw = json.loads(line)
                 case = ClosureCase(**(raw | {"family": Family(raw["family"])}))
                 try:
-                    record = case_tokens(case, tokenizer)
+                    record = tokenized_case_record(case, tokenizer)
                     prompt_length = len(record["prompt_token_ids"])
                     target_length = len(record["target_token_ids"])
                     if prompt_length + target_length > context_tokens:
@@ -103,7 +121,7 @@ def prepare_tokens(cases_directory: Path, initializer: Path, output: Path, conte
         "context_tokens": context_tokens,
         "failures": failures,
         "hashes": output_hashes,
-        "source_manifest_sha256": hashlib.sha256((cases_directory / "manifest.json").read_bytes()).hexdigest(),
+        "source_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
         "tokenizer_sha256": hashlib.sha256((initializer / "tokenizer.json").read_bytes()).hexdigest(),
         "chat_template_sha256": hashlib.sha256((initializer / "chat_template.jinja").read_bytes()).hexdigest(),
         "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

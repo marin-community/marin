@@ -11,8 +11,22 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from rolloutengine.closure_scoring import ClosureFormat, ClosureScore, closure_state, score_closure
+from rolloutengine.closure_scoring import (
+    REASONING_CLOSER,
+    REASONING_OPENER,
+    TOOL_CLOSER,
+    TOOL_OPENER,
+    ClosureFormat,
+    ClosureScore,
+    closure_state,
+    score_closure,
+)
 from rolloutengine.structure_closure import PrefixStatus, json_closure_state
+
+
+class Split(StrEnum):
+    TRAIN = "train"
+    VALIDATION = "validation"
 
 
 class Family(StrEnum):
@@ -80,10 +94,10 @@ def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list
         (Family.ARRAY, array_text, len(array_text) - 1),
         (Family.NESTED, nested_text, len(nested_text) - 2),
         (Family.STRING, string_text, len(string_text) - 1),
-        (Family.TOOL, "<tool_call>" + tool_body + "</tool_call>", len("<tool_call>" + tool_body)),
-        (Family.REASONING, "<|start_think|>" + reason_body + "<|end_think|>", len("<|start_think|>" + reason_body)),
+        (Family.TOOL, TOOL_OPENER + tool_body + TOOL_CLOSER, len(TOOL_OPENER + tool_body)),
+        (Family.REASONING, REASONING_OPENER + reason_body + REASONING_CLOSER, len(REASONING_OPENER + reason_body)),
         (Family.FENCE, "```json\n" + fence_body + "\n```", len("```json\n" + fence_body + "\n")),
-        (Family.REPEATED_OPENER, "<tool_call>" + tool_body + "</tool_call>", len("<tool_call>")),
+        (Family.REPEATED_OPENER, TOOL_OPENER + tool_body + TOOL_CLOSER, len(TOOL_OPENER)),
     ]
     cases = []
     for family, expected, close_cut in specifications:
@@ -153,19 +167,20 @@ def build_benchmark(source: Path, split_file: Path, output: Path):
                 task_cases(
                     task["source_id"],
                     answer,
-                    "train" if task["source_id"] in train else "validation",
+                    Split.TRAIN if task["source_id"] in train else Split.VALIDATION,
                     hashlib.sha256(raw).hexdigest(),
                 )
             )
         except (OSError, ValueError) as error:
             failures.append({"task": task["source_id"], "error": str(error)})
     output.mkdir(parents=True)
-    (output / "conversion-failures.json").write_text(json.dumps(failures, indent=2) + "\n")
+    failures_path = output / "conversion-failures.json"
+    failures_path.write_text(json.dumps(failures, indent=2) + "\n")
     if failures:
-        raise ValueError(f"{len(failures)} tasks failed; see {output / 'conversion-failures.json'}")
+        raise ValueError(f"{len(failures)} tasks failed; see {failures_path}")
     counts = Counter(f"{case.split}/{case.family}/{case.control}" for case in cases)
     hashes = {}
-    for cohort in ("train", "validation"):
+    for cohort in Split:
         data = "".join(json.dumps(asdict(case), separators=(",", ":")) + "\n" for case in cases if case.split == cohort)
         (output / f"{cohort}.jsonl").write_text(data)
         hashes[cohort] = hashlib.sha256(data.encode()).hexdigest()

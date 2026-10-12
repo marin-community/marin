@@ -16,8 +16,15 @@ from rolloutengine.structure_closure import (
     required_code_fence_state,
 )
 
+TOOL_OPENER = "<tool_call>"
+TOOL_CLOSER = "</tool_call>"
+REASONING_OPENER = "<|start_think|>"
+REASONING_CLOSER = "<|end_think|>"
+
 
 class ClosureFormat(StrEnum):
+    """Supported wire formats; tool and reasoning use Hermes and Snowball markers."""
+
     JSON = "json"
     TOOL = "tool"
     REASONING = "reasoning"
@@ -35,9 +42,9 @@ def closure_state(text: str, structure_format: ClosureFormat) -> ClosureState:
     if structure_format == ClosureFormat.JSON:
         return json_closure_state(text)
     if structure_format == ClosureFormat.TOOL:
-        return delimited_json_closure_state(text, opener="<tool_call>", closer="</tool_call>")
+        return delimited_json_closure_state(text, opener=TOOL_OPENER, closer=TOOL_CLOSER)
     if structure_format == ClosureFormat.REASONING:
-        return paired_marker_closure_state(text, opener="<|start_think|>", closer="<|end_think|>")
+        return paired_marker_closure_state(text, opener=REASONING_OPENER, closer=REASONING_CLOSER)
     if structure_format == ClosureFormat.CODE_FENCE:
         return required_code_fence_state(text)
     raise ValueError(f"Unsupported closure format: {structure_format}")
@@ -45,7 +52,7 @@ def closure_state(text: str, structure_format: ClosureFormat) -> ClosureState:
 
 def _json_content(text: str, structure_format: ClosureFormat) -> str:
     if structure_format == ClosureFormat.TOOL:
-        text = text[len("<tool_call>") :].rstrip(" \t\r\n")[: -len("</tool_call>")]
+        text = text[len(TOOL_OPENER) :].rstrip(" \t\r\n")[: -len(TOOL_CLOSER)]
     # Canonical serialization ignores object order and whitespace, but preserves
     # distinctions such as true versus 1 that Python container equality loses.
     return json.dumps(json.loads(text), sort_keys=True, ensure_ascii=True, allow_nan=False)

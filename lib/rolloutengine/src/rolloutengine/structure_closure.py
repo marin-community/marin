@@ -7,6 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 
 
 class PrefixStatus(StrEnum):
@@ -39,7 +40,8 @@ _NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 _NUMBER_PREFIX = re.compile(r"-?(?:(?:0|[1-9][0-9]*)(?:\.[0-9]*)?|(?:0|[1-9][0-9]*)(?:\.[0-9]+)?[eE][+-]?[0-9]*)?")
 _WHITESPACE = " \t\r\n"
 _HEX = frozenset("0123456789abcdefABCDEF")
-_CLOSE = {"{": "}", "[": "]", '"': '"'}
+_CLOSE = MappingProxyType({"{": "}", "[": "]", '"': '"'})
+_FENCE_INDENT = r" {0,3}"
 
 
 class _JsonPrefix:
@@ -176,6 +178,7 @@ class _JsonPrefix:
                 return
 
     def separator(self, closer: str) -> bool:
+        """Consume a separator; return True for a closer and False for a comma."""
         self.skip_space()
         if self.position == len(self.text):
             raise _PrefixEnd(self.suffix())
@@ -293,15 +296,15 @@ def required_code_fence_state(prefix: str) -> ClosureState:
     contract must therefore be declared in the task, not inferred globally.
     """
     lines = prefix.split("\n")
-    opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})([^\n]*)", lines[0])
+    opening = re.fullmatch(_FENCE_INDENT + r"(`{3,}|~{3,})([^\n]*)", lines[0])
     if opening is None:
-        if re.fullmatch(r" {0,3}(?:`{0,2}|~{0,2})", prefix):
+        if re.fullmatch(_FENCE_INDENT + r"(?:`{0,2}|~{0,2})", prefix):
             return ClosureState(PrefixStatus.EXTENDABLE, (), None)
         return ClosureState(PrefixStatus.INVALID, (), None, 0, "Expected code fence")
     fence, info = opening.groups()
     if fence[0] == "`" and "`" in info:
         return ClosureState(PrefixStatus.INVALID, (), None, lines[0].find("`", opening.end(1)), "Backtick in fence info")
-    closer_pattern = re.compile(r" {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*")
+    closer_pattern = re.compile(_FENCE_INDENT + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*")
     offset = len(lines[0]) + 1
     for index, line in enumerate(lines[1:], 1):
         if closer_pattern.fullmatch(line):
@@ -311,7 +314,7 @@ def required_code_fence_state(prefix: str) -> ClosureState:
             return ClosureState(PrefixStatus.COMPLETE, (), "")
         offset += len(line) + 1
     last = lines[-1]
-    if len(lines) > 1 and re.fullmatch(r" {0,3}" + re.escape(fence[0]) + "{0," + str(len(fence) - 1) + "}", last):
+    if len(lines) > 1 and re.fullmatch(_FENCE_INDENT + re.escape(fence[0]) + "{0," + str(len(fence) - 1) + "}", last):
         suffix = fence[len(last.lstrip(" ")) :]
     else:
         suffix = "\n" + fence

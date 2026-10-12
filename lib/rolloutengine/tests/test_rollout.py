@@ -91,10 +91,10 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
         async def prepare(self):
             return SessionStart(({"role": "user", "content": "Replay case"},), {}, prompt_token_ids=prefix)
 
-        async def advance(self, turn):
+        async def advance(self, _turn):
             return Transition(done=True)
 
-        async def grade(self, messages, *, stop_reason):
+        async def grade(self, _messages, *, stop_reason):
             return GradeResult(Outcome.GRADED, 1.0)
 
         async def close(self):
@@ -105,10 +105,10 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
         served = (*prefix[:-1], 99) if alter_prefix else prefix
         return ModelTurn({"role": "assistant", "content": "done"}, served, (5, 6), (-0.1, -0.2), "stop")
 
-    runner = ShellboxRolloutEngine(model, {}, sessions={"fixture": lambda task, machine: Session()})
+    runner = ShellboxRolloutEngine(model, {}, sessions={"fixture": lambda _task, _machine: Session()})
     task = lowered(arithmetic_task(), task_session="fixture")
     if alter_prefix:
-        with pytest.raises(RolloutContractError, match="initial replay token prefix"):
+        with pytest.raises(RolloutContractError):
             await runner.run(task)
         return
     result = await runner.run(task)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Joint closure-loss recipe derived from the BFCL source-v125 async configuration."""
+"""Joint closure-loss recipe for the protocol-FTPO initializer (Marin issue #10061)."""
 
 from copy import deepcopy
 
