@@ -153,7 +153,7 @@ def audit_evaluation(
                 if not regions or regions[0].start != 0:
                     raise ValueError("Tool cohort does not start with an outside-thinking tool call")
                 tool_protocol_status = regions[0].status
-            if case["control"] in ("continue_required", "escape_continue_required"):
+            if case["control"] in ("continue_required", "escape_continue_required", "value_continue_required"):
                 control_outcome = continuation_outcome(
                     case["prefix"] + content, case["expected"], ClosureFormat(case["format"])
                 )

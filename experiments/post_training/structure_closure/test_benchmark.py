@@ -64,6 +64,19 @@ def test_escape_control_does_not_offer_a_closing_only_repair():
     assert score_case(case, case.expected[len(case.prefix) :]).success
 
 
+@pytest.mark.parametrize("family", [Family.OBJECT, Family.ARRAY, Family.NESTED, Family.TOOL])
+def test_missing_value_controls_require_content_before_any_closing_suffix(family):
+    case = next(
+        case
+        for case in task_cases("example_1234", [], "validation", "source")
+        if case.family == family and case.control == "value_continue_required"
+    )
+    assert syntax_state(case.prefix, family).closing_suffix is None
+    for suffix in ("}", "]", "]}", '"}', "</tool_call>"):
+        assert not score_case(case, suffix).syntax_complete
+    assert score_case(case, case.expected[len(case.prefix) :]).success
+
+
 @pytest.mark.parametrize("task_id", ["case_1", "case_2", "case_3", "case_4"])
 def test_varied_fences_require_the_opening_marker_length_and_character(task_id):
     case = next(
