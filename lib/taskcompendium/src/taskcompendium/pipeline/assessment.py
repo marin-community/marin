@@ -47,6 +47,7 @@ PACKET_SCHEMA = pa.schema(
 )
 EVIDENCE_READ_BLOCK_BYTES = 1_048_576
 AUDIT_PREVIEW_CHARACTERS = 2048
+AUDIT_FIELD_OWNERS = {"task_json": "normalize", "normalization_changes": "normalize", "raw_json": "review"}
 
 
 class Cohort(StrEnum):
@@ -108,7 +109,10 @@ def submission_contract(task: TaskSpec) -> SubmissionContract:
             "The runtime extracts the answer from the conversation using answer_format and writes it to answer_path "
             "before invoking the script. The solver need not write that file."
             if answer_path is not None
-            else "The runtime captures declared workspace outputs and available state."
+            else (
+                "The runtime captures workspace outputs and available state, "
+                "and stages the conversation at conversation_path."
+            )
         )
     elif isinstance(task.grader, VerifyitGrader):
         if task.grader.environment is None:
@@ -122,7 +126,10 @@ def submission_contract(task: TaskSpec) -> SubmissionContract:
                 "The runtime extracts the conversation answer using answer_format and stages it at answer_path "
                 "for Verifyit. The solver need not write that file."
                 if task.answer_type in CONVERSATION_ANSWERS
-                else "The runtime captures declared output files or state from the solver."
+                else (
+                    "The runtime captures answer_path when configured and declared output files from the solver "
+                    "workspace; supplied state can be graded without an answer file."
+                )
             )
     return SubmissionContract(
         task.answer_type,
@@ -135,10 +142,10 @@ def submission_contract(task: TaskSpec) -> SubmissionContract:
     )
 
 
-def _audit_preview(value: str) -> str | dict[str, Any]:
+def _audit_preview(value: str) -> tuple[str | dict[str, Any], bool]:
     if len(value) <= AUDIT_PREVIEW_CHARACTERS:
-        return value
-    return private_evidence_summary(value, "Full value retained in source audit", AUDIT_PREVIEW_CHARACTERS)
+        return value, False
+    return private_evidence_summary(value, "Full value retained in source audit", AUDIT_PREVIEW_CHARACTERS), True
 
 
 def read_json(path: str) -> dict[str, Any]:
@@ -245,13 +252,13 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
     for change in row.get("normalization_changes") or []:
         for key in ("original", "replacement"):
             if change[key] is not None:
-                if len(change[key]) > AUDIT_PREVIEW_CHARACTERS:
+                change[key], truncated = _audit_preview(change[key])
+                if truncated:
                     omissions.append(f"{view}: normalization {change['field']} {key} preview truncated")
-                change[key] = _audit_preview(change[key])
     if row.get("raw_json") is not None:
-        if len(row["raw_json"]) > AUDIT_PREVIEW_CHARACTERS:
+        row["raw_json"], truncated = _audit_preview(row["raw_json"])
+        if truncated:
             omissions.append(f"{view}: original source row preview truncated")
-        row["raw_json"] = _audit_preview(row["raw_json"])
     if view == "normalize":
         task_json = row.pop("task_json")
         if task_json is None:
@@ -267,7 +274,7 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
     evidence[view] = row
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence.pop("task", None)
-        omissions.append("task: projected evidence exceeds packet budget")
+        omissions.append("task: projected evidence exceeds packet budget; available submission contract retained")
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence = {view: {"task_id": row["task_id"], "omitted": "section exceeds packet budget"}}
         omissions.append(f"{view}: evidence exceeds packet budget")
@@ -281,14 +288,8 @@ def _selected_evidence(
     view, path, groups = file
     with open_file(path, block_size=EVIDENCE_READ_BLOCK_BYTES) as stream:
         parquet = pq.ParquetFile(stream)
+        columns = [name for name in parquet.schema_arrow.names if AUDIT_FIELD_OWNERS.get(name, view) == view]
         for group, selected in groups.items():
-            columns = [
-                name
-                for name in parquet.schema_arrow.names
-                if (name != "task_json" or view == "normalize")
-                and (name != "normalization_changes" or view == "normalize")
-                and (name != "raw_json" or view == "review")
-            ]
             table = parquet.read_row_group(group, columns=columns)
             rows = table.take(pa.array(list(selected), type=pa.int64())).to_pylist()
             for task_id, row in zip(selected.values(), rows, strict=True):
