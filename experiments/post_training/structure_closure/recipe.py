@@ -43,7 +43,7 @@ def training_config(*, max_steps: int, eval_batch_size: int, learning_rate: floa
     }
     policy_geometry["optimizer_checkpoint_sharding_type"] = "dp_reshardable"
     return {
-        "entrypoint": "standard",
+        "entrypoint": "taskcompendium",
         "context_budget": {
             "request_window_tokens": 32768,
             "max_new_tokens_per_turn": 1024,
