@@ -158,9 +158,10 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     model = MODELS[DEFAULT_MODEL].step
     download = model.build_config(StepContext.for_fingerprint(model.runtime_args, model.deps))
     adopted_model = ArtifactStep.adopt(model.name, model.version, QWEN_SOURCE, kind=model.artifact_type)
+    recipe_fingerprint = fingerprint_hash(canonical_json({"config": config, "data": data_identity}))
     run = skyrl_step(
         SkyRLSpec(
-            name=user_owned_name(f"{RUN_NAME}/{mode}"),
+            name=user_owned_name(f"{RUN_NAME}/{mode}/{recipe_fingerprint}"),
             version=version,
             config_yaml=yaml.safe_dump(config, sort_keys=False),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
