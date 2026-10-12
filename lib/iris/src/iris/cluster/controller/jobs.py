@@ -369,7 +369,10 @@ def _authorize_federation_handoff(
                 f"Federation requester {request.federation.requester_id!r} does not match "
                 f"the authenticated peer {identity.user_id!r}",
             )
-        if not user_admitted(dependencies.auth.allowed_submitters, request.federation.submitting_user):
+        if not (
+            user_admitted(dependencies.auth.allowed_submitters, request.federation.submitting_user)
+            or user_admitted(dependencies.auth.allowed_batch_submitters, request.federation.submitting_user)
+        ):
             raise ConnectError(
                 Code.PERMISSION_DENIED,
                 f"Submitter {request.federation.submitting_user!r} is not admitted for federation to this cluster",
@@ -571,6 +574,16 @@ def _resolve_launch_priority(
             inherited_band = reads.get_priority_bands(snapshot, [launch.job_id.parent])[launch.job_id.parent]
     band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
     request.priority_band = band
+    if (
+        user_admitted(dependencies.auth.allowed_batch_submitters, launch.submitting_user)
+        and not user_admitted(dependencies.auth.allowed_submitters, launch.submitting_user)
+        and band != job_pb2.PRIORITY_BAND_BATCH
+    ):
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Submitter {launch.submitting_user!r} has batch-only access to this cluster; "
+            "resubmit with `--priority batch`.",
+        )
     if launch.received_handoff:
         return band
     if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider:

@@ -610,10 +610,13 @@ class AuthConfig(_OneofConfig):
     federation_peers: dict[str, str] = Field(default_factory=dict)
     # Which submitters this cluster admits via an inbound federation handoff, keyed
     # on the asserted submitting_user — allow-policy syntax ("*", "*@domain", or an
-    # exact identity). Empty admits none (fail closed); a receiving cluster narrows
-    # it explicitly, e.g. ["*@openathena.ai"]. A local_admin (CIDR/loopback) identity
+    # exact identity). A receiving cluster narrows it explicitly, e.g.
+    # ["*@openathena.ai"]. A local_admin (CIDR/loopback) identity
     # is never a valid federation submitter regardless of this list.
     allowed_submitters: list[str] = Field(default_factory=list)
+    # Additional federation submitters restricted to BATCH, including child jobs.
+    # The unrestricted allowlist takes precedence when both match.
+    allowed_batch_submitters: list[str] = Field(default_factory=list)
 
     @field_validator("trusted_cidrs")
     @classmethod

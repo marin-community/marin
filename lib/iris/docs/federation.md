@@ -135,6 +135,11 @@ A handoff is authorized as a peer-to-peer delivery, not as a user submission. Th
 verifies the requesting cluster's signed identity and its own `allowed_submitters` against the
 principal the parent asserts, then admits the job under the parent's job id.
 
+`auth.allowed_batch_submitters` admits additional submitters at BATCH priority only.
+Their child jobs must also stay at BATCH; an inherited priority keeps that band.
+Both allowlists use exact identities, `*@domain` patterns, or `*`. A match in
+`auth.allowed_submitters` takes precedence and permits the existing priority behavior.
+
 What it does *not* re-run is the client-freshness gate. That gate makes humans upgrade a stale
 `marin-iris` CLI, and the wire client here is the parent controller, which re-encodes the
 request from its own stored job state — the submitter's `client_revision_date` is not part of
