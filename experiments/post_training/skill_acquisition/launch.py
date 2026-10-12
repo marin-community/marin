@@ -57,11 +57,11 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def protocol_recipe(updates: int) -> str:
-    """Retain source-v125 optimizer and serving settings under the current FTPO contract."""
+def protocol_recipe(updates: int, learning_rate: float) -> str:
+    """Set the FTPO learning rate while retaining other source-v125 optimizer settings."""
     source = Path(__file__).parents[1] / "bfcl_rl/v125_async.yaml"
     baseline = yaml.safe_load(source.read_text())["skyrl"]
-    optimizer = baseline["trainer"]["policy"]["optimizer_config"]
+    optimizer = {**baseline["trainer"]["policy"]["optimizer_config"], "lr": learning_rate}
     generator = baseline["generator"]
     serving_fields = (
         "backend",
@@ -179,7 +179,7 @@ def protocol_recipe(updates: int) -> str:
     return yaml.safe_dump(recipe, sort_keys=False)
 
 
-def protocol_spec(input_uri: str, input_version: str, updates: int) -> SkyRLSpec:
+def protocol_spec(input_uri: str, input_version: str, updates: int, learning_rate: float) -> SkyRLSpec:
     inputs = ArtifactStep.adopt(
         user_owned_name("data/online-skill-acquisition-inputs"), input_version, input_uri, kind=Artifact
     )
@@ -194,7 +194,7 @@ def protocol_spec(input_uri: str, input_version: str, updates: int) -> SkyRLSpec
     return SkyRLSpec(
         name=name,
         version=resolve_version(name, None),
-        config_yaml=protocol_recipe(updates),
+        config_yaml=protocol_recipe(updates, learning_rate),
         runtime=SkyRLRuntime(SkyRLRuntimeProfile.MEGATRON),
         model=ArtifactHfModel(checkpoint, MODEL, MODEL_REVISION, relative_path=""),
         train_data=(ArtifactDataSource(inputs, relative_path="bfcl-training.parquet"),),
@@ -212,15 +212,16 @@ def protocol_spec(input_uri: str, input_version: str, updates: int) -> SkyRLSpec
 @click.option("--input-uri", required=True)
 @click.option("--input-version", required=True)
 @click.option("--updates", type=click.IntRange(min=1), required=True)
+@click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), required=True)
 @rl_build_options
-def main(input_uri: str, input_version: str, updates: int) -> ArtifactStep:
+def main(input_uri: str, input_version: str, updates: int, learning_rate: float) -> ArtifactStep:
     execution = replace(
         COLLECTION_EXECUTION,
         wandb_entity="nyu-dice-lab",
         coordinator_timeout_hours=72,
         job_timeout_seconds=72 * 3600,
     )
-    return skyrl_step(protocol_spec(input_uri, input_version, updates), execution, export_hf=True)
+    return skyrl_step(protocol_spec(input_uri, input_version, updates, learning_rate), execution, export_hf=True)
 
 
 if __name__ == "__main__":
