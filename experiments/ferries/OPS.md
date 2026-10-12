@@ -146,7 +146,7 @@ echo "https://wandb.ai/marin-community/marin/runs/$RUN_ID"
 - Iris passes `WANDB_API_KEY` and `HF_TOKEN` from the submitting shell. Without `WANDB_API_KEY`, the coordinator raises an error before it submits the TPU job.
 - The coordinator job is `/<user>/iris-run-job-<timestamp>`; the TPU child is `grug-train-<RUN_ID>`. A v6e-4 run trains 238 steps in about 8 minutes; environment setup and queueing for capacity add to that.
 
-After the run finishes, remove the checkout with `git worktree remove "$WORKTREE"`.
+After the run finishes, go back to the main checkout and remove this one with `cd "$CURRENT" && git worktree remove "$WORKTREE"`.
 
 ### Read the result
 
