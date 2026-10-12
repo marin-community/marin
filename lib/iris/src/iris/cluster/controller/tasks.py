@@ -13,6 +13,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.server_auth import get_verified_identity
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, tuple_
 
@@ -30,10 +31,12 @@ from iris.cluster.controller.task_state import (
     attempt_is_worker_failure,
     task_row_can_be_scheduled,
 )
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, WorkerId, is_federated
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import FEDERATION_PEER_ROLE
 from iris.rpc.proto_display import task_state_friendly
 from iris.time_proto import timestamp_to_proto
 
@@ -60,6 +63,9 @@ class PendingKick:
 class TaskRuntime(Protocol):
     @property
     def backend(self) -> TaskBackend: ...
+
+    @property
+    def federation(self) -> FederationManager: ...
 
     def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None: ...
 
@@ -133,14 +139,12 @@ def get_task_status(
         task_id.require_task()
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
-    task = read_task_with_attempts(dependencies.db, task_id)
-    if task is None:
-        raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
-
-    worker_id = task_worker_id(task)
-    task_proto = task_to_proto(task, worker_address=worker_address(dependencies.db, worker_id) if worker_id else "")
-    job_resources = None
     with dependencies.db.read_snapshot() as tx:
+        task = read_task_with_attempts(tx, task_id)
+        if task is None:
+            raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
+        worker_id = task_worker_id(task)
+        address = worker_address(tx, worker_id) if worker_id else ""
         job_config = tx.execute(
             select(
                 job_config_table.c.res_cpu_millicores,
@@ -150,6 +154,9 @@ def get_task_status(
                 job_config_table.c.task_image,
             ).where(job_config_table.c.job_id == task.job_id)
         ).first()
+
+    task_proto = task_to_proto(task, worker_address=address)
+    job_resources = None
     if job_config is not None:
         if (
             job_config.res_cpu_millicores
@@ -212,28 +219,46 @@ def kick_tasks(
     reason = request.reason or f"Kicked to {task_state_friendly(request.desired_state)} by operator"
     results: list[controller_pb2.Controller.KickResult] = []
     kicks: list[PendingKick] = []
+    forwarded: dict[str, list[str]] = {}
     with dependencies.db.read_snapshot() as tx:
         for target in request.targets:
-            _resolve_kick_target(dependencies, tx, target, kind, reason, kicks, results)
+            _resolve_kick_target(dependencies, tx, target, kind, reason, kicks, results, forwarded)
     dependencies.runtime.request_task_kicks(kicks)
+    for peer_id, targets in forwarded.items():
+        peer_request = controller_pb2.Controller.KickTasksRequest(
+            targets=targets, desired_state=request.desired_state, reason=reason
+        )
+        try:
+            response = dependencies.runtime.federation.proxy_to_peer(
+                peer_id, lambda peer, forwarded_request=peer_request: peer.kick_tasks(forwarded_request)
+            )
+        except (ConnectError, ConnectionError, OSError) as error:
+            # A retry of the entire batch could kick an already accepted target's
+            # next attempt. Preserve partial success without a retryable RPC error.
+            results.extend(
+                controller_pb2.Controller.KickResult(
+                    target=target, queued=False, detail=f"Peer {peer_id} did not confirm the action: {error}"
+                )
+                for target in targets
+            )
+        else:
+            results.extend(response.results)
     return controller_pb2.Controller.KickTasksResponse(results=results)
 
 
-def read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAttempts | None:
-    with db.read_snapshot() as tx:
-        task_row = tx.execute(reads.task_detail_query().where(tasks_table.c.task_id == task_id)).first()
-        if task_row is None:
-            return None
-        attempt_rows = tx.execute(
-            reads.attempt_select()
-            .where(task_attempts_table.c.task_id == task_id)
-            .order_by(task_attempts_table.c.attempt_id.asc())
-        ).all()
+def read_task_with_attempts(tx: Tx, task_id: JobName) -> TaskWithAttempts | None:
+    task_row = tx.execute(reads.task_detail_query().where(tasks_table.c.task_id == task_id)).first()
+    if task_row is None:
+        return None
+    attempt_rows = tx.execute(
+        reads.attempt_select()
+        .where(task_attempts_table.c.task_id == task_id)
+        .order_by(task_attempts_table.c.attempt_id.asc())
+    ).all()
     return TaskWithAttempts.from_row(task_row, tuple(AttemptDetailRow.from_row(row) for row in attempt_rows))
 
 
 def tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
-    job_task_ids = select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id)
     task_rows = tx.execute(
         reads.task_detail_query()
         .where(tasks_table.c.job_id == job_id)
@@ -249,27 +274,33 @@ def tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
             )
         )
     ).all()
-    latest_failed = (
-        select(
-            task_attempts_table.c.task_id.label("task_id"),
-            func.max(task_attempts_table.c.attempt_id).label("attempt_id"),
+    failed_attempt_rows = []
+    # Attempt zero has no earlier failures to include in the bounded listing.
+    if any(row.current_attempt_id > 0 for row in task_rows):
+        retried_task_ids = select(tasks_table.c.task_id).where(
+            tasks_table.c.job_id == job_id, tasks_table.c.current_attempt_id > 0
         )
-        .where(
-            task_attempts_table.c.task_id.in_(job_task_ids),
-            task_attempts_table.c.state.in_(_LISTING_FAILURE_STATES),
-        )
-        .group_by(task_attempts_table.c.task_id, task_attempts_table.c.state)
-        .subquery()
-    )
-    failed_attempt_rows = tx.execute(
-        reads.attempt_select(
-            reads.ATTEMPTS_WITH_OUTPUT.join(
-                latest_failed,
-                (task_attempts_table.c.task_id == latest_failed.c.task_id)
-                & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+        latest_failed = (
+            select(
+                task_attempts_table.c.task_id.label("task_id"),
+                func.max(task_attempts_table.c.attempt_id).label("attempt_id"),
             )
+            .where(
+                task_attempts_table.c.task_id.in_(retried_task_ids),
+                task_attempts_table.c.state.in_(_LISTING_FAILURE_STATES),
+            )
+            .group_by(task_attempts_table.c.task_id, task_attempts_table.c.state)
+            .subquery()
         )
-    ).all()
+        failed_attempt_rows = tx.execute(
+            reads.attempt_select(
+                reads.ATTEMPTS_WITH_OUTPUT.join(
+                    latest_failed,
+                    (task_attempts_table.c.task_id == latest_failed.c.task_id)
+                    & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+                )
+            )
+        ).all()
     attempts_by_task: dict[JobName, dict[int, AttemptDetailRow]] = {}
     for row in (*current_attempt_rows, *failed_attempt_rows):
         attempt = AttemptDetailRow.from_row(row)
@@ -352,9 +383,8 @@ def task_worker_id(task: TaskWithAttempts) -> WorkerId | None:
     return task.current_worker_id
 
 
-def worker_address(db: ControllerDB, worker_id: WorkerId) -> str:
-    with db.read_snapshot() as tx:
-        row = tx.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).first()
+def worker_address(tx: Tx, worker_id: WorkerId) -> str:
+    row = tx.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).first()
     return str(row.address) if row else ""
 
 
@@ -385,6 +415,7 @@ def _resolve_kick_target(
     reason: str,
     kicks: list[PendingKick],
     results: list[controller_pb2.Controller.KickResult],
+    forwarded: dict[str, list[str]],
 ) -> None:
     def reject(detail: str, *, task_id: str = "") -> None:
         results.append(
@@ -403,7 +434,22 @@ def _resolve_kick_target(
         return
 
     name = task_attempt.task_id
-    authorize_owner_if_configured(dependencies.auth, name.user)
+    identity = get_verified_identity()
+    if dependencies.auth.provider and identity is not None and identity.role == FEDERATION_PEER_ROLE:
+        handoff = reads.received_handoff(tx, name.root_job)
+        if handoff is None or handoff.requester_id != identity.user_id:
+            raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {name.root_job}")
+    else:
+        authorize_owner_if_configured(dependencies.auth, name.user)
+    if not name.is_task and task_attempt.attempt_id is not None:
+        reject("a job target cannot carry an ':attempt' suffix")
+        return
+    # Resolve and validate against the executing peer, whose attempt may be newer
+    # than the parent's mirrored task state (or may not have been mirrored yet).
+    handle = reads.federated_handle(tx, name.root_job)
+    if handle is not None:
+        forwarded.setdefault(handle.peer_id, []).append(target)
+        return
     if name.is_task:
         detail = reads.get_task_detail(tx, name)
         if detail is None:
@@ -425,9 +471,6 @@ def _resolve_kick_target(
         results.append(controller_pb2.Controller.KickResult(target=target, task_id=name.to_wire(), queued=True))
         return
 
-    if task_attempt.attempt_id is not None:
-        reject("a job target cannot carry an ':attempt' suffix")
-        return
     if reads.get_job_state(tx, name) is None:
         reject("job not found")
         return

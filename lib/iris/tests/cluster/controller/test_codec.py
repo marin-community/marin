@@ -53,6 +53,7 @@ def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.Launc
         submit_argv=["iris", "job", "run", "--", "python", "train.py"],
         client_revision_date="2026-07-12",
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+        egress_policy=job_pb2.EGRESS_POLICY_NONE,
     )
     request.entrypoint.setup_commands.append("uv sync")
     request.entrypoint.run_command.argv[:] = ["python", "train.py"]

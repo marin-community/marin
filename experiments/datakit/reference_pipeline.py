@@ -39,9 +39,8 @@ succeed.
 
 Per source::
 
-    normalize → tokenize
+    normalize → tokenize             → quality (pooled fast-transformer on the tokenize ids, given model dir)
               → embed (luxical-one)   → assign (domain v0, given centroids)
-              → quality                (pooled fast-transformer, given model dir)
               → decontam               (shared eval bloom)
               → minhash
 
@@ -79,7 +78,7 @@ Submit the sample-mode end-to-end run on iris::
         -- python -m experiments.datakit.reference_pipeline \\
             --mode sample --sample-prefix s3://.../datakit/sample_100b_8ae7a94f \\
             --sources all --pool-workers 512 \\
-            --quality-model-version pooled-junkgate2 \\
+            --quality-model-version pooled-junkgate2-marin \\
             --domain-centroids-version <run-id>
 
 Reproducibility contract
@@ -443,9 +442,10 @@ def default_sources() -> dict[str, StepSpec]:
     return select_sources(None)
 
 
-def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale) -> StepSpec:
+def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale, output_prefix: str | None) -> StepSpec:
     return StepSpec(
         name=f"datakit/embed/{name}",
+        output_path_prefix=output_prefix,
         deps=[normalize_step],
         hash_attrs={
             "luxical_repo": LUXICAL_REPO,
@@ -474,7 +474,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
 
 
 def build_per_source_embed_steps(
-    sources: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE
+    sources: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE, output_prefix: str | None = None
 ) -> dict[str, StepSpec]:
     """Build the Luxical embed StepSpec for each source.
 
@@ -483,10 +483,12 @@ def build_per_source_embed_steps(
     the domain training subgraph (via :func:`build_train_centroids_step`) can
     share the same embeds across both wirings.
     """
-    return {name: _build_embed_step(name, step, scale) for name, step in sources.items()}
+    return {name: _build_embed_step(name, step, scale, output_prefix) for name, step in sources.items()}
 
 
-def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE) -> StepSpec:
+def build_train_centroids_step(
+    embed_steps: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE, output_prefix: str | None = None
+) -> StepSpec:
     """Build the K-means training StepSpec for the domain centroids.
 
     The returned step's ``output_path`` contains ``centroids_<k_train>.npy``
@@ -497,6 +499,7 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
     cluster = scale.cluster
     sample_step = StepSpec(
         name="datakit/cluster/sample_centroids",
+        output_path_prefix=output_prefix,
         deps=list(embed_steps.values()),
         hash_attrs={
             "n_per_source": scale.n_per_source_for_sample,
@@ -524,6 +527,7 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
     n_threads = int(scale.train_centroids_resources.cpu)
     return StepSpec(
         name="datakit/cluster/train_centroids",
+        output_path_prefix=output_prefix,
         deps=[sample_step],
         hash_attrs={
             "k_train": cluster.k_train,
@@ -593,7 +597,7 @@ def _resolve_quality_model_version(quality_model: str, quality_model_version: st
         raise ValueError(
             f"quality_model_version is required: the quality model dir ({quality_model}) is "
             "region-specific and must not enter the cache hash. Pass a stable tag "
-            "identifying the model bytes (e.g. 'pooled-junkgate2')."
+            "identifying the model bytes (e.g. 'pooled-junkgate2-marin')."
         )
     return quality_model_version
 
@@ -660,12 +664,17 @@ def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    output_prefix: str | None = None,
 ) -> ZephyrDatakitSteps:
-    """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
+    """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages.
+
+    ``output_prefix`` roots every stage output in place of ``MARIN_PREFIX``.
+    """
     source_names = sorted(sources)
     worker_resources = scale.pool.task if zephyr_context is not None else scale.pool.worker
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
+        output_path_prefix=output_prefix,
         deps=[sources[name] for name in source_names],
         hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
         fn=lambda output_path: global_exact_deduplicate(
@@ -683,6 +692,7 @@ def zephyr_datakit_steps(
     for name, normalize_step in sources.items():
         tokenize_steps[name] = tokenize_attributes_step(
             name=f"datakit/tokenize/{name}",
+            output_path_prefix=output_prefix,
             train_normalize=normalize_step,
             tokenizer=TOKENIZER,
             tokenizer_backend=TOKENIZER_BACKEND,
@@ -693,6 +703,7 @@ def zephyr_datakit_steps(
         )
         minhash_steps[name] = StepSpec(
             name=f"datakit/minhash/{name}",
+            output_path_prefix=output_prefix,
             deps=[normalize_step],
             hash_attrs={
                 "num_perms": mh.num_perms,
@@ -717,6 +728,7 @@ def zephyr_datakit_steps(
 
     fuzzy_dedup = StepSpec(
         name="datakit/dedup",
+        output_path_prefix=output_prefix,
         deps=list(minhash_steps.values()),
         hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
@@ -747,6 +759,7 @@ def decontamination_steps(
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
     mark_source_names: list[str] | None = None,
+    output_prefix: str | None = None,
 ) -> DecontaminationSteps:
     """Build decontamination stages with one full-source preparation.
 
@@ -763,6 +776,7 @@ def decontamination_steps(
     eval_root = eval_corpus_root()
     bloom = build_eval_bloom_step(
         name="datakit/bloom/_combined_fixed",
+        output_path_prefix=output_prefix,
         eval_data_sources=[eval_root],
         ngram_length=NGRAM_LENGTH,
         overlap_threshold=OVERLAP_THRESHOLD,
@@ -781,6 +795,7 @@ def decontamination_steps(
     )
     drop_sets = all_source_drop_sets_step(
         name="datakit/decon_drop/_combined",
+        output_path_prefix=output_prefix,
         sources=[
             DropSetSource(
                 name=source_name,
@@ -804,6 +819,7 @@ def decontamination_steps(
     marks = {
         name: decon_step(
             name=f"datakit/decontam/{name}",
+            output_path_prefix=output_prefix,
             normalized=normalize_step,
             prebuilt_bloom=bloom,
             drop_sets=drop_sets,
@@ -822,6 +838,7 @@ def decontamination_steps(
     }
     report = StepSpec(
         name="datakit/report/decontam",
+        output_path_prefix=output_prefix,
         deps=list(marks.values()),
         hash_attrs={"v": 1},
         fn=lambda output_path: decontam_report(
@@ -841,13 +858,14 @@ def reference_datakit_steps(
     centroids_version: str | None = None,
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    output_prefix: str | None = None,
 ) -> DatakitSteps:
     """Build the reference Datakit DAG over the given normalize steps.
 
-    Every step's output lands at ``<MARIN_PREFIX>/<step_name>_<hash>/`` via
-    the default StepSpec routing -- this pipeline never sets
-    ``output_path_prefix``, so changing the deploy region is just a matter
-    of changing ``MARIN_PREFIX``.
+    Every step's output lands at ``<output_prefix>/<step_name>_<hash>/``.
+    ``output_prefix`` defaults to ``MARIN_PREFIX``, so changing the deploy region
+    is just a matter of changing ``MARIN_PREFIX``. Inputs such as the eval corpus
+    always resolve against ``MARIN_PREFIX``.
 
     Args:
         sources: ``{name: normalize_step}``. Each step must produce a
@@ -857,7 +875,7 @@ def reference_datakit_steps(
         quality_model: Directory holding the pooled fast-transformer scorer
             artifacts plus the calibration json (immutable by convention).
         quality_model_version: Required. A stable tag identifying the model bytes
-            (e.g. ``'pooled-junkgate2'``) -- hashed into the quality step in place
+            (e.g. ``'pooled-junkgate2-marin'``) -- hashed into the quality step in place
             of the region-specific ``quality_model`` dir, so the same scorer
             resolves to one output path across regions.
         domain_centroids: A GCS directory holding ``centroids_<k_train>.npy``
@@ -878,6 +896,8 @@ def reference_datakit_steps(
             ``DEFAULT_SCALE`` is the production full-fleet shape; ``SMOKE_SCALE``
             runs the same DAG end-to-end on a testbed sample.
         zephyr_context: Optional shared context for subprocess-compatible stages.
+        output_prefix: Root for every step output, for example a temporary
+            prefix below ``MARIN_PREFIX``. ``None`` uses ``MARIN_PREFIX``.
     """
     cluster = scale.cluster
     fuzzy = scale.fuzzy
@@ -889,17 +909,19 @@ def reference_datakit_steps(
     unknown_exempt = set(scale.store.fuzzy_exempt_sources) - (all_sources().keys() | sources.keys())
     if unknown_exempt:
         raise ValueError(f"Unknown fuzzy-exempt sources: {sorted(unknown_exempt)!r}")
-    zephyr_steps = zephyr_datakit_steps(sources, scale, zephyr_context)
+    zephyr_steps = zephyr_datakit_steps(sources, scale, zephyr_context, output_prefix)
     exact_dedup = zephyr_steps.exact_dedup
-    embed_steps = build_per_source_embed_steps(sources, scale)
+    embed_steps = build_per_source_embed_steps(sources, scale, output_prefix)
     if domain_centroids is None:
-        domain_centroids = build_train_centroids_step(embed_steps, scale)
+        domain_centroids = build_train_centroids_step(embed_steps, scale, output_prefix)
 
     centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(
         domain_centroids, cluster, centroids_version
     )
     quality_model_hash = _resolve_quality_model_version(quality_model, quality_model_version)
-    decontamination = decontamination_steps(sources, scale=scale, zephyr_context=zephyr_context)
+    decontamination = decontamination_steps(
+        sources, scale=scale, zephyr_context=zephyr_context, output_prefix=output_prefix
+    )
 
     # ---- Per-source steps ------------------------------------------------------
     per_source: dict[str, dict[str, StepSpec]] = {}
@@ -913,6 +935,7 @@ def reference_datakit_steps(
         # invalidates already-assigned outputs.
         assign = StepSpec(
             name=f"datakit/cluster_assign/{name}",
+            output_path_prefix=output_prefix,
             deps=[embed, *centroids_deps],
             hash_attrs=assign_hash_attrs(centroids_hash, cluster.k_train, cluster.k_views, scale.assign_batch_size),
             fn=remote(
@@ -930,14 +953,17 @@ def reference_datakit_steps(
 
         quality = StepSpec(
             name=f"datakit/quality/{name}",
-            deps=[normalize_step],
-            hash_attrs={"model_version": quality_model_hash, "v": 1},
+            output_path_prefix=output_prefix,
+            deps=[normalize_step, tokenize],
+            hash_attrs={"model_version": quality_model_hash, "v": 2},
             fn=remote(
-                lambda output_path, np=normalize_step.output_path, src=name: score_normalized(
+                lambda output_path, np=normalize_step.output_path, tp=tokenize.output_path, src=name: score_normalized(
                     output_path=output_path,
                     normalized=read_artifact(np, NormalizedData),
+                    tokenized=read_artifact(tp, TokenizedAttrData),
                     source=src,
                     model_dir=quality_model,
+                    split=SPLIT,
                     max_workers=scale.pool.n_workers,
                     worker_resources=scale.pool.worker,
                 ),
@@ -962,6 +988,7 @@ def reference_datakit_steps(
 
     cluster_plan = large_clusters_step(
         name="datakit/large_fuzzy_clusters",
+        output_path_prefix=output_prefix,
         candidates=dedup,
         params=fuzzy.plan,
         max_workers=fuzzy.max_workers,
@@ -970,6 +997,7 @@ def reference_datakit_steps(
     )
     cluster_text = cluster_text_step(
         name="datakit/fuzzy_cluster_text",
+        output_path_prefix=output_prefix,
         plan=cluster_plan,
         params=fuzzy.text,
         max_workers=fuzzy.max_workers,
@@ -979,6 +1007,7 @@ def reference_datakit_steps(
     )
     verified_dedup = cluster_verify_step(
         name="datakit/verify_fuzzy_clusters",
+        output_path_prefix=output_prefix,
         cluster_text=cluster_text,
         params=fuzzy.rule,
         limits=fuzzy.limits,
@@ -1019,6 +1048,7 @@ def reference_datakit_steps(
     # Tokenizer and quality bucket edges are already captured by dependencies.
     store = StepSpec(
         name="datakit/store",
+        output_path_prefix=output_prefix,
         deps=store_deps,
         hash_attrs={
             "cluster_view": cluster.cluster_view,
@@ -1041,6 +1071,7 @@ def reference_datakit_steps(
     reports = [
         StepSpec(
             name="datakit/report/normalize",
+            output_path_prefix=output_prefix,
             deps=list(sources.values()),
             hash_attrs={"v": 2},
             fn=lambda op: normalize_report(
@@ -1049,6 +1080,7 @@ def reference_datakit_steps(
         ),
         StepSpec(
             name="datakit/report/tokenize",
+            output_path_prefix=output_prefix,
             deps=[s["tokenize"] for s in per_source.values()],
             hash_attrs={"v": 1, "split": SPLIT},
             fn=lambda op: tokenize_report(
@@ -1057,12 +1089,14 @@ def reference_datakit_steps(
         ),
         StepSpec(
             name="datakit/report/quality",
+            output_path_prefix=output_prefix,
             deps=[s["quality"] for s in per_source.values()],
             hash_attrs={"v": 1},
             fn=lambda op: quality_report(op, {n: read_artifact(p, QualityScores) for n, p in quality_paths.items()}),
         ),
         StepSpec(
             name="datakit/report/domain",
+            output_path_prefix=output_prefix,
             deps=[s["assign"] for s in per_source.values()],
             hash_attrs={"v": 1, "cluster_view": cluster.cluster_view},
             fn=lambda op: assign_report(
@@ -1072,6 +1106,7 @@ def reference_datakit_steps(
         decontamination.report,
         StepSpec(
             name="datakit/report/dedup",
+            output_path_prefix=output_prefix,
             deps=[dedup, verified_dedup],
             hash_attrs={"v": 2},
             fn=lambda op: cluster_dedup_report(
@@ -1082,6 +1117,7 @@ def reference_datakit_steps(
         ),
         StepSpec(
             name="datakit/report/store",
+            output_path_prefix=output_prefix,
             deps=[store],
             hash_attrs={"v": 1},
             fn=lambda op: store_report(op, read_artifact(store.output_path, ClusteredStoreData)),
@@ -1099,8 +1135,22 @@ def reference_datakit_steps(
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
 
-QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2"
+QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2_marin"
 """Pooled fast-transformer scorer directory, relative to ``MARIN_PREFIX``."""
+
+QUALITY_MODEL_VERSION = "pooled-junkgate2-marin"
+"""Identity tag for the bytes at :data:`QUALITY_MODEL`."""
+
+
+def shared_zephyr_context(scale: PipelineScale, name: str = "datakit-reference") -> ZephyrContext:
+    """Return the worker pool that the subprocess-compatible stages share."""
+    return ZephyrContext(
+        name=name,
+        resources=scale.pool.worker,
+        coordinator_resources=scale.pool.coordinator,
+        max_workers=scale.pool.n_workers,
+        stage_runner_factory=SubprocessRunner,
+    )
 
 
 def quality_model_path() -> str:
@@ -1284,7 +1334,7 @@ def main() -> None:
     parser.add_argument(
         "--quality-model-version",
         help=(
-            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2'). Required for --target all. "
+            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2-marin'). Required for --target all. "
             "Hashed in place of the region-specific model dir for cross-region reproducibility."
         ),
     )
@@ -1334,17 +1384,7 @@ def main() -> None:
         if not mark_source_names:
             parser.error("--mark-sources must name at least one source or use 'all'")
 
-    zephyr_context = (
-        None
-        if args.target == "decon-report"
-        else ZephyrContext(
-            name="datakit-reference",
-            resources=scale.pool.worker,
-            coordinator_resources=scale.pool.coordinator,
-            max_workers=scale.pool.n_workers,
-            stage_runner_factory=SubprocessRunner,
-        )
-    )
+    zephyr_context = None if args.target == "decon-report" else shared_zephyr_context(scale)
     if args.target == "all":
         result = reference_datakit_steps(
             sources,

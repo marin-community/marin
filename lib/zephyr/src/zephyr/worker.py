@@ -9,7 +9,7 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Hashable
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -20,13 +20,6 @@ from rigging.timing import ExponentialBackoff, RateLimiter
 
 from zephyr import counters as stage_counters
 from zephyr.coordinator import CoordinatorUnreachable, PullStatus, PullTask
-from zephyr.memory_store import (
-    MemoryStoreActorStats,
-    MemoryStoreService,
-    MemoryTableLookup,
-    MemoryTableRegistration,
-    MemoryTableStatsResult,
-)
 from zephyr.stage_io import ShardTask, StageRunner, TaskResult, ZephyrTaskResources
 from zephyr.stats import (
     WORKER_STATS_INTERVAL,
@@ -73,6 +66,14 @@ def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
     return detail, summary
 
 
+def attempt_worker_id(group_name: str, index: int, attempt_id: int) -> str:
+    """Iris can start a new attempt of a lost worker task while the old attempt
+    still runs. The attempt number keeps their IDs apart, so each process has
+    its own liveness and the coordinator requeues a dead attempt's shards.
+    """
+    return f"{group_name}-{index}-a{attempt_id}"
+
+
 class ZephyrWorker:
     """Long-lived worker actor with a single poll loop and per-task threads.
 
@@ -113,13 +114,14 @@ class ZephyrWorker:
         # in Python <3.12 don't inherit it).
         self._actor_ctx = current_actor()
         self._host_shutdown_event = self._actor_ctx.shutdown_event
-        self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
-        self._actor_handle = self._actor_ctx.handle
-        self._memory_store = MemoryStoreService(self._actor_ctx.index)
-        self._stats_writer = StatsWriter.connect(stats_config)
         job_info = get_job_info()
         self._job_id = str(job_info.job_id) if job_info is not None else ""
         self._task_id = job_info.task_id.to_wire() if job_info is not None else ""
+        self._worker_id = attempt_worker_id(
+            self._actor_ctx.group_name, self._actor_ctx.index, job_info.attempt_id if job_info is not None else 0
+        )
+        self._actor_handle = self._actor_ctx.handle
+        self._stats_writer = StatsWriter.connect(stats_config)
 
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
@@ -143,7 +145,7 @@ class ZephyrWorker:
         return self._host_shutdown_event is not None and self._host_shutdown_event.is_set()
 
     def _register(self) -> bool:
-        """Register with the coordinator and restore the memory tables it returns.
+        """Register with the coordinator.
 
         Returns True once registration lands, False if this worker is told to stop
         first. Blocks for as long as registration takes.
@@ -168,7 +170,7 @@ class ZephyrWorker:
                     future = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle, self._task_id)
                     request_start = time.monotonic()
                     warned = False
-                registrations = future.result(timeout=RPC_POLL_INTERVAL)
+                future.result(timeout=RPC_POLL_INTERVAL)
             except TimeoutError:
                 elapsed = time.monotonic() - request_start
                 if elapsed > REGISTER_WARN_AFTER and not warned:
@@ -181,7 +183,6 @@ class ZephyrWorker:
                 self._shutdown_event.wait(timeout=backoff.next_interval())
                 continue
 
-            self._memory_store.restore(registrations)
             return True
 
         logger.info("[%s] Told to stop before registration completed", self._worker_id)
@@ -195,8 +196,6 @@ class ZephyrWorker:
         At stage boundaries, the loop sleeps briefly and then polls again.
         """
         logger.info("[%s] Poll loop starting", self._worker_id)
-        # Registration must land before polling: it returns the memory-table
-        # registrations that tasks read through memory_store.
         if not self._register():
             self._stats_writer.close()
             return
@@ -297,35 +296,6 @@ class ZephyrWorker:
         self._shutdown_event.set()
         if self._host_shutdown_event is not None:
             self._host_shutdown_event.set()
-
-    def load_memory_table(self, registration: MemoryTableRegistration) -> MemoryStoreActorStats:
-        """Validate and load one table from its shard-local source data."""
-        return self._memory_store.load(registration)
-
-    def reload_memory_table(self, table_id: str) -> MemoryStoreActorStats | None:
-        """Reload one active table, or return `None` if it was destroyed."""
-        registration = self._coordinator.memory_table_registration.remote(table_id).result()
-        if registration is None:
-            self._memory_store.destroy(table_id)
-            return None
-
-        stats = self._memory_store.load(registration)
-        if self._coordinator.memory_table_registration.remote(table_id).result() is None:
-            self._memory_store.destroy(table_id)
-            return None
-        return stats
-
-    def lookup_memory_table(self, table_id: str, keys: list[Hashable]) -> MemoryTableLookup:
-        """Return values or structured state that lets the caller trigger reload."""
-        return self._memory_store.lookup(table_id, keys)
-
-    def memory_table_stats(self, table_id: str) -> MemoryTableStatsResult:
-        """Return one worker's table state or load statistics."""
-        return self._memory_store.stats(table_id)
-
-    def destroy_memory_table(self, table_id: str) -> None:
-        """Tombstone one table and release its values."""
-        self._memory_store.destroy(table_id)
 
     def _task_thread(
         self,

@@ -9,7 +9,7 @@ import os
 from marina.db import database_from_env, engine_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from .app import EvaldashConfig, PgRecordStore, PostgresIngestor, StoreMode
+from .app import EvaldashConfig, PostgresIngestor, StoreMode
 from .results_db import verify_schema
 
 APP_NAME = "evaldash"
@@ -28,8 +28,7 @@ def main() -> int:
     engine = engine_for(database, APP_NAME)
     try:
         verify_schema(engine)
-        store = PgRecordStore(engine)
-        ingestor = PostgresIngestor(store, config.prefixes, config.ingest_interval, config.revalidate_after)
+        ingestor = PostgresIngestor(engine, config.prefixes, config.ingest_interval, config.revalidate_after)
         failures = asyncio.run(ingestor.run_once())
         if failures:
             raise RuntimeError(f"EvalDash ingest failed for prefixes: {', '.join(failures)}")

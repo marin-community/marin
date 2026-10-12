@@ -67,6 +67,16 @@ def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
     return _interleave_halves(gate, up)
 
 
+def _deinterleave_gate_up(moe_w13_interleaved: jax.Array) -> jax.Array:
+    """Undo ``_interleave_gate_up``: interleaved [g0,u0,g1,u1,...] -> grug w13 gate=[:I], up=[I:]."""
+    if moe_w13_interleaved.dtype.itemsize == 2:
+        gate, up = _unpack_pairs_u32(moe_w13_interleaved)
+    else:
+        pairs = moe_w13_interleaved.reshape(*moe_w13_interleaved.shape[:-1], -1, 2)
+        gate, up = pairs[..., 0], pairs[..., 1]
+    return jnp.concatenate([gate, up], axis=-1)
+
+
 def _swiglu_gate_up_backward(gu: jax.Array, dh: jax.Array) -> jax.Array:
     """Cotangent of the interleaved gate/up pre-activations, given the SwiGLU output's."""
     if gu.dtype.itemsize == 2:

@@ -804,6 +804,21 @@ class EnvironmentSpec:
 
         return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
 
+    def to_sandbox_proto(self) -> job_pb2.EnvironmentConfig:
+        """Wire format for a ``CONTAINER_PROFILE_SANDBOX`` job: only what this spec names.
+
+        Unlike :meth:`to_proto`, nothing is copied from the submitting process
+        (no ``HF_TOKEN``, ``WANDB_API_KEY``, or provenance) and no default uv-sync
+        setup is built, since a sandbox has no workspace bundle to sync.
+        ``setup_scripts`` run verbatim; ``None`` means no setup.
+        """
+        if self.extras or self.pip_packages or self.sync_packages:
+            raise ValueError("A sandbox job has no workspace to sync; extras, pip_packages and sync_packages need one")
+        return job_pb2.EnvironmentConfig(
+            env_vars=dict(self.env_vars or {}),
+            setup_scripts=[s for s in self.setup_scripts or [] if s.strip()],
+        )
+
 
 class Namespace(str):
     """Namespace for actor isolation.

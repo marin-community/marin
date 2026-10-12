@@ -122,5 +122,6 @@
       ],
       "filterExpression": "metric == 'kv_cache_usage' || metric == 'kv_cache_usage_peak'"
     }
-  ]
+  ],
+  "maxDataPoints": 360
 }

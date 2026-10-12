@@ -40,12 +40,12 @@ FEDERATION_PEER_ROLE = "federation-peer"
 # DASHBOARD_READABLE_RPCS.
 FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "FederationSync", "ListBackends"})
 
-# On-demand debug proxies a federation-peer identity may call, but only after the
+# Task operations a federation-peer identity may call, but only after the
 # handler confirms the target task belongs to a job that peer federated here (its
 # RECEIVED handle) — a peer must not profile/exec/inspect the receiving cluster's own
-# tasks or its controller. authorize_method admits these; the attempt operation
+# tasks or its controller. authorize_method admits these; each operation
 # validates ownership against the peer's received handoff.
-FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset({"ProfileTask", "ExecInContainer", "GetProcessStatus"})
+FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset({"ProfileTask", "ExecInContainer", "GetProcessStatus", "KickTasks"})
 
 
 class AuthzAction(StrEnum):

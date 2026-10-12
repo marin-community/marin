@@ -62,9 +62,8 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
     with TestClient(api.app) as client:
         assert client.get("/runs").json() == []
         config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
-        writer = evaldash_app.PgRecordStore(engine)
         ingestor = evaldash_app.PostgresIngestor(
-            writer, config.prefixes, config.ingest_interval, config.revalidate_after
+            engine, config.prefixes, config.ingest_interval, config.revalidate_after
         )
         assert asyncio.run(ingestor.run_once()) == ()
         response = client.post("/refresh")
@@ -89,7 +88,7 @@ def test_a_second_instance_serves_the_generation_the_first_committed(engine, rec
     writer = evaldash_app.PgRecordStore(engine)
     now = [0.0]
     reader = evaldash_app.PgRecordStore(engine, now=lambda: now[0])
-    ingestor = evaldash_app.PostgresIngestor(writer, config.prefixes, config.ingest_interval, config.revalidate_after)
+    ingestor = evaldash_app.PostgresIngestor(engine, config.prefixes, config.ingest_interval, config.revalidate_after)
     assert reader.store_info().record_count == 0
 
     asyncio.run(ingestor.run_once())
@@ -113,10 +112,9 @@ def test_a_second_instance_serves_the_generation_the_first_committed(engine, rec
 def test_catalog_check_failure_serves_cached_snapshot_until_retry(engine, records, monkeypatch):
     evaldash_app.migrate(engine)
     config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
-    writer = evaldash_app.PgRecordStore(engine)
     asyncio.run(
         evaldash_app.PostgresIngestor(
-            writer, config.prefixes, config.ingest_interval, config.revalidate_after
+            engine, config.prefixes, config.ingest_interval, config.revalidate_after
         ).run_once()
     )
     now = [0.0]

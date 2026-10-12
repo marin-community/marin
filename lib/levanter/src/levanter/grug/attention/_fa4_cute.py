@@ -22,7 +22,7 @@ from levanter.grug.attention._fa4_cute_config import (
     flash4_cute_kernel_config,
     sm100_flash4_cute_kernel_config,
 )
-from levanter.sharding import partitioning_axes, partition_spec_of
+from levanter.sharding import partition_spec_of, partitioned_dims
 
 
 def _replicate_metadata(x: jax.Array) -> jax.Array:
@@ -209,16 +209,6 @@ def _validate_head_layout(q: jax.Array, k: jax.Array, *, backend_name: str) -> N
         raise ValueError(f"{backend_name} requires Hq divisible by Hkv, got q={q.shape}, k={k.shape}")
 
 
-def _partitioned_dims(
-    x: jax.Array, mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh
-) -> tuple[tuple[str, ...], ...]:
-    """Return the mesh axes partitioning each dimension, ignoring size-one axes."""
-    spec = partition_spec_of(x)
-    entries = tuple(spec) if spec is not None else ()
-    entries += (None,) * (x.ndim - len(entries))
-    return tuple(partitioning_axes(entry, mesh) for entry in entries)
-
-
 def _fa4_cute_attention_forward_sharded(
     q: jax.Array,
     k: jax.Array,
@@ -245,11 +235,11 @@ def _fa4_cute_attention_forward_sharded(
             q_offset=jnp.zeros((1,), dtype=jnp.int32),
         )
 
-    q_dims = _partitioned_dims(q, mesh)
+    q_dims = partitioned_dims(q, mesh)
     if q_dims[3]:
         raise ValueError(f"FA4/CuTe requires an unsharded q feature dimension, got {partition_spec_of(q)}.")
     for name, x in (("k", k), ("v", v)):
-        kv_dims = _partitioned_dims(x, mesh)
+        kv_dims = partitioned_dims(x, mesh)
         if kv_dims != (q_dims[0], (), q_dims[2], ()):
             raise ValueError(
                 f"FA4/CuTe requires {name} to match q's batch/head sharding with unsharded sequence/feature "

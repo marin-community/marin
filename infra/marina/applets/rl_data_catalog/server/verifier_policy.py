@@ -100,7 +100,9 @@ def migrate_verifier_policy(connection: Connection) -> None:
                             SELECT 1 FROM jsonb_array_elements(r.collection->'reviews') judgment,
                                 jsonb_array_elements(judgment->'attributes'->'resolved_verifier_issues') resolution
                             WHERE resolution->>'issue_url' = NEW.issue_url
-                                AND resolution->>'verifier_revision' = s.payload->>'verifier_revision'
+                                AND resolution ? 'verifier_revision'
+                                AND (resolution->>'verifier_revision') IS NOT DISTINCT FROM
+                                    (s.payload->>'verifier_revision')
                                 AND resolution->>'dataset_revision' = COALESCE(
                                     s.payload->>'dataset_revision', s.payload->>'revision')
                                 AND resolution->'fix_validated' = 'true'::jsonb
