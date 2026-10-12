@@ -66,6 +66,7 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.host_stall import HostStallSampler
+from experiments.grug.fast_track.library_kernels import load_library_kernels
 from experiments.grug.fast_track.model import (
     DenseMLP,
     GrugModelConfig,
@@ -303,6 +304,9 @@ class GrugTrainerConfig:
     # mesh's train step and autotunes it alone (no cross-process exchange); compile ahead of time, publish the
     # results and stop before running a step. None: a normal run.
     xla_autotune_seed_topology: str | None = None
+    # Before the first step, run each cuBLAS call of the compiled train step once alone on each local device
+    # (``library_kernels``), so no kernel library loads mid-step (a first-step deadlock on GB200).
+    preload_library_kernels: bool = False
     # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
     layer_skip: LayerSkipRule | None = None
     # When the extra_mlp_layers MLPs switch on, as a fraction of training (0: from the start).
@@ -1369,6 +1373,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         # The step runs on the state's flat leaves (``_flat_train_step``); ``state`` is rebuilt from them each step.
         state_leaves, state_treedef = jax.tree.flatten(state)
         train_step = _flat_train_step(train_step_fn, state_treedef)
+        # The train step's optimized HLO, set when the first step compiles it ahead of time.
+        train_step_hlo: str | None = None
 
         eval_interval = eval_cfg.steps_per_eval if eval_cfg is not None and eval_cfg.steps_per_eval else None
         last_ready_time: float | None = None
@@ -1391,12 +1397,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             last_ready_time = ready_time
             if step_state is not None and config.trainer.hlo_dump_path is not None and not hlo_written:
                 if jax.process_index() == 0:
-                    _write_train_step_hlo(
-                        train_step,
-                        state_leaves,
-                        rec.batch,
-                        config.trainer.hlo_dump_path,
-                    )
+                    assert train_step_hlo is not None
+                    _write_train_step_hlo(train_step_hlo, config.trainer.hlo_dump_path)
                 hlo_written = True
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
             if autotune_cache_loaded is False and not autotune_published:
@@ -1513,6 +1515,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             iterator.this_load_time,
                         )
                     state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
+                    if train_step_hlo is None:
+                        # Compile ahead of time and run the executable directly: its HLO is then free to read.
+                        compiled_step = train_step.lower(state_leaves, batch).compile()
+                        train_step_hlo = compiled_step.as_text()
+                        if config.trainer.preload_library_kernels:
+                            load_library_kernels(train_step_hlo, jax.local_devices())
+                        train_step = compiled_step
                     dispatch_start = time.perf_counter()
                     state_leaves, metrics, inline_watch_stats = train_step(state_leaves, batch)
                     state = jax.tree.unflatten(state_treedef, state_leaves)
@@ -1874,9 +1883,8 @@ def _warn_on_long_gc(phase: str, info: dict) -> None:
         logger.warning("gc gen%d pause %.3f s on process %d", info.get("generation", -1), pause, jax.process_index())
 
 
-def _write_train_step_hlo(train_step, state_leaves, batch, path: str) -> None:
-    """Write the optimized HLO of the flat ``train_step`` (with op metadata) to ``path``; recompiles once."""
-    text = train_step.lower(state_leaves, batch).compile().as_text()
+def _write_train_step_hlo(text: str, path: str) -> None:
+    """Write the train step's optimized HLO (with op metadata) to ``path``."""
     with fsspec.open(path, "w") as f:
         f.write(text)
     logger.info("Wrote train-step HLO (%d chars) to %s", len(text), path)

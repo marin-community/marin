@@ -596,6 +596,7 @@ def build_h100_ladder_run(
                 token_dump_path=(prefix_join(ctx.output_path, "token_dump.npz") if token_dump else None),
                 token_dump_skip_layers=token_dump_skip_layers,
                 xla_autotune_cache_path=autotune_cache_path,
+                preload_library_kernels=rung.device == "GB200",
                 xla_autotune_seed_topology=(f"1x{rung.global_device_count}x1" if seed_xla_autotune_cache else None),
                 layer_skip=layer_skip,
                 extra_mlp_start_frac=extra_mlp_start_frac,
