@@ -151,3 +151,24 @@ def test_rewrite_of_stable_text_still_rejects_supervision():
             encode=codepoints,
             decode=decode,
         )
+
+
+@pytest.mark.parametrize("response", ["```", "```\nextra", "```<tool_call>"])
+def test_fence_closing_line_must_stay_valid_when_generation_continues(response):
+    prefix = "```json\n{}\n"
+    target = verified_closure_target(
+        codepoints(prefix),
+        codepoints(response),
+        structure_prefix=prefix,
+        inspect=lambda value: closure_state(value, ClosureFormat.CODE_FENCE),
+        verify_complete=lambda value: score_closure(value, prefix + "```", ClosureFormat.CODE_FENCE).success,
+        encode=codepoints,
+        decode=text,
+    )
+    if response == "```<tool_call>":
+        assert target is not None
+        assert target.kind == ClosureTargetKind.WRONG_TOKEN
+        assert target.response_position == 3
+        assert text(list(target.repair_token_ids)) == "\n"
+    else:
+        assert target is None

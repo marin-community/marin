@@ -69,14 +69,17 @@ def verified_closure_target(
         next_structure = structure_prefix + text[len(prompt_text) :]
         next_state = inspect(next_structure)
         if next_state.completion_offset is not None:
-            return None
-        if next_state.status == PrefixStatus.INVALID:
+            if not next_state.completion_guard:
+                return None
+        elif state.completion_guard or next_state.status == PrefixStatus.INVALID:
             position = index
             kind = ClosureTargetKind.WRONG_TOKEN
             break
         structure, state, previous_text = next_structure, next_state, text
-    suffix = state.closing_suffix
-    if state.status != PrefixStatus.EXTENDABLE or not suffix:
+    if kind == ClosureTargetKind.MISSING_SUFFIX and state.completion_offset is not None:
+        return None
+    suffix = state.completion_guard or state.closing_suffix
+    if (state.status != PrefixStatus.EXTENDABLE and not state.completion_guard) or not suffix:
         return None
     completed = structure + suffix
     if inspect(completed).status != PrefixStatus.COMPLETE or not verify_complete(completed):

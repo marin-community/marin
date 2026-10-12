@@ -22,6 +22,8 @@ class ClosureState:
 
     Offsets count Python characters. A completed region followed by extra
     content remains INVALID but retains its exclusive completion offset.
+    A nonempty completion guard is the separator needed to keep an EOF-valid
+    completion valid when generation continues, such as a fence's newline.
     """
 
     status: PrefixStatus
@@ -30,6 +32,7 @@ class ClosureState:
     error_offset: int | None = None
     reason: str | None = None
     completion_offset: int | None = None
+    completion_guard: str = ""
 
 
 class _PrefixEnd(Exception):
@@ -331,7 +334,13 @@ def required_code_fence_state(prefix: str) -> ClosureState:
                 return ClosureState(
                     PrefixStatus.INVALID, (), None, offset + len(line) + 1, "Content after code fence", completed_at
                 )
-            return ClosureState(PrefixStatus.COMPLETE, (), "", completion_offset=completed_at)
+            return ClosureState(
+                PrefixStatus.COMPLETE,
+                (),
+                "",
+                completion_offset=completed_at,
+                completion_guard="\n" if index == len(lines) - 1 else "",
+            )
         offset += len(line) + 1
     last = lines[-1]
     if len(lines) > 1 and re.fullmatch(_FENCE_INDENT + re.escape(fence[0]) + "{0," + str(len(fence) - 1) + "}", last):
