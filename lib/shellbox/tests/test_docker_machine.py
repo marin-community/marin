@@ -9,11 +9,63 @@ import shutil
 import signal
 import sys
 import tracemalloc
+import uuid
 from pathlib import Path
 
 import pytest
 from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine, DockerMachineFactory, docker
+from shellbox.backends.gvisor.machine import GvisorMachineFactory
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
+
+
+@pytest.mark.parametrize(
+    "factory_type",
+    [
+        pytest.param(DockerMachineFactory, marks=pytest.mark.docker),
+        # Requires a Docker host with runsc registered.
+        pytest.param(GvisorMachineFactory, marks=pytest.mark.manual),
+    ],
+)
+def test_image_build_and_registry_cache_work_with_only_docker_on_path(tmp_path, monkeypatch, factory_type):
+    executable = shutil.which("docker")
+    assert executable is not None
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    (binaries / "docker").symlink_to(executable)
+    monkeypatch.setenv("PATH", str(binaries))
+    context = tmp_path / "build context"
+    context.mkdir()
+    dockerfile = context / "Dockerfile"
+    dockerfile.write_text("FROM busybox:1.36\nCOPY payload /payload\n")
+    payload = b"native image payload\x00\xff"
+    (context / "payload").write_bytes(payload)
+    reference = f"registry.invalid/shellbox-cache:{uuid.uuid4().hex}"
+
+    async def scenario():
+        factory = factory_type()
+        built = await factory.create(MachineSpec(DockerfileSource(context, dockerfile)))
+        try:
+            result = await built.run(Command(("cat", "/payload")))
+            assert (result.exit_code, result.stdout) == (0, payload)
+            inspected = await docker("inspect", "--format", "{{.Image}}", built.name)
+            assert inspected.exit_code == 0
+            image_id = inspected.stdout.decode().strip()
+        finally:
+            await built.close()
+        try:
+            tagged = await docker("tag", image_id, reference)
+            assert tagged.exit_code == 0
+            cached = await factory.create(MachineSpec(RegistryImage(reference)))
+            try:
+                result = await cached.run(Command(("cat", "/payload")))
+                assert (result.exit_code, result.stdout) == (0, payload)
+            finally:
+                await cached.close()
+        finally:
+            await docker("image", "rm", reference, image_id)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("output_limit", [0, 1024])
