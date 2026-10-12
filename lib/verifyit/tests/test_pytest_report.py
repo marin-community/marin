@@ -174,14 +174,15 @@ def test_pytest_missing_declared_candidate_module_scores_zero_then_implementatio
     assert (success.status, success.reward) == (Status.SCORED, 1.0)
 
 
-def test_pytest_app_workspace_imports_declared_namespace_module(tmp_path):
-    workspace = tmp_path / "app"
+@pytest.mark.parametrize("namespace", ["app", "candidate"])
+def test_pytest_workspace_imports_declared_namespace_module(tmp_path, namespace):
+    workspace = tmp_path / namespace
     workspace.mkdir()
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
     test = tests_dir / "test_practical.py"
-    test.write_text("from app.practical import add\ndef test_add():\n    assert add(2, 3) == 5\n")
-    spec = _spec(candidate_modules=("app.practical",), paths=(str(test),))
+    test.write_text(f"from {namespace}.practical import add\ndef test_add():\n    assert add(2, 3) == 5\n")
+    spec = _spec(candidate_modules=(f"{namespace}.practical",), paths=(str(test),))
 
     missing = grade_pytest.grade(spec, tests_dir, workspace)
     assert (missing.status, missing.reward) == (Status.SCORED, 0.0)

@@ -206,7 +206,7 @@ def test_jsonl_normalization_bounds_remote_reads_and_retains_exact_large_records
     stream = _RangeFile(data)
 
     @contextmanager
-    def range_input(path, mode):
+    def range_input(_path, _mode):
         try:
             yield stream
         finally:

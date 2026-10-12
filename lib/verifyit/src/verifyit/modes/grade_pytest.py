@@ -164,7 +164,11 @@ def grade(spec: PytestSpec, tests_dir: Path, workspace: Path) -> Reward:
             failures_path = Path(scratch) / f"{index}-failures.txt"
             argv = [spec.python, "-c", PYTEST_RUNNER, str(failures_path), *_pytest_args(report_path), *spec.args, *paths]
             environment = None
-            if directory.name == "app" and not (directory / "app.py").is_file():
+            namespace = directory.name
+            if (
+                any(module == namespace or module.startswith(namespace + ".") for module in spec.candidate_modules)
+                and not (directory / f"{namespace}.py").is_file()
+            ):
                 pythonpath = os.environ.get("PYTHONPATH", "")
                 environment = {"PYTHONPATH": os.pathsep.join(filter(None, (str(directory.parent), pythonpath)))}
             result = run_command(argv, directory, remaining, env=environment)
@@ -321,20 +325,16 @@ def _candidate_error_files(
         if failure.kind == _FailureKind.INTERRUPT:
             return []
         if failure.kind in (_FailureKind.DEPENDENCY, _FailureKind.IMPORT):
-            if any(
-                failure.missing_module == module
+            matching_modules = tuple(
+                module
+                for module in candidate_modules
+                if failure.missing_module == module
                 or failure.missing_module.startswith(module + ".")
                 or module.startswith(failure.missing_module + ".")
-                for module in candidate_modules
-            ):
+            )
+            if matching_modules:
                 if failure.kind == _FailureKind.IMPORT:
-                    files.update(
-                        _candidate_module_path(module, root)
-                        for module in candidate_modules
-                        if failure.missing_module == module
-                        or failure.missing_module.startswith(module + ".")
-                        or module.startswith(failure.missing_module + ".")
-                    )
+                    files.update(_candidate_module_path(module, root) for module in matching_modules)
                 else:
                     files.add(failure.missing_module.replace(".", "/"))
                 continue
@@ -363,13 +363,10 @@ def _candidate_error_files(
 
 
 def _candidate_module_path(module: str, workspace: Path) -> str:
-    """Map an app-qualified module alias back to its file under the /app workspace."""
-    if workspace.name == "app":
-        if module == "app":
-            return "__init__.py"
-        if module.startswith("app."):
-            return module.removeprefix("app.").replace(".", "/")
-    return module.replace(".", "/")
+    """Map a workspace-qualified module to its file inside the workspace."""
+    if module == workspace.name:
+        return "__init__.py"
+    return module.removeprefix(workspace.name + ".").replace(".", "/")
 
 
 def _validate_test_dependencies(failures: list[_PytestFailure], paths: tuple[str, ...], workspace: Path) -> None:

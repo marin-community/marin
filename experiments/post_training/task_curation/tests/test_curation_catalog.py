@@ -7,7 +7,11 @@ import json
 import pytest
 from finestore.reader import ReadView
 
-from experiments.post_training.task_curation.curation_catalog import ManifestEvidence, SourceDocuments, append_curation_catalog
+from experiments.post_training.task_curation.curation_catalog import (
+    ManifestEvidence,
+    SourceDocuments,
+    append_curation_catalog,
+)
 
 
 def test_catalog_preserves_evidence_and_dispositions_across_reused_paths(tmp_path):

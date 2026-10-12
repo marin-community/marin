@@ -50,10 +50,6 @@ def normalize_jsonl(path: str, component: Callable[[bytes], str], *, row_group_b
     Blank lines do not advance the native row index. Groups contain one component;
     ``row_group_bytes`` bounds their raw payload, except for an oversized single record.
     Return the input hash, byte/row counts and per-component counts.
-
-    Acquisition runs this once per file as a Zephyr task. Its generic Parquet
-    writer combines batches across component boundaries, defeating component
-    filter pushdown, so this writer flushes each component separately.
     """
     destination = normalized_jsonl_path(StoragePath(path))
     ensure_parent_dir(str(destination))
@@ -63,6 +59,9 @@ def normalize_jsonl(path: str, component: Callable[[bytes], str], *, row_group_b
     count = 0
     with atomic_rename(str(destination)) as temporary:
         with parquet_sink(temporary) as (output, filesystem):
+            # Zephyr schedules preparation per file. Its generic Parquet writer
+            # combines batches across components; separate groups let footer
+            # filters skip unrelated components.
             # Exclude large raw values from footer statistics and dictionaries.
             with pq.ParquetWriter(
                 output,
