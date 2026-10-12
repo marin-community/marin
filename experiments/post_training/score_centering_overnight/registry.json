@@ -1214,7 +1214,58 @@
       "bundle_id": "09da412465aeba5d8fd0cdcd8752b5f8ec9033f3c4c42e75db0c55ecbdbf63c8",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
       "retained_audit": "experiments/post_training/score_centering_overnight/results/append_only_qualification_tis.json"
+    },
+    {
+      "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/skyrl_main_v4/noise005-sc-s0.yaml",
+      "configuration_sha256": "28e54de9fba8318621bd6f8de1884c0b1c2470da6050f1cb8d8756cb5d344f3b",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "f42aa144498b3c252851c9a8fda35f54494e66fe82bd90e00ff4bc562acbab3a",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-runtime-qual-sc-s0-a3-01a126ce",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_qualification_v4/sc-detach.yaml",
+      "configuration_sha256": "82f0c656f81cdb301a41761245b64312d78a73e8e32766c1ed4695706930a72a",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-sc-s0-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "09cee83279fe9243f74cac5d37762675edd66dfd1a6e1a921e322c23edf34df4",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-snowball-runtime-qual-sc-s0-a3-01a126ce",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 5,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/snowball_qualification_v4/detach.yaml",
+      "configuration_sha256": "5e9c78d010a155d4c1763141caadea2412b0b33664eecc6651415a506110e7c7",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-runtime-qual-sc-s0-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "fbaa26afd32d314d1475688b8469e15009d823d24164b0cdfdaceb956bb99248",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-12T17:55:24.411708+00:00"
+  "observed_at": "2026-10-12T18:28:22.328045+00:00"
 }
