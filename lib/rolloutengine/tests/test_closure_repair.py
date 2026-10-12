@@ -68,8 +68,58 @@ def test_json_repair_keeps_sampled_history_and_masks_only_closure(response):
     assert text(prompt + sampled[:position] + list(target.repair_token_ids)) == (
         "user context\nassistant\n" + prefix + response[:position] + "}]}"
     )
-    candidates = verified_closure_candidates(target, prompt, sampled, codepoints("]}x"), decode=text)
+    candidates = verified_closure_candidates(
+        target,
+        prompt,
+        sampled,
+        codepoints("]}x"),
+        structure_prefix=prefix,
+        verify_complete=lambda value: score_closure(value, '{"items":[{"value":3}]}', ClosureFormat.JSON).success,
+        decode=text,
+    )
     assert candidates == ((ord("}"),) if "]" in response else ())
+
+
+def test_array_candidates_accept_complete_whitespace_variants_without_content_changes():
+    prefix = '["x"'
+    pieces = {
+        1000000: "]",
+        1000001: "]\n",
+        1000002: " ]",
+        1000003: "]\nextra",
+        1000004: ',"other"]',
+        1000005: "}\n",
+        1000006: " ",
+    }
+
+    def decode(tokens):
+        return "".join(pieces[token] if token in pieces else chr(token) for token in tokens)
+
+    def verify(value):
+        return score_closure(value, '["x"]', ClosureFormat.JSON).success
+
+    prompt = codepoints("instruction\n" + prefix)
+    response = codepoints("?")
+    target = verified_closure_target(
+        prompt,
+        response,
+        structure_prefix=prefix,
+        inspect=json_closure_state,
+        verify_complete=verify,
+        encode=codepoints,
+        decode=decode,
+    )
+    assert target is not None
+    candidates = verified_closure_candidates(
+        target,
+        prompt,
+        response,
+        list(pieces),
+        structure_prefix=prefix,
+        verify_complete=verify,
+        decode=decode,
+    )
+    assert candidates == (1000000, 1000001, 1000002)
 
 
 @pytest.mark.parametrize("prefix", ['{"x":', '["unfinished', '["escape\\', "[1e", "[tru"])

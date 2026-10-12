@@ -106,17 +106,21 @@ def verified_closure_candidates(
     response_ids: Sequence[int],
     candidate_ids: Sequence[int],
     *,
+    structure_prefix: str,
+    verify_complete: Callable[[str], bool],
     decode: Callable[[list[int]], str],
 ) -> tuple[int, ...]:
     """Keep FTPO alternatives that advance the verified suffix in exact context.
 
     Candidates need not use the encoder's canonical token segmentation. Each
-    must emit a nonempty prefix of the verified repair and leave history intact.
-    A multi-token repair is not replaced by an arbitrary single closing token.
+    must advance the verified repair or complete the structure with verified
+    content, while leaving history intact. The complete-content check permits
+    equivalent closing tokens with whitespace without accepting extra content.
     """
     if target.kind != ClosureTargetKind.WRONG_TOKEN:
         return ()
     history = list(prompt_ids) + list(response_ids[: target.response_position])
+    prompt_text = decode(list(prompt_ids))
     before = decode(history)
     repaired = decode(history + list(target.repair_token_ids))
     rejected = response_ids[target.response_position]
@@ -125,6 +129,8 @@ def verified_closure_candidates(
         if candidate < 0 or candidate == rejected:
             continue
         text = decode([*history, candidate])
-        if text.startswith(before) and len(text) > len(before) and repaired.startswith(text):
+        if not text.startswith(before) or len(text) <= len(before):
+            continue
+        if repaired.startswith(text) or verify_complete(structure_prefix + text[len(prompt_text) :]):
             chosen.append(candidate)
     return tuple(chosen)
