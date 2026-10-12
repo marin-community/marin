@@ -23,6 +23,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 
+from experiments.datasets.structure_closure import ClosureCohort, structure_closure_dataset
 from experiments.post_training.structure_closure.recipe import ROLE_PLAN, training_config
 
 MODEL_REPOSITORY = "open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO"
@@ -31,11 +32,12 @@ MODEL_URI = (
     "s3://marin-us-east-02a/marin/users/benfeuer/models/online-skill-acquisition-protocol-ftpo/"
     "2026.10.12.2/exports/global_step_4/policy"
 )
-DATA_URI = "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-copy-tasks-v1"
 CLUSTER = "cw-us-east-02a"
 
 
-def build_run(*, parity_uri: str, parity_version: str, max_steps: int, learning_rate: float) -> ArtifactStep:
+def build_run(
+    *, cohort: ClosureCohort, parity_uri: str, parity_version: str, max_steps: int, learning_rate: float
+) -> ArtifactStep:
     """Bind immutable inputs and an explicit 40-H100 role plan to the trainer."""
     name = user_owned_name("models/structure-closure")
     model = ArtifactStep.adopt(
@@ -45,15 +47,7 @@ def build_run(*, parity_uri: str, parity_version: str, max_steps: int, learning_
         kind=LevanterCheckpoint,
         config={"hf_repository": MODEL_REPOSITORY, "hf_revision": MODEL_REVISION},
     )
-    data = ArtifactStep.adopt(
-        user_owned_name("datasets/structure-closure"),
-        "2026.10.12.1",
-        DATA_URI,
-        config={
-            "train_sha256": "83f5c3007f065ae6d50ec3892e942c644327f204f3333962b5420748478386d9",
-            "validation_sha256": "5813e728fab3ffc17fb290c86260ae29719df744acc2db33b5aff86854a3be1c",
-        },
-    )
+    data = structure_closure_dataset(cohort)
     parity = ArtifactStep.adopt(user_owned_name("datasets/structure-closure-parity"), parity_version, parity_uri)
     return skyrl_step(
         SkyRLSpec(
@@ -93,14 +87,21 @@ def build_run(*, parity_uri: str, parity_version: str, max_steps: int, learning_
 
 
 @click.command(help=__doc__)
+@click.option(
+    "--cohort", type=click.Choice([cohort.value for cohort in ClosureCohort]), default="copy-v1", show_default=True
+)
 @click.option("--parity-uri", required=True, help="Immutable native BFCL-Parity dataset directory.")
 @click.option("--parity-version", required=True)
 @click.option("--max-steps", type=click.IntRange(min=1), default=2, show_default=True)
 @click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), default=4e-6, show_default=True)
 @rl_build_options
-def main(parity_uri: str, parity_version: str, max_steps: int, learning_rate: float) -> ArtifactStep:
+def main(cohort: str, parity_uri: str, parity_version: str, max_steps: int, learning_rate: float) -> ArtifactStep:
     return build_run(
-        parity_uri=parity_uri, parity_version=parity_version, max_steps=max_steps, learning_rate=learning_rate
+        cohort=ClosureCohort(cohort),
+        parity_uri=parity_uri,
+        parity_version=parity_version,
+        max_steps=max_steps,
+        learning_rate=learning_rate,
     )
 
 
