@@ -96,11 +96,28 @@ The engine owns model calls, conversation accumulation, and exact-token accounti
 Each model request returns one turn, then `advance` executes that turn's operations.
 Completion, a generation limit, the turn limit, or the cumulative turn deadline starts final grading.
 Ordinary task sessions return observations to the engine, which calls the model.
-For an installed agent, pass `agent=` to `ShellboxRolloutEngine`. The agent receives the task machine
-and an async completion callback. It sends each `SessionStart` to that callback and receives the exact
-`ModelTurn` produced by the engine. Only one completion request may be pending at a time. The engine
-keeps the Shellbox session's isolated grader and closes the agent before releasing the task machine.
-This mode requires the built-in `shellbox` task session.
+An agent that controls its own prompt and tool loop can use `AgentTaskSession` from
+`rolloutengine.agent_session`. Its coroutine sends each `SessionStart` to an async
+completion callback and receives the exact `ModelTurn` produced by the engine.
+Only one completion request may be pending at a time. Pass a `session_wrapper` to
+`ShellboxRolloutEngine` to combine that agent with the selected session's grader.
+Given a model callable, machine factories, and an async `run_agent(machine, complete)` callback:
+
+```python
+from functools import partial
+
+from rolloutengine.agent_session import AgentTaskSession
+from rolloutengine.engine import ShellboxRolloutEngine
+
+
+def wrap_session(session, machine):
+    return AgentTaskSession(partial(run_agent, machine), session.grade)
+
+engine = ShellboxRolloutEngine(model, factories, session_wrapper=wrap_session)
+```
+
+The engine closes the wrapper before the selected session and task machine.
+Agents that provide their own grader can instead use the existing `sessions` registry.
 The default session exposes `shell(command: string)` when the task declares the shell capability.
 Each command runs through `bash -c`. Files persist between commands; shell variables do not.
 TaskSpec can own the shell interface when its prompt names a particular tool. Declare the

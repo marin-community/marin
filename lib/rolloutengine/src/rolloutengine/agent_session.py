@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Let an external agent request generations from the shared rollout loop."""
+"""Adapt an agent's model requests to the task-session lifecycle."""
 
 import asyncio
 from collections.abc import Awaitable, Callable
@@ -27,7 +27,7 @@ class _PendingRequest:
     response: asyncio.Future[ModelTurn]
 
 
-class ExternalAgentSession:
+class AgentTaskSession:
     """Run a sequential agent while the engine owns each model generation.
 
     The agent adapter translates its wire protocol to ``SessionStart`` and calls

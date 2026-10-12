@@ -4,8 +4,9 @@
 `RolloutData`: the conversation, exact tokens, loss mask, optional log probabilities, grade, and per-turn records.
 
 Callers supply a model callable, machine factories, and optional `TaskSession`
-factories for task actions and grading. An optional installed agent can control
-the conversation through the engine's model-completion callback.
+factories for task actions and grading. `AgentTaskSession` lets an agent control
+the prompt and tool loop. A `session_wrapper` can pair it with the selected
+session's grader.
 The default session handles shell tools.
 For text, number, JSON, and native-action answers, it adds the task's answer-format instruction and tools to the model request.
 For workspace-state tasks, this session adds shell and final-response instructions to the model request.

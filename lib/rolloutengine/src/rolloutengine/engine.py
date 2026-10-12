@@ -7,14 +7,12 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
-from functools import partial
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import conversation_messages
 
-from rolloutengine.agent_session import AgentCompletion, ExternalAgentSession
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
     LENGTH_STOP_REASON,
@@ -53,8 +51,8 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
 class ShellboxRolloutEngine:
     """Generate exact-token rollouts from lowered single-stage tasks.
 
-    An optional external agent controls conversation with the task machine and
-    a completion callback. Shellbox still owns isolated grading and cleanup.
+    A session wrapper may replace conversation control while retaining the
+    selected session's grader. The engine closes both sessions separately.
     """
 
     def __init__(
@@ -63,17 +61,15 @@ class ShellboxRolloutEngine:
         factories: Mapping[str, MachineFactory],
         *,
         sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
-        agent: Callable[[Machine | None, AgentCompletion], Awaitable[None]] | None = None,
+        session_wrapper: Callable[[TaskSession, Machine | None], TaskSession] | None = None,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
-        self.agent = agent
+        self.session_wrapper = session_wrapper
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
-        if self.agent is not None and lowered.session.task_session != SHELLBOX_SESSION:
-            raise ValueError("External agents require the Shellbox task session")
         validate_lowered_task(lowered, factories=self.factories, sessions=self.sessions)
         deadline = asyncio.timeout(lowered.session.attempt_timeout)
         cleanup = _Cleanup(lowered.session.cleanup_timeout)
@@ -130,11 +126,14 @@ class ShellboxRolloutEngine:
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
-        if self.agent is not None:
-            # Keep the selected session's grader and resource ownership; only
-            # conversation control moves to the installed agent.
-            session = ExternalAgentSession(partial(self.agent, machine), session.grade)
-            resources.push_async_callback(cleanup.run, "agent_close", session.close)
+        if self.session_wrapper is not None:
+            try:
+                wrapped = self.session_wrapper(session, machine)
+            except Exception as error:
+                raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
+            if wrapped is not session:
+                resources.push_async_callback(cleanup.run, "wrapped_session_close", wrapped.close)
+            session = wrapped
         return await self._run_session(lowered, session, attempt)
 
     async def _run_session(
