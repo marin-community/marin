@@ -432,12 +432,25 @@ def build_train_dataset(
     initial_batch_size = batch_schedule.batch_size_at_step(0)
     datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
     return MixtureDataset(
-        datasets=datasets,
+        datasets={name: dataset.map(_with_segment_ids) for name, dataset in datasets.items()},
         weights=weights,
         stop_strategy=data_config.stop_strategy,
         key=mix_key,
         block_size=data_config.mixture_block_size,
     )
+
+
+def _with_segment_ids(example: GrugLmExample) -> GrugLmExample:
+    """``example`` with segment ids: zeros (one segment, the same attention and loss) when its source gave none.
+
+    Every process must build batches of one pytree structure. A mixture block whose examples all come from a
+    source without segment ids otherwise yields a batch with one leaf fewer on that process, and its train step
+    is a different program (lc1-gb200-k10b/k10c: 259 vs 260 inputs), which deadlocks or fails the shared compile.
+    """
+    if example.attn_mask.segment_ids is not None:
+        return example
+    zeros = jnp.zeros(example.tokens.shape, jnp.int32)
+    return dataclasses.replace(example, attn_mask=example.attn_mask.with_segment_ids(zeros))
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -1923,15 +1936,34 @@ def _warn_on_long_gc(phase: str, info: dict) -> None:
 FIRST_STEP_HANG_EXIT_CODE = 75
 # Seconds the other processes wait for process 0 to compile and publish the shared train-step executable.
 SHARED_EXECUTABLE_TIMEOUT = 3600
+# Distributed key-value key under which process 0 publishes its lowered train step's key.
+SHARED_EXECUTABLE_KEY = "grug/shared_train_step_key"
 
 
 def _compile_on_process_zero(lowered: jax.stages.Lowered, directory: str) -> jax.stages.Compiled:
     """``lowered`` compiled once on process 0 and loaded from its serialized executable everywhere else, so every
-    process runs byte-identical code. Keyed by the lowered program, which is identical across processes."""
-    key = hashlib.sha256(lowered.as_text().encode()).hexdigest()[:24]
-    path = prefix_join(directory, f"train_step-{key}.jaxexec")
+    process runs byte-identical code. Process 0 publishes its lowered program's key first; a process whose own
+    lowering differs writes it next to the executable and fails at once, since loading another program would be
+    wrong (and a key-named rendezvous would wait out its timeout)."""
+    text = lowered.as_text()
+    key = hashlib.sha256(text.encode()).hexdigest()[:24]
     client = jax_distributed.global_state.client
     assert client is not None, "a shared executable needs the JAX distributed client"
+    if jax.process_index() == 0:
+        # Kept as the reference a mismatching process's lowering is diffed against.
+        with fsspec.open(prefix_join(directory, f"lowered-process0-{key}.mlir"), "w") as f:
+            f.write(text)
+        client.key_value_set(SHARED_EXECUTABLE_KEY, key)
+    expected = client.blocking_key_value_get(SHARED_EXECUTABLE_KEY, SHARED_EXECUTABLE_TIMEOUT * 1000)
+    if key != expected:
+        mismatch_path = prefix_join(directory, f"lowered-process{jax.process_index()}-{key}.mlir")
+        with fsspec.open(mismatch_path, "w") as f:
+            f.write(text)
+        raise RuntimeError(
+            f"process {jax.process_index()} lowered the train step to {key}, process 0 to {expected}: the "
+            f"processes would run different programs (this process's lowering: {mismatch_path})"
+        )
+    path = prefix_join(directory, f"train_step-{key}.jaxexec")
     if jax.process_index() == 0:
         start = time.perf_counter()
         compiled = lowered.compile()
@@ -1944,7 +1976,7 @@ def _compile_on_process_zero(lowered: jax.stages.Lowered, directory: str) -> jax
             len(payload) >> 20,
             path,
         )
-    client.wait_at_barrier(f"shared_train_step_{key}", SHARED_EXECUTABLE_TIMEOUT * 1000)
+    client.wait_at_barrier("shared_train_step", SHARED_EXECUTABLE_TIMEOUT * 1000)
     if jax.process_index() == 0:
         return compiled
     with fsspec.open(path, "rb") as f:
