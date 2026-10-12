@@ -284,7 +284,9 @@ fn session_discovery_batch(
 
 async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
     let _guard = store.query_visibility().read().await;
-    let providers = store.query_providers().unwrap();
+    let providers = store
+        .query_providers(&crate::query::query_namespaces(&make_ctx(), sql).unwrap())
+        .unwrap();
     run_query_over(&make_ctx(), providers, sql)
         .await
         .unwrap()

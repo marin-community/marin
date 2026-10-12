@@ -265,10 +265,10 @@ def _reserved_tmp_sqlite(tmp_dir: Path) -> Iterator[Path]:
 
 
 def backup_databases(db: ControllerDB) -> DatabaseBackup:
-    """Create local SQLite backup copies of the main, auth and profiles DBs.
+    """Create local SQLite backup copies of the main and auth DBs.
 
-    Should be called while holding the write lock against the main DB -- it
-    uses the SQLite backup API for a consistent snapshot.  The returned
+    The main DB copy pins a read snapshot while allowing concurrent writes;
+    callers do not need to hold its write lock.  The returned
     ``DatabaseBackup`` owns the temporary files and must be cleaned up by the
     caller (via ``DatabaseBackup.cleanup``) on the success path.  If any of
     the backup operations raise, all reserved temp files are unlinked before

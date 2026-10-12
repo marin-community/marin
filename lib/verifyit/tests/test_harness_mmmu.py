@@ -25,6 +25,8 @@ def test_invalid_gold_cannot_pass_missing_choice_path(gold):
 def test_prepared_open_floats_use_zero_tolerance_and_text_uses_substring():
     assert grade_mmmu_open([1.23], [1.23]).reward == 1.0
     assert grade_mmmu_open([1.23], [1.24]).reward == 0.0
+    assert grade_mmmu_open([0.0], [-0.0]).reward == 1.0
+    assert grade_mmmu_open([0.2 + 0.1], [0.3]).reward == 0.0
     assert grade_mmmu_open(["cat"], ["caterpillar"]).reward == 1.0
     assert grade_mmmu_open([" cat", "cat "], ["catfish"]).reward == 0.0
 

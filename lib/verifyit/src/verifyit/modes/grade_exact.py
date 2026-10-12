@@ -59,7 +59,7 @@ def _matches(candidate: str, spec: ExactSpec) -> bool:
     return Counter(items) == Counter(expected)
 
 
-def _validate_spec(spec: ExactSpec) -> None:
+def validate_exact(spec: ExactSpec) -> None:
     if (
         not isinstance(spec.expected, (tuple, list))
         or not spec.expected
@@ -79,11 +79,12 @@ def _validate_spec(spec: ExactSpec) -> None:
         raise InvalidTask("exact normalization flags must be booleans")
     if spec.substring and (len(spec.expected) != 1 or not _normalize(spec.expected[0], spec)):
         raise InvalidTask("exact substring expects one nonempty normalized reference")
+    empty_output_policy(spec)
 
 
 def grade_exact_candidate(spec: ExactSpec, candidate: str) -> Reward:
     """Score answer content after the caller extracts it from its submission format."""
-    _validate_spec(spec)
+    validate_exact(spec)
     policy = empty_output_policy(spec)
     if not isinstance(candidate, str):
         raise InvalidTask("exact candidate must be text")
@@ -239,7 +240,7 @@ def grade_collection_precision_interval(
 
 
 def grade(spec: ExactSpec, tests_dir: Path, workspace: Path) -> Reward:
-    _validate_spec(spec)
+    validate_exact(spec)
 
     text = read_output(spec, workspace)
     if text is None:

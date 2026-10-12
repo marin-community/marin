@@ -1,13 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load a trained fast-transformer and score arbitrary documents.
+"""Load a trained fast-transformer and score documents given as token ids.
 
 ``train.py`` fits the model and ``data.py`` builds a compact vocabulary remap from
-the training corpus; to score *new* text we need both the serialised model and that
-remap. :class:`PooledScorer` bundles them, ``load_pooled_scorer`` builds one from a
-model dir, and ``score_bme`` is the whole-doc (begin/middle/end) scoring used by both
-production scoring and calibration fitting. This module deliberately depends only on
+the training corpus; to score *new* documents we need both the serialised model and
+that remap. :class:`PooledScorer` bundles them and ``load_pooled_scorer`` builds one
+from a model dir. ``score_windowed`` scores pre-sliced token windows per document
+(the scoring stage slices its own); ``score_bme`` slices begin/middle/end windows
+from whole-document ids first (calibration fitting and tests). Windows are the
+tokenize stage's ``input_ids`` (BOS/EOS included), each at most ``max_tokens`` long
+and padded to ``max_tokens`` so ``predict`` compiles once. This module deliberately depends only on
 the model + inference forward, not on the training loop or the zephyr/iris pipeline.
 """
 
@@ -21,31 +24,26 @@ import jax.random as jr
 import numpy as np
 from rigging.filesystem.factory import open_url
 
-from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID, encode_texts
+from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, bme_windows, remap_table
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
 from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformer, FastTransformerConfig
 
-# bme scores begin/middle/end ~512-token (~2000-char) windows of the whole doc and
-# mean-pools them, so a shared boilerplate prefix no longer dominates the score.
-CHUNK_CHARS = 2_000
+# CPU workers: 30.7 vs 44.2 CPU-s per 75k windows against predict's default, scores
+# bit-identical; TPU callers keep ``inference.predict``'s default.
+PREDICT_BATCH_SIZE = 64
 
 MODEL_STEM = "pooled_junkgate2"  # the deployed model artifact stem
-
-
-def artifact_names(stem: str) -> tuple[str, str, str]:
-    """The (.eqx, remap.json, meta.json) artifact filenames for a model stem."""
-    return f"{stem}.eqx", f"{stem}_remap.json", f"{stem}_meta.json"
-
-
-MODEL_EQX, MODEL_REMAP, MODEL_META = artifact_names(MODEL_STEM)
+MODEL_EQX = f"{MODEL_STEM}.eqx"
+MODEL_REMAP = f"{MODEL_STEM}_remap.json"
+MODEL_META = f"{MODEL_STEM}_meta.json"
 
 
 @dataclass(frozen=True)
 class PooledScorer:
-    """A trained fast-transformer plus its tokenizer + vocab remap, ready to score."""
+    """A trained fast-transformer plus its vocab remap table, ready to score token windows."""
 
     model: FastTransformer
-    remap: dict[int, int]
+    remap_table: np.ndarray
     tokenizer_name: str
     max_tokens: int
 
@@ -67,20 +65,20 @@ class PooledScorer:
         template = FastTransformer(config, key=jr.PRNGKey(0))
         # eqx deserialise needs a local file path
         model = eqx.tree_deserialise_leaves(model_path, template)
-        return cls(model=model, remap=remap, tokenizer_name=meta["tokenizer"], max_tokens=meta["max_tokens"])
+        return cls(
+            model=model,
+            remap_table=remap_table(remap),
+            tokenizer_name=meta["tokenizer"],
+            max_tokens=meta["max_tokens"],
+        )
 
-    def score(self, texts: list[str], batch_size: int = 256) -> np.ndarray:
-        """Quality score in ``[0, 1]`` per document."""
-        out = np.empty(len(texts), dtype=np.float32)
-        for start in range(0, len(texts), batch_size):
-            chunk = texts[start : start + batch_size]
-            encoded = encode_texts(self.tokenizer_name, chunk, self.max_tokens)
-            ids = np.full((len(chunk), self.max_tokens), PAD_ID, dtype=np.int32)
-            for i, row in enumerate(encoded):
-                mapped = [self.remap.get(t, UNK_ID) for t in row[: self.max_tokens]]
-                ids[i, : len(mapped)] = mapped
-            out[start : start + len(chunk)] = predict(self.model, ids)
-        return out
+    def score_windows(self, windows: list[np.ndarray], batch_size: int = PREDICT_BATCH_SIZE) -> np.ndarray:
+        """Quality score in ``[0, 1]`` per token window (each padded to ``max_tokens``)."""
+        ids = np.full((len(windows), self.max_tokens), PAD_ID, dtype=np.int32)
+        last = len(self.remap_table) - 1
+        for i, window in enumerate(windows):
+            ids[i, : len(window)] = self.remap_table[np.minimum(window, last)]
+        return predict(self.model, ids, batch_size=batch_size)
 
 
 def load_pooled_scorer(model_dir: str) -> PooledScorer:
@@ -93,18 +91,19 @@ def load_pooled_scorer(model_dir: str) -> PooledScorer:
     return PooledScorer.load(local_eqx, f"{model_dir}/{MODEL_REMAP}", f"{model_dir}/{MODEL_META}")
 
 
-def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
-    """Mean-pool the FT score over begin/middle/end ~512-token windows of each doc.
-    Short docs (<= one chunk) reduce to a single scored window."""
-    flat: list[str] = []
+def score_windowed(scorer: PooledScorer, docs: list[list[np.ndarray]]) -> np.ndarray:
+    """Mean-pool the FT score over each doc's pre-sliced token windows.
+    All windows go through one ``score_windows`` call; spans map back per doc."""
+    flat: list[np.ndarray] = []
     spans: list[tuple[int, int]] = []
-    for t in texts:
-        if len(t) <= CHUNK_CHARS:
-            cs = [t]
-        else:
-            m = len(t) // 2
-            cs = [t[:CHUNK_CHARS], t[max(0, m - CHUNK_CHARS // 2) : m + CHUNK_CHARS // 2], t[-CHUNK_CHARS:]]
-        spans.append((len(flat), len(flat) + len(cs)))
-        flat.extend(cs)
-    s = scorer.score(flat)
+    for windows in docs:
+        spans.append((len(flat), len(flat) + len(windows)))
+        flat.extend(windows)
+    s = scorer.score_windows(flat)
     return np.array([s[a:b].mean() for a, b in spans])
+
+
+def score_bme(scorer: PooledScorer, docs: list[np.ndarray]) -> np.ndarray:
+    """Mean-pool the FT score over begin/middle/end ``max_tokens`` windows of each doc's ids.
+    Short docs (<= one window) reduce to a single scored window."""
+    return score_windowed(scorer, [bme_windows(d, scorer.max_tokens) for d in docs])

@@ -99,6 +99,29 @@ def test_scatter_roundtrip(tmp_path):
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
+def test_scatter_streams_wide_items_before_consuming_input(tmp_path):
+    """Batched records must reach the memory-aware writer before 1,000 accumulate."""
+    data_path = tmp_path / "wide-scatter"
+
+    def rows():
+        for index in range(64):
+            if index == 32:
+                assert list(data_path.glob("*.parquet")), "Wide records accumulated without flushing"
+            yield {"k": index % 4, "v": index, "payload": b"x" * 1024**2}
+
+    ctx = _InProcessWorkerContext(
+        chunk_prefix="test", execution_id="test", stage_name="test", task_memory_bytes=64 * 1024**2
+    )
+    token = _worker_ctx_var.set(ctx)
+    try:
+        paths = list(_write_scatter(rows(), 0, str(data_path), _key, 4))
+    finally:
+        _worker_ctx_var.reset(token)
+    recovered = [row for shard in range(4) for row in _read_shard(ScatterReader.from_sidecars(paths, shard))]
+    assert sorted(row["v"] for row in recovered) == list(range(64))
+    assert all(row["payload"] == b"x" * 1024**2 for row in recovered)
+
+
 def test_scatter_each_shard_gets_correct_items(tmp_path):
     """Items are routed to shards by deterministic_hash(key) % num_shards."""
     num_shards = 4

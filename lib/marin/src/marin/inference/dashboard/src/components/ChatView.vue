@@ -103,7 +103,10 @@ watch(
     props.conversation.messages
       .map((message) => {
         if (message.role === 'tool') return JSON.stringify(message.result).length
-        return message.content.length + (message.role === 'assistant' ? message.thinking.length : 0)
+        if (message.role === 'assistant') {
+          return `${message.content.length + message.thinking.length}:${message.finishReason ?? ''}`
+        }
+        return message.content.length
       })
       .join(','),
   async () => {
@@ -303,7 +306,9 @@ async function complete(
   }
   await requestCompletion('v1/chat/completions', body, props.streaming, signal, (data) => {
     if (debugEnabled) requestDebug = requestDebugData(data) ?? requestDebug
-    const delta = data.choices?.[0]?.delta ?? data.choices?.[0]?.message
+    const choice = data.choices?.[0]
+    if (choice?.finish_reason) reply.finishReason = choice.finish_reason
+    const delta = choice?.delta ?? choice?.message
     if (!delta) return
     const reasoning = delta.reasoning_content ?? delta.reasoning
     if (reasoning) reasoningStream += reasoning
@@ -340,7 +345,7 @@ async function complete(
     reply.content = inline.visible
     reply.toolCalls = structuredCalls.calls.size ? finalizeToolCalls(structuredCalls, newId) : inline.calls
   }
-  reply.completed = !signal.aborted
+  reply.completed = !signal.aborted && reply.finishReason !== 'length'
 }
 
 </script>
