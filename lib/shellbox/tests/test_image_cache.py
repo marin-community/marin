@@ -10,11 +10,26 @@ import multiprocessing
 import shutil
 import subprocess
 import tarfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
 from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, load_docker_image
+
+
+@dataclass(frozen=True)
+class RegistryTransport:
+    skopeo: Path
+    request_log: Path
+    manifest_digest: str
+
+
+@dataclass(frozen=True)
+class CompressedImage:
+    image: PreparedImage
+    configuration: dict
+    payload: bytes
 
 
 @pytest.fixture
@@ -55,7 +70,7 @@ def registry_transport(tmp_path):
         f"shutil.copytree({str(layout)!r}, destination)\n"
     )
     skopeo.chmod(0o755)
-    return skopeo, contact_log, f"sha256:{manifest_hash}"
+    return RegistryTransport(skopeo, contact_log, f"sha256:{manifest_hash}")
 
 
 def _prepare_registry_process(directory, skopeo, source, start, results):
@@ -65,7 +80,9 @@ def _prepare_registry_process(directory, skopeo, source, start, results):
 
 
 def test_pinned_registry_image_is_available_to_a_second_process_without_registry_access(tmp_path, registry_transport):
-    skopeo, contact_log, selected_digest = registry_transport
+    skopeo = registry_transport.skopeo
+    contact_log = registry_transport.request_log
+    selected_digest = registry_transport.manifest_digest
     source = RegistryImage(f"registry.invalid/image@sha256:{'a' * 64}")
     directory = tmp_path / "cache"
     first = ImageCache(directory, skopeo=skopeo).prepare(source)
@@ -85,7 +102,9 @@ def test_pinned_registry_image_is_available_to_a_second_process_without_registry
 
 
 def test_concurrent_processes_prepare_one_pinned_registry_layout(tmp_path, registry_transport):
-    skopeo, contact_log, selected_digest = registry_transport
+    skopeo = registry_transport.skopeo
+    contact_log = registry_transport.request_log
+    selected_digest = registry_transport.manifest_digest
     source = RegistryImage(f"registry.invalid/image@sha256:{'b' * 64}")
     directory = tmp_path / "cache"
     context = multiprocessing.get_context("spawn")
@@ -107,7 +126,8 @@ def test_concurrent_processes_prepare_one_pinned_registry_layout(tmp_path, regis
 
 
 def test_mutable_references_are_rechecked_between_cache_instances(tmp_path, registry_transport):
-    skopeo, contact_log, _ = registry_transport
+    skopeo = registry_transport.skopeo
+    contact_log = registry_transport.request_log
     source = RegistryImage("registry.invalid/image:mutable")
     first = ImageCache(tmp_path / "cache", skopeo=skopeo).prepare(source)
     second = ImageCache(tmp_path / "cache", skopeo=skopeo).prepare(source)
@@ -116,7 +136,8 @@ def test_mutable_references_are_rechecked_between_cache_instances(tmp_path, regi
 
 
 def test_pinned_registry_cache_does_not_bypass_an_explicit_signature_policy(tmp_path, registry_transport):
-    skopeo, contact_log, _ = registry_transport
+    skopeo = registry_transport.skopeo
+    contact_log = registry_transport.request_log
     source = RegistryImage(f"registry.invalid/image@sha256:{'c' * 64}")
     ImageCache(tmp_path / "cache", skopeo=skopeo).prepare(source)
     policy = tmp_path / "policy.json"
@@ -127,7 +148,7 @@ def test_pinned_registry_cache_does_not_bypass_an_explicit_signature_policy(tmp_
 
 
 def test_pinned_registry_cache_rejects_a_changed_configuration_blob(tmp_path, registry_transport):
-    skopeo, _, _ = registry_transport
+    skopeo = registry_transport.skopeo
     source = RegistryImage(f"registry.invalid/image@sha256:{'d' * 64}")
     cache = tmp_path / "cache"
     image = ImageCache(cache, skopeo=skopeo).prepare(source)
@@ -304,14 +325,16 @@ def compressed_image(tmp_path, request, skopeo):
     image = PreparedImage(compressed, digest, RegistryImage(f"fixture.invalid/image@{digest}"))
     tag = f"harbor-prepared:sha256-{digest.split(':')[1]}"
     try:
-        yield image, json.loads(config), marker
+        yield CompressedImage(image, json.loads(config), marker)
     finally:
         subprocess.run(("docker", "image", "rm", tag), capture_output=True)
 
 
 @pytest.mark.docker
 def test_compressed_oci_load_preserves_image_identity_payload_and_pinned_cache(compressed_image, skopeo):
-    image, config, marker = compressed_image
+    image = compressed_image.image
+    config = compressed_image.configuration
+    marker = compressed_image.payload
     original = {path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()}
     tag = load_docker_image(image, skopeo=skopeo)
     actual = json.loads(subprocess.check_output(("docker", "image", "inspect", tag)))[0]
@@ -335,7 +358,7 @@ def test_compressed_oci_load_preserves_image_identity_payload_and_pinned_cache(c
 
 @pytest.mark.docker
 def test_cached_docker_tag_with_different_contents_is_rejected(compressed_image, skopeo):
-    image, _, _ = compressed_image
+    image = compressed_image.image
     tag = load_docker_image(image, skopeo=skopeo)
     original_id = json.loads(subprocess.check_output(("docker", "image", "inspect", tag)))[0]["Id"]
     stream = io.BytesIO()

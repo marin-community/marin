@@ -7,7 +7,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime
 from enum import StrEnum
 from functools import partial
@@ -17,10 +17,12 @@ import pyarrow as pa
 from finestore.layout import CommitToken
 from finestore.store import DataStore
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.pipeline.models import Admission
+from taskcompendium.pipeline.source_verification import VerificationCounts
 
 CATALOG_DIRECTORY = "catalog"
-ADMISSIONS = ("admitted", "rejected", "deferred", "no_grader", "unverified")
-CONTROL_COUNTS = ("checked", "passed", "failed", "defective", "unsupported", "infra_error", "inconsistent")
+ADMISSIONS = tuple(admission.value for admission in Admission)
+CONTROL_COUNTS = tuple(field.name for field in fields(VerificationCounts))
 SOURCE_FIELDS = (
     "source",
     "source_dataset",

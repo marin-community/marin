@@ -97,7 +97,7 @@ NLTK_DATA_DIRECTORY = Path("share") / "nltk_data"
 
 
 def _runtime_parent() -> Path:
-    """Use Iris' executable node cache when mounted; local hosts keep the /tmp default."""
+    """Use a mounted node cache for executable environments; local hosts keep the /tmp default."""
     cache = Path("/cache")
     return cache / "task-curation" if cache.is_mount() else Path("/tmp")
 

@@ -102,7 +102,16 @@ def test_converter_oracle_replaces_the_archive_oracle():
     assert converted.solution_files["solution/solution.py"] == SUM_SOLUTION
 
 
-@pytest.mark.parametrize("module, location", [("calc", "calc.py"), ("arithmetic.calc", "/app/arithmetic/calc.py")])
+@pytest.mark.parametrize(
+    "module, location",
+    [
+        ("calc", "calc.py"),
+        ("arithmetic.calc", "/app/arithmetic/calc.py"),
+        ("app.practical", "/app/practical.py"),
+        ("calculator", "calculator.py"),
+        ("app.calculator", "calculator.py"),
+    ],
+)
 def test_python_archive_missing_public_module_scores_zero_then_implementation_passes(tmp_path, module, location):
     tests = f"from {module} import add\ndef test_add():\n    assert add(2, 3) == 5\n".encode()
     converted = archive_conversion(
@@ -120,70 +129,9 @@ def test_python_archive_missing_public_module_scores_zero_then_implementation_pa
     spec = replace(converted.spec, paths=(str(test),), python=sys.executable)
     empty = grade_pytest.grade(spec, tmp_path, workspace)
     assert (empty.status, empty.reward) == (Status.SCORED, 0.0)
-    implementation = workspace.joinpath(*module.split(".")).with_suffix(".py")
+    implementation = workspace.joinpath(*module.removeprefix("app.").split(".")).with_suffix(".py")
     implementation.parent.mkdir(parents=True, exist_ok=True)
     implementation.write_text("def add(a, b):\n    return a + b\n")
-    passing = grade_pytest.grade(spec, tmp_path, workspace)
-    assert (passing.status, passing.reward) == (Status.SCORED, 1.0)
-
-
-def test_python_archive_app_qualified_import_matches_public_workspace_path(tmp_path):
-    converted = archive_conversion(
-        archive_data(
-            {
-                INSTRUCTION: b"Implement add(a, b) in /app/practical.py.",
-                "tests/test_solution.py": b"from app.practical import add\ndef test_add():\n    assert add(2, 3) == 5\n",
-            }
-        ),
-        convert_python,
-    )
-    assert isinstance(converted, ConvertedTask)
-    assert isinstance(converted.spec, PytestSpec)
-    assert {"practical", "app.practical"}.issubset(converted.spec.candidate_modules)
-
-    workspace = tmp_path / "app"
-    workspace.mkdir()
-    test = tmp_path / "test_solution.py"
-    test.write_bytes(converted.data_files["tests/test_solution.py"])
-    spec = replace(converted.spec, paths=(str(test),), python=sys.executable)
-    missing = grade_pytest.grade(spec, tmp_path, workspace)
-    assert (missing.status, missing.reward) == (Status.SCORED, 0.0)
-
-    (workspace / "practical.py").write_text("def add(a, b):\n    return a + b\n")
-    passing = grade_pytest.grade(spec, tmp_path, workspace)
-    assert (passing.status, passing.reward) == (Status.SCORED, 1.0)
-
-
-@pytest.mark.parametrize("module", ["calculator", "app.calculator"])
-def test_python_archive_relative_public_module_name_matches_app_import(tmp_path, module):
-    converted = archive_conversion(
-        archive_data(
-            {
-                INSTRUCTION: b"Implement a Calculator in calculator.py under /app.",
-                "tests/test_solution.py": (
-                    (
-                        f"from {module} import Calculator\n" "def test_add():\n    assert Calculator().add(2, 3) == 5\n"
-                    ).encode()
-                ),
-            }
-        ),
-        convert_python,
-    )
-    assert isinstance(converted, ConvertedTask)
-    assert isinstance(converted.spec, PytestSpec)
-    assert {"calculator", "app.calculator"}.issubset(converted.spec.candidate_modules)
-
-    workspace = tmp_path / "app"
-    workspace.mkdir()
-    test = tmp_path / "test_solution.py"
-    test.write_bytes(converted.data_files["tests/test_solution.py"])
-    spec = replace(converted.spec, paths=(str(test),), python=sys.executable)
-    missing = grade_pytest.grade(spec, tmp_path, workspace)
-    assert (missing.status, missing.reward) == (Status.SCORED, 0.0)
-
-    (workspace / "calculator.py").write_text(
-        "class Calculator:\n    def add(self, left, right):\n        return left + right\n"
-    )
     passing = grade_pytest.grade(spec, tmp_path, workspace)
     assert (passing.status, passing.reward) == (Status.SCORED, 1.0)
 

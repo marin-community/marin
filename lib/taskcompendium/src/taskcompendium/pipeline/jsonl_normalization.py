@@ -46,10 +46,9 @@ def _flush(buffer: _Buffer, writer: pq.ParquetWriter) -> None:
 def normalize_jsonl(path: str, component: Callable[[bytes], str], *, row_group_bytes: int = ROW_GROUP_BYTES) -> dict:
     """Write one shared Parquet file, retaining original record bytes and native row indices.
 
-    Each row group contains one component, so predicates can skip unrelated payloads.
-    Blank lines do not advance the native reader's row index. A large record occupies
-    its own group; raw JSON statistics and dictionary encoding are disabled to keep
-    its payload out of the footer and dictionary.
+    Blank lines do not advance the native row index. Groups contain one component;
+    ``row_group_bytes`` bounds their raw payload, except for an oversized single record.
+    Return the input hash, byte/row counts and per-component counts.
     """
     destination = normalized_jsonl_path(StoragePath(path))
     buffers: dict[str, _Buffer] = defaultdict(_Buffer)
@@ -58,6 +57,7 @@ def normalize_jsonl(path: str, component: Callable[[bytes], str], *, row_group_b
     count = 0
     with atomic_rename(str(destination)) as temporary:
         with StoragePath(temporary).open("wb", auto_mkdir=True) as output:
+            # Exclude large raw values from footer statistics and dictionaries.
             with pq.ParquetWriter(
                 output,
                 NORMALIZED_SCHEMA,
