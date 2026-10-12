@@ -10,7 +10,6 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "pydantic>=2",
     "marin-taskcompendium",
-    "marin-verifyit",
     "marin-shellbox",
 ]
 

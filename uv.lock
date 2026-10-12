@@ -7507,7 +7507,6 @@ source = { editable = "lib/rolloutengine" }
 dependencies = [
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
-    { name = "marin-verifyit" },
     { name = "pydantic" },
 ]
 
@@ -7523,7 +7522,6 @@ test = [
 requires-dist = [
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
-    { name = "marin-verifyit", editable = "lib/verifyit" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
