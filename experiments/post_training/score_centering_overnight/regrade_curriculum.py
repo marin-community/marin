@@ -23,12 +23,14 @@ from skyrl_gym.envs.reasoning_gym.scoring import normalize_ground_truth, score_r
 
 SOURCES = {}
 PRESERVE_FULL_RESPONSE = False
+EOS_TOKEN_TEXT = "<|im_end|>"
 
 
-def load_sources(train: str, validation: str, preserve_full_response: bool) -> None:
-    global PRESERVE_FULL_RESPONSE
+def load_sources(train: str, validation: str, preserve_full_response: bool, eos_token_text: str = "<|im_end|>") -> None:
+    global PRESERVE_FULL_RESPONSE, EOS_TOKEN_TEXT
     SOURCES.update(train=pd.read_parquet(train), eval=pd.read_parquet(validation))
     PRESERVE_FULL_RESPONSE = preserve_full_response
+    EOS_TOKEN_TEXT = eos_token_text
 
 
 def regrade(record: dict) -> dict:
@@ -56,7 +58,12 @@ def regrade(record: dict) -> dict:
                 "Native execution failure; attempted response may be removed and replaced by a masked placeholder."
             ),
         }
-    response = grading_text(record["response"]["text"], record["response"]["messages"], PRESERVE_FULL_RESPONSE)
+    response = grading_text(
+        record["response"]["text"],
+        record["response"]["messages"],
+        PRESERVE_FULL_RESPONSE,
+        eos_token_text=EOS_TOKEN_TEXT,
+    )
     try:
         if environment == "aime":
             quality = float(verify(response, expected, allow_general_math_reference=True)[0])
@@ -116,6 +123,9 @@ def main() -> None:
         expected_hashes = {"train": manifest["source_files"]["train"], "eval": manifest["source_files"]["validation"]}
     assert source_hashes == expected_hashes
     preserve_full_response = config["skyrl"]["generator"].get("preserve_full_response_text", False)
+    eos_token_text = (
+        "<|end_of_text|>" if "marin-tokenizer" in config["inputs"]["model"]["tokenizer_uri"] else "<|im_end|>"
+    )
     files = [
         "envs/aime/utils.py",
         "envs/gsm8k/utils.py",
@@ -152,7 +162,7 @@ def main() -> None:
     with ProcessPoolExecutor(
         max_workers=4,
         initializer=load_sources,
-        initargs=(str(args.train_source), str(args.validation_source), preserve_full_response),
+        initargs=(str(args.train_source), str(args.validation_source), preserve_full_response, eos_token_text),
     ) as executor:
         for result in executor.map(regrade, records, chunksize=16):
             key = (result["phase"], result["step"])
@@ -167,6 +177,7 @@ def main() -> None:
         "run_id": config["run"]["id"],
         "source": config["runtime"]["launcher_commit"],
         "preserve_full_response_text": preserve_full_response,
+        "tokenizer_eos_text": eos_token_text,
         "basis": (
             "Every retained response replayed against its original source row using the frozen grading contract; "
             "this is not an independent verifier implementation."

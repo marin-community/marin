@@ -6,8 +6,15 @@
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import REASONING_DELIMITERS, final_answer_text
 
 
-def grading_text(decoded: str, messages: list[dict], preserve_full_response: bool) -> str:
-    semantic = decoded.removesuffix("<|im_end|>").removesuffix("<|eot_id|>")
+def grading_text(
+    decoded: str,
+    messages: list[dict],
+    preserve_full_response: bool,
+    *,
+    eos_token_text: str = "<|im_end|>",
+) -> str:
+    # Match DirectModelClient: remove one configured tokenizer EOS before decoding.
+    semantic = decoded.removesuffix(eos_token_text)
     if preserve_full_response:
         return semantic
     if any(marker in semantic for pair in REASONING_DELIMITERS for marker in pair):

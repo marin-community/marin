@@ -1,0 +1,12 @@
+{
+  "run_id": "sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce",
+  "records_inspected": 15736,
+  "tokenizer_eos_text": "<|end_of_text|>",
+  "reasoning_gym_records_regraded": 1944,
+  "reasoning_gym_score_discrepancies": [],
+  "server_message_text_differences": 4488,
+  "message_note": "Server message content can differ from ModelTurn.text: DirectModelClient reconstructs marked reasoning from exact semantic token IDs. Server-message equality is not the grading contract.",
+  "original_full_report_sha256": "7caff570c847b6dcb61a060dc726c97fa4fd75d4bde48e2acf7718b16faa59a0",
+  "basis": "All Reasoning Gym records replayed against original source rows with corrected configured EOS handling. Original full replay retained. The separate offline worker failure remains unresolved.",
+  "passed": true
+}

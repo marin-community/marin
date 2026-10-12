@@ -1,0 +1,149 @@
+{
+  "run_id": "sc-snowball-noise-calibration-005-tis-s0-a1-01a126ce",
+  "source": "f4357fa7844b00c6ed8e63eb8e2d9be9b2807d0b",
+  "preserve_full_response_text": false,
+  "basis": "Every retained response replayed against its original source row using the frozen grading contract; this is not an independent verifier implementation.",
+  "grader_files_sha256": {
+    "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+    "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+    "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+  },
+  "source_sha256": {
+    "train": "6515e0315d30948375fe51a811dafb87c43a6fa3535066f6d595d6200627175f",
+    "eval": "97d305a34496c36890e8320c5435a615ad8b058ed42f2ddc30c8eb72b0d413ef"
+  },
+  "record_payloads_sha256": "1635673ae5fba310c4a2d31752b4147dfc15922e973921ae059b2458a658769e",
+  "records": 15736,
+  "quality": [
+    {
+      "phase": "eval",
+      "completed_updates": 0,
+      "responses": 4796,
+      "replayed_quality": 0.2962563158559378
+    },
+    {
+      "phase": "eval",
+      "completed_updates": 12,
+      "responses": 4796,
+      "replayed_quality": 0.4593274081391615
+    },
+    {
+      "phase": "train",
+      "completed_updates": 1,
+      "responses": 512,
+      "replayed_quality": 0.24988726336888095
+    },
+    {
+      "phase": "train",
+      "completed_updates": 2,
+      "responses": 512,
+      "replayed_quality": 0.3052758490384917
+    },
+    {
+      "phase": "train",
+      "completed_updates": 3,
+      "responses": 512,
+      "replayed_quality": 0.2698105847363368
+    },
+    {
+      "phase": "train",
+      "completed_updates": 4,
+      "responses": 512,
+      "replayed_quality": 0.2704332178479594
+    },
+    {
+      "phase": "train",
+      "completed_updates": 5,
+      "responses": 512,
+      "replayed_quality": 0.2978540490690562
+    },
+    {
+      "phase": "train",
+      "completed_updates": 6,
+      "responses": 512,
+      "replayed_quality": 0.3013398195916457
+    },
+    {
+      "phase": "train",
+      "completed_updates": 7,
+      "responses": 512,
+      "replayed_quality": 0.3382285843091074
+    },
+    {
+      "phase": "train",
+      "completed_updates": 8,
+      "responses": 512,
+      "replayed_quality": 0.3930222554076421
+    },
+    {
+      "phase": "train",
+      "completed_updates": 9,
+      "responses": 512,
+      "replayed_quality": 0.38968421867903824
+    },
+    {
+      "phase": "train",
+      "completed_updates": 10,
+      "responses": 512,
+      "replayed_quality": 0.38814770225615225
+    },
+    {
+      "phase": "train",
+      "completed_updates": 11,
+      "responses": 512,
+      "replayed_quality": 0.4443444374812703
+    },
+    {
+      "phase": "train",
+      "completed_updates": 12,
+      "responses": 512,
+      "replayed_quality": 0.40864849698424216
+    }
+  ],
+  "discrepancies": [
+    {
+      "record_id": "8826500ca1658c4792e6936e522cd6e807581e67e18931fcf61a7dcd9a50cbae",
+      "phase": "eval",
+      "step": 0,
+      "source_row": 941,
+      "offline_error": "RuntimeError",
+      "error": "grading worker exited without a result"
+    },
+    {
+      "record_id": "3b7cd4a86fc32fa8a5414f952251eb4363ae10a04cc3792d6e0cbb87d6c6b0f2",
+      "phase": "train",
+      "step": 2,
+      "source_row": 19879,
+      "native_error": false,
+      "quality": 0.1111111111111111,
+      "native_quality": 1.0,
+      "mismatch": true
+    },
+    {
+      "record_id": "2a3e166a8c3b82918eeccb5ea196eb11827b9cb951599e889a1e0c6596781a96",
+      "phase": "train",
+      "step": 3,
+      "source_row": 21549,
+      "native_error": false,
+      "quality": 0.15789473684210525,
+      "native_quality": 1.0,
+      "mismatch": true
+    }
+  ],
+  "native_failures_not_regraded": [
+    {
+      "record_id": "71d9150b57f183c60fe6d51db768cdbe256d7d9edc58235888679f401b144a26",
+      "phase": "train",
+      "step": 1,
+      "source_row": 14451,
+      "native_error": true,
+      "quality": 0.0,
+      "native_quality": null,
+      "mismatch": false,
+      "replayed": false,
+      "reason": "Native execution failure; attempted response may be removed and replaced by a masked placeholder."
+    }
+  ],
+  "regrading_passed": false
+}

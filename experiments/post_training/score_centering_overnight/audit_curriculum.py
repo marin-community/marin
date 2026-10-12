@@ -5,6 +5,7 @@
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -112,6 +113,7 @@ def audit(
     training_groups = {}
     memberships = {}
     quality = {}
+    evaluation_rows = {}
     errors = []
     inventory = {
         item["Key"].split("/attempts/", 1)[-1]: item for item in json.loads((root / "object_inventory.json").read_text())
@@ -162,6 +164,23 @@ def audit(
                         score = 0
                     assert 0 <= score <= 1
                     quality.setdefault(step, []).append(float(score))
+                    domain = row["trajectory"]["environment_extras"]["data_source"]
+                    summary = evaluation_rows.setdefault(step, {}).setdefault(
+                        source_row,
+                        {
+                            "source_row": source_row,
+                            "data_source": domain,
+                            "responses": 0,
+                            "quality_sum": 0.0,
+                            "errors": 0,
+                        },
+                    )
+                    assert summary["data_source"] == domain
+                    summary["responses"] += 1
+                    summary["quality_sum"] += float(score)
+                    summary["errors"] += int(
+                        row["disposition"]["exception_type"] is not None or verdict["status"] == "error"
+                    )
     if not platform_scope:
         assert (
             sum(phase == "train" for phase, _, _ in errors) <= max_train_errors
@@ -184,6 +203,18 @@ def audit(
         expected_members = 756 if config["skyrl"]["context_budget"]["request_window_tokens"] == 8192 else 753
     assert len(first) == expected_members and set(first.values()) == {generator["eval_n_samples_per_prompt"]}
     assert all(members == first for members in memberships.values())
+    membership_sha256 = hashlib.sha256(
+        json.dumps(
+            [[source_row, list(tokens), count] for (source_row, tokens), count in sorted(first.items())],
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    assert all(len(rows) == expected_members for rows in evaluation_rows.values())
+    assert all(
+        row["responses"] == generator["eval_n_samples_per_prompt"]
+        for rows in evaluation_rows.values()
+        for row in rows.values()
+    )
     return {
         "run_id": config["run"]["id"],
         "source": config["runtime"]["launcher_commit"],
@@ -203,6 +234,11 @@ def audit(
         "selected_archives": selected_archives,
         "score_centering": algorithm["score_centering_enabled"],
         "learner_evidence": evidence,
+        "evaluation_membership_sha256": membership_sha256,
+        "evaluation_rows": [
+            {"completed_updates": step, "rows": [row for _, row in sorted(rows.items())]}
+            for step, rows in sorted(evaluation_rows.items())
+        ],
         "quality": [
             {"completed_updates": step, "responses": len(scores), "quality": sum(scores) / len(scores)}
             for step, scores in sorted(quality.items())
@@ -251,7 +287,11 @@ def main() -> None:
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(
         json.dumps(
-            {k: v for k, v in result.items() if k not in {"learner_evidence", "selected_archives", "source_task_errors"}}
+            {
+                k: v
+                for k, v in result.items()
+                if k not in {"learner_evidence", "selected_archives", "source_task_errors", "evaluation_rows"}
+            }
         )
     )
 
