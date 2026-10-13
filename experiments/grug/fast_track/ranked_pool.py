@@ -1,9 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""External ordering and token-prefix writes for quality pool records."""
+"""External ordering and token-prefix writes for quality pool records.
 
-from collections.abc import Callable, Iterator
+Records must carry a positive integer ``token_count`` column.
+"""
+
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass
 from itertools import islice
 from typing import Any
@@ -37,39 +41,42 @@ class RankedPool:
 @dataclass(frozen=True)
 class PrefixResult:
     shards: tuple[str, ...]
-    requested_token_budget: int
     total_documents: int
     total_tokens: int
-    overshoot_tokens: int
 
-    @property
-    def usable_tokens(self) -> int:
-        """Return selected token mass without whole-document overshoot."""
-        return self.total_tokens - self.overshoot_tokens
+
+def write_parquet_tables(path: str, tables: Iterable[pa.Table], *, schema: pa.Schema | None = None) -> int:
+    """Stream tables into one Parquet file and return its row count.
+
+    The first table sets the file schema unless ``schema`` is given.
+    """
+    ensure_parent_dir(path)
+    rows = 0
+    with ExitStack() as stack:
+        stream = stack.enter_context(StoragePath(path).open("wb"))
+        writer = None
+        for table in tables:
+            if writer is None:
+                writer = stack.enter_context(pq.ParquetWriter(stream, schema or table.schema))
+            writer.write_table(table)
+            rows += table.num_rows
+    return rows
 
 
 def _write_range(output_path: str) -> Callable[[int, Iterator[dict[str, Any]]], RangeTokenTotal]:
     def write(range_key: int, rows: Iterator[dict[str, Any]]) -> RangeTokenTotal:
         path = prefix_join(output_path, f"range-{range_key:05d}.parquet")
-        ensure_parent_dir(path)
-        documents = 0
         tokens = 0
-        writer = None
-        with StoragePath(path).open("wb") as stream:
-            try:
-                while batch := list(islice(rows, RANKED_BATCH_ROWS)):
-                    clean_rows = [
-                        {key: value for key, value in row.items() if not key.startswith("_ranked_")} for row in batch
-                    ]
-                    table = pa.Table.from_pylist(clean_rows)
-                    if writer is None:
-                        writer = pq.ParquetWriter(stream, table.schema)
-                    writer.write_table(table)
-                    documents += len(batch)
-                    tokens += sum(row["_ranked_token_count"] for row in batch)
-            finally:
-                if writer is not None:
-                    writer.close()
+
+        def tables() -> Iterator[pa.Table]:
+            nonlocal tokens
+            while batch := list(islice(rows, RANKED_BATCH_ROWS)):
+                tokens += sum(row["token_count"] for row in batch)
+                yield pa.Table.from_pylist(
+                    [{key: value for key, value in row.items() if not key.startswith("_ranked_")} for row in batch]
+                )
+
+        documents = write_parquet_tables(path, tables())
         if documents == 0:
             raise ValueError("rank range must contain at least one document")
         return RangeTokenTotal(range_key, path, documents, tokens)
@@ -83,7 +90,6 @@ def ranked_pool(
     ctx: ZephyrContext,
     output_path: str,
     rank_key: Callable[[dict[str, Any]], Any],
-    token_count: Callable[[dict[str, Any]], int],
     range_key: Callable[[dict[str, Any]], int],
     num_ranges: int = 256,
 ) -> RankedPool:
@@ -93,15 +99,14 @@ def ranked_pool(
 
     def add_rank_fields(row: dict[str, Any]) -> dict[str, Any]:
         key = range_key(row)
-        rank = rank_key(row)
-        count = token_count(row)
+        count = row["token_count"]
         if not isinstance(key, int) or not 0 <= key < num_ranges:
             raise ValueError("rank range must be an integer in [0, num_ranges)")
         if not isinstance(count, int) or count <= 0:
             raise ValueError("ranked pool records require positive integer token counts")
         if any(name.startswith("_ranked_") for name in row):
             raise ValueError("ranked pool input uses a reserved field")
-        return {**row, "_ranked_range": key, "_ranked_rank": rank, "_ranked_token_count": count}
+        return {**row, "_ranked_range": key, "_ranked_rank": rank_key(row)}
 
     ranked = dataset.map(add_rank_fields)
 
@@ -124,38 +129,28 @@ def ranked_pool(
     )
 
 
-def _write_prefix(
-    source_path: str,
-    output_path: str,
-    *,
-    token_budget: int,
-) -> RangeTokenTotal:
+def _write_prefix(source_path: str, output_path: str, *, token_budget: int) -> tuple[int, int]:
+    """Write the whole-document prefix that reaches ``token_budget`` and return its documents and tokens."""
     documents = 0
     tokens = 0
-    writer = None
-    ensure_parent_dir(output_path)
-    with StoragePath(source_path).open("rb") as source, StoragePath(output_path).open("wb") as target:
-        parquet = pq.ParquetFile(source)
-        try:
-            for batch in parquet.iter_batches(batch_size=RANKED_BATCH_ROWS):
-                counts = batch.column(batch.schema.get_field_index("token_count")).to_pylist()
-                end = 0
-                for count in counts:
-                    end += 1
-                    documents += 1
-                    tokens += count
-                    if tokens >= token_budget:
-                        break
-                output = pa.Table.from_batches([batch.slice(0, end)])
-                if writer is None:
-                    writer = pq.ParquetWriter(target, output.schema)
-                writer.write_table(output)
+
+    def tables(parquet: pq.ParquetFile) -> Iterator[pa.Table]:
+        nonlocal documents, tokens
+        for batch in parquet.iter_batches(batch_size=RANKED_BATCH_ROWS):
+            end = 0
+            for count in batch.column("token_count").to_pylist():
+                end += 1
+                tokens += count
                 if tokens >= token_budget:
                     break
-        finally:
-            if writer is not None:
-                writer.close()
-    return RangeTokenTotal(-1, output_path, documents, tokens)
+            documents += end
+            yield pa.Table.from_batches([batch.slice(0, end)])
+            if tokens >= token_budget:
+                return
+
+    with StoragePath(source_path).open("rb") as source:
+        write_parquet_tables(output_path, tables(pq.ParquetFile(source)))
+    return documents, tokens
 
 
 def take_token_prefix(
@@ -187,22 +182,13 @@ def take_token_prefix(
     paths = [item.path for item in pool.range_totals if item.range_key < boundary.range_key]
     if remaining == boundary.tokens:
         paths.append(boundary.path)
-        total_tokens = preceding_tokens + boundary.tokens
-        total_documents = preceding_documents + boundary.documents
+        boundary_documents, boundary_tokens = boundary.documents, boundary.tokens
     else:
         boundary_output = prefix_join(output_path, "boundary.parquet")
-        result = ctx.execute(
+        boundary_documents, boundary_tokens = ctx.execute(
             Dataset.from_list([boundary.path]).map(
                 lambda path: _write_prefix(path, boundary_output, token_budget=remaining)
             )
         ).results[0]
         paths.append(boundary_output)
-        total_tokens = preceding_tokens + result.tokens
-        total_documents = preceding_documents + result.documents
-    return PrefixResult(
-        tuple(paths),
-        token_budget,
-        total_documents,
-        total_tokens,
-        total_tokens - token_budget,
-    )
+    return PrefixResult(tuple(paths), preceding_documents + boundary_documents, preceding_tokens + boundary_tokens)

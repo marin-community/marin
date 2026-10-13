@@ -13,10 +13,10 @@ from experiments.grug.fast_track.hero_sample import HERO_TARGET_TOKENS, hero_sam
 @click.command()
 @click.option(
     "--token-budget",
-    type=click.IntRange(min=1, max=HERO_TARGET_TOKENS),
+    type=click.IntRange(min=1),
     default=HERO_TARGET_TOKENS,
     show_default=True,
-    help="Maximum target-token budget for the frozen hero sample.",
+    help="Target-token budget of the frozen hero sample.",
 )
 @click.option("--data-seed", type=click.IntRange(min=0), default=0, show_default=True)
 @build_options

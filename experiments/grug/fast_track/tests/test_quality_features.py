@@ -7,38 +7,19 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from fray.local_backend import LocalClient
-from fray.types import ResourceConfig
-from zephyr.context import ZephyrContext
 from zephyr.stage_io import ZephyrWorkerError
 
-from experiments.grug.fast_track.corpus_sample import CorpusSource, RawCorpusPool
+from experiments.grug.fast_track.corpus_sample import CorpusSource
 from experiments.grug.fast_track.quality_features import (
     HARRIER_FEATURE_IDENTITY,
     QualityFeatureSource,
     normalize_harrier_embeddings,
     prepare_quality_features,
 )
-from experiments.grug.fast_track.ranked_pool import RangeTokenTotal
 
 
 @pytest.fixture
-def zephyr_context(tmp_path):
-    client = LocalClient()
-    context = ZephyrContext(
-        client=client,
-        max_workers=2,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        name="quality-features-test",
-    )
-    yield context
-    context.shutdown()
-    client.shutdown(wait=True)
-
-
-@pytest.fixture
-def feature_pool(tmp_path):
+def feature_pool(tmp_path, write_raw_pool):
     normalized_path = tmp_path / "normalized.parquet"
     harrier_path = tmp_path / "harrier" / normalized_path.name
     harrier_path.parent.mkdir()
@@ -73,25 +54,7 @@ def feature_pool(tmp_path):
             }
         )
     raw_rows.sort(key=lambda row: (row["sample_rank"], row["source"], row["id"]))
-    shard_paths = (tmp_path / "raw-0.parquet", tmp_path / "raw-1.parquet")
-    pq.write_table(pa.Table.from_pylist(raw_rows[:6]), shard_paths[0])
-    pq.write_table(pa.Table.from_pylist(raw_rows[6:]), shard_paths[1])
-    pool = RawCorpusPool(
-        tokenizer="quality-feature-test",
-        tokenizer_hash="a" * 64,
-        sources=(CorpusSource("source", str(tmp_path), 60),),
-        seed=1,
-        requested_tokens=60,
-        actual_tokens=60,
-        documents=12,
-        shards=tuple(map(str, shard_paths)),
-        range_totals=(
-            RangeTokenTotal(0, str(shard_paths[0]), 6, 30),
-            RangeTokenTotal(1, str(shard_paths[1]), 6, 30),
-        ),
-        source_tokens={"source": 60},
-        manifest_path=str(tmp_path / "raw.json"),
-    )
+    pool = write_raw_pool(raw_rows, sources=(CorpusSource("source", str(tmp_path), 60),))
     source = QualityFeatureSource("source", str(tmp_path), str(tmp_path / "harrier"))
     return pool, source, harrier_path
 

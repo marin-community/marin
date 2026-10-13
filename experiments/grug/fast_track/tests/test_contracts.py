@@ -1,26 +1,37 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
+from dataclasses import dataclass
 
 import pytest
+from levanter.data.text.datasets import LmDataConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 
 from experiments.grug.fast_track.add_dataset import AddDatasetTrainingSource
 from experiments.grug.fast_track.contracts import (
     AddDatasetConfig,
-    AddDatasetSamplingPolicy,
-    DatasetPrefix,
     FrozenBaselineComponent,
     FrozenBaselineManifest,
     PreparedAddDatasetCache,
     ResolvedTrainingBudget,
-    unique_token_sample_cap,
 )
 from experiments.grug.fast_track.launch import V16384_TOKENIZER, FlatCacheTrainingSource
 
+BUDGET = ResolvedTrainingBudget(batch_size=2, num_steps=10, sequence_length=10)
 
-def _source(*, fraction: float, available_unique_tokens: int) -> AddDatasetTrainingSource:
+
+@dataclass(frozen=True)
+class _UnlimitedBaseline(FlatCacheTrainingSource):
+    """A flat-cache baseline that has no measured capacity."""
+
+    def mixture_config(self, **kwargs) -> LmDataConfig:
+        return self.data_config(**kwargs)
+
+    def require_capacity(self, data: LmDataConfig, *, ctx: StepContext, budget: ResolvedTrainingBudget) -> None:
+        del data, ctx, budget
+
+
+def _source(*, fraction: float, available_unique_tokens: int, target_production_tokens: int) -> AddDatasetTrainingSource:
     token_cache = ArtifactStep(
         name="prepared/hf-dataset",
         version="2026.10.03",
@@ -30,21 +41,8 @@ def _source(*, fraction: float, available_unique_tokens: int) -> AddDatasetTrain
     )
     config = AddDatasetConfig(
         token_cache=token_cache,
-        prefix=DatasetPrefix(
-            repo="org/dataset",
-            revision="a" * 40,
-            subset="default",
-            split="train",
-            text_field="text",
-            tokenizer=V16384_TOKENIZER,
-            tokenizer_hash="sha256:test-tokenizer",
-            sampling_policy=AddDatasetSamplingPolicy.PREFIX,
-            max_rows=1_000,
-            max_overshoot_tokens=16_384,
-            requested_token_cap=100_000,
-        ),
         fraction=fraction,
-        target_production_tokens=1_000,
+        target_production_tokens=target_production_tokens,
         available_unique_tokens=available_unique_tokens,
     )
     baseline = FrozenBaselineManifest(
@@ -54,67 +52,50 @@ def _source(*, fraction: float, available_unique_tokens: int) -> AddDatasetTrain
             FrozenBaselineComponent(name="b", cache_dir="b", weight=0.25),
         ),
     )
-    return AddDatasetTrainingSource(config=config, baseline=FlatCacheTrainingSource(manifest=baseline))
+    return AddDatasetTrainingSource(config=config, baseline=_UnlimitedBaseline(manifest=baseline))
 
 
-def test_add_dataset_config_preserves_baseline_mix_and_caps_prepared_cache_once():
-    source = _source(fraction=0.19, available_unique_tokens=300)
-    budget = ResolvedTrainingBudget(batch_size=2, num_steps=10, sequence_length=10)
+def _data(source: AddDatasetTrainingSource) -> LmDataConfig:
     context = StepContext.for_fingerprint((), source.dependencies())
+    return source.data_config(ctx=context, validation=(), tokenizer=V16384_TOKENIZER, budget=BUDGET)
 
-    data = source.data_config(ctx=context, validation=(), tokenizer=V16384_TOKENIZER, budget=budget)
+
+def test_add_dataset_config_preserves_baseline_mix_and_points_at_the_prepared_cache():
+    source = _source(fraction=0.19, available_unique_tokens=300, target_production_tokens=1_000)
+
+    data = _data(source)
 
     assert data.train_weights == pytest.approx({"a": 0.6075, "b": 0.2025, "add-dataset": 0.19})
-    assert data.max_train_sequences == {"add-dataset": 3}
-    assert data.target_budget is None
-    assert data.experiment_budget is None
-    assert source.dependencies() == (source.config.token_cache,)
+    context = StepContext.for_fingerprint((), source.dependencies())
     assert data.components["add-dataset"].cache_dir == f"{context.artifact_path(source.config.token_cache)}/train"
 
 
-def test_add_dataset_config_accepts_one_sequence_below_one_full_batch():
-    source = _source(fraction=0.05, available_unique_tokens=900)
-    budget = ResolvedTrainingBudget(batch_size=2, num_steps=10, sequence_length=10)
-    context = StepContext.for_fingerprint((), source.dependencies())
-
-    data = source.data_config(ctx=context, validation=(), tokenizer=V16384_TOKENIZER, budget=budget)
-
-    assert data.max_train_sequences == {"add-dataset": 1}
-
-
-def test_add_dataset_config_rejects_availability_below_one_sequence():
-    source = _source(fraction=0.99, available_unique_tokens=100_000_000)
-    source = dataclasses.replace(
-        source,
-        config=dataclasses.replace(source.config, target_production_tokens=18_750_000_000_000),
+@pytest.mark.parametrize(
+    ("fraction", "available_unique_tokens", "target_production_tokens", "expected_sequences"),
+    [
+        # Share limit: 0.19 * 200 = 38 tokens.
+        (0.19, 300, 1_000, 3),
+        # Share limit below one full batch: 0.05 * 200 = 10 tokens.
+        (0.05, 900, 1_000, 1),
+        # Availability limit: 300 * 200 / 1000 = 60 tokens.
+        (0.5, 300, 1_000, 6),
+        # Availability limit at a high share: 1e12 * 200 / 18.75e12 = 10.7 tokens.
+        (0.99, 1_000_000_000_000, 18_750_000_000_000, 1),
+        # Availability below one sequence: 1e8 * 200 / 18.75e12 < 1 token.
+        (0.99, 100_000_000, 18_750_000_000_000, None),
+    ],
+)
+def test_add_dataset_sequence_cap_takes_the_smaller_exposure_limit(
+    fraction, available_unique_tokens, target_production_tokens, expected_sequences
+):
+    source = _source(
+        fraction=fraction,
+        available_unique_tokens=available_unique_tokens,
+        target_production_tokens=target_production_tokens,
     )
-    budget = ResolvedTrainingBudget(batch_size=2, num_steps=10, sequence_length=10)
-    context = StepContext.for_fingerprint((), source.dependencies())
 
-    with pytest.raises(ValueError, match="fewer than one training sequence"):
-        source.data_config(ctx=context, validation=(), tokenizer=V16384_TOKENIZER, budget=budget)
-
-
-def test_add_dataset_config_keeps_one_sequence_at_high_fraction_with_enough_unique_data():
-    source = _source(fraction=0.99, available_unique_tokens=1_000_000_000_000)
-    source = dataclasses.replace(
-        source,
-        config=dataclasses.replace(source.config, target_production_tokens=18_750_000_000_000),
-    )
-    budget = ResolvedTrainingBudget(batch_size=2, num_steps=10, sequence_length=10)
-    context = StepContext.for_fingerprint((), source.dependencies())
-
-    data = source.data_config(ctx=context, validation=(), tokenizer=V16384_TOKENIZER, budget=budget)
-
-    assert data.max_train_sequences == {"add-dataset": 1}
-
-
-def test_exposure_simulation_rejects_a_run_larger_than_its_production_target():
-    with pytest.raises(ValueError, match="must not exceed the target production"):
-        unique_token_sample_cap(
-            target_production_tokens=100,
-            fast_track_budget=200,
-            available_unique_tokens=50,
-            fraction=0.5,
-            sequence_length=1,
-        )
+    if expected_sequences is None:
+        with pytest.raises(ValueError, match="fewer than one training sequence"):
+            _data(source)
+    else:
+        assert _data(source).max_train_sequences == {"add-dataset": expected_sequences}

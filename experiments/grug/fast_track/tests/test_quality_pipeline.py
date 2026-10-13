@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import hashlib
 import json
 from dataclasses import replace
 from typing import cast
@@ -14,48 +13,37 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from fray.local_backend import LocalClient
-from fray.types import ResourceConfig
 from haliax import Axis
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheLedger, CacheMetadata, SerialCacheWriter, TreeCache
 from marin.execution.lazy import ArtifactStep
 from marin.execution.step_spec import StepSpec
-from zephyr.context import ZephyrContext
 
 from experiments.grug.fast_track import quality_pipeline
 from experiments.grug.fast_track.contracts import ResolvedTrainingBudget
-from experiments.grug.fast_track.corpus_sample import RawCorpusPool
 from experiments.grug.fast_track.label_exclusion import LabelExclusion
 from experiments.grug.fast_track.quality_cli import main as quality_main
 from experiments.grug.fast_track.quality_pipeline import (
-    QualityConfig,
     QualityData,
     QualityTrainingSource,
+    ScorerSpec,
     SelectionMethod,
     prepare_quality_data,
     score_raw_pool,
 )
-from experiments.grug.fast_track.ranked_pool import RangeTokenTotal
 
 
-def _write_selected_token_shard(path, token_rows, *, bad_checksum_row=None):
-    rows = []
-    for index, values in enumerate(token_rows):
-        tokens = np.asarray(values, dtype="<i4")
-        checksum = hashlib.sha256(tokens.tobytes()).hexdigest()
-        if index == bad_checksum_row:
-            checksum = "0" * 64
-        rows.append(
-            {
-                "source": "source",
-                "id": str(index),
-                "input_ids": tokens.tolist(),
-                "token_count": len(tokens),
-                "token_sha256": checksum,
-            }
-        )
+def _write_selected_token_shard(path, token_rows, *, bad_count_row=None):
+    rows = [
+        {
+            "source": "source",
+            "id": str(index),
+            "input_ids": values,
+            "token_count": len(values) + (index == bad_count_row),
+        }
+        for index, values in enumerate(token_rows)
+    ]
     pq.write_table(pa.Table.from_pylist(rows), path)
 
 
@@ -88,91 +76,33 @@ class _FingerprintContext:
         return self.cache_dir
 
 
-@pytest.fixture
-def zephyr_context(tmp_path):
-    client = LocalClient()
-    context = ZephyrContext(
-        client=client,
-        max_workers=2,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        name="quality-pipeline-test",
-    )
-    yield context
-    context.shutdown()
-    client.shutdown(wait=True)
-
-
-def test_quality_pipeline_writes_exact_budget_tokens_from_selected_parquet(tmp_path, zephyr_context, monkeypatch):
+def test_quality_pipeline_writes_exact_budget_tokens_from_selected_parquet(
+    tmp_path, raw_pool, zephyr_context, monkeypatch
+):
     monkeypatch.setattr("experiments.grug.fast_track.quality_pipeline.load_tokenizer", lambda _name: _SmallTokenizer())
-    rows = []
-    for index in range(12):
-        token_values = [index + 1] * 5
-        rows.append(
-            {
-                "source": "source",
-                "id": str(index),
-                "sample_rank": hashlib.sha256(f"seed:{index}".encode()).hexdigest(),
-                "duplicate_group": hashlib.sha256(f"text-{index}".encode()).hexdigest(),
-                "text": f"text-{index}",
-                "input_ids": token_values,
-                "token_count": len(token_values),
-            }
-        )
-    rows.sort(key=lambda row: (row["sample_rank"], row["source"], row["id"]))
-    path_a, path_b = tmp_path / "raw-a.parquet", tmp_path / "raw-b.parquet"
-    pq.write_table(pa.Table.from_pylist(rows[:6]), path_a)
-    pq.write_table(pa.Table.from_pylist(rows[6:]), path_b)
-    raw = RawCorpusPool(
-        tokenizer="test-tokenizer",
-        tokenizer_hash="a" * 64,
-        sources=(),
-        seed=17,
-        requested_tokens=60,
-        actual_tokens=60,
-        documents=12,
-        shards=(str(path_a), str(path_b)),
-        range_totals=(
-            RangeTokenTotal(0, str(path_a), 6, 30),
-            RangeTokenTotal(1, str(path_b), 6, 30),
-        ),
-        source_tokens={"source": 60},
-        manifest_path=str(tmp_path / "raw.json"),
-    )
-    with pytest.raises(ValueError, match="below the 60 scoring budget"):
-        score_raw_pool(
-            raw.model_copy(update={"requested_tokens": 55}),
-            ctx=zephyr_context,
-            output_path=str(tmp_path / "overshoot-only-capacity"),
-            scorer_factory=_Scorer(),
-            classifier_identity={"implementation": "text-test", "revision": "v1"},
-            label_exclusion=LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset()),
-            token_budget=60,
-        )
     scored = score_raw_pool(
-        raw,
+        raw_pool,
         ctx=zephyr_context,
         output_path=str(tmp_path / "scored"),
-        scorer_factory=_Scorer(),
-        classifier_identity={"implementation": "text-test", "revision": "v1"},
+        candidate=ScorerSpec(_Scorer(), {"implementation": "text-test", "revision": "v1"}),
         label_exclusion=LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset()),
         token_budget=40,
     )
-    config = QualityConfig(
-        4,
-        SelectionMethod.CANDIDATE,
-        7,
-        scored,
-        str(tmp_path / "selection"),
-    )
 
-    result = prepare_quality_data(config, ctx=zephyr_context)
+    result = prepare_quality_data(
+        scored,
+        ctx=zephyr_context,
+        output_path=str(tmp_path / "selection"),
+        training_tokens=4,
+        selection_method=SelectionMethod.CANDIDATE,
+        tie_seed=7,
+    )
     cache = TreeCache.load(result.cache_dir, {"input_ids": np.zeros(0, dtype=np.int32)})
     selected = cache.get_batch_sync([0])
-    expected_id = max((row["id"] for row in rows[:8]), key=int)
+    raw_prefix_ids = [row["id"] for path in raw_pool.shards for row in pq.read_table(path).to_pylist()][:8]
+    expected_id = max(raw_prefix_ids, key=int)
 
-    assert result.tokenizer_hash == raw.tokenizer_hash
-    assert result.requested_tokens == 4
+    assert result.tokenizer_hash == raw_pool.tokenizer_hash
     assert result.actual_tokens == 5
     assert len(selected) == 1
     np.testing.assert_array_equal(selected[0]["input_ids"], np.full(5, int(expected_id) + 1, dtype=np.int32))
@@ -214,59 +144,19 @@ def test_quality_cache_writer_preserves_rows_across_bounded_flushes(tmp_path, mo
         assert record["input_ids"].dtype == np.dtype("<i4")
 
 
-def test_quality_cache_writer_checksum_failure_does_not_commit_ledger(tmp_path, monkeypatch):
+def test_quality_cache_writer_token_count_failure_does_not_commit_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(quality_pipeline, "QUALITY_CACHE_MAX_PENDING_BYTES", 32)
     shard_path = tmp_path / "bad-selected.parquet"
-    _write_selected_token_shard(shard_path, [[1, 2, 3, 4, 5, 6, 7, 8, 9], [10]], bad_checksum_row=1)
+    _write_selected_token_shard(shard_path, [[1, 2, 3, 4, 5, 6, 7, 8, 9], [10]], bad_count_row=1)
     cache_dir = str(tmp_path / "incomplete-cache")
 
-    with pytest.raises(ValueError, match="checksum differs"):
+    with pytest.raises(ValueError, match="selected token count differs for source/1"):
         quality_pipeline._write_quality_token_cache(
             [str(shard_path)], cache_dir, metadata=CacheMetadata({"preprocessor": "quality-cache-test"})
         )
 
     with pytest.raises(FileNotFoundError):
         CacheLedger.load(cache_dir)
-
-
-def test_quality_pipeline_fails_when_pool_capacity_does_not_meet_rung_budget(tmp_path, zephyr_context):
-    rows = [
-        {
-            "source": "source",
-            "id": str(index),
-            "sample_rank": f"{index:064x}",
-            "duplicate_group": str(index),
-            "text": f"text-{index}",
-            "input_ids": [index + 1] * 5,
-            "token_count": 5,
-        }
-        for index in range(12)
-    ]
-    path = tmp_path / "raw.parquet"
-    pq.write_table(pa.Table.from_pylist(rows), path)
-    raw = RawCorpusPool(
-        tokenizer="test-tokenizer",
-        tokenizer_hash="a" * 64,
-        sources=(),
-        seed=17,
-        requested_tokens=60,
-        actual_tokens=60,
-        documents=12,
-        shards=(str(path),),
-        range_totals=(RangeTokenTotal(0, str(path), 12, 60),),
-        source_tokens={"source": 60},
-        manifest_path=str(tmp_path / "raw.json"),
-    )
-    with pytest.raises(ValueError, match="below the 70 scoring budget"):
-        score_raw_pool(
-            raw,
-            ctx=zephyr_context,
-            output_path=str(tmp_path / "undersized-score"),
-            scorer_factory=_Scorer(),
-            classifier_identity={"implementation": "text-test", "revision": "v1"},
-            label_exclusion=LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset()),
-            token_budget=70,
-        )
 
 
 def test_training_loader_reads_only_complete_mixture_blocks(tmp_path, monkeypatch):
@@ -294,16 +184,23 @@ def test_training_loader_reads_only_complete_mixture_blocks(tmp_path, monkeypatc
     assert sorted(token_values) == [31, 32, 33]
 
 
+def _adopt_sources(spec: StepSpec) -> list[str]:
+    payload = json.loads(spec.fingerprint_payload)
+    if "adopt_source" in payload:
+        return [payload["adopt_source"]]
+    return [source for dep in spec.deps for source in _adopt_sources(dep)]
+
+
 @pytest.mark.parametrize(
     ("stage", "terminal_artifact"),
     [
-        ("features", "fast-track/quality-features"),
+        ("features", "fast-track/quality-features/"),
         ("score", "fast-track/scored-pool/"),
         ("select", "fast-track/quality/"),
         ("train", "grug/quality-cli-plan"),
     ],
 )
-def test_quality_cli_prints_selected_stage_graph(tmp_path, stage, terminal_artifact):
+def test_quality_cli_builds_each_stage_from_the_adopted_raw_pool(tmp_path, monkeypatch, stage, terminal_artifact):
     args = ["--raw-pool", "s3://marin-test/raw-pool", "--stage", stage, "--version", "2026.10.04"]
     if stage != "features":
         exclusion_path = tmp_path / "labels.json"
@@ -322,16 +219,15 @@ def test_quality_cli_prints_selected_stage_graph(tmp_path, stage, terminal_artif
         )
     if stage == "train":
         args.extend(["--run-id", "quality-cli-plan", "--size", "d512"])
+    emitted = []
+    monkeypatch.setattr(click, "echo", emitted.append)
 
-    result = CliRunner().invoke(
-        quality_main,
-        args,
-    )
+    result = CliRunner().invoke(quality_main, args)
 
-    assert result.exit_code == 0, result.output
-    assert "fast-track/raw-pool" in result.output
-    assert "s3://marin-test/raw-pool" in result.output
-    assert terminal_artifact in result.output
+    assert result.exit_code == 0, result.exception
+    terminal = next(item for item in emitted if isinstance(item, StepSpec))
+    assert terminal.name.startswith(terminal_artifact)
+    assert _adopt_sources(terminal) == ["s3://marin-test/raw-pool"]
 
 
 def test_quality_cli_reuses_scored_pool_for_moe_rung(monkeypatch):

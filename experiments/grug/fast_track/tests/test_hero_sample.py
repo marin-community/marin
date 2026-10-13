@@ -19,12 +19,17 @@ from tokenizers.pre_tokenizers import Whitespace
 import experiments.grug.fast_track.hero_sample as hero_sample
 from experiments.grug.fast_track.contracts import FrozenBaselineComponent, FrozenBaselineManifest, ResolvedTrainingBudget
 from experiments.grug.fast_track.hero_sample import (
-    _component_shuffle_index,
     _mixture_component_examples,
-    _production_component_dataset,
     _sample_component,
-    _source_component_config,
+    _SampleTask,
+    _shuffled_component_dataset,
 )
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
+    HARRIER_MIX_2026_08_18_STORE,
+    harrier_mix_2026_08_18_data_config,
+)
+
+ALPHA = 1
 
 
 def test_hero_sample_capacity_matches_mixture_block_rounding():
@@ -49,54 +54,69 @@ def test_hero_sample_artifact_identity_tracks_tokenizer_files(monkeypatch):
     assert first_config.target_tokenizer_hash != second_config.target_tokenizer_hash
 
 
-def _write_test_tokenizer(path, *, eos_token: str, eos_id: int):
+def _write_test_tokenizer(path, *, bos_token: str, eos_token: str) -> None:
     path.mkdir()
-    vocab = {"[UNK]": 0, "alpha": 1, "reserved": 2, eos_token: eos_id}
+    vocab = {"[UNK]": 0, "alpha": ALPHA, bos_token: 2, eos_token: 3}
     tokenizer = Tokenizer(WordLevel(vocab, unk_token="[UNK]"))
     tokenizer.pre_tokenizer = Whitespace()
-    tokenizer.add_special_tokens([eos_token])
+    tokenizer.add_special_tokens([bos_token, eos_token])
     tokenizer.save(str(path / "tokenizer.json"))
-    (path / "tokenizer_config.json").write_text(json.dumps({"eos_token": eos_token}))
+    (path / "tokenizer_config.json").write_text(json.dumps({"bos_token": bos_token, "eos_token": eos_token}))
+
+
+def _sample_one_component(tmp_path, source_tokens: np.ndarray, *, target_tokens: int) -> _SampleTask:
+    source_tokenizer_path = tmp_path / "source-tokenizer"
+    target_tokenizer_path = tmp_path / "target-tokenizer"
+    _write_test_tokenizer(source_tokenizer_path, bos_token="<|source_begin|>", eos_token="<|source_end|>")
+    _write_test_tokenizer(target_tokenizer_path, bos_token="<|target_begin|>", eos_token="<|target_end|>")
+    source_cache = tmp_path / "source-cache"
+    write_levanter_cache([{"input_ids": source_tokens}], str(source_cache), metadata={})
+    task = _SampleTask(
+        name="c00q0",
+        source_cache=str(source_cache),
+        output_cache=str(tmp_path / "target-cache"),
+        source_tokenizer=str(source_tokenizer_path),
+        target_tokenizer=str(target_tokenizer_path),
+        target_tokens=target_tokens,
+        data_seed=0,
+        component_index=0,
+        source_tokenizer_hash=tokenizer_content_hash(str(source_tokenizer_path)),
+        target_tokenizer_hash=tokenizer_content_hash(str(target_tokenizer_path)),
+    )
+    _sample_component(task)
+    return task
+
+
+def _target_rows(task: _SampleTask) -> list[list[int]]:
+    cache = TreeCache.load(task.output_cache, {"input_ids": np.zeros((0,), dtype=np.int32)})
+    return [row["input_ids"].tolist() for row in cache]
+
+
+def test_hero_sample_closes_every_source_segment_and_keeps_only_document_starts(tmp_path):
+    source_bos, source_eos = 2, 3
+    # A cut tail of an earlier document, one whole document, and a document that the example cuts.
+    head = [ALPHA, ALPHA, source_eos]
+    whole = [source_bos, ALPHA, source_eos]
+    cut_length = 4096 - len(head) - len(whole) - 1
+    source = np.array([*head, *whole, source_bos, *[ALPHA] * cut_length], dtype=np.int32)
+
+    task = _sample_one_component(tmp_path, source, target_tokens=1)
+
+    target = load_tokenizer(task.target_tokenizer)
+    bos, eos = target.bos_token_id, target.eos_token_id
+    assert _target_rows(task) == [[ALPHA, ALPHA, eos, bos, ALPHA, eos, bos, *[ALPHA] * cut_length, eos]]
 
 
 def test_hero_sample_round_trip_preserves_eos_through_training_loader(tmp_path, monkeypatch):
-    source_tokenizer_path = tmp_path / "source-tokenizer"
-    target_tokenizer_path = tmp_path / "target-tokenizer"
-    _write_test_tokenizer(source_tokenizer_path, eos_token="<|source_end|>", eos_id=2)
-    _write_test_tokenizer(target_tokenizer_path, eos_token="<|target_end|>", eos_id=3)
-    source_tokenizer = load_tokenizer(str(source_tokenizer_path))
-    target_tokenizer = load_tokenizer(str(target_tokenizer_path))
-    source_cache = tmp_path / "source-cache"
-    source_sequence = np.tile(np.array([1, source_tokenizer.eos_token_id], dtype=np.int32), 2048)
-    write_levanter_cache([{"input_ids": source_sequence}], str(source_cache), metadata={})
+    source_sequence = np.tile(np.array([ALPHA, 3], dtype=np.int32), 2048)
+    task = _sample_one_component(tmp_path, source_sequence, target_tokens=4096)
+    target_tokenizer_path = task.target_tokenizer
 
-    output_cache = tmp_path / "target-cache"
-    task = {
-        "name": "c00q0",
-        "source_cache": str(source_cache),
-        "output_cache": str(output_cache),
-        "source_tokenizer": str(source_tokenizer_path),
-        "target_tokenizer": str(target_tokenizer_path),
-        "target_tokens": 4096,
-        "data_seed": 0,
-        "component_index": 0,
-        "source_tokenizer_hash": tokenizer_content_hash(str(source_tokenizer_path)),
-        "target_tokenizer_hash": tokenizer_content_hash(str(target_tokenizer_path)),
-    }
-    _sample_component(task)
+    expected = np.tile(np.array([ALPHA, load_tokenizer(target_tokenizer_path).eos_token_id], dtype=np.int32), 2048)
+    np.testing.assert_array_equal(_target_rows(task)[0], expected)
 
-    expected = np.tile(np.array([1, target_tokenizer.eos_token_id], dtype=np.int32), 2048)
-    target_tree_cache = TreeCache.load(str(output_cache), {"input_ids": np.zeros((0,), dtype=np.int32)})
-    np.testing.assert_array_equal(target_tree_cache.get_batch_sync([0])[0]["input_ids"], expected)
-
-    training_config = _source_component_config(
-        source_cache=str(output_cache), tokenizer=str(target_tokenizer_path), name="c00q0"
-    )
-    training_dataset = _production_component_dataset(
-        training_config,
-        name="c00q0",
-        position=Axis("position", 4096),
-        key=jax.random.PRNGKey(0),
+    training_dataset = _shuffled_component_dataset(
+        cache_dir=task.output_cache, tokenizer=target_tokenizer_path, name="c00q0", key=jax.random.PRNGKey(0)
     )
     training_example = training_dataset.as_sync_dataset().get_batch([0])[0]
     np.testing.assert_array_equal(np.asarray(training_example.tokens), expected)
@@ -107,13 +127,13 @@ def test_hero_sample_round_trip_preserves_eos_through_training_loader(tmp_path, 
     write_artifact(
         hero_sample.PreparedHeroSample(
             baseline=FrozenBaselineManifest(
-                tokenizer=str(target_tokenizer_path),
-                components=(FrozenBaselineComponent("c00q0", str(output_cache), 1.0),),
+                tokenizer=target_tokenizer_path,
+                components=(FrozenBaselineComponent("c00q0", task.output_cache, 1.0),),
             ),
-            source_store=str(source_cache),
-            source_tokenizer=str(source_tokenizer_path),
-            source_tokenizer_hash=task["source_tokenizer_hash"],
-            target_tokenizer_hash=task["target_tokenizer_hash"],
+            source_store=task.source_cache,
+            source_tokenizer=task.source_tokenizer,
+            source_tokenizer_hash=task.source_tokenizer_hash,
+            target_tokenizer_hash=task.target_tokenizer_hash,
             recipe_sha256="a" * 64,
             phase="main",
             loader_policy=hero_sample.HERO_LOADER_POLICY,
@@ -128,9 +148,8 @@ def test_hero_sample_round_trip_preserves_eos_through_training_loader(tmp_path, 
     sample = ArtifactStep.adopt("hero-test", "2026.10.04", artifact_path, kind=hero_sample.PreparedHeroSample)
     source = hero_sample.HeroTrainingSource(sample)
     context = StepContext.for_run(output_path="unused", prefix=str(tmp_path), deps=source.dependencies())
-    data = source.data_config(
-        ctx=context, validation=(), tokenizer=str(target_tokenizer_path), budget=ResolvedTrainingBudget(1, 1, 4096)
-    )
+    budget = ResolvedTrainingBudget(1, 1, 4096)
+    data = source.data_config(ctx=context, validation=(), tokenizer=target_tokenizer_path, budget=budget)
     loaded = (
         data.train_set(Axis("position", 4096), BatchSchedule(1), key=jax.random.PRNGKey(0))
         .as_sync_dataset()
@@ -138,22 +157,27 @@ def test_hero_sample_round_trip_preserves_eos_through_training_loader(tmp_path, 
     )
     np.testing.assert_array_equal(np.asarray(loaded.tokens.array), expected)
 
-    changed_tokenizer = Tokenizer.from_file(str(target_tokenizer_path / "tokenizer.json"))
+    changed_tokenizer = Tokenizer.from_file(f"{target_tokenizer_path}/tokenizer.json")
     changed_tokenizer.add_tokens(["new-token"])
-    changed_tokenizer.save(str(target_tokenizer_path / "tokenizer.json"))
-    with pytest.raises(ValueError, match="training tokenizer content differs"):
-        source.data_config(
-            ctx=context, validation=(), tokenizer=str(target_tokenizer_path), budget=ResolvedTrainingBudget(1, 1, 4096)
-        )
+    changed_tokenizer.save(f"{target_tokenizer_path}/tokenizer.json")
+    with pytest.raises(ValueError, match=r"hero sample training: tokenizer .* content is"):
+        source.data_config(ctx=context, validation=(), tokenizer=target_tokenizer_path, budget=budget)
 
 
-def test_hero_component_shuffle_index_keeps_rare_prior_phase_component():
-    recipe = json.loads(hero_sample.HERO_RECIPE.read_text())
+def test_hero_shuffle_keys_follow_production_component_order():
+    data = harrier_mix_2026_08_18_data_config(
+        ctx=StepContext.for_fingerprint((), (HARRIER_MIX_2026_08_18_STORE,)),
+        total_steps=390_251,
+        batch_size=512,
+        max_seq_len=4096,
+        experiment_flops=1e24,
+        validation=(),
+    )
+    stages = data.train_weights
+    assert isinstance(stages, list)
+    production_order = tuple(name for name in data.components if any(weights.get(name, 0) > 0 for _, weights in stages))
 
-    assert recipe["phases"][0]["weights"]["c22q0"] > 0
-    assert recipe["phases"][1]["weights"]["c22q0"] == 0
-    assert _component_shuffle_index(recipe, "c23q0") == list(
-        name
-        for name in recipe["available_tokens"]
-        if any(phase["weights"].get(name, 0) > 0 for phase in recipe["phases"])
-    ).index("c23q0")
+    assert hero_sample._HERO_RECIPE.shuffle_order == production_order
+    # c22q0 has weight only before the main phase, but it still takes a production shuffle key.
+    assert "c22q0" in production_order
+    assert "c22q0" not in hero_sample._HERO_RECIPE.weights

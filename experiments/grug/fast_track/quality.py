@@ -37,12 +37,6 @@ class LabelledEmbedding:
     label: float
 
 
-class QualityScorer(Protocol):
-    """Score a batch of embeddings after head fitting."""
-
-    def scores(self, embeddings: NDArray) -> NDArray[np.float64]: ...
-
-
 @dataclass(frozen=True)
 class QualityScoringBatch:
     """Document inputs with optional normalized Harrier vectors."""
@@ -54,29 +48,14 @@ class QualityScoringBatch:
     def __post_init__(self) -> None:
         if len(self.texts) != len(self.document_ids):
             raise ValueError("quality texts and document IDs must have equal length")
-        if any(not isinstance(text, str) for text in self.texts):
-            raise ValueError("quality scoring texts must be strings")
-        if any(not isinstance(document_id, str) for document_id in self.document_ids):
-            raise ValueError("quality scoring document IDs must be strings")
-        if self.embeddings is not None:
-            embeddings = np.asarray(self.embeddings)
-            if embeddings.ndim != 2 or len(embeddings) != len(self.texts) or not np.isfinite(embeddings).all():
-                raise ValueError("quality embeddings must be a finite matrix with one row per document")
+        if self.embeddings is not None and len(self.embeddings) != len(self.texts):
+            raise ValueError("quality embeddings must have one row per document")
 
 
 class DocumentQualityScorer(Protocol):
     """Score a batch of documents from text, optional embeddings, or both."""
 
     def scores(self, batch: QualityScoringBatch) -> NDArray[np.float64]: ...
-
-
-class QualityHeadConfig(Protocol):
-    """Fit on training rows; identity names the implementation revision and every fit parameter."""
-
-    @property
-    def identity(self) -> Mapping[str, str | int | float | bool]: ...
-
-    def fit(self, rows: Sequence[LabelledEmbedding]) -> QualityScorer: ...
 
 
 @dataclass(frozen=True)
@@ -86,29 +65,18 @@ class RidgeHead:
     regularization: float
 
     def scores(self, embeddings: NDArray) -> NDArray[np.float64]:
-        values = np.asarray(embeddings, dtype=np.float64)
-        if values.ndim != 2 or values.shape[1] != len(self.coefficients) or not np.isfinite(values).all():
-            raise ValueError("embedding dimensions or values do not match the quality head")
-        return values @ np.asarray(self.coefficients) + self.intercept
+        return np.asarray(embeddings, dtype=np.float64) @ np.asarray(self.coefficients) + self.intercept
 
 
 @dataclass(frozen=True)
 class RidgeHeadConfig:
     regularization: float
 
-    @property
-    def identity(self) -> Mapping[str, str | int | float | bool]:
-        return {"implementation": "ridge", "revision": "ridge-v1", "regularization": self.regularization}
-
     def fit(self, rows: Sequence[LabelledEmbedding]) -> RidgeHead:
         if not math.isfinite(self.regularization) or self.regularization <= 0:
             raise ValueError("ridge regularization must be finite and positive")
-        if not rows:
-            raise ValueError("quality head training rows must not be empty")
         x = np.asarray([row.embedding for row in rows], dtype=np.float64)
         y = np.asarray([row.label for row in rows], dtype=np.float64)
-        if x.ndim != 2 or x.shape[1] == 0 or not np.isfinite(x).all() or not np.isfinite(y).all():
-            raise ValueError("training embeddings and labels must be finite")
         mean_x, mean_y = x.mean(axis=0), float(y.mean())
         centered_x, centered_y = x - mean_x, y - mean_y
         if len(rows) < x.shape[1]:
@@ -123,49 +91,38 @@ class RidgeHeadConfig:
 
 
 @dataclass(frozen=True)
-class FittedQualityHead:
-    """A fitted head and its development-only fit report."""
-
-    scorer: QualityScorer
-    identity: dict[str, str | int | float | bool]
-    training_documents: int
-    development: "LabelMetrics"
-
-
-@dataclass(frozen=True)
-class EmbeddingHeadScorer:
-    """Adapt a fitted embedding head to the document scorer API."""
-
-    scorer: QualityScorer
-
-    def scores(self, batch: QualityScoringBatch) -> NDArray[np.float64]:
-        if batch.embeddings is None:
-            raise ValueError("embedding head requires prepared Harrier embeddings")
-        return score_embeddings(self.scorer, batch.embeddings)
-
-
-@dataclass(frozen=True)
 class LabelMetrics:
     documents: int
     mean_squared_error: float
     source_mean_squared_error: dict[str, float]
 
 
-def fit_quality_head(
-    rows: Sequence[LabelledEmbedding], *, head: QualityHeadConfig, split_seed: int
-) -> FittedQualityHead:
+@dataclass(frozen=True)
+class FittedQualityHead:
+    """A fitted ridge head and its development-only fit report."""
+
+    head: RidgeHead
+    training_documents: int
+    development: LabelMetrics
+
+
+@dataclass(frozen=True)
+class EmbeddingHeadScorer:
+    """Adapt a fitted ridge head to the document scorer API."""
+
+    head: RidgeHead
+
+    def scores(self, batch: QualityScoringBatch) -> NDArray[np.float64]:
+        if batch.embeddings is None:
+            raise ValueError("embedding head requires prepared Harrier embeddings")
+        return self.head.scores(batch.embeddings)
+
+
+def fit_quality_head(rows: Sequence[LabelledEmbedding], *, head: RidgeHeadConfig, split_seed: int) -> FittedQualityHead:
     """Fit on frozen training embeddings and report development metrics, without audit labels."""
     training, development = split_labelled_embeddings(rows, split_seed=split_seed)
-    scorer = head.fit(training)
-    metrics = development_metrics(scorer, development)
-    return FittedQualityHead(scorer, quality_classifier_identity(head.identity), len(training), metrics)
-
-
-def frozen_label_duplicate_groups(rows: Sequence[LabelledEmbedding]) -> frozenset[str]:
-    """Return all label duplicate groups for exclusion from every scored pool."""
-    if any(not row.duplicate_group for row in rows):
-        raise ValueError("frozen labels require duplicate groups")
-    return frozenset(row.duplicate_group for row in rows)
+    fitted = head.fit(training)
+    return FittedQualityHead(fitted, len(training), development_metrics(fitted, development))
 
 
 def split_labelled_embeddings(
@@ -179,34 +136,13 @@ def split_labelled_embeddings(
     development = [row for row in rows if label_split(row.duplicate_group, split_seed) is LabelSplit.DEVELOPMENT]
     if not train or not development:
         raise ValueError("the frozen labels must contain training and development groups")
-    try:
-        embeddings = np.asarray([row.embedding for row in train], dtype=np.float64)
-    except ValueError as exc:
-        raise ValueError("training embeddings must have one fixed dimension") from exc
-    labels = np.asarray([row.label for row in train], dtype=np.float64)
-    if (
-        embeddings.ndim != 2
-        or embeddings.shape[1] == 0
-        or not np.isfinite(embeddings).all()
-        or not np.isfinite(labels).all()
-    ):
-        raise ValueError("training embeddings and labels must be finite")
     return train, development
 
 
-def development_metrics(scorer: QualityScorer, rows: Sequence[LabelledEmbedding]) -> LabelMetrics:
-    """Measure one scorer on development rows, grouped by source."""
-    try:
-        x = np.asarray([row.embedding for row in rows], dtype=np.float64)
-    except ValueError as exc:
-        raise ValueError("development embeddings must have one fixed dimension") from exc
-    y = np.asarray([row.label for row in rows], dtype=np.float64)
-    if not np.isfinite(y).all():
-        raise ValueError("development embeddings and labels must be finite")
-    predictions = score_embeddings(scorer, x)
-    errors = (predictions - y) ** 2
-    if not np.isfinite(errors).all():
-        raise ValueError("development scores and labels must be finite")
+def development_metrics(head: RidgeHead, rows: Sequence[LabelledEmbedding]) -> LabelMetrics:
+    """Measure one head on development rows, grouped by source."""
+    predictions = head.scores(np.asarray([row.embedding for row in rows], dtype=np.float64))
+    errors = (predictions - np.asarray([row.label for row in rows], dtype=np.float64)) ** 2
     by_source: dict[str, list[float]] = defaultdict(list)
     for row, error in zip(rows, errors, strict=True):
         by_source[row.source].append(float(error))
@@ -227,14 +163,3 @@ def quality_classifier_identity(
     except (TypeError, ValueError) as exc:
         raise ValueError("classifier identity must contain finite JSON values") from exc
     return identity
-
-
-def score_embeddings(scorer: QualityScorer, embeddings: NDArray) -> NDArray[np.float64]:
-    """Require one finite score for each finite embedding row."""
-    values = np.asarray(embeddings, dtype=np.float64)
-    if values.ndim != 2 or values.shape[1] == 0 or not np.isfinite(values).all():
-        raise ValueError("scoring embeddings must be a finite matrix")
-    scores = np.asarray(scorer.scores(values), dtype=np.float64)
-    if scores.shape != (len(values),) or not np.isfinite(scores).all():
-        raise ValueError("quality scorer must return one finite score per embedding")
-    return scores

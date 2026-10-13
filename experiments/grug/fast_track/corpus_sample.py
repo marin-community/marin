@@ -19,7 +19,7 @@ import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text._batch_tokenizer import BatchTokenizer
-from levanter.tokenizers import MarinTokenizer, load_tokenizer, tokenizer_content_hash
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import Artifact, read_artifact
@@ -38,11 +38,13 @@ from experiments.grug.fast_track.contracts import (
     TOKENIZATION_MAX_DOCUMENT_BYTES,
     TOKENIZATION_POLICY,
     TokenizerSpec,
+    require_tokenizer_content,
 )
 from experiments.grug.fast_track.label_exclusion import LabelExclusion
 from experiments.grug.fast_track.ranked_pool import RangeTokenTotal, ranked_pool, take_token_prefix
 
-QUALITY_FRACTION = 0.1
+# A quality pool holds this many raw tokens for each selected training token.
+QUALITY_POOL_MULTIPLIER = 10
 TOKENIZE_BATCH_ROWS = 128
 TOKENIZE_BATCH_MAX_BYTES = 256 * 1024
 PARQUET_BATCH_ROWS = 32
@@ -306,9 +308,7 @@ def _encode_records(records: list[dict], preprocessor: BatchProcessor[dict, dict
 
 
 def _read_sample(shard: _CorpusShard, *, cutoff: int, spec: CorpusSampleSpec) -> Iterator[dict]:
-    actual_hash = tokenizer_content_hash(spec.tokenizer.name)
-    if actual_hash != spec.tokenizer.identity:
-        raise ValueError(f"tokenizer content differs from the corpus specification: {actual_hash}")
+    require_tokenizer_content(spec.tokenizer.name, spec.tokenizer.identity, owner="corpus sample")
     yield from _sample_records(
         shard,
         cutoff=cutoff,
@@ -319,8 +319,7 @@ def _read_sample(shard: _CorpusShard, *, cutoff: int, spec: CorpusSampleSpec) ->
     )
 
 
-def _source_summary(shard: dict) -> _CorpusShardSummary:
-    path = shard["path"]
+def _source_summary(index: int, path: str) -> _CorpusShardSummary:
     counts: Counter[str] = Counter()
     documents = 0
     with StoragePath(path).open("rb") as stream:
@@ -328,7 +327,7 @@ def _source_summary(shard: dict) -> _CorpusShardSummary:
             for row in batch.to_pylist():
                 counts[row["source"]] += row["token_count"]
                 documents += 1
-    return _CorpusShardSummary(RangeTokenTotal(shard["index"], path, documents, sum(counts.values())), dict(counts))
+    return _CorpusShardSummary(RangeTokenTotal(index, path, documents, sum(counts.values())), dict(counts))
 
 
 def prepare_corpus_pool(
@@ -359,7 +358,6 @@ def prepare_corpus_pool(
             ctx=ctx,
             output_path=attempt_path,
             rank_key=lambda row: f"{row['sample_rank']}:{row['source']}:{row['id']}",
-            token_count=lambda row: row["token_count"],
             range_key=lambda row, sampling_cutoff=cutoff: int(row["sample_rank"], 16) * num_ranges // sampling_cutoff,
             num_ranges=num_ranges,
         )
@@ -373,8 +371,8 @@ def prepare_corpus_pool(
         ranked, ctx=ctx, output_path=prefix_join(config.output_path, "pool"), token_budget=spec.token_budget
     )
     counts: Counter[str] = Counter({source.name: 0 for source in spec.sources})
-    selected_files = [{"index": index, "path": path} for index, path in enumerate(selected.shards)]
-    summaries = ctx.execute(Dataset.from_list(selected_files).map(_source_summary)).results
+    selected_files = list(enumerate(selected.shards))
+    summaries = ctx.execute(Dataset.from_list(selected_files).map(lambda item: _source_summary(*item))).results
     ranges = tuple(sorted((item.range_total for item in summaries), key=lambda item: item.range_key))
     for result in summaries:
         counts.update(result.source_tokens)

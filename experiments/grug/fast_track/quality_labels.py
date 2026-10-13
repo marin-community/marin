@@ -21,6 +21,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import ensure_parent_dir
 
+from experiments.datakit.embeddings.harrier.pipeline import HARRIER_DIM
 from experiments.grug.fast_track.label_exclusion import LabelExclusion
 from experiments.grug.fast_track.quality import (
     LabelledEmbedding,
@@ -87,8 +88,19 @@ class _Label:
 
 
 @dataclass(frozen=True)
+class _JoinedRecord:
+    source: str
+    id: str
+    duplicate_group: str
+    embedding: np.ndarray
+    label: float
+    retained_path: str
+    retained_row: int
+
+
+@dataclass(frozen=True)
 class _JoinedLabels:
-    records: dict[str, dict]
+    records: dict[str, _JoinedRecord]
     keys: set[tuple[str, str]]
     duplicate_groups: set[str]
     duplicate_rows: list[dict]
@@ -171,7 +183,7 @@ def _read_joined_labels(
     if not paths:
         raise ValueError(f"no joined label shards at {joined_path}/outputs")
 
-    records: dict[str, dict] = {}
+    records: dict[str, _JoinedRecord] = {}
     joined_keys: set[tuple[str, str]] = set()
     duplicate_groups: set[str] = set()
     duplicate_rows = []
@@ -187,8 +199,8 @@ def _read_joined_labels(
                 if not isinstance(text, str) or generate_id(text) != label.document_id:
                     raise ValueError(f"joined full text does not match its normalized content ID: {key}")
                 embedding = np.asarray(row["embedding"])
-                if embedding.shape != (1024,) or embedding.dtype.kind not in "iu":
-                    raise ValueError(f"joined Harrier embedding must contain 1024 signed int8 values: {key}")
+                if embedding.shape != (HARRIER_DIM,) or embedding.dtype.kind not in "iu":
+                    raise ValueError(f"joined Harrier embedding must contain {HARRIER_DIM} signed int8 values: {key}")
                 if np.any(embedding < -128) or np.any(embedding > 127):
                     raise ValueError(f"joined Harrier embedding is outside the int8 range: {key}")
                 embedding = embedding.astype(np.int8)
@@ -196,29 +208,21 @@ def _read_joined_labels(
                 duplicate_groups.add(group)
                 joined_keys.add(key)
                 if label.document_id not in records:
-                    records[label.document_id] = {
-                        "source": label.source,
-                        "id": label.document_id,
-                        "duplicate_group": group,
-                        "embedding": embedding,
-                        "label": label.score,
-                        "retained_path": path,
-                        "retained_row": joined_row,
-                        "text": text,
-                    }
+                    records[label.document_id] = _JoinedRecord(
+                        label.source, label.document_id, group, embedding, label.score, path, joined_row
+                    )
                 else:
+                    # The text matches its content ID above, so rows with one ID have the same text.
                     retained = records[label.document_id]
-                    if retained["text"] != text:
-                        raise ValueError(f"conflicting joined text for {label.document_id}")
-                    if retained["label"] != label.score:
+                    if retained.label != label.score:
                         raise ValueError(f"conflicting joined quality targets for {label.document_id}")
-                    difference = _embedding_difference(retained["embedding"], embedding)
+                    difference = _embedding_difference(retained.embedding, embedding)
                     duplicate_rows.append(
                         {
                             "id": label.document_id,
-                            "retained_source": retained["source"],
-                            "retained_path": retained["retained_path"],
-                            "retained_row": retained["retained_row"],
+                            "retained_source": retained.source,
+                            "retained_path": retained.retained_path,
+                            "retained_row": retained.retained_row,
                             "duplicate_source": label.source,
                             "duplicate_path": path,
                             "duplicate_row": joined_row,
@@ -250,13 +254,19 @@ def _write_frozen_quality_labels(
             ("source", pa.string()),
             ("id", pa.string()),
             ("duplicate_group", pa.string()),
-            ("embedding", pa.list_(pa.int8(), 1024)),
+            ("embedding", pa.list_(pa.int8(), HARRIER_DIM)),
             ("label", pa.float64()),
         ]
     )
     table_rows = [
-        {name: joined.records[key][name] for name in ("source", "id", "duplicate_group", "embedding", "label")}
-        for key in sorted(joined.records)
+        {
+            "source": record.source,
+            "id": record.id,
+            "duplicate_group": record.duplicate_group,
+            "embedding": record.embedding,
+            "label": record.label,
+        }
+        for record in (joined.records[key] for key in sorted(joined.records))
     ]
     table = pa.Table.from_pylist(table_rows, schema=schema)
     buffer = io.BytesIO()
@@ -379,17 +389,23 @@ def read_labelled_embeddings(labels: FrozenQualityLabels) -> list[LabelledEmbedd
     return result
 
 
+@dataclass(frozen=True)
+class _FreezeLabelsConfig:
+    spec: QualityLabelSpec
+    output_path: str
+
+
 def build_quality_labels(spec: QualityLabelSpec, *, version: str | None = None) -> ArtifactStep[FrozenQualityLabels]:
     """Bind label validation and freezing as one reusable artifact dependency."""
     digest = hashlib.sha256(canonical_json(asdict(spec)).encode()).hexdigest()[:20]
     name = f"fast-track/quality-labels/{digest}"
     version = resolve_version(name, version)
 
-    def build_config(ctx: StepContext) -> dict:
-        return {"spec": spec, "output_path": ctx.output_path}
+    def build_config(ctx: StepContext) -> _FreezeLabelsConfig:
+        return _FreezeLabelsConfig(spec, ctx.output_path)
 
-    def run(config: dict) -> FrozenQualityLabels:
-        return freeze_quality_labels(config["spec"], output_path=config["output_path"])
+    def run(config: _FreezeLabelsConfig) -> FrozenQualityLabels:
+        return freeze_quality_labels(config.spec, output_path=config.output_path)
 
     return ArtifactStep(
         name=user_namespaced_name(name, version),
@@ -416,9 +432,8 @@ def _fit_ridge(config: _RidgeFitConfig) -> FittedRidgeQualityHead:
         head=RidgeHeadConfig(config.regularization),
         split_seed=config.split_seed,
     )
-    assert isinstance(fitted.scorer, RidgeHead)
     return FittedRidgeQualityHead(
-        head=fitted.scorer,
+        head=fitted.head,
         label_exclusion=labels.label_exclusion,
         feature_identity=labels.feature_identity,
         split_seed=config.split_seed,

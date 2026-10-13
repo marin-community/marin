@@ -6,27 +6,9 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from fray.local_backend import LocalClient
-from fray.types import ResourceConfig
-from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.grug.fast_track.ranked_pool import ranked_pool, take_token_prefix
-
-
-@pytest.fixture
-def zephyr_context(tmp_path):
-    client = LocalClient()
-    context = ZephyrContext(
-        client=client,
-        max_workers=2,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        name="quality-pool-test",
-    )
-    yield context
-    context.shutdown()
-    client.shutdown(wait=True)
 
 
 @pytest.fixture
@@ -51,7 +33,6 @@ def _rank(dataset, context, output_path: Path, ranges: int):
         ctx=context,
         output_path=str(output_path),
         rank_key=lambda row: (row["rank"], row["id"]),
-        token_count=lambda row: row["token_count"],
         range_key=lambda row: row["range"],
         num_ranges=ranges,
     )
@@ -75,8 +56,6 @@ def test_ranked_pool_orders_shards_and_prefix_independently_of_input_partitions(
 
     assert selected == ["a", "b", "c"]
     assert prefix.total_tokens == 12
-    assert prefix.usable_tokens == 10
-    assert prefix.overshoot_tokens == 2
 
 
 def test_ranked_pool_rejects_budget_above_available_token_mass(pool_parquets, zephyr_context, tmp_path):

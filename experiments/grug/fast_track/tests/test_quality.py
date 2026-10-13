@@ -24,14 +24,14 @@ def test_ridge_head_uses_fixed_training_groups_and_keeps_audit_labels_private():
     ]
     other_fitted = fit_quality_head(altered, head=RidgeHeadConfig(0.001), split_seed=9)
 
-    np.testing.assert_allclose(fitted.scorer.scores(np.array([[10.0], [20.0]])), [23.0, 43.0], rtol=1e-4)
-    assert other_fitted.scorer == fitted.scorer
+    np.testing.assert_allclose(fitted.head.scores(np.array([[10.0], [20.0]])), [23.0, 43.0], rtol=1e-4)
+    assert other_fitted.head == fitted.head
     assert other_fitted.development == fitted.development
     assert fitted.development.mean_squared_error < 1e-7
     assert fitted.training_documents == sum(label_split(row.duplicate_group, 9) is LabelSplit.TRAIN for row in rows)
 
     np.testing.assert_allclose(
-        EmbeddingHeadScorer(fitted.scorer).scores(
+        EmbeddingHeadScorer(fitted.head).scores(
             QualityScoringBatch(
                 texts=["10", "20"],
                 document_ids=["doc-10", "doc-20"],

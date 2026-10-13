@@ -225,32 +225,6 @@ def _active_params(cfg: GrugModelConfig) -> int:
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)
 
 
-def _with_validation_components(
-    *,
-    ctx: StepContext,
-    training_data: LmDataConfig,
-    validation: Sequence[ArtifactStep[TokenizedCache]],
-) -> LmDataConfig:
-    """Add zero-weight validation components to a training data configuration."""
-    if ctx.is_fingerprint:
-        val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
-    else:
-        val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
-    collisions = training_data.components.keys() & val_components.keys()
-    if collisions:
-        raise ValueError(f"validation components collide with training components: {sorted(collisions)}")
-
-    zero_weights = {name: 0.0 for name in val_components}
-    weights = training_data.train_weights
-    if not isinstance(weights, dict):
-        raise ValueError("fast-track training data requires fixed dictionary weights")
-    return dataclasses.replace(
-        training_data,
-        components={**training_data.components, **val_components},
-        train_weights={**weights, **zero_weights},
-    )
-
-
 class TrainingSource(Protocol):
     """Build the training data and list its artifact dependencies."""
 
@@ -285,23 +259,31 @@ class FlatCacheTrainingSource:
     ) -> LmDataConfig:
         if tokenizer != self.manifest.tokenizer:
             raise ValueError(f"baseline tokenizer {self.manifest.tokenizer!r} does not match requested {tokenizer!r}")
-        training_data = LmDataConfig(
+        components = {
+            component.name: DatasetComponent(
+                source=None,
+                cache_dir=component.cache_dir,
+                format=TextLmDatasetFormat(),
+                tags=[component.name],
+                flat_cache=True,
+            )
+            for component in self.manifest.components
+        }
+        if ctx.is_fingerprint:
+            val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
+        else:
+            val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
+        collisions = components.keys() & val_components.keys()
+        if collisions:
+            raise ValueError(f"validation components collide with training components: {sorted(collisions)}")
+        return LmDataConfig(
             tokenizer=tokenizer,
             cache_dir=None,
-            components={
-                component.name: DatasetComponent(
-                    source=None,
-                    cache_dir=component.cache_dir,
-                    format=TextLmDatasetFormat(),
-                    tags=[component.name],
-                    flat_cache=True,
-                )
-                for component in self.manifest.components
-            },
-            train_weights={component.name: component.weight for component in self.manifest.components},
+            components={**components, **val_components},
+            train_weights={component.name: component.weight for component in self.manifest.components}
+            | {name: 0.0 for name in val_components},
             auto_build_caches=False,
         )
-        return _with_validation_components(ctx=ctx, training_data=training_data, validation=validation)
 
 
 def resolve_h100_ladder_budget(
@@ -372,7 +354,7 @@ def build_h100_ladder_run(
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     version: str | None = None,
     tokenizer: str = V16384_TOKENIZER,
-    training_source: TrainingSource | None = None,
+    training_source: TrainingSource = FlatCacheTrainingSource(),
     vocab_size: int = V16384_VOCAB,
     no_eval: bool = False,
     dense: bool = False,
@@ -391,7 +373,6 @@ def build_h100_ladder_run(
         raise ValueError("run_id must not be empty")
     if not wandb_project.strip():
         raise ValueError("wandb_project must not be empty")
-    resolved_training_source = training_source or FlatCacheTrainingSource()
 
     rung = _h100_ladder_rung(size)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
@@ -493,7 +474,7 @@ def build_h100_ladder_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        data = resolved_training_source.data_config(
+        data = training_source.data_config(
             ctx=ctx,
             validation=validation,
             tokenizer=tokenizer,
@@ -529,7 +510,7 @@ def build_h100_ladder_run(
         artifact_type=ThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(*resolved_training_source.dependencies(), *validation),
+        deps=(*training_source.dependencies(), *validation),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -537,7 +518,7 @@ def build_h100_ladder_run(
 _WANDB_PROJECT = "marin_moe"
 
 
-def submit_to_cluster(run_id: str, *, target_cluster: str | None) -> NoReturn:
+def _submit_to_cluster(run_id: str, *, target_cluster: str) -> NoReturn:
     """Run the current command in an Iris coordinator job."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
     if "--run" not in launch_args:
@@ -546,7 +527,6 @@ def submit_to_cluster(run_id: str, *, target_cluster: str | None) -> NoReturn:
     wandb_mode = os.environ.get("WANDB_MODE")
     if not wandb_key and wandb_mode != "disabled":
         raise click.ClickException("Set WANDB_API_KEY, or set WANDB_MODE=disabled for an untracked run.")
-    placement_args = ["--target-cluster", target_cluster] if target_cluster else ["--reserve", "H100"]
     cmd = [
         "uv",
         "run",
@@ -557,7 +537,8 @@ def submit_to_cluster(run_id: str, *, target_cluster: str | None) -> NoReturn:
         "run",
         "--no-wait",
         "--enable-extra-resources",
-        *placement_args,
+        "--target-cluster",
+        target_cluster,
         "--priority",
         "interactive",
         "--job-name",
@@ -635,10 +616,10 @@ def main(
     dense: bool,
     save_checkpoints: bool,
     submit: bool,
-    target_cluster: str | None,
+    target_cluster: str,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
-        submit_to_cluster(run_id, target_cluster=target_cluster)
+        _submit_to_cluster(run_id, target_cluster=target_cluster)
 
     return build_h100_ladder_run(
         run_id=run_id,

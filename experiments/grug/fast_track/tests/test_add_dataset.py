@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pytest
@@ -24,8 +24,8 @@ from experiments.grug.fast_track.add_dataset import (
 )
 from experiments.grug.fast_track.add_dataset_cli import main as add_dataset_cli
 from experiments.grug.fast_track.contracts import (
+    TOKENIZATION_POLICY,
     AddDatasetConfig,
-    AddDatasetSamplingPolicy,
     DatasetPrefix,
     FrozenBaselineComponent,
     FrozenBaselineManifest,
@@ -33,12 +33,41 @@ from experiments.grug.fast_track.contracts import (
     ResolvedTrainingBudget,
     unique_token_sample_cap,
 )
+from experiments.grug.fast_track.hero_sample import (
+    HERO_LOADER_POLICY,
+    HeroTrainingSource,
+    PreparedHeroSample,
+    _mixture_component_examples,
+    hero_sample_manifest,
+)
 from experiments.grug.fast_track.launch import (
     V16384_TOKENIZER,
     FlatCacheTrainingSource,
     MatchMode,
     resolve_h100_ladder_budget,
 )
+from experiments.grug.moe.launch_datakit_moe_mix import _MIXTURE_BLOCK_SIZE
+
+TOKENIZER_HASH = "sha256:test-tokenizer"
+
+
+@dataclass(frozen=True)
+class _UnlimitedBaseline(FlatCacheTrainingSource):
+    """A flat-cache baseline that has no measured capacity."""
+
+    def mixture_config(self, **kwargs) -> LmDataConfig:
+        return self.data_config(**kwargs)
+
+    def require_capacity(self, data: LmDataConfig, *, ctx: StepContext, budget: ResolvedTrainingBudget) -> None:
+        del data, ctx, budget
+
+
+@pytest.fixture
+def stable_tokenizer(monkeypatch):
+    monkeypatch.setattr("experiments.grug.fast_track.contracts.tokenizer_content_hash", lambda _name: TOKENIZER_HASH)
+    monkeypatch.setattr(
+        "experiments.grug.fast_track.add_dataset_cli.tokenizer_content_hash", lambda _name: TOKENIZER_HASH
+    )
 
 
 class _SmallTokenizer:
@@ -64,11 +93,9 @@ def _prefix(*, token_cap: int = 5, max_rows: int = 10) -> DatasetPrefix:
         split="train",
         text_field="body",
         tokenizer="hero-bpe-v16384",
-        tokenizer_hash="sha256:test-tokenizer",
-        sampling_policy=AddDatasetSamplingPolicy.PREFIX,
+        tokenizer_hash=TOKENIZER_HASH,
         requested_token_cap=token_cap,
         max_rows=max_rows,
-        max_overshoot_tokens=2,
     )
 
 
@@ -79,109 +106,33 @@ def _config(tmp_path, *, token_cap: int = 5, max_rows: int = 10) -> AddDatasetPr
     )
 
 
-def test_prepare_add_dataset_cache_writes_and_loads_the_measured_prefix(tmp_path, monkeypatch):
+@dataclass(frozen=True)
+class _PreparedSource:
+    prepared: PreparedAddDatasetCache
+    source: AddDatasetTrainingSource
+    context: StepContext
+
+
+@pytest.fixture
+def prepared_source(tmp_path, monkeypatch, stable_tokenizer) -> _PreparedSource:
+    """A 12-token prefix of three rows, at 20% of a baseline that cannot run out."""
     monkeypatch.setattr("experiments.grug.fast_track.add_dataset.load_tokenizer", lambda _name: _SmallTokenizer())
-    monkeypatch.setattr(
-        "experiments.grug.fast_track.add_dataset.tokenizer_content_hash", lambda _name: "sha256:test-tokenizer"
-    )
-    rows = [
-        {"body": "a b"},
-        {"body": "c"},
-        {"body": "d e f"},
-    ]
-
-    config = _config(tmp_path, token_cap=7)
     prepared = prepare_add_dataset_cache(
-        config,
-        rows=rows,
-        tokenizer=_SmallTokenizer.name_or_path,
-    )
-
-    assert prepared.actual_num_rows == 2
-    assert prepared.actual_num_tokens == 7
-    cache = TreeCache.load(
-        str(tmp_path / "prepared" / "train"),
-        {"input_ids": np.zeros((0,), dtype=np.int32)},
-    )
-    assert len(cache) == 2
-    assert sum(len(row["input_ids"]) for row in cache) == 7
-
-    artifact_path = str(tmp_path / "artifact-record")
-    write_artifact(prepared, artifact_path)
-    cache_step = ArtifactStep(
-        name="prepared/test",
-        version="2026.10.03",
-        artifact_type=PreparedAddDatasetCache,
-        run=lambda _config: None,
-        build_config=lambda _ctx: None,
-        override_path=artifact_path,
-    )
-    source = AddDatasetTrainingSource(
-        config=AddDatasetConfig(
-            token_cache=cache_step,
-            prefix=config.prefix,
-            fraction=0.2,
-            target_production_tokens=1_000,
-            available_unique_tokens=500,
-        ),
-        baseline=FlatCacheTrainingSource(
-            manifest=FrozenBaselineManifest(
-                tokenizer=V16384_TOKENIZER,
-                components=(FrozenBaselineComponent(name="base", cache_dir="base", weight=1.0),),
-            )
-        ),
-    )
-    training_data = source.data_config(
-        ctx=StepContext.for_run(output_path="unused", prefix=str(tmp_path), deps=(cache_step,)),
-        validation=(),
-        tokenizer=V16384_TOKENIZER,
-        budget=ResolvedTrainingBudget(batch_size=1, num_steps=25, sequence_length=1),
-    )
-    assert training_data.train_weights == pytest.approx({"base": 0.8, "add-dataset": 0.2})
-    assert training_data.max_train_sequences == {"add-dataset": 5}
-    assert training_data.components["add-dataset"].cache_dir == f"{prepared.cache_dir}/train"
-    monkeypatch.setattr(
-        "experiments.grug.fast_track.add_dataset.tokenizer_content_hash", lambda _name: "sha256:changed-tokenizer"
-    )
-    with pytest.raises(ValueError, match="tokenizer content differs"):
-        source.data_config(
-            ctx=StepContext.for_run(output_path="unused", prefix=str(tmp_path), deps=(cache_step,)),
-            validation=(),
-            tokenizer=V16384_TOKENIZER,
-            budget=ResolvedTrainingBudget(batch_size=1, num_steps=25, sequence_length=1),
-        )
-
-
-def test_prepared_prefix_reuses_one_cache_across_training_budgets(tmp_path, monkeypatch):
-    monkeypatch.setattr("experiments.grug.fast_track.add_dataset.load_tokenizer", lambda _name: _SmallTokenizer())
-    monkeypatch.setattr(
-        "experiments.grug.fast_track.add_dataset.tokenizer_content_hash", lambda _name: "sha256:test-tokenizer"
-    )
-    preparation = _config(tmp_path, token_cap=12)
-    prepared = prepare_add_dataset_cache(
-        preparation,
+        _config(tmp_path, token_cap=12),
         rows=[{"body": "a b"} for _ in range(8)],
         tokenizer=_SmallTokenizer.name_or_path,
     )
     artifact_path = str(tmp_path / "prepared-artifact")
     write_artifact(prepared, artifact_path)
-    cache_step = ArtifactStep(
-        name="prepared/shared-budget-test",
-        version="2026.10.03",
-        artifact_type=PreparedAddDatasetCache,
-        run=lambda _config: None,
-        build_config=lambda _ctx: None,
-        override_path=artifact_path,
-    )
+    cache_step = ArtifactStep.adopt("prepared/test", "2026.10.03", artifact_path, kind=PreparedAddDatasetCache)
     source = AddDatasetTrainingSource(
         config=AddDatasetConfig(
             token_cache=cache_step,
-            prefix=preparation.prefix,
             fraction=0.2,
             target_production_tokens=1_000,
             available_unique_tokens=500,
         ),
-        baseline=FlatCacheTrainingSource(
+        baseline=_UnlimitedBaseline(
             manifest=FrozenBaselineManifest(
                 tokenizer=V16384_TOKENIZER,
                 components=(FrozenBaselineComponent(name="base", cache_dir="base", weight=1.0),),
@@ -189,18 +140,40 @@ def test_prepared_prefix_reuses_one_cache_across_training_budgets(tmp_path, monk
         ),
     )
     context = StepContext.for_run(output_path="unused", prefix=str(tmp_path), deps=(cache_step,))
+    return _PreparedSource(prepared, source, context)
 
-    short_data = source.data_config(
-        ctx=context,
-        validation=(),
-        tokenizer=V16384_TOKENIZER,
-        budget=ResolvedTrainingBudget(batch_size=1, num_steps=25, sequence_length=1),
+
+def test_prepare_add_dataset_cache_writes_and_loads_the_measured_prefix(prepared_source, monkeypatch):
+    prepared = prepared_source.prepared
+    assert prepared.actual_num_rows == 3
+    assert prepared.actual_num_tokens == 12
+    cache = TreeCache.load(f"{prepared.cache_dir}/train", {"input_ids": np.zeros((0,), dtype=np.int32)})
+    assert [row["input_ids"].tolist() for row in cache] == [[1, *_SmallTokenizer().encode("a b EOS")]] * 3
+
+    budget = ResolvedTrainingBudget(batch_size=1, num_steps=25, sequence_length=1)
+    training_data = prepared_source.source.data_config(
+        ctx=prepared_source.context, validation=(), tokenizer=V16384_TOKENIZER, budget=budget
     )
-    long_data = source.data_config(
-        ctx=context,
-        validation=(),
-        tokenizer=V16384_TOKENIZER,
-        budget=ResolvedTrainingBudget(batch_size=1, num_steps=50, sequence_length=1),
+    assert training_data.train_weights == pytest.approx({"base": 0.8, "add-dataset": 0.2})
+    assert training_data.max_train_sequences == {"add-dataset": 5}
+    assert training_data.components["add-dataset"].cache_dir == f"{prepared.cache_dir}/train"
+
+    monkeypatch.setattr("experiments.grug.fast_track.contracts.tokenizer_content_hash", lambda _name: "sha256:changed")
+    with pytest.raises(ValueError, match="tokenizer 'hero-bpe-v16384' content is sha256:changed"):
+        prepared_source.source.data_config(
+            ctx=prepared_source.context, validation=(), tokenizer=V16384_TOKENIZER, budget=budget
+        )
+
+
+def test_prepared_prefix_reuses_one_cache_across_training_budgets(prepared_source):
+    short_data, long_data = (
+        prepared_source.source.data_config(
+            ctx=prepared_source.context,
+            validation=(),
+            tokenizer=V16384_TOKENIZER,
+            budget=ResolvedTrainingBudget(batch_size=1, num_steps=num_steps, sequence_length=1),
+        )
+        for num_steps in (25, 50)
     )
 
     assert short_data.components["add-dataset"].cache_dir == long_data.components["add-dataset"].cache_dir
@@ -208,14 +181,64 @@ def test_prepared_prefix_reuses_one_cache_across_training_budgets(tmp_path, monk
     assert long_data.max_train_sequences == {"add-dataset": 10}
 
 
-def test_add_dataset_cli_prepare_only_writes_cache_loadable_by_python_api(tmp_path, monkeypatch):
+def test_hero_capacity_check_uses_the_final_add_dataset_weights(tmp_path, stable_tokenizer):
+    """A small new share moves the block remainder to the largest Hero cell, which then needs more data."""
+    budget = ResolvedTrainingBudget(batch_size=_MIXTURE_BLOCK_SIZE, num_steps=1, sequence_length=4096)
+    manifest = hero_sample_manifest(str(tmp_path / "hero"))
+    # The sample holds exactly what the Hero control reads in one mixture block.
+    sequences = _mixture_component_examples(
+        {component.name: component.weight for component in manifest.components}, budget.token_count
+    )
+    hero_path = str(tmp_path / "hero-artifact")
+    write_artifact(
+        PreparedHeroSample(
+            baseline=manifest,
+            source_store="s3://test/store",
+            source_tokenizer="source-tokenizer",
+            source_tokenizer_hash="sha256:source",
+            target_tokenizer_hash=TOKENIZER_HASH,
+            recipe_sha256="a" * 64,
+            phase="main",
+            loader_policy=HERO_LOADER_POLICY,
+            sequence_length=4096,
+            data_seed=0,
+            requested_tokens=budget.token_count,
+            actual_tokens=budget.token_count,
+            component_tokens={name: count * 4096 for name, count in sequences.items()},
+        ),
+        hero_path,
+    )
+    prepared_path = str(tmp_path / "prepared-artifact")
+    write_artifact(
+        PreparedAddDatasetCache(
+            cache_dir=str(tmp_path / "prepared-cache"),
+            prefix=_prefix(token_cap=budget.token_count),
+            actual_num_rows=1,
+            actual_num_tokens=budget.token_count,
+            tokenization_policy=TOKENIZATION_POLICY,
+        ),
+        prepared_path,
+    )
+    hero = HeroTrainingSource(ArtifactStep.adopt("hero/test", "2026.10.04", hero_path, kind=PreparedHeroSample))
+    cache_step = ArtifactStep.adopt("prepared/test", "2026.10.04", prepared_path, kind=PreparedAddDatasetCache)
+    context = StepContext.for_run(output_path="unused", prefix=str(tmp_path), deps=(hero.sample, cache_step))
+    treatment = AddDatasetTrainingSource(
+        config=AddDatasetConfig(
+            token_cache=cache_step,
+            fraction=0.01,
+            target_production_tokens=budget.token_count,
+            available_unique_tokens=budget.token_count,
+        ),
+        baseline=hero,
+    )
+
+    hero.data_config(ctx=context, validation=(), tokenizer=V16384_TOKENIZER, budget=budget)
+    with pytest.raises(ValueError, match=r"hero component c\d\dq\d has [\d,]+ usable sequences"):
+        treatment.data_config(ctx=context, validation=(), tokenizer=V16384_TOKENIZER, budget=budget)
+
+
+def test_add_dataset_cli_prepare_only_writes_cache_loadable_by_python_api(tmp_path, monkeypatch, stable_tokenizer):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
-    monkeypatch.setattr(
-        "experiments.grug.fast_track.add_dataset_cli.tokenizer_content_hash", lambda _name: "sha256:test-tokenizer"
-    )
-    monkeypatch.setattr(
-        "experiments.grug.fast_track.add_dataset.tokenizer_content_hash", lambda _name: "sha256:test-tokenizer"
-    )
     monkeypatch.setattr(
         "experiments.grug.fast_track.add_dataset.load_dataset",
         lambda *args, **kwargs: [{"body": "a b"}, {"body": "c"}, {"body": "d e f"}],
@@ -234,8 +257,6 @@ def test_add_dataset_cli_prepare_only_writes_cache_loadable_by_python_api(tmp_pa
         "body",
         "--max-rows",
         "10",
-        "--max-overshoot-tokens",
-        "2",
         "--prepare-token-cap",
         "7",
         "--prepare-only",
@@ -252,7 +273,7 @@ def test_add_dataset_cli_prepare_only_writes_cache_loadable_by_python_api(tmp_pa
         client.shutdown()
 
     assert result.exit_code == 0, result.output
-    step = add_dataset_cache_step(config=_config(tmp_path, token_cap=7), version="2026.10.03")
+    step = add_dataset_cache_step(prefix=_prefix(token_cap=7), version="2026.10.03")
     prepared = PreparedAddDatasetCache.raw_load(step.path(str(tmp_path / "artifacts")))
     cache = TreeCache.load(
         f"{prepared.cache_dir}/train",
@@ -281,12 +302,11 @@ def test_add_dataset_cli_prepare_only_writes_cache_loadable_by_python_api(tmp_pa
     training_source = AddDatasetTrainingSource(
         config=AddDatasetConfig(
             token_cache=step,
-            prefix=prepared.prefix,
             fraction=0.2,
             target_production_tokens=1_000,
             available_unique_tokens=500,
         ),
-        baseline=FlatCacheTrainingSource(
+        baseline=_UnlimitedBaseline(
             manifest=FrozenBaselineManifest(
                 tokenizer=V16384_TOKENIZER,
                 components=(FrozenBaselineComponent(name="base", cache_dir=baseline_cache, weight=1.0),),
@@ -316,10 +336,7 @@ def test_add_dataset_cli_prepare_only_writes_cache_loadable_by_python_api(tmp_pa
     assert training_config.train_weights[validation_step.name] == 0
 
 
-def test_add_dataset_cli_reports_invalid_revision_as_usage_error(monkeypatch):
-    monkeypatch.setattr(
-        "experiments.grug.fast_track.add_dataset_cli.tokenizer_content_hash", lambda _name: "sha256:test-tokenizer"
-    )
+def test_add_dataset_cli_reports_invalid_revision_as_usage_error(stable_tokenizer):
     result = CliRunner().invoke(
         add_dataset_cli,
         [
@@ -347,13 +364,14 @@ def test_add_dataset_cli_reports_invalid_revision_as_usage_error(monkeypatch):
     assert "Traceback" not in result.output
 
 
-def test_add_dataset_cli_accepts_prepared_artifacts_without_hugging_face_options(tmp_path):
-    preparation = _config(tmp_path, token_cap=16_384)
+def test_add_dataset_cli_accepts_prepared_artifacts_without_hugging_face_options(tmp_path, monkeypatch):
+    handles = []
+    monkeypatch.setattr("marin.experiment.cli._print_plan", lambda roots: handles.extend(roots))
     prepared_path = str(tmp_path / "prepared-artifact")
     write_artifact(
         PreparedAddDatasetCache(
             cache_dir=str(tmp_path / "prepared-cache"),
-            prefix=preparation.prefix,
+            prefix=_prefix(token_cap=16_384),
             actual_num_rows=3,
             actual_num_tokens=16_384,
             tokenization_policy="fast-track-long-string-v1",
@@ -365,6 +383,7 @@ def test_add_dataset_cli_accepts_prepared_artifacts_without_hugging_face_options
         "prepared-cache-run",
         "--baseline-artifact",
         "s3://test/hero-sample",
+        "--dense",
         "--prepared-cache",
         prepared_path,
         "--fraction",
@@ -380,13 +399,11 @@ def test_add_dataset_cli_accepts_prepared_artifacts_without_hugging_face_options
     result = CliRunner().invoke(add_dataset_cli, args)
 
     assert result.exit_code == 0, result.output
-    assert "prepared-cache" in result.output
+    caches = [step for step in graph_handles(handles) if step.artifact_type is PreparedAddDatasetCache]
+    assert [cache.adopt_source for cache in caches] == [prepared_path]
 
 
-def test_add_dataset_cli_prepares_maximum_prefix_once_for_smaller_rungs(monkeypatch):
-    monkeypatch.setattr(
-        "experiments.grug.fast_track.add_dataset_cli.tokenizer_content_hash", lambda _name: "sha256:test-tokenizer"
-    )
+def test_add_dataset_cli_prepares_maximum_prefix_once_for_smaller_rungs(monkeypatch, stable_tokenizer):
     handles = []
     monkeypatch.setattr("marin.experiment.cli._print_plan", lambda roots: handles.extend(roots))
     common_args = [
@@ -442,6 +459,7 @@ def test_add_dataset_cli_reports_minimum_unique_tokens_for_one_sequence():
             "small-unique-data",
             "--baseline-artifact",
             "s3://test/hero-sample",
+            "--dense",
             "--repository",
             "org/dataset",
             "--revision",
@@ -466,11 +484,8 @@ def test_add_dataset_cli_reports_minimum_unique_tokens_for_one_sequence():
     assert "to supply one training sequence" in result.output
 
 
-def test_prepare_add_dataset_cache_stops_when_the_bounded_prefix_runs_out(tmp_path, monkeypatch):
+def test_prepare_add_dataset_cache_stops_when_the_bounded_prefix_runs_out(tmp_path, monkeypatch, stable_tokenizer):
     monkeypatch.setattr("experiments.grug.fast_track.add_dataset.load_tokenizer", lambda _name: _SmallTokenizer())
-    monkeypatch.setattr(
-        "experiments.grug.fast_track.add_dataset.tokenizer_content_hash", lambda _name: "sha256:test-tokenizer"
-    )
     with pytest.raises(ValueError, match="requires 5 tokens"):
         prepare_add_dataset_cache(
             _config(tmp_path, token_cap=5, max_rows=1),
@@ -479,12 +494,9 @@ def test_prepare_add_dataset_cache_stops_when_the_bounded_prefix_runs_out(tmp_pa
         )
 
 
-def test_long_document_prefix_preserves_tokens_and_defers_oversized_lookahead(tmp_path, monkeypatch):
+def test_long_document_prefix_preserves_tokens_and_defers_oversized_lookahead(tmp_path, monkeypatch, stable_tokenizer):
     tokenizer = _SmallTokenizer()
     monkeypatch.setattr("experiments.grug.fast_track.add_dataset.load_tokenizer", lambda _name: tokenizer)
-    monkeypatch.setattr(
-        "experiments.grug.fast_track.add_dataset.tokenizer_content_hash", lambda _name: "sha256:test-tokenizer"
-    )
     monkeypatch.setattr("experiments.grug.fast_track.add_dataset.TOKENIZATION_MAX_DOCUMENT_BYTES", 200_000)
     texts = ["first", "hello 世界\n" * 10_000, "last"]
     expected = [[1, *tokenizer.encode(text + " EOS")] for text in texts]
@@ -506,27 +518,19 @@ def test_long_document_prefix_preserves_tokens_and_defers_oversized_lookahead(tm
         )
 
 
-def test_add_dataset_cache_identity_changes_with_revision_and_prefix_limit(tmp_path):
-    config = _config(tmp_path)
-    original = add_dataset_cache_step(config=config, version="2026.10.03")
+def test_add_dataset_cache_identity_changes_with_revision_and_prefix_limit():
+    prefix = _prefix()
+    original = add_dataset_cache_step(prefix=prefix, version="2026.10.03")
 
     revision_change = add_dataset_cache_step(
-        config=replace(config, prefix=config.prefix.model_copy(update={"revision": "b" * 40})),
-        version="2026.10.03",
+        prefix=prefix.model_copy(update={"revision": "b" * 40}), version="2026.10.03"
     )
     prefix_change = add_dataset_cache_step(
-        config=replace(
-            config,
-            prefix=config.prefix.model_copy(update={"requested_token_cap": config.prefix.requested_token_cap + 1}),
-        ),
+        prefix=prefix.model_copy(update={"requested_token_cap": prefix.requested_token_cap + 1}),
         version="2026.10.03",
     )
     tokenizer_change = add_dataset_cache_step(
-        config=replace(
-            config,
-            prefix=config.prefix.model_copy(update={"tokenizer_hash": "sha256:other-tokenizer"}),
-        ),
-        version="2026.10.03",
+        prefix=prefix.model_copy(update={"tokenizer_hash": "sha256:other-tokenizer"}), version="2026.10.03"
     )
 
     assert original.name != revision_change.name

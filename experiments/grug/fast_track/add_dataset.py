@@ -8,7 +8,7 @@ import hashlib
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from itertools import islice
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 from datasets import load_dataset
@@ -18,7 +18,7 @@ from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.datasets import DatasetComponent, DatasetComponentBase, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, write_levanter_cache
-from levanter.tokenizers import load_tokenizer, tokenizer_content_hash
+from levanter.tokenizers import load_tokenizer
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -40,6 +40,7 @@ from experiments.grug.fast_track.contracts import (
     PreparedAddDatasetCache,
     ResolvedTrainingBudget,
     add_dataset_mixture_weights,
+    require_tokenizer_content,
     unique_token_sample_cap,
 )
 from experiments.grug.fast_track.launch import TrainingSource
@@ -97,25 +98,15 @@ def _tokenized_prefix(
                     f"{TOKENIZATION_POLICY} permits at most {TOKENIZATION_MAX_DOCUMENT_BYTES:,} bytes per document"
                 )
         valid_rows = [{config.prefix.text_field: text} for text in texts if isinstance(text, str)]
-        encoded = preprocessor(valid_rows) if valid_rows else []
-        if not isinstance(encoded, list) or len(encoded) != len(valid_rows):
-            raise ValueError("text preprocessor must return one token record for each input row")
-        token_records = iter(encoded)
+        token_records = iter(preprocessor(valid_rows) if valid_rows else [])
         for text in texts:
             row_count = counts.scanned_rows
             # An invalid look-ahead row must fail only if the requested prefix consumes it.
             if not isinstance(text, str):
                 raise ValueError(f"row {row_count} has no string field {config.prefix.text_field!r}")
             input_ids = np.asarray(next(token_records)["input_ids"], dtype=np.int32)
-            next_tokens = counts.total_tokens + len(input_ids)
-            if next_tokens > config.prefix.requested_token_cap + config.prefix.max_overshoot_tokens:
-                raise ValueError(
-                    f"row {row_count} exceeds the token cap by "
-                    f"{next_tokens - config.prefix.requested_token_cap:,} tokens; "
-                    f"the limit is {config.prefix.max_overshoot_tokens:,}"
-                )
             counts.scanned_rows += 1
-            counts.total_tokens = next_tokens
+            counts.total_tokens += len(input_ids)
             yield {"input_ids": input_ids}
             if counts.total_tokens >= config.prefix.requested_token_cap:
                 break
@@ -136,12 +127,7 @@ def prepare_add_dataset_cache(
     tokenizer: str,
 ) -> PreparedAddDatasetCache:
     """Tokenize and write a bounded row prefix to a Levanter cache."""
-    actual_tokenizer_hash = tokenizer_content_hash(tokenizer)
-    if actual_tokenizer_hash != config.prefix.tokenizer_hash:
-        raise ValueError(
-            f"tokenizer content differs from the dataset prefix: "
-            f"expected {config.prefix.tokenizer_hash}, got {actual_tokenizer_hash}"
-        )
+    require_tokenizer_content(tokenizer, config.prefix.tokenizer_hash, owner=f"add-dataset prefix {config.prefix.repo}")
     counts = _PrefixCounts()
     train_path = prefix_join(config.output_path, TRAIN_SPLIT)
     preprocessor = BatchTokenizer(
@@ -156,8 +142,6 @@ def prepare_add_dataset_cache(
         metadata=preprocessor.metadata,
     )
     ledger = CacheLedger.load(train_path)
-    if ledger.total_num_rows != counts.scanned_rows or ledger.field_counts.get("input_ids", 0) != counts.total_tokens:
-        raise ValueError("written cache counts do not match the prepared prefix counts")
     write_stats_json(train_path, ledger)
     return PreparedAddDatasetCache(
         cache_dir=config.output_path,
@@ -191,11 +175,11 @@ def _build_prepared_cache(config: AddDatasetPreparationConfig) -> PreparedAddDat
 
 def add_dataset_cache_step(
     *,
-    config: AddDatasetPreparationConfig,
+    prefix: DatasetPrefix,
     version: str | None = None,
 ) -> ArtifactStep[PreparedAddDatasetCache]:
     """Build a cache handle whose name includes every preparation identity field."""
-    identity = config.prefix.model_dump() | {
+    identity = prefix.model_dump() | {
         "tokenization_policy": TOKENIZATION_POLICY,
         "tokenization_chunk_chars": TOKENIZATION_CHUNK_CHARS,
         "tokenization_max_document_bytes": TOKENIZATION_MAX_DOCUMENT_BYTES,
@@ -206,7 +190,7 @@ def add_dataset_cache_step(
     namespaced_name = user_namespaced_name(name, resolved_version)
 
     def build_config(ctx: StepContext) -> AddDatasetPreparationConfig:
-        return dataclasses.replace(config, output_path=ctx.output_path)
+        return AddDatasetPreparationConfig(prefix=prefix, output_path=ctx.output_path)
 
     return ArtifactStep(
         name=namespaced_name,
@@ -227,8 +211,7 @@ def add_prepared_dataset_component(
 ) -> LmDataConfig:
     """Add a prepared dataset at its token share without a second simulated slice."""
     weights = baseline.train_weights
-    if not isinstance(weights, dict):
-        raise ValueError("add-dataset training requires fixed dictionary weights")
+    assert isinstance(weights, dict), "add-dataset training adds to a one-stage mixture"
     if name in baseline.components:
         raise ValueError(f"new dataset component {name!r} already exists")
     if fraction * baseline.mixture_block_size < 1:
@@ -236,26 +219,41 @@ def add_prepared_dataset_component(
             f"add-dataset fraction must be at least {1 / baseline.mixture_block_size:.6g} "
             f"to select one sequence in a mixture block of {baseline.mixture_block_size}"
         )
-    max_train_sequences_by_component = baseline.max_train_sequences or {}
-    if name in max_train_sequences_by_component:
-        raise ValueError(f"new dataset component {name!r} already has a sequence limit")
-
     return replace(
         baseline,
         components={**baseline.components, name: component},
         train_weights=add_dataset_mixture_weights(weights, new_component=name, fraction=fraction),
-        max_train_sequences={**max_train_sequences_by_component, name: max_train_sequences},
+        max_train_sequences={**(baseline.max_train_sequences or {}), name: max_train_sequences},
         target_budget=None,
         experiment_budget=None,
     )
 
 
+class CapacityCheckedSource(TrainingSource, Protocol):
+    """A baseline that builds its mixture and then checks a final mixture against the data that it holds."""
+
+    def mixture_config(
+        self,
+        *,
+        ctx: StepContext,
+        validation: Sequence[ArtifactStep[TokenizedCache]],
+        tokenizer: str,
+        budget: ResolvedTrainingBudget,
+    ) -> LmDataConfig: ...
+
+    def require_capacity(self, data: LmDataConfig, *, ctx: StepContext, budget: ResolvedTrainingBudget) -> None: ...
+
+
 @dataclasses.dataclass(frozen=True)
 class AddDatasetTrainingSource:
-    """Add one prepared Hugging Face token cache to the frozen baseline."""
+    """Add one prepared Hugging Face token cache to the frozen baseline.
+
+    The baseline checks its capacity on the final weights, because the new component changes the share
+    and the block remainder of each baseline component.
+    """
 
     config: AddDatasetConfig
-    baseline: TrainingSource
+    baseline: CapacityCheckedSource
 
     def dependencies(self) -> tuple[ArtifactStep, ...]:
         return (*self.baseline.dependencies(), self.config.token_cache)
@@ -268,12 +266,7 @@ class AddDatasetTrainingSource:
         tokenizer: str,
         budget: ResolvedTrainingBudget,
     ) -> LmDataConfig:
-        baseline = self.baseline.data_config(
-            ctx=ctx,
-            validation=validation,
-            tokenizer=tokenizer,
-            budget=budget,
-        )
+        baseline = self.baseline.mixture_config(ctx=ctx, validation=validation, tokenizer=tokenizer, budget=budget)
         sample_cap = unique_token_sample_cap(
             target_production_tokens=self.config.target_production_tokens,
             fast_track_budget=budget.token_count,
@@ -292,25 +285,11 @@ class AddDatasetTrainingSource:
                 raise ValueError(
                     f"prepared cache uses {token_cache.tokenization_policy!r}; expected {TOKENIZATION_POLICY!r}"
                 )
-            actual_tokenizer_hash = tokenizer_content_hash(tokenizer)
-            if actual_tokenizer_hash != self.config.prefix.tokenizer_hash:
-                raise ValueError(
-                    f"tokenizer content differs from the prepared add-dataset prefix: "
-                    f"expected {self.config.prefix.tokenizer_hash}, got {actual_tokenizer_hash}"
-                )
             if token_cache.prefix.tokenizer != tokenizer:
                 raise ValueError(
                     f"add-dataset tokenizer {token_cache.prefix.tokenizer!r} does not match requested {tokenizer!r}"
                 )
-            if token_cache.prefix != self.config.prefix:
-                expected = self.config.prefix.model_dump(mode="json")
-                actual = token_cache.prefix.model_dump(mode="json")
-                differences = {
-                    field: {"expected": value, "actual": actual[field]}
-                    for field, value in expected.items()
-                    if value != actual[field]
-                }
-                raise ValueError(f"prepared add-dataset prefix differs from the training source: {differences}")
+            require_tokenizer_content(tokenizer, token_cache.prefix.tokenizer_hash, owner="add-dataset training")
             if token_cache.actual_num_tokens < sample_cap:
                 raise ValueError(
                     f"prepared add-dataset cache has {token_cache.actual_num_tokens:,} tokens; "
@@ -318,14 +297,16 @@ class AddDatasetTrainingSource:
                 )
             cache_dir = token_cache.cache_dir
 
-        return add_prepared_dataset_component(
+        data = add_prepared_dataset_component(
             baseline,
             name="add-dataset",
             component=DatasetComponent(
                 cache_dir=prefix_join(cache_dir, TRAIN_SPLIT),
-                format=TextLmDatasetFormat(text_key=self.config.prefix.text_field),
+                format=TextLmDatasetFormat(),
                 flat_cache=True,
             ),
             fraction=self.config.fraction,
             max_train_sequences=sample_cap // budget.sequence_length,
         )
+        self.baseline.require_capacity(data, ctx=ctx, budget=budget)
+        return data

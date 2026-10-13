@@ -6,7 +6,6 @@
 import hashlib
 import math
 from collections.abc import Iterator, Sequence
-from contextlib import ExitStack
 from dataclasses import dataclass
 from itertools import islice
 
@@ -18,7 +17,6 @@ from marin.execution.fingerprint import canonical_json
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.writers import ensure_parent_dir
 
 from experiments.datakit import hero_data
 from experiments.datakit.embeddings.harrier.pipeline import (
@@ -30,7 +28,7 @@ from experiments.datakit.embeddings.harrier.pipeline import (
     dequantize_to_fp32,
 )
 from experiments.grug.fast_track.corpus_sample import CorpusSource, RawCorpusPool
-from experiments.grug.fast_track.ranked_pool import RankedPool, take_token_prefix
+from experiments.grug.fast_track.ranked_pool import RankedPool, take_token_prefix, write_parquet_tables
 
 FEATURE_BATCH_ROWS = 1024
 FEATURE_JOIN_SHARDS = 512
@@ -106,12 +104,20 @@ def normalize_harrier_embeddings(raw_embeddings: np.ndarray) -> np.ndarray:
 
 def pinned_quality_feature_sources(sources: Sequence[CorpusSource]) -> tuple[QualityFeatureSource, ...]:
     """Resolve the checked-in normalized and Harrier paths for corpus sources."""
-    pins = tuple(
+    return tuple(
         QualityFeatureSource(source.name, source.normalized_path, hero_data.harrier(source.name))
         for source in sorted(sources, key=lambda item: item.name)
     )
-    if not pins or len({pin.source for pin in pins}) != len(pins):
-        raise ValueError("quality feature sources must have distinct normalized source names")
+
+
+def validate_feature_sources(
+    pool: RawCorpusPool, sources: Sequence[QualityFeatureSource]
+) -> tuple[QualityFeatureSource, ...]:
+    """Return feature source pins sorted by name after a check that they match the pool's normalized pins."""
+    pins = tuple(sorted(sources, key=lambda item: item.source))
+    pool_paths = {source.name: source.normalized_path for source in pool.sources}
+    if len({pin.source for pin in pins}) != len(pins) or {pin.source: pin.normalized_path for pin in pins} != pool_paths:
+        raise ValueError("quality feature source pins must match the raw pool's normalized source pins")
     return pins
 
 
@@ -148,8 +154,8 @@ def _normalized_row_locators(raw_prefix_shards: tuple[str, ...]) -> Dataset[dict
 
 def _embedding_path(source: QualityFeatureSource, normalized_shard: str) -> str:
     shard = StoragePath(normalized_shard)
-    if not shard.relative_to(StoragePath(source.normalized_path)):
-        raise ValueError(f"normalized shard {normalized_shard} is outside the pinned source {source.source}")
+    # Raises ValueError when the shard is outside the pinned normalized source.
+    shard.relative_to(StoragePath(source.normalized_path))
     return str(StoragePath(source.harrier_path) / shard.name)
 
 
@@ -181,8 +187,6 @@ def _join_source_shard(
             while pending_locator is not None and pending_locator["normalized_row"] < row_end:
                 if pending_locator["source"] != source_name:
                     raise ValueError("one normalized shard has rows from multiple source pins")
-                if pending_locator["normalized_row"] < row_start:
-                    raise ValueError("normalized row locators are not unique and ordered")
                 if pending_locator["normalized_row"] <= previous_row:
                     raise ValueError("normalized row locators are not unique and ordered")
                 previous_row = pending_locator["normalized_row"]
@@ -227,17 +231,12 @@ def _join_source_shard(
 def _write_feature_range(output_path: str):
     def write(range_key: int, rows: Iterator[dict]) -> QualityFeatureShard:
         path = prefix_join(output_path, f"{FEATURE_FILE_PREFIX}{range_key:05d}.parquet")
-        ensure_parent_dir(path)
-        documents = 0
-        writer = None
-        with ExitStack() as stack:
-            target = stack.enter_context(StoragePath(path).open("wb"))
+
+        def tables() -> Iterator[pa.Table]:
             while batch := list(islice(rows, FEATURE_BATCH_ROWS)):
-                table = pa.Table.from_pylist(batch, schema=FEATURE_SCHEMA)
-                if writer is None:
-                    writer = stack.enter_context(pq.ParquetWriter(target, FEATURE_SCHEMA))
-                writer.write_table(table)
-                documents += len(batch)
+                yield pa.Table.from_pylist(batch, schema=FEATURE_SCHEMA)
+
+        documents = write_parquet_tables(path, tables(), schema=FEATURE_SCHEMA)
         if documents == 0:
             raise ValueError("quality feature ranges must contain at least one document")
         return QualityFeatureShard(range_key, path, documents)
@@ -254,17 +253,10 @@ def prepare_quality_features(
     sources: Sequence[QualityFeatureSource],
 ) -> PreparedQualityPool:
     """Prepare one bounded raw prefix of row-aligned cached Harrier features."""
-    if token_budget <= 0 or token_budget > pool.requested_tokens:
+    if token_budget > pool.requested_tokens:
         raise ValueError("quality feature token budget must fit the raw pool's requested capacity")
-    source_pins = {source.source: source for source in sources}
-    if not source_pins or len(source_pins) != len(sources):
-        raise ValueError("quality feature source pins must be non-empty and unique")
-    corpus_sources = {source.name for source in pool.sources}
-    if source_pins.keys() != corpus_sources:
-        raise ValueError("quality feature source pins must match the raw pool's normalized sources")
-    normalized_paths = {source.name: source.normalized_path for source in pool.sources}
-    if any(source.normalized_path != normalized_paths[source.source] for source in sources):
-        raise ValueError("quality feature normalized paths must match the raw pool source pins")
+    pins = validate_feature_sources(pool, sources)
+    source_pins = {source.source: source for source in pins}
     raw_prefix = take_token_prefix(
         RankedPool(pool.shards, pool.range_totals, pool.documents, pool.actual_tokens),
         ctx=ctx,
@@ -289,10 +281,9 @@ def prepare_quality_features(
         raise ValueError("Harrier feature joins did not produce every raw prefix shard")
     if sum(item.documents for item in feature_shards) != raw_prefix.total_documents:
         raise ValueError("Harrier feature joins did not preserve the raw prefix document count")
-    source_pins_tuple = tuple(sorted(sources, key=lambda item: item.source))
     source_identity = [
         {"source": item.source, "normalized_path": item.normalized_path, "harrier_path": item.harrier_path}
-        for item in source_pins_tuple
+        for item in pins
     ]
     identity = {
         **HARRIER_FEATURE_IDENTITY,
@@ -308,6 +299,6 @@ def prepare_quality_features(
         documents=raw_prefix.total_documents,
         raw_prefix_shards=raw_prefix.shards,
         feature_shards=feature_shards,
-        sources=source_pins_tuple,
+        sources=pins,
         feature_identity=identity,
     )

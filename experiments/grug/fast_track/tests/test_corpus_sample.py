@@ -9,14 +9,11 @@ from types import SimpleNamespace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from fray.local_backend import LocalClient
-from fray.types import ResourceConfig
 from levanter.tokenizers import load_tokenizer, tokenizer_content_hash
 from marin.datakit.normalize import NormalizedData, generate_id
 from marin.execution.artifact import write_artifact
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
-from zephyr.context import ZephyrContext
 
 from experiments.grug.fast_track import corpus_sample
 from experiments.grug.fast_track.contracts import TokenizerSpec
@@ -30,21 +27,6 @@ from experiments.grug.fast_track.corpus_sample import (
     prepare_corpus_pool,
 )
 from experiments.grug.fast_track.label_exclusion import LabelExclusion
-
-
-@pytest.fixture
-def corpus_context(tmp_path):
-    client = LocalClient()
-    try:
-        with ZephyrContext(
-            client=client,
-            max_workers=2,
-            resources=ResourceConfig(cpu=2, ram="8g"),
-            chunk_storage_prefix=str(tmp_path / "chunks"),
-        ) as context:
-            yield context
-    finally:
-        client.shutdown()
 
 
 @pytest.fixture
@@ -135,21 +117,21 @@ def _write_id_shard(tmp_path, name, document_ids, *, row_group_size=None, write_
 
 
 def test_corpus_sample_keeps_raw_proportions_and_is_independent_of_input_partitions(
-    tmp_path, corpus_context, corpus_tokenizer
+    tmp_path, zephyr_context, corpus_tokenizer
 ):
     sources = (
         _source(tmp_path / "first", "large", 400, text="hello world " * 4),
         _source(tmp_path / "first", "small", 400),
     )
     spec = CorpusSampleSpec(sources, corpus_tokenizer, token_budget=1200, seed=11)
-    first = prepare_corpus_pool(CorpusSampleConfig(spec, str(tmp_path / "pool1")), ctx=corpus_context, num_ranges=16)
+    first = prepare_corpus_pool(CorpusSampleConfig(spec, str(tmp_path / "pool1")), ctx=zephyr_context, num_ranges=16)
     repartitioned = (
         _source(tmp_path / "second", "small", 400, partitions=3, estimate=1),
         _source(tmp_path / "second", "large", 400, partitions=7, estimate=1, text="hello world " * 4),
     )
     second = prepare_corpus_pool(
         CorpusSampleConfig(replace(spec, sources=repartitioned), str(tmp_path / "pool2")),
-        ctx=corpus_context,
+        ctx=zephyr_context,
         num_ranges=16,
     )
     first_rows, second_rows = _records(first), _records(second)
@@ -172,19 +154,19 @@ def test_corpus_sample_keeps_raw_proportions_and_is_independent_of_input_partiti
     assert sum(item.tokens for item in restored.range_totals) == restored.actual_tokens
 
 
-def test_corpus_sample_reports_insufficient_real_capacity(tmp_path, corpus_context, corpus_tokenizer):
+def test_corpus_sample_reports_insufficient_real_capacity(tmp_path, zephyr_context, corpus_tokenizer):
     source = _source(tmp_path, "tiny", 4, estimate=1)
     spec = CorpusSampleSpec((source,), corpus_tokenizer, token_budget=1000, seed=0)
     with pytest.raises(ValueError, match="corpus has"):
-        prepare_corpus_pool(CorpusSampleConfig(spec, str(tmp_path / "pool")), ctx=corpus_context, num_ranges=8)
+        prepare_corpus_pool(CorpusSampleConfig(spec, str(tmp_path / "pool")), ctx=zephyr_context, num_ranges=8)
 
 
-def test_corpus_sample_manifest_keeps_full_domain_cutoff_width(tmp_path, corpus_context, corpus_tokenizer):
+def test_corpus_sample_manifest_keeps_full_domain_cutoff_width(tmp_path, zephyr_context, corpus_tokenizer):
     source = _source(tmp_path, "full-domain", 4, estimate=1)
     output_path = tmp_path / "pool"
     spec = CorpusSampleSpec((source,), corpus_tokenizer, token_budget=1, seed=0)
 
-    prepare_corpus_pool(CorpusSampleConfig(spec, str(output_path)), ctx=corpus_context, num_ranges=8)
+    prepare_corpus_pool(CorpusSampleConfig(spec, str(output_path)), ctx=zephyr_context, num_ranges=8)
 
     manifest = json.loads((output_path / "corpus.json").read_text())
     assert manifest["sampling_cutoff_hex"] == f"{1 << 128:033x}"
@@ -192,7 +174,7 @@ def test_corpus_sample_manifest_keeps_full_domain_cutoff_width(tmp_path, corpus_
 
 
 @pytest.mark.parametrize("use_normalized_ids", [False, True])
-def test_corpus_excludes_label_duplicates_across_sources(tmp_path, corpus_context, corpus_tokenizer, use_normalized_ids):
+def test_corpus_excludes_label_duplicates_across_sources(tmp_path, zephyr_context, corpus_tokenizer, use_normalized_ids):
     sources = (
         _source(tmp_path, "label-source", 30, estimate=1),
         _source(tmp_path, "copy-source", 30, estimate=1),
@@ -213,7 +195,7 @@ def test_corpus_excludes_label_duplicates_across_sources(tmp_path, corpus_contex
     )
     spec = CorpusSampleSpec(sources, corpus_tokenizer, token_budget=30, seed=0, label_exclusion=labels)
     output_path = tmp_path / "pool"
-    pool = prepare_corpus_pool(CorpusSampleConfig(spec, str(output_path)), ctx=corpus_context, num_ranges=8)
+    pool = prepare_corpus_pool(CorpusSampleConfig(spec, str(output_path)), ctx=zephyr_context, num_ranges=8)
     manifest = json.loads((output_path / "corpus.json").read_text())
     assert pool.source_tokens == {"label-source": 0, "copy-source": 0, "unlabelled": pool.actual_tokens}
     assert manifest["source_tokens"] == pool.source_tokens
@@ -221,7 +203,7 @@ def test_corpus_excludes_label_duplicates_across_sources(tmp_path, corpus_contex
 
 
 def test_corpus_sample_low_probability_preserves_global_rank_order_and_prefix(
-    tmp_path, corpus_context, corpus_tokenizer
+    tmp_path, zephyr_context, corpus_tokenizer
 ):
     id_space = 1 << 128
     source_name = "low-probability"
@@ -237,7 +219,7 @@ def test_corpus_sample_low_probability_preserves_global_rank_order_and_prefix(
     output_path = tmp_path / "pool"
     pool = prepare_corpus_pool(
         CorpusSampleConfig(spec, str(output_path)),
-        ctx=corpus_context,
+        ctx=zephyr_context,
         num_ranges=32,
     )
 
@@ -375,7 +357,7 @@ def test_corpus_sample_fails_on_observed_invalid_id_or_schema(tmp_path, corpus_t
         )
 
 
-def test_corpus_sample_grows_integer_cutoff_until_pool_is_large_enough(tmp_path, corpus_context, corpus_tokenizer):
+def test_corpus_sample_grows_integer_cutoff_until_pool_is_large_enough(tmp_path, zephyr_context, corpus_tokenizer):
     id_space = 1 << 128
     source_name = "growing-cutoff"
     token_budget = 32
@@ -388,7 +370,7 @@ def test_corpus_sample_grows_integer_cutoff_until_pool_is_large_enough(tmp_path,
     output_path = tmp_path / "growing-pool"
     spec = CorpusSampleSpec((source,), corpus_tokenizer, token_budget=token_budget, seed=seed)
 
-    pool = prepare_corpus_pool(CorpusSampleConfig(spec, str(output_path)), ctx=corpus_context, num_ranges=32)
+    pool = prepare_corpus_pool(CorpusSampleConfig(spec, str(output_path)), ctx=zephyr_context, num_ranges=32)
     manifest = json.loads((output_path / "corpus.json").read_text())
     full_read_rows = list(
         _sample_records(

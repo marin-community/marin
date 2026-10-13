@@ -3,21 +3,18 @@
 
 """Score a raw pool, select a fixed token budget, and start a quality run."""
 
-import hashlib
 import importlib
 import json
-import math
 from collections.abc import Callable
 from enum import StrEnum
+from typing import cast
 
 import click
-from marin.execution.artifact import Artifact
-from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
-from marin.experiment.namespacing import user_namespaced_name
 
-from experiments.grug.fast_track.corpus_sample import RawCorpusPool
+from experiments.grug.fast_track.contracts import adopt_artifact_path
+from experiments.grug.fast_track.corpus_sample import QUALITY_POOL_MULTIPLIER, RawCorpusPool
 from experiments.grug.fast_track.label_exclusion import read_label_exclusion
 from experiments.grug.fast_track.launch import (
     H100_LADDER_SIZES,
@@ -29,11 +26,11 @@ from experiments.grug.fast_track.launch import (
 from experiments.grug.fast_track.quality import DocumentQualityScorer
 from experiments.grug.fast_track.quality_features import PreparedQualityPool
 from experiments.grug.fast_track.quality_pipeline import (
-    QUALITY_FRACTION,
     QualityData,
     QualitySpec,
     QualityTrainingSource,
     ScoredPool,
+    ScorerSpec,
     SelectionMethod,
     build_quality_data,
     build_quality_features,
@@ -56,7 +53,7 @@ def _factory(path: str) -> Callable[[], DocumentQualityScorer]:
     value = getattr(importlib.import_module(module_name), name)
     if not callable(value):
         raise click.BadParameter("scorer factory must be callable")
-    return value
+    return cast(Callable[[], DocumentQualityScorer], value)
 
 
 def _identity(value: str) -> dict[str, str | int | float | bool]:
@@ -69,18 +66,17 @@ def _identity(value: str) -> dict[str, str | int | float | bool]:
     return identity
 
 
-def _adopt_path(path: str, *, name: str, kind: type[Artifact]) -> ArtifactStep:
-    digest = hashlib.sha256(path.encode()).hexdigest()[:20]
-    artifact_name = f"fast-track/{name}/{digest}"
-    version = resolve_version(artifact_name, None)
-    return ArtifactStep.adopt(user_namespaced_name(artifact_name, version), version, path, kind=kind)
+def _reject_options(options: dict[str, object], reason: str) -> None:
+    given = [flag for flag, value in options.items() if value is not None]
+    if given:
+        raise click.UsageError(f"{', '.join(given)}: {reason}")
 
 
 @click.command()
 @click.option("--raw-pool", help="RawCorpusPool artifact path.")
 @click.option(
     "--scored-pool",
-    help="Reusable ScoredPool artifact path with at least 10x the requested training tokens.",
+    help=f"Reusable ScoredPool artifact path with at least {QUALITY_POOL_MULTIPLIER}x the requested training tokens.",
 )
 @click.option("--scorer-factory", help="Worker-loaded document scorer factory as module:callable.")
 @click.option("--classifier-identity", help="Stable classifier identity as JSON.")
@@ -91,7 +87,7 @@ def _adopt_path(path: str, *, name: str, kind: type[Artifact]) -> ArtifactStep:
 @click.option("--prepared-features", help="Prepared Harrier feature pool artifact path for a generic scorer.")
 @click.option("--run-id", help="Run identifier for training.")
 @click.option("--size", type=click.Choice(H100_LADDER_SIZES), default="d512", show_default=True)
-@click.option("--dense/--moe", default=True, show_default=True, help="Select the dense or MoE model.")
+@click.option("--dense/--moe", default=False, show_default=True, help="Select the dense or MoE model.")
 @click.option(
     "--training-tokens", type=click.IntRange(min=1), help="Override the rung token budget for preparation only."
 )
@@ -102,8 +98,13 @@ def _adopt_path(path: str, *, name: str, kind: type[Artifact]) -> ArtifactStep:
     show_default=True,
 )
 @click.option("--tie-seed", type=click.IntRange(min=0), default=0, show_default=True)
-@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True)
-@click.option("--data-seed", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed.")
+@click.option(
+    "--data-seed",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Training data order seed. Omit to derive it from --seed.",
+)
 @click.option(
     "--stage",
     type=click.Choice([stage.value for stage in QualityStage]),
@@ -129,7 +130,7 @@ def main(
     selection_method: str,
     tie_seed: int,
     seed: int,
-    data_seed: int,
+    data_seed: int | None,
     stage: str,
 ) -> (
     ArtifactStep[QualityData]
@@ -138,6 +139,7 @@ def main(
     | ArtifactStep[ScoredPool]
 ):
     selected_stage = QualityStage(stage)
+    method = SelectionMethod(selection_method)
     rung_tokens = resolve_h100_ladder_budget(
         size=size,
         dense=dense,
@@ -147,85 +149,71 @@ def main(
     ).token_count
     if selected_stage is QualityStage.TRAIN and training_tokens is not None:
         raise click.UsageError("--training-tokens is only valid for preparation stages")
-    selected_tokens = (
-        training_tokens if selected_stage is not QualityStage.TRAIN and training_tokens is not None else rung_tokens
-    )
+    selected_tokens = training_tokens if training_tokens is not None else rung_tokens
     if selected_stage is not QualityStage.TRAIN and run_id is not None:
         raise click.UsageError(f"--stage {selected_stage.value} cannot combine with --run-id")
     if (raw_pool is None) == (scored_pool is None):
         raise click.UsageError("provide exactly one of --raw-pool or --scored-pool")
+    scoring_options = {
+        "--scorer-factory": scorer_factory,
+        "--classifier-identity": classifier_identity,
+        "--ridge-head-artifact": ridge_head_artifact,
+        "--incumbent-scorer-factory": incumbent_scorer_factory,
+        "--incumbent-identity": incumbent_identity,
+        "--label-exclusion-manifest": label_exclusion_manifest,
+        "--prepared-features": prepared_features,
+    }
     if scored_pool is not None:
         if selected_stage in (QualityStage.FEATURES, QualityStage.SCORE):
             raise click.UsageError("--scored-pool requires --stage select or --stage train")
-        if any(
-            (
-                scorer_factory,
-                classifier_identity,
-                ridge_head_artifact,
-                incumbent_scorer_factory,
-                incumbent_identity,
-                label_exclusion_manifest,
-                prepared_features,
-            )
-        ):
-            raise click.UsageError("--scored-pool cannot combine with scorer, head, label, or feature options")
-        scored = _adopt_path(scored_pool, name="scored-pool", kind=ScoredPool)
+        _reject_options(scoring_options, "--scored-pool already fixes the scorer, labels, and features")
+        scored = adopt_artifact_path(scored_pool, kind=ScoredPool)
     else:
         assert raw_pool is not None
-        raw_step = _adopt_path(raw_pool, name="raw-pool", kind=RawCorpusPool)
-        token_cap = math.ceil(selected_tokens / QUALITY_FRACTION)
+        raw_step = adopt_artifact_path(raw_pool, kind=RawCorpusPool)
+        token_cap = selected_tokens * QUALITY_POOL_MULTIPLIER
         if selected_stage is QualityStage.FEATURES:
-            if any(
-                (
-                    scorer_factory,
-                    classifier_identity,
-                    ridge_head_artifact,
-                    incumbent_scorer_factory,
-                    incumbent_identity,
-                    label_exclusion_manifest,
-                    prepared_features,
-                    run_id,
-                )
-            ):
-                raise click.UsageError("--stage features cannot combine with scoring or training options")
+            _reject_options(scoring_options, "--stage features does not score")
             return build_quality_features(raw_step, token_budget=token_cap)
+        if (
+            selected_stage in (QualityStage.SELECT, QualityStage.TRAIN)
+            and method is SelectionMethod.INCUMBENT
+            and incumbent_scorer_factory is None
+        ):
+            raise click.UsageError("--selection-method incumbent requires --incumbent-scorer-factory")
         if ridge_head_artifact is not None:
-            if any((scorer_factory, classifier_identity, label_exclusion_manifest, prepared_features)):
-                raise click.UsageError("--ridge-head-artifact supplies its scorer, labels, and features")
-            if incumbent_scorer_factory is not None or incumbent_identity is not None:
-                raise click.UsageError("--ridge-head-artifact cannot combine with an incumbent scorer")
-            scored = build_ridge_scored_pool(
-                raw_step,
-                head_artifact_path=ridge_head_artifact,
-                token_budget=token_cap,
+            _reject_options(
+                {flag: value for flag, value in scoring_options.items() if flag != "--ridge-head-artifact"},
+                "--ridge-head-artifact supplies its scorer, labels, and features, and has no incumbent",
             )
+            scored = build_ridge_scored_pool(raw_step, head_artifact_path=ridge_head_artifact, token_budget=token_cap)
         else:
             if scorer_factory is None or classifier_identity is None or label_exclusion_manifest is None:
                 raise click.UsageError(
                     "generic scoring requires --scorer-factory, --classifier-identity, and --label-exclusion-manifest"
                 )
-            identity = _identity(classifier_identity)
-            incumbent_factory = _factory(incumbent_scorer_factory) if incumbent_scorer_factory else None
-            incumbent_id = _identity(incumbent_identity) if incumbent_identity else None
-            if (incumbent_factory is None) != (incumbent_id is None):
+            if (incumbent_scorer_factory is None) != (incumbent_identity is None):
                 raise click.UsageError("--incumbent-scorer-factory and --incumbent-identity must appear together")
-            label_exclusion = read_label_exclusion(label_exclusion_manifest)
-            feature_step = None
-            if prepared_features is not None:
-                feature_step = _adopt_path(prepared_features, name="quality-features", kind=PreparedQualityPool)
+            incumbent = (
+                ScorerSpec(_factory(incumbent_scorer_factory), _identity(incumbent_identity))
+                if incumbent_scorer_factory is not None and incumbent_identity is not None
+                else None
+            )
             scored = build_scored_pool(
                 raw_step,
-                scorer_factory=_factory(scorer_factory),
-                classifier_identity=identity,
-                label_exclusion=label_exclusion,
+                candidate=ScorerSpec(_factory(scorer_factory), _identity(classifier_identity)),
+                incumbent=incumbent,
+                label_exclusion=read_label_exclusion(label_exclusion_manifest),
                 token_budget=token_cap,
-                prepared_features=feature_step,
-                incumbent_scorer_factory=incumbent_factory,
-                incumbent_identity=incumbent_id,
+                prepared_features=(
+                    None
+                    if prepared_features is None
+                    else adopt_artifact_path(prepared_features, kind=PreparedQualityPool)
+                ),
             )
     if selected_stage is QualityStage.SCORE:
         return scored
-    selection = build_quality_data(QualitySpec(scored, selected_tokens, SelectionMethod(selection_method), tie_seed))
+    selection = build_quality_data(QualitySpec(scored, selected_tokens, method, tie_seed))
     if selected_stage is QualityStage.SELECT:
         return selection
     if run_id is None or not run_id.strip():
