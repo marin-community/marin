@@ -41,7 +41,9 @@ class Environment:
     ``pypi`` holds exact ``name==version`` pins, compiled to a hash lock at build time; ``lock`` is a
     uv-compiled requirements lock with hashes, used verbatim instead. ``apt`` names Debian packages and
     ``data`` downloads such as ``nltk:punkt_tab``. ``image`` is a digest-pinned image used as-is and
-    excludes every other field.
+    excludes every other field. ``dockerfile`` is a checked-in, self-contained Dockerfile fragment that
+    installs a toolchain the packages cannot provide, such as Lean and Mathlib; the environment's image
+    build runs it after the apt step, so it excludes ``image``.
     """
 
     pypi: tuple[str, ...] = ()
@@ -49,6 +51,7 @@ class Environment:
     apt: tuple[str, ...] = ()
     image: str | None = None
     data: tuple[str, ...] = ()
+    dockerfile: Path | None = None
 
     def __post_init__(self) -> None:
         if self.pypi and self.lock is not None:
@@ -56,8 +59,10 @@ class Environment:
         if self.image is not None:
             if PINNED_IMAGE.fullmatch(self.image) is None:
                 raise ValueError(f"An environment image must be pinned by digest: {self.image}")
-            if self.pypi or self.lock is not None or self.apt or self.data:
-                raise ValueError(f"An environment image is used as-is; declare no packages or data: {self.image}")
+            if self.pypi or self.lock is not None or self.apt or self.data or self.dockerfile is not None:
+                raise ValueError(
+                    f"An environment image is used as-is; declare no packages, data or dockerfile: {self.image}"
+                )
         unpinned = [requirement for requirement in self.pypi if PYPI_PIN.fullmatch(requirement) is None]
         if unpinned:
             raise ValueError(f"pypi requirements must be exact name==version pins: {unpinned}")
@@ -66,6 +71,8 @@ class Environment:
             raise ValueError(f"apt entries must be Debian package names: {invalid}")
         if self.lock is not None and not self.lock.is_file():
             raise ValueError(f"Lock file does not exist: {self.lock}")
+        if self.dockerfile is not None and not self.dockerfile.is_file():
+            raise ValueError(f"Dockerfile fragment does not exist: {self.dockerfile}")
         unsupported = [entry for entry in self.data if NLTK_DATA.fullmatch(entry) is None]
         if unsupported:
             raise ValueError(f"Data entries must be nltk:<package>: {unsupported}")
@@ -77,18 +84,18 @@ class Placement(StrEnum):
     IMAGE = "image"
     """A sandbox of the declared image."""
     BUILT_IMAGE = "built_image"
-    """A sandbox of the image built for packages the worker image lacks."""
+    """A sandbox of the image built for a toolchain fragment or packages the worker image lacks."""
     WORKER = "worker"
     """A bubblewrap sandbox on the Zephyr worker, in a uv environment built from the lock."""
 
 
 def placement(environment: Environment) -> Placement:
-    """Use an explicit image, build for missing system packages, or prepare a lock in Local.
+    """Use an explicit image, build for a toolchain or missing system packages, or prepare a lock in Local.
 
     Local assumes the worker provides WORKER_IMAGE_APT; it does not probe the host.
     """
     if environment.image is not None:
         return Placement.IMAGE
-    if set(environment.apt) - WORKER_IMAGE_APT:
+    if environment.dockerfile is not None or set(environment.apt) - WORKER_IMAGE_APT:
         return Placement.BUILT_IMAGE
     return Placement.WORKER

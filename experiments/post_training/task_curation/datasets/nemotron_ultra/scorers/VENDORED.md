@@ -19,6 +19,7 @@ imports resolve unchanged. Upstream files are copied byte for byte from
 | `skyrl_gym/envs/nemotron_ultra/rdkit_chemistry.py` | [`nemotron_ultra/rdkit_chemistry.py`](https://github.com/marin-community/MarinSkyRL/blob/d8b6e8c163def3660e9d3072c1c174226a1709fa/skyrl-gym/skyrl_gym/envs/nemotron_ultra/rdkit_chemistry.py) | Unchanged. Compares exact answers and does not import RDKit. |
 | `skyrl_gym/envs/nemotron_ultra/structured_outputs.py` | [`nemotron_ultra/structured_outputs.py`](https://github.com/marin-community/MarinSkyRL/blob/d8b6e8c163def3660e9d3072c1c174226a1709fa/skyrl-gym/skyrl_gym/envs/nemotron_ultra/structured_outputs.py) | Unchanged. |
 | `skyrl_gym/envs/nemotron_ultra/tool_call.py` | [`nemotron_ultra/tool_call.py`](https://github.com/marin-community/MarinSkyRL/blob/d8b6e8c163def3660e9d3072c1c174226a1709fa/skyrl-gym/skyrl_gym/envs/nemotron_ultra/tool_call.py) | Unchanged. |
+| `local_lean_sandbox.py` | none | Ours. `LocalLeanSandbox.execute` replaces the NeMo Skills sandbox server for `language="lean4"`: it compiles the proof with `lake env lean` in the Mathlib project that [`../lean.Dockerfile`](../lean.Dockerfile) builds into `LEAN_GRADER_PACKAGES` and returns the server's response fields. |
 
 The NVARC scorer and its sandbox client live with the ARC family in [`../../arc/scorers/`](../../arc/scorers/VENDORED.md).
 

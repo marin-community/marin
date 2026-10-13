@@ -9,6 +9,7 @@ from pathlib import Path
 
 REPOSITORY = "registry.invalid/fixture/images"
 LOCK = "numpy==2.3.5 \\\n    --hash=sha256:" + "a" * 64 + "\n"
+TOOLCHAIN_FRAGMENT = "ENV TOOLCHAIN_HOME=/opt/toolchain\nRUN mkdir -p /opt/toolchain && touch /opt/toolchain/ready\n"
 
 # Records each invocation and answers `imagetools inspect` with a digest derived from the tag, so a
 # changed environment pushes a different digest.
@@ -70,3 +71,11 @@ def tracked_lock(root: Path) -> Path:
     subprocess.run(["git", "init", "--quiet"], cwd=repository, check=True)
     track_all(repository)
     return lock
+
+
+def tracked_fragment(lock: Path) -> Path:
+    """A Dockerfile fragment tracked beside ``lock``."""
+    fragment = lock.parent / "toolchain.Dockerfile"
+    fragment.write_text(TOOLCHAIN_FRAGMENT)
+    track_all(lock.parent)
+    return fragment

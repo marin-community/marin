@@ -22,12 +22,16 @@ from experiments.post_training.task_curation.images.build import (
     EnvironmentBuild,
     build_environment,
     built_environment,
+    dockerfile,
     environment_artifact,
     identity_digest,
 )
 from experiments.post_training.task_curation.tests.image_builds import (
+    LOCK,
     REPOSITORY,
+    TOOLCHAIN_FRAGMENT,
     install_fake_build_tools,
+    tracked_fragment,
     tracked_lock,
 )
 
@@ -44,6 +48,11 @@ def docker_log(tmp_path, monkeypatch):
 @pytest.fixture
 def lock(tmp_path):
     return tracked_lock(tmp_path)
+
+
+@pytest.fixture
+def fragment(lock):
+    return tracked_fragment(lock)
 
 
 def test_apt_packages_beyond_the_worker_image_push_an_image_and_record_its_digest(docker_log):
@@ -104,12 +113,42 @@ def test_an_unchanged_environment_resolves_without_building(lock, docker_log, mo
         pytest.param(lambda environment: replace(environment, lock=None, pypi=("numpy==2.3.5",)), id="pypi"),
         pytest.param(lambda environment: replace(environment, apt=("build-essential",)), id="apt"),
         pytest.param(lambda environment: replace(environment, data=("nltk:wordnet",)), id="data"),
+        pytest.param(
+            lambda environment: replace(environment, dockerfile=tracked_fragment(environment.lock)), id="dockerfile"
+        ),
     ],
 )
 def test_declaration_changes_rename_the_environment_artifact(lock, change):
     environment = Environment(lock=lock)
     original = environment_artifact(environment).name
     assert environment_artifact(change(environment)).name != original
+
+
+def test_editing_a_dockerfile_fragment_renames_the_environment_artifact(lock, fragment):
+    environment = Environment(lock=lock, dockerfile=fragment)
+    original = environment_artifact(environment).name
+    fragment.write_text(TOOLCHAIN_FRAGMENT + "RUN touch /opt/toolchain/patched\n")
+    assert environment_artifact(environment).name != original
+
+
+def test_a_dockerfile_fragment_builds_an_image_with_its_lines_between_apt_and_the_lock_sync(lock, fragment, docker_log):
+    environment = Environment(lock=lock, apt=("build-essential",), dockerfile=fragment)
+    (built,) = run(environment_artifact(environment, REPOSITORY))
+    assert built.image is not None
+    assert built.dockerfile_sha256 == hashlib.sha256(TOOLCHAIN_FRAGMENT.encode()).hexdigest()
+    assert StoragePath(built.lock_url).read_text() == LOCK
+    lines = dockerfile(environment).splitlines()
+    apt_step = next(index for index, line in enumerate(lines) if line.startswith("RUN apt-get"))
+    lock_copy = next(index for index, line in enumerate(lines) if line.startswith("COPY requirements.lock"))
+    fragment_lines = TOOLCHAIN_FRAGMENT.splitlines()
+    start = lines.index(fragment_lines[0])
+    assert lines[start : start + len(fragment_lines)] == fragment_lines
+    assert apt_step < start < lock_copy
+
+
+def test_an_image_excludes_a_dockerfile_fragment(fragment):
+    with pytest.raises(ValueError, match="used as-is"):
+        Environment(image="registry.invalid/fixture/images@sha256:" + "a" * 64, dockerfile=fragment)
 
 
 def test_the_repository_is_where_a_build_pushes_not_identity(lock):
