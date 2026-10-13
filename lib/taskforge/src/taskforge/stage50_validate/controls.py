@@ -5,9 +5,9 @@
 
 A control runs as an ordinary trial whose model is a ``ScriptedModel``: it answers each request
 with the control's next assistant turn. A workspace control is delivered the way an agent would
-leave it: one scripted shell call per file (``workspace_turn``: decode the bytes into the path and
-set its mode, run by the shell tool as the task machine's ``MachineRuntimeSpec.user``, after the
-setup commands), then a final reply (``WORKSPACE_REPLY``). The task's own grader then runs on that
+leave it: one scripted shell call per file (``spec.controls.workspace_turn``: decode the bytes into
+the path and set its mode, run by the shell tool as the task machine's ``MachineRuntimeSpec.user``,
+after the setup commands), then a final reply (``WORKSPACE_REPLY``). The task's own grader then runs on that
 machine state. Grading is the engine's, unchanged.
 
 The engine accepts a turn only with exact token ids, so the scripted model gets them from the
@@ -28,24 +28,19 @@ Responses carry no log probabilities.
 """
 
 import asyncio
-import base64
-import json
-import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Protocol, Self
 
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutContractError
 from rolloutengine.spec import LoweredTaskSpec
-from taskcompendium.models import AssistantToolCalls, TaskResource, TaskSpec, TextMessage
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
 
 from taskforge.ledger.records import Ledger
-from taskforge.sandbox.images import DEFAULT_MODE
-from taskforge.spec.controls import Control, Workspace, reply, shell_turn, validate_controls
+from taskforge.spec.controls import Control, Workspace, candidate_turns, validate_controls, wire_message
 from taskforge.stage50_validate.outcome import Graded, Outcome, TrialKind
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, run_trial
 
@@ -62,25 +57,6 @@ class Tokenize(Protocol):
     async def rendered_ids(self, messages: Sequence[Mapping[str, Any]], options: Mapping[str, Any]) -> tuple[int, ...]:
         """``messages`` rendered as a finished conversation, without the generation prompt."""
         ...
-
-
-def wire_message(turn: TextMessage | AssistantToolCalls) -> dict[str, Any]:
-    """A transcript turn as the chat message a GLM rollout model would have produced."""
-    if isinstance(turn, TextMessage):
-        return {"role": "assistant", "content": turn.content, "reasoning_content": ""}
-    return {
-        "role": "assistant",
-        "content": turn.content or "",
-        "reasoning_content": "",
-        "tool_calls": [
-            {
-                "id": call.call_id,
-                "type": "function",
-                "function": {"name": call.name, "arguments": json.dumps(call.arguments, ensure_ascii=False)},
-            }
-            for call in turn.calls
-        ],
-    }
 
 
 @dataclass(frozen=True)
@@ -170,25 +146,10 @@ class ControlPlan:
         )
 
 
-def workspace_turn(index: int, file: TaskResource) -> AssistantToolCalls:
-    """One shell call that writes ``file`` as the agent would: its parent made, its bytes, its mode.
-
-    ``file.path`` is relative to the machine root, as a task's own resources are.
-    """
-    target = PurePosixPath("/", file.path)
-    path = shlex.quote(str(target))
-    directory = shlex.quote(str(target.parent))
-    data = shlex.quote(base64.b64encode(resource_bytes(file)).decode())
-    mode = file.mode or DEFAULT_MODE
-    command = f"mkdir -p {directory} && printf %s {data} | base64 -d > {path} && chmod {mode} {path}"
-    return shell_turn((f"workspace-{index}", command))
-
-
 def control_turns(control: Control) -> tuple[dict[str, Any], ...]:
     """The assistant turns a control replays."""
     if isinstance(control.payload, Workspace):
-        turns = [workspace_turn(index, file) for index, file in enumerate(control.payload.files)]
-        return (*(wire_message(turn) for turn in turns), wire_message(reply(WORKSPACE_REPLY)))
+        return candidate_turns(WORKSPACE_REPLY, control.payload.files)
     return tuple(wire_message(turn) for turn in control.payload.turns)
 
 

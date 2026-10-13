@@ -1,12 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The context a build step receives, and the exception a step raises when the task cannot be built."""
+"""The context a build step receives, and the exceptions a build raises when it stops.
+
+A step raises ``BuildFailure`` when the task cannot be built as written, which the next round's
+author can fix. ``BuildInfrastructureFailure`` says the host failed instead (``infrastructure.py``
+classifies host errors), so no revision of the program can fix it.
+"""
 
 from dataclasses import dataclass
 
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.recording import CallLedger
+from taskforge.stage40_build.services import RLEnvBuildServices
 
 
 class BuildFailure(Exception):
@@ -22,13 +29,44 @@ class BuildFailure(Exception):
         self.step = step
 
 
+class BuildInfrastructureFailure(Exception):
+    """The host failed while a build was running; the program is not at fault.
+
+    ``cause`` is an ``infrastructure.InfrastructureCause`` value. Not a ``BuildFailure``: the
+    original host error is in the ``__cause__`` chain.
+    """
+
+    def __init__(self, cause: str, message: str):
+        super().__init__(f"{cause}: {message}")
+        self.cause = cause
+        self.message = message
+
+
 @dataclass(frozen=True)
 class RLEnvBuildContext:
-    """The first argument of every step: the item being built, and the model with its sampling policy.
+    """The first argument of every step: the item and round being built, the model, and the host.
 
-    A step calls ``context.model.complete_structured(messages, Output, context.sampling)``.
+    ``run_program`` sets ``step`` to the running step's name, so the model calls and tool calls a step
+    makes are recorded under it. A step calls ``context.model.complete_structured(messages, Output,
+    context.sampling)``, or the SDK's ``structured``, which records the call.
+
+    Attributes:
+        item_id: The item's file-safe id.
+        round: The build round.
+        model: The model steps call.
+        sampling: The sampling policy steps pass to ``model``.
+        services: Machines, images, web tools and the ledger.
+        step: The name of the running step.
     """
 
     item_id: str
+    round: int
     model: ModelClient
     sampling: LLMPolicy
+    services: RLEnvBuildServices
+    step: str
+
+
+def call_ledger(context: RLEnvBuildContext) -> CallLedger:
+    """Where the running step records its model and tool calls: its item, round and step name."""
+    return CallLedger(ledger=context.services.recording, item_id=context.item_id, round=context.round, step=context.step)
