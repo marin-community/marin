@@ -264,10 +264,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     qk_mult_long_scale: float = 1.0
-    """Extra multiplier on ``qk_mult`` applied only on the global layers (every ``global_every``-th
-    and the last layer, full causal). Sliding-window layers are unaffected. Intended for YaRN-style
-    attention-temperature scaling at context extension, where softmax logits sharpen with sequence
-    length but sliding-window layers stay bounded by their window."""
+    """Extra Q multiplier on the global (full-causal) layers; local layers use ``qk_mult`` alone."""
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -667,8 +664,6 @@ class CausalSelfAttention(eqx.Module):
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
-        # The long-layer scale is a second multiply, in the same order as june_tpu_67b_a2b and the
-        # vLLM GrugMoE backend. A scale of 1.0 adds no op to the graph.
         if self.cfg.qk_mult_long_scale != 1.0:
             q = q * jnp.where(is_global, self.cfg.qk_mult_long_scale, 1.0)
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
