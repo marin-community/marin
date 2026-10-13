@@ -13,7 +13,7 @@ import math
 
 from openai import APIError
 from verifyit.candidate import Candidate, grade_candidate
-from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status
+from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, empty_output_policy
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 from verifyit.spec import (
     EmptyOutputPolicy,
@@ -116,7 +116,13 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
 
 def _gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec) -> bool:
     """Whether a blank final text is a candidate under the verifier's explicit policy."""
-    if not isinstance(task.answer_format, PlainText) or verifier.empty_output is not EmptyOutputPolicy.GRADE:
+    if not isinstance(task.answer_format, PlainText):
+        return False
+    try:
+        policy = empty_output_policy(verifier)
+    except InvalidTask:
+        return False
+    if policy is not EmptyOutputPolicy.GRADE:
         return False
     final = attempt.conversation.events[-1]
     return isinstance(final, TextMessage) and final.role == "assistant" and not final.content.strip()
