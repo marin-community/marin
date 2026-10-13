@@ -163,6 +163,8 @@ def build_ladder_run(
     capacity_factor: float | None = None,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
+    eval_every: int | None = None,
+    eval_seq_len: int = HERO_REFERENCE_SEQ_LEN,
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
@@ -175,7 +177,7 @@ def build_ladder_run(
     parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set dropless. The
     narrow rungs eval every 5% of the run and keep only the forced final
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
-    ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
+    ``checkpoint_every`` and ``eval_every`` override those cadences for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
     resumes from the newest checkpoint it finds. ``initialize_from_checkpoint`` is another run's
     checkpoint directory, added as the resume fallback so a relaunch under a new run id continues
@@ -256,6 +258,8 @@ def build_ladder_run(
         keep_permanent = None
     if checkpoint_every is not None:
         keep_permanent = [{"every": checkpoint_every}]
+    if eval_every is not None:
+        steps_per_eval = eval_every
 
     # The optimizer's LR/epsilon are compute-scaled from the tokens per step, token budget, and width.
     optimizer = MoeHeuristic().build_optimizer_config(
@@ -359,7 +363,7 @@ def build_ladder_run(
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
-                max_seq_len=HERO_REFERENCE_SEQ_LEN,
+                max_seq_len=eval_seq_len,
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
                 # The capacity-limited eval breaks the ragged train step at d6144 (#8861). The
@@ -433,6 +437,19 @@ def build_ladder_run(
     "and is not affected by this option.",
 )
 @click.option(
+    "--eval-every",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Eval every N steps. Default follows the rung (3000 at d6144, every 5% elsewhere).",
+)
+@click.option(
+    "--eval-seq-len",
+    type=click.IntRange(min=1),
+    default=HERO_REFERENCE_SEQ_LEN,
+    show_default=True,
+    help="Eval packing length, one sequence per device.",
+)
+@click.option(
     "--gate-router-weight-decay",
     type=click.FloatRange(min=0.0),
     default=0.02,
@@ -468,6 +485,8 @@ def main(
     capacity_factor: float | None,
     num_steps: int | None,
     checkpoint_every: int | None,
+    eval_every: int | None,
+    eval_seq_len: int,
     gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
     context_switch_step: int | None,
@@ -482,6 +501,8 @@ def main(
         capacity_factor=capacity_factor,
         num_steps=num_steps,
         checkpoint_every=checkpoint_every,
+        eval_every=eval_every,
+        eval_seq_len=eval_seq_len,
         gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
         context_switch_step=context_switch_step,
