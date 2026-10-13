@@ -65,7 +65,7 @@ def stack_config() -> ProxyConfig:
 
 
 def deploy(config: ProxyConfig) -> DeploymentOutputs:
-    """Build source-pinned images and declare the proxy's restricted network access."""
+    """Build one source-pinned image and declare the proxy's deployment resources."""
     prefix = StoragePath(config.prefix)
     if prefix.scheme != "s3":
         raise ValueError("ports proxy requires a CoreWeave S3 prefix")
