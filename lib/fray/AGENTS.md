@@ -2,10 +2,6 @@
 
 Distributed execution abstraction layer. Start with the shared instructions in `/AGENTS.md`; only Fray-specific conventions are below.
 
-## Key Docs
-
-- Archived: `.agents/projects/20260130_fray_lite_design.md` — original API design (implemented; read code instead)
-
 ## Source Layout
 
 - `src/fray/__init__.py` — docstring only. Import from the defining submodule
@@ -22,6 +18,9 @@ Distributed execution abstraction layer. Start with the shared instructions in `
 ## Conventions
 
 - Always use the `Client` protocol, not concrete backend implementations.
+- Iris is an optional backend dependency. Core/local Fray imports must not import
+  `iris.client.client`; `current_client()` loads the Iris adapter only after an
+  ambient Iris context or task environment is present.
 - Actor resources: set `num_cpus=0` on actors to avoid head-node resource contention.
 - Testing: use `LocalClient` for unit tests. Only use the Iris backend for integration tests.
 - Task setup: `EnvironmentConfig(setup_scripts=...)` controls how the worker prepares

@@ -1,0 +1,14 @@
+# Marin's forked TPU serving pair. vLLM is an exact source on the maintained
+# main lineage; tpu-inference is its separately refreshed backend. These run
+# from an isolated uvx env and are surfaced by config/update-external.py.
+# `upstream_base` is the upstream commit each fork tip is compared against.
+
+[vllm]
+repository = "https://github.com/marin-community/vllm.git"
+commit = "fb02daf1d7139d2adaeb0588448649591657d1e3"
+upstream_base = "9d88ceb02694c6e3df182ec3c87201284f50e2c6"
+
+[tpu-inference]
+repository = "https://github.com/marin-community/tpu-inference.git"
+commit = "a8fc5c9f6d14ac5a3b1f97d5c296d6015a73cabe"
+upstream_base = "34535b114a213b1e5668de2ea3b62bceb377efb1"

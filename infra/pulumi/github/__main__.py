@@ -7,11 +7,26 @@ import os
 import sys
 from typing import cast
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pulumi
+import pulumi_github as github
 from iac.github.credentials import credential_manifest
-from iac.github.resources import credential_resource_plans, register_credentials
+from iac.github.dependency_updater import (
+    dependency_updater_config,
+    register_dependency_updater,
+    register_dependency_updater_environment,
+)
+from iac.github.resources import credential_resource_plans, register_credentials, repository_name
+
+LOOM_STACK = "organization/marin-loom/marin-loom"
+AGENTIC_LINT_FEDERATION = "agentic-lint"
+CODEHEALTH_REFINEMENT_FEDERATION = "codehealth-refinement"
+FORK_FERRY_FEDERATION = "fork-ferry"
+GITHUB_AUTOMATION_FEDERATION = "ops-loom-github"
+PR_REVIEW_FEDERATION = "pr-review"
+PROSE_CLEANUP_FEDERATION = "agent-prose-cleanup"
 
 
 def main() -> None:
@@ -30,7 +45,54 @@ def main() -> None:
 
     plans = credential_resource_plans(manifest)
     register_credentials(manifest)
+    fork_ferry_repository = config.require("forkFerryRepository")
+    marin_repository = repository_name(manifest.organization, fork_ferry_repository)
+    loom = pulumi.StackReference(LOOM_STACK)
+    federation_profiles = loom.require_output("githubFederationProfiles")
+    profile_variables = {
+        "agentic-lint-profile": ("LOOM_AGENTIC_LINT_PROFILE", AGENTIC_LINT_FEDERATION),
+        "codehealth-refinement-profile": (
+            "LOOM_CODEHEALTH_REFINEMENT_PROFILE",
+            CODEHEALTH_REFINEMENT_FEDERATION,
+        ),
+        "fork-ferry-profile": ("LOOM_FORK_FERRY_PROFILE", FORK_FERRY_FEDERATION),
+        "github-automation-profile": ("LOOM_GITHUB_AUTOMATION_PROFILE", GITHUB_AUTOMATION_FEDERATION),
+        "pr-review-profile": ("LOOM_PR_REVIEW_PROFILE", PR_REVIEW_FEDERATION),
+        "prose-cleanup-profile": ("LOOM_PROSE_CLEANUP_PROFILE", PROSE_CLEANUP_FEDERATION),
+    }
+    resolved_profiles = {}
+    for resource_name, (variable_name, federation_name) in profile_variables.items():
+        profile = federation_profiles.apply(lambda profiles, name=federation_name: profiles[name])
+        resolved_profiles[federation_name] = profile
+        github.ActionsVariable(
+            resource_name,
+            repository=marin_repository,
+            variable_name=variable_name,
+            value=profile,
+        )
+    updater = dependency_updater_config(
+        organization=manifest.organization,
+        settings=cast(dict[str, object], config.require_object("dependencyUpdater")),
+    )
+    _, deployment_policy = register_dependency_updater_environment(
+        updater.organization,
+        updater.repository,
+    )
+    register_dependency_updater(updater, deployment_policy)
     pulumi.export("credential_count", len(plans))
+    pulumi.export(
+        "agentic_lint_profile",
+        resolved_profiles[AGENTIC_LINT_FEDERATION],
+    )
+    pulumi.export(
+        "codehealth_refinement_profile",
+        resolved_profiles[CODEHEALTH_REFINEMENT_FEDERATION],
+    )
+    pulumi.export("dependency_updater_enabled", True)
+    pulumi.export("fork_ferry_profile", resolved_profiles[FORK_FERRY_FEDERATION])
+    pulumi.export("github_automation_profile", resolved_profiles[GITHUB_AUTOMATION_FEDERATION])
+    pulumi.export("pr_review_profile", resolved_profiles[PR_REVIEW_FEDERATION])
+    pulumi.export("prose_cleanup_profile", resolved_profiles[PROSE_CLEANUP_FEDERATION])
 
 
 main()

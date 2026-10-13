@@ -3,6 +3,7 @@
 
 """Writers for common output formats."""
 
+import functools
 import itertools
 import logging
 import os
@@ -20,7 +21,10 @@ import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
 from pyarrow import fs as pa_fs
-from rigging.filesystem import StoragePath, atomic_rename, url_to_fs
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.s3_compat import S3_RETRY_MAX_ATTEMPTS
+from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters
 
@@ -28,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 # 64 MB write blocks — controls S3 multipart upload part size.
 _WRITE_BLOCK_SIZE = 64 * 1024 * 1024
+_PARQUET_COMPRESSION = "zstd"
+_PARQUET_COMPRESSION_LEVEL = 3
+_PARQUET_WRITE_PAGE_INDEX = True
+_PARQUET_MAX_ROWS_PER_PAGE = 256
 
 # Default target buffer size for writer batching. Writers accumulate
 # micro-batches until accumulated nbytes reaches this threshold, then yield
@@ -39,7 +47,7 @@ DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
 _MICRO_BATCH_SIZE = 8
 
 # Number of items per intermediate pickle chunk between non-scatter stages.
-# Used by ``_write_pickle_chunks`` in execution.py.
+# Used by ``_write_pickle_chunks`` in stage_io.py.
 INTERMEDIATE_CHUNK_SIZE = 100_000
 
 
@@ -91,9 +99,11 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     return {"path": output_path, "count": count}
 
 
-def infer_arrow_schema(records: list[dict[str, Any]]) -> Any:
-    """Infer a PyArrow schema from a batch of record dicts"""
-    return pa.Table.from_pylist(records).schema
+def infer_arrow_schema(records: list[dict[str, Any]]) -> pa.Schema:
+    """Infer a PyArrow schema from every field in a batch of record dicts."""
+    fields = dict.fromkeys(key for record in records for key in record)
+    rows = [{key: record.get(key) for key in fields} for record in records]
+    return pa.Table.from_pylist(rows).schema
 
 
 def batchify(batch: Iterable, n: int = 1024) -> Iterable:
@@ -133,7 +143,7 @@ def _accumulate_row_tables(
     schema_inferred = schema is None
 
     def _raise_schema_mismatch(e: Exception, dicts: list[dict[str, Any]]) -> None:
-        actual_schema = pa.Table.from_pylist(dicts).schema
+        actual_schema = infer_arrow_schema(dicts)
         origin = (
             f"inferred from first {_MICRO_BATCH_SIZE} records (no explicit schema passed)"
             if schema_inferred
@@ -171,7 +181,7 @@ def _accumulate_row_tables(
 
         if not schema_inferred:
             _raise_schema_mismatch(mismatch_error, dicts)
-        new_schema = pa.Table.from_pylist(dicts).schema
+        new_schema = infer_arrow_schema(dicts)
         try:
             widened = pa.unify_schemas([schema, new_schema])
         except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
@@ -297,6 +307,31 @@ def _s3_filesystem_kwargs() -> dict[str, str | bool | int]:
     return kwargs
 
 
+@functools.cache
+def _native_s3_filesystem(kwargs: tuple[tuple[str, str | bool | int], ...]) -> pa_fs.S3FileSystem:
+    """One S3 filesystem per configuration, held for the life of the process.
+
+    Each filesystem owns a connection pool that dies with it, so one per file
+    exhausts the pod's ephemeral ports via ``TIME_WAIT`` (#8402). The retry
+    strategy is explicit because pyarrow otherwise uses the AWS C++ SDK
+    default.
+    """
+    return pa_fs.S3FileSystem(
+        retry_strategy=pa_fs.AwsStandardS3RetryStrategy(max_attempts=S3_RETRY_MAX_ATTEMPTS),
+        **dict(kwargs),
+    )
+
+
+@functools.cache
+def _native_gcs_filesystem() -> pa_fs.GcsFileSystem:
+    return pa_fs.GcsFileSystem()
+
+
+@functools.cache
+def _native_local_filesystem() -> pa_fs.LocalFileSystem:
+    return pa_fs.LocalFileSystem()
+
+
 def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
     """Resolve ``path`` to a native pyarrow ``(filesystem, path)``, or ``None``.
 
@@ -308,13 +343,13 @@ def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
     in tests); those fall back to an fsspec handle.
     """
     if "://" not in path:
-        return pa_fs.LocalFileSystem(), path
+        return _native_local_filesystem(), path
     if path.startswith("file://"):
-        return pa_fs.LocalFileSystem(), path[len("file://") :]
+        return _native_local_filesystem(), path[len("file://") :]
     if path.startswith("gs://"):
-        return pa_fs.GcsFileSystem(), path[len("gs://") :]
+        return _native_gcs_filesystem(), path[len("gs://") :]
     if path.startswith("s3://"):
-        return pa_fs.S3FileSystem(**_s3_filesystem_kwargs()), path[len("s3://") :]
+        return _native_s3_filesystem(tuple(sorted(_s3_filesystem_kwargs().items()))), path[len("s3://") :]
     return None
 
 
@@ -366,7 +401,15 @@ def write_parquet_file(
             try:
                 for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
                     if writer is None:
-                        writer = pq.ParquetWriter(where_fd, table.schema, filesystem=native_fs)
+                        writer = pq.ParquetWriter(
+                            where_fd,
+                            table.schema,
+                            filesystem=native_fs,
+                            compression=_PARQUET_COMPRESSION,
+                            compression_level=_PARQUET_COMPRESSION_LEVEL,
+                            write_page_index=_PARQUET_WRITE_PAGE_INDEX,
+                            max_rows_per_page=_PARQUET_MAX_ROWS_PER_PAGE,
+                        )
                     writer.write_table(table)
                     count += len(table)
                     counters.pipeline.update_counter(counters.RECORDS_OUT, len(table))
@@ -376,7 +419,15 @@ def write_parquet_file(
 
             if writer is None:
                 actual_schema = schema or pa.schema([])
-                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), where_fd, filesystem=native_fs)
+                pq.write_table(
+                    pa.Table.from_pylist([], schema=actual_schema),
+                    where_fd,
+                    filesystem=native_fs,
+                    compression=_PARQUET_COMPRESSION,
+                    compression_level=_PARQUET_COMPRESSION_LEVEL,
+                    write_page_index=_PARQUET_WRITE_PAGE_INDEX,
+                    max_rows_per_page=_PARQUET_MAX_ROWS_PER_PAGE,
+                )
 
     return {"path": output_path, "count": count}
 
@@ -438,15 +489,23 @@ def write_vortex_file(
 _SENTINEL = object()
 
 
-def _queue_iterable(q: queue.Queue) -> Iterable:
+class WriterAbortedError(Exception):
+    """Raised into a ``ThreadedBatchWriter`` write function when the producer failed."""
+
+
+def _queue_iterable(q: queue.Queue, aborted: threading.Event) -> Iterable:
     """Yield items from a bounded queue until the sentinel is received.
 
     Designed for use with ``ThreadedBatchWriter``: the background thread passes
     this iterable to a writer function so the writer can consume items naturally
-    as they arrive through the queue.
+    as they arrive through the queue. Once ``aborted`` is set, the next read raises
+    instead of ending the stream, so the writer function does not finalize (for
+    example, commit an ``atomic_rename``) a partial output.
     """
     while True:
         item = q.get()
+        if aborted.is_set():
+            raise WriterAbortedError("producer failed; partial output discarded")
         if item is _SENTINEL:
             return
         yield item
@@ -461,6 +520,11 @@ class ThreadedBatchWriter:
     The ``write_fn`` receives an iterable that yields submitted items from the
     internal queue, allowing the writer to consume items as a natural stream
     rather than via per-item callbacks.
+
+    When the ``with`` block raises, the stream is aborted: ``write_fn``'s next read
+    raises :class:`WriterAbortedError`, so a write function such as
+    :func:`write_parquet_file` discards its temporary file instead of committing
+    a partial output.
     """
 
     def __init__(self, write_fn: Callable[[Iterable], None], maxsize: int = 128):
@@ -468,12 +532,13 @@ class ThreadedBatchWriter:
         self._queue_maxsize = maxsize
         self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
         self._error: BaseException | None = None
+        self._aborted = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="ZephyrWriter")
         self._thread.start()
 
     def _run(self) -> None:
         try:
-            self._write_fn(_queue_iterable(self._queue))
+            self._write_fn(_queue_iterable(self._queue, self._aborted))
         except Exception as e:
             self._error = e
 
@@ -493,7 +558,14 @@ class ThreadedBatchWriter:
 
     def close(self) -> None:
         """Wait for all pending writes and propagate any error."""
-        self._queue.put(_SENTINEL)
+        # Poll like ``submit``: a plain ``put`` blocks forever when the queue is
+        # full and the writer thread has already exited.
+        while self._thread.is_alive():
+            try:
+                self._queue.put(_SENTINEL, timeout=1.0)
+                break
+            except queue.Full:
+                continue
         self._thread.join()
         if self._error is not None:
             raise self._error
@@ -503,7 +575,11 @@ class ThreadedBatchWriter:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         if exc_type is not None:
-            # Signal the thread to stop without blocking the caller.
+            # Abort, not end, the stream: the write function must not finalize a
+            # partial output. The sentinel only wakes a thread blocked on an empty
+            # queue; a full queue gives the thread an item to read, so it sees the
+            # abort without it. Do not block the caller on the thread.
+            self._aborted.set()
             try:
                 self._queue.put_nowait(_SENTINEL)
             except queue.Full:

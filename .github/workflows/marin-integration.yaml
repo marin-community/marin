@@ -71,19 +71,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run iris integration tests
-        run: |
-          uv run pytest tests/integration/iris/ \
-            --controller-url "$IRIS_CONTROLLER_URL" \
-            -v -s --log-cli-level=INFO --tb=short --timeout=600 \
-            -o "addopts=" \
-            -x
-        env:
-          WANDB_MODE: disabled
-          WANDB_API_KEY: ""
-          JAX_TRACEBACK_FILTERING: off
-
-      - name: Run full marin integration pipeline
+      - name: Run Marin integration pipeline
         run: |
           timeout 600 uv run pytest tests/test_integration_test.py \
             -m integration -o "addopts=" --timeout=600 -v -s

@@ -12,7 +12,7 @@ import logging
 
 import click
 import pytest
-from rigging.filesystem import load_cluster_config
+from rigging.filesystem.cluster_config import load_cluster_config
 
 
 def _normalize_cluster_region(cluster: str) -> str:

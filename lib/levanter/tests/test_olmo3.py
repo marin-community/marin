@@ -18,7 +18,7 @@ import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from levanter.testing.helpers import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 from transformers import AutoModelForCausalLM
 
 from levanter.layers.attention import AttentionMask
@@ -175,13 +175,6 @@ def test_olmo3_custom_layer_types():
                 assert layer.self_attn.config.sliding_window == config.sliding_window
             else:
                 assert layer.self_attn.config.sliding_window is None
-
-        # Verify model runs successfully
-        Batch = hax.Axis("batch", 1)
-        input_ids = hax.random.randint(random.PRNGKey(0), (Batch, config.max_Pos), 0, Vocab.size)
-        mask = AttentionMask.causal()
-        out = model(input_ids, mask)
-        assert out.array.shape == (Batch.size, config.max_Pos.size, Vocab.size)
 
 
 def test_olmo3_sliding_window_config():

@@ -19,9 +19,10 @@ from typing import Protocol
 import cloudpickle
 import humanfriendly
 from fray.types import ResourceConfig
-from rigging.filesystem import open_url, unique_temp_path
+from rigging.filesystem.atomic import unique_temp_path
+from rigging.filesystem.factory import open_url
 
-from zephyr.plan import PhysicalOp, Scatter, Shard
+from zephyr.plan import PhysicalOp, Scatter
 from zephyr.shuffle import ListShard, _write_scatter
 from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY, per_second
 from zephyr.worker_context import CounterEntry
@@ -102,7 +103,7 @@ class TaskResult:
 
     Always contains a ListShard. For non-scatter stages, refs are
     PickleDiskChunks. For scatter stages, refs contain file paths
-    (the actual metadata lives in ``.scatter_meta`` sidecar files
+    (the actual metadata lives in ``metadata.msgpack`` sidecar files
     read lazily by reducers).
     """
 
@@ -222,18 +223,21 @@ def _write_stage_output(
     """Write stage output to disk.
 
     For scatter stages (``scatter_op`` is set), writes Parquet with envelope
-    wrapping and ``.scatter_meta`` sidecars. Returns TaskResult with compact
+    wrapping and ``metadata.msgpack`` sidecars. Returns TaskResult with compact
     scatter metadata.
 
     For non-scatter stages, batches items into pickle chunk files. Returns
     TaskResult with a ListShard.
     """
     if scatter_op is not None:
-        first_item = next(stage_gen, None)
-        if first_item is None:
+        # Peek with islice, not ``next(stage_gen, None)``: a stage whose first
+        # item is legitimately ``None`` would look like an exhausted stream and
+        # the whole shard would be dropped.
+        peeked = list(itertools.islice(stage_gen, 1))
+        if not peeked:
             return TaskResult(shard=ListShard(refs=[]))
 
-        full_gen = itertools.chain([first_item], stage_gen)
+        full_gen = itertools.chain(peeked, stage_gen)
 
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
         data_path = f"{stage_dir}/shard-{shard_idx:04d}/scatter/"
@@ -284,11 +288,11 @@ class ShardTask:
 
     shard_idx: int
     total_shards: int
-    shard: Shard
+    shard: ListShard
     operations: list[PhysicalOp]
     cost: ZephyrTaskResources
     stage_name: str = "output"
-    aux_shards: dict[int, Shard] | None = None
+    aux_shards: dict[int, ListShard] | None = None
 
 
 class StageRunner(Protocol):

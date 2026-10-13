@@ -119,9 +119,10 @@ curl -fsS "$HEALTH_URL" >/dev/null
 
 DEPLOYMENT_FILE=/run/loom-deployment.json
 meta instance/attributes/loom-deployment >"$DEPLOYMENT_FILE"
-docker compose -f "$COMPOSE_FILE" exec -T \
-  -e "WEAVER_API=http://127.0.0.1:${LOOM_PORT}" loom \
-  loom deployment apply --file - <"$DEPLOYMENT_FILE"
+docker compose -f "$COMPOSE_FILE" exec -T loom \
+  curl -fsS -H 'Content-Type: application/json' \
+    --data-binary @- "http://127.0.0.1:${LOOM_PORT}/api/deployment/reconcile" \
+    <"$DEPLOYMENT_FILE" >/dev/null
 rm -f "$DEPLOYMENT_FILE"
 touch "$STARTUP_SUCCESS"
 echo "== loom startup-script done =="

@@ -1,0 +1,18 @@
+schema_version: 1
+code: ml-missing-isinstance-narrow
+lane: interfaces
+title: Manual type check instead of `isinstance`
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Non-`isinstance` type checks (attribute probing, `type(x)
+  is Foo`) don't narrow under the type checker; pyrefly can't validate
+  downstream code.
+
+  **When allowed:** Genuinely structural duck-typing where the caller can't
+  import the concrete type. Rare; prefer a Protocol.
+
+  **Bad example:**
+  ```python
+  if hasattr(payload, "to_proto"):
+      payload.to_proto()   # use isinstance(payload, Protoable) and let the checker help.
+  ```

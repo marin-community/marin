@@ -21,7 +21,7 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.credential_store import cluster_name_from_url
 from rigging.credentials import ClientCredentials, credentials_for
 
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
 from iris.cluster.local_cluster import LocalCluster

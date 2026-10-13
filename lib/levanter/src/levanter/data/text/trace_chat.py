@@ -115,43 +115,21 @@ def _message_without_tool_calls(message: Mapping[str, Any], content: str) -> dic
     return chunk
 
 
-def _split_text_tool_call_message(message: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _structured_text_tool_call_message(message: Mapping[str, Any]) -> dict[str, Any]:
     content = message.get("content")
     if message.get("role") != "assistant" or not isinstance(content, str) or message.get("tool_calls"):
-        return [dict(message)]
+        return dict(message)
 
     matches = list(_TEXT_TOOL_CALL_PATTERN.finditer(content))
     if not matches:
-        return [dict(message)]
+        return dict(message)
 
-    split_messages: list[dict[str, Any]] = []
-    cursor = 0
-    parsed_any = False
-    for match in matches:
-        prefix = content[cursor : match.start()]
-        if prefix.strip():
-            split_messages.append(_message_without_tool_calls(message, prefix))
-
-        tool_call = _parsed_text_tool_call(match.group(1))
-        # Prefix/suffix text stays in adjacent assistant messages; this chunk represents only the structured call.
-        split_messages.append({"role": "assistant", "content": "", "tool_calls": [tool_call]})
-        parsed_any = True
-        cursor = match.end()
-
-    suffix = content[cursor:]
-    if suffix.strip():
-        split_messages.append(_message_without_tool_calls(message, suffix))
-
-    if not parsed_any:
-        return [dict(message)]
-    return split_messages
-
-
-def _split_text_tool_call_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    split_messages: list[dict[str, Any]] = []
-    for message in messages:
-        split_messages.extend(_split_text_tool_call_message(message))
-    return split_messages
+    # Keep the source turn intact: splitting prose and parallel calls into
+    # separate messages inserts end-of-turn tokens before the tool handoff.
+    normalized = dict(message)
+    normalized["content"] = _TEXT_TOOL_CALL_PATTERN.sub("", content)
+    normalized["tool_calls"] = [_parsed_text_tool_call(match.group(1)) for match in matches]
+    return normalized
 
 
 def _find_subsequence(haystack: Sequence[int], needle: Sequence[int]) -> int | None:
@@ -411,7 +389,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         example_messages = example[self.messages_field]
         normalized_messages = [_normalize_chat_message(message) for message in example_messages]
         if self.parse_text_tool_calls:
-            normalized_messages = _split_text_tool_call_messages(normalized_messages)
+            normalized_messages = [_structured_text_tool_call_message(message) for message in normalized_messages]
 
         if self.system_prompt_field is not None and self.system_prompt_field in example:
             system_content = example[self.system_prompt_field]
@@ -628,6 +606,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             "include_role_tags": self.include_role_tags,
             "include_final_assistant_tag": self.include_final_assistant_tag,
             "parse_text_tool_calls": self.parse_text_tool_calls,
+            "text_tool_call_format_version": 2,
             "label_spec": {
                 "id_to_name": {str(label_id): name for label_id, name in self.label_spec.id_to_name.items()},
                 "aggregates": {name: list(label_ids) for name, label_ids in self.label_spec.aggregates.items()},

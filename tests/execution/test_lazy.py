@@ -117,6 +117,56 @@ def test_trailing_slash_prefix_resolves_relative_pin(monkeypatch):
     assert pinned.path() == "s3://marin-na/marin/pinned/loc"
 
 
+def test_shared_dep_is_lowered_once_per_graph():
+    """A handle several consumers share is lowered once, not once per path through it.
+
+    ``build_config`` is arbitrary user code (it can build a full training config), so
+    re-walking a shared subgraph re-runs it for every consumer — and compounds through
+    chained diamonds.
+    """
+    calls = 0
+
+    def counting_config(ctx: StepContext) -> TokenizeCfg:
+        nonlocal calls
+        calls += 1
+        return TokenizeCfg(out=ctx.output_path, source="gs://raw/dclm", tokenizer="llama3")
+
+    data = ArtifactStep(
+        name="datasets/dclm_tokens",
+        version="2026.06.25",
+        artifact_type=Tokens,
+        run=_make_tokens,
+        build_config=counting_config,
+    )
+
+    def consumer(lr: float) -> ArtifactStep[Ckpt]:
+        return ArtifactStep(
+            name=f"checkpoints/dclm_1b_{lr}",
+            version="2026.06.28",
+            artifact_type=Ckpt,
+            run=_make_ckpt,
+            build_config=lambda ctx: TrainCfg(out=ctx.output_path, data=ctx.artifact_path(data), lr=lr, steps=10),
+            deps=(data,),
+        )
+
+    left, right = consumer(1e-3), consumer(3e-3)
+    top = ArtifactStep(
+        name="checkpoints/merged",
+        version="2026.06.28",
+        artifact_type=Ckpt,
+        run=_make_ckpt,
+        build_config=lambda ctx: TrainCfg(
+            out=ctx.output_path, data=ctx.artifact_path(left) + ctx.artifact_path(right), lr=1e-4, steps=10
+        ),
+        deps=(left, right),
+    )
+
+    spec = lower(top)
+    assert calls == 1
+    # Both branches point at the same lowered dep, so the runner sees one node.
+    assert spec.deps[0].deps[0] is spec.deps[1].deps[0]
+
+
 def test_fingerprint_is_prefix_independent_but_drift_sensitive():
     base = dclm_1b().fingerprint()
     # Region/prefix must not change identity.
@@ -333,6 +383,17 @@ def test_consumer_reads_dependency_value_via_ctx_resolved(tmp_path, monkeypatch)
     run(echo_consumer())
     saved = TokenizerEcho.raw_load(f"{tmp_path}/checkpoints/echo/2026.06.28")
     # The dep's tokenizer flowed from its record into the consumer's output.
+    assert saved.tokenizer == "llama3"
+
+
+def test_consumer_resolves_dependency_under_relative_prefix(tmp_path, monkeypatch):
+    """A relative ``MARIN_PREFIX`` (the tutorials' ``local_store``) must resolve a dependency's
+    record. The dep's path is joined onto the prefix and still looks relative, so an unanchored
+    prefix was applied again on read and the record came back missing."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MARIN_PREFIX", "local_store")
+    run(echo_consumer())
+    saved = TokenizerEcho.raw_load(f"{tmp_path}/local_store/checkpoints/echo/2026.06.28")
     assert saved.tokenizer == "llama3"
 
 

@@ -22,7 +22,7 @@ Two ways to apply that setup, for two different callers:
 
 Endpoints and credential variables are not hardcoded here: each backend declares them under
 ``data.stores`` in its cluster config (``config/*.yaml``), read through
-:func:`rigging.filesystem.store_config`. For Marin that means ``CW_KEY_ID`` / ``CW_KEY_SECRET``
+:func:`rigging.filesystem.cluster_config.store_config`. For Marin that means ``CW_KEY_ID`` / ``CW_KEY_SECRET``
 for CoreWeave and ``R2_KEY_ID`` / ``R2_KEY_SECRET`` for R2, each falling back to the generic
 ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` pair. A process talking to both backends at
 once must use the namespaced pairs, since the two have distinct keys.
@@ -48,11 +48,16 @@ VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 
 _S3_CONNECT_TIMEOUT = 30
 _S3_READ_TIMEOUT = 120
-_S3_RETRY_MAX_ATTEMPTS = 5
+S3_RETRY_MAX_ATTEMPTS = 5
+
+# botocore's default pool of 10 serializes any caller fanning listing or transfer
+# threads over one filesystem. Connections are created on demand, so a high cap
+# costs nothing when idle.
+_S3_MAX_POOL_CONNECTIONS = 128
 # Whole-request ceiling. It spans pool wait, connect, body upload, and response
 # download, so it bounds every S3 request rather than only a stalled one: a
 # genuine transfer slower than 600s now fails and is retried from byte zero, up
-# to _S3_RETRY_MAX_ATTEMPTS times. 600 leaves ample headroom for the largest
+# to S3_RETRY_MAX_ATTEMPTS times. 600 leaves ample headroom for the largest
 # request we issue (a 50 MiB multipart part needs ~90 KiB/s to fit), while still
 # failing a wedged request inside a shard's useful lifetime. Single-object reads
 # of many GB through this filesystem are the case to re-check if this bites.
@@ -98,7 +103,8 @@ def s3_request_bounds_config_kwargs() -> dict[str, Any]:
     return {
         "connect_timeout": _S3_CONNECT_TIMEOUT,
         "read_timeout": _S3_READ_TIMEOUT,
-        "retries": {"max_attempts": _S3_RETRY_MAX_ATTEMPTS, "mode": "standard"},
+        "retries": {"max_attempts": S3_RETRY_MAX_ATTEMPTS, "mode": "standard"},
+        "max_pool_connections": _S3_MAX_POOL_CONNECTIONS,
     }
 
 
@@ -184,7 +190,7 @@ def configure_coreweave_s3() -> None:
 def s3_credentials(store: StoreType) -> tuple[str, str] | None:
     """The ``(key_id, secret)`` pair for *store*, or ``None`` when neither pair is complete.
 
-    Reads the variables the backend's :class:`~rigging.filesystem.StoreConfig` names, then
+    Reads the variables the backend's :class:`~rigging.filesystem.cluster_config.StoreConfig` names, then
     the generic ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY``. Callers that cannot
     proceed without credentials raise their own error, so a browser can list the buckets it
     *can* reach instead of failing on the first unconfigured backend.

@@ -12,13 +12,15 @@ placeholder, so a report works offline and can be hosted anywhere.
 
 import html
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.datakit.source_key import DatakitArtifactPath
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 TEMPLATES = Path(__file__).parent / "templates"
 REPORT_FILE = "report.html"
@@ -50,19 +52,22 @@ def write_report(output_path: str, page: str) -> str:
     return path
 
 
-def sample_rows(directory: str, columns: list[str], limit: int) -> list[dict]:
-    """Read up to ``limit`` rows of ``columns`` from the parquet files under ``directory``.
+def iter_batches(directory: str, columns: list[str], batch_size: int) -> Iterator[pa.RecordBatch]:
+    """Stream ``columns`` from the parquet files under ``directory`` in sorted file order.
 
-    Files are visited in sorted order via a single-level ``*.parquet`` glob (a
-    recursive glob makes s3fs ``HeadObject`` the prefix, which the CW object
-    store rejects), streaming batches until the limit is reached.
+    Uses a single-level ``*.parquet`` glob: a recursive glob makes s3fs
+    ``HeadObject`` the prefix, which the CW object store rejects.
     """
-    out: list[dict] = []
     for f in sorted(str(m) for m in StoragePath(f"{directory.rstrip('/')}/*.parquet").glob()):
         with StoragePath(f).open("rb") as fh:
-            for batch in pq.ParquetFile(fh).iter_batches(batch_size=min(limit, 4096), columns=columns):
-                rows = batch.to_pylist()
-                out.extend(rows[: limit - len(out)])
-                if len(out) >= limit:
-                    return out
+            yield from pq.ParquetFile(fh).iter_batches(batch_size=batch_size, columns=columns)
+
+
+def sample_rows(directory: str, columns: list[str], limit: int) -> list[dict]:
+    """Read up to ``limit`` rows of ``columns`` from the parquet files under ``directory``."""
+    out: list[dict] = []
+    for batch in iter_batches(directory, columns, batch_size=min(limit, 4096)):
+        out.extend(batch.to_pylist()[: limit - len(out)])
+        if len(out) >= limit:
+            break
     return out

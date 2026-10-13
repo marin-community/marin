@@ -6,10 +6,11 @@
 import pytest
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.expr import col
-from zephyr.readers import InputFileSpec, load_parquet, load_vortex
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import load_parquet, load_vortex
 from zephyr.writers import write_parquet_file, write_vortex_file
 
 
@@ -48,6 +49,15 @@ class TestVortexReader:
         records = list(load_vortex(spec))
         assert len(records) == 100
         assert set(records[0].keys()) == {"id", "name"}
+
+    @pytest.mark.parametrize(
+        "row_start,row_end",
+        [(10, 20), (10, None), (None, 20), (None, 150)],
+    )
+    def test_load_vortex_row_range(self, vortex_file, row_start, row_end):
+        spec = InputFileSpec(path=str(vortex_file), row_start=row_start, row_end=row_end)
+        records = list(load_vortex(spec))
+        assert [record["id"] for record in records] == list(range(100))[row_start:row_end]
 
     def test_load_vortex_empty_file(self, tmp_path):
         """Test loading an empty vortex file."""

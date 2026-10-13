@@ -6,7 +6,7 @@
 
 Submitted as a normal Iris job (one task per gang member) and run from the job
 bundle, so it can ``import jax`` (installed via the job's ``gpu``/``cpu`` extra)
-and use ``iris.runtime.jax_init.initialize_jax`` for coordinator discovery via
+and use ``iris.jax.init.initialize_jax`` for coordinator discovery via
 the controller's endpoint registry — no hand-rolled rendezvous.
 
 It joins one JAX mesh across the whole gang, runs an explicit cross-host
@@ -38,7 +38,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from iris.cluster.client.job_info import get_job_info
-from iris.runtime.jax_init import initialize_jax
+from iris.jax.init import initialize_jax
 from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P

@@ -9,10 +9,9 @@ the local prefix. Cross-region copies are charged against the shared
 :class:`TransferBudget`.
 
 This module and :mod:`~rigging.filesystem.distributed_lock` are the only ones in
-the package that import ``botocore`` (for the S3 lock backend), so
-:mod:`rigging.filesystem` registers the ``mirror://`` protocol lazily (by class
-path) to keep it off a plain ``import rigging.filesystem``. fsspec imports this
-module on demand the first time a ``mirror://`` filesystem is constructed.
+the package that import ``botocore`` for the S3 lock backend. The guarded
+factory registers the ``mirror://`` protocol by class path, and fsspec imports
+this module on the first ``mirror://`` filesystem construction.
 """
 
 import logging
@@ -262,6 +261,18 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         fs, fspath = self._get_fs_and_path(resolved)
         return fs.cat_file(fspath, start=start, end=end, **kwargs)
 
+    def materialize(self, path: str) -> str:
+        """Copy a mirror file or directory tree into the local prefix and return its concrete URL."""
+        path = cast(str, self._strip_protocol(path))
+        if not path:
+            raise ValueError("Cannot materialize the mirror filesystem root")
+        if not self.exists(path):
+            raise FileNotFoundError(f"mirror://{path} not found in any marin bucket")
+
+        for file_path in self.find(path):
+            self._resolve_path(file_path)
+        return self._local_url(path)
+
     # -- fsspec interface: write operations ------------------------------------
 
     def _mkdir(self, path: str, create_parents: bool = True, **kwargs: Any) -> None:
@@ -328,6 +339,5 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return self._budget.bytes_used
 
 
-# Upgrade the package's lazy class-path registration to the concrete class now
-# that this module is actually loaded.
+# Replace the factory's class-path registration now that this module is loaded.
 fsspec.register_implementation("mirror", MirrorFileSystem, clobber=True)

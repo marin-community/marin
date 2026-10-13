@@ -29,6 +29,10 @@ services:
     env_file: .env
     environment:
       RUST_BACKTRACE: "1"
+      CLAUDE_CODE_VERSION: "2.1.280"
+      CODEX_CLI_VERSION: "0.156.1"
+      CLAUDE_ACP_VERSION: "0.81.1"
+      CODEX_ACP_VERSION: "1.13.1"
       LOOM_RUNNER: docker
       LOOM_SESSION_IMAGE: ${LOOM_IMAGE:?LOOM_IMAGE is required}
       LOOM_SESSION_HOME_VOLUME: *session-home-volume

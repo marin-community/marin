@@ -11,18 +11,23 @@ import pyarrow as pa
 import pytest
 from config import ClusterTarget
 from conftest import bridge_config
-from errors import UpstreamError
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from errors import FinelogUnavailableError, UpstreamError
+from finelog.errors import StatsError
 from finelog_health import FinelogRole
 from finelog_source import FinelogSource
 from github_source import GithubSource
+from google.api_core.exceptions import Forbidden, ServiceUnavailable
 from iris_source import IrisSource
 from k8s_source import K8sFleet
 from nightly_config import NIGHTLY_LANES
 from server import create_app
 from starlette.testclient import TestClient
-from wandb_source import WandbSource
+from wandb_source import LoggedPoint, WandbSource
 
 TARGET = ClusterTarget(name="marin", project="p", zone="z", instance_filter="f", controller_filter="c")
+HEALTH_QUERY = 'SELECT * FROM "log" LIMIT 1'
 
 
 def _iris(handler) -> IrisSource:
@@ -49,7 +54,7 @@ class _FakeLogClient:
         self._raises = raises
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        assert sql == 'SELECT * FROM "log" LIMIT 1'
+        assert sql == HEALTH_QUERY
         assert max_rows == 1
         if self._raises is not None:
             raise self._raises
@@ -82,10 +87,60 @@ def test_finelog_health_does_not_mask_programming_errors():
         _finelog(ValueError("bug")).health()
 
 
+def test_finelog_query_classifies_only_retryable_rpc_failures_as_unavailable():
+    unavailable = StatsError("query failed")
+    unavailable.__cause__ = ConnectError(Code.UNAVAILABLE, "down")
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(unavailable).query(HEALTH_QUERY, max_rows=1)
+
+    invalid = StatsError("invalid query")
+    invalid.__cause__ = ConnectError(Code.INVALID_ARGUMENT, "syntax error")
+    with pytest.raises(StatsError) as raised:
+        _finelog(invalid).query(HEALTH_QUERY, max_rows=1)
+    assert raised.value is invalid
+
+
+def test_finelog_query_classifies_only_retryable_discovery_failures_as_unavailable():
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(ServiceUnavailable("temporarily unavailable")).query(HEALTH_QUERY, max_rows=1)
+
+    forbidden = Forbidden("permission denied")
+    with pytest.raises(Forbidden) as raised:
+        _finelog(forbidden).query(HEALTH_QUERY, max_rows=1)
+    assert raised.value is forbidden
+
+
+def test_finelog_relay_status_calls_connect_json_without_a_new_client_release():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "http://finelog:10001/finelog.stats.StatsService/ListRelayStatus"
+        assert request.headers["connect-protocol-version"] == "1"
+        assert request.read() == b"{}"
+        return httpx.Response(
+            200,
+            json={
+                "senders": [
+                    {
+                        "cluster": "cw-a",
+                        "bootId": "boot",
+                        "reportSequence": "1",
+                        "target": "https://hub",
+                        "receivedAtMs": "1000",
+                        "namespaces": [],
+                    }
+                ]
+            },
+        )
+
+    source = FinelogSource(TARGET, timeout_ms=5_000)
+    source._relay_address = "http://finelog:10001"
+    source._relay_http = httpx.Client(transport=httpx.MockTransport(handler))
+    assert source.relay_status()[0].cluster == "cw-a"
+
+
 # --- IrisSource ------------------------------------------------------------
 
 
-def test_jobs_splits_inflight_from_terminal_and_names_states():
+def test_job_counts_splits_inflight_from_terminal_and_names_states():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/ExecuteRawQuery")
         return httpx.Response(
@@ -96,7 +151,7 @@ def test_jobs_splits_inflight_from_terminal_and_names_states():
             },
         )
 
-    assert _iris(handler).jobs() == [
+    assert _iris(handler).job_counts() == [
         {"bucket": "inflight", "state": "running", "count": 5},
         {"bucket": "last24h", "state": "succeeded", "count": 10},
         {"bucket": "last24h", "state": "killed", "count": 2},
@@ -202,7 +257,7 @@ def test_peers_reports_controller_heartbeat_reachability():
 
 def test_controller_non_200_raises_upstream_error():
     with pytest.raises(UpstreamError) as excinfo:
-        _iris(lambda request: httpx.Response(503)).jobs()
+        _iris(lambda request: httpx.Response(503)).job_counts()
     assert excinfo.value.source == "iris"
     assert excinfo.value.status_code == 502
 
@@ -295,42 +350,390 @@ def test_wandb_points_follow_report_runset_and_drop_null_metric_rows():
                 200,
                 json={"data": {"view": {"displayName": "Hero report", "spec": json.dumps(spec)}}},
             )
-        return httpx.Response(
-            200,
-            json={
-                "data": {
-                    "project": {
-                        "run": {
-                            "state": "running",
-                            "sampledHistory": [
-                                [
-                                    {"throughput/total_tokens": 10, "throughput/mfu": 0.42},
-                                    {"throughput/total_tokens": 20, "throughput/mfu": None},
-                                ]
-                            ],
-                        }
-                    }
-                }
-            },
-        )
+        spec = json.loads(body["variables"]["specs"][0])
+        points = [
+            {"_step": 99, "throughput/total_tokens": 10, "throughput/mfu": 0.42},
+            {"_step": 100, "throughput/total_tokens": 20, "throughput/mfu": None},
+            {"_step": 101, "throughput/total_tokens": 30, "throughput/mfu": 0.44},
+        ]
+        if "minStep" not in spec:
+            points = points[:2]  # Whole-run sampling misses the child metric.
+        points = [point for point in points if point["_step"] >= spec.get("minStep", 0)]
+        run = {"branchPoint": {"step": 99}, "sampledHistory": [points]}
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
 
     assert _wandb(handler).points("mfu") == [
         {
             "chart": "MFU (%)",
             "run": "hero",
-            "tokens": 10,
-            "value": 0.42,
+            "tokens": tokens,
+            "value": value,
             "report_title": "Hero report",
             "report_url": (
-                "https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ"
+                "https://wandb.ai/marin-community/marin_moe/reports/"
+                "535B-A23B-18T-Token-Hero-Run-Scaling-Ladder--VmlldzoxNzc2MDM5Ng"
             ),
         }
+        for tokens, value in [(10, 0.42), (30, 0.44)]
     ]
 
 
 def test_wandb_rejects_unknown_chart_without_network():
     with pytest.raises(ValueError, match="unknown W&B chart"):
         _wandb(lambda request: pytest.fail("unexpected request")).points("nope")
+
+
+def _history_handler(found_in: str, points: list[dict], asked: list[tuple[str, list[str]]]):
+    """Serve `points` from the project named `found_in`; record each project asked."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        variables = json.loads(request.content)["variables"]
+        asked.append((variables["project"], json.loads(variables["specs"][0])["keys"]))
+        if variables["project"] != found_in:
+            return httpx.Response(200, json={"data": {"project": None}})
+        return httpx.Response(
+            200,
+            json={"data": {"project": {"run": {"state": "running", "sampledHistory": [points]}}}},
+        )
+
+    return handler
+
+
+def test_wandb_run_history_searches_projects_and_drops_null_metric_rows():
+    asked: list[tuple[str, list[str]]] = []
+    points = [{"_step": 0, "train/loss": 3.1}, {"_step": 1, "train/loss": None}, {"_step": 2, "train/loss": 2.7}]
+
+    rows = _wandb(_history_handler("marin", points, asked)).run_history("hero-run", metric="train/loss")
+
+    # `_step` is the x axis because levanter logs through wandb.log(..., step=<step>).
+    assert asked == [("marin_moe", ["_step", "train/loss"]), ("marin", ["_step", "train/loss"])]
+    assert rows == [
+        {
+            "run": "hero-run",
+            "project": "marin",
+            "run_url": "https://wandb.ai/marin-community/marin/runs/hero-run",
+            "step": step,
+            "value": value,
+        }
+        for step, value in ((0, 3.1), (2, 2.7))
+    ]
+
+
+def test_wandb_run_history_pins_an_explicit_project_without_searching():
+    asked: list[tuple[str, list[str]]] = []
+    handler = _history_handler("marin_moe", [{"_step": 7, "train/loss": 2.5}], asked)
+
+    rows = _wandb(handler).run_history("hero-run", metric="train/loss", project="marin_moe")
+
+    assert [project for project, _ in asked] == ["marin_moe"]
+    assert [row["step"] for row in rows] == [7]
+
+
+def test_wandb_run_history_preserves_parent_and_samples_child_separately():
+    parent = {"_step": 99, "train/loss": 1.25}
+    child = [{"_step": 100, "train/loss": 1.20}, {"_step": 101, "train/loss": 1.22}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        spec = json.loads(json.loads(request.content)["variables"]["specs"][0])
+        # Whole-run sampling loses the first child point; the bounded query recovers it.
+        points = [parent, child[-1]] if "minStep" not in spec else [parent, *child]
+        points = [point for point in points if point["_step"] >= spec.get("minStep", 0)]
+        run = {"branchPoint": {"step": 99}, "sampledHistory": [points]}
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
+
+    rows = _wandb(handler).run_history("fork", metric="train/loss", project="marin_moe")
+
+    assert [(row["step"], row["value"]) for row in rows] == [(99, 1.25), (100, 1.20), (101, 1.22)]
+
+
+def test_wandb_recent_points_carry_a_forks_parent_history_and_skip_an_absent_run():
+    key = "eval_dropless/paloma/macro_loss"
+    parent = [{"_step": step, "_timestamp": step * 10.0, key: loss} for step, loss in ((137_999, 2.20), (143_999, 2.19))]
+    child = [{"_step": 146_999, "_timestamp": 1_469_990.0, key: 2.26}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        variables = json.loads(request.content)["variables"]
+        if variables["run"] != "fork":
+            return httpx.Response(200, json={"data": {"project": {"run": None}}})
+        spec = json.loads(variables["specs"][0])
+        points = [point for point in parent + child if point["_step"] >= spec.get("minStep", 0)]
+        run = {"branchPoint": {"step": 146_138}, "sampledHistory": [points]}
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
+
+    source = _wandb(handler)
+
+    assert source.recent_points("fork", metric=key, count=2) == [
+        LoggedPoint(step=143_999, value=2.19, timestamp=1_439_990.0),
+        LoggedPoint(step=146_999, value=2.26, timestamp=1_469_990.0),
+    ]
+    assert source.recent_points("smoke-test", metric=key, count=2) == []
+
+
+def _activity_handler(
+    found_in: str, run: dict, asked: list[str], tps_points: list[dict] = (), history_reads: list[int] | None = None
+):
+    """Serve `run` for the activity query and `tps_points` for its history read.
+
+    Only the activity search is recorded in `asked`; the history read that follows it
+    asks the project the run was already found in, so it carries no new routing
+    information. `history_reads` records the number of specs in each history read.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        variables = json.loads(request.content)["variables"]
+        if "specs" in variables:  # the history read, not the activity search
+            if variables["project"] != found_in:
+                return httpx.Response(200, json={"data": {"project": None}})
+            if history_reads is not None:
+                history_reads.append(len(variables["specs"]))
+            specs = [json.loads(spec) for spec in variables["specs"]]
+            sampled = [[point for point in tps_points if point["_step"] >= spec.get("minStep", 0)] for spec in specs]
+            history = {"state": "running", "sampledHistory": sampled}
+            return httpx.Response(200, json={"data": {"project": {"run": history}}})
+        asked.append(variables["project"])
+        if variables["project"] != found_in:
+            return httpx.Response(200, json={"data": {"project": None}})
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
+
+    return handler
+
+
+def test_wandb_run_activity_separates_active_time_from_downtime():
+    # `_runtime` is W&B's own count of the seconds a process was alive, restored at each
+    # resume, so it is the run's active time across restarts and never includes the wait
+    # between two attempts. Wall clock here is four days, of which ninety hours ran.
+    # Progress efficiency divides the tokens this run produced by the mean rate times wall.
+    # The reference rate is the mean over the history (2.5M here), not the summary's last
+    # step, so a checkpoint step logging a low rate cannot skew it. This run is a fresh id
+    # resumed at step 39,000 with a 10M-token batch, so total_tokens is 10M*(step+1): the
+    # inherited count before its first step is reconstructed as 390.01e9 * 39000/39001, i.e.
+    # 390e9, not the earliest sample's 390.01e9 (which would drop that first batch too).
+    # Crediting the full 1038e9 over four days would read 120%; only 1038e9 - 390e9 counts,
+    # and 648e9 / (2.5e6 * 345600) is 0.75.
+    asked: list[str] = []
+    run = {
+        "state": "running",
+        "createdAt": "2026-08-20T02:00:00Z",
+        "heartbeatAt": "2026-08-24T02:00:00Z",
+        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "throughput/total_tokens": 1_038_000_000_000}),
+    }
+    tps_points = [
+        {
+            "_step": 39_000,
+            "_timestamp": 1_787_364_000,
+            "throughput/total_tokens": 390_010_000_000,
+            "throughput/tokens_per_second": 2_000_000,
+        },
+        {
+            "_step": 78_001,
+            "_timestamp": 1_787_700_000,
+            "throughput/total_tokens": 780_020_000_000,
+            "throughput/tokens_per_second": 3_000_000,
+        },
+    ]
+
+    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+
+    assert asked == ["marin_moe"]
+    assert row == {
+        "run": "hero-run",
+        "project": "marin_moe",
+        "run_url": "https://wandb.ai/marin-community/marin_moe/runs/hero-run",
+        "state": "running",
+        "active_seconds": 324_000.0,
+        "wall_seconds": 345_600.0,
+        "downtime_seconds": 21_600.0,
+        "active_share": 0.9375,
+        "reference_tps": 2_500_000.0,
+        "progress_efficiency": pytest.approx(0.75),
+        "projected_finish_ms": None,  # no `_step` or `run_progress` in this summary
+    }
+
+
+@pytest.mark.parametrize("has_child_history", [False, True])
+def test_wandb_run_activity_excludes_inherited_fork_history(has_child_history):
+    created = datetime(2026, 9, 18, tzinfo=UTC)
+    heartbeat = created + timedelta(seconds=200)
+    run = {
+        "state": "running",
+        "createdAt": created.isoformat(),
+        "heartbeatAt": heartbeat.isoformat(),
+        "branchPoint": {"step": 99},
+        "summaryMetrics": json.dumps(
+            {
+                "_step": 109 if has_child_history else 99,
+                "run_progress": 0.545 if has_child_history else 0.495,
+                "throughput/total_tokens": 110_000 if has_child_history else 100_000,
+            }
+        ),
+    }
+    points = [
+        {
+            "_step": step,
+            "_timestamp": created.timestamp() + elapsed,
+            "run_progress": step / 200,
+            "throughput/total_tokens": tokens,
+            "throughput/tokens_per_second": tps,
+        }
+        for step, elapsed, tokens, tps in [(99, -1000, 100_000, 1000), (100, 20, 101_000, 100), (109, 200, 110_000, 100)]
+        if has_child_history or step == 99
+    ]
+
+    (row,) = _wandb(_activity_handler("marin_moe", run, [], points)).run_activity("fork")
+
+    if has_child_history:
+        # Only the child's 10,000 tokens count over its 200-second lifetime.
+        assert row["reference_tps"] == 100
+        assert row["progress_efficiency"] == pytest.approx(0.5)
+        # Nine steps in 180 seconds: 91 remaining steps take another 1820 seconds.
+        assert row["projected_finish_ms"] == round((heartbeat.timestamp() + 1820) * 1000)
+    else:
+        assert row["reference_tps"] is None
+        assert row["progress_efficiency"] is None
+        assert row["projected_finish_ms"] is None
+
+
+def test_wandb_run_activity_credits_a_from_scratch_run_its_first_step():
+    # A run started from step 0 inherited nothing, so its baseline reconstructs to zero and
+    # its first step counts: total_tokens * 0 / 1 == 0. Without the reconstruction the first
+    # sample would be taken as the baseline and a one-step run would report null. Here the
+    # run has produced 100e9 tokens over a 100000s wall clock at a 2M reference rate, so
+    # progress efficiency is 100e9 / (2e6 * 100000), i.e. 0.5.
+    asked: list[str] = []
+    run = {
+        "state": "running",
+        "createdAt": "2026-08-20T02:00:00Z",
+        "heartbeatAt": "2026-08-21T05:46:40Z",
+        "summaryMetrics": json.dumps({"_runtime": 90_000, "throughput/total_tokens": 100_000_000_000}),
+    }
+    tps_points = [
+        {
+            "_step": 0,
+            "_timestamp": 1_787_364_000,
+            "throughput/total_tokens": 100_000_000_000,
+            "throughput/tokens_per_second": 2_000_000,
+        }
+    ]
+
+    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+
+    assert row["wall_seconds"] == 100_000.0
+    assert row["reference_tps"] == 2_000_000.0
+    assert row["progress_efficiency"] == pytest.approx(0.5)
+
+
+def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
+    # A run that has been created but has logged nothing has no `_runtime` to read. The
+    # tile then shows no data, which is true, rather than zero, which reads as a stall.
+    # With no token rate and no tokens seen, progress efficiency is null for the same reason.
+    asked: list[str] = []
+    run = {
+        "state": "running",
+        "createdAt": "2026-08-20T02:00:00Z",
+        "heartbeatAt": "2026-08-20T02:10:00Z",
+        "summaryMetrics": "{}",
+    }
+
+    (row,) = _wandb(_activity_handler("marin", run, asked)).run_activity("hero-run")
+
+    assert asked == ["marin_moe", "marin"]
+    assert (row["active_seconds"], row["downtime_seconds"], row["active_share"]) == (None, None, None)
+    assert row["wall_seconds"] == 600.0
+    assert (row["reference_tps"], row["progress_efficiency"], row["projected_finish_ms"]) == (None, None, None)
+
+
+def _projection_run(state: str, heartbeat: datetime) -> dict:
+    return {
+        "state": state,
+        "createdAt": "2026-09-09T16:00:00Z",
+        "heartbeatAt": heartbeat.isoformat(),
+        "summaryMetrics": json.dumps(
+            {"_runtime": 86_000, "_step": 85_320, "run_progress": 85_320 / 390_000, "throughput/total_tokens": 1.0}
+        ),
+    }
+
+
+def test_wandb_run_activity_projects_the_finish_from_the_recent_step_rate():
+    # A completion date extrapolates the step rate over the last 1,000 steps, between the
+    # first and last logged points in that window, to the stop step that the last point's
+    # `_step / run_progress` recovers. This run is a fresh id resumed at step 81,000. A
+    # six-hour outage early on means its whole-life rate is 25 s a step (4,320 steps in 30
+    # hours); its last 1,000 steps took 20 s each. With 304,680 steps to go on a
+    # 390,000-step schedule, the recent rate puts the finish 70.5 days out. The whole-life
+    # rate would add another 17.6 days for an outage the run has trained past.
+    last_step_at = datetime(2026, 9, 10, 22, 30, tzinfo=UTC)
+    # The process has been alive but silent for 100 minutes since its last step. The
+    # heartbeat moves on while no step is logged, so it must not enter the rate.
+    heartbeat = last_step_at + timedelta(minutes=100)
+    points = [
+        {
+            "_step": step,
+            "_timestamp": (last_step_at - timedelta(seconds=before)).timestamp(),
+            "run_progress": step / 390_000,
+            "throughput/total_tokens": 1.0,
+            "throughput/tokens_per_second": 1.0,
+        }
+        for step, before in [(81_000, 30 * 3_600), (84_320, 1_000 * 20), (85_320, 0)]
+    ]
+    history_reads: list[int] = []
+
+    handler = _activity_handler("marin_moe", _projection_run("running", heartbeat), [], points, history_reads)
+    (row,) = _wandb(handler).run_activity("hero-run")
+
+    projected = datetime.fromtimestamp(row["projected_finish_ms"] / 1000, UTC)
+    assert projected == last_step_at + timedelta(seconds=304_680 * 20)
+    assert projected == datetime(2026, 11, 20, 11, 10, tzinfo=UTC)
+    # The token baseline and the rate window share one history request.
+    assert history_reads == [2]
+
+    # A window holding a single logged step has no rate, and so no date.
+    (row,) = _wandb(_activity_handler("marin_moe", _projection_run("running", heartbeat), [], points[-1:])).run_activity(
+        "hero-run"
+    )
+    assert row["projected_finish_ms"] is None
+
+
+def test_wandb_run_activity_projects_no_finish_for_a_run_that_stopped():
+    # A crashed run a fork replaced will never reach its stop step.
+    heartbeat = datetime(2026, 9, 10, 22, 30, tzinfo=UTC)
+    points = [
+        {
+            "_step": step,
+            "_timestamp": (heartbeat - timedelta(seconds=(85_320 - step) * 20)).timestamp(),
+            "run_progress": step / 390_000,
+            "throughput/total_tokens": 1.0,
+            "throughput/tokens_per_second": 1.0,
+        }
+        for step in (84_320, 85_320)
+    ]
+
+    (row,) = _wandb(_activity_handler("marin_moe", _projection_run("crashed", heartbeat), [], points)).run_activity(
+        "hero-run"
+    )
+
+    assert row["projected_finish_ms"] is None
+
+
+def test_wandb_run_activity_fails_loud_when_no_project_has_the_run():
+    asked: list[str] = []
+
+    with pytest.raises(UpstreamError) as excinfo:
+        _wandb(_activity_handler("nowhere", {}, asked)).run_activity("hero-run")
+
+    assert excinfo.value.status_code == 404
+    assert asked == ["marin_moe", "marin"]
+
+
+def test_wandb_run_history_fails_loud_when_no_project_has_the_run():
+    asked: list[tuple[str, list[str]]] = []
+    handler = _history_handler("nowhere", [], asked)
+
+    with pytest.raises(UpstreamError) as excinfo:
+        _wandb(handler).run_history("hero-run", metric="train/loss")
+
+    assert excinfo.value.source == "wandb"
+    assert excinfo.value.status_code == 404
+    assert [project for project, _ in asked] == ["marin_moe", "marin"]
 
 
 # --- endpoint routing / fail-loud ------------------------------------------
@@ -346,7 +749,7 @@ class _FakeIris:
     def target(self):
         return self._target
 
-    def jobs(self):
+    def job_counts(self):
         if self._raises:
             raise self._raises
         return self._rows
@@ -366,7 +769,7 @@ def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
 
 def test_iris_endpoint_returns_rows():
     client = _app(_FakeIris(TARGET, rows=[{"bucket": "inflight", "state": "running", "count": 3}]))
-    assert client.get("/iris/marin/jobs").json() == [{"bucket": "inflight", "state": "running", "count": 3}]
+    assert client.get("/iris/marin/job_counts").json() == [{"bucket": "inflight", "state": "running", "count": 3}]
 
 
 def test_iris_peers_endpoint_returns_heartbeat_rows():
@@ -376,13 +779,13 @@ def test_iris_peers_endpoint_returns_heartbeat_rows():
 
 def test_dead_controller_fails_loud_not_empty():
     client = _app(_FakeIris(TARGET, raises=UpstreamError("iris", "controller unreachable", status_code=504)))
-    resp = client.get("/iris/marin/jobs")
+    resp = client.get("/iris/marin/job_counts")
     assert resp.status_code == 504
     assert resp.json()["source"] == "iris"
 
 
 def test_unknown_cluster_on_iris_route_is_400():
-    assert _app(_FakeIris(TARGET)).get("/iris/nope/jobs").status_code == 400
+    assert _app(_FakeIris(TARGET)).get("/iris/nope/job_counts").status_code == 400
 
 
 def test_nightlies_endpoint_returns_linked_long_cells():

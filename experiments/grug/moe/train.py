@@ -34,6 +34,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -60,8 +61,8 @@ class GrugTrainerConfig:
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
 
-    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of
+    # using the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -83,6 +84,7 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    shuffle: bool = True  # Mix eval domains within batches to reduce expert-capacity drops.
 
 
 @dataclass(frozen=True)
@@ -96,7 +98,7 @@ class GrugRunConfig:
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
-    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
+    # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
 
 
@@ -134,7 +136,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -164,7 +166,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -193,6 +195,7 @@ def build_tagged_evaluator(
         device_mesh=mesh,
         axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
+        shuffle=eval_cfg.shuffle,
     )
 
 
@@ -404,7 +407,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    with set_mesh(mesh):
+    checkpointer = trainer.checkpointer.create(run_id)
+    with set_mesh(mesh), TrainingDashboard(config, checkpointer.request_checkpoint, run_id):
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -431,7 +435,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),

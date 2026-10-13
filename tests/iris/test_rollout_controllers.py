@@ -136,7 +136,7 @@ def test_rollout_order_leads_with_dev_then_production_then_smallest_first():
 
 
 def test_deploy_candidates_drop_ci_owned_configs():
-    configs = {"marin": Path("marin.yaml"), "ci-gcp-smoke": Path("ci-gcp-smoke.yaml")}
+    configs = {"marin": Path("marin.yaml"), "ci-coreweave-gpu-smoke": Path("ci-coreweave-gpu-smoke.yaml")}
     assert set(deploy_candidates(configs)) == {"marin"}
 
 

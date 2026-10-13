@@ -10,12 +10,19 @@ Most of these datasets are gated and require HF_TOKEN at download time.
 All use parquet format with a "text" field.
 """
 
+import re
 from dataclasses import dataclass, field
 from functools import cache
 
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
+from zephyr import counters
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.rollout_transforms import checked_openai_chat_document, load_parquet_batched
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -38,6 +45,7 @@ class NemotronV2Dataset:
 
 NEMOTRON_PRETRAINING_LEGAL_V1 = "nemotron_pretraining_legal_v1"
 NEMOTRON_PRETRAINING_SPECIALIZED_V1_2 = "nemotron_pretraining_specialized_v1_2"
+NEMOTRON_PRETRAINING_SFT_V1 = "nemotron_pretraining_sft_v1"
 
 NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
     "nemotron_cc_v2": NemotronV2Dataset(
@@ -128,7 +136,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
         },
         override_output_path="raw/nemotron_pretraining_specialized_v1-a31fae",
     ),
-    "nemotron_pretraining_sft_v1": NemotronV2Dataset(
+    NEMOTRON_PRETRAINING_SFT_V1: NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-Pretraining-SFT-v1",
         revision="3f1a5b8",
         subsets={
@@ -189,6 +197,69 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
     ),
 }
 
+_GENERAL_TURN = re.compile(r"<extra_id_1>(User|Assistant)\n")
+
+
+def _nemotron_sft_messages(text: str, subset: str) -> list[dict] | None:
+    """Recover the documented role delimiters used by each Nemotron SFT subset."""
+    if subset == "sft_general":
+        matches = list(_GENERAL_TURN.finditer(text))
+        if not matches or matches[0].start() != 0:
+            return None
+        messages = []
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            role = match.group(1).lower()
+            content = text[match.end() : end].strip()
+            if messages and messages[-1]["role"] == role and messages[-1]["content"] and content:
+                messages[-1]["content"] += f"\n\n{content}"
+                counters.pipeline.update_counter("nemotron_sft/sft_general/adjacent_speaker_merged", 1)
+            else:
+                messages.append({"role": role, "content": content})
+        return messages
+    if subset == "sft_math":
+        if not text.startswith("input: ") or " output: " not in text:
+            return None
+        prompt, response = text.removeprefix("input: ").split(" output: ", 1)
+        return [{"role": "user", "content": prompt.strip()}, {"role": "assistant", "content": response.strip()}]
+    if subset == "sft_code":
+        marker = "\n\n<think>"
+        if marker not in text:
+            return None
+        prompt, response = text.split(marker, 1)
+        return [
+            {"role": "user", "content": prompt.strip()},
+            {"role": "assistant", "content": f"<think>{response}".strip()},
+        ]
+    raise ValueError(f"Unsupported Nemotron SFT subset {subset!r}")
+
+
+def _nemotron_sft_row_to_chat(row: dict, subset: str) -> list[dict]:
+    text = row.get("text")
+    if not isinstance(text, str):
+        return []
+    messages = _nemotron_sft_messages(text, subset)
+    if messages is None:
+        counters.pipeline.update_counter(f"nemotron_sft/{subset}/unparsed", 1)
+        return []
+    return checked_openai_chat_document(
+        messages,
+        NEMOTRON_V2_DATASETS[NEMOTRON_PRETRAINING_SFT_V1].hf_dataset_id,
+        counter_prefix=f"nemotron_sft/{subset}/chat",
+    )
+
+
+def _transform_nemotron_sft_chat(input_path: str, output_path: str, subset: str) -> None:
+    pipeline = (
+        Dataset.from_files(prefix_join(input_path, "**/*.parquet"))
+        .flat_map(load_parquet_batched)
+        .flat_map(lambda row: _nemotron_sft_row_to_chat(row, subset))
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), schema=CHAT_SCHEMA, skip_existing=True
+        )
+    )
+    ZephyrContext(name=f"nemotron-sft-{subset}-chat", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
+
 
 @cache
 def download_nemotron_v2_step(family: str) -> StepSpec:
@@ -243,3 +314,33 @@ def nemotron_v2_normalize_steps(family: str) -> dict[str, tuple[StepSpec, ...]]:
         f"{family}/{subset}": (download, normalize_nemotron_v2_step(download, family=family, subset=subset))
         for subset in info.subsets
     }
+
+
+def nemotron_sft_chat_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
+    """Return structured-chat chains for the three Nemotron SFT subsets."""
+    family = NEMOTRON_PRETRAINING_SFT_V1
+    info = NEMOTRON_V2_DATASETS[family]
+    download = download_nemotron_v2_step(family)
+    chains: dict[str, tuple[StepSpec, ...]] = {}
+    for subset, pattern in info.subsets.items():
+        subset_dir = pattern.split("/**")[0]
+        processed = StepSpec(
+            name=f"processed-chat/{family}/{subset}",
+            deps=[download],
+            fn=lambda output_path, source_subset=subset, source_dir=subset_dir: _transform_nemotron_sft_chat(
+                prefix_join(download.output_path, source_dir), output_path, source_subset
+            ),
+            hash_attrs={
+                "version": "2026.09.09.adjacent-speakers" if subset == "sft_general" else "2026.09.05.2.harmony-arrow",
+                "subset": subset,
+            },
+        )
+        normalized = normalize_chat_step(
+            output_schema=CHAT_SCHEMA,
+            name=f"normalized-chat/{family}/{subset}",
+            download=processed,
+            file_extensions=(".parquet",),
+            worker_resources=info.subset_normalize_worker_resources.get(subset),
+        )
+        chains[f"nemotron_sft/{subset}"] = (download, processed, normalized)
+    return chains

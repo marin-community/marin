@@ -6,13 +6,15 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import threading
 import typing
 import warnings
 from dataclasses import dataclass
-from typing import Any, List, Optional, Union
+from pathlib import Path
+from typing import Any, List, Optional, TypedDict, Union
 
 import fsspec
 import jax
@@ -20,6 +22,7 @@ import numpy as np
 import wandb
 from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
+from rigging.provenance import Provenance
 
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
@@ -27,16 +30,50 @@ from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import Tracker, TrackerConfig
 from levanter.utils import jax_utils
 
-if typing.TYPE_CHECKING:
-    import wandb.sdk.lib.disabled
-
-
 logger = logging.getLogger(__name__)
 
-WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"]
+WandbRun: typing.TypeAlias = wandb.sdk.wandb_run.Run
 
 
 _WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
+MAX_WANDB_ARTIFACT_BYTES = 20 * 1_000_000
+_WANDB_INIT_ERROR_KEY = "error"
+_WANDB_INIT_METADATA_KEY = "metadata"
+_WANDB_INIT_PROCESS_INDEX_KEY = "process_index"
+_WANDB_FORK_FROM_PATTERN = re.compile(r"(?P<run_id>[^?]+)\?_step=(?P<step>\d+)")
+
+
+class _WandbInitStatus(TypedDict):
+    process_index: int
+    error: str | None
+    metadata: dict[str, Any] | None
+
+
+def _artifact_size_bytes(artifact_path: str | os.PathLike[str]) -> int:
+    """Return the number of regular-file bytes that W&B would upload for a path."""
+    path = os.fspath(artifact_path)
+    if os.path.isfile(path):
+        return os.path.getsize(path)
+    if not os.path.isdir(path):
+        raise FileNotFoundError(path)
+
+    total = 0
+    for directory, _, filenames in os.walk(path):
+        for filename in filenames:
+            file_path = os.path.join(directory, filename)
+            if not os.path.islink(file_path):
+                total += os.path.getsize(file_path)
+    return total
+
+
+def _validate_wandb_artifact_size(artifact_path: str | os.PathLike[str], *, artifact_name: str | None = None) -> None:
+    size = _artifact_size_bytes(artifact_path)
+    if size > MAX_WANDB_ARTIFACT_BYTES:
+        display_name = artifact_name or os.path.basename(os.fspath(artifact_path)) or "artifact"
+        raise ValueError(
+            f"Refusing W&B artifact {display_name!r} at {artifact_path}: {size:,} bytes exceeds the "
+            f"{MAX_WANDB_ARTIFACT_BYTES:,}-byte limit."
+        )
 
 
 def _teardown_wandb_service_bounded(timeout: float) -> None:
@@ -159,9 +196,16 @@ class WandbTracker(Tracker):
             return
         self.run.summary.update(self._prepare_summary(metrics))
 
+    def validate_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None) -> None:
+        """Reject an artifact that would exceed Marin's W&B storage limit."""
+        del type
+        artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
+        _validate_wandb_artifact_size(artifact_path, artifact_name=artifact_name)
+
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         if self._suppress_logging:
             return
+        self.validate_artifact(artifact_path, name=name, type=type)
         artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
         self.run.log_artifact(
             artifact_path,
@@ -263,14 +307,20 @@ def _convert_metrics_to_wandb_loggable(metrics: typing.Mapping[str, Any]) -> dic
     """Flatten metrics into a wandb-ready dict.
 
     Expands every :class:`SummaryStats` value into its individual loggable keys
-    (computing ``mean``/``variance``/``rms`` and building ``wandb.Histogram`` as
-    needed) and passes every other value through
+    (building ``wandb.Histogram`` as needed) and passes every other value through
     :func:`_convert_value_to_loggable_rec`.
 
     Pure conversion: no wandb run state is touched. Safe to call on the producer
     thread before handing off to a :class:`BackgroundTracker` worker, and
     idempotent when called a second time on an already-flat dict.
     """
+    # Start every device-to-host copy before reading any value. Otherwise each scalar
+    # pays a full blocking copy, which dominates logging time for payloads with
+    # thousands of per-layer values.
+    for leaf in jax.tree.leaves(dict(metrics)):
+        if isinstance(leaf, jax.Array):
+            leaf.copy_to_host_async()
+
     to_log: dict[str, Any] = {}
     for k, v in metrics.items():
         if isinstance(v, SummaryStats):
@@ -321,10 +371,6 @@ def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, incl
     return out
 
 
-def is_wandb_available():
-    return wandb.run is not None
-
-
 @TrackerConfig.register_subclass("wandb")
 @dataclass
 class WandbConfig(TrackerConfig):
@@ -347,12 +393,17 @@ class WandbConfig(TrackerConfig):
     document for more details.
     """
 
+    fork_from: Optional[str] = None
+    """Fork a new run from ``<source-run-id>?_step=<step>``.
+
+    W&B does not allow ``fork_from`` and ``resume`` in the same initialization.
+    A fork starts a new child run; recover a stopped child with a subsequent
+    configuration that omits ``fork_from`` and resumes the child run ID.
+    """
+
     save_code: Union[bool, str] = True
     """If string, will save code from that directory. If True, will attempt to sniff out the main directory (since we
     typically don't run from the root of the repo)."""
-
-    save_xla_dumps: bool = False
-    """If True, will save the XLA code to wandb (as configured by XLA_FLAGS). This is useful for debugging."""
 
     replicate_path: Optional[str] = None
     """If set, write config and summary to this path (local or GCS) on finish()."""
@@ -387,6 +438,8 @@ class WandbConfig(TrackerConfig):
         if id is None:
             id = run_id
 
+        fork_from = self._validated_fork_from(id)
+
         hparams_to_save = {}
 
         # for distributed runs, we only want the primary worker to use wandb, so we make everyone else be disabled
@@ -398,23 +451,77 @@ class WandbConfig(TrackerConfig):
             mode = "disabled"
 
         git_settings = self._git_settings()
+        git_config = _git_run_config(git_settings.get("git_commit"), self._code_dir() or ".")
+        hparams_to_save.update(git_config)
+        if "git_commit" in git_config:
+            git_settings["git_commit"] = git_config["git_commit"]
 
-        if "git_commit" in git_settings:
-            hparams_to_save["git_commit"] = git_settings["git_commit"]
+        process_count = jax.process_count()
+        initialization_error = None
+        try:
+            init_kwargs = dict(
+                entity=self.entity,
+                project=self.project,
+                name=self.name,
+                tags=self.tags,
+                id=id,
+                group=self.group,
+                mode=mode,
+                config=hparams_to_save,
+                settings=git_settings,
+                allow_val_change=True,
+            )
+            if fork_from is None:
+                init_kwargs["resume"] = self.resume
+            else:
+                init_kwargs["fork_from"] = fork_from
+            r = wandb.init(**init_kwargs)
+            if r is None:
+                raise RuntimeError("W&B initialization returned no run")
+        except Exception as e:
+            initialization_error = e
+            r = None
 
-        r = wandb.init(
-            entity=self.entity,
-            project=self.project,
-            name=self.name,
-            tags=self.tags,
-            id=id,
-            group=self.group,
-            resume=self.resume,
-            mode=mode,
-            config=hparams_to_save,
-            settings=git_settings,
-            allow_val_change=True,
-        )
+        metadata: dict[str, Any] | None = None
+        if r is not None and is_primary_process:
+            metadata = {
+                # entity=r.entity,
+                "project": r.project,
+                "name": r.name,
+                "tags": r.tags,
+                "id": r.id,
+                "group": r.group,
+                "minimum_log_step": int(r.step),
+            }
+
+        initialization_status: _WandbInitStatus = {
+            _WANDB_INIT_PROCESS_INDEX_KEY: jax.process_index(),
+            _WANDB_INIT_ERROR_KEY: (
+                f"{type(initialization_error).__name__}: {initialization_error}"
+                if initialization_error is not None
+                else None
+            ),
+            _WANDB_INIT_METADATA_KEY: metadata,
+        }
+        if process_count > 1:
+            try:
+                initialization_statuses = jax_utils.multihost_allgather_sync(initialization_status)
+            except Exception as coordination_error:
+                if initialization_error is not None:
+                    raise initialization_error from coordination_error
+                raise
+        else:
+            initialization_statuses = [initialization_status]
+
+        failed_statuses = [status for status in initialization_statuses if status[_WANDB_INIT_ERROR_KEY] is not None]
+        if failed_statuses:
+            if initialization_error is not None:
+                raise initialization_error
+            failures = "; ".join(
+                f"process {status[_WANDB_INIT_PROCESS_INDEX_KEY]}: {status[_WANDB_INIT_ERROR_KEY]}"
+                for status in failed_statuses
+            )
+            raise RuntimeError(f"W&B initialization failed on {failures}")
 
         assert r is not None
 
@@ -422,20 +529,9 @@ class WandbConfig(TrackerConfig):
             logger.info("Resuming wandb run. Attempting to mitigate issues.")
 
         minimum_log_step = int(r.step)
-        if jax.process_count() > 1:
-            # we need to share wandb run information across all hosts, because we use it for checkpoint paths and things
-            metadata_to_share = dict(
-                # entity=r.entity,
-                project=r.project,
-                name=r.name,
-                tags=r.tags,
-                id=r.id,
-                group=r.group,
-                minimum_log_step=minimum_log_step,
-            )
-            metadata_to_share = jax_utils.multihost_broadcast_sync(
-                metadata_to_share, is_source=jax.process_index() == 0
-            )
+        if process_count > 1:
+            metadata_to_share = initialization_statuses[0][_WANDB_INIT_METADATA_KEY]
+            assert metadata_to_share is not None
             minimum_log_step = int(metadata_to_share["minimum_log_step"])
 
             # if jax.process_index() != 0:
@@ -471,34 +567,65 @@ class WandbConfig(TrackerConfig):
                 suppress_logging=not is_primary_process,
                 minimum_log_step=minimum_log_step,
             ),
-            # Only the primary process actually logs; a suppressed tracker no-ops every
-            # call, so wrapping it in a background thread is pure overhead — and would
-            # make non-primary hosts stage (copy) large profile artifacts they discard.
+            # Only the primary process sends anything to W&B. A suppressed tracker still
+            # materializes log payloads on the calling thread, keeping device work
+            # symmetric across hosts, and has no I/O to move to a worker. A
+            # background wrapper would also make non-primary hosts stage (copy) large
+            # profile artifacts they discard.
             enabled=self.background and is_primary_process,
             max_queue_size=self.background_max_queue_size,
             finish_timeout=self.background_finish_timeout,
         )
 
+    def _validated_fork_from(self, child_run_id: Optional[str]) -> Optional[str]:
+        if self.fork_from is None:
+            return None
+
+        match = _WANDB_FORK_FROM_PATTERN.fullmatch(self.fork_from)
+        if match is None:
+            raise ValueError("fork_from must have the form '<source-run-id>?_step=<nonnegative-step>'.")
+
+        source_run_id = match["run_id"]
+        if child_run_id == source_run_id:
+            raise ValueError("fork_from must name a different run from the new child run ID.")
+
+        return self.fork_from
+
+    def _code_dir(self) -> Optional[str]:
+        """The source directory to capture, or ``None`` when source capture is off."""
+        if isinstance(self.save_code, str):
+            return self.save_code
+        if self.save_code:
+            return infer_experiment_git_root() or "."  # type: ignore
+        return None
+
     def _git_settings(self):
         other_settings = dict()
-        if isinstance(self.save_code, str):
-            code_dir = self.save_code
-        elif self.save_code:
-            code_dir = infer_experiment_git_root() or "."  # type: ignore
-        else:
-            code_dir = None
+        code_dir = self._code_dir()
         if code_dir is not None:
-            logger.info(f"Setting wandb code_dir to {code_dir}")
-            other_settings["code_dir"] = code_dir
-            other_settings["git_root"] = code_dir
-            # for some reason, wandb isn't populating the git commit, so we do it here
             try:
-                sha = self._get_git_sha(code_dir)
-            except:  # noqa: E722
-                logger.warning(f"Could not get git sha for {code_dir}. Will not log git commit.")
-                sha = None
-            if sha is not None:
-                other_settings["git_commit"] = sha
+                _validate_wandb_artifact_size(code_dir, artifact_name="source code")
+            except ValueError as exc:
+                logger.error(
+                    "Automatic W&B source capture is disabled: %s. Set save_code=False or choose a smaller "
+                    "source directory.",
+                    exc,
+                )
+            else:
+                logger.info(f"Setting wandb code_dir to {code_dir}")
+                other_settings["code_dir"] = code_dir
+                other_settings["git_root"] = code_dir
+        # The commit is run metadata, so record it whether or not the source is captured.
+        # wandb doesn't populate it on its own.
+        commit_dir = code_dir or "."
+        try:
+            sha = self._get_git_sha(commit_dir)
+        except Exception as exc:
+            # The commit is optional metadata; a broken checkout must not stop training.
+            logger.warning("Could not get git sha for %s (%s). Will not log git commit.", commit_dir, exc)
+            sha = None
+        if sha is not None:
+            other_settings["git_commit"] = sha
 
         return other_settings
 
@@ -527,6 +654,32 @@ class WandbConfig(TrackerConfig):
                 raise e
 
         return git_sha
+
+
+def _git_run_config(commit: Optional[str], source_dir: str) -> dict[str, Any]:
+    """Run-config entries for the commit and working-tree state of the launch.
+
+    A job submitted through Iris runs from a bundle without ``.git``, but inherits the
+    submitter's git provenance in ``MARIN_PROVENANCE``. Only the commit, the dirty flag,
+    and the tree hash are recorded: the full provenance also holds the submitter's
+    username, command line, and remote URL, which do not belong in a W&B config.
+
+    Args:
+        commit: The commit from ``GIT_COMMIT`` or a local checkout, if one was found.
+        source_dir: The checkout the commit was read from. Without ``MARIN_PROVENANCE``, the
+            dirty flag is read from this checkout, which can differ from the working directory.
+    """
+    provenance = Provenance.capture(Path(source_dir))
+    if not provenance.base_commit:
+        return {"git_commit": commit} if commit else {}
+    if commit is not None and not commit.startswith(provenance.base_commit):
+        # The provenance describes a different checkout, so its dirty flag does not apply.
+        return {"git_commit": commit}
+    return {
+        "git_commit": commit or provenance.base_commit,
+        "git_dirty": provenance.dirty,
+        "git_tree_hash": provenance.tree_hash,
+    }
 
 
 def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:

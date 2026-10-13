@@ -1,0 +1,9 @@
+name: marin-buckets
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: ../../.venv
+description: Shared Marin data buckets and lifecycle policies.

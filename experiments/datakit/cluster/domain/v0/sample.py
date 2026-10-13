@@ -36,9 +36,10 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 from fray.types import ResourceConfig
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
-from zephyr.readers import InputFileSpec, load_file
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import load_file
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, EmbeddingAttrData
