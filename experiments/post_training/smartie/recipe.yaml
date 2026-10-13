@@ -1,6 +1,13 @@
 # Recipe fragment, not a launch document. Artifact inputs, role geometry, and
 # runtime pins must be bound by the campaign artifact entrypoint before launch.
 entrypoint: taskcompendium
+data:
+  sampling:
+    kind: domain-weighted
+    seed: 42
+    domain_weights:
+      real: 2.0
+      structural: 1.0
 context_budget:
   request_window_tokens: 32768
   max_new_tokens_per_turn: 16384

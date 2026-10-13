@@ -84,7 +84,7 @@ def training_config(max_steps: int) -> dict:
         chat_template=None,
     )
     config["generator"]["engine_init_kwargs"]["moe_backend"] = "triton"
-    config["data"] = {"kind": "parquet", "train_data": [], "val_data": [], "shuffle": True}
+    config["data"].update(kind="parquet", train_data=[], val_data=[], shuffle=True)
     config["extra_env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True", "NCCL_DEBUG": "WARN"}
     return config
 

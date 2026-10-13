@@ -27,6 +27,8 @@ print(json.dumps({
     "reference_required": reference_model_required(launch.skyrl.trainer.algorithm),
     "auxiliary_active": objective.auxiliary_weight > 0,
     "verified_boundaries": objective.boundary.uses_verified_boundaries,
+    "sampling_kind": launch.skyrl.data.sampling.kind,
+    "domain_weights": dict(launch.skyrl.data.sampling.domain_weights),
 }))
 """
 
@@ -56,4 +58,6 @@ def test_joint_recipe_crosses_pinned_launcher_boundary(tmp_path):
         "reference_required": True,
         "auxiliary_active": True,
         "verified_boundaries": True,
+        "sampling_kind": "domain-weighted",
+        "domain_weights": {"real": 2.0, "structural": 1.0},
     }
