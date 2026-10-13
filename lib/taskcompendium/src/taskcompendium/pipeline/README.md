@@ -138,7 +138,7 @@ unsampled rows get `source_sampled` readiness. Otherwise controls run on every
 remaining kept task; already sampled tasks are not rerun. The report records
 `validated`, with counts and evidence covering all eligible tasks. Passed tasks
 remain usable, failed and defective tasks are rejected, and unavailable controls
-defer only their own task. An empty sample remains inconclusive. The 95% threshold
+defer only their own task. An empty sample skips controls. The 95% threshold
 controls this execution shortcut; it does not set the GLM quality grade.
 
 Completed validation shards checkpoint their trial evidence before returning.

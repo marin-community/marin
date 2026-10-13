@@ -582,6 +582,10 @@ def _checkpointed_trials(
         )
         for row in rows
     ]
+    new_records = [item for item in verified if any(value.reused_from is None for value in item.evidence)]
+    if not new_records:
+        yield from verified
+        return
     checkpoint = (
         StoragePath(report_path).parent / f"evidence/control-{time.time_ns():020d}-{phase}-{shard.shard_idx:05d}.parquet"
     )
@@ -597,7 +601,7 @@ def _checkpointed_trials(
                     }
                 )
             }
-            for item in verified
+            for item in new_records
         ),
         str(checkpoint),
         schema=TRIAL_CHECKPOINT_SCHEMA,

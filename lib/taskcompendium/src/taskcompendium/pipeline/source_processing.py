@@ -68,6 +68,7 @@ from taskcompendium.pipeline.source_quality import (
 )
 from taskcompendium.pipeline.source_verification import (
     SOURCE_VERIFICATION_REVISION,
+    VERIFICATION_REPORT_FILENAME,
     SourceVerificationPolicy,
     SourceVerificationStatus,
     VerificationCounts,
@@ -820,7 +821,7 @@ def _write_manifest(
     output, recipe, config = run.output, run.recipe, run.config
     report = {key: value for key, value in verification["verification"].items() if key not in {"results", "evidence"}}
     if run.recipe.controls is not None and report["status"] != SourceVerificationStatus.SKIPPED:
-        report["trial_report"] = str(run.scratch("verified") / "verification.json")
+        report["trial_report"] = str(run.scratch("verified") / VERIFICATION_REPORT_FILENAME)
     telemetry = str(output / TELEMETRY_FILENAME)
     manifest = {
         "telemetry": telemetry,
