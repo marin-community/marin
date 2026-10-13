@@ -165,6 +165,26 @@ rows. Before submission, the launcher posts source SHA, run and coordinator IDs,
 fork point, and checkpoint to [#8506](https://github.com/marin-community/marin/issues/8506);
 a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
+## Context-length switches
+
+The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
+at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
+decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch.
+
+A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
+(`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the
+context the run is leaving, with the step N it ended at, to `HERO_CONTEXT_PHASES` in
+`launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the parent's
+`throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later handoffs keep
+both. Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
+only `--qk-mult` and `--qk-mult-long-scale` on the command line. `qk_mult_long_scale` multiplies
+`qk_mult` on the global layers only. Each Harrier bucket skips the unread rest of the shuffle window
+it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
+data seed, component order, and token store unchanged. The QK and capacity values need measured
+evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
+thresholds; see the
+[context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
+
 ## Coordinated garbage collection
 
 The scaling-ladder launcher, including the production hero launched by `trigger_hero.sh`,
