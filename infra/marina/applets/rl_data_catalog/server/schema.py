@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS atlas_packets (
     PRIMARY KEY (load_id, pipeline_key, task_id)
 );
 CREATE OR REPLACE VIEW atlas_cohort_summary AS
+WITH counts AS (
 SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
     COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed') AS reviewed,
     COUNT(i.task_id) FILTER (WHERE NOT i.has_task) AS missing_evidence,
@@ -53,15 +54,40 @@ SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
         'bad', COUNT(i.task_id) FILTER (WHERE i.verdict = 'bad'),
         'unknown', COUNT(i.task_id) FILTER (WHERE i.verdict = 'unknown')
     ) AS verdict_counts,
-    CASE
-        WHEN p.sample_count = 0 OR COUNT(i.task_id) <> p.sample_count
-            OR COUNT(i.task_id) FILTER (WHERE i.status <> 'reviewed' OR NOT i.has_task) > 0 THEN 'unknown'
-        WHEN COUNT(i.task_id) FILTER (WHERE i.verdict = 'bad') > 0 THEN 'bad'
-        WHEN COUNT(i.task_id) FILTER (WHERE i.verdict = 'some_issues') > 0 THEN 'some_issues'
-        WHEN COUNT(i.task_id) FILTER (WHERE i.verdict = 'unknown') > 0 THEN 'unknown'
-        ELSE 'good'
-    END AS grade
-FROM atlas_populations p LEFT JOIN atlas_items i
+    COUNT(i.task_id) AS item_count,
+    COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed' AND i.has_task AND i.verdict = 'good') AS good_count,
+    COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed' AND i.has_task AND i.verdict = 'bad') AS bad_count,
+    COUNT(i.task_id) FILTER (
+        WHERE i.status = 'reviewed' AND i.has_task AND i.verdict <> 'unknown'
+    ) AS conclusive_count,
+    a.curation->>'status' AS curation_status,
+    (a.curation->>'processed_rows')::bigint AS processed_rows
+FROM atlas_populations p JOIN atlas_assessments a USING (load_id, pipeline_key)
+LEFT JOIN atlas_items i
     ON i.load_id = p.load_id AND i.pipeline_key = p.pipeline_key AND i.cohort = p.cohort
-GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count;
+GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count, a.curation
+)
+SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
+    missing_evidence, packets_with_omissions, verdict_counts,
+    CASE
+        WHEN cohort = 'admitted' AND population = 0 AND processed_rows > 0
+            AND curation_status IN ('completed', 'gated') THEN 'bad'
+        WHEN sample_count = 0 OR item_count <> sample_count THEN 'unknown'
+        WHEN 5 * good_count >= 4 * sample_count THEN 'good'
+        WHEN 5 * bad_count > sample_count THEN 'bad'
+        WHEN 5 * conclusive_count < 4 * sample_count THEN 'unknown'
+        ELSE 'some_issues'
+    END AS grade,
+    good_count::double precision / NULLIF(sample_count, 0) AS good_fraction,
+    CASE
+        WHEN cohort = 'admitted' AND population = 0 AND processed_rows > 0
+            AND curation_status IN ('completed', 'gated') THEN 'Curation retained zero tasks'
+        WHEN sample_count = 0 THEN 'No sample available'
+        WHEN item_count <> sample_count THEN 'Sample coverage is incomplete'
+        WHEN 5 * good_count >= 4 * sample_count THEN 'At least 80% of sampled tasks are Good'
+        WHEN 5 * bad_count > sample_count THEN 'More than 20% of sampled tasks are Bad'
+        WHEN 5 * conclusive_count < 4 * sample_count THEN 'Fewer than 80% of sampled tasks have conclusive evidence'
+        ELSE 'Sample has concerns below the Bad threshold'
+    END AS grade_reason
+FROM counts;
 """

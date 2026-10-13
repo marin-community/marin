@@ -2,7 +2,7 @@
 const number = new Intl.NumberFormat("en-US");
 const labels = {good: "Good", some_issues: "Some issues", bad: "Bad", unknown: "Unknown", unassessed: "Unassessed"};
 const state = {sources: [], sort: "display_name", direction: 1};
-const columns = [["display_name", "Source"], ["origin", "Catalog"], ["task_count", "Input rows"], ["admitted", "Admitted rows"], ["quality", "Sampled grade"], ["sample", "Admitted / excluded sample"], ["curation", "Curation"], ["controls", "Executed controls"], ["type", "Type"], ["status", "Availability"]];
+const columns = [["display_name", "Source"], ["origin", "Catalog"], ["task_count", "Input rows"], ["admitted", "Retained rows"], ["quality", "Sampled grade"], ["sample", "Retained / excluded sample"], ["curation", "Curation"], ["controls", "Executed controls"], ["type", "Type"], ["status", "Availability"]];
 function grade(row) {return row.assessment.status === "complete" ? row.assessment.admitted.grade : "unassessed";}
 function value(row, key) {
   if (key === "quality") return grade(row);
@@ -40,6 +40,11 @@ function render() {
       else if (key === "quality") {const badge = node("span", labels[item], `chip quality-${item}`); if (row.assessment.status === "complete") {const anchor = node("a"); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; anchor.append(badge); td.append(anchor);} else td.append(badge);}
       else if (key === "sample") td.textContent = row.assessment.status === "complete" ? `${row.assessment.admitted.sample_count} / ${row.assessment.excluded.sample_count}` : "—";
       else td.textContent = item === null || item === undefined ? "—" : typeof item === "number" ? number.format(item) : item;
+      if (key === "quality" && row.assessment.status === "complete") {
+        const summary = row.assessment.admitted;
+        td.title = summary.grade_reason;
+        if (summary.good_fraction !== null) td.append(node("div", `${(100 * summary.good_fraction).toFixed(1)}% Good`, "source-subtitle"));
+      }
       tr.append(td);
     }
     fragment.append(tr);

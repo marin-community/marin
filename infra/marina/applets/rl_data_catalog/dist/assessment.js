@@ -5,9 +5,10 @@ function summary(report) {
   const target = $("summary");
   for (const cohort of ["admitted", "excluded"]) {
     const data = report.assessment[cohort], section = node("section", undefined, "assessment-card");
-    section.append(node("h2", cohort === "admitted" ? "Admitted task opinions" : "Excluded row diagnostics"));
+    section.append(node("h2", cohort === "admitted" ? "Retained task opinions" : "Excluded row diagnostics"));
     section.append(node("p", `${labels[data.grade]} · ${data.reviewed}/${data.sample_count} reviewed · population ${data.population.toLocaleString()}`));
     section.append(node("p", ["good", "some_issues", "bad", "unknown"].map(verdict => `${labels[verdict]} ${data.verdict_counts[verdict]}`).join(" · ")));
+    section.append(node("p", data.good_fraction === null ? data.grade_reason : `${(100 * data.good_fraction).toFixed(1)}% Good · ${data.grade_reason}`));
     section.append(node("p", `Missing required evidence: ${data.missing_evidence}. Packets with omissions: ${data.packets_with_omissions}.`));
     target.append(section);
   }
@@ -20,7 +21,7 @@ function summary(report) {
 }
 function samples(report) {
   for (const cohort of ["admitted", "excluded"]) {
-    const section = node("section"); section.append(node("h2", cohort === "admitted" ? "Admitted sample" : "Excluded sample"));
+    const section = node("section"); section.append(node("h2", cohort === "admitted" ? "Retained sample" : "Excluded sample"));
     for (const sample of report.evidence.samples.filter(item => item.cohort === cohort)) {
       const details = node("details", undefined, "assessment-card"), heading = node("summary", `${labels[sample.verdict]} · ${sample.task_id}`), content = node("div");
       details.append(heading, content); section.append(details);

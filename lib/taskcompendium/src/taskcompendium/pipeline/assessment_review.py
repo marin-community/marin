@@ -47,7 +47,10 @@ evidence; only material exposed to the solver can be answer leakage. Resource ro
 The submission section describes the runtime adapter. It can extract a conversation answer and stage
 it in a grader file; this does not require the solver to write that file. Use this contract when
 checking answer delivery. Missing previous model reviews alone are not a task defect.
-If required task context or reference evidence was omitted, use unknown. For an excluded item,
+Bounded previews include original counts and sampled indices or text prefixes and suffixes.
+Assess the visible public task and answer contract; exhaustive private fixtures and prior reviews
+are not required. Use unknown only when a specific missing fact prevents assessing the task,
+and name that fact. Do not infer defects or certify details in omitted material. For an excluded item,
 explain its recorded rejection and any possible false exclusion without treating it as released data.
 """
 TOOL_NAME = "assess_task"

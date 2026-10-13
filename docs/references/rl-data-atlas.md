@@ -18,14 +18,30 @@ flowchart LR
 ## Reading grades
 
 FULL campaigns grade automatically; SAMPLE opts in with `--assess`.
-The default sample covers 100 admitted tasks and up to 20 excluded rows.
+The default sample covers 100 retained tasks and up to 20 excluded rows.
+"Admitted" in the catalog means a task retained in the final TaskSpec parquet
+after curation. Excluded rows are sampled separately to inspect filtering decisions.
 Admitted opinions, excluded diagnostics and executed grader controls remain
 separate. Grading does not change admission. Input populations may overlap.
 
-SQL computes each cohort's verdict counts and label. An empty sample, missing
-TaskSpec gives Unknown; otherwise Bad takes precedence
-over Some issues, Unknown and Good. Read the task explanations, citations and
-omissions beside the label. These opinions describe the inspected sample.
+SQL computes each cohort's verdict counts and label over the entire selected sample:
+
+- Good: at least 80% have usable task evidence and a Good judgment.
+- Bad: more than 20% have usable task evidence and a Bad judgment.
+- Unknown: neither threshold is met and fewer than 80% have conclusive judgments.
+- Some issues: the remaining samples.
+
+A completed or gated pipeline that processes inputs and retains zero tasks is Bad.
+An incomplete pipeline without retained tasks remains Unknown. Missing packets
+and unavailable judgments count against coverage; they are never dropped from
+the denominator. Atlas displays the Good fraction and the reason for the label.
+These opinions describe the inspected sample, not an estimate of the whole source.
+
+Large packets retain the task and answer contract, with bounded previews of long
+text, collections and stage audits. Previews record original sizes and selected
+indices or text prefixes and suffixes; full evidence remains in curation outputs.
+The model names any missing fact that prevents a judgment. Omitted private fixture
+text alone does not force Unknown.
 
 Assessment keys use ordinary artifact dependencies and explicit versions.
 Changing only the rubric or grading model reuses curation. A failed new key has

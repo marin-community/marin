@@ -230,3 +230,61 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(cat
         assert client.get("/sources").json()["snapshot_id"] == "next"
         assert client.get("/evidence", params={"source_id": "math", "task_id": "one"}).json() == packet
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
+
+
+@pytest.mark.parametrize(
+    "verdicts, curation_status, expected",
+    [
+        (["good"] * 99 + ["bad"], "completed", "good"),
+        (["good"] * 80 + ["bad"] * 20, "completed", "good"),
+        (["good"] * 79 + ["bad"] * 21, "completed", "bad"),
+        (["good"] * 79 + ["some_issues"] * 21, "completed", "some_issues"),
+        (["good"] * 80 + ["unknown"] * 20, "completed", "good"),
+        (["good"] * 79 + ["unknown"] * 21, "completed", "unknown"),
+        (["good", "missing_task"], "completed", "unknown"),
+        ([], "completed", "bad"),
+        ([], "gated", "bad"),
+        ([], "incomplete", "unknown"),
+    ],
+)
+def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, verdicts, curation_status, expected):
+    with catalog_database.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO atlas_assessments VALUES
+                ('load', 'pipeline', 'source', 'full', '{}'::jsonb, 'rubric',
+                 :curation, 'curation-uri', '[]'::jsonb)
+            """
+            ),
+            {"curation": json.dumps({"status": curation_status, "processed_rows": 100})},
+        )
+        connection.execute(
+            text("INSERT INTO atlas_populations VALUES ('load', 'pipeline', 'admitted', :count, :count)"),
+            {"count": len(verdicts)},
+        )
+        for index, verdict in enumerate(verdicts):
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO atlas_items VALUES
+                    ('load', 'pipeline', :id, 'admitted', 'reviewed', :verdict, 'finding',
+                     '[]'::jsonb, 'packet-uri', :has_task, '[]'::jsonb, NULL)
+                """
+                ),
+                {
+                    "id": str(index),
+                    "verdict": "good" if verdict == "missing_task" else verdict,
+                    "has_task": verdict != "missing_task",
+                },
+            )
+        row = (
+            connection.execute(text("SELECT grade, good_fraction, grade_reason FROM atlas_cohort_summary"))
+            .mappings()
+            .one()
+        )
+    assert row["grade"] == expected
+    if verdicts == ["good"] * 99 + ["bad"]:
+        assert row["good_fraction"] == 0.99
+    if not verdicts and curation_status != "incomplete":
+        assert row["grade_reason"] == "Curation retained zero tasks"

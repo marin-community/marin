@@ -409,3 +409,46 @@ def test_assessment_keeps_task_context_when_audit_views_repeat_large_payloads(co
     assert "task_json" not in evidence["review"] and "task_json" not in evidence["verify"]
     assert "raw_json" not in evidence["verify"]
     assert len(packet["packet_json"]) <= sampling.max_packet_characters
+
+
+@pytest.mark.parametrize("oversized_section", ["task", "audit"])
+def test_assessment_summarizes_large_evidence_without_dropping_task(context, tmp_path, oversized_section):
+    curated = curated_source(
+        context, tmp_path, [{"Body": "Ada has two apples.", "Question": "How many apples?", "Answer": "2"}]
+    )
+    for view in ("normalize", "review", "verify"):
+        path = next((curated / view).glob("*.parquet"))
+        table = pq.read_table(path)
+        rows = table.to_pylist()
+        for row in rows:
+            if oversized_section == "task" and view == "normalize":
+                task = json.loads(row["task_json"])
+                task["context"]["events"][-1]["content"] = (
+                    "Ada has two apples. " + "Background information. " * 10_000 + "How many apples?"
+                )
+                row["task_json"] = json.dumps(task)
+            elif oversized_section == "audit":
+                row["normalization_changes"] = [
+                    {
+                        "field": "prompt",
+                        "reason": "adapt delivery",
+                        "original": "old " * 5000,
+                        "replacement": "new " * 5000,
+                    }
+                    for _ in range(40)
+                ]
+        pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
+    inputs = tmp_path / "inputs"
+    sampling = AssessmentSampling(admitted=1)
+    prepare_assessment(context, curated_root=str(curated), sampling=sampling, output_root=str(inputs))
+    metadata = assessment_inputs(str(inputs))
+    (packet,) = [row for path in metadata.packet_paths for row in load_parquet(path)]
+    evidence = json.loads(packet["packet_json"])
+    assert evidence["task"]["id"] == packet["task_id"]
+    assert evidence["submission"]["answer_path"] is None
+    assert evidence["verify"]["admission"] == "admitted"
+    assert len(packet["packet_json"]) <= sampling.max_packet_characters
+    if oversized_section == "task":
+        content = evidence["task"]["context"]["events"][-1]["content"]
+        assert content["text"].startswith("Ada has two apples.")
+        assert content["suffix"].endswith("How many apples?")

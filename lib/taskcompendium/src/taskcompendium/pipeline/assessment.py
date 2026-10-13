@@ -51,7 +51,6 @@ AUDIT_PREVIEW_CHARACTERS = 2048
 AUDIT_FIELD_OWNERS = {"task_json": "normalize", "normalization_changes": "normalize"}
 PARQUET_READ_BLOCK_BYTES = 4 * 1024 * 1024
 EVIDENCE_VIEWS = ("normalize", "review", "verify")
-TASK_PACKET_OMISSION = "task: projected evidence exceeds packet budget"
 INPUTS_METADATA = "inputs.parquet"
 JUDGMENTS_METADATA = "judgments.parquet"
 
@@ -193,6 +192,54 @@ def _audit_preview(value: str) -> tuple[str | dict[str, Any], bool]:
     return private_evidence_summary(value, "Full value retained in source audit", AUDIT_PREVIEW_CHARACTERS), True
 
 
+def _evidence_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
+
+
+def _evidence_preview(value: Any, *, text_characters: int, entries: int) -> Any:
+    if isinstance(value, str):
+        if len(value) <= text_characters:
+            return value
+        prefix = text_characters // 2
+        summary = private_evidence_summary(value, "Full value retained in curation audit", prefix)
+        summary["suffix"] = value[-(text_characters - prefix) :]
+        return summary
+    if isinstance(value, list):
+        if len(value) <= entries:
+            return [_evidence_preview(item, text_characters=text_characters, entries=entries) for item in value]
+        indices = [index * (len(value) - 1) // (entries - 1) for index in range(entries)]
+        return {
+            "total_count": len(value),
+            "sampled_indices": indices,
+            "items": [
+                _evidence_preview(value[index], text_characters=text_characters, entries=entries) for index in indices
+            ],
+        }
+    if isinstance(value, dict):
+        items = list(value.items())
+        result = {
+            key: _evidence_preview(item, text_characters=text_characters, entries=entries)
+            for key, item in items[:entries]
+        }
+        if len(items) > entries:
+            return {"total_fields": len(items), "fields": result, "truncated": True}
+        return result
+    return value
+
+
+def _bounded_evidence(value: dict[str, Any], budget: int) -> dict[str, Any]:
+    if len(_evidence_json(value)) <= budget:
+        return value
+    # Shrink from the original on each pass so nested previews never become evidence.
+    for text_characters, entries in ((4096, 64), (2048, 32), (1024, 16), (512, 8), (256, 4), (128, 2)):
+        preview = {
+            key: _evidence_preview(item, text_characters=text_characters, entries=entries) for key, item in value.items()
+        }
+        if len(_evidence_json(preview)) <= budget:
+            return preview
+    raise ValueError(f"Evidence structure cannot fit the {budget}-character section budget")
+
+
 def _indexed_rows(path: str, *, cohort: Cohort) -> Iterator[dict[str, Any]]:
     columns = ["task_id", "admission", "filter_reasons"] if cohort == Cohort.EXCLUDED else ["task_id"]
     for row in load_parquet(InputFileSpec(path, columns=columns)):
@@ -295,12 +342,6 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
             evidence["task"] = review_payload(task)
             evidence["submission"] = asdict(submission_contract(task))
     evidence[view] = row
-    if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
-        evidence.pop("task", None)
-        omissions.append(TASK_PACKET_OMISSION)
-    if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
-        evidence = {view: {"task_id": row["task_id"], "omitted": "section exceeds packet budget"}}
-        omissions.append(f"{view}: evidence exceeds packet budget")
     return {
         "task_id": row["task_id"],
         "evidence": evidence,
@@ -339,16 +380,25 @@ def _packet(
     for view in EVIDENCE_VIEWS:
         if view not in evidence:
             omissions.append(f"{view}: no row evidence")
-    if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
-        evidence.pop("task", None)
-        omissions.append(TASK_PACKET_OMISSION)
-    if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
-        evidence = {view: {"task_id": task_id, "omitted": "section exceeds packet budget"} for view in evidence}
-        omissions.append("audit: evidence exceeds packet budget")
+    if len(_evidence_json(evidence)) > sampling.max_packet_characters:
+        # Reserve most of the packet for the task; audits must not crowd it out.
+        available = sampling.max_packet_characters - 256
+        budgets = {"task": available * 3 // 4}
+        other_sections = [section for section in evidence if section != "task"]
+        audit_budget = (available - budgets["task"]) // max(len(other_sections), 1)
+        budgets.update({section: audit_budget for section in other_sections})
+        for section, value in evidence.items():
+            bounded = _bounded_evidence(value, budgets[section])
+            if bounded != value:
+                omissions.append(f"{section}: bounded preview; full evidence retained in curation audit")
+            evidence[section] = bounded
+    packet_json = _evidence_json(evidence)
+    if len(packet_json) > sampling.max_packet_characters:
+        raise ValueError(f"Assessment packet exceeds its budget: {task_id}")
     return {
         "task_id": task_id,
         "cohort": selected["cohort"],
-        "packet_json": json.dumps(evidence, ensure_ascii=False, allow_nan=False, sort_keys=True),
+        "packet_json": packet_json,
         "omissions": omissions,
         "exclusion_reason": selected["reason"],
     }

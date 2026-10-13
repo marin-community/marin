@@ -26,7 +26,7 @@ from experiments.post_training.glm import (
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import RecipeSettings
 
-INPUTS_VERSION = "2026.10.13.5"
+INPUTS_VERSION = "2026.10.13.6"
 JUDGMENTS_VERSION = "2026.10.13.1"
 
 
