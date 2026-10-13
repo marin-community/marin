@@ -209,9 +209,6 @@ Install the `shellsim` extra for Shellsim 0.1.35 or later. A Harbor worker share
 ```yaml
 environment:
   import_path: shellbox.backends.shellsim.environment:ShellSimEnvironment
-  kwargs:
-    pypi_catalog: https://ports.oa.dev/releases/<version>/catalog.json
-    pypi_packages: [numpy, pytest]
 agents:
   - import_path: shellbox.agent:BashAgent
     model_name: openai/local-model
@@ -219,7 +216,7 @@ agents:
       base_url: http://127.0.0.1:8000/v1
 ```
 
-For direct use, inject `shellsim.Context(pypi_catalog=...)` into `ShellSimMachineFactory` and select packages/tools on `ShellSimBuiltins`. Harbor also accepts `tools`, `cache_dir`, `offline`, and `trusted_precompiled` as environment kwargs. Use a snapshot catalog for reproducible runs; catalog downloads happen in the trusted harness. Guest commands have no host filesystem or network access.
+Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Packages and tools are environment selections (`pypi_packages`/`tools`, or `ShellSimBuiltins`). A custom Harbor environment class can own the configured Context. Guest commands have no host filesystem or network access.
 
 Agent shell state persists between Bash actions; setup and verifier commands use fresh shell state over the same filesystem. Actions complete before returning; interactive input and interruption are unavailable. Task images and Dockerfile instructions are not applied; regular files under `environment/` are copied to the workdir. Select tasks compatible with the WASI catalog and supported commands.
 
