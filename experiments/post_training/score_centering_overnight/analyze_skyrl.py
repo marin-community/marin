@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+from urllib.parse import urlparse
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -41,7 +42,12 @@ def summarize(config: dict, audit: dict, cache: Path, ledger: dict) -> dict:
     metrics = [
         json.loads((cache / "exports/training_metrics" / f"train-{step:08d}.json").read_text()) for step in range(1, 301)
     ]
-    inventory = {row["Key"].rsplit("/", 1)[-1]: row for row in json.loads((cache / "object_inventory.json").read_text())}
+    metric_prefix = urlparse(config["artifacts"]["export_root"]).path.lstrip("/").rstrip("/") + "/training_metrics/"
+    inventory = {
+        row["Key"].removeprefix(metric_prefix): row
+        for row in json.loads((cache / "object_inventory.json").read_text())
+        if row["Key"].startswith(metric_prefix)
+    }
     attempts = [row for row in ledger["attempts"] if row["task_id"].rsplit("/", 1)[0] == "/romain/" + run_id]
     assert attempts and all(int(row["finished_at_ms"]) for row in attempts)
     points = []

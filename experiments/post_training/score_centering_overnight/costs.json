@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-13T04:21:30.547020+00:00",
+  "observed_at": "2026-10-13T16:34:19.884770+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -3403,7 +3403,8 @@
       "configuration_sha256": "b7ba4cc0263fb50b27e035bfd83ee672c3c5a5d2379d794bc631901b50b0e46e",
       "allocated_seconds": 50.942,
       "allocated_h100_hours": 0.11320444444444444,
-      "outcome": "failed engineering attempt"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce/1",
@@ -3423,7 +3424,8 @@
       "configuration_sha256": "b7ba4cc0263fb50b27e035bfd83ee672c3c5a5d2379d794bc631901b50b0e46e",
       "allocated_seconds": 50.942,
       "allocated_h100_hours": 0.11320444444444444,
-      "outcome": "failed engineering attempt"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/0",
@@ -3443,7 +3445,8 @@
       "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
       "allocated_seconds": 85.35,
       "allocated_h100_hours": 0.18966666666666665,
-      "outcome": "failed engineering attempt"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/1",
@@ -3463,7 +3466,8 @@
       "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
       "allocated_seconds": 85.35,
       "allocated_h100_hours": 0.18966666666666665,
-      "outcome": "failed engineering attempt"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s1-a3-01a126ce/0",
@@ -3525,7 +3529,8 @@
       "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
       "allocated_seconds": 8988.365,
       "allocated_h100_hours": 19.974144444444445,
-      "outcome": "failed engineering attempt"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/1",
@@ -3545,33 +3550,17 @@
       "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
       "allocated_seconds": 8988.365,
       "allocated_h100_hours": 19.974144444444445,
-      "outcome": "failed engineering attempt"
-    }
-  ],
-  "terminal_h100_hours": 54.25557777777778,
-  "terminal_h100_hours_by_stage": {
-    "reference diagnostics": 14.997133333333334,
-    "reference qualification": 1.1350711111111111,
-    "reference main": 28.411202222222222,
-    "SkyRL qualification": 30.69114888888889,
-    "SkyRL main": 2945.291882222221,
-    "SkyRL staleness qualification": 7.2194199999999995,
-    "core GPU qualification": 4.532366666666666,
-    "Snowball GPU qualification": 233.0384955555555,
-    "Qwen GPU qualification": 98.52069999999999,
-    "Snowball noise calibration": 235.28845555555557,
-    "Snowball incumbent qualification": 92.46114222222224
-  },
-  "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
-  "active_attempts": [
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json"
+    },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce/0",
       "attempt_id": "0",
       "attempt_uid": "ac0cbbea5b653e63",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791851438320",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791872813926",
       "node_name": "g73df9c",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3580,16 +3569,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "fb0f27daaad57f8645a3569c075c8d0d6c930d6e9e78fedeb00f8aa796ef5975",
-      "allocated_h100_hours_so_far": 30.78272671116723
+      "allocated_seconds": 21375.606,
+      "allocated_h100_hours": 47.50134666666666,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce/1",
       "attempt_id": "0",
       "attempt_uid": "4f27396f0facce55",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791851438320",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791872813926",
       "node_name": "g73e352",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3598,16 +3590,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "fb0f27daaad57f8645a3569c075c8d0d6c930d6e9e78fedeb00f8aa796ef5975",
-      "allocated_h100_hours_so_far": 30.78272671116723
+      "allocated_seconds": 21375.606,
+      "allocated_h100_hours": 47.50134666666666,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce/0",
       "attempt_id": "0",
       "attempt_uid": "f7b65d11e8e73fe8",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791851449911",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791873555357",
       "node_name": "g8247ba",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3616,16 +3611,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "c880a86314c0cbfcbd79aa0e0bc9df7a74aff6ec453b763f8673da039acf3238",
-      "allocated_h100_hours_so_far": 30.756968933211432
+      "allocated_seconds": 22105.446,
+      "allocated_h100_hours": 49.12321333333333,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce/1",
       "attempt_id": "0",
       "attempt_uid": "f9e74e76aa9c9319",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791851449911",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791873549879",
       "node_name": "g82d828",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3634,16 +3632,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "c880a86314c0cbfcbd79aa0e0bc9df7a74aff6ec453b763f8673da039acf3238",
-      "allocated_h100_hours_so_far": 30.756968933211432
+      "allocated_seconds": 22099.968,
+      "allocated_h100_hours": 49.11104,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce/0",
       "attempt_id": "0",
       "attempt_uid": "36b2cf25fb0c50cb",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791851495586",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791874113262",
       "node_name": "g73b7ae",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3652,16 +3653,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "762ba5111820fee74ecc7d5c4392cb68e6f740d2d3ce438f9b373438681349d1",
-      "allocated_h100_hours_so_far": 30.655468933317398
+      "allocated_seconds": 22617.676,
+      "allocated_h100_hours": 50.26150222222222,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce/1",
       "attempt_id": "0",
       "attempt_uid": "b1c1a822d2b04396",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791851495586",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791874113262",
       "node_name": "g73bb8a",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3670,16 +3674,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "762ba5111820fee74ecc7d5c4392cb68e6f740d2d3ce438f9b373438681349d1",
-      "allocated_h100_hours_so_far": 30.655468933317398
+      "allocated_seconds": 22617.676,
+      "allocated_h100_hours": 50.26150222222222,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce/0",
       "attempt_id": "0",
       "attempt_uid": "7e46af257420d5cd",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791851622460",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791880984374",
       "node_name": "g73e294",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3688,16 +3695,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "a05570a67be620be819d3aa3ccdcb2fcc8f93cc69740181c755f1d96c03d0070",
-      "allocated_h100_hours_so_far": 30.373526710934108
+      "allocated_seconds": 29361.914,
+      "allocated_h100_hours": 65.24869777777778,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce/1",
       "attempt_id": "0",
       "attempt_uid": "a1a05be997fc9179",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791851645582",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791880984374",
       "node_name": "g853b26",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3706,16 +3716,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "a05570a67be620be819d3aa3ccdcb2fcc8f93cc69740181c755f1d96c03d0070",
-      "allocated_h100_hours_so_far": 30.32214448875851
+      "allocated_seconds": 29338.792,
+      "allocated_h100_hours": 65.19731555555556,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce/0",
       "attempt_id": "1",
       "attempt_uid": "756fdd4662729000",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791854724255",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791883511090",
       "node_name": "g83bf4c",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3724,16 +3737,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "b7ba4cc0263fb50b27e035bfd83ee672c3c5a5d2379d794bc631901b50b0e46e",
-      "allocated_h100_hours_so_far": 23.48064893298679
+      "allocated_seconds": 28786.835,
+      "allocated_h100_hours": 63.97074444444444,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce/1",
       "attempt_id": "1",
       "attempt_uid": "8ab0127b40f884e1",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791854724255",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791883505343",
       "node_name": "g83c00a",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3742,16 +3758,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "b7ba4cc0263fb50b27e035bfd83ee672c3c5a5d2379d794bc631901b50b0e46e",
-      "allocated_h100_hours_so_far": 23.48064893298679
+      "allocated_seconds": 28781.088,
+      "allocated_h100_hours": 63.957973333333335,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/0",
       "attempt_id": "2",
       "attempt_uid": "594f9219ba1ca0b7",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791864168843",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791887202881",
       "node_name": "g7387bc",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3760,16 +3779,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
-      "allocated_h100_hours_so_far": 2.49267560005188
+      "allocated_seconds": 23034.038,
+      "allocated_h100_hours": 51.186751111111114,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/1",
       "attempt_id": "2",
       "attempt_uid": "6677eb59e0b0f335",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791864134398",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791887202881",
       "node_name": "g73a62a",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3778,7 +3800,26 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
-      "allocated_h100_hours_so_far": 2.569220044347975
+      "allocated_seconds": 23068.483,
+      "allocated_h100_hours": 51.26329555555556,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce.json"
     }
-  ]
+  ],
+  "terminal_h100_hours": 54.25557777777778,
+  "terminal_h100_hours_by_stage": {
+    "reference diagnostics": 14.997133333333334,
+    "reference qualification": 1.1350711111111111,
+    "reference main": 28.411202222222222,
+    "SkyRL qualification": 30.69114888888889,
+    "SkyRL main": 3599.876611111109,
+    "SkyRL staleness qualification": 7.2194199999999995,
+    "core GPU qualification": 4.532366666666666,
+    "Snowball GPU qualification": 233.0384955555555,
+    "Qwen GPU qualification": 98.52069999999999,
+    "Snowball noise calibration": 235.28845555555557,
+    "Snowball incumbent qualification": 92.46114222222224
+  },
+  "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
+  "active_attempts": []
 }
