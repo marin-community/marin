@@ -14,11 +14,12 @@ buffer, ``L = 1``, where group ``e``'s rows start at tile ``cu[e] // 128 + e``, 
 """
 
 import functools
+import math
 
 import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
-from jax.sharding import reshard
+from jax.sharding import get_abstract_mesh, reshard
 
 import cutlass
 import cutlass.cute as cute
@@ -347,18 +348,22 @@ def _quantize_rows(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     return values, blocked_scales(exponents[None])
 
 
-def mxfp8_matmul(x: jax.Array, w: jax.Array) -> jax.Array:
-    """Local ``x[T, K] @ w[K, N]`` with both operands MXFP8 along ``K``."""
+def mxfp8_matmul(x: jax.Array, w_values: jax.Array, w_exponents: jax.Array) -> jax.Array:
+    """Local ``x[T, K] @ w[K, N]`` with both operands MXFP8 along ``K``; ``w`` comes quantized along ``K`` in its
+    stored layout (``mx_quantize_cols``: e4m3 ``[K, N]``, exponents ``[K / 32, N]``)."""
     qx, sx = _quantize_rows(x)
-    qw, sw = _quantize_rows(w.T)
-    return _dense_gemm(qx, sx, qw, sw, a_spec=_K_MAJOR, b_spec=_K_MAJOR, rows=x.shape[0], cols=w.shape[1])
+    sw = blocked_scales(w_exponents.T[None])
+    return _dense_gemm(
+        qx, sx, w_values, sw, a_spec=_K_MAJOR, b_spec=_MN_MAJOR, rows=x.shape[0], cols=w_values.shape[1]
+    )
 
 
-def mxfp8_matmul_dgrad(g: jax.Array, w: jax.Array) -> jax.Array:
-    """Local ``g[T, N] @ w[K, N]^T`` with both operands MXFP8 along ``N``."""
+def mxfp8_matmul_dgrad(g: jax.Array, w_values: jax.Array, w_exponents: jax.Array) -> jax.Array:
+    """Local ``g[T, N] @ w[K, N]^T`` with both operands MXFP8 along ``N``; ``w`` comes quantized along ``N``
+    (``mx_quantize_rows``: e4m3 ``[K, N]``, exponents ``[K, N / 32]``)."""
     qg, sg = _quantize_rows(g)
-    qw, sw = _quantize_rows(w)
-    return _dense_gemm(qg, sg, qw, sw, a_spec=_K_MAJOR, b_spec=_K_MAJOR, rows=g.shape[0], cols=w.shape[0])
+    sw = blocked_scales(w_exponents[None])
+    return _dense_gemm(qg, sg, w_values, sw, a_spec=_K_MAJOR, b_spec=_K_MAJOR, rows=g.shape[0], cols=w_values.shape[0])
 
 
 def mxfp8_matmul_wgrad(x: jax.Array, g: jax.Array) -> jax.Array:
@@ -397,6 +402,31 @@ def _reduce_partial_to_spec(dw: jax.Array, w_spec: P, batch_axes: tuple[str, ...
     return jax.lax.psum(dw, rest) if rest else dw
 
 
+def _local_size(size: int, entry) -> int:
+    mesh = get_abstract_mesh()
+    return size // math.prod(mesh.shape[axis] for axis in _axes(entry))
+
+
+def _gathered_mx_weight(w: jax.Array, along: str) -> tuple[jax.Array, jax.Array]:
+    """``w[K, N]`` quantized to MXFP8 along ``K`` (``along="k"``) or ``N`` (``"n"``) and gathered to every device:
+    e4m3 values ``[K, N]`` and uint8 exponents. Each device quantizes its own FSDP shard and the gather moves e4m3
+    bytes, half the bf16 weight's. A shard that does not hold whole 32-element blocks is gathered first instead."""
+    spec = tuple(jax.typeof(w).sharding.spec) + (None,) * (2 - len(tuple(jax.typeof(w).sharding.spec)))
+    quantize = mx_quantize_cols if along == "k" else mx_quantize_rows
+    axis = 0 if along == "k" else 1
+    if _local_size(w.shape[axis], spec[axis]) % MX_BLOCK:
+        values, exponents = quantize(reshard(w, P(None, None)))
+        return values, exponents
+
+    def local(wl):
+        values, exponents = quantize(wl)
+        return jax.lax.bitcast_convert_type(values, jnp.uint8), exponents
+
+    values, exponents = jax.shard_map(local, in_specs=P(*spec), out_specs=(P(*spec), P(*spec)), check_vma=False)(w)
+    values, exponents = reshard(values, P(None, None)), reshard(exponents, P(None, None))
+    return jax.lax.bitcast_convert_type(values, jnp.float8_e4m3fn), exponents
+
+
 def _token_spec(x_spec: P, ndim: int) -> P:
     """``x``'s spec padded to ``ndim`` with the feature dim unsharded (the kernels need whole rows)."""
     entries = tuple(x_spec) + (None,) * (ndim - len(tuple(x_spec)))
@@ -418,12 +448,13 @@ def _mx_linear_fwd(x, w, out_sharding):
     x_spec = _token_spec(jax.typeof(x).sharding.spec, x.ndim)
     k, n = w.shape
 
-    def local(xl, wl):
-        return mxfp8_matmul(xl.reshape(-1, k), wl).reshape(*xl.shape[:-1], n)
+    def local(xl, wv, we):
+        return mxfp8_matmul(xl.reshape(-1, k), wv, we).reshape(*xl.shape[:-1], n)
 
     # The Pallas quantizers' outputs are not vma-annotated, so skip the varying-axes check.
-    y = jax.shard_map(local, in_specs=(x_spec, P(None, None)), out_specs=x_spec, check_vma=False)(
-        reshard(x, x_spec), reshard(w, P(None, None))
+    replicated = P(None, None)
+    y = jax.shard_map(local, in_specs=(x_spec, replicated, replicated), out_specs=x_spec, check_vma=False)(
+        reshard(x, x_spec), *_gathered_mx_weight(w, "k")
     )
     if out_sharding is not None:
         y = reshard(y, out_sharding)
@@ -441,15 +472,16 @@ def _mx_linear_bwd(out_sharding, res, g):
     k, n = w.shape
     g = reshard(g, x_spec)
 
-    def local(xl, gl, wl):
+    def local(xl, gl, wv, we):
         x2, g2 = xl.reshape(-1, k), gl.reshape(-1, n)
-        dx = mxfp8_matmul_dgrad(g2, wl).reshape(xl.shape)
+        dx = mxfp8_matmul_dgrad(g2, wv, we).reshape(xl.shape)
         dw = _reduce_partial_to_spec(mxfp8_matmul_wgrad(x2, g2), dw_spec, batch_axes)
         return dx, dw
 
+    replicated = P(None, None)
     dx, dw = jax.shard_map(
-        local, in_specs=(x_spec, x_spec, P(None, None)), out_specs=(x_spec, dw_spec), check_vma=False
-    )(reshard(x, x_spec), g, reshard(w, P(None, None)))
+        local, in_specs=(x_spec, x_spec, replicated, replicated), out_specs=(x_spec, dw_spec), check_vma=False
+    )(reshard(x, x_spec), g, *_gathered_mx_weight(w, "n"))
     dx, dw = reshard(dx, x_orig_spec), reshard(dw, w_spec)
     return dx.astype(x.dtype), dw.astype(w.dtype)
 
