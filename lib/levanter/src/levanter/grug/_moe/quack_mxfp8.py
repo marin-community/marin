@@ -32,6 +32,7 @@ from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
+from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows
 from levanter.grug.mxfp8 import MX_BLOCK, mx_dequantize_rows, mx_quantize_cols, mx_quantize_rows, mx_unpack_rows
 from levanter.grug._moe.quack_moe_cute import _ACC, _QUACK_USE_PDL, _max_active_clusters, _mint_epilogue_gemm
 
@@ -282,7 +283,7 @@ def relu2_expert_mlp_mxfp8_fwd(x, w_up, w_down, cu):
     if x.dtype == jnp.uint8:
         values, exponents = mx_unpack_rows(x, w_up.shape[1])
     else:
-        values, exponents = mx_quantize_rows(x)
+        values, exponents = quantize_rows(x)
     pre, post, post_scales = mxfp8_relu2_grouped_gemm(
         values, padded_scale_rows(exponents, cu), *mx_weights(w_up, "n"), cu, b_major="n"
     )
@@ -296,7 +297,7 @@ def relu2_expert_mlp_mxfp8_backward_input(res, dy):
     input-gradient GEMM read (the ReLU^2 backward GEMM stores ``d pre`` only quantized)."""
     x, w_up, w_down, pre, cu = res
     dtype = dy.dtype
-    dy_values, dy_exponents = mx_quantize_rows(dy)
+    dy_values, dy_exponents = quantize_rows(dy)
     post, d_pre_values, d_pre_scales, output_dot = mxfp8_drelu2_grouped_gemm(
         dy_values, padded_scale_rows(dy_exponents, cu), *mx_weights(w_down, "k"), pre, cu
     )
@@ -337,12 +338,12 @@ def _dense_gemm(a, a_scales, b, b_scales, *, a_spec, b_spec, rows, cols, max_swi
 
 def _quantize_cols(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     """MXFP8 ``x[T, K]`` along ``T`` (32-row blocks): e4m3 ``[T, K]`` in place and blocked scales over ``(K, T / 32)``."""
-    values, exponents = mx_quantize_cols(x)
+    values, exponents = quantize_cols(x)
     return values, blocked_scales(exponents.T[None])
 
 
 def _quantize_rows(x: jax.Array) -> tuple[jax.Array, jax.Array]:
-    values, exponents = mx_quantize_rows(x)
+    values, exponents = quantize_rows(x)
     return values, blocked_scales(exponents[None])
 
 
