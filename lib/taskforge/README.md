@@ -21,7 +21,8 @@ src/taskforge/
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/            model.py: the TaskProposal document and its generation regex;
                                source.py: ProposalBatch, SlotFailure, the ProposalSource protocol
-  stage20_triage/              verdict.py: TriageDecision and `accept`
+  stage20_triage/              checks.py: structural checks; program.py: the GLM rubric and the decision;
+                               verdict.py: Verdict, TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
@@ -59,6 +60,15 @@ non-null body cites every item, and only listed items, as `research[i]`.
 field that constrains a completion to the canonical layout for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
+
+## Triage
+
+`stage20_triage.program.evaluate(proposal, checks, rubric, ctx) -> Verdict` runs the structural
+checks first, and a fatal failure or a null proposal rejects without a model call. The rubric
+scores independent samples, each a structured call through `CallStore`, and the decision is ACCEPT
+or REJECT by strict majority, otherwise REPAIR. A sample whose structured output stays invalid is
+drawn once more and then dropped. `GlmRubric.repair` rewrites a REPAIR proposal under the document
+regex with continuations off and re-asks once if the rewrite fails `parse`.
 
 ## Task specs
 
