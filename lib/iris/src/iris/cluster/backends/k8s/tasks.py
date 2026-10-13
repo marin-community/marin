@@ -19,13 +19,12 @@ from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
 from finelog.client.log_client import Table
 from google.protobuf import json_format
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_CONTAINER_NAME,
@@ -2877,9 +2876,9 @@ class K8sTaskProvider:
         through a lazy paged iterator, so neither its duration nor the size of the
         backlog it sweeps is anyone else's problem.
         """
-        now = datetime.now(UTC).timestamp()
-        cutoff = now - _GC_MAX_AGE_SECONDS
-        gang_cutoff = now - _GANG_GC_MAX_AGE_SECONDS
+        now = Timestamp.now()
+        cutoff = now.add(Duration.from_seconds(-_GC_MAX_AGE_SECONDS))
+        gang_cutoff = now.add(Duration.from_seconds(-_GANG_GC_MAX_AGE_SECONDS))
 
         # Pod-groups with live (Pending/Running) members share one Kueue
         # Workload across the gang; releasing it would evict the running
@@ -2917,12 +2916,17 @@ class K8sTaskProvider:
             if not created:
                 continue
             finish_times = (
-                status.get("state", {}).get("terminated", {}).get("finishedAt")
-                for status in pod.get("status", {}).get("containerStatuses", [])
+                container_status.get("state", {}).get("terminated", {}).get("finishedAt")
+                for status_kind in ("initContainerStatuses", "containerStatuses")
+                for container_status in pod.get("status", {}).get(status_kind, [])
             )
             ts = max(
-                (parse_k8s_timestamp(finished).timestamp() for finished in finish_times if finished),
-                default=parse_k8s_timestamp(created).timestamp(),
+                (
+                    Timestamp.from_seconds(parse_k8s_timestamp(finished).timestamp())
+                    for finished in finish_times
+                    if finished
+                ),
+                default=Timestamp.from_seconds(parse_k8s_timestamp(created).timestamp()),
             )
             pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
             # Gang sweep: a deletionTimestamp means a prior delete is

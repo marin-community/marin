@@ -1704,6 +1704,42 @@ def test_gc_gang_retention_starts_after_container_finishes(provider, k8s):
     assert k8s.get_json(K8sResource.WORKLOADS, group) is None
 
 
+def test_gc_retains_old_gang_pod_after_recent_init_failure(provider, k8s):
+    now = datetime.now(UTC)
+    task_id = JobName.from_wire("/failed-during-staging/0")
+    pod_name = _pod_name(task_id, 0)
+    group = "failed-during-staging"
+    populate_pod(
+        k8s,
+        pod_name,
+        "Failed",
+        labels={_LABEL_TASK_HASH: _task_hash(task_id.to_wire()), _KUEUE_POD_GROUP_NAME: group},
+    )
+    pod = k8s.get_json(K8sResource.PODS, pod_name)
+    pod["metadata"]["creationTimestamp"] = (now - timedelta(hours=2)).isoformat()
+    pod["status"]["initContainerStatuses"] = [
+        {
+            "name": "stage-workdir",
+            "state": {
+                "terminated": {
+                    "exitCode": 1,
+                    "reason": "Error",
+                    "message": "download failed",
+                    "finishedAt": (now - timedelta(seconds=30)).isoformat(),
+                }
+            },
+        }
+    ]
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider.collect_garbage()
+
+    assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+    update = provider.sync(make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)]))[0]
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
+    assert update.terminal_reason == "Init:Error stage-workdir: download failed"
+
+
 def test_gc_skips_gang_with_active_sibling(provider, k8s):
     """A terminal gang pod past the gang retention is NOT swept while a
     Pending/Running sibling of the same pod group exists: releasing the shared
