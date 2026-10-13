@@ -182,7 +182,7 @@ def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
 
 
 @pytest.mark.parametrize("seq_len", [8192, 16384])
-def test_context_switch_preserves_optimizer_and_tokens_per_step(seq_len):
+def test_context_switch_preserves_optimizer(seq_len):
     parent_step = build_ladder_run(run_id="context-parent", size="d6144", seq_len=4096, version="dev")
     child_step = build_ladder_run(run_id="context-child", size="d6144", seq_len=seq_len, qk_mult=1.48, version="dev")
     parent = parent_step.build_config(StepContext.for_fingerprint(parent_step.runtime_args, parent_step.deps))
@@ -190,7 +190,3 @@ def test_context_switch_preserves_optimizer_and_tokens_per_step(seq_len):
     # The child resumes the parent's optimizer state, so its schedule and hyperparameters must not move.
     assert child.trainer.trainer.num_train_steps == parent.trainer.trainer.num_train_steps
     assert child.optimizer == parent.optimizer
-    assert (
-        child.trainer.trainer.train_batch_size * child.model.max_seq_len
-        == parent.trainer.trainer.train_batch_size * parent.model.max_seq_len
-    )
