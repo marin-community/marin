@@ -739,56 +739,17 @@ def _row_ranges_per_file(
         return list(pool.map(row_ranges, files))
 
 
-def _compute_file_pushdown(
+def _source_items_for_files(
     files: list[FileEntry],
     load_op: LoadFileOp,
-    operations: list,
     parallelism: int,
-) -> tuple[list[SourceItem], list]:
-    """Create source items for file pipeline with pushdown optimizations applied.
-
-    Args:
-        files: List of FileEntry objects (path + size from bulk listing)
-        load_op: The LoadFileOp specifying format and default columns
-        operations: Full operations list (first op is LoadFileOp)
-        parallelism: Worker limit used to size source fragments.
-
-    Returns:
-        Tuple of (source_items, remaining_operations), where filter/select have been pushed down.
-    """
+    columns: list[str] | None,
+    filter_expr: Expr | None,
+) -> list[SourceItem]:
+    """Size ordered source tasks from Parquet row counts while retaining shard IDs."""
     # A RecordBatch is a user-visible item; changing source ranges would change
     # its boundaries and therefore the result of arbitrary batch maps.
     split_source = not load_op.batch_mode and len(files) < parallelism
-    filter_expr: Expr | None = None
-    select_columns = load_op.columns
-    ops_to_skip: set[int] = set()
-
-    # We don't try to do anything fancy, e.g. AND multiple filters.
-    # We can however aggregate select operations, though this is obviously unusual.
-
-    for i, op in enumerate(operations):
-        if isinstance(op, FilterOp) and op.expr is not None and filter_expr is None:
-            if load_op.include_file_paths and load_op.file_path_column in referenced_columns(op.expr):
-                # The filter references the injected file path column, which doesn't
-                # exist in the source files. Stop pushdown so the filter runs normally
-                # in the pipeline after the column has been injected.
-                break
-            filter_expr = op.expr
-            ops_to_skip.add(i)
-        elif isinstance(op, SelectOp) and select_columns is None:
-            select_columns = list(op.columns)
-            ops_to_skip.add(i)
-        elif isinstance(op, FilterOp) and op.expr is None:
-            # Lambda filter — can't introspect what columns it reads, so any
-            # later SelectOp pushdown could KeyError the lambda by dropping
-            # columns it needs. Stop pushdown here.
-            break
-        elif isinstance(op, (MapOp | FlatMapOp)):
-            break  # Transform ops stop pushdown
-        else:
-            break
-
-    # Create InputFileSpecs with final columns/filter, one per row span.
     source_items: list[SourceItem] = []
     ranges_per_file = _row_ranges_per_file(files, load_op, parallelism if split_source else 1)
     spans = [(entry, start, end) for entry, ranges in zip(files, ranges_per_file, strict=True) for start, end in ranges]
@@ -824,7 +785,7 @@ def _compute_file_pushdown(
                     data=InputFileSpec(
                         path=entry.path,
                         format=load_op.format,
-                        columns=select_columns,
+                        columns=columns,
                         row_start=row_start,
                         row_end=row_end,
                         filter_expr=filter_expr,
@@ -832,9 +793,48 @@ def _compute_file_pushdown(
                 )
             )
 
+    return source_items
+
+
+def _compute_file_pushdown(
+    files: list[FileEntry],
+    load_op: LoadFileOp,
+    operations: list,
+    parallelism: int,
+) -> tuple[list[SourceItem], list]:
+    """Push file filters and projections into the source reader."""
+    filter_expr: Expr | None = None
+    select_columns = load_op.columns
+    ops_to_skip: set[int] = set()
+
+    # We don't try to do anything fancy, e.g. AND multiple filters.
+    # We can however aggregate select operations, though this is obviously unusual.
+
+    for i, op in enumerate(operations):
+        if isinstance(op, FilterOp) and op.expr is not None and filter_expr is None:
+            if load_op.include_file_paths and load_op.file_path_column in referenced_columns(op.expr):
+                # The filter references the injected file path column, which doesn't
+                # exist in the source files. Stop pushdown so the filter runs normally
+                # in the pipeline after the column has been injected.
+                break
+            filter_expr = op.expr
+            ops_to_skip.add(i)
+        elif isinstance(op, SelectOp) and select_columns is None:
+            select_columns = list(op.columns)
+            ops_to_skip.add(i)
+        elif isinstance(op, FilterOp) and op.expr is None:
+            # Lambda filter — can't introspect what columns it reads, so any
+            # later SelectOp pushdown could KeyError the lambda by dropping
+            # columns it needs. Stop pushdown here.
+            break
+        elif isinstance(op, (MapOp | FlatMapOp)):
+            break  # Transform ops stop pushdown
+        else:
+            break
+
     # Build final operations list: LoadFileOp + remaining ops
     final_ops = [load_op] + [op for i, op in enumerate(operations) if i not in ops_to_skip]
-
+    source_items = _source_items_for_files(files, load_op, parallelism, select_columns, filter_expr)
     return source_items, final_ops
 
 
