@@ -387,6 +387,7 @@ class IrisSkyRLExecution:
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
+    required_env_vars: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
