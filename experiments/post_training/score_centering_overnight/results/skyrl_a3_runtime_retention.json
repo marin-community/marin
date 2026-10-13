@@ -1,0 +1,72 @@
+{
+  "scope": "All8completedfaithfula3Countdownrunstemporaryruntimeartifacts, including interrupted controller attempts; native persistent captures/evaluations/checkpoints stay in originalroots.",
+  "runs": [
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 22200,
+      "bytes": 39235300402,
+      "manifest_sha256": "2a14a014db2254c93b6e1de877124225a698871693ceea55e04c6cb3731ee7e9",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-sc-s1-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 22200,
+      "bytes": 4712972518,
+      "manifest_sha256": "2702299b3f91a6bf674a9330a5e225b08ede13a3b85061ba33ce04c48dc8ca3e",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-sc-s1-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 22200,
+      "bytes": 39078967938,
+      "manifest_sha256": "7157c918b5acceb26f74bce3b02d98a1d89ad53d97637756cb147260eb7df96e",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 22200,
+      "bytes": 41158296916,
+      "manifest_sha256": "6e69597aaa4f3828865dce218e789882bb0c005431f381e58c6513ce1b30d444",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 22200,
+      "bytes": 41682857988,
+      "manifest_sha256": "7510d68b0bec787ef5f51af6f3f3169d7af2a2bec76adf7d75f1135814f83122",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 22200,
+      "bytes": 57729216043,
+      "manifest_sha256": "b66a8cfd99f1083dbb080552c9b19cc68b8e58ea52f512f22e3943074107800c",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 22200,
+      "bytes": 57322822020,
+      "manifest_sha256": "e7b98340abf436d78456dc15efe07f7e5adb272c1ddeceb130cc5db79929880b",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 33289,
+      "bytes": 58659238125,
+      "manifest_sha256": "58c37a5d6df55d4ba64d0b152a59de06f37187ed499730f2e3295f5ded9b6da9",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    }
+  ],
+  "objects": 188689,
+  "bytes": 339579671950,
+  "verification": "Samebucket conditionalcopy/sourceETag/destinationlength/provenance; ETagsarenotfullweightSHA256."
+}
