@@ -109,7 +109,10 @@ def _moe_mlp_ep_ring_dedup_local(
     ``transport_capacity_factor`` sizes each (sender, destination) block as a multiple of the
     distinct tokens a shard sends one destination under uniform routing,
     ``destination_hit_fraction * Tlocal``. A token past that limit loses all its assignments to
-    the destination (sender drops). ``capacity_factor`` keeps ring's meaning: each expert shard
+    the destination (sender drops). The size is an expectation for uniform routing, with no
+    worst-case guarantee: when routing concentrates on a destination, its tokens past the limit
+    drop even if the destination has expert capacity to spare, so a factor that drops nothing on
+    one workload can drop on another. ``capacity_factor`` keeps ring's meaning: each expert shard
     runs at most ``capacity_factor * Tlocal * K`` assignments, allocated in local-expert order
     (receiver drops).
     """

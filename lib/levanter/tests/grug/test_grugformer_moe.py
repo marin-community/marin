@@ -50,6 +50,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
+from levanter.grug._moe.ep_ring_dedup import _weighted_gather_sum_rows
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -1692,12 +1693,23 @@ def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.parametrize("transport_capacity_factor", [8.0, 0.5], ids=["no_drops", "sender_drops"])
-def test_ring_dedup_matches_ring_and_dense_with_sender_drops(transport_capacity_factor: float):
-    """On 8 expert shards, ring_dedup matches ring without drops. With a small sender capacity it
-    matches a dense reference that drops, per (source shard, destination shard), every token past
-    the first C tokens that select an expert on the destination. Gradients include the combine
-    weights, which carry the router gradient."""
+@pytest.mark.parametrize(
+    ("transport_capacity_factor", "capacity_factor", "padding"),
+    [
+        (8.0, 8.0, "none"),
+        (0.5, 8.0, "none"),
+        (8.0, 0.75, "none"),
+        (0.5, 0.3, "uneven"),
+        (0.5, 0.3, "all"),
+    ],
+    ids=["no_drops", "sender_drops", "receiver_drops", "both_drops_uneven_padding", "all_padding"],
+)
+def test_ring_dedup_matches_ring_and_dense_with_drops(
+    transport_capacity_factor: float, capacity_factor: float, padding: str
+):
+    """On 8 expert shards, ring_dedup matches a dense reference that applies its sender capacity and then ring's
+    receiver capacity, and matches ring whenever no sender drops. Gradients include the combine weights, which
+    carry the router gradient. The uneven padding leaves shard 0 with no valid tokens."""
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
@@ -1714,43 +1726,67 @@ def test_ring_dedup_matches_ring_and_dense_with_sender_drops(transport_capacity_
 
         shards, tokens_per_shard, hidden, inter, experts, topk = 8, 24, 8, 6, 32, 4
         transport_capacity_factor = __TRANSPORT__
+        capacity_factor = __CAPACITY__
+        padding = "__PADDING__"
         tokens = shards * tokens_per_shard
+        local_experts = experts // shards
         mesh = Mesh(
             np.asarray(jax.devices()).reshape(1, shards, 1),
             axis_names=("data", "expert", "model"),
             axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
         )
-        keys = jax.random.split(jax.random.key(0), 6)
+        keys = jax.random.split(jax.random.key(0), 7)
         x = jax.random.normal(keys[0], (tokens, hidden))
         selected = jnp.argsort(jax.random.uniform(keys[1], (tokens, experts)), axis=1)[:, :topk].astype(jnp.int32)
         combine_weights = jax.nn.softmax(jax.random.normal(keys[2], (tokens, topk)), axis=-1)
         w_up_gate = jax.random.normal(keys[3], (experts, hidden, 2 * inter)) / math.sqrt(hidden)
         w_down = jax.random.normal(keys[4], (experts, inter, hidden)) / math.sqrt(inter)
         cotangent = jax.random.normal(keys[5], (tokens, hidden))
+        if padding == "uneven":
+            # Shard s keeps about s / 7 of its tokens.
+            keep_fraction = np.repeat(np.arange(shards) / (shards - 1), tokens_per_shard)
+            token_valid = np.asarray(jax.random.uniform(keys[6], (tokens,))) < keep_fraction
+        else:
+            token_valid = np.full(tokens, padding == "none")
 
-        # Independent sender-capacity reference.
-        local_experts = experts // shards
-        capacity = min(
-            tokens_per_shard,
-            math.ceil(
-                transport_capacity_factor
-                * destination_hit_fraction(num_experts=experts, local_experts=local_experts, topk=topk)
-                * tokens_per_shard
-            ),
-        )
+        # Sender capacity: per (source, destination) shard pair, the first C valid tokens that select an expert
+        # on the destination keep their assignments there, with C scaled by the source's valid tokens.
         sel_np = np.asarray(selected)
-        keep = np.ones((tokens, topk), dtype=bool)
+        keep = np.repeat(token_valid[:, None], topk, axis=1)
+        hit_fraction = destination_hit_fraction(num_experts=experts, local_experts=local_experts, topk=topk)
+        pair_capacity = min(tokens_per_shard, math.ceil(transport_capacity_factor * hit_fraction * tokens_per_shard))
         for source in range(shards):
+            first = source * tokens_per_shard
+            source_valid = int(token_valid[first : first + tokens_per_shard].sum())
+            capacity = min(pair_capacity, max(1, math.ceil(transport_capacity_factor * hit_fraction * source_valid)))
             for dest in range(shards):
                 seen = 0
-                for t in range(source * tokens_per_shard, (source + 1) * tokens_per_shard):
+                for t in range(first, first + tokens_per_shard):
                     on_dest = sel_np[t] // local_experts == dest
-                    if on_dest.any():
+                    if token_valid[t] and on_dest.any():
                         if seen >= capacity:
                             keep[t, on_dest] = False
                         seen += 1
-        expected_dropped = int((~keep).sum())
-        keep = jnp.asarray(keep)
+        valid_assignments = int(token_valid.sum()) * topk
+        expected_sender_dropped = valid_assignments - int(keep.sum())
+
+        # Ring's receiver capacity: each destination runs at most L of the assignments it receives, in (expert,
+        # token) order, with L set by the valid demand before sender drops.
+        receiver_capacity = min(
+            max(local_experts, math.ceil(capacity_factor * valid_assignments / shards)),
+            max(local_experts, math.ceil(capacity_factor * tokens_per_shard * topk)),
+        )
+        expected_receiver_dropped = 0
+        for dest in range(shards):
+            accepted = 0
+            for expert in range(dest * local_experts, (dest + 1) * local_experts):
+                for t, k in zip(*np.nonzero(keep & (sel_np == expert))):
+                    if accepted < receiver_capacity:
+                        accepted += 1
+                    else:
+                        keep[t, k] = False
+                        expected_receiver_dropped += 1
+        keep = jnp.asarray(keep, jnp.float32)
 
         def dense(x, cw, w_up_gate, w_down):
             hidden_act = jnp.einsum("th,tkhi->tki", x, w_up_gate[selected])
@@ -1767,27 +1803,30 @@ def test_ring_dedup_matches_ring_and_dense_with_sender_drops(transport_capacity_
             jax.device_put(w_down, expert_sharding),
         )
         selected_sharded = jax.device_put(selected, batch)
+        token_valid_sharded = jax.device_put(jnp.asarray(token_valid), NamedSharding(mesh, P(("data", "expert"))))
         cotangent_sharded = jax.device_put(cotangent, batch)
 
         def backend(implementation):
-            def run(x, cw, w_up_gate, w_down):
-                return moe_mlp(
+            def loss(x, cw, w_up_gate, w_down):
+                out, counts = moe_mlp(
                     x,
                     selected_sharded,
                     cw,
                     w_up_gate,
                     w_down,
+                    token_valid=token_valid_sharded,
                     activation=jax.nn.silu,
                     implementation=implementation,
                     mesh=mesh,
-                    capacity_factor=8.0,
+                    capacity_factor=capacity_factor,
                     pooled_transport_capacity_factor=transport_capacity_factor,
                     report_capacity_overflow=True,
                 )
+                return jnp.sum(out * cotangent_sharded), (out, counts)
 
             with jax.set_mesh(mesh):
-                out, counts = run(*args)
-                grads = jax.grad(lambda *a: jnp.sum(run(*a)[0] * cotangent_sharded), argnums=(0, 1, 2, 3))(*args)
+                grad_fn = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True))
+                (_, (out, counts)), grads = grad_fn(*args)
             return out, counts, grads
 
         expected = dense(x, combine_weights, w_up_gate, w_down)
@@ -1796,22 +1835,26 @@ def test_ring_dedup_matches_ring_and_dense_with_sender_drops(transport_capacity_
         )
         actual, counts, actual_grads = backend("ring_dedup")
         references = [(expected, expected_grads)]
-        if expected_dropped == 0:
+        if expected_sender_dropped == 0:
             ring_out, ring_counts, ring_grads = backend("ring")
-            assert int(ring_counts.dropped) == 0
+            assert int(ring_counts.dropped) == expected_receiver_dropped
             references.append((ring_out, ring_grads))
-        else:
-            assert transport_capacity_factor < 1.0
 
         for ref_out, ref_grads in references:
             np.testing.assert_allclose(np.asarray(actual), np.asarray(ref_out), rtol=1e-5, atol=1e-5)
             for a, e in zip(actual_grads, ref_grads, strict=True):
                 np.testing.assert_allclose(np.asarray(a), np.asarray(e), rtol=1e-5, atol=1e-5)
-        assert int(counts.sender_dropped) == expected_dropped
-        assert int(counts.receiver_dropped) == 0
-        assert (expected_dropped > 0) == (transport_capacity_factor < 1.0)
+        assert int(counts.sender_dropped) == expected_sender_dropped
+        assert int(counts.receiver_dropped) == expected_receiver_dropped
+        # Each case drops what its parameters ask for; with no valid tokens nothing can drop.
+        assert (expected_sender_dropped > 0) == (padding != "all" and transport_capacity_factor < 1.0)
+        assert (expected_receiver_dropped > 0) == (padding != "all" and capacity_factor < 1.0)
     """
-    script = script.replace("__TRANSPORT__", repr(transport_capacity_factor))
+    script = (
+        script.replace("__TRANSPORT__", repr(transport_capacity_factor))
+        .replace("__CAPACITY__", repr(capacity_factor))
+        .replace("__PADDING__", padding)
+    )
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(script)],
         env=env,
@@ -1821,6 +1864,47 @@ def test_ring_dedup_matches_ring_and_dense_with_sender_drops(transport_capacity_
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_ring_dedup_expert_combine_keeps_bf16_sums_in_float32():
+    """The expert-side combine sums each received row's bf16 expert outputs in float32 and rounds once. Its
+    backward rounds each output-row gradient once and returns the float32 routing-weight gradient unrounded."""
+    received_rows, topk, dispatch_rows, hidden = 6, 4, 16, 32
+    rng = np.random.default_rng(0)
+    # Dispatch rows hold 14 of the 24 (received row, k) assignments in random order; the last two are padding.
+    flat_idx = rng.permutation(received_rows * topk)[:dispatch_rows].astype(np.int32)
+    flat_idx[14:] = received_rows * topk
+    inv = np.full(received_rows * topk, dispatch_rows, np.int32)
+    inv[flat_idx[:14]] = np.arange(14)
+    inv = inv.reshape(received_rows, topk)
+    # Integers below 256, and their products with powers of two, are exact in bf16, and the float32 sums below
+    # are exact, so each value's final rounding to bf16 is its only one.
+    src = rng.integers(-255, 256, (dispatch_rows, hidden)).astype(np.float32)
+    weights = np.exp2(rng.integers(-2, 2, (received_rows, topk))).astype(np.float32)
+    cotangent = rng.integers(-255, 256, (received_rows, hidden)).astype(np.float32)
+
+    @jax.jit
+    def evaluate(src, weights, cotangent):
+        out, vjp = jax.vjp(
+            lambda src, weights: _weighted_gather_sum_rows(src, weights, jnp.asarray(inv), jnp.asarray(flat_idx)),
+            src,
+            weights,
+        )
+        return out, *vjp(cotangent)
+
+    out, src_gradient, weights_gradient = evaluate(
+        jnp.asarray(src, jnp.bfloat16), jnp.asarray(weights), jnp.asarray(cotangent, jnp.bfloat16)
+    )
+
+    gathered = np.concatenate([src, np.zeros((1, hidden), np.float32)])[inv]
+    expected_out = np.einsum("njh,nj->nh", gathered, weights)
+    expected_weights_gradient = np.einsum("njh,nh->nj", gathered, cotangent)
+    flat_weights = np.append(weights.reshape(-1), 0.0)
+    padded_cotangent = np.concatenate([cotangent, np.zeros((1, hidden), np.float32)])
+    expected_src_gradient = padded_cotangent[flat_idx // topk] * flat_weights[flat_idx][:, None]
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(expected_out, jnp.bfloat16))
+    np.testing.assert_array_equal(np.asarray(src_gradient), np.asarray(expected_src_gradient, jnp.bfloat16))
+    np.testing.assert_array_equal(np.asarray(weights_gradient), expected_weights_gradient)
 
 
 def _simulate_ragged_a2a(operands, outputs, params):
