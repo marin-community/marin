@@ -160,12 +160,13 @@ class _FakeGpu:
     [
         (_FakeGpu("AMD Instinct MI350X"), "tile_map"),
         (_FakeGpu("AMD Instinct MI300X"), "tile_map"),
-        (_FakeGpu("NVIDIA H100 80GB HBM3", "9.0"), "group_grid"),
-        (_FakeGpu("NVIDIA B200", "10.0"), "group_grid"),
+        (_FakeGpu("NVIDIA H100 80GB HBM3", "9.0"), "tile_map"),
+        (_FakeGpu("NVIDIA B200", "10.0"), "tile_map"),
+        (_FakeGpu("AMD Radeon PRO W7900", "gfx1100"), "group_grid"),
     ],
-    ids=["mi350x", "mi300x", "h100", "b200"],
+    ids=["mi350x", "mi300x", "h100", "b200", "radeon"],
 )
-def test_triton_kernel_family_uses_tile_map_only_on_amd_instinct(monkeypatch, device, expected):
+def test_triton_kernel_family_uses_tile_map_on_amd_instinct_and_nvidia(monkeypatch, device, expected):
     monkeypatch.setattr(ragged_dot_module.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(ragged_dot_module.jax, "devices", lambda backend=None: [device])
 
@@ -278,7 +279,12 @@ def test_triton_kernel_families_match_ragged_dot_general(family, layout, group_s
     _assert_close_to_reference(actual, expected, rtol)
 
 
-@pytest.mark.parametrize("group_sizes", [[512, 512, 512, 512], [5, 1000, 0, 1043]], ids=["balanced", "skewed"])
+# H100 picks its drhs blocks by rows per group, below and from 2048.
+@pytest.mark.parametrize(
+    "group_sizes",
+    [[512, 512, 512, 512], [5, 1000, 0, 1043], [2048, 2048, 2048, 2048]],
+    ids=["balanced", "skewed", "many_rows_per_group"],
+)
 def test_triton_ragged_dot_value_and_gradients_match_reference_with_device_blocks(group_sizes):
     _require_triton_gpu()
     rows, k, n = sum(group_sizes), 256, 384

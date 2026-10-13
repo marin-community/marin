@@ -381,7 +381,6 @@ def _gpu_family() -> _GpuFamily:
 _TILE_MAP_GENERIC_CONFIG = TritonBlockConfig(
     block_m=128, block_n=_TRITON_DEFAULT_BLOCK_N, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=1
 )
-_TILE_MAP_BLACKWELL_ROW_CONFIG = dataclasses.replace(_TILE_MAP_GENERIC_CONFIG, block_n=_TRITON_BLACKWELL_BLOCK_N)
 _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
     # Swept on MI350X (gfx950) at the June (G=32, K and N of 1280-2560) and Mixtral-like (G=8, 4096x14336)
     # expert shapes; see lib/levanter/scripts/bench/bench_ragged_dot_triton.py.
@@ -396,16 +395,42 @@ _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
             block_m=256, block_n=128, block_k=64, num_warps=4, num_stages=1, num_xcds=8, group_m=8
         ),
     },
-    _GpuFamily.NVIDIA_BLACKWELL: {
-        RaggedLayout.FWD: _TILE_MAP_BLACKWELL_ROW_CONFIG,
-        RaggedLayout.DLHS: _TILE_MAP_BLACKWELL_ROW_CONFIG,
+    # Swept on H100 and GB200 at the same shapes.
+    _GpuFamily.NVIDIA: {
+        RaggedLayout.FWD: TritonBlockConfig(
+            block_m=128, block_n=256, block_k=64, num_warps=8, num_stages=4, num_xcds=1, group_m=8
+        ),
+        RaggedLayout.DLHS: TritonBlockConfig(
+            block_m=128, block_n=256, block_k=64, num_warps=8, num_stages=4, num_xcds=1, group_m=8
+        ),
+        RaggedLayout.DRHS: TritonBlockConfig(
+            block_m=128, block_n=256, block_k=64, num_warps=8, num_stages=3, num_xcds=1, group_m=8
+        ),
     },
+    _GpuFamily.NVIDIA_BLACKWELL: dict.fromkeys(
+        RaggedLayout,
+        TritonBlockConfig(block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=3, num_xcds=1, group_m=8),
+    ),
 }
+# H100 drhs with fewer rows per group than this runs faster with smaller blocks: 12% faster at the
+# June shape with 512 rows per group, about even at 1024, and slower from 2048 up.
+_NVIDIA_DRHS_FEW_ROWS_PER_GROUP = 2048
+_NVIDIA_DRHS_FEW_ROWS_CONFIG = TritonBlockConfig(
+    block_m=128, block_n=128, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=8
+)
 
 
-def _tile_map_block_config(layout: RaggedLayout, m: int, k: int, n: int) -> TritonBlockConfig:
+def _tile_map_block_config(layout: RaggedLayout, m: int, k: int, n: int, num_groups: int) -> TritonBlockConfig:
     """Device-dependent block config for one layout, fitted to ``m x k x n`` (rows x contraction x columns)."""
-    config = _TILE_MAP_CONFIGS.get(_gpu_family(), {}).get(layout, _TILE_MAP_GENERIC_CONFIG)
+    family = _gpu_family()
+    if (
+        family == _GpuFamily.NVIDIA
+        and layout == RaggedLayout.DRHS
+        and k < _NVIDIA_DRHS_FEW_ROWS_PER_GROUP * num_groups
+    ):
+        config = _NVIDIA_DRHS_FEW_ROWS_CONFIG
+    else:
+        config = _TILE_MAP_CONFIGS.get(family, {}).get(layout, _TILE_MAP_GENERIC_CONFIG)
     return config.fit(m, k, n)
 
 
@@ -678,14 +703,14 @@ def _tile_map_pallas_call(
         rows, m = lhs.shape
         n = rhs.shape[1]
         num_groups = group_sizes.shape[0]
-        config = (config or _tile_map_block_config(layout, m, rows, n)).fit(m, rows, n)
+        config = (config or _tile_map_block_config(layout, m, rows, n, num_groups)).fit(m, rows, n)
         bounds = jnp.cumulative_sum(group_sizes.astype(jnp.int32), include_initial=True)
         return _tile_map_contracting_matmul(rows, m, n, num_groups, lhs.dtype, config)(lhs, rhs, bounds)
 
     m, k = lhs.shape
     num_groups = rhs.shape[0]
     n = rhs.shape[2] if layout == RaggedLayout.FWD else rhs.shape[1]
-    config = (config or _tile_map_block_config(layout, m, k, n)).fit(m, k, n)
+    config = (config or _tile_map_block_config(layout, m, k, n, num_groups)).fit(m, k, n)
     tiles = _row_tile_metadata(group_sizes, m, config.block_m)
     return _tile_map_row_matmul(m, k, n, num_groups, lhs.dtype, layout, config)(lhs, rhs, tiles)
 
@@ -701,8 +726,8 @@ _TRITON_KERNELS: dict[TritonKernelFamily, Callable[[jax.Array, jax.Array, jax.Ar
     TritonKernelFamily.GROUP_GRID: _group_grid_pallas_call,
     TritonKernelFamily.TILE_MAP: _tile_map_pallas_call,
 }
-# GPU families that run the tile-map kernels; every other GPU, NVIDIA included, runs the group-grid kernels.
-_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT})
+# GPU families that run the tile-map kernels; any other GPU runs the group-grid kernels.
+_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT, _GpuFamily.NVIDIA, _GpuFamily.NVIDIA_BLACKWELL})
 
 
 def _triton_kernel_family() -> TritonKernelFamily:
