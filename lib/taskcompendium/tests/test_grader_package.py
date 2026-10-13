@@ -8,7 +8,7 @@ from dataclasses import replace
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, MachineSpec, RegistryImage, ShellSimBuiltins
+from shellbox.machine import Backend, MachineSpec, PackageSpec, RegistryImage
 from verifyit.spec import JsonSchemaSpec, NumericSpec, ScriptSpec
 
 from taskcompendium.grader import GraderPackage, verifyit_package
@@ -50,7 +50,7 @@ class FixtureImageFactory:
     backend = Backend.DOCKER
 
     async def create(self, spec):
-        return await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins()))
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
 
 
 def _task(package, answer_type=AnswerType.TEXT, answer_format=PlainText(), final_tools=()):

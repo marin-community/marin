@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("shellsim")
 
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Command, ExitReason, MachineSpec, ShellSimBuiltins, ShellStatus
+from shellbox.machine import Command, ExitReason, MachineSpec, PackageSpec, ShellStatus
 from shellbox.transfer import download_files
 
 UNSUPPORTED_COMMAND = "cat /workspace/numbers.txt | python3 -c 'import sys; print(sum(int(line) for line in sys.stdin))'"
@@ -28,7 +28,7 @@ UNSUPPORTED_OUTPUT_LIMIT_BYTES = 64
 )
 def test_download_rejects_file_and_byte_overflow(limits):
     async def check():
-        machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
         try:
             result = await machine.run(Command(("sh", "-c", "printf aa > first; printf bb > second")))
             assert result.exit_code == 0
@@ -42,7 +42,7 @@ def test_download_rejects_file_and_byte_overflow(limits):
 
 def test_shell_state_and_one_shot_command() -> None:
     async def check() -> None:
-        machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins(), env={"INITIAL": "base"}))
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), env={"INITIAL": "base"}))
         try:
             shell = await machine.open_shell()
             first = await shell.execute(
@@ -64,7 +64,7 @@ def test_shell_state_and_one_shot_command() -> None:
 
 def test_file_transfer_and_bounded_output(tmp_path: Path) -> None:
     async def check() -> None:
-        machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
         try:
             source = tmp_path / "source"
             source.mkdir()
@@ -87,7 +87,7 @@ def test_file_transfer_and_bounded_output(tmp_path: Path) -> None:
 
 def test_run_unsupported_command_returns_failed_result(tmp_path: Path) -> None:
     async def check() -> None:
-        machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
         try:
             source = tmp_path / "numbers.txt"
             source.write_text("1\n2\n")
@@ -112,7 +112,7 @@ def test_run_unsupported_command_returns_failed_result(tmp_path: Path) -> None:
 
 def test_shell_session_unsupported_command_returns_failed_update(tmp_path: Path) -> None:
     async def check() -> None:
-        machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
         try:
             source = tmp_path / "numbers.txt"
             source.write_text("1\n2\n")

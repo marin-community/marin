@@ -28,8 +28,8 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    PackageSpec,
     ShellSession,
-    ShellSimBuiltins,
 )
 
 
@@ -57,8 +57,7 @@ class ShellSimEnvironment(BaseEnvironment):
         self,
         *args,
         context: shellsim.Context | None = None,
-        pypi_packages: tuple[str, ...] | None = None,
-        tools: tuple[str, ...] = (),
+        package_spec: PackageSpec = PackageSpec(),
         network_policy: TaskNetworkPolicy = TaskNetworkPolicy.REQUIRE_OFFLINE_TASK,
         cpu_limit: int = DEFAULT_CPU_LIMIT,
         memory_mb: int = DEFAULT_MEMORY_MB,
@@ -72,7 +71,7 @@ class ShellSimEnvironment(BaseEnvironment):
             disk=disk_limit_bytes,
             output=output_limit_bytes,
         )
-        self.software = ShellSimBuiltins(pypi_packages, tools)
+        self.package_spec = package_spec
         self.network_policy = TaskNetworkPolicy(network_policy)
         self.memory_mb = memory_mb
         self.machine: ShellSimMachine | None = None
@@ -94,7 +93,7 @@ class ShellSimEnvironment(BaseEnvironment):
 
     async def start(self, force_build: bool) -> None:
         workdir = self.task_env_config.workdir or "/workspace"
-        spec = MachineSpec(self.software, workdir=workdir, network=NetworkPolicy.DENY, memory_mb=self.memory_mb)
+        spec = MachineSpec(self.package_spec, workdir=workdir, network=NetworkPolicy.DENY, memory_mb=self.memory_mb)
         self.machine = await self.factory.create(spec)
         try:
             if self.environment_dir.is_dir():

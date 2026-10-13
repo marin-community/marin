@@ -20,7 +20,7 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 ## Machine API
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts `ShellSimBuiltins(pypi_packages=..., tools=...)`, and `LocalMachineFactory` only `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. QEMU and ShellSim have Harbor environment adapters. Docker, gVisor, Daytona, Iris, and local expose the machine API without a Harbor adapter or persistent Bash support.
 
@@ -216,7 +216,7 @@ agents:
       base_url: http://127.0.0.1:8000/v1
 ```
 
-Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Packages and tools are environment selections (`pypi_packages`/`tools`, or `ShellSimBuiltins`). A custom Harbor environment class can own the configured Context. Guest commands have no host filesystem or network access.
+Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Select packages and tools through the shared `shellbox.PackageSpec`, passed as `package_spec` to the Harbor adapter or as the machine source. A custom Harbor environment class can own the configured Context. Guest commands have no host filesystem or network access.
 
 Agent shell state persists between Bash actions; setup and verifier commands use fresh shell state over the same filesystem. Actions complete before returning; interactive input and interruption are unavailable. Task images and Dockerfile instructions are not applied; regular files under `environment/` are copied to the workdir. Select tasks compatible with the WASI catalog and supported commands.
 

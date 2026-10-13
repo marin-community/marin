@@ -71,8 +71,11 @@ Grader staging runs as root, so local grading requires a host process running as
 Local machines reject CPU, storage, and GPU allocations; leave those fields unset and `gpus=0`.
 
 Native environments explicitly declare `CommandSemantics.LINUX_PROCESS`.
+`environment.package_spec` selects Python requirements and tools through one shared
+`shellbox.PackageSpec`. Bubblewrap installs Python wheels in a cached read-only environment
+and uses host tools; Shellsim resolves the same declaration through its Context catalog.
 `CommandSemantics.SHELL_SIMULATOR` selects built-in shell and virtual filesystem semantics,
-which require `ShellSimBuiltins` and a ShellSim factory. Missing native dependencies do not imply simulation.
+which require `PackageSpec` and a ShellSim factory. Missing native dependencies do not imply simulation.
 The default workdir is the image's workdir, or `/workspace` for the built-in filesystem.
 An explicit `working_directory` overrides that selection.
 

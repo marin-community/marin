@@ -42,7 +42,7 @@ from shellbox.machine import (
     MachineFactory,
     MachineSpec,
     NetworkPolicy,
-    ShellSimBuiltins,
+    PackageSpec,
     UnsupportedMachineSpec,
 )
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, require_resolved_environment
@@ -272,10 +272,8 @@ class CampaignMachines:
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         require_resolved_environment(environment)
         if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-            return self._simulator_factory, MachineSpec(
-                ShellSimBuiltins(), network=NetworkPolicy.DENY, memory_mb=memory_mb
-            )
-        if environment.packages_lock is not None:
+            return self._simulator_factory, MachineSpec(PackageSpec(), network=NetworkPolicy.DENY, memory_mb=memory_mb)
+        if environment.packages_lock is not None or environment.package_spec is not None:
             return self.local.machine(environment, memory_mb)
         if environment.docker_image is None:
             raise UnsupportedMachineSpec("Native campaign execution requires a pinned image or package lock")

@@ -20,8 +20,8 @@ from shellbox.machine import (
     Machine,
     MachineFactory,
     MachineSpec,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, require_resolved_environment
@@ -67,8 +67,10 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
         source = HostImage()
+    elif requirements.package_spec is not None:
+        source = requirements.package_spec
     elif requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-        source = ShellSimBuiltins()
+        source = PackageSpec()
     else:
         raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
     return MachineSpec(
