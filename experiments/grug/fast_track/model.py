@@ -1138,6 +1138,12 @@ def _proj(cfg: "GrugModelConfig", x: jax.Array, w: jax.Array, out_sharding: P | 
     return jnp.einsum("...k,kn->...n", x, w, out_sharding=out_sharding)
 
 
+def _proj_parts(cfg: "GrugModelConfig", x: jax.Array, weights: tuple[jax.Array, ...]) -> tuple[jax.Array, ...]:
+    """``_proj(cfg, x, w)`` for every ``w`` of ``weights``, as one projection onto their concatenation."""
+    fused = _proj(cfg, x, jnp.concatenate(weights, axis=1))
+    return tuple(jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=-1))
+
+
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     """Non-parametric RMS norm over the last dimension."""
     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
@@ -1951,10 +1957,24 @@ class KimiDeltaAttention(eqx.Module):
         b, s, _ = x.shape
 
         proj_inputs = proj_inputs or {}
+        # Every projection of x as one block-scaled GEMM: x is quantized once and the GEMM is 4-6x wider. Only under
+        # the real MXFP8 dense recipes, whose per-projection quantization passes dominate at these widths.
+        fused: dict[str, jax.Array] = {}
+        if cfg.fp8_recipe in _DENSE_FP8_REAL and not proj_inputs and kv_input is None:
+            named = {
+                "q": self.w_q,
+                "k": self.w_k,
+                "v": self.w_v,
+                "g": self.w_g,
+                "write": self.w_write,
+                "erase": self.w_erase,
+            }
+            named = {name: w for name, w in named.items() if w is not None}
+            fused = dict(zip(named, _proj_parts(cfg, x, tuple(named.values())), strict=True))
 
         def project(w: jax.Array, conv: ShortConv, bias_row: int, name: str) -> jax.Array:
             source = kv_input if kv_input is not None and name in ("k", "v") else proj_inputs.get(name, x)
-            y = _proj(cfg, source, w)
+            y = fused[name] if fused else _proj(cfg, source, w)
             y = jax.nn.silu(conv(y, segment_ids))
             return rearrange(y, "... (n d) -> ... n d", d=head_dim)
 
@@ -1962,7 +1982,7 @@ class KimiDeltaAttention(eqx.Module):
         k = project(self.w_k, self.sconv_k, 1, "k")
         v = project(self.w_v, self.sconv_v, 2, "v")
         if self.w_write is not None:
-            write = _proj(cfg, proj_inputs.get("v", x), self.w_write)
+            write = fused["write"] if fused else _proj(cfg, proj_inputs.get("v", x), self.w_write)
             v = v * rearrange(
                 2.0 * jax.nn.sigmoid(write.astype(jnp.float32)), "... (n d) -> ... n d", d=head_dim
             ).astype(v.dtype)
@@ -1996,7 +2016,7 @@ class KimiDeltaAttention(eqx.Module):
             extras["gate_bias"] = reshard(self.dt_bias.astype(jnp.float32), head_spec)
             extra_specs["gate_p"] = extra_specs["gate_bias"] = head_spec
         if self.w_erase is not None:
-            z = _proj(cfg, proj_inputs.get("k", x), self.w_erase)
+            z = fused["erase"] if fused else _proj(cfg, proj_inputs.get("k", x), self.w_erase)
             z = rearrange(z, "... (n d) -> ... n d", d=head_dim)
             erase_logits = z.astype(jnp.float32)
             if cfg.kda_onchip_erase_gate:
@@ -2026,7 +2046,7 @@ class KimiDeltaAttention(eqx.Module):
         o = kernel(*args)
         o = self.o_norm(o.astype(x.dtype))
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
-        gate = jax.nn.sigmoid(_proj(cfg, x, self.w_g))
+        gate = jax.nn.sigmoid(fused["g"] if fused else _proj(cfg, x, self.w_g))
         o = o * gate
         out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec())
         return out, stats
