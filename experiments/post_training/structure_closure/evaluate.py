@@ -47,8 +47,8 @@ def evaluation_config() -> dict:
     return config
 
 
-def build_evaluation(*, name: str, data: ArtifactStep) -> ArtifactStep:
-    """Evaluate an immutable closure cohort with the policy initializer."""
+def initializer_model() -> ArtifactHfModel:
+    """Bind the campaign initializer and its pinned tokenizer."""
     model = ArtifactStep.adopt(
         user_owned_name("models/structure-closure-initializer"),
         "2026.10.12.1",
@@ -56,15 +56,20 @@ def build_evaluation(*, name: str, data: ArtifactStep) -> ArtifactStep:
         kind=LevanterCheckpoint,
         config={"hf_repository": MODEL_REPOSITORY, "hf_revision": MODEL_REVISION},
     )
+    return ArtifactHfModel(
+        step=model, tokenizer_uri=MODEL_REPOSITORY, tokenizer_revision=MODEL_REVISION, relative_path=""
+    )
+
+
+def build_evaluation(*, name: str, data: ArtifactStep, model: ArtifactHfModel) -> ArtifactStep:
+    """Evaluate an immutable closure cohort with an explicit model artifact."""
     return skyrl_step(
         SkyRLSpec(
             name=name,
             version=resolve_version(name, None),
             config_yaml=yaml.safe_dump(evaluation_config(), sort_keys=False),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-            model=ArtifactHfModel(
-                step=model, tokenizer_uri=MODEL_REPOSITORY, tokenizer_revision=MODEL_REVISION, relative_path=""
-            ),
+            model=model,
             train_data=(),
             validation_data=(ArtifactDataSource(data, relative_path="validation.parquet"),),
             topology=SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=EVAL_ROLE_PLAN),
@@ -97,7 +102,9 @@ def main() -> ArtifactStep:
         DATA_URI,
         config={"validation_sha256": "f64e9ae5724ab081c3e119ee39efc850f12eeaf39f0c5a05ceaf017454a7b011"},
     )
-    return build_evaluation(name=user_owned_name("evals/structure-closure-explicit"), data=data)
+    return build_evaluation(
+        name=user_owned_name("evals/structure-closure-explicit"), data=data, model=initializer_model()
+    )
 
 
 if __name__ == "__main__":

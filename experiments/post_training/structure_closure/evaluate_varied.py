@@ -8,7 +8,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 
-from experiments.post_training.structure_closure.evaluate import build_evaluation
+from experiments.post_training.structure_closure.evaluate import build_evaluation, initializer_model
 
 
 @click.command(help=__doc__)
@@ -20,7 +20,7 @@ def main() -> ArtifactStep:
         "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-varied-tasks-v4",
         config={"validation_sha256": "2a3e293887f809b5e21473ae0e400c5d9fd8ed650a3d431dcddb940366426cc8"},
     )
-    return build_evaluation(name=user_owned_name("evals/structure-closure-varied"), data=data)
+    return build_evaluation(name=user_owned_name("evals/structure-closure-varied"), data=data, model=initializer_model())
 
 
 if __name__ == "__main__":
