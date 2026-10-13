@@ -1,6 +1,6 @@
 # Task rollouts
 
-`ShellboxRolloutEngine.run(lowered)` executes one single-stage task and returns `RolloutData`.
+`RolloutEngine.run(lowered)` executes one single-stage task and returns `RolloutData`.
 The caller supplies the model callable, configured Shellbox factories, and optional task-session factories.
 The caller owns concurrency, retries, group grading, and training projections.
 TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. VerifyIT supplies grading modes and their implementations.
@@ -12,7 +12,7 @@ flowchart TD
     Task --> Lower[LoweredTaskSpec: preserved task, runtime, session limits]
     Config[Deployment configuration] --> Lower
     Lower --> Worker[Caller: task scheduler or rollout worker]
-    Worker --> Engine[ShellboxRolloutEngine]
+    Worker --> Engine[RolloutEngine]
     Engine --> Model[Model callable: public messages and exact tokens]
     Model --> Engine
     Engine --> Session[TaskSession: task operations and grading]
@@ -49,9 +49,12 @@ Other deadlines accept `None` or a finite, positive value.
 `backend` identifies a factory in the engine's `factories` mapping.
 `task_session` identifies a factory in its `sessions` mapping.
 The reserved session identifier `shellbox` selects the built-in shell-tool session.
-Custom session factories receive `(lowered, machine, default_grader)` and return a fresh session for each attempt.
-The default grader applies the task's `TaskSpec` grader and can be passed to a session that controls its own tools.
-Sessions with their own grading logic can ignore it.
+Custom session factories receive a `TaskSessionContext` and return a fresh session for each attempt.
+Its `lowered` and `machine` fields describe that attempt. `task_grader` applies the task's
+`TaskSpec` grader, or is `None` for a `SessionGrader` task that grades itself.
+Sessions that delegate grading call `context.require_task_grader()`; self-grading sessions need no task grader.
+A class that accepts `TaskSessionContext` in its constructor can be registered directly.
+It implements the `TaskSession` protocol through its methods; no base class is required.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
 A grader with an environment requires a `verifier_machine` selection. Every other grader requires `verifier_machine=None`.
@@ -100,6 +103,8 @@ tools, and return observations or a new conversation for the next model turn.
 The built-in `shellbox` session follows the same lifecycle as registered sessions.
 Its preflight checks reject tools and environments it does not support.
 The engine owns model calls, conversation accumulation, and exact-token accounting.
+It records the model transport's assistant message before `advance()` runs. A session can
+parse that message and choose the next conversation, but cannot replace the recorded message.
 Each model request returns one turn, then `advance` executes that turn's operations.
 Completion, a generation limit, the turn limit, or the cumulative turn deadline starts final grading.
 Ordinary task sessions return observations to the engine, which calls the model.
@@ -114,13 +119,13 @@ Given a model callable, machine factories, and an async `run_agent(machine, comp
 from functools import partial
 
 from rolloutengine.agent_session import AgentTaskSession
-from rolloutengine.engine import ShellboxRolloutEngine
+from rolloutengine.engine import RolloutEngine
 
 
-def agent_session(_lowered, machine, default_grader):
-    return AgentTaskSession(partial(run_agent, machine), default_grader)
+def agent_session(context):
+    return AgentTaskSession(partial(run_agent, context.machine), context.require_task_grader())
 
-engine = ShellboxRolloutEngine(model, factories, sessions={"agent": agent_session})
+engine = RolloutEngine(model, factories, sessions={"agent": agent_session})
 ```
 
 The engine closes the selected session before the task machine.
@@ -330,7 +335,7 @@ This function accepts a fully lowered record and a model callable:
 from collections.abc import Awaitable, Callable
 
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
-from rolloutengine.engine import ShellboxRolloutEngine
+from rolloutengine.engine import RolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -339,7 +344,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 async def run_task(
     lowered: LoweredTaskSpec, model: Callable[[ModelRequest], Awaitable[ModelTurn]]
 ) -> RolloutData:
-    engine = ShellboxRolloutEngine(
+    engine = RolloutEngine(
         model,
         {"docker": DockerMachineFactory(), "shellsim": ShellSimMachineFactory()},
     )

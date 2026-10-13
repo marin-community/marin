@@ -150,4 +150,19 @@ class TaskGrader(Protocol):
     async def __call__(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult: ...
 
 
-TaskSessionFactory = Callable[[LoweredTaskSpec, Machine | None, TaskGrader], TaskSession]
+@dataclass(frozen=True)
+class TaskSessionContext:
+    """Inputs for one task session; session-graded tasks have no task grader."""
+
+    lowered: LoweredTaskSpec
+    machine: Machine | None
+    task_grader: TaskGrader | None
+
+    def require_task_grader(self) -> TaskGrader:
+        """Return the task grader for a session that delegates final grading."""
+        if self.task_grader is None:
+            raise ValueError("This task uses session-owned grading")
+        return self.task_grader
+
+
+TaskSessionFactory = Callable[[TaskSessionContext], TaskSession]

@@ -66,7 +66,7 @@ from rolloutengine.contracts import (
     SessionStart,
     Transition,
 )
-from rolloutengine.engine import ShellboxRolloutEngine
+from rolloutengine.engine import RolloutEngine
 from rolloutengine.lowering import lower_task
 from rolloutengine.spec import LoweredTaskSpec
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
@@ -277,11 +277,11 @@ async def test_agent_session_uses_isolated_task_grading_and_engine_cleanup(answe
         finally:
             released.set()
 
-    record = await ShellboxRolloutEngine(
+    record = await RolloutEngine(
         model.complete,
         {"local": factory},
         sessions={
-            "agent": lambda _task, machine, grader: AgentTaskSession(partial(agent, machine), grader),
+            "agent": lambda context: AgentTaskSession(partial(agent, context.machine), context.require_task_grader()),
         },
     ).run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), task_session="agent"))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
@@ -310,11 +310,11 @@ async def test_agent_session_file_grade_preserves_rejected_nonobject_tool_argume
         result = await machine.run(Command(("sh", "-c", f"echo {response.message['content']} > /workspace/answer")))
         assert result.exit_code == 0
 
-    record = await ShellboxRolloutEngine(
+    record = await RolloutEngine(
         model.complete,
         {"local": RecordingShellSimFactory()},
         sessions={
-            "agent": lambda _task, machine, grader: AgentTaskSession(partial(agent, machine), grader),
+            "agent": lambda context: AgentTaskSession(partial(agent, context.machine), context.require_task_grader()),
         },
     ).run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), task_session="agent"))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
@@ -327,7 +327,7 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     rejected = shell_call("unused", call_id="rejected")
     rejected["tool_calls"][0]["function"]["arguments"] = arguments
     model = ReplayModel([rejected, shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
-    record = await ShellboxRolloutEngine(model.complete, {"local": RecordingShellSimFactory()}).run(
+    record = await RolloutEngine(model.complete, {"local": RecordingShellSimFactory()}).run(
         lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
@@ -357,9 +357,9 @@ async def test_agent_session_receives_engine_turns_and_controls_next_history(com
         return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
 
     model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
-    result = await engine(
-        model, sessions={"agent": lambda _task, _machine, _grader: AgentTaskSession(agent, grade)}
-    ).run(lowered(arithmetic_task(), task_session="agent"))
+    result = await engine(model, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)}).run(
+        lowered(arithmetic_task(), task_session="agent")
+    )
 
     assert result.grade.reward == 1.0
     assert [turn.response_token_ids for turn in received] == [(20,), (21,)]
@@ -396,9 +396,7 @@ async def test_agent_session_replays_exact_tokens_on_later_turns(compact):
         assert request.prompt_token_ids == replay
         return ModelTurn({"role": "assistant", "content": "12"}, replay, (21,), (-0.5,), "stop")
 
-    rollout_engine = ShellboxRolloutEngine(
-        model, {}, sessions={"agent": lambda _task, _machine, _grader: AgentTaskSession(agent, grade)}
-    )
+    rollout_engine = RolloutEngine(model, {}, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)})
     result = await rollout_engine.run(lowered(arithmetic_task(), task_session="agent"))
 
     assert result.grade.reward == 1.0
@@ -424,9 +422,7 @@ async def test_agent_session_is_cancelled_when_engine_generation_is_cancelled():
     async def grade(_messages, *, stop_reason):
         raise AssertionError("Cancellation must not grade an unfinished model call")
 
-    runner = ShellboxRolloutEngine(
-        model, {}, sessions={"agent": lambda _task, _machine, _grader: AgentTaskSession(agent, grade)}
-    )
+    runner = RolloutEngine(model, {}, sessions={"agent": lambda _context: AgentTaskSession(agent, grade)})
     pending = asyncio.create_task(runner.run(lowered(arithmetic_task(), task_session="agent")))
     await asyncio.wait_for(model_entered.wait(), timeout=5)
     pending.cancel()
@@ -445,7 +441,7 @@ async def test_agent_session_failure_retains_the_generated_turn():
 
     runner = engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
-        sessions={"agent": lambda _task, _machine, _grader: AgentTaskSession(agent, grade)},
+        sessions={"agent": lambda _context: AgentTaskSession(agent, grade)},
     )
     with pytest.raises(RolloutInterrupted) as caught:
         await runner.run(lowered(arithmetic_task(), task_session="agent"))
@@ -453,6 +449,30 @@ async def test_agent_session_failure_retains_the_generated_turn():
     assert isinstance(caught.value.__cause__, RuntimeError)
     assert caught.value.rollout.response_token_ids == (20,)
     assert caught.value.rollout.loss_mask == (1,)
+
+
+async def test_session_grader_uses_session_owned_grade():
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Return 12."},), {})
+
+        async def advance(self, _turn):
+            return Transition(done=True)
+
+        async def grade(self, messages, *, stop_reason):
+            return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
+
+        async def close(self):
+            pass
+
+    def create(context):
+        assert context.task_grader is None
+        return Session()
+
+    record = await engine(ReplayModel([{"role": "assistant", "content": "12"}]), sessions={"fixture": create}).run(
+        lowered(arithmetic_task(grader=SessionGrader()), task_session="fixture")
+    )
+    assert record.grade.reward == 1.0
 
 
 @pytest.mark.parametrize("next_options", [{}, {"tool_choice": "none"}])
@@ -480,7 +500,7 @@ async def test_session_replaces_model_options_after_conversation_reset(next_opti
             pass
 
     model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
-    result = await engine(model, sessions={"fixture": lambda _task, _machine, _grader: Session()}).run(
+    result = await engine(model, sessions={"fixture": lambda _context: Session()}).run(
         lowered(arithmetic_task(), task_session="fixture")
     )
 
@@ -512,7 +532,7 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
         served = (*prefix[:-1], 99) if alter_prefix else prefix
         return ModelTurn({"role": "assistant", "content": "done"}, served, (5, 6), (-0.1, -0.2), "stop")
 
-    runner = ShellboxRolloutEngine(model, {}, sessions={"fixture": lambda _task, _machine, _grader: Session()})
+    runner = RolloutEngine(model, {}, sessions={"fixture": lambda _context: Session()})
     task = lowered(arithmetic_task(), task_session="fixture")
     if alter_prefix:
         with pytest.raises(RolloutContractError, match="replay token prefix"):
@@ -536,7 +556,7 @@ async def test_reasoning_only_response_grades_missing_answer_or_existing_files(s
             turn = await replay.complete(request)
             return replace(turn, stop_reason=stop_reason) if turn.message is empty else turn
 
-        return await ShellboxRolloutEngine(complete, {"local": FixtureImageFactory()}).run(lowered(task, **runtime))
+        return await RolloutEngine(complete, {"local": FixtureImageFactory()}).run(lowered(task, **runtime))
 
     missing = await run(arithmetic_task(), [empty])
     assert missing.grade.reward == 0.0
@@ -671,8 +691,8 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
             return Machine()
 
     class Session:
-        def __init__(self, lowered, machine, _grader):
-            self.machine = machine
+        def __init__(self, context):
+            self.machine = context.machine
 
         async def prepare(self):
             agent = await self.machine.run(Command(("whoami",)))
@@ -1079,7 +1099,7 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
             "stop",
         )
 
-    runner = ShellboxRolloutEngine(complete, {"local": FixtureImageFactory()})
+    runner = RolloutEngine(complete, {"local": FixtureImageFactory()})
     with pytest.raises(RolloutContractError):
         await runner.run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
 
@@ -1215,7 +1235,7 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
     pending = asyncio.create_task(
         engine(
             Model([{"role": "assistant", "content": "12"}]),
-            sessions={"fixture": lambda _task, _machine, _grader: Session()},
+            sessions={"fixture": lambda _context: Session()},
         ).run(lowered(arithmetic_task(), **limits))
     )
     await asyncio.wait_for(entered.wait(), timeout=5)
@@ -1273,7 +1293,7 @@ async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
     pending = asyncio.create_task(
         engine(
             Model([{"role": "assistant", "content": "12"}]),
-            sessions={"fixture": lambda _task, _machine, _grader: Session()},
+            sessions={"fixture": lambda _context: Session()},
         ).run(lowered(arithmetic_task(), task_session="fixture", total_turn_timeout=0.05))
     )
     await asyncio.wait_for(grading.wait(), timeout=5)
@@ -1463,7 +1483,7 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
     with pytest.raises(asyncio.CancelledError):
         await engine(
             ReplayModel([{"role": "assistant", "content": "12"}]),
-            sessions={"fixture": lambda _task, _machine, _grader: Session()},
+            sessions={"fixture": lambda _context: Session()},
         ).run(lowered(arithmetic_task(), task_session="fixture", attempt_timeout=0.01))
     assert closed.is_set()
 
@@ -1493,8 +1513,8 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
             return Machine()
 
     class Session:
-        def __init__(self, lowered, machine, _grader):
-            self.machine = machine
+        def __init__(self, context):
+            self.machine = context.machine
 
         async def prepare(self):
             return SessionStart(({"role": "user", "content": "Run the task."},), {})

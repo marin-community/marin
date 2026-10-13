@@ -6,7 +6,6 @@
 import json
 from typing import Any
 
-from shellbox.machine import Machine
 from taskcompendium.chat import assistant_message
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
@@ -29,8 +28,7 @@ from taskcompendium.submission import (
     submission_instruction,
 )
 
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, TaskGrader, Transition
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, TaskSessionContext, Transition
 
 WORKSPACE_INSTRUCTION = (
     "Use the {tool_name} tool to inspect and change the workspace. Send a final response when the task is completed."
@@ -75,16 +73,11 @@ def session_start(task: TaskSpec, shell_tool: BoundShellTool | None) -> SessionS
 class _ShellboxTaskSession:
     """Execute shell calls and grade final task evidence."""
 
-    def __init__(
-        self,
-        lowered: LoweredTaskSpec,
-        machine: Machine | None,
-        grader: TaskGrader,
-    ):
-        self.lowered = lowered
-        self.machine = machine
-        self.grader = grader
-        self.shell_tool = resolve_shell_tool(lowered.task, lowered.session.shell_tool)
+    def __init__(self, context: TaskSessionContext):
+        self.lowered = context.lowered
+        self.machine = context.machine
+        self.grader = context.require_task_grader()
+        self.shell_tool = resolve_shell_tool(context.lowered.task, context.lowered.session.shell_tool)
 
     async def prepare(self) -> SessionStart:
         return session_start(self.lowered.task, self.shell_tool)

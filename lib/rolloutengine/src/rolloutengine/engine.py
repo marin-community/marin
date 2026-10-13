@@ -11,7 +11,7 @@ from typing import Any
 
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import SessionGrader, TaskSpec
 from taskcompendium.submission import conversation_messages
 
 from rolloutengine.cleanup import _Cleanup
@@ -28,6 +28,7 @@ from rolloutengine.contracts import (
     RolloutOperation,
     RolloutStep,
     TaskSession,
+    TaskSessionContext,
     TaskSessionFactory,
     Transition,
 )
@@ -51,7 +52,7 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
     )
 
 
-class ShellboxRolloutEngine:
+class RolloutEngine:
     """Generate exact-token rollouts from lowered single-stage tasks."""
 
     def __init__(
@@ -126,7 +127,8 @@ class ShellboxRolloutEngine:
             SHELLBOX_SESSION: _ShellboxTaskSession,
         }
         try:
-            session = session_factories[lowered.session.task_session](lowered, machine, grade)
+            context = TaskSessionContext(lowered, machine, None if isinstance(task.grader, SessionGrader) else grade)
+            session = session_factories[lowered.session.task_session](context)
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.PREPARE) from error
         resources.push_async_callback(cleanup.run, "session_close", session.close)
