@@ -36,6 +36,8 @@ def objects(client, uri: str) -> tuple[str, str, list[dict]]:
 
 def collect(client, uri: str, root: Path) -> None:
     bucket, prefix, inventory = objects(client, uri)
+    inventory_path = root / "object_inventory.json"
+    previous = {row["Key"]: row for row in json.loads(inventory_path.read_text())} if inventory_path.exists() else {}
 
     def download(item):
         name = item["Key"].removeprefix(prefix)
@@ -44,12 +46,18 @@ def collect(client, uri: str, root: Path) -> None:
             return
         destination = root / name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if not destination.exists() or destination.stat().st_size != item["Size"]:
+        cached = previous.get(item["Key"])
+        if (
+            not destination.exists()
+            or destination.stat().st_size != item["Size"]
+            or cached is None
+            or cached["ETag"] != item["ETag"]
+        ):
             client.download_file(bucket, item["Key"], str(destination))
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(download, inventory))
-    (root / "object_inventory.json").write_text(
+    inventory_path.write_text(
         json.dumps(
             [
                 {
@@ -64,7 +72,20 @@ def collect(client, uri: str, root: Path) -> None:
     )
 
 
-def audit(config: dict, root: Path, *, training_group_audit: dict | None = None) -> dict:
+def audit(config: dict, root: Path, *, training_group_audit: dict | None = None, archive_after_ms: int = 0) -> dict:
+    inventory = {}
+    if archive_after_ms:
+        uri = config["artifacts"]["attempts_root"].removesuffix("/attempts")
+        prefix = urlparse(uri).path.lstrip("/").rstrip("/") + "/"
+        inventory = {
+            row["Key"].removeprefix(prefix): row for row in json.loads((root / "object_inventory.json").read_text())
+        }
+
+    def require_current_attempt(path: Path) -> None:
+        if archive_after_ms:
+            item = inventory[str(path.relative_to(root))]
+            assert item["last_modified_ms"] >= archive_after_ms, f"Artifact predates selected attempt: {path}"
+
     resolved = yaml.safe_load((root / "resolved-launch.yaml").read_text())["config"]
     assert resolved["runtime"]["launcher_commit"] == config["runtime"]["launcher_commit"]
     trainer = resolved["skyrl"]["trainer"]
@@ -86,6 +107,8 @@ def audit(config: dict, root: Path, *, training_group_audit: dict | None = None)
         json.loads((root / "exports/training_metrics" / f"train-{step:08d}.json").read_text())
         for step in range(1, updates + 1)
     ]
+    for step in range(1, updates + 1):
+        require_current_attempt(root / "exports/training_metrics" / f"train-{step:08d}.json")
     for step, values in enumerate(metrics, 1):
         assert values["trainer/global_step"] == step
         assert values["policy/policy_update_steps"] == 1 and values["policy/skipped_steps"] == 0
@@ -97,6 +120,7 @@ def audit(config: dict, root: Path, *, training_group_audit: dict | None = None)
     learner = []
     for step in range(1, updates + 1):
         path = root / "exports/dumped_data" / f"global_step_{step}_training_input.pkl"
+        require_current_attempt(path)
         batch = pickle.loads(path.read_bytes())
         assert batch.metadata["global_step"] == step and batch.metadata["source_batch_size"] == 512
         assert torch.all(batch["rollout_staleness"] == (step - 1) % refresh_period)
@@ -151,7 +175,11 @@ def audit(config: dict, root: Path, *, training_group_audit: dict | None = None)
     qualities = {}
     full_completion_grade_differences = Counter()
     preserve_full_response = resolved["skyrl"]["generator"].get("preserve_full_response_text", False)
+    excluded_prior_archives = 0
     for path in sorted((root / "attempts/trajectories").glob("**/*.zip")):
+        if archive_after_ms and inventory[str(path.relative_to(root))]["last_modified_ms"] < archive_after_ms:
+            excluded_prior_archives += 1
+            continue
         with zipfile.ZipFile(path) as archive:
             for name in archive.namelist():
                 if not name.startswith("records/"):
@@ -195,12 +223,16 @@ def audit(config: dict, root: Path, *, training_group_audit: dict | None = None)
     # The interval callback also fires at update300 even with train-end evaluation disabled.
     assert set(expected_eval_steps).issubset(qualities)
     assert extra_eval_steps == ([300] if updates == 300 else [])
+    for step in qualities:
+        require_current_attempt(root / "exports/training_metrics" / f"eval-{step:08d}.json")
     first = memberships[0]
     assert len(first) == 64 and set(first.values()) == {8}
     assert all(memberships[step] == first and records[("eval", step)] == 512 for step in qualities)
     return {
         "run_id": config["run"]["id"],
         "runtime": resolved["runtime"],
+        "archive_after_ms": archive_after_ms,
+        "excluded_prior_attempt_archives": excluded_prior_archives,
         "completed_updates": updates,
         "score_centering": algorithm["score_centering_enabled"],
         "sampler_refresh_period": refresh_period,
@@ -249,6 +281,7 @@ def main() -> None:
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--training-group-audit", type=Path)
+    parser.add_argument("--archive-after-ms", type=int, default=0)
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     client = boto3.client(
@@ -262,12 +295,14 @@ def main() -> None:
     args.cache.mkdir(parents=True, exist_ok=True)
     collect(client, uri, args.cache)
     group_audit = json.loads(args.training_group_audit.read_text()) if args.training_group_audit else None
-    result = audit(config, args.cache, training_group_audit=group_audit)
+    result = audit(config, args.cache, training_group_audit=group_audit, archive_after_ms=args.archive_after_ms)
     checkpoint = urlparse(config["artifacts"]["checkpoint_root"])
-    marker = client.get_object(
+    marker_object = client.get_object(
         Bucket=checkpoint.netloc, Key=checkpoint.path.lstrip("/") + "/latest_ckpt_global_step.txt"
-    )["Body"].read()
+    )
+    marker = marker_object["Body"].read()
     assert int(marker) == result["completed_updates"]
+    assert int(marker_object["LastModified"].timestamp() * 1000) >= args.archive_after_ms
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({k: v for k, v in result.items() if k != "learner_evidence"}))

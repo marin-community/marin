@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-13T03:12:58.950050+00:00",
+  "observed_at": "2026-10-13T04:21:30.547020+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -3506,6 +3506,46 @@
       "allocated_h100_hours": 17.2175,
       "outcome": "succeeded with retained audit",
       "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s1-a3-01a126ce.json"
+    },
+    {
+      "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/0",
+      "attempt_id": "1",
+      "attempt_uid": "4c32b6f4171800d1",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791854724255",
+      "finished_at_ms": "1791863712620",
+      "node_name": "g83d142",
+      "terminal_reason": "",
+      "stage": "SkyRL main",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
+      "allocated_seconds": 8988.365,
+      "allocated_h100_hours": 19.974144444444445,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/1",
+      "attempt_id": "1",
+      "attempt_uid": "e2f01b5abb732c70",
+      "state": "10",
+      "exit_code": "143",
+      "started_at_ms": "1791854724255",
+      "finished_at_ms": "1791863712620",
+      "node_name": "g845f9c",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 11f413c5-27e6-444f-8b76-f8f580186172, JobUID: fd459e0c-5e4d-431c-91a6-2116b7f67b69) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "SkyRL main",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
+      "allocated_seconds": 8988.365,
+      "allocated_h100_hours": 19.974144444444445,
+      "outcome": "failed engineering attempt"
     }
   ],
   "terminal_h100_hours": 54.25557777777778,
@@ -3514,7 +3554,7 @@
     "reference qualification": 1.1350711111111111,
     "reference main": 28.411202222222222,
     "SkyRL qualification": 30.69114888888889,
-    "SkyRL main": 2905.343593333332,
+    "SkyRL main": 2945.291882222221,
     "SkyRL staleness qualification": 7.2194199999999995,
     "core GPU qualification": 4.532366666666666,
     "Snowball GPU qualification": 233.0384955555555,
@@ -3540,7 +3580,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "fb0f27daaad57f8645a3569c075c8d0d6c930d6e9e78fedeb00f8aa796ef5975",
-      "allocated_h100_hours_so_far": 21.64584455596076
+      "allocated_h100_hours_so_far": 30.78272671116723
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-sc-s0-a3-01a126ce/1",
@@ -3558,7 +3598,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "fb0f27daaad57f8645a3569c075c8d0d6c930d6e9e78fedeb00f8aa796ef5975",
-      "allocated_h100_hours_so_far": 21.64584455596076
+      "allocated_h100_hours_so_far": 30.78272671116723
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce/0",
@@ -3576,7 +3616,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "c880a86314c0cbfcbd79aa0e0bc9df7a74aff6ec453b763f8673da039acf3238",
-      "allocated_h100_hours_so_far": 21.620086778004964
+      "allocated_h100_hours_so_far": 30.756968933211432
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-clean-tis-s0-a3-01a126ce/1",
@@ -3594,7 +3634,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "c880a86314c0cbfcbd79aa0e0bc9df7a74aff6ec453b763f8673da039acf3238",
-      "allocated_h100_hours_so_far": 21.620086778004964
+      "allocated_h100_hours_so_far": 30.756968933211432
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce/0",
@@ -3612,7 +3652,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "762ba5111820fee74ecc7d5c4392cb68e6f740d2d3ce438f9b373438681349d1",
-      "allocated_h100_hours_so_far": 21.51858677811093
+      "allocated_h100_hours_so_far": 30.655468933317398
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce/1",
@@ -3630,7 +3670,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "762ba5111820fee74ecc7d5c4392cb68e6f740d2d3ce438f9b373438681349d1",
-      "allocated_h100_hours_so_far": 21.51858677811093
+      "allocated_h100_hours_so_far": 30.655468933317398
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce/0",
@@ -3648,7 +3688,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "a05570a67be620be819d3aa3ccdcb2fcc8f93cc69740181c755f1d96c03d0070",
-      "allocated_h100_hours_so_far": 21.23664455572764
+      "allocated_h100_hours_so_far": 30.373526710934108
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s0-a3-01a126ce/1",
@@ -3666,7 +3706,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "a05570a67be620be819d3aa3ccdcb2fcc8f93cc69740181c755f1d96c03d0070",
-      "allocated_h100_hours_so_far": 21.185262333552043
+      "allocated_h100_hours_so_far": 30.32214448875851
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce/0",
@@ -3684,7 +3724,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "b7ba4cc0263fb50b27e035bfd83ee672c3c5a5d2379d794bc631901b50b0e46e",
-      "allocated_h100_hours_so_far": 14.34376677778032
+      "allocated_h100_hours_so_far": 23.48064893298679
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s1-a3-01a126ce/1",
@@ -3702,17 +3742,17 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "b7ba4cc0263fb50b27e035bfd83ee672c3c5a5d2379d794bc631901b50b0e46e",
-      "allocated_h100_hours_so_far": 14.34376677778032
+      "allocated_h100_hours_so_far": 23.48064893298679
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/0",
-      "attempt_id": "1",
-      "attempt_uid": "4c32b6f4171800d1",
+      "attempt_id": "2",
+      "attempt_uid": "594f9219ba1ca0b7",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791854724255",
+      "started_at_ms": "1791864168843",
       "finished_at_ms": "",
-      "node_name": "g83d142",
+      "node_name": "g7387bc",
       "terminal_reason": "",
       "stage": "SkyRL main",
       "cluster": "cw-us-east-02a",
@@ -3720,17 +3760,17 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
-      "allocated_h100_hours_so_far": 14.34376677778032
+      "allocated_h100_hours_so_far": 2.49267560005188
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/1",
-      "attempt_id": "1",
-      "attempt_uid": "e2f01b5abb732c70",
+      "attempt_id": "2",
+      "attempt_uid": "6677eb59e0b0f335",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791854724255",
+      "started_at_ms": "1791864134398",
       "finished_at_ms": "",
-      "node_name": "g845f9c",
+      "node_name": "g73a62a",
       "terminal_reason": "",
       "stage": "SkyRL main",
       "cluster": "cw-us-east-02a",
@@ -3738,7 +3778,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "8d062993b27cb2f0a33da4f5fea5cc8c1c605ea7d6a1ce1a0112d7d5b3514934",
-      "allocated_h100_hours_so_far": 14.34376677778032
+      "allocated_h100_hours_so_far": 2.569220044347975
     }
   ]
 }
