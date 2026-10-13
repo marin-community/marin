@@ -19,7 +19,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
@@ -297,6 +297,9 @@ class ScriptModel:
     barrier: asyncio.Barrier | None = None
     requests: list[ModelRequest] = field(default_factory=list)
 
+    def for_step(self, step: str) -> Self:
+        return self
+
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         self.requests.append(request)
         index = sum(message["role"] == "assistant" for message in request.messages)
@@ -312,6 +315,9 @@ class ScriptModel:
 @dataclass
 class RaisingModel:
     error: Callable[[], Exception]
+
+    def for_step(self, step: str) -> Self:
+        return self
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         raise self.error()

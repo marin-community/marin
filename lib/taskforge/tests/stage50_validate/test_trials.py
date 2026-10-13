@@ -5,7 +5,8 @@
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Self
 
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, ModelRequest, ModelTurn, RolloutData
@@ -14,8 +15,12 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import JsonAnswer, PlainText
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
+from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import ModelRequestRejected, TokenEvidenceError
-from taskforge.llm.rollout_model import TokenContractBreak
+from taskforge.llm.glm_client import GlmClient
+from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.recording import CallLedger
+from taskforge.llm.rollout_model import GlmRolloutModel, RolloutTransport, TokenContractBreak
 from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.stage50_validate.trials import (
@@ -27,6 +32,7 @@ from taskforge.stage50_validate.trials import (
     run_trials,
     task_digest,
 )
+from tests.conftest import fake_source
 from tests.sandbox.fixture_images import FixtureImageFactory
 
 DEADLINES = Deadlines(total_turn_timeout=30, attempt_timeout=60)
@@ -171,6 +177,26 @@ async def test_trials_run_concurrently(tmp_path, math_task, fakes):
     assert [o.reward for o in outcomes if isinstance(o, Graded)] == [1.0] * 20
 
 
+async def test_each_trial_of_a_glm_model_records_and_routes_under_its_own_attempt_step(
+    tmp_path, math_task, fakes, fake_glm, fast_provider
+):
+    for _ in range(2):
+        fake_glm.stream(
+            content="395", prompt_tokens=3, completion_tokens=2, prompt_token_ids=(1, 2, 3), token_ids=(4, 5)
+        )
+    trial_plan = plan(tmp_path, k=2, max_retries=0)
+
+    async with GlmClient(fake_source(fake_glm), replace(fast_provider, max_attempts=1)) as client:
+        record = CallLedger(trial_plan.ledger, trial_plan.workpiece_id, trial_plan.round, str(TrialKind.SOLVER))
+        model = GlmRolloutModel(client, LLMPolicy(max_continuations=0), RolloutTransport.CHAT_COMPLETIONS, record)
+        outcomes = await run_trials(math_task, trial_plan, settings(fakes.flaky_factory(0, RuntimeError)), model)
+
+    assert [o.reward for o in outcomes if isinstance(o, Graded)] == [1.0, 1.0]
+    assert sorted(body["prompt_cache_key"] for body in fake_glm.requests) == ["item:1:solver/0/0", "item:1:solver/1/0"]
+    calls = [entry.step for entry in ledger(tmp_path) if entry.kind is EntryKind.LLM_CALL]
+    assert sorted(calls) == ["solver/0/0", "solver/1/0"]
+
+
 async def test_validation_deadlines_replace_the_builders_turn_deadline(tmp_path, file_task, fakes):
     # The builder allows an hour; validation's total-turn deadline ends the trial after the first shell turn.
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
@@ -267,6 +293,9 @@ class ContractBreakingModel:
     broken: int
     breaks: int = 0
     broken_at: tuple[dict, ...] = ()
+
+    def for_step(self, step: str) -> Self:
+        return self
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         if not request.prefix_token_ids:
