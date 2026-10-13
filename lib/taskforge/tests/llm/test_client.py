@@ -16,8 +16,17 @@ from taskforge.llm.client import (
     FinishReason,
     ModelRequestRejected,
     ModelUnavailable,
+    TokenCompletion,
 )
-from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.glm_client import (
+    GENERATE_PATH,
+    ROUTING_KEY_HEADER,
+    EndpointSource,
+    FixedEndpoint,
+    GlmClient,
+    GlmEndpoint,
+    Pool,
+)
 from taskforge.llm.policy import (
     CONTINUE_PROMPT,
     GLM_MAX_OUTPUT_TOKENS,
@@ -334,3 +343,63 @@ def test_continuations_stop_at_policy_limit(fake_glm, run):
     assert completion.content == "abc"
     assert completion.finish_reason is FinishReason.LENGTH
     assert len(fake_glm.requests) == 3
+
+
+def generate(source: EndpointSource, provider: LLMProviderConfig, max_tokens: int = 64) -> TokenCompletion:
+    async def call() -> TokenCompletion:
+        async with GlmClient(source, provider) as client:
+            return await client.generate((1, 2, 3), LLMPolicy(), max_tokens=max_tokens, routing_key="item:0:solver")
+
+    return asyncio.run(call())
+
+
+def test_generate_posts_token_ids_and_reads_ids_logprobs_bytes_and_usage(fake_glm, fast_provider):
+    fake_glm.generate((30, 31), (b"ok", b"<|user|>"), prompt_tokens=3, cached_tokens=2)
+
+    completion = generate(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)
+
+    assert (completion.token_ids, completion.token_bytes) == ((30, 31), (b"ok", b"<|user|>"))
+    assert completion.logprobs == (-0.25, -0.25)
+    assert (completion.usage.prompt_tokens, completion.usage.completion_tokens, completion.usage.cached_tokens) == (
+        3,
+        2,
+        2,
+    )
+    [body] = fake_glm.requests
+    assert fake_glm.request_paths == [GENERATE_PATH]
+    assert body == {
+        "model": "glm-5.3",
+        "token_ids": [1, 2, 3],
+        "sampling_params": {"max_tokens": 64, "temperature": 1.0, "top_p": 0.95, "logprobs": 0},
+        "return_token_bytes": True,
+        "stream": False,
+    }
+    headers = fake_glm.request_headers[0]
+    assert (headers["authorization"], headers[ROUTING_KEY_HEADER]) == ("Bearer test-token", "item:0:solver")
+
+
+def test_generate_retries_a_retryable_status_and_records_each_attempt(fake_glm, fast_provider):
+    fake_glm.status(503, "busy")
+    fake_glm.generate((30,), (b"<|user|>",))
+
+    completion = generate(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)
+
+    assert outcomes(completion) == [AttemptOutcome.RETRYABLE_STATUS, AttemptOutcome.COMPLETED]
+    assert len(fake_glm.requests) == 2
+
+
+def test_generate_rejects_a_router_without_token_bytes_at_once(fake_glm, fast_provider):
+    fake_glm.status(503, json.dumps({"error": {"code": "token_bytes_unavailable", "message": "tokenizer mismatch"}}))
+
+    with pytest.raises(ModelRequestRejected) as error:
+        generate(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)
+
+    assert (error.value.status, len(fake_glm.requests)) == (503, 1)
+    assert outcomes(error.value) == [AttemptOutcome.REJECTED]
+
+
+def test_generate_context_overflow_raises(fake_glm, fast_provider):
+    fake_glm.status(400, CONTEXT_ERROR)
+
+    with pytest.raises(ContextExhausted):
+        generate(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)

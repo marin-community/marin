@@ -8,7 +8,10 @@ Taskforge turns task ideas into TaskCompendium `TaskSpec`s with a model's help. 
 ```
 src/taskforge/
   content_hash.py  canonical JSON and its sha256 digests
-  llm/             the ModelClient protocol, the GLM client, sampling policy, structured output
+  ledger/          timed spans to per-item JSONL and, under Iris, Finelog
+  llm/             the ModelClient protocol, the GLM client and its token-id route, sampling policy,
+                   structured output, call cache, ledger recording, agent loop, web tools,
+                   the RolloutEngine model
   stage30_author/  program.py: build steps and the DAG they form;
                    author.py: Revision, the Author protocol, `static_author`, the program manifest
   stage40_build/   context.py: RLEnvBuildContext, BuildFailure;
@@ -19,8 +22,57 @@ src/taskforge/
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
 proposal 10, triage 20, author 30, build 40. The gaps leave room to insert a stage later without
 renumbering. A stage imports from lower-numbered stages and from the shared modules
-(`content_hash`, `llm`), and the shared modules import no stage.
-`tests/test_imports.py` checks both directions.
+(`content_hash`, `ledger`, `llm`), and the shared modules import no stage.
+`tests/test_imports.py` checks both directions. `scripts/ledger_summary.py` totals wall time and
+tokens per kind and step over JSONL ledgers.
+
+## Model calls
+
+`llm.recording` records every model call as an `LLM_CALL` span under a `CallLedger` (ledger, item,
+round, step), with tokens, finish reason and the call's attempt record (`attempts`,
+`attempts_<outcome>` counts, non-200 `http_statuses`, `wall_time`). `recorded_complete` and
+`recorded_structured` wrap one call each; `run_agent` and `GlmRolloutModel` record through
+`llm_call_span`, so a rollout's 429s, retries and holds reach the ledger.
+
+```
+run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
+        |                                     |
+        +---------> llm_call_span <-----------+
+                    (record: CallLedger)
+                      |              |
+                      v              v
+          GlmClient.complete      span(LLM_CALL) -> Ledger.record(LedgerEntry)
+          or .generate,                              |-> JsonlLedger   <root>/<item_id>.jsonl
+          retries and holds                          '-> FinelogLedger taskforge.ledger (under Iris)
+                      |
+                      v
+          GLM-5.3 router: POST /v1/chat/completions (streamed)
+                          or POST /inference/v1/generate (token ids)
+```
+
+`llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
+own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each assistant turn's
+`reasoning_content`. `shell_tool` offers RolloutEngine's default shell tool on a shellbox
+`Machine`, and `llm.web` adds Parallel search and extract. The client sends the policy's whole
+`max_tokens` with every turn, so a prompt plus that budget beyond the context window raises
+`ContextExhausted`, which ends the loop with `AgentStop.CONTEXT`; long loops set a smaller
+`max_tokens`.
+
+`llm.rollout_model.GlmRolloutModel(client, policy, transport, record)` is the RolloutEngine model
+callable. On `RolloutTransport.CHAT_COMPLETIONS` each turn is one streamed call with
+`return_token_ids`, and the served ids come from the chunks. On `RolloutTransport.TOKEN_ROUTE`
+every turn after the first renders the conversation once on the server (a one-token probe, its own
+`purpose=render` span), keeps the ids the template rendered after the previous assistant turn, and
+samples from the rollout's exact prefix plus those ids through `GlmClient.generate`, with header
+`x-routing-key: <item>:<round>:<step>`. The route returns each sampled id's bytes
+(`return_token_bytes`), and `llm.glm_format.parse_turn` joins them and splits the text into
+reasoning, answer and tool calls. A turn that cannot keep the exact prefix raises
+`TokenContractBreak` inside its span, which records `cause == "token_contract"`. A response whose
+ids, logprobs and bytes do not align raises `TokenEvidenceError`, which fails the run. Both
+transports send the same sampling fields, `LLMPolicy.sampling_params()`.
+
+`llm.store.CallStore` caches `complete` and `complete_structured` calls on disk by the digest of
+the request and does not record to the ledger.
 
 ## The build DAG
 
@@ -74,3 +126,20 @@ uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/p
     lib/taskforge/tests experiments/post_training/capability_driven_envs/tests
 cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
+
+Live tests carry `@pytest.mark.live_glm`. The default marker expression excludes them, and they
+skip with a reason when their inputs are missing. They call GLM-5.3's high pool through the router
+port-forward:
+
+```bash
+KUBECONFIG=<open-athena kubeconfig> kubectl -n open-athena port-forward svc/glm53-router 18000:8000 &
+export TASKFORGE_GLM_BASE_URL=http://127.0.0.1:18000/v1
+export GLM_HIGH_TOKEN=<high-pool bearer token>
+uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/pyproject.toml \
+    lib/taskforge/tests -m live_glm
+```
+
+`-m live_glm` replaces the default marker expression. The agent live tests also take
+`TASKFORGE_PARALLEL_KEY_FILE`, a file with a `PARALLEL_KEY=...` line. Live checks write raw evidence
+(request without the bearer token, full response, wall time) under `$TASKFORGE_EVIDENCE_DIR`, or
+`taskforge-evidence/` in the system temp directory, outside the checkout.

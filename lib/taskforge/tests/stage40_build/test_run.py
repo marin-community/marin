@@ -6,7 +6,7 @@
 import asyncio
 import base64
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 import pytest
@@ -52,7 +52,9 @@ class FakeModel:
     def __init__(self):
         self.calls = 0
 
-    async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
+    async def complete(
+        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
+    ) -> Completion:
         raise AssertionError("the steps here make structured calls only")
 
     async def complete_structured[T: BaseModel](

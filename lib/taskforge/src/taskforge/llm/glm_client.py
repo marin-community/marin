@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.3 chat completions through the ``openai`` SDK, retried by the client's own loop.
+"""GLM-5.3 chat completions through the ``openai`` SDK and token-id sampling, retried by one loop.
 
 ``GlmClient`` implements ``taskforge.llm.client.ModelClient``, with ``LLMProviderConfig`` supplying
 the model, the retry budget and backoff, the hold and stall timeouts and the connection pool. The
@@ -10,11 +10,11 @@ retries failed attempts itself. The SDK retries only before a response starts, w
 retrying a stall, an abort, a mid-stream error or a stream ending without usage. The SDK also cannot
 hold on an empty pool or a missing route and returns no record of the individual attempts.
 
-Every request streams. The SDK's read timeout abandons a connection after ``stall_timeout`` seconds
-without bytes, and the client's loop over chunks abandons a stream after as long without a token, so
-a slow reply still producing tokens runs without a wall-clock cap. The SDK's
-``ChatCompletionStreamState`` accumulates the chunks, and the client reads content, reasoning, tool
-calls, finish reason and usage from its snapshot.
+Every chat-completions request streams. The SDK's read timeout abandons a connection after
+``stall_timeout`` seconds without bytes, and the client's loop over chunks abandons a stream after
+as long without a token, so a slow reply still producing tokens runs without a wall-clock cap. The
+SDK's ``ChatCompletionStreamState`` accumulates the chunks, and the client reads content,
+reasoning, tool calls, finish reason and usage from its snapshot.
 
 After a failed attempt, the client handles the failure by kind:
 
@@ -45,6 +45,15 @@ sent them.
 continuations off, then validates the reply and asks for repairs through ``taskforge.llm.structured``.
 That module also appends a user turn describing each field, since the chat template renders nothing
 from ``response_format``.
+
+``generate`` samples from prompt token ids without a chat template, through the router's token-id
+route (``GENERATE_PATH``), for rollouts that must keep their exact tokens. It sends one
+non-streamed POST over the same connection pool and the same retry and hold loop as ``complete``,
+so the statuses, holds and context overflow behave as above. No stall timeout applies; the caller's
+turn timeout bounds the request. The body asks for ``return_token_bytes``, and the route answers
+with each sampled id's bytes. A 503 reporting ``token_bytes_unavailable`` means the router's
+tokenizer does not match the model, which no retry fixes, so the call raises
+``ModelRequestRejected``.
 """
 
 import asyncio
@@ -52,7 +61,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import TracebackType
@@ -75,6 +84,8 @@ from taskforge.llm.client import (
     ModelRequestRejected,
     ModelUnavailable,
     StructuredResult,
+    TokenCompletion,
+    TokenEvidenceError,
     ToolCall,
     Usage,
 )
@@ -100,6 +111,11 @@ ERROR_BODY_LIMIT = 2000
 CONNECT_TIMEOUT = 30.0
 WRITE_TIMEOUT = 120.0
 HEALTH_TIMEOUT = 20.0
+GENERATE_PATH = "/inference/v1/generate"
+"""The router's token-id route, beside the OpenAI-compatible ``/v1`` root."""
+ROUTING_KEY_HEADER = "x-routing-key"
+TOKEN_BYTES_UNAVAILABLE = "token_bytes_unavailable"
+"""The 503 error code the token-id route returns when its tokenizer cannot supply token bytes."""
 
 
 class Pool(StrEnum):
@@ -198,15 +214,17 @@ def _retry_after(response: httpx.Response) -> float:
     return float(value) if value.replace(".", "", 1).isdigit() else 0.0
 
 
-def _status_failure(error: openai.APIStatusError) -> _AttemptFailed:
-    status = error.status_code
-    body = error.response.text[:ERROR_BODY_LIMIT]
+def _status_failure(response: httpx.Response) -> _AttemptFailed:
+    status = response.status_code
+    body = response.text[:ERROR_BODY_LIMIT]
+    if status == 503 and TOKEN_BYTES_UNAVAILABLE in body:
+        return _AttemptFailed(AttemptOutcome.REJECTED, body, status)
     if status == 404 and "route" in body.lower():
         return _AttemptFailed(AttemptOutcome.ROUTE_MISSING, body, status)
     if status == 400 and CONTEXT_LIMIT_PATTERN.search(body):
         return _AttemptFailed(AttemptOutcome.CONTEXT_OVERFLOW, body, status)
     if status in RETRYABLE_STATUSES:
-        return _AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, body, status, _retry_after(error.response))
+        return _AttemptFailed(AttemptOutcome.RETRYABLE_STATUS, body, status, _retry_after(response))
     return _AttemptFailed(AttemptOutcome.REJECTED, body, status)
 
 
@@ -228,12 +246,67 @@ def request_kwargs(
         "model": model,
         "messages": list(messages),
         "max_tokens": max_tokens,
-        "temperature": policy.temperature,
+        **policy.sampling_params(),
         "stream": True,
         "stream_options": {"include_usage": True},
         **sdk_fields,
         "extra_body": {"chat_template_kwargs": policy.template_kwargs(), **extra_fields},
     }
+
+
+def generate_body(model: str, token_ids: Sequence[int], max_tokens: int, policy: LLMPolicy) -> dict[str, object]:
+    """Build the exact token-id route body the client sends.
+
+    ``sampling_params`` carries the policy's ``sampling_params()``, the same fields chat completions
+    send; the route rejects ``min_p`` and ``logit_bias``. ``logprobs: 0`` returns the sampled
+    token's own raw logprob, and ``return_token_bytes`` returns each sampled id's bytes.
+    """
+    return {
+        "model": model,
+        "token_ids": list(token_ids),
+        "sampling_params": {"max_tokens": max_tokens, **policy.sampling_params(), "logprobs": 0},
+        "return_token_bytes": True,
+        "stream": False,
+    }
+
+
+def token_completion(payload: Mapping[str, Any], wall_time: float, attempts: tuple[Attempt, ...]) -> TokenCompletion:
+    """Read a token-id route response.
+
+    Raises:
+        TokenEvidenceError: ``token_bytes`` is absent, does not align with ``token_ids``, or has no
+            bytes for a sampled id; or the logprob entries do not align with ``token_ids``.
+    """
+    choice = payload["choices"][0]
+    token_ids = tuple(choice["token_ids"])
+    token_bytes = choice.get("token_bytes")
+    if token_bytes is None:
+        raise TokenEvidenceError("the response has no token_bytes; the route must honor return_token_bytes")
+    if len(token_bytes) != len(token_ids):
+        raise TokenEvidenceError(f"{len(token_ids)} token ids but {len(token_bytes)} token_bytes entries")
+    missing = [index for index, data in enumerate(token_bytes) if data is None]
+    if missing:
+        ids = [token_ids[index] for index in missing[:8]]
+        raise TokenEvidenceError(f"sampled ids {ids} at indices {missing[:8]} came back without bytes")
+    entries = (choice.get("logprobs") or {}).get("content") or []
+    if len(entries) != len(token_ids):
+        raise TokenEvidenceError(f"{len(token_ids)} token ids but {len(entries)} logprob entries")
+    usage = payload["usage"]
+    prompt_details = usage.get("prompt_tokens_details") or {}
+    return TokenCompletion(
+        token_ids=token_ids,
+        logprobs=tuple(float(entry["logprob"]) for entry in entries),
+        token_bytes=tuple(bytes(data) for data in token_bytes),
+        finish_reason=FinishReason(choice["finish_reason"]),
+        usage=Usage(
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            reasoning_tokens=0,
+            cached_tokens=prompt_details.get("cached_tokens") or 0,
+        ),
+        wall_time=wall_time,
+        attempts=attempts,
+    )
 
 
 class GlmClient:
@@ -377,6 +450,53 @@ class GlmClient:
         """
         return await complete_structured(self, messages, output_type, policy, self._provider.structured_repairs)
 
+    async def generate(
+        self, token_ids: Sequence[int], policy: LLMPolicy, *, max_tokens: int, routing_key: str
+    ) -> TokenCompletion:
+        """Sample from ``token_ids`` through the token-id route (``GENERATE_PATH``), without a chat template.
+
+        The request retries and holds as ``complete`` does, and a context overflow raises
+        ``ContextExhausted``. ``routing_key`` goes out as ``ROUTING_KEY_HEADER``, so a rollout's
+        requests share a node's prefix cache. The route reports no reasoning split, so
+        ``usage.reasoning_tokens`` is 0.
+
+        Raises:
+            TokenEvidenceError: The response's ids, logprobs and token bytes do not align.
+        """
+        started = time.monotonic()
+        attempts: list[Attempt] = []
+        body = generate_body(self._provider.model, token_ids, max_tokens, policy)
+
+        async def send(events: list[str]) -> dict[str, Any]:
+            return await self._generate_once(body, routing_key, events)
+
+        payload = await self._retrying(send, 0, max_tokens, attempts)
+        return token_completion(payload, time.monotonic() - started, tuple(attempts))
+
+    async def _generate_once(self, body: Mapping[str, object], routing_key: str, events: list[str]) -> dict[str, Any]:
+        """Send one token-id route request, appending the raw response body to ``events``."""
+        endpoint = self._endpoint
+        headers = {"Authorization": f"Bearer {endpoint.token}", ROUTING_KEY_HEADER: routing_key}
+        timeout = httpx.Timeout(connect=CONNECT_TIMEOUT, read=None, write=WRITE_TIMEOUT, pool=None)
+        try:
+            response = await self._http.post(
+                f"{endpoint.base_url.removesuffix(API_ROOT)}{GENERATE_PATH}", json=body, headers=headers, timeout=timeout
+            )
+        except httpx.TransportError as error:
+            raise _AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"{type(error).__name__}: {error}") from error
+        if response.status_code != 200:
+            raise _status_failure(response)
+        events.append(response.text)
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as error:
+            raise _AttemptFailed(AttemptOutcome.STREAM_ERROR, f"malformed response body: {error}") from error
+        if "error" in payload:
+            raise _AttemptFailed(AttemptOutcome.STREAM_ERROR, json.dumps(payload["error"])[:ERROR_BODY_LIMIT])
+        if payload["choices"][0]["finish_reason"] == FinishReason.ABORT:
+            raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
+        return payload
+
     async def _segment(
         self,
         messages: Sequence[Message],
@@ -385,19 +505,40 @@ class GlmClient:
         segment: int,
         attempts: list[Attempt],
     ) -> _Segment:
-        """Send a request, retrying and holding as needed, and append each attempt to ``attempts``."""
+        """Stream a chat-completions request through ``_retrying``, appending each attempt to ``attempts``."""
+        kwargs = request_kwargs(self._provider.model, messages, policy.max_tokens, policy, request_fields)
+
+        async def send(events: list[str]) -> _Segment:
+            return await self._stream(kwargs, events)
+
+        result = await self._retrying(send, segment, policy.max_tokens, attempts)
+        if result.finish_reason is FinishReason.TOOL_CALLS and result.usage.completion_tokens >= policy.max_tokens:
+            return replace(result, finish_reason=FinishReason.LENGTH)
+        return result
+
+    async def _retrying[T](
+        self,
+        send: Callable[[list[str]], Awaitable[T]],
+        segment: int,
+        max_tokens: int,
+        attempts: list[Attempt],
+    ) -> T:
+        """Call ``send`` until an attempt succeeds, retrying and holding as needed, and return its result.
+
+        ``send(events)`` makes one request, appends the raw payloads it receives to ``events``, and
+        raises ``_AttemptFailed`` for a failure this loop handles. Each attempt, failed or not, is
+        appended to ``attempts``.
+        """
         # Retries and hold polls back off on separate schedules, so a hold leaves the next retry's delay as it was.
         retry_backoff = self._backoff.copy()
         hold_backoff = self._backoff.copy()
-        max_tokens = policy.max_tokens
         failures = 0
         hold_started: float | None = None
         while True:
-            kwargs = request_kwargs(self._provider.model, messages, max_tokens, policy, request_fields)
             events: list[str] = []
             started_wall, started = time.time(), time.monotonic()
             try:
-                result = await self._stream(kwargs, events)
+                result = await send(events)
             except _AttemptFailed as failure:
                 duration = time.monotonic() - started
                 status, detail = failure.http_status, failure.detail
@@ -432,8 +573,6 @@ class GlmClient:
                 )
                 await asyncio.sleep(delay)
                 continue
-            if result.finish_reason is FinishReason.TOOL_CALLS and result.usage.completion_tokens >= max_tokens:
-                result = replace(result, finish_reason=FinishReason.LENGTH)
             duration = time.monotonic() - started
             attempts.append(
                 Attempt(segment, AttemptOutcome.COMPLETED, max_tokens, started_wall, duration, 200, "", tuple(events))
@@ -471,7 +610,7 @@ class GlmClient:
         except TimeoutError as error:
             raise _AttemptFailed(AttemptOutcome.STALLED, f"no token for {stall_timeout}s") from error
         except openai.APIStatusError as error:
-            raise _status_failure(error) from error
+            raise _status_failure(error.response) from error
         except openai.APITimeoutError as error:
             raise _AttemptFailed(AttemptOutcome.STALLED, f"no response within the timeout: {error}") from error
         except openai.APIConnectionError as error:
