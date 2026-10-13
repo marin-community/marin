@@ -1495,11 +1495,12 @@
       "configuration_sha256": "d765a18d08f71efb8b33d0e22c30fb789608e9683a8ee56abfb7906e0285b19e",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 2,
       "bundle_id": "74da8bec43a75e45467cf10d045e5bb99bb99962f98bae725ec665077e00e1fd",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "job_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce",
@@ -1512,11 +1513,12 @@
       "configuration_sha256": "ff48b8d8ec63f97872d2456599d1ceb4d3db124ebf02d73158c8e2b9c99c4025",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 2,
       "bundle_id": "74da8bec43a75e45467cf10d045e5bb99bb99962f98bae725ec665077e00e1fd",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce.json.gz"
     },
     {
       "job_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce",
@@ -1546,8 +1548,8 @@
       "configuration_sha256": "d7c61049f9e5df41dc465b74077b2086d9768a94d6c9461dc2824a7fadba792d",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s1-main-a2-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 5,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "5dacea4aac6cbf9b2f3ec1a23e40c5fd9d22c271985b7a66c8b22e716109178e",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
@@ -1636,7 +1638,24 @@
       "priority_band": 3,
       "bundle_id": "8225a610e0ff199f81322078440a7ae1e7bf048ad00a4b4777f1bc40f6b00e78",
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-curriculum-sc-s1-main-a3-01a126ce",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "h100_nodes": 2,
+      "h100_per_node": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v4/curriculum-sc-s1.yaml",
+      "configuration_sha256": "ed320e3caa9823388b94e68072a5ce1a39891b9de06e690fa9e47adc42edf4e2",
+      "configuration_sha256_basis": "published launcher-input bytes",
+      "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s1-main-a3-01a126ce",
+      "controller_state": 3,
+      "status": "running",
+      "priority_band": 3,
+      "bundle_id": "11e476d12ada9a8ad6dbf8f105a2a7b1ba6da0d4f91eccd2a911c1a11e1ce9f7",
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-13T21:27:27.273491+00:00"
+  "observed_at": "2026-10-13T22:25:55.697827+00:00"
 }

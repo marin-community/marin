@@ -1,0 +1,15 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configs": [
+    {
+      "path": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/optimizer-sc-s0.yaml",
+      "sha256": "d765a18d08f71efb8b33d0e22c30fb789608e9683a8ee56abfb7906e0285b19e"
+    },
+    {
+      "path": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/optimizer-tis-s0.yaml",
+      "sha256": "ff48b8d8ec63f97872d2456599d1ceb4d3db124ebf02d73158c8e2b9c99c4025"
+    }
+  ],
+  "placement": "BotharmsINTERACTIVE2nodes each;4totalcap. No failedattempts inthispair.",
+  "scope": "Oneexploratorypairedseed040updates;no populationinterval/equivalenceclaim."
+}

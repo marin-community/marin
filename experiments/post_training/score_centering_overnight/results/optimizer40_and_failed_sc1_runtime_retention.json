@@ -1,0 +1,29 @@
+{
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 5560,
+      "bytes": 6928651013,
+      "manifest_sha256": "316663bf93c7d040141c14aa10d61f95ed3231d1f1fc72d30fcf47f3af8e6c72",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 5560,
+      "bytes": 6908124031,
+      "manifest_sha256": "51ba7b900952bc9374d87ce4827ab2afb9ecf20ca2dae8727d0c85b1d37f6781",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-sc-s1-main-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 3347,
+      "bytes": 998180659,
+      "manifest_sha256": "d327d68e6bf92be729a026427c8e45b5542365a96c6c2986a9b0f4bb9c00b2ff",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s1-main-a2-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    }
+  ],
+  "scope": "Completedpairedoptimizer40pilotsandfailedfiveupdatecurriculumSCseed1attempt;rawpersistentartifactsunchanged."
+}
