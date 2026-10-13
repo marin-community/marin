@@ -176,7 +176,7 @@ async def generate_task(
     """
     messages = program_messages(idea)
     # The library appends the field instruction as the final user turn; the record keeps what was sent.
-    request = [*messages, {"role": "user", "content": schema_instruction(ProgramSubmission)}]
+    request: list[Message] = [*messages, {"role": "user", "content": schema_instruction(ProgramSubmission)}]
     try:
         result = await client.complete_structured(messages, ProgramSubmission, policy)
     except StructuredOutputError as error:
