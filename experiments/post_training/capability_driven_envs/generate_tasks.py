@@ -3,6 +3,10 @@
 
 """Generate TaskSpecs from the capability catalog, with GLM writing a program for each task.
 
+This driver runs the unstaged path: a catalog entry goes to a program, and the program writes a
+TaskSpec, with none of Taskforge's stages in between. ``propose_tasks`` runs the staged path
+instead, from the catalog to proposals, to ``stage20_triage`` and on to the build.
+
 For each selected capability and sample, the driver sends GLM the messages from
 ``program_prompt.program_messages`` and receives a Python program. The driver runs the program as a
 child process in the driver's own Python environment, passing it the path for the TaskSpec it
