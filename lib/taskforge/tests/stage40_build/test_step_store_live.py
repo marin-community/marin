@@ -22,7 +22,7 @@ import pytest
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from taskforge.stage40_build.step_store import SDK_VERSION, CacheStatus, RLEnvBuildStepKey, RLEnvBuildStepStore
+from taskforge.stage40_build.step_store import SDK_VERSION, RLEnvBuildStepKey, RLEnvBuildStepStore
 
 ROOT_ENV = "TASKFORGE_STEP_STORE_LIVE_ROOT"
 
@@ -50,7 +50,7 @@ def test_store_round_trips_on_an_object_store_root():
         assert loaded is not None
         record, output = loaded
         assert output == Numbers(7, "seven")
-        assert record.status is CacheStatus.HIT and record.key == stored.key
+        assert record == stored
         objects = fs.find(root)
         assert len(objects) == 2 and not any(".tmp." in path for path in objects)
     finally:

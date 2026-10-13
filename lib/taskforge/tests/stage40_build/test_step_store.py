@@ -6,7 +6,13 @@ from dataclasses import dataclass
 import pytest
 
 from taskforge.content_hash import digest
-from taskforge.stage40_build.step_store import SDK_VERSION, CacheStatus, RLEnvBuildStepKey, RLEnvBuildStepStore
+from taskforge.stage40_build.step_store import (
+    SDK_VERSION,
+    CacheStatus,
+    RLEnvBuildStepKey,
+    RLEnvBuildStepStore,
+    memoized,
+)
 
 
 @dataclass(frozen=True)
@@ -20,7 +26,7 @@ OUTPUT = Fixture(path="workspace/numbers.txt", lines=("6", "7"))
 
 
 @pytest.mark.parametrize("scheme", ["", "file://"], ids=["local path", "file url"])
-def test_a_stored_output_loads_back_as_a_hit_and_items_share_its_blob(tmp_path, scheme):
+def test_a_stored_output_loads_back_and_items_share_its_blob(tmp_path, scheme):
     root = f"{scheme}{tmp_path}/store"
     first = RLEnvBuildStepStore(root, "item-a")
     assert first.load(KEY, "fixtures", Fixture) is None
@@ -29,15 +35,32 @@ def test_a_stored_output_loads_back_as_a_hit_and_items_share_its_blob(tmp_path, 
     RLEnvBuildStepStore(root, "item-b").store(KEY, "fixtures", OUTPUT)
     loaded = RLEnvBuildStepStore(root, "item-a").load(KEY, "fixtures", Fixture)
 
-    assert stored.status is CacheStatus.MISS
     assert stored.inputs == KEY.inputs
     assert loaded is not None
     record, output = loaded
     assert output == OUTPUT
-    assert record.status is CacheStatus.HIT
-    assert record.output_digest == stored.output_digest == digest(OUTPUT)
+    assert record == stored
+    assert stored.output_digest == digest(OUTPUT)
     assert [path.name for path in (tmp_path / "store" / "blobs").iterdir()] == [stored.output_digest]
     assert (tmp_path / "store" / "items" / "item-b" / "steps" / "fixtures" / f"{KEY.digest}.json").exists()
+
+
+async def test_a_memoized_helper_computes_once_and_hits_on_the_second_call(tmp_path):
+    store = RLEnvBuildStepStore(str(tmp_path), "item-a")
+    key = RLEnvBuildStepKey(SDK_VERSION, "helper source", {"path": digest(OUTPUT.path)}, "model")
+    calls = []
+
+    async def compute() -> Fixture:
+        calls.append(None)
+        return OUTPUT
+
+    first_status, first_record, first_output = await memoized(store, "fixtures.render", key, Fixture, compute)
+    again_status, again_record, again_output = await memoized(store, "fixtures.render", key, Fixture, compute)
+
+    assert (first_status, again_status) == (CacheStatus.MISS, CacheStatus.HIT)
+    assert again_record == first_record
+    assert again_output == first_output == OUTPUT
+    assert len(calls) == 1
 
 
 def test_a_blob_altered_on_disk_is_refused(tmp_path):

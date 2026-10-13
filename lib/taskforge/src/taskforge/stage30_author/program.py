@@ -3,34 +3,38 @@
 
 """Build steps and the DAG they form.
 
-An author writes each step as ``async def name(context, **inputs) -> Output`` and decorates it with
-``@rl_env_build_step(inputs=...)``. When the program runs, the step receives the build context first,
-then one keyword argument per declared input:
+An author writes each step as ``async def name(context, ...) -> Output`` and decorates it with
+``@rl_env_build_step``. The decorator reads the step's inputs off its signature, taking every
+parameter after the context in order. When the program runs, the step receives the build context
+first, then one keyword argument per input:
 
 * for an input named after another step, the output of that step;
 * for ``PROPOSAL_INPUT``, the proposal the caller passed to the runner.
 
-``rl_env_build_program`` checks the declared inputs, orders the steps so each one follows its
-inputs, and picks the sink, the single step no other step takes as an input. The sink's output
-becomes the program's output.
+``rl_env_build_program`` checks the inputs, orders the steps so each one follows its inputs, and
+picks the sink, the single step no other step takes as an input. The sink's output becomes the
+program's output.
 """
 
 import bisect
 import inspect
 import typing
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from taskforge.content_hash import digest, sha256_hex
 
 PROPOSAL_INPUT = "proposal"
-"""The input name a step declares to receive the proposal. A step may not use it as its own name."""
+"""The parameter name a step takes to receive the proposal. A step may not use it as its own name."""
 
 
 @dataclass(frozen=True)
 class RLEnvBuildStep:
-    """A decorated step: ``fn`` with its declared ``inputs``, its return annotation and the sha256 of its source."""
+    """A decorated step: ``fn`` with its inputs, its return annotation and the sha256 of its source.
+
+    ``inputs`` lists the names of ``fn``'s parameters after the context, in order.
+    """
 
     name: str
     fn: Callable[..., Awaitable[Any]]
@@ -39,40 +43,33 @@ class RLEnvBuildStep:
     source_digest: str
 
 
-def rl_env_build_step(*, inputs: Sequence[str] = ()) -> Callable[[Callable[..., Awaitable[Any]]], RLEnvBuildStep]:
+def rl_env_build_step(fn: Callable[..., Awaitable[Any]]) -> RLEnvBuildStep:
     """Turn ``async def name(context, *inputs) -> Output`` into the step ``name`` taking ``inputs``.
 
-    The decorator hashes the function's own source text, decorator line included, into
+    The step's inputs are the function's parameters after the context, in declaration order. The
+    decorator hashes the function's own source text, decorator line included, into
     ``source_digest``.
 
     Raises:
-        TypeError: the function is not ``async``, lacks a return annotation, or lists parameters
-            after the context other than ``inputs`` in their declared order.
+        TypeError: the function is not ``async``, takes no context parameter, or lacks a return
+            annotation.
     """
-
-    def wrap(fn: Callable[..., Awaitable[Any]]) -> RLEnvBuildStep:
-        name = fn.__name__
-        if not inspect.iscoroutinefunction(fn):
-            raise TypeError(f"Step {name} must be an async function")
-        parameters = tuple(inspect.signature(fn).parameters)
-        if not parameters:
-            raise TypeError(f"Step {name} must take the build context as its first parameter")
-        if parameters[1:] != tuple(inputs):
-            raise TypeError(
-                f"Step {name} takes {list(parameters[1:])} after the context but declares inputs {list(inputs)}"
-            )
-        hints = typing.get_type_hints(fn)
-        if "return" not in hints:
-            raise TypeError(f"Step {name} needs a return annotation to decode its stored output")
-        return RLEnvBuildStep(
-            name=name,
-            fn=fn,
-            inputs=tuple(inputs),
-            output_type=hints["return"],
-            source_digest=sha256_hex(inspect.getsource(fn).encode()),
-        )
-
-    return wrap
+    name = fn.__name__
+    if not inspect.iscoroutinefunction(fn):
+        raise TypeError(f"Step {name} must be an async function")
+    parameters = tuple(inspect.signature(fn).parameters)
+    if not parameters:
+        raise TypeError(f"Step {name} must take the build context as its first parameter")
+    hints = typing.get_type_hints(fn)
+    if "return" not in hints:
+        raise TypeError(f"Step {name} needs a return annotation to decode its stored output")
+    return RLEnvBuildStep(
+        name=name,
+        fn=fn,
+        inputs=parameters[1:],
+        output_type=hints["return"],
+        source_digest=sha256_hex(inspect.getsource(fn).encode()),
+    )
 
 
 @dataclass(frozen=True)
@@ -106,7 +103,7 @@ def rl_env_build_program(*steps: RLEnvBuildStep) -> RLEnvBuildProgram:
     by_name: dict[str, RLEnvBuildStep] = {}
     for step in steps:
         if step.name == PROPOSAL_INPUT:
-            raise ValueError(f"A step may not be named {PROPOSAL_INPUT!r}: steps declare it to receive the proposal")
+            raise ValueError(f"A step may not be named {PROPOSAL_INPUT!r}: steps use it to receive the proposal")
         if step.name in by_name:
             raise ValueError(f"Two steps are named {step.name!r}")
         by_name[step.name] = step
