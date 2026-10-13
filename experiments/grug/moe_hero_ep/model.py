@@ -513,17 +513,14 @@ def _apply_rotary_embedding_fused(
 
 
 def _qk_scale(cfg: GrugModelConfig, is_global: bool | jax.Array) -> float | jax.Array:
-    """Q multiplier for one layer: ``resolved_global_qk_mult`` on global layers, ``qk_mult`` on local.
-
-    ``is_global`` is a traced per-layer scalar inside the layer scan, so the two values are selected
-    with ``jnp.where`` rather than a ``lax.cond``. When they are equal the plain Python float is
-    returned, so configs that leave ``global_qk_mult`` unset trace exactly as before.
-    """
+    """Q multiplier for one layer: ``resolved_global_qk_mult`` on global layers, ``qk_mult`` on local."""
     local, global_ = cfg.qk_mult, cfg.resolved_global_qk_mult
+    # Equal scales return the Python float, so a config without global_qk_mult lowers as before.
     if local == global_:
         return local
     if isinstance(is_global, bool):
         return global_ if is_global else local
+    # Inside the layer scan is_global is traced; select the scale without a per-layer lax.cond.
     return jnp.where(is_global, global_, local)
 
 
