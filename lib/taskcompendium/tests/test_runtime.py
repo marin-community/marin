@@ -448,7 +448,7 @@ def test_no_grader_task_is_unavailable_without_a_grading_machine(shell_task):
 
 
 @pytest.mark.asyncio
-async def test_shell_uploads_public_files_without_oracle_and_captures_submission(shell_task, shellsim_factory):
+async def test_shell_uploads_public_files_without_oracle_and_captures_submission(shell_task):
     task = shell_task.model_copy(
         update={
             "environment_requirements": EnvironmentRequirements(
@@ -456,7 +456,7 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
             )
         }
     )
-    factory = ShellFactory(shellsim_factory, MachineSpec(PackageSpec(pypi_packages=("pytest",))), {}, 1, 1024)
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024)
     env = await factory.create(task)
     try:
         python = await env.machine.run(Command(("python3", "-c", "print(6 * 7)")))

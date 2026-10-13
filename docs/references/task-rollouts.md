@@ -349,7 +349,6 @@ This function accepts a fully lowered record and a model callable:
 ```python
 from collections.abc import Awaitable, Callable
 
-import shellsim
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
@@ -362,12 +361,7 @@ async def run_task(
 ) -> RolloutData:
     engine = RolloutEngine(
         model,
-        {
-            "docker": DockerMachineFactory(),
-            "shellsim": ShellSimMachineFactory(
-                context=shellsim.Context(pypi_catalog="https://shellsim.rjp.io/ports/catalog.json")
-            ),
-        },
+        {"docker": DockerMachineFactory(), "shellsim": ShellSimMachineFactory()},
     )
     return await engine.run(lowered)
 ```
@@ -375,7 +369,6 @@ async def run_task(
 From the Marin repository root, with the test environment installed:
 
 ```bash
-export SHELLSIM_TEST_CATALOG=$(uv run python infra/ci/prepare_shellsim_ports.py)
 task_test_prefix=$(mktemp -d -t taskcompendium-tests.XXXXXX)
 MARIN_PREFIX="$task_test_prefix" uv run --frozen --no-sync pytest lib/taskcompendium/tests -q -n 0
 uv run --package marin-rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q

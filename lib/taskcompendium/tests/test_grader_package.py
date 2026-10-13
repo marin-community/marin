@@ -4,10 +4,12 @@
 """Grader packages and their observable verdicts."""
 
 import json
+from dataclasses import replace
 
 import pytest
-from infra.ci.shellsim_test_runtime import ShellSimImageFactory
-from shellbox.machine import MachineSpec, RegistryImage
+from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend, MachineSpec, PackageSpec, RegistryImage
 from verifyit.spec import JsonSchemaSpec, NumericSpec, ScriptSpec
 
 from taskcompendium.grader import GraderPackage, verifyit_package
@@ -41,6 +43,15 @@ from taskcompendium.runtime.task_grading import grade_task
 IMAGE = "fixture@sha256:" + "0" * 64
 GRADING_ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)
 GRADING_MACHINE = MachineSpec(RegistryImage(IMAGE))
+
+
+class FixtureImageFactory(DockerMachineFactory):
+    """Run the pinned fixture image's commands on the ShellSim built-ins."""
+
+    backend = Backend.DOCKER
+
+    async def create(self, spec):
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
 
 
 def _task(package, answer_type=AnswerType.TEXT, answer_format=PlainText(), final_tools=()):
@@ -77,8 +88,10 @@ def test_json_schema_grader_reads_private_schema_and_scores_document():
 
 
 STATE_GRADER = b"""import json
+import os
 
 config = '/tests/config.json'
+assert os.stat(config).st_mode & 0o777 == 0o600
 expected = json.load(open(config))['expected']
 actual = json.load(open('/app/state.json'))['value']
 with open('/logs/verifier/reward.json', 'w') as reward:
@@ -87,9 +100,9 @@ with open('/logs/verifier/reward.json', 'w') as reward:
 
 
 @pytest.mark.parametrize("value,reward,passed", [(3, 1.0, True), (4, 0.0, False)])
-def test_script_grader_reads_private_configuration_and_captured_state(value, reward, passed, shellsim_factory):
+def test_script_grader_reads_private_configuration_and_captured_state(value, reward, passed):
     grader = ScriptGrader(
-        argv=("sh", "-c", 'test "$(stat -c %a /tests/config.json)" = 600 && python3 /tests/grade.py'),
+        argv=("python3", "/tests/grade.py"),
         environment=GRADING_ENVIRONMENT,
         answer_path=None,
         reward=FileReward(
@@ -101,7 +114,7 @@ def test_script_grader_reads_private_configuration_and_captured_state(value, rew
     result = grade_task(
         task,
         _attempt(task, TextMessage(role="assistant", content="Done"), StateSubmission({"value": value})),
-        machine_factory=ShellSimImageFactory(shellsim_factory),
+        machine_factory=FixtureImageFactory(),
         machine_spec=GRADING_MACHINE,
     )
     assert (result.status, result.reward, result.passed, result.detail) == (
@@ -109,7 +122,7 @@ def test_script_grader_reads_private_configuration_and_captured_state(value, rew
         reward,
         passed,
         {"actual": value},
-    ), (result.error, result.diagnostics)
+    )
 
 
 @pytest.mark.parametrize(
@@ -183,7 +196,7 @@ def _lookup(index, content="A native action"):
         ),
     ],
 )
-def test_native_action_script_grader_receives_the_final_message(answer_format, final, expected, shellsim_factory):
+def test_native_action_script_grader_receives_the_final_message(answer_format, final, expected):
     grader = ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADING_ENVIRONMENT)
     task = _task(
         GraderPackage(grader, (inline_resource("grade.py", NATIVE_ACTION_GRADER),)),
@@ -191,7 +204,5 @@ def test_native_action_script_grader_receives_the_final_message(answer_format, f
         answer_format,
         final_tools=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),
     )
-    result = grade_task(
-        task, _attempt(task, final), machine_factory=ShellSimImageFactory(shellsim_factory), machine_spec=GRADING_MACHINE
-    )
+    result = grade_task(task, _attempt(task, final), machine_factory=FixtureImageFactory(), machine_spec=GRADING_MACHINE)
     assert (result.status, result.reward) == expected

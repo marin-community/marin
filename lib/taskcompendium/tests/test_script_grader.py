@@ -10,15 +10,15 @@ import os
 import re
 import shutil
 import tarfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import pytest
-from infra.ci.shellsim_test_runtime import ShellSimImageFactory
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
+    Backend,
     Command,
     ExitReason,
     Machine,
@@ -75,8 +75,8 @@ REWARD_JSON = "/logs/verifier/reward.json"
 class VerifyitImageMachine:
     """A ShellSim machine whose image provides the verifyit CLI.
 
-    The verifyit CLI is a test-only host fake operating on copies of the machine's ``/tests``
-    and workspace; ordinary Python grader scripts run inside ShellSim.
+    ShellSim's Python lacks the standard library verifyit needs, so the CLI runs on the host against
+    copies of the machine's ``/tests`` and workspace, and its verdict is written back.
     """
 
     machine: Machine
@@ -108,11 +108,13 @@ class VerifyitImageMachine:
         await self.machine.close()
 
 
-class VerifyitImageFactory(ShellSimImageFactory):
-    """Provide the test-only verifyit CLI over a simulated image."""
+class FixtureImageFactory(DockerMachineFactory):
+    """Start the pinned fixture image as ShellSim built-ins."""
+
+    backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> VerifyitImageMachine:
-        return VerifyitImageMachine(await super().create(spec))
+        return VerifyitImageMachine(await ShellSimMachineFactory().create(replace(spec, source=PackageSpec())))
 
 
 def arithmetic_task(grader: Grader) -> TaskSpec:
@@ -344,12 +346,12 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
         if artifact_case in host_errors:
             with pytest.raises(OSError) as caught:
                 await grade_in_sandbox(
-                    task, answered(task, "12"), VerifyitImageFactory(), GRADER_MACHINE, task_machine=agent
+                    task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
                 )
             assert caught.value.errno == host_errors[artifact_case]
             return
         result = await grade_in_sandbox(
-            task, answered(task, "12"), VerifyitImageFactory(), GRADER_MACHINE, task_machine=agent
+            task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
         )
         if artifact_case in {"inspect_timeout", "tar_failed", "tar_timeout"}:
             assert (result.status, result.reward, result.failure) == (
@@ -368,7 +370,7 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
 
 
 @pytest.mark.asyncio
-async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading(shellsim_factory):
+async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading():
     agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
     await agent.run(
         Command(("sh", "-c", "mkdir -p /app/out/nested && echo a > /app/out/a.txt && echo b > /app/out/nested/b.txt"))
@@ -402,7 +404,7 @@ async def test_script_grader_collects_and_copies_task_machine_outputs_before_gra
     task = arithmetic_task(grader)
 
     result = await grade_in_sandbox(
-        task, answered(task, "12"), VerifyitImageFactory(shellsim_factory), GRADER_MACHINE, task_machine=agent
+        task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
     )
 
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
@@ -416,7 +418,7 @@ async def test_script_grader_collects_and_copies_task_machine_outputs_before_gra
 
 
 @pytest.mark.asyncio
-async def test_script_grader_reads_extracted_answer_and_conversation_at_declared_paths(shellsim_factory):
+async def test_script_grader_reads_extracted_answer_and_conversation_at_declared_paths():
     report = (
         "import json\n"
         "detail = {\n"
@@ -435,7 +437,7 @@ async def test_script_grader_reads_extracted_answer_and_conversation_at_declared
     task = arithmetic_task(grader).model_copy(update={"answer_format": JsonAnswer()})
     final = json.dumps({"answer": "12"})
 
-    result = await grade_in_sandbox(task, answered(task, final), VerifyitImageFactory(shellsim_factory), GRADER_MACHINE)
+    result = await grade_in_sandbox(task, answered(task, final), FixtureImageFactory(), GRADER_MACHINE)
 
     assert result.status == Outcome.GRADED, result.error
     assert result.detail == {
@@ -537,7 +539,7 @@ async def test_script_grader_reward_kinds(reward, script, expected):
     grader = ScriptGrader(argv=("sh", "-c", script), environment=GRADER_ENVIRONMENT, reward=reward)
     task = arithmetic_task(grader)
 
-    result = await grade_in_sandbox(task, answered(task, "12"), VerifyitImageFactory(), GRADER_MACHINE)
+    result = await grade_in_sandbox(task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE)
 
     assert (result.status, result.reward, result.passed, result.detail, result.failure) == expected, result.error
 
@@ -548,6 +550,6 @@ async def test_verifyit_grader_with_environment_runs_verifyit_cli_in_grading_mac
     package = verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0), environment=GRADER_ENVIRONMENT)
     task = arithmetic_task(package.grader)
 
-    result = await grade_in_sandbox(task, answered(task, answer), VerifyitImageFactory(), GRADER_MACHINE)
+    result = await grade_in_sandbox(task, answered(task, answer), FixtureImageFactory(), GRADER_MACHINE)
 
     assert (result.status, result.reward) == (Outcome.GRADED, reward), result.error

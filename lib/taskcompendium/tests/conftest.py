@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-from infra.ci.shellsim_test_runtime import shellsim_factory  # noqa: F401
 from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements

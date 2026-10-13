@@ -12,7 +12,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
-from infra.ci.shellsim_test_runtime import ShellSimImageFactory
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
@@ -23,6 +22,7 @@ from shellbox.machine import (
     ExitReason,
     Machine,
     MachineSpec,
+    PackageSpec,
     Result,
     UnsupportedMachineSpec,
 )
@@ -190,19 +190,29 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         assert (await docker("inspect", machine.name)).exit_code != 0
 
 
+class FixtureImageFactory(DockerMachineFactory):
+    """Execute fixture image commands on the built-in filesystem."""
+
+    backend = Backend.DOCKER
+
+    async def create(self, spec):
+        return await ShellSimMachineFactory().create(
+            replace(spec, source=PackageSpec(), workdir=spec.workdir or "/workspace")
+        )
+
+
 @dataclass
 class RecordingShellSimFactory(DockerMachineFactory):
     backend: Backend = Backend.DOCKER
 
     machines: list[Machine] = field(default_factory=list)
-    simulator: ShellSimMachineFactory | None = None
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
         factory = ShellSimMachineFactory() if self.backend == Backend.SHELLSIM else DockerMachineFactory()
         factory.check_environment(requirements, spec)
 
     async def create(self, spec):
-        machine = await ShellSimImageFactory(self.simulator).create(spec)
+        machine = await FixtureImageFactory().create(spec)
         self.machines.append(machine)
         return machine
 
@@ -552,7 +562,7 @@ async def test_reasoning_only_response_grades_missing_answer_or_existing_files(s
             turn = await replay.complete(request)
             return replace(turn, stop_reason=stop_reason) if turn.message is empty else turn
 
-        return await RolloutEngine(complete, {"local": ShellSimImageFactory()}).run(lowered(task, **runtime))
+        return await RolloutEngine(complete, {"local": FixtureImageFactory()}).run(lowered(task, **runtime))
 
     missing = await run(arithmetic_task(), [empty])
     assert missing.grade.reward == 0.0
@@ -756,7 +766,7 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
             {"role": "assistant", "content": "Done."},
         ]
     )
-    result = await engine(model, {"local": ShellSimImageFactory()}).run(
+    result = await engine(model, {"local": FixtureImageFactory()}).run(
         lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime(), shell_tool=binding)
     )
 
@@ -820,7 +830,7 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
         backend = Backend.DOCKER
 
         async def create(self, spec):
-            return TimeoutMachine(await ShellSimImageFactory().create(spec))
+            return TimeoutMachine(await FixtureImageFactory().create(spec))
 
     message = shell_call("hang", call_id="first")
     message["tool_calls"].extend(
@@ -886,7 +896,7 @@ async def test_answer_call_retains_submission_tool_and_finishes():
         ],
     }
     model = ReplayModel([message])
-    result = await engine(model, {"local": ShellSimImageFactory()}).run(lowered(task, machine=machine_runtime()))
+    result = await engine(model, {"local": FixtureImageFactory()}).run(lowered(task, machine=machine_runtime()))
     assert result.grade.reward == 1.0
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["submit_answer", "shell"]
 
@@ -918,7 +928,7 @@ async def test_native_action_preserves_configured_call_limits(calls, expected):
 async def test_workspace_state_receives_shell_presentation_without_answer_tools():
     task = file_task(answer_type=AnswerType.WORKSPACE_STATE, answer_format=AnswerCall())
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": ShellSimImageFactory()}).run(
+    record = await engine(model, {"local": FixtureImageFactory()}).run(
         lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert record.grade.reward == 1.0
@@ -983,9 +993,7 @@ async def test_ungraded_task_reports_reason_without_a_verifier_machine():
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
-async def test_script_grader_reads_answer_and_conversation_files_without_a_task_machine(
-    answer, reward, shellsim_factory
-):
+async def test_script_grader_reads_answer_and_conversation_files_without_a_task_machine(answer, reward):
     script = (
         b"import json\n"
         b"messages = json.load(open('/tests/conversation.json'))\n"
@@ -997,7 +1005,7 @@ async def test_script_grader_reads_answer_and_conversation_files_without_a_task_
         grader=ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADER_ENVIRONMENT),
         resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)),
     )
-    factory = RecordingShellSimFactory(simulator=shellsim_factory)
+    factory = RecordingShellSimFactory()
     record = await engine(ReplayModel([{"role": "assistant", "content": answer}]), {"local": factory}).run(
         lowered(task, verifier_machine=machine_runtime())
     )
@@ -1009,9 +1017,7 @@ async def test_script_grader_reads_answer_and_conversation_files_without_a_task_
 
 @pytest.mark.parametrize("answer,reward", [(b"\x00\xff\r\n", 1.0), (b"incorrect", 0.0)])
 @pytest.mark.parametrize("command_semantics", [CommandSemantics.LINUX_PROCESS, CommandSemantics.SHELL_SIMULATOR])
-async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(
-    answer, reward, command_semantics, shellsim_factory
-):
+async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(answer, reward, command_semantics):
     task = file_task(
         environment_requirements=EnvironmentRequirements(
             command_semantics=command_semantics,
@@ -1041,8 +1047,8 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(
             ),
         ),
     )
-    factory = RecordingShellSimFactory(simulator=shellsim_factory)
-    simulator = RecordingShellSimFactory(backend=Backend.SHELLSIM, simulator=shellsim_factory)
+    factory = RecordingShellSimFactory()
+    simulator = RecordingShellSimFactory(backend=Backend.SHELLSIM)
     model = ReplayModel(
         [
             shell_call(
@@ -1080,7 +1086,7 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
             return await super().complete(request)
 
     record = await engine(
-        LimitedModel([shell_call("echo 12 > /workspace/answer")]), {"local": ShellSimImageFactory()}
+        LimitedModel([shell_call("echo 12 > /workspace/answer")]), {"local": FixtureImageFactory()}
     ).run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert record.stop_reason == "length"
     assert (record.grade.status, record.grade.reward) == (
@@ -1103,7 +1109,7 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
             "stop",
         )
 
-    runner = RolloutEngine(complete, {"local": ShellSimImageFactory()})
+    runner = RolloutEngine(complete, {"local": FixtureImageFactory()})
     with pytest.raises(RolloutContractError):
         await runner.run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
 
@@ -1152,7 +1158,7 @@ async def test_reward_file_priority_rejects_fallback_and_agent_scores(script, st
         ),
     )
     record = await engine(
-        ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": ShellSimImageFactory()}
+        ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": FixtureImageFactory()}
     ).run(lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert (record.grade.status, record.grade.reward, record.grade.failure) == (status, reward, failure)
     if reward == 0:

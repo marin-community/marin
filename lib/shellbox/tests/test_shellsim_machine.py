@@ -14,7 +14,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, ExitReason, MachineSpec, PackageSpec, ShellStatus
 from shellbox.transfer import download_files
 
-UNSUPPORTED_COMMAND = "unsupported-native-command-with-a-long-name-for-output-truncation-testing"
+UNSUPPORTED_COMMAND = "cat /workspace/numbers.txt | python3 -c 'import sys; print(sum(int(line) for line in sys.stdin))'"
 UNSUPPORTED_OUTPUT_LIMIT_BYTES = 64
 
 
@@ -97,7 +97,7 @@ def test_run_unsupported_command_returns_failed_result(tmp_path: Path) -> None:
                 Command(("sh", "-c", UNSUPPORTED_COMMAND), output_limit_bytes=UNSUPPORTED_OUTPUT_LIMIT_BYTES)
             )
             assert result.reason is ExitReason.EXITED
-            assert result.exit_code == 127
+            assert result.exit_code == 2
             assert result.stdout == b""
             assert len(result.stderr) == UNSUPPORTED_OUTPUT_LIMIT_BYTES
             assert result.stderr_truncated
@@ -121,34 +121,12 @@ def test_shell_session_unsupported_command_returns_failed_update(tmp_path: Path)
 
             update = await shell.execute(UNSUPPORTED_COMMAND, output_limit_bytes=UNSUPPORTED_OUTPUT_LIMIT_BYTES)
             assert update.status is ShellStatus.COMPLETED
-            assert update.exit_code == 127
+            assert update.exit_code == 2
             assert len(update.output) == UNSUPPORTED_OUTPUT_LIMIT_BYTES
             assert update.truncated
 
             followup = await shell.execute("cat /workspace/numbers.txt")
             assert (followup.exit_code, followup.output) == (0, b"1\n2\n")
-        finally:
-            await machine.close()
-
-    asyncio.run(check())
-
-
-def test_python_pipeline_reads_uploaded_input(tmp_path: Path, shellsim_factory) -> None:
-    async def check() -> None:
-        machine = await shellsim_factory.create(MachineSpec(PackageSpec(pypi_packages=("pytest",))))
-        try:
-            source = tmp_path / "numbers.txt"
-            source.write_text("1\n2\n")
-            await machine.upload(source, "/workspace/numbers.txt")
-            shell = await machine.open_shell()
-            update = await shell.execute(
-                "cat numbers.txt | python3 -c 'import sys; print(sum(int(line) for line in sys.stdin))'"
-            )
-            assert (update.exit_code, update.output) == (0, b"3\n")
-            result = await machine.run(
-                Command(("python3", "-c", "import pathlib; print(pathlib.Path('numbers.txt').read_text(), end='')"))
-            )
-            assert (result.exit_code, result.stdout) == (0, b"1\n2\n")
         finally:
             await machine.close()
 
