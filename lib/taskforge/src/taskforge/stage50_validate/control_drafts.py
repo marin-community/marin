@@ -13,7 +13,8 @@ from the draft's ``grader`` step output (``stage40_build.run.step_output``), so 
 answer validation replays is the one the build checked.
 
 The request lists the task's output paths, the only files a control may write, since the grader
-reads nothing else from the candidate's machine. ``check_control_files`` sends back a control
+reads nothing else from the candidate's machine. A control writes them at the absolute paths the
+``TaskSpec`` lists, wherever they lie on the machine. ``check_control_files`` sends back a control
 writing any other file, such as one of the task's own files or the build's reference files.
 
 The accepted controls go to ``<directory>/controls.json`` (``spec.controls.controls_json``), and
@@ -28,7 +29,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import BaseModel, Field, field_validator
 from rigging.filesystem.atomic import atomic_rename
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import TaskResource, TaskSpec, TextMessage, format_conversation
+from taskcompendium.models import TaskResource, TaskSpec, TextMessage, format_conversation, normalized_absolute_path
 from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.llm.client import ModelClient
@@ -52,19 +53,25 @@ from taskforge.spec.controls import (
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage40_build.context import BuildFailure
 from taskforge.stage40_build.outputs import GradedCandidate, Grader
-from taskforge.stage40_build.sdk import (
-    SUBMISSION,
-    FileDraft,
-    checked_structured,
-    files_text,
-    task_messages,
-    under_workspace,
-)
+from taskforge.stage40_build.sdk import SUBMISSION, checked_structured, files_text, task_messages
 
 CONTROLS_FILE = "controls.json"
 CONTROLS_STEP = "controls"
 """The ``BuildFailure.step`` of a control set the model never got right."""
 CONTROL_AUTHOR = "validate.write_controls"
+
+
+class ControlFile(BaseModel):
+    path: str = Field(
+        description="Absolute path on the candidate's machine, spelled as in the task's output paths: one of "
+        "those paths, or a file under an output path that is a directory."
+    )
+    content: str = Field(description="Complete UTF-8 file content.")
+
+    @field_validator("path")
+    @classmethod
+    def absolute(cls, path: str) -> str:
+        return normalized_absolute_path(path)
 
 
 class ControlDraft(BaseModel):
@@ -85,9 +92,9 @@ class ControlDraft(BaseModel):
         "empty_or_malformed: extraction or acceptance."
     )
     final_reply: str = Field(description="The candidate's final reply.")
-    files: list[FileDraft] = Field(
-        description="Files the candidate writes before replying, relative to the machine root. Only the task's "
-        "output paths may appear here, never the task's own files or the build's reference files; for a task "
+    files: list[ControlFile] = Field(
+        description="Files the candidate writes before replying, at the task's output paths as listed. No other "
+        "path may appear here, including the task's own files and the build's reference files; for a task "
         "without output paths, leave the list empty."
     )
     reward_min: float | None = Field(description="Positive controls: the minimum reward, e.g. 0.99. Otherwise null.")
@@ -95,11 +102,6 @@ class ControlDraft(BaseModel):
         description=f"Negative and malformed controls: the maximum reward, at most {REJECTION_CEILING}."
     )
     rationale: str = Field(description="Why this candidate must receive that grade.")
-
-    @field_validator("files")
-    @classmethod
-    def workspace(cls, files: list[FileDraft]) -> list[FileDraft]:
-        return under_workspace(files)
 
 
 class ControlsDraft(BaseModel):
@@ -115,9 +117,9 @@ def control_payload(draft: ControlDraft) -> Transcript:
     commands = tuple(
         (
             f"{draft.id}-write-{index}",
-            f"mkdir -p {shlex.quote('/' + f.path.rsplit('/', 1)[0])} && "
+            f"mkdir -p {shlex.quote(str(PurePosixPath(f.path).parent))} && "
             f"printf %s {shlex.quote(base64.b64encode(f.content.encode()).decode())} "
-            f"| base64 -d > {shlex.quote(f'/{f.path}')}",
+            f"| base64 -d > {shlex.quote(f.path)}",
         )
         for index, f in enumerate(draft.files)
     )
@@ -164,15 +166,16 @@ def check_control_files(drafts: Sequence[ControlDraft], output_paths: Sequence[s
     """Refuse a control that writes a file outside the task's ``output_paths``.
 
     The grader reads a candidate's files only at its output paths, so a control writing any other
-    file tests nothing the grader sees.
+    file tests nothing the grader sees. A control file counts as captured when its absolute path is
+    an output path or lies under one.
 
     Raises:
         ValueError: naming each such control and its files.
     """
     roots = [PurePosixPath(path) for path in output_paths]
 
-    def captured(file: FileDraft) -> bool:
-        return any(PurePosixPath(f"/{file.path}").is_relative_to(root) for root in roots)
+    def captured(file: ControlFile) -> bool:
+        return any(PurePosixPath(file.path).is_relative_to(root) for root in roots)
 
     outside = {draft.id: paths for draft in drafts if (paths := [f.path for f in draft.files if not captured(f)])}
     if outside:
@@ -205,8 +208,8 @@ def output_paths_text(output_paths: Sequence[str]) -> str:
     if not output_paths:
         return "The task has no output paths, so every control is a final reply alone with no files."
     return (
-        "A control's files are only these output paths, the files the grader reads from the candidate's machine: "
-        f"{', '.join(output_paths)}."
+        "A control writes files only at these output paths, the files the grader reads from the candidate's "
+        f"machine, with each path absolute as listed: {', '.join(output_paths)}."
     )
 
 

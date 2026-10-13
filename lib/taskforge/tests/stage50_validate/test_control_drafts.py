@@ -18,6 +18,7 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
+from taskforge.spec.controls import Transcript
 from taskforge.stage10_proposal.model import parse
 from taskforge.stage40_build.context import BuildFailure
 from taskforge.stage40_build.outputs import GradedCandidate, Grader
@@ -148,7 +149,7 @@ async def test_a_control_writing_files_outside_the_output_paths_goes_back_to_the
     glm_client, fake_glm, ledger, tmp_path
 ):
     written_out = json.loads(controls("41"))
-    written_out["controls"][0]["files"] = [{"path": "workspace/answer.txt", "content": "42\n", "executable": False}]
+    written_out["controls"][0]["files"] = [{"path": "/workspace/answer.txt", "content": "42\n"}]
     fake_glm.stream(content=json.dumps(written_out))
     fake_glm.stream(content=controls("41"))
 
@@ -162,12 +163,41 @@ async def test_a_control_writing_files_outside_the_output_paths_goes_back_to_the
     assert [c.id for c in written] == ["P-reference", "N1-shortcut", "N2-off-by-two", "N3"]
 
 
+async def test_a_control_writes_an_output_path_outside_the_workspace(glm_client, fake_glm, ledger, tmp_path):
+    report = "/snapshot/report/x.sql"
+    task = draft.assemble(
+        "item",
+        "What is 6 * 7? Write a query returning it to /snapshot/report/x.sql, then reply with the number alone.",
+        AnswerType.TEXT,
+        PlainText(),
+        draft.answer_grader(ExactSpec(expected=("42",))),
+        Source(dataset="test", revision="r", row="0", importer_revision="test"),
+        environment=draft.requirements(image=None),
+        output_paths=(report,),
+    )
+    submitted = json.loads(controls("41"))
+    submitted["controls"][0]["files"] = [{"path": report, "content": "select 42;\n"}]
+    fake_glm.stream(content=json.dumps(submitted))
+
+    written = await write_controls(
+        task, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+    )
+
+    assert report in fake_glm.requests[0]["messages"][-2]["content"]
+    assert len(fake_glm.requests) == 1
+    payload = written[0].payload
+    assert isinstance(payload, Transcript)
+    turn = payload.turns[0]
+    assert isinstance(turn, AssistantToolCalls)
+    assert f"> {report}" in str(turn.calls[0].object_arguments()["command"])
+
+
 async def test_control_files_with_shell_metacharacters_in_their_paths_are_written_verbatim():
-    path = "workspace/it's $HOME/a b.txt"
+    path = "/workspace/it's $HOME/a b.txt"
     submitted = ControlDraft.model_validate(
         {
             **control("quoted", "positive", "known_correct", "reference", "done", 1.0, None),
-            "files": [{"path": path, "content": "x'y\n", "executable": False}],
+            "files": [{"path": path, "content": "x'y\n"}],
         }
     )
     turn = control_payload(submitted).turns[0]
@@ -177,7 +207,7 @@ async def test_control_files_with_shell_metacharacters_in_their_paths_are_writte
         for call in turn.calls:
             result = await machine.run(Command(argv=("sh", "-c", str(call.object_arguments()["command"]))))
             assert result.exit_code == 0, result.stderr
-        written = await machine.run(Command(argv=("cat", f"/{path}")))
+        written = await machine.run(Command(argv=("cat", path)))
     finally:
         await machine.close()
     assert written.stdout == b"x'y\n"
