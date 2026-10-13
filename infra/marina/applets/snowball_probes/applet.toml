@@ -1,0 +1,4 @@
+title = "Snowball conversation lab"
+description = "Live GLM-as-user conversations, agentic traces, and checkpoint comparisons against Qwen."
+python_entrypoint = "server.app:create_api"
+build_command = "npm ci && npm run build"

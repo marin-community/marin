@@ -19,6 +19,7 @@ from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, b
 from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
 from marin.inference.repository_snapshot import RepositorySnapshotTooLarge, clone_repository_snapshot
+from marin.inference.shell_workspace import ShellWorkspaceRequest, ShellWorkspaceTerminated, shell_command_result
 
 from experiments.llama import llama3_instruct_trainable_chat_template
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
@@ -279,6 +280,30 @@ def test_dashboard_shellsim_enforces_cpu_limit(dashboard_tool_base_url):
 
     assert exhausted.status_code == 422
     assert "cpu_exhausted" in exhausted.json()["details"]
+
+
+@pytest.mark.parametrize("stage", ["current", "history"])
+def test_shell_workspace_cpu_budget_can_be_raised_and_replay_exhaustion_is_terminal(stage):
+    request = ShellWorkspaceRequest.from_payload(
+        {
+            "files": {"work.py": "n=0\nfor i in range(100000):\n n+=i\nprint(n)\n"},
+            "commits": [],
+            "history": ["python3 work.py"] if stage == "history" else [],
+            "command": "echo ready" if stage == "history" else "python3 work.py",
+        }
+    )
+    if stage == "history":
+        with pytest.raises(ShellWorkspaceTerminated) as failed:
+            shell_command_result(request, cpu_limit=10_000)
+        assert failed.value.stop_reason == "cpu_exhausted"
+    else:
+        exhausted = shell_command_result(request, cpu_limit=10_000)
+        assert exhausted.stop_reason == "cpu_exhausted"
+        assert exhausted.exit_code != 0
+    completed = shell_command_result(request, cpu_limit=50_000_000)
+    assert completed.exit_code == 0
+    assert completed.stop_reason is None
+    assert completed.stdout == ("ready\n" if stage == "history" else "4999950000\n")
 
 
 def test_dashboard_shell_workspace_replays_git_branch_workflow(dashboard_tool_base_url):

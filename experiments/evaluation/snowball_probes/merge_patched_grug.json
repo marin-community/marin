@@ -1,0 +1,27 @@
+[
+  {
+    "key": "snowball-merge-nupa-bfcl-shared100",
+    "label": "Snowball \u00b7 Merge NUPA/BFCL Shared100 (2026-10-09)",
+    "checkpoint": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09",
+    "revision": "81d4cd7d39ddb7499b1f85d7a1f39fc6658b2a01",
+    "gpu_count": 2,
+    "tensor_parallel_size": 1,
+    "data_parallel_size": 2,
+    "reasoning_parser": "grug",
+    "tool_call_parser": "hermes",
+    "reasoning_format": "api_fields",
+    "weights_revision": "462ad9af071055da39ef4bfea1d4ba2c9429a223"
+  },
+  {
+    "key": "qwen3.6-35b-a3b",
+    "label": "Qwen 3.6 \u00b7 35B A3B",
+    "checkpoint": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
+    "gpu_count": 2,
+    "tensor_parallel_size": 2,
+    "data_parallel_size": 1,
+    "reasoning_parser": "qwen3",
+    "tool_call_parser": "qwen3_coder",
+    "reasoning_format": "api_fields"
+  }
+]

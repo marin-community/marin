@@ -92,6 +92,14 @@ class ShellCommandResult:
         return json.dumps(dataclasses.asdict(self)).encode()
 
 
+class ShellWorkspaceTerminated(ValueError):
+    """A resource limit prevents reconstructing the saved workspace."""
+
+    def __init__(self, command_index: int, stop_reason: str):
+        self.stop_reason = stop_reason
+        super().__init__(f"Shell workspace history command {command_index} terminated the simulation: {stop_reason}")
+
+
 def _workspace_files(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         raise ValueError("Shell workspace files must be an object mapping paths to text")
@@ -253,9 +261,10 @@ def _write_workspace_file(environment: shellsim.Environment, name: str, content:
     environment.write_file(f"{_WORKSPACE_ROOT}/{name}", content)
 
 
-def shell_command_result(request: ShellWorkspaceRequest) -> ShellCommandResult:
+def shell_command_result(request: ShellWorkspaceRequest, *, cpu_limit: int = _SHELLSIM_CPU_LIMIT) -> ShellCommandResult:
+    """Reconstruct a workspace and run one command within its CPU fuel budget."""
     environment = shellsim.Environment(
-        cpu=_SHELLSIM_CPU_LIMIT,
+        cpu=cpu_limit,
         memory=_SHELLSIM_MEMORY_LIMIT,
         disk=_SHELLSIM_DISK_LIMIT,
         output=_SHELLSIM_OUTPUT_LIMIT,
@@ -265,7 +274,7 @@ def shell_command_result(request: ShellWorkspaceRequest) -> ShellCommandResult:
         replayed = environment.run(command)
         if environment.terminated:
             reason = replayed.stop_reason or "resource limit"
-            raise ValueError(f"Shell workspace history command {index} terminated the simulation: {reason}")
+            raise ShellWorkspaceTerminated(index, reason)
 
     result = environment.run(request.command)
     return ShellCommandResult(

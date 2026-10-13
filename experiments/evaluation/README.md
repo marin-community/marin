@@ -19,6 +19,9 @@ the model and suite catalogs, Marin fleet policy, and CLI choices.
 The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
 commands, suite constraints, launch controls, and result locations.
 
+For continuous GLM-as-user exploration with paired chat and ShellSim traces,
+see the [Snowball conversation lab](../../docs/tutorials/snowball-conversation-lab.md).
+
 ## Commands
 
 Run through the module:

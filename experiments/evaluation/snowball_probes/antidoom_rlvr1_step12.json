@@ -1,0 +1,26 @@
+[
+  {
+    "key": "snowball-antidoom-rlvr1-step12",
+    "label": "Snowball \u00b7 Antidoom RLVR1 Step12 (2026-10-02)",
+    "checkpoint": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+    "revision": "88f4d8b8c2a6083b9d107836b2a3a028e2465a8c",
+    "gpu_count": 2,
+    "tensor_parallel_size": 1,
+    "data_parallel_size": 2,
+    "reasoning_parser": "grug_optional",
+    "tool_call_parser": "hermes",
+    "reasoning_format": "api_fields"
+  },
+  {
+    "key": "qwen3.6-35b-a3b",
+    "label": "Qwen 3.6 \u00b7 35B A3B",
+    "checkpoint": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
+    "gpu_count": 2,
+    "tensor_parallel_size": 2,
+    "data_parallel_size": 1,
+    "reasoning_parser": "qwen3",
+    "tool_call_parser": "qwen3_coder",
+    "reasoning_format": "api_fields"
+  }
+]

@@ -368,15 +368,23 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
 
 
 @pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
-def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine):
+@pytest.mark.parametrize("torch_version", [None, "2.14.1+cu132"])
+def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine, torch_version):
     # uvx is the external install boundary. The direct wheel, digest-bearing URL, CUDA ABI,
     # entrypoint, and provenance payload are its immutable contract; entrypoint behavior is
     # exercised separately in test_vllm_wheel_entrypoint.py.
     monkeypatch.setattr("platform.machine", lambda: machine)
-    launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
+    release = dataclasses.replace(VLLM_GPU_RELEASE, torch_version=torch_version) if torch_version else VLLM_GPU_RELEASE
+    launcher = vllm_launcher(
+        VllmEngineConfig(
+            launcher=VllmLauncherType.CUDA,
+            source=VllmSource.MARIN_FORK,
+            gpu_release=release if torch_version else None,
+        )
+    )
     cmd = launcher.command()
     requirement = cmd[cmd.index("--from") + 1]
-    wheel = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, machine)
+    wheel = vllm_gpu_wheel_for_architecture(release, machine)
     distribution, separator, direct_url = requirement.partition(" @ ")
     parsed_url = urlsplit(direct_url)
     assert distribution == "vllm"
@@ -385,33 +393,33 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
     indexes = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--index"]
     assert indexes == [
-        f"https://download.pytorch.org/whl/{VLLM_GPU_RELEASE.torch_backend}",
+        f"https://download.pytorch.org/whl/{release.torch_backend}",
         "https://download.pytorch.org/whl/cpu",
     ]
     assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
     assert "--torch-backend" not in cmd
     requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
-    assert f"torch=={VLLM_GPU_RELEASE.torch_version}" in requirements
+    assert f"torch=={release.torch_version}" in requirements
     toolchain = {requirement.partition("==")[0]: requirement.partition("==")[2] for requirement in requirements}
     toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm"}
     assert set(toolchain) >= toolchain_packages
     assert "nvidia-cuda-nvrtc" not in toolchain
     assert {toolchain[package] for package in toolchain_packages} == {
-        CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend]
+        CUDA_TOOLCHAIN_VERSION_BY_BACKEND[release.torch_backend]
     }
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
     assert wrapped_command[0] == "python"
     assert wrapped_command[1] == "-c"
     assert Path(wrapped_command[3]).name == "vllm_wheel_entrypoint.py"
-    expected_provenance = json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))))
+    expected_provenance = json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(release, wheel))))
     assert json.loads(wrapped_command[4]) == expected_provenance
     env = launcher.env()
     assert "VLLM_USE_PRECOMPILED" not in env
     assert "VLLM_USE_FLASHINFER_SAMPLER" not in env
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
     assert requirement in launcher.cache_identity()
-    assert VLLM_GPU_RELEASE.torch_version in launcher.cache_identity()
+    assert release.torch_version in launcher.cache_identity()
 
 
 def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):
