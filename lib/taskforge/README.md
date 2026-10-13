@@ -23,18 +23,21 @@ src/taskforge/
   stage40_build/   context.py: RLEnvBuildContext, BuildFailure;
                    step_store.py: step keys, memos, the memo store and `memoized`;
                    run.py: `run_program`, `run_build`, the draft and `ItemBuildProvenance`
+  stage50_validate/ trials.py: trials on RolloutEngine; classify.py: the failure classifier;
+                   controls.py: control replay; outcome.py, evidence.py: outcomes and their totals
 ```
 
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
-proposal 10, triage 20, author 30, build 40. The gaps leave room to insert a stage later without
+proposal 10, triage 20, author 30, build 40, validate 50. The gaps leave room to insert a stage later without
 renumbering. A stage imports from lower-numbered stages and from the shared modules
 (`content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and the shared modules import no stage.
 `tests/test_imports.py` checks both directions. `scripts/ledger_summary.py` totals wall time and
 tokens per kind and step over JSONL ledgers. The cluster scripts run on Iris and document their
 submit commands in their docstrings: `scripts/build_image_job.py` builds a `DockerBuild` context
 and pushes it to a registry digest through `scripts/push_image_task.py`, and
-`scripts/iris_machine_probe.py` probes the shellbox Iris backend. `docker/grader-base` is the
-build context of the grader base image.
+`scripts/iris_machine_probe.py` probes the shellbox Iris backend, and
+`scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved
+from a relay job. `docker/grader-base` is the build context of the grader base image.
 
 ## Proposals
 
@@ -193,6 +196,22 @@ and what those classes reach in turn. Names bound by imports stay out; a library
 `TaskSpec` falls under `SDK_VERSION`, so a library change comes with an `SDK_VERSION` bump.
 Because inputs enter the key by content, a step that reruns and returns the same output leaves its
 consumers cached.
+
+## Validation
+
+`stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
+`LoweredTaskSpec` through `RolloutEngine`. `TrialPlan.deadlines` and `EngineSettings`
+replace the builder's session limits, and `task_digest(lowered)` hashes what runs, answer format
+included. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
+`stage50_validate.classify.classify` is the only failure classifier. A trial is attempted again for
+a retryable cause, and for a broken token contract within `TrialPlan.token_contract_retries`;
+`TrialPlan.first_attempt` numbers attempts after the ones on disk, so a re-entered trial continues
+where it stopped. Solver trials sample on `SOLVER_TRANSPORT`, the token-id route.
+`stage50_validate.evidence.Evidence(outcomes, contract_retries).reward_stats(kind)` totals the
+graded trials and the attempts a broken contract discarded.
+`stage50_validate.controls.replay(lowered, controls, plan, settings, tokenize)` replays each control
+as one `CONTROL` trial named by its id, with `llm.rollout_model.ServerRenderer` serving `tokenize`
+from the served chat template.
 
 ## Testing
 
