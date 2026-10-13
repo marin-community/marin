@@ -34,12 +34,8 @@ from shellbox.machine import (
 
 
 @cache
-def _worker_context(
-    pypi_catalog: str | None, cache_dir: str | None, offline: bool, trusted_precompiled: bool
-) -> shellsim.Context:
-    return shellsim.Context(
-        pypi_catalog=pypi_catalog, cache_dir=cache_dir, offline=offline, trusted_precompiled=trusted_precompiled
-    )
+def _worker_context() -> shellsim.Context:
+    return shellsim.Context()
 
 
 def _download_target(target: Path | StoragePath | str) -> Path | StoragePath:
@@ -61,10 +57,6 @@ class ShellSimEnvironment(BaseEnvironment):
         self,
         *args,
         context: shellsim.Context | None = None,
-        pypi_catalog: str | None = None,
-        cache_dir: str | None = None,
-        offline: bool | None = None,
-        trusted_precompiled: bool | None = None,
         pypi_packages: tuple[str, ...] | None = None,
         tools: tuple[str, ...] = (),
         network_policy: TaskNetworkPolicy = TaskNetworkPolicy.REQUIRE_OFFLINE_TASK,
@@ -74,16 +66,8 @@ class ShellSimEnvironment(BaseEnvironment):
         output_limit_bytes: int = DEFAULT_OUTPUT_LIMIT,
         **kwargs,
     ):
-        if context is not None and any(
-            value is not None for value in (pypi_catalog, cache_dir, offline, trusted_precompiled)
-        ):
-            raise ValueError("Configure catalog policy on the supplied Context")
         self.factory = ShellSimMachineFactory(
-            context=(
-                context
-                if context is not None
-                else _worker_context(pypi_catalog, cache_dir, bool(offline), bool(trusted_precompiled))
-            ),
+            context=context if context is not None else _worker_context(),
             cpu=cpu_limit,
             disk=disk_limit_bytes,
             output=output_limit_bytes,
