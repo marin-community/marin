@@ -14,7 +14,7 @@ from marin.inference.openai_chat import OpenAIChatClient
 from taskcompendium.pipeline.assessment import AssessmentSampling, prepare_assessment
 from taskcompendium.pipeline.assessment_review import AssessmentModel, grade_assessment
 from taskcompendium.pipeline.chat_requests import chat_output
-from taskcompendium.pipeline.review_requests import batch_output
+from taskcompendium.pipeline.review_requests import DEFAULT_BATCH_POLL_SECONDS, batch_output
 from taskcompendium.pipeline.stages import ReviewMode
 
 from experiments.post_training.glm import (
@@ -87,7 +87,7 @@ def _judge(
         submit = partial(
             batch_output,
             OpenAIBatchClient(base_url, token, timeout=GLM_REQUEST_TIMEOUT, request_attempts=GLM_REQUEST_ATTEMPTS),
-            poll_seconds=5.0,
+            poll_seconds=DEFAULT_BATCH_POLL_SECONDS,
         )
     grade_assessment(
         runtime.context,

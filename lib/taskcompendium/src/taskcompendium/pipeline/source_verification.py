@@ -520,13 +520,6 @@ def _select_sample(run: _VerificationRun, policy: SourceVerificationPolicy) -> V
     ).results[0]
 
 
-def _with_saved_trials(
-    rows: list[dict[str, Any]], prior: Mapping[tuple[str, int], SavedTrial], attempts: int
-) -> list[dict[str, Any]]:
-    """Attach the saved trials whose exact task digest matches each selected row."""
-    return [_with_saved_row(row, prior=prior, attempts=attempts) for row in rows]
-
-
 def _with_saved_row(
     row: dict[str, Any], *, prior: Mapping[tuple[str, int], SavedTrial], attempts: int
 ) -> dict[str, Any]:
@@ -551,7 +544,9 @@ def _run_trials(
         return []
     return execute_phase(
         run.context,
-        Dataset.from_list(_with_saved_trials(sample.rows, prior, policy.attempts)).map_shard(
+        Dataset.from_list(
+            [_with_saved_row(row, prior=prior, attempts=policy.attempts) for row in sample.rows]
+        ).map_shard(
             partial(
                 _checkpointed_trials,
                 suite=suite,

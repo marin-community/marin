@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def compact_query_cache(root: str) -> None:
-    """Rewrite active cache shards together, including inlined responses; retain superseded objects."""
+    """Compact the optional request cache on a best-effort basis, retaining superseded objects."""
     try:
         with DataStore.open(root, writer_id="query-cache-compaction") as store:
             store.compact(BlobTables.DESCRIPTORS)
