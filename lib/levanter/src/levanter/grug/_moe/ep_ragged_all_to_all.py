@@ -315,9 +315,9 @@ class _CuteRelu2ExpertMlp:
 class _CuteRelu2Mxfp8ExpertMlp:
     """``_CuteRelu2ExpertMlp`` with MXFP8 operands in the four activation-path GEMMs (QuACK block-scaled SM100).
 
-    The rows arrive as ``mx_pack_rows`` bytes (``_ExpertLayout.mxfp8_dispatch``) or are packed on arrival; ``relu(pre)^2`` and
-    ``d pre`` are quantized in their GEMMs' epilogues, ``dy`` and the weights in XLA. The weight gradients stay bf16
-    and read the dequantized rows, the values the forward multiplied.
+    The rows arrive as ``mx_pack_rows`` bytes (``_ExpertLayout.mxfp8_dispatch``) or as bf16 rows quantized here.
+    ``relu(pre)^2`` and ``d pre`` are quantized in their GEMMs' epilogues, ``dy`` and the weights in XLA. The weight
+    gradients stay bf16 (``relu2_expert_mlp_mxfp8_backward_input``).
     """
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
@@ -327,8 +327,6 @@ class _CuteRelu2Mxfp8ExpertMlp:
         cumulative_group_sizes = jnp.concatenate(
             [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
         )
-        if x_dispatch.dtype != jnp.uint8:
-            x_dispatch = mx_pack_rows(x_dispatch)
         return relu2_expert_mlp_mxfp8_fwd(x_dispatch, moe_w13_local, moe_w2_local, cumulative_group_sizes)
 
     def backward(self, residuals, cotangent):

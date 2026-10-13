@@ -261,30 +261,28 @@ def mxfp8_drelu2_grouped_gemm(dy, dy_scales, b, b_scales, pre, cu_seqlens, *, ma
     return post, d_pre_q, d_pre_scales, jnp.sum(dot_partials, axis=-1)
 
 
-def relu2_expert_mlp_mxfp8_fwd(x_packed, w_up, w_down, cu):
-    """``relu(x W_up)^2 W_down`` with MXFP8 operands; ``x_packed`` is ``mx_pack_rows`` of the rows, as dispatched.
+def relu2_expert_mlp_mxfp8_fwd(x, w_up, w_down, cu):
+    """``relu(x W_up)^2 W_down`` with MXFP8 operands. ``x`` is the dispatched rows, either ``mx_pack_rows`` bytes
+    (uint8) or bf16 rows, which are quantized here and saved as bf16 for the weight gradient.
 
     Same contract as ``_relu2_expert_mlp_quack_fwd``: rows past ``cu[-1]`` are unspecified."""
-    # Tie the weights to this call's rows before quantizing them: inside a layer scan, XLA otherwise hoists the
-    # quantization of the stacked weights out of the loop and keeps every layer's quantized copies live (+16 GiB at
-    # the GB200 recipe).
-    x_packed, w_up, w_down = jax.lax.optimization_barrier((x_packed, w_up, w_down))
-    values, exponents = mx_unpack_rows(x_packed, w_up.shape[1])
+    if x.dtype == jnp.uint8:
+        values, exponents = mx_unpack_rows(x, w_up.shape[1])
+    else:
+        values, exponents = mx_quantize_rows(x)
     pre, post, post_scales = mxfp8_relu2_grouped_gemm(
         values, padded_scale_rows(exponents, cu), *mx_weights(jnp.swapaxes(w_up, 1, 2)), cu
     )
     y = mxfp8_grouped_gemm(post, post_scales, *mx_weights(jnp.swapaxes(w_down, 1, 2)), cu)
-    return y, (x_packed, w_up, w_down, pre, cu)
+    return y, (x, w_up, w_down, pre, cu)
 
 
 def relu2_expert_mlp_mxfp8_backward_input(res, dy):
     """``(dx, <y, dy>, wgrad_args)`` of ``relu2_expert_mlp_mxfp8_fwd``; ``wgrad_args`` feed the bf16
-    ``_relu2_expert_mlp_quack_wgrads`` with the dequantized rows the forward multiplied."""
-    x_packed, w_up, w_down, pre, cu = res
+    ``_relu2_expert_mlp_quack_wgrads``: the bf16 rows and ``dy``, and ``d pre`` dequantized from the MXFP8 copy the
+    input-gradient GEMM read (the ReLU^2 backward GEMM stores ``d pre`` only quantized)."""
+    x, w_up, w_down, pre, cu = res
     dtype = dy.dtype
-    dy, w_up, w_down = jax.lax.optimization_barrier((dy, w_up, w_down))  # as in the forward
-    # Only MXFP8 copies of the row tensors stay live through the backward (the bf16 ``dy`` dies here); the bf16
-    # weight-gradient GEMMs read short-lived dequantized copies, the values the other GEMMs multiplied.
     dy_values, dy_exponents = mx_quantize_rows(dy)
     post, d_pre_values, d_pre_scales, output_dot = mxfp8_drelu2_grouped_gemm(
         dy_values, padded_scale_rows(dy_exponents, cu), *mx_weights(w_down), pre, cu
@@ -292,8 +290,9 @@ def relu2_expert_mlp_mxfp8_backward_input(res, dy):
     dx = mxfp8_grouped_gemm(d_pre_values, d_pre_scales, *mx_weights(w_up), cu)
     rows, width = d_pre_values.shape
     d_pre = mx_dequantize_rows(d_pre_values, unpadded_scale_rows(d_pre_scales, cu, rows, width // MX_BLOCK), dtype)
-    x = mx_dequantize_rows(*mx_unpack_rows(x_packed, w_up.shape[1]), dtype)
-    return dx, output_dot, (x, d_pre, post, mx_dequantize_rows(dy_values, dy_exponents, dtype), cu)
+    if x.dtype == jnp.uint8:
+        x = mx_dequantize_rows(*mx_unpack_rows(x, w_up.shape[1]), dtype)
+    return dx, output_dot, (x, d_pre, post, dy, cu)
 
 
 @cute_launcher_factory
