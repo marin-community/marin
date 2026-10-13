@@ -57,9 +57,7 @@ def _submissions(path: Path) -> dict[tuple[str, str], dict]:
 
 
 def _status(state: str) -> str:
-    if state in {"running", "starting"}:
-        return "RUNNING"
-    if state in {"queued", "pending", "submitted", "waiting"}:
+    if state in {"running", "building", "pending"}:
         return "QUEUED"
     return "CRASHED"
 
@@ -83,6 +81,7 @@ def refresh(standard: Path, manifest: Path, output: Path) -> None:
     submissions = _submissions(manifest)
     tournament_rows = {}
     state_by_job = {}
+    active_mode_by_job = set()
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         for model in standard_rows:
             cells = []
@@ -104,7 +103,12 @@ def refresh(standard: Path, manifest: Path, output: Path) -> None:
                 job = entry["job"]
                 if job not in state_by_job:
                     state_by_job[job] = client.job_status(JobName.from_string(job)).state.value
-                cells.append(_status(state_by_job[job]))
+                state = state_by_job[job]
+                if state == "running" and job not in active_mode_by_job:
+                    cells.append("RUNNING")
+                    active_mode_by_job.add(job)
+                else:
+                    cells.append(_status(state))
             tournament_rows[model] = cells
     output.mkdir(parents=True, exist_ok=True)
     _write_table(output / "TRACKER.md", mode_names, ["syntax closure"] * len(modes), tournament_rows)
