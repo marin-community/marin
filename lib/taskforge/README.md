@@ -14,6 +14,8 @@ src/taskforge/
                    the RolloutEngine model
   sandbox/         MachineFactory selection per host, up-front task refusals, image builds
   spec/            TaskSpec assembly, lowering, fixed controls, grader verdicts
+  stage10_proposal/ model.py: the TaskProposal document and its generation regex;
+                   source.py: ProposalBatch, SlotFailure, the ProposalSource protocol
   stage30_author/  program.py: build steps and the DAG they form;
                    author.py: Revision, the Author protocol, `static_author`, the program manifest
   stage40_build/   context.py: RLEnvBuildContext, BuildFailure;
@@ -31,6 +33,21 @@ submit commands in their docstrings: `scripts/build_image_job.py` builds a `Dock
 and pushes it to a registry digest through `scripts/push_image_task.py`, and
 `scripts/iris_machine_probe.py` probes the shellbox Iris backend. `docker/grader-base` is the
 build context of the grader base image.
+
+## Proposals
+
+A proposal source implements `stage10_proposal.source.ProposalSource[IdeaT]`:
+`async propose(idea, n) -> ProposalBatch`. A batch holds the planning request and completions and
+one `SlotProposal` or `SlotFailure` per slot, in slot order, so a failed slot does not drop its
+siblings. `stage10_proposal.model.TaskProposal` is YAML front matter (`ProposalHeader`, keys in
+`HEADER_KEYS` order) plus a markdown body with required section headings. `parse` and `render`
+round-trip it and `digest` is the sha256 of the canonical form. `parse` also checks the research
+decision: `research_need: needed` lists at least one `research` item and `not_needed` none, and a
+non-null body cites every item, and only listed items, as `research[i]`.
+`document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
+field that constrains a completion to the canonical layout for that id and source. A reply cut off
+by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
+built from `DOCUMENT_REPAIR_PROMPT`.
 
 ## Task specs
 
