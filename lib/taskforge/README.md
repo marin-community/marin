@@ -73,6 +73,13 @@ field that constrains a completion to the canonical layout for that id and sourc
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
 
+`experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
+source for catalog capabilities, which takes its model, sampling policy and host environments at
+construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a research
+decision, then writes each document under the regex with GLM thinking first.
+`propose_tasks` in the same package proposes and reviews the catalog's capabilities from the
+command line.
+
 ## Triage
 
 `stage20_triage.program.evaluate(proposal, checks, rubric, ctx) -> Verdict` runs the structural
@@ -393,6 +400,8 @@ uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/p
 ```
 
 `-m live_glm` replaces the default marker expression. The agent live tests also take
-`TASKFORGE_PARALLEL_KEY_FILE`, a file with a `PARALLEL_KEY=...` line. Live checks write raw evidence
+`TASKFORGE_PARALLEL_KEY_FILE`, a file with a `PARALLEL_KEY=...` line. The capability live tests in
+`experiments/post_training/capability_driven_envs/tests` also take `TASKFORGE_CAPABILITY_CATALOG`,
+the full capability catalog's JSON file, which is not checked in. Live checks write raw evidence
 (request without the bearer token, full response, wall time) under `$TASKFORGE_EVIDENCE_DIR`, or
 `taskforge-evidence/` in the system temp directory, outside the checkout.
