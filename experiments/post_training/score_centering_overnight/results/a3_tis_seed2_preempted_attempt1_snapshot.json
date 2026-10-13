@@ -1,0 +1,11 @@
+{
+  "job_id": "/romain/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce",
+  "controller_attempt": 1,
+  "attempt_finished_at_ms": 1791863712620,
+  "observed_partial_update": 126,
+  "scope": "Surviving original objects written before attempt1 preemption; lower-step objects already overwritten by attempt2 are not invented or recovered. This partial attempt does not establish a final endpoint.",
+  "bytes": 388459013,
+  "objects": 8344,
+  "manifest_sha256": "d008da3fb6b0da85275e16c54adaeb26ac3fe4d27fc8c9abeaf1b6bbf6d78aa0",
+  "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-tis-s2-a3-01a126ce/preserved-controller-attempt1-before-restart/snapshot-manifest.json"
+}
