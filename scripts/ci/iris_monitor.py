@@ -30,6 +30,7 @@ _REPO_ROOT = Path(__file__).parents[2]
 
 JOB_STATE_SUCCEEDED = JobState.SUCCEEDED.name
 RESOURCE_EXHAUSTED_STATE = "RESOURCE_EXHAUSTED"
+WAIT_TIMED_OUT_STATE = "WAIT_TIMED_OUT"
 _MAX_CHILD_WAIT_POLL_INTERVAL = 30.0
 _RESOURCE_EXHAUSTION_MARKERS = (
     STOCKOUT_MARKER,
@@ -46,6 +47,14 @@ class ResourceExhaustionPolicy(StrEnum):
 
     ESCALATE = "escalate"
     SHUTDOWN = "shutdown"
+
+
+class TimeoutPolicy(StrEnum):
+    """How the monitor handles a job that still runs when ``--timeout`` expires."""
+
+    FAIL = "fail"
+    DEFER = "defer"
+    """Exit 0 and report ``WAIT_TIMED_OUT`` so that a later CI job can continue the wait."""
 
 
 def _job_id_prefix(job_id: str) -> str:
@@ -685,6 +694,20 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
         click.echo(f"error:  {s.error_message}")
 
 
+def _write_github_output(
+    github_output: bool, *, job_id: str, state: str, succeeded: bool, resource_exhausted: bool
+) -> None:
+    if not github_output or not (path := os.environ.get("GITHUB_OUTPUT")):
+        return
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(
+            f"job_id={job_id}\n"
+            f"state={state}\n"
+            f"succeeded={str(succeeded).lower()}\n"
+            f"resource_exhausted={str(resource_exhausted).lower()}\n"
+        )
+
+
 @cli.command()
 @click.option("--job-id", required=True, help="Iris job ID to wait on.")
 @click.option("--iris-config", default=None, type=click.Path(path_type=Path), help="Path to iris config file.")
@@ -714,6 +737,13 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     type=click.Choice([policy.value for policy in ResourceExhaustionPolicy]),
     help="Escalate resource exhaustion as a failure, or shut down the job and emit a warning.",
 )
+@click.option(
+    "--timeout-policy",
+    default=TimeoutPolicy.FAIL.value,
+    type=click.Choice([policy.value for policy in TimeoutPolicy]),
+    show_default=True,
+    help="Fail when --timeout expires, or defer: exit 0 with state WAIT_TIMED_OUT so a later job continues the wait.",
+)
 def wait(
     job_id: str,
     iris_config: Path | None,
@@ -723,10 +753,13 @@ def wait(
     github_output: bool,
     child_wait_timeout: float | None,
     resource_exhaustion_policy: str,
+    timeout_policy: str,
 ) -> None:
     """Poll an Iris job and exit non-zero for failures that require escalation."""
     if child_wait_timeout is not None and timeout is not None:
         raise click.UsageError("--child-wait-timeout and --timeout are mutually exclusive")
+    if TimeoutPolicy(timeout_policy) is TimeoutPolicy.DEFER and timeout is None:
+        raise click.UsageError("--timeout-policy defer requires --timeout")
 
     if child_wait_timeout is not None:
         click.echo(
@@ -744,40 +777,48 @@ def wait(
         )
     else:
         click.echo(f"Waiting for {job_id!r} every {poll_interval}s ...", err=True)
-        result = wait_for_job(
-            job_id,
-            iris_config=iris_config,
-            controller_url=controller_url,
-            poll_interval=poll_interval,
-            timeout=timeout,
-            repo_root=_REPO_ROOT,
-            resource_exhaustion_policy=ResourceExhaustionPolicy(resource_exhaustion_policy),
-        )
+        try:
+            result = wait_for_job(
+                job_id,
+                iris_config=iris_config,
+                controller_url=controller_url,
+                poll_interval=poll_interval,
+                timeout=timeout,
+                repo_root=_REPO_ROOT,
+                resource_exhaustion_policy=ResourceExhaustionPolicy(resource_exhaustion_policy),
+            )
+        except TimeoutError as exc:
+            if TimeoutPolicy(timeout_policy) is TimeoutPolicy.FAIL:
+                raise
+            click.echo(f"{exc}; a later job must continue the wait.", err=True)
+            _write_github_output(
+                github_output, job_id=job_id, state=WAIT_TIMED_OUT_STATE, succeeded=False, resource_exhausted=False
+            )
+            return
 
     if result.resource_exhaustion_reason is not None:
         state = RESOURCE_EXHAUSTED_STATE
-        succeeded = "true"
-        resource_exhausted = "true"
+        succeeded = True
+        resource_exhausted = True
         warning = result.resource_exhaustion_reason.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
         click.echo(f"::warning title=Canary resource exhaustion::{warning}", err=True)
     else:
         state = result.status.state.name
-        succeeded = "true" if state == JOB_STATE_SUCCEEDED else "false"
-        resource_exhausted = "false"
+        succeeded = state == JOB_STATE_SUCCEEDED
+        resource_exhausted = False
 
-    if github_output and (path := os.environ.get("GITHUB_OUTPUT")):
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(
-                f"job_id={result.status.job_id}\n"
-                f"state={state}\n"
-                f"succeeded={succeeded}\n"
-                f"resource_exhausted={resource_exhausted}\n"
-            )
+    _write_github_output(
+        github_output,
+        job_id=str(result.status.job_id),
+        state=state,
+        succeeded=succeeded,
+        resource_exhausted=resource_exhausted,
+    )
 
     click.echo(f"Job {job_id!r} finished with state: {state}", err=True)
     if result.status.error_message:
         click.echo(f"Error: {result.status.error_message}", err=True)
-    if succeeded != "true":
+    if not succeeded:
         sys.exit(1)
 
 
