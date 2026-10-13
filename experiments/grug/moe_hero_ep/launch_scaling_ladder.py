@@ -113,9 +113,9 @@ HERO_INITIAL_SEQ_LEN = 4096
 HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_INITIAL_SEQ_LEN
 # The context lengths the d6144 hero trained at before its current one, oldest first, each with the
 # step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
-HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = ()
+HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (HarrierContextPhase(end_step=252_000, seq_len=4096),)
 # The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
-HERO_FLOPS_BASELINE_TOTAL: float | None = None
+HERO_FLOPS_BASELINE_TOTAL: float | None = 1.7409251960604768e24
 
 
 def _hero_flops_baseline(
