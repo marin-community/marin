@@ -91,8 +91,8 @@ def summarize(config: dict, audit: dict, cache: Path, costs: dict, *, recovery_r
         "learner_evidence": audit["learner_evidence"],
         "total_allocated_h100_hours": sum(row["allocated_h100_hours"] for row in attempts),
         "recovery_run_ids": list(recovery_run_ids),
-        "group_admission_watchdog_seconds": config["skyrl"]["trainer"]["algorithm"].get("group_admission", {}).get(
-            "stall_timeout"
+        "group_admission_watchdog_seconds": (
+            config["skyrl"]["trainer"]["algorithm"].get("group_admission", {}).get("stall_timeout")
         ),
         "source_task_errors": audit["source_task_errors"],
         "cost_basis": (
