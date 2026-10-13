@@ -85,7 +85,7 @@ from taskforge.llm.glm_client import API_ROOT, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.sandbox.factories import MachineHost, factory_capabilities, machine_factories
+from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.spec.draft import (
     answer_grader,
     assemble,
@@ -372,7 +372,6 @@ async def run_phase(
     timed = {backend: TimedFactory(factory) for backend, factory in factories.items()}
     settings = EngineSettings(
         factories=timed,
-        capabilities=factory_capabilities(MachineHost.IRIS),
         max_turns=MAX_TURNS,
         command_timeout=COMMAND_TIMEOUT,
         tool_turn_timeout=TOOL_TURN_TIMEOUT,

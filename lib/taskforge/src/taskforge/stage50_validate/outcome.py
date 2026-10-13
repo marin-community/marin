@@ -37,7 +37,8 @@ class Cause(StrEnum):
     """The machine ended under the engine: killed, expired, preempted or lost with its host
     (shellbox ``MachineTerminated``)."""
     MACHINE_UNSUPPORTED = "machine_unsupported"
-    """The factories cannot provide what the task asks for (``task_refusals`` or ``UnsupportedMachineSpec``)."""
+    """A factory is missing or rejects the task's machine, before the trial (``task_refusals``) or while
+    it runs (``UnsupportedMachineSpec``)."""
     SUBMISSION_UNSUPPORTED = "submission_unsupported"
     """The task's answer format cannot carry its answer for its grader (TaskCompendium
     ``submission_compatibility``)."""

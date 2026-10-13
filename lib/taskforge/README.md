@@ -103,8 +103,9 @@ record, so a move of either is a single-site change.
 - `sandbox.factories.machine_factories(where, controller_url)` returns the factories for
   `RolloutEngine`, keyed by shellbox `Backend` value: ShellSim plus Docker on a laptop,
   ShellSim plus gVisor on Iris, plus the local backend for lock-only graders when bubblewrap works
-  in the Iris task. `task_refusals(lowered, factory_capabilities(where))` lists every typed reason
-  a lowered task cannot run on them, before a trial starts.
+  in the Iris task. Before a trial starts, `task_refusals(lowered, factories)` passes each machine of
+  a lowered task to its factory's `check_environment` and lists a typed refusal, with the factory's
+  message, for each machine without a factory or rejected by one.
 
 Task-specific grading is the task's own code, private in `resources.verifier`, run by a
 `ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
