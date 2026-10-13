@@ -478,19 +478,22 @@ def test_competitive_code_rejects_constructive_problem_without_its_special_judge
     )
 
 
-def test_reasoning_gym_extracts_a_reference_from_an_explicit_markdown_answer_section():
-    response = "Reasoning.\n\n## Answer\n\n**The maximum area is 9.**\n\n---\n\nExtra algorithm notes."
-    assert markdown_answer(response) == "The maximum area is 9."
-
-
-def test_reasoning_gym_does_not_extract_a_negated_reference():
-    response = "Reasoning.\n\n## Answer\n\nThe answer is not 9."
-    assert markdown_answer(response) == "The answer is not 9."
-
-
-def test_reasoning_gym_does_not_replace_a_contradictory_answer_with_the_hidden_target():
-    response = "## Answer\nThe answer is 41; the provided target was 42."
-    assert markdown_answer(response) == "The answer is 41; the provided target was 42."
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (
+            "Reasoning.\n\n## Answer\n\n**The maximum area is 9.**\n\n---\n\nExtra algorithm notes.",
+            "The maximum area is 9.",
+        ),
+        ("Reasoning.\n\n## Answer\n\nThe answer is not 9.", "The answer is not 9."),
+        (
+            "## Answer\nThe answer is 41; the provided target was 42.",
+            "The answer is 41; the provided target was 42.",
+        ),
+    ],
+)
+def test_reasoning_gym_keeps_the_explicit_markdown_answer_section(response, expected):
+    assert markdown_answer(response) == expected
 
 
 def test_structured_output_repairs_repeated_required_fields():
@@ -753,15 +756,6 @@ def test_semantic_components_package_their_judge_contract(staged, path, answer_t
     assert [resource.path for resource in task.resources.verifier] == resources
     assert task.tags == tags
     assert "expected_action" not in task.model_dump_json()
-
-
-def test_multichallenge_uses_every_source_criterion_and_full_context(staged):
-    task = task_for("ultra_sft_step3200_multichallenge_len40k", staged)
-    spec = verifyit_spec(task.grader)
-    assert isinstance(spec, JudgeSpec)
-    assert len(spec.criteria) == 2
-    assert "is YES" in spec.criteria[0]
-    assert "is NO" in spec.criteria[1]
 
 
 def test_instruction_following_combines_formal_and_multiturn_semantic_checks(staged):

@@ -4,6 +4,7 @@
 """Plan RL curation, then run QUICK locally or reviewed SAMPLE/FULL campaigns on Iris."""
 
 import json
+import os
 from pathlib import Path
 from typing import cast
 
@@ -16,7 +17,7 @@ from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 
-from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
+from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL
 from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, campaign_plan, run_campaign
 from experiments.post_training.task_curation.config import (
     InputOverrides,
@@ -225,6 +226,7 @@ def main(
         review=review,
         review_cache=review_cache,
         base_url=base_url,
+        api_key=os.environ[GLM_BULK_TOKEN_ENV],
         relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=normalized_shards,
