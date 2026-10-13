@@ -414,7 +414,7 @@ Use `--cache-dir PATH` to run SAMPLE/FULL locally against small pinned sources
 and retain downloads, source artifacts, assessment artifacts and GLM query
 cache. Local workers need no Iris coordinator settings; package and image
 controls keep their environment prerequisites. See the
-[real-source local loop](../../experiments/post_training/task_curation/README.md#reviewed-local-loop-on-real-sources).
+[real-source local loop](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#reviewed-local-loop-on-real-sources).
 
 ## Outputs
 
