@@ -14,7 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350  # GH-hosted runners cap at 6h; nemotron high (~28% of medium) targets 6h compute
     concurrency:
-      group: datakit-nemotron-ferry
+      # A run on a branch must not cancel the scheduled run on main.
+      group: datakit-nemotron-ferry-${{ github.ref }}
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}
