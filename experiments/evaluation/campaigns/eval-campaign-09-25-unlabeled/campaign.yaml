@@ -79,6 +79,8 @@ model_config_overrides:
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-BFCL-Recovery.yaml
   open-athena-Grug-67B-A2B-BFCL-Protocol-FTPO:
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-BFCL-Protocol-FTPO.yaml
+  open-athena-Grug-67B-A2B-Continuation-Tool-Retention:
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Continuation-Tool-Retention.yaml
   open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom:
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom.yaml
   open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10:
