@@ -9,6 +9,7 @@ import io
 import json
 
 import pytest
+from marin.evaluation.records import TaskCoverage
 
 tournament = importlib.import_module(
     "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.structure_closure_tournament"
@@ -23,6 +24,13 @@ def test_score_display_uses_three_significant_digits() -> None:
     assert refresh._score_text(0.001) == "0.00100"
     assert refresh._score_text(0.9501) == "0.950"
     assert refresh._score_text(1) == "1.00"
+
+
+def test_tournament_cell_requires_ninety_percent_scored_coverage() -> None:
+    coverage = TaskCoverage(n_benchmark=704, n_attempted=704, n_scored=634)
+    assert refresh._acceptable_coverage(coverage)
+    assert not refresh._acceptable_coverage(coverage.model_copy(update={"n_scored": 633}))
+    assert not refresh._acceptable_coverage(coverage.model_copy(update={"n_attempted": 633}))
 
 
 def test_completion_sends_raw_tokens_and_retains_special_tokens(monkeypatch: pytest.MonkeyPatch) -> None:

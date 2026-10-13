@@ -13,7 +13,7 @@ from pathlib import Path
 
 from iris.cli.connect import open_iris_client
 from iris.cluster.types import JobName
-from marin.evaluation.records import CW_RECORDS_PREFIX, RunStatus, read_record, record_path
+from marin.evaluation.records import CW_RECORDS_PREFIX, RunStatus, TaskCoverage, read_record, record_path
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -71,6 +71,15 @@ def _score_text(score: float) -> str:
     return format(rounded.quantize(Decimal(1).scaleb(rounded.adjusted() - 2)), "f")
 
 
+def _acceptable_coverage(coverage: TaskCoverage | None) -> bool:
+    return (
+        coverage is not None
+        and coverage.n_benchmark == campaign.CASES_PER_MODE
+        and coverage.n_attempted == campaign.CASES_PER_MODE
+        and coverage.n_scored * 10 >= campaign.CASES_PER_MODE * 9
+    )
+
+
 def _write_table(path: Path, header: list[str], metric: list[str], rows: dict[str, list[str]]) -> None:
     lines = [
         "| " + " | ".join(["Model", *header]) + " |",
@@ -104,7 +113,11 @@ def refresh(standard: Path, manifest: Path, output: Path) -> None:
                     record = read_record(path)
                     task = f"{family}/{control}"
                     score = record.metrics.get(task, {}).get("syntax_complete")
-                    if record.status is RunStatus.SUCCEEDED and score is not None:
+                    if (
+                        record.status is RunStatus.SUCCEEDED
+                        and score is not None
+                        and _acceptable_coverage(record.coverage.get(task))
+                    ):
                         cells.append(f"{_score_text(score)} ({record.results_path})")
                     else:
                         cells.append("CRASHED")
