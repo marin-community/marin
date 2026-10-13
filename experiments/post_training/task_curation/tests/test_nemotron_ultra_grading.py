@@ -10,7 +10,7 @@ import pytest
 from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskSpec, TextMessage
-from taskcompendium.pipeline.controls import run_controls
+from taskcompendium.pipeline.controls import ControlRuntime, run_controls
 from taskcompendium.pipeline.models import CheckStatus, Reply
 from taskcompendium.runtime.resources import inline_resource
 
@@ -84,7 +84,7 @@ def test_grade_script_scores_the_reply(path, submission, reward, machines):
 def test_golden_control_scores_the_reference_one(path, machines):
     controls = RECIPES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
-    report = run_controls(task(path), controls=controls, machines=machines)
+    report = run_controls(task(path), runtime=ControlRuntime(controls, machines))
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"golden": CheckStatus.PASS}, report
 

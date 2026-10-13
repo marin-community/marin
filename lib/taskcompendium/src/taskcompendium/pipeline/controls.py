@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade a source's control submissions through the same grading path rollouts use."""
+"""Grade a source's control submissions through its configured grading boundary."""
 
 import asyncio
 import os
@@ -105,35 +105,30 @@ def controls_identity(controls: Controls) -> dict[str, Any]:
     }
 
 
-def control_suite(
-    controls: Controls, machines: GradingMachines | None, judge_connection: JudgeConnection | None = None
-) -> CheckSuite:
+@dataclass(frozen=True)
+class ControlRuntime:
+    controls: Controls
+    machines: GradingMachines | None
+    judge_connection: JudgeConnection | None = None
+
+
+def control_suite(runtime: ControlRuntime) -> CheckSuite:
     """Check each sampled task with a declared positive or negative submission, falling back to empty."""
+    controls = runtime.controls
     return CheckSuite(
         id="controls",
         revision=CONTROLS_REVISION,
         parameters={
-            **(machines.identity() if machines is not None else {}),
+            **(runtime.machines.identity() if runtime.machines is not None else {}),
             **controls_identity(controls),
-            **({"judge_base_url": judge_connection.base_url} if judge_connection is not None else {}),
+            **({"judge_base_url": runtime.judge_connection.base_url} if runtime.judge_connection is not None else {}),
         },
-        run=partial(
-            run_controls,
-            controls=controls,
-            machines=machines,
-            judge_connection=judge_connection,
-        ),
+        run=partial(run_controls, runtime=runtime),
     )
 
 
-def run_controls(
-    task: TaskSpec,
-    *,
-    controls: Controls,
-    machines: GradingMachines | None,
-    judge_connection: JudgeConnection | None = None,
-) -> VerificationReport:
-    return asyncio.run(_control_checks(task, controls, machines, judge_connection))
+def run_controls(task: TaskSpec, *, runtime: ControlRuntime) -> VerificationReport:
+    return asyncio.run(_control_checks(task, runtime))
 
 
 def _empty_submission(task: TaskSpec) -> ControlSubmission:
@@ -154,10 +149,9 @@ class _RemoteJudge:
 
 async def _control_checks(
     task: TaskSpec,
-    controls: Controls,
-    machines: GradingMachines | None,
-    judge_connection: JudgeConnection | None,
+    runtime: ControlRuntime,
 ) -> VerificationReport:
+    controls = runtime.controls
     require_resolved_environment(task.environment_requirements)
     grader = task.grader
     if isinstance(grader, NoGrader | SessionGrader):
@@ -169,7 +163,7 @@ async def _control_checks(
             ]
         )
     remote_judge = (
-        _RemoteJudge(judge_connection)
+        _RemoteJudge(runtime.judge_connection)
         if controls.execution == ControlExecution.REMOTE_JUDGE and _is_judge_task(task)
         else None
     )
@@ -178,9 +172,13 @@ async def _control_checks(
         environment = grader.environment
         assert environment is not None
         require_resolved_environment(environment)
-        if machines is None:
+        if runtime.machines is None:
             raise ValueError("Sandbox controls require grading machines")
-        sandbox = _Sandbox(machines, controls.memory_mb, _selected_machine(machines, environment, controls.memory_mb))
+        sandbox = _Sandbox(
+            runtime.machines,
+            controls.memory_mb,
+            _selected_machine(runtime.machines, environment, controls.memory_mb),
+        )
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is not None:
         check = await _control(task, "golden", golden, 1.0, sandbox, remote_judge)

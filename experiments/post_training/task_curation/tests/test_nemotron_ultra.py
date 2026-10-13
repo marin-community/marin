@@ -28,7 +28,7 @@ from taskcompendium.models import (
     grades_in_process,
     verifyit_spec,
 )
-from taskcompendium.pipeline.controls import run_controls
+from taskcompendium.pipeline.controls import ControlRuntime, run_controls
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask, Reply
@@ -559,7 +559,7 @@ def math_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
 def test_math_golden_scores_the_boxed_reference_one(staged, path):
     controls = RECIPES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
-    report = run_controls(task_for(path, staged), controls=controls, machines=None)
+    report = run_controls(task_for(path, staged), runtime=ControlRuntime(controls, None))
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"golden": CheckStatus.PASS}, report
 

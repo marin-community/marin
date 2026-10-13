@@ -12,7 +12,7 @@ import json
 import pytest
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.controls import answer_reply, run_controls
+from taskcompendium.pipeline.controls import ControlRuntime, answer_reply, run_controls
 from taskcompendium.pipeline.models import CheckStatus
 from taskcompendium.runtime.resources import inline_resource
 
@@ -50,7 +50,7 @@ def test_declared_control_passes_in_the_grader_image(name, control, machines):
     """The source's known solution scores 1, or an empty reply scores 0 where it has none."""
     pipeline = RECIPES[name]
     assert pipeline.controls is not None
-    report = run_controls(converted_task(pipeline, ROWS[name]), controls=pipeline.controls, machines=machines)
+    report = run_controls(converted_task(pipeline, ROWS[name]), runtime=ControlRuntime(pipeline.controls, machines))
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {control: CheckStatus.PASS}, report.checks
 
