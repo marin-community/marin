@@ -84,6 +84,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
+    SEQ_LEN,
     SMALL_SHAPES,
     _active_params,
     _small_model,
@@ -107,8 +108,11 @@ HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 # names the ranks that never arrived, while this one only reports that nothing progressed.
 HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 
-HERO_REFERENCE_SEQ_LEN = HERO_MODEL_CONFIG.max_seq_len
-HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_REFERENCE_SEQ_LEN
+# The hero started at 4K context, and every context keeps its 4K tokens per rack per update.
+HERO_INITIAL_SEQ_LEN = 4096
+HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_INITIAL_SEQ_LEN
+# Eval packing stays at 4K at every training context, so the eval series stays comparable.
+HERO_EVAL_SEQ_LEN = 4096
 # The context lengths the d6144 hero trained at before its current one, oldest first, each with the
 # step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
 HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = ()
@@ -124,7 +128,7 @@ def _hero_flops_baseline(
     The history must start at 4K and change context length at every entry, including the current one.
     """
     seq_lens = [phase.seq_len for phase in context_phases] + [seq_len]
-    if seq_lens[0] != HERO_REFERENCE_SEQ_LEN or any(a == b for a, b in itertools.pairwise(seq_lens)):
+    if seq_lens[0] != HERO_INITIAL_SEQ_LEN or any(a == b for a, b in itertools.pairwise(seq_lens)):
         raise ValueError(f"The hero's context lengths must start at 4K and change at every phase, got {seq_lens}")
     if not context_phases or flops_baseline_total is None:
         if context_phases or flops_baseline_total is not None:
@@ -156,11 +160,11 @@ LADDER_MAX_RETRIES_FAILURE = 1000
 LADDER_MAX_TASK_FAILURES = 1000
 
 
-def _ladder_model(size: str, seq_len: int):
+def _ladder_model(size: str):
     """The GrugModelConfig for ``size`` at the hero routing geometry with the QB histogram estimator."""
     if size == "d6144":
         # Only the hero rung is measured with the layer-carry offload.
-        return with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, max_seq_len=seq_len))
+        return with_transport_remat_mode(HERO_MODEL_CONFIG)
     shape = SMALL_SHAPES[size]
     return _small_model(
         shape,
@@ -168,7 +172,7 @@ def _ladder_model(size: str, seq_len: int):
         attention_implementation="gpu_fa4_cute",
         moe_implementation="ragged_all_to_all",
         expert_chunks=1,
-        seq_len=seq_len,
+        seq_len=SEQ_LEN,
         num_experts=384,
         num_experts_per_token=8,
         intermediate_dim=None,
@@ -182,14 +186,14 @@ def build_ladder_run(
     *,
     run_id: str,
     size: str,
-    seq_len: int,
+    seq_len: int | None = None,
     qk_mult: float | None = None,
-    qk_mult_long_scale: float = 1.0,
+    qk_mult_long_scale: float | None = None,
     capacity_factor: float | None = None,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
     eval_every: int | None = None,
-    eval_seq_len: int = HERO_REFERENCE_SEQ_LEN,
+    eval_seq_len: int = HERO_EVAL_SEQ_LEN,
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
@@ -212,18 +216,31 @@ def build_ladder_run(
     attn_gate and router weights, and because the decay reads the Adam step count it also applies at
     the right point when a run resumes an existing checkpoint. Pass 0 to opt out.
 
+    ``seq_len``, ``qk_mult``, ``qk_mult_long_scale``, and ``capacity_factor`` override the rung's model
+    config when set; the hero's own values live in ``HERO_MODEL``.
+
     ``context_phases`` is the d6144 hero's context history (``HERO_CONTEXT_PHASES`` from the CLI), and
     ``flops_baseline_total`` its cumulative training FLOPs at the last switch. Each data bucket resumes at
     its next shuffle window (see ``LmDataConfig.prior_context_phases``). The narrow rungs take no history
-    and train at ``seq_len`` from their start.
+    and train at their context length from their start.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in LADDER_RACKS:
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
-    if seq_len != HERO_REFERENCE_SEQ_LEN and qk_mult is None:
-        raise ValueError("A changed context length requires an explicit qk_mult (--qk-mult)")
+    overrides = {
+        name: value
+        for name, value in (
+            ("max_seq_len", seq_len),
+            ("qk_mult", qk_mult),
+            ("qk_mult_long_scale", qk_mult_long_scale),
+            ("capacity_factor", capacity_factor),
+        )
+        if value is not None
+    }
+    model = dataclasses.replace(_ladder_model(size), **overrides)
+    seq_len = model.max_seq_len
     flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len) if size == "d6144" else None
 
     dp_racks = LADDER_RACKS[size]
@@ -236,12 +253,6 @@ def build_ladder_run(
     if batch_size % eval_batch_size:
         raise ValueError(f"batch_size={batch_size} must divide evenly over {eval_batch_size} batch devices")
 
-    model = _ladder_model(size, seq_len)
-    if qk_mult is not None:
-        model = dataclasses.replace(model, qk_mult=qk_mult)
-    model = dataclasses.replace(model, qk_mult_long_scale=qk_mult_long_scale)
-    if capacity_factor is not None:
-        model = dataclasses.replace(model, capacity_factor=capacity_factor)
     if num_steps is None:
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
@@ -407,28 +418,26 @@ def build_ladder_run(
 @click.option(
     "--seq-len",
     type=click.IntRange(min=1),
-    default=HERO_REFERENCE_SEQ_LEN,
-    show_default=True,
-    help="Training context length. The sequence batch adjusts to preserve tokens per step.",
+    default=None,
+    help="Override the rung's training context length. The sequence batch adjusts to preserve tokens per step.",
 )
 @click.option(
     "--qk-mult",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Query/key attention multiplier on all layers. Required when changing the context length.",
+    help="Override the query/key attention multiplier on all layers.",
 )
 @click.option(
     "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
-    default=1.0,
-    show_default=True,
-    help="Extra multiplier on --qk-mult for the global (full-causal) layers only.",
+    default=None,
+    help="Override the extra query/key multiplier on the global (full-causal) layers only.",
 )
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Override expert receiver capacity. Defaults to the existing hero value.",
+    help="Override the rung's expert receiver capacity.",
 )
 @click.option("--size", required=True, type=click.Choice(sorted(LADDER_RACKS)), help="Ladder rung width.")
 @click.option(
@@ -454,7 +463,7 @@ def build_ladder_run(
 @click.option(
     "--eval-seq-len",
     type=click.IntRange(min=1),
-    default=HERO_REFERENCE_SEQ_LEN,
+    default=HERO_EVAL_SEQ_LEN,
     show_default=True,
     help="Eval packing length, one sequence per device.",
 )
@@ -476,9 +485,9 @@ def build_ladder_run(
 def main(
     run_id: str,
     size: str,
-    seq_len: int,
+    seq_len: int | None,
     qk_mult: float | None,
-    qk_mult_long_scale: float,
+    qk_mult_long_scale: float | None,
     capacity_factor: float | None,
     num_steps: int | None,
     checkpoint_every: int | None,

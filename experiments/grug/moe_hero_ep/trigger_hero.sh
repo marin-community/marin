@@ -16,10 +16,6 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
 HANDOFF_CHECKPOINT=s3://hero-checkpoints/marin/grug/hero-fa4sm100-nomask-step146k/2026.08.19.2/checkpoints/step-231464
 WANDB_FORK_FROM='hero-fa4sm100-nomask-step146k?_step=231463'
-SEQ_LEN=4096
-QK_MULT=1.3
-QK_MULT_LONG_SCALE=1.0
-CAPACITY_FACTOR=1.15
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
@@ -158,9 +154,5 @@ IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-e
     --run-id "$RUN_ID" \
     --initialize-from-checkpoint "$HANDOFF_CHECKPOINT" \
     --size d6144 \
-    --seq-len "$SEQ_LEN" \
-    --qk-mult "$QK_MULT" \
-    --qk-mult-long-scale "$QK_MULT_LONG_SCALE" \
-    --capacity-factor "$CAPACITY_FACTOR" \
     --version 2026.08.19.2 \
     --run

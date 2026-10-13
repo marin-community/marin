@@ -171,16 +171,18 @@ The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack he
 at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
 decay. Canonical eval stays at 4K packing, so the inherited `eval_dropless/*` series stay comparable.
 
-A switch's deploy PR sets `SEQ_LEN`, `QK_MULT`, `QK_MULT_LONG_SCALE`, and `CAPACITY_FACTOR` in
-`trigger_hero.sh`. It also appends the context the run is leaving, with the step N it ended at, to
-`HERO_CONTEXT_PHASES` in `launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the
-parent's `throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later
-handoffs keep both. `QK_MULT` applies to all attention layers; `QK_MULT_LONG_SCALE` multiplies it on
-the global layers only, so a global-only arm keeps `QK_MULT=1.3`. Each Harrier bucket skips the unread rest of the shuffle window it was
-reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the data
-seed, component order, and token store unchanged. The QK and capacity values need measured
-evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
-thresholds; see the
+A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
+(`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the
+context the run is leaving, with the step N it ended at, to `HERO_CONTEXT_PHASES` in
+`launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the parent's
+`throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later handoffs keep
+both. Trial arms run from a branch that sets the history and override the model fields with
+`--seq-len`, `--qk-mult`, `--qk-mult-long-scale`, and `--capacity-factor`. `qk_mult_long_scale`
+multiplies `qk_mult` on the global layers only. Each Harrier bucket skips the unread rest of the
+shuffle window it was reading at each switch, about 52B tokens at a 216000 handoff, so no data
+repeats. Keep the data seed, component order, and token store unchanged. The QK and capacity values
+need measured evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed
+trial thresholds; see the
 [context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
 
 ## Coordinated garbage collection
