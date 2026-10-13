@@ -85,21 +85,38 @@ def test_continuation_target_excludes_content_drift_correct_completion_and_unclo
     )
 
 
-def test_continuation_target_does_not_move_back_before_already_diverged_closing_token():
-    # Separate quote and bracket tokens have already lost the exact reference
-    # prefix by the first outer-completion token.
-    assert (
-        verified_continuation_boundary(
-            codepoints('["unfin'),
-            codepoints('"]'),
-            [codepoints("ix")] * 2,
-            structure_prefix='["unfin',
-            expected='["unfinished"]',
-            structure_format=ClosureFormat.JSON,
-            decode=text,
-        )
-        is None
+@pytest.mark.parametrize(
+    "structure_format,prefix,expected,response,position,chosen",
+    [
+        (ClosureFormat.JSON, '["unfin', '["unfinished"]', 'is"]', 2, "h"),
+        (
+            ClosureFormat.TOOL,
+            '<tool_call>{"x":"unfin',
+            '<tool_call>{"x":"unfinished"}</tool_call>',
+            '"}</tool_call>',
+            0,
+            "i",
+        ),
+        (ClosureFormat.CODE_FENCE, "~~~~json\n[", "~~~~json\n[]\n~~~~", "\n~~~~", 0, "]"),
+    ],
+)
+def test_multitoken_premature_closure_selects_first_divergent_token(
+    structure_format, prefix, expected, response, position, chosen
+):
+    prompt = codepoints("context\n" + prefix)
+    boundary = verified_continuation_boundary(
+        prompt,
+        codepoints(response),
+        [codepoints(chosen + "x")] * len(response),
+        structure_prefix=prefix,
+        expected=expected,
+        structure_format=structure_format,
+        decode=text,
     )
+    assert boundary is not None
+    assert boundary.response_position == position
+    assert boundary.candidate_token_ids == tuple(codepoints(chosen))
+    assert expected.startswith(prefix + response[:position] + chosen)
 
 
 @pytest.mark.parametrize(

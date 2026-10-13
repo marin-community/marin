@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from rolloutengine.closure_scoring import ClosureFormat, ContinuationOutcome, closure_state, continuation_outcome
+from rolloutengine.closure_scoring import ClosureFormat, ContinuationOutcome, continuation_outcome
 from rolloutengine.structure_closure import ClosureState, PrefixStatus
 
 
@@ -44,7 +44,9 @@ def verified_continuation_boundary(
     Only closing-only truncations of the supplied reference qualify. Content
     drift and unstable token boundaries supply no target. Alternatives come
     from recorded candidates and must extend the exact reference in context.
-    The returned boundary supervises one sampled token, never a repair suffix.
+    The first token that departs from the reference is selected, including when
+    a premature closing sequence spans several tokens. The returned boundary
+    supervises one sampled token, never a repair suffix.
     """
     prompt, response = list(prompt_ids), list(response_ids)
     prompt_text = decode(prompt)
@@ -64,8 +66,7 @@ def verified_continuation_boundary(
             continue
         if not after.startswith(before):
             raise ValueError("Decoded response rewrites its conditioning prefix")
-        completed = closure_state(structure_prefix + after[len(prompt_text) :], structure_format)
-        if completed.completion_offset is None:
+        if expected.startswith(structure_prefix + after[len(prompt_text) :]):
             before = after
             continue
         prefix = structure_prefix + before[len(prompt_text) :]

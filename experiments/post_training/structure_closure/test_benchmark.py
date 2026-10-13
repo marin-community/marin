@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import asdict
 
 import pytest
 
 from experiments.post_training.structure_closure.benchmark import Family, score_case, syntax_state, task_cases
+from experiments.post_training.structure_closure.training_prefixes import prepare_training_prefixes
 
 
 def test_reference_continuations_cover_each_family_and_preserve_content():
@@ -15,6 +17,59 @@ def test_reference_continuations_cover_each_family_and_preserve_content():
     for case in cases:
         assert score_case(case, case.expected[len(case.prefix) :]).success
         assert not score_case(case, "").success
+
+
+def test_training_prefix_variant_preserves_validation_and_non_target_rows(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    cases = task_cases("example_1234", [], "train", "source")
+    original = [json.dumps(asdict(case)) + "\n" for case in cases]
+    (source / "train.jsonl").write_text("".join(original))
+    validation = b' {"frozen": "validation bytes"}\r\n'
+    (source / "validation.jsonl").write_bytes(validation)
+    (source / "manifest.json").write_text("{}")
+    output = tmp_path / "variant"
+    prepare_training_prefixes(source, output)
+    assert (output / "validation.jsonl").read_bytes() == validation
+    rows = (output / "train.jsonl").read_text().splitlines(keepends=True)
+    assert len(rows) == len(cases)
+    for case, old, new in zip(cases, original, rows, strict=True):
+        if case.control != "continue_required":
+            assert new == old
+            continue
+        changed = json.loads(new)
+        assert {k: v for k, v in changed.items() if k != "prefix"} == {
+            k: v for k, v in asdict(case).items() if k != "prefix"
+        }
+        assert changed["prefix"].startswith(case.prefix)
+        prefix = changed["prefix"]
+        suffix = syntax_state(prefix, case.family).closing_suffix
+        assert suffix is not None
+        assert not score_case(case, prefix[len(case.prefix) :] + suffix).content_preserved
+        assert score_case(case, case.expected[len(case.prefix) :]).success
+    array = next(
+        row for row in map(json.loads, rows) if row["family"] == Family.ARRAY and row["control"] == "continue_required"
+    )
+    assert array["prefix"] == '["example_123'
+
+
+def test_training_prefix_conversion_reports_all_failures_without_publishing_partial_data(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    case = next(
+        case for case in task_cases("example_1234", [], "train", "source") if case.control == "continue_required"
+    )
+    rows = [asdict(case) | {"prefix": "unrelated"}, asdict(case) | {"split": "validation"}, asdict(case)]
+    (source / "train.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    (source / "validation.jsonl").write_bytes(b"frozen")
+    (source / "manifest.json").write_text("{}")
+    output = tmp_path / "variant"
+    with pytest.raises(ValueError, match="2 conversion failures"):
+        prepare_training_prefixes(source, output)
+    failures = json.loads((output / "conversion-failures.json").read_text())
+    assert [failure["line"] for failure in failures] == [1, 2]
+    assert not (output / "train.jsonl").exists()
+    assert not (output / "manifest.json").exists()
 
 
 def test_close_probes_supply_content_only_in_the_prefix_while_continue_controls_supply_a_reference():

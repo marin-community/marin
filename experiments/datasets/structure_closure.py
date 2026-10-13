@@ -13,6 +13,7 @@ class ClosureCohort(StrEnum):
     COPY_V1 = "copy-v1"
     VALUE_CONTROLS_V5 = "value-controls-v5"
     NATIVE_TOOLS_V6 = "native-tools-v6"
+    NEAR_BOUNDARY_V7 = "near-boundary-v7"
 
 
 def tool_prompt_probe_dataset() -> ArtifactStep:
@@ -55,6 +56,16 @@ def structure_closure_dataset(cohort: ClosureCohort) -> ArtifactStep:
             config={
                 "train_sha256": "275bc77b9ebf59a0e279e6721023afd4ca5cf9cc4f30467568913c7d61b7c336",
                 "validation_sha256": "f67bf84ad1db454e10fcf2eb98a5caf80d60dba135010030b7c5ddb1195285fa",
+            },
+        )
+    if cohort == ClosureCohort.NEAR_BOUNDARY_V7:
+        return ArtifactStep.adopt(
+            user_owned_name("datasets/structure-closure-near-boundary"),
+            "2026.10.13.7",
+            "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-near-boundary-tasks-v7",
+            config={
+                "train_sha256": "54acba429df7f5336f3bc1de20f168d9b528b1c3df286a282c26c95e4e3ec320",
+                "validation_sha256": "0a6a8599acd9ff0c76d43f37f8ed6613821ce9f068bb4eb988a3c2acfce3259d",
             },
         )
     raise ValueError(f"Unknown closure cohort: {cohort}")
