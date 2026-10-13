@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Check the three overlays against pinned source prompt and token behavior."""
 
 import hashlib
@@ -6,9 +9,8 @@ from pathlib import Path
 
 import yaml
 from huggingface_hub import hf_hub_download
-from transformers import AutoTokenizer
-
 from launch import OUTPUT, ROOT, SHARED_MODEL, prepare
+from transformers import AutoTokenizer
 
 
 def main() -> None:
@@ -41,7 +43,11 @@ def main() -> None:
             "reasoning_content": "Call the calculator.",
             "content": "",
             "tool_calls": [
-                {"id": "call_probe_1", "type": "function", "function": {"name": "calculator", "arguments": '{"a":19,"b":23}'}}
+                {
+                    "id": "call_probe_1",
+                    "type": "function",
+                    "function": {"name": "calculator", "arguments": '{"a":19,"b":23}'},
+                }
             ],
         },
         {"role": "tool", "tool_call_id": "call_probe_1", "name": "calculator", "content": "42"},
@@ -102,7 +108,15 @@ def main() -> None:
         "arms": variants,
     }
     (OUTPUT / "rendered-prompt-checks.json").write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
-    print(json.dumps({arm: {key: value for key, value in result.items() if key != "rendered_prompt"} for arm, result in variants.items()}, indent=2))
+    print(
+        json.dumps(
+            {
+                arm: {key: value for key, value in result.items() if key != "rendered_prompt"}
+                for arm, result in variants.items()
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

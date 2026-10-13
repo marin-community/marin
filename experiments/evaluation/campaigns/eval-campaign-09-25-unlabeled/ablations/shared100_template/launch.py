@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Prepare and launch isolated Shared100 chat-template ablations."""
 
 import argparse
@@ -8,7 +11,6 @@ from pathlib import Path
 
 import yaml
 from huggingface_hub import hf_hub_download
-
 
 ROOT = Path(__file__).resolve().parent
 CAMPAIGN = ROOT.parent.parent
@@ -60,7 +62,10 @@ def prepare(arm: str) -> Path:
         "tokenizer.json",
         manifest["antidoom_tokenizer_sha256"],
     )
-    for repository, revision in ((SHARED_MODEL, model["revision"]), (manifest["antidoom_model"], manifest["antidoom_revision"])):
+    for repository, revision in (
+        (SHARED_MODEL, model["revision"]),
+        (manifest["antidoom_model"], manifest["antidoom_revision"]),
+    ):
         pinned_file(
             repository,
             revision,
