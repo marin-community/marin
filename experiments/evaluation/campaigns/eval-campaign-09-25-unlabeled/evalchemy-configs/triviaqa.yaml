@@ -1,4 +1,5 @@
 tasks: [triviaqa]
+runtime_memory: 128g
 task_options:
   triviaqa:
     num_fewshot: 5
