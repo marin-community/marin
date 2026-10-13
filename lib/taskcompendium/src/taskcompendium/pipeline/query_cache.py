@@ -29,9 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 def compact_query_cache(root: str) -> None:
-    """Consolidate lookup metadata between campaigns, retaining cached response objects."""
-    with DataStore.open(root, writer_id="query-cache-compaction") as store:
-        store.compact(BlobTables.DESCRIPTORS)
+    """Rewrite active cache shards together, including inlined responses; retain superseded objects."""
+    try:
+        with DataStore.open(root, writer_id="query-cache-compaction") as store:
+            store.compact(BlobTables.DESCRIPTORS)
+    except Exception as error:
+        logger.warning("Request-cache compaction failed; continuing with best-effort cache reads: %s", error)
 
 
 @dataclass(frozen=True)
