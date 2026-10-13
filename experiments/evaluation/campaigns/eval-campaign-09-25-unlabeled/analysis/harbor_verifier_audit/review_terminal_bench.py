@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 from marin.evaluation.harbor.driver_config import HarborErrorTaxonomy
-from marin.evaluation.harbor.runner import _aggregate, _job_benchmark, _read_trials
+from marin.evaluation.harbor.runner import _aggregate, _job_benchmark, _read_trial, _read_trials
 from marin.external_dependencies import HARBOR
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -129,6 +129,7 @@ def review(model: str, uri: str, recovered: dict, taxonomy: HarborErrorTaxonomy)
     original, provenance = original_aggregate(uri, taxonomy)
     filesystem, key = filesystem_for(uri + "/harbor_jobs")
     excluded = []
+    reviewed = []
     for job in filesystem.ls(key, detail=False):
         bucket, prefix, _ = filesystem.split_path(job.rstrip("/") + "/qemu-alpine-ssh__")
         listing = filesystem.call_s3("list_objects_v2", Bucket=bucket, Prefix=prefix, Delimiter="/", MaxKeys=1000)
@@ -141,19 +142,23 @@ def review(model: str, uri: str, recovered: dict, taxonomy: HarborErrorTaxonomy)
                 continue
             result, digest = trial
             verifier = result.get("verifier_result") or {}
-            if not failed_verifier_setup(verifier.get("stdout", ""), verifier.get("stderr", "")):
-                continue
-            excluded.append(
-                {
-                    "trial": result["trial_name"],
-                    "uri": trial_uri,
-                    "sha256": digest,
-                    "task_checksum": result["task_checksum"],
-                    "primary_exception": (result.get("exception_info") or {}).get("exception_type"),
-                    "invalid_reward": verifier["rewards"]["reward"],
-                }
-            )
-    if len(excluded) != 3:
+            scored = _read_trial(StoragePath.parse(trial_uri), taxonomy).scored
+            setup_failed = failed_verifier_setup(verifier.get("stdout", ""), verifier.get("stderr", ""))
+            evidence = {
+                "trial": result["trial_name"],
+                "uri": trial_uri,
+                "sha256": digest,
+                "task_checksum": result["task_checksum"],
+                "primary_exception": (result.get("exception_info") or {}).get("exception_type"),
+                "originally_scored": scored,
+                "verifier_setup_failed": setup_failed,
+            }
+            reviewed.append(evidence)
+            # The native taxonomy already omits infrastructure failures, including
+            # failures with a verifier reward. Subtracting them again loses valid trials.
+            if setup_failed and scored:
+                excluded.append({**evidence, "invalid_reward": verifier["rewards"]["reward"]})
+    if len(reviewed) != 3:
         raise ValueError(f"{model}: expected evidence for all three QEMU repetitions")
     corrected = remove_rewards(original, [row["invalid_reward"] for row in excluded])
     return {
@@ -164,9 +169,10 @@ def review(model: str, uri: str, recovered: dict, taxonomy: HarborErrorTaxonomy)
         "original": dataclasses.asdict(original),
         "corrected": dataclasses.asdict(corrected),
         "sealable": corrected.count / BENCHMARK_TRIALS >= MINIMUM_COVERAGE,
+        "reviewed_trials": reviewed,
         "excluded_trials": excluded,
         "original_aggregate": provenance,
-        "reason": "QEMU verifier package bootstrap failed; tests never ran.",
+        "reason": "QEMU repetitions reviewed; scored package-bootstrap failures excluded because tests never ran.",
     }
 
 
