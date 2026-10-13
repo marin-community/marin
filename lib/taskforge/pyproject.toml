@@ -5,11 +5,16 @@ build-backend = "hatchling.build"
 [project]
 name = "marin-taskforge"
 version = "0.1.0"
-description = "Task generation with GLM-5.3: the model client that writes TaskCompendium task programs"
+description = "Task generation with GLM-5.3: proposals, build programs, RolloutEngine validation"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "marin-taskcompendium",
+    "marin-rolloutengine",
+    "marin-shellbox[shellsim]",
+    "marin-verifyit",
     "marin-rigging",
+    "marin-finelog",
+    "marin-iris",
     "httpx>=0.27,<1",
     "openai",
     "pydantic>=2.0",
@@ -17,6 +22,8 @@ dependencies = [
     # click for its CLI and marin-iris to resolve the GLM relay inside an Iris task.
     "click",
     "marin-iris",
+    "jsonschema>=4.20",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]
@@ -28,7 +35,7 @@ packages = ["src/taskforge"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 timeout = 60
-addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not live_glm'"
 markers = [
     "slow: long-running test",
     "integration: external service",
@@ -37,6 +44,7 @@ markers = [
     "requires_cluster: live cluster",
     "docker: Docker daemon",
     "manual: explicit validation",
+    "live_glm: calls the live GLM-5.3 endpoint; skips unless TASKFORGE_GLM_BASE_URL and GLM_HIGH_TOKEN are set",
 ]
 
 [tool.ruff]
@@ -48,5 +56,16 @@ known-first-party = ["taskforge"]
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
 project-includes = ["src", "tests", "../../experiments/post_training/capability_driven_envs"]
-search-path = ["src", "../..", "../taskcompendium/src", "../rigging/src"]
+search-path = [
+    "src",
+    ".",
+    "../..",
+    "../taskcompendium/src",
+    "../rolloutengine/src",
+    "../shellbox/src",
+    "../verifyit/src",
+    "../rigging/src",
+    "../finelog/src",
+    "../iris/src",
+]
 python-interpreter = "../../.venv/bin/python"

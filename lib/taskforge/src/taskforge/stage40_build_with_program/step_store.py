@@ -29,6 +29,7 @@ garbled, because canonical JSON encodes them as base64 and pydantic decodes a JS
 """
 
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -37,19 +38,12 @@ from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath
 
 from taskforge.content_hash import canonical_json, digest, sha256_hex
+from taskforge.ledger.records import FILE_SAFE, check_workpiece_id
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 
 SDK_VERSION = "taskforge.builder/8"
 """Bump when a library change alters what an unchanged step would produce."""
-
-FILE_SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-
-
-def check_workpiece_id(workpiece_id: str) -> None:
-    """Raise ``ValueError`` unless ``workpiece_id`` is safe to use as a directory name."""
-    if not FILE_SAFE.fullmatch(workpiece_id):
-        raise ValueError(f"Workpiece id {workpiece_id!r} must match {FILE_SAFE.pattern}")
 
 
 def model_digest(model: ModelClient, sampling: LLMPolicy) -> str:

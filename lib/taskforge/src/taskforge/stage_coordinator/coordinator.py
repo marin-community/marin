@@ -65,6 +65,7 @@ from pydantic import TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
 
 from taskforge.content_hash import digest, pretty_json
+from taskforge.ledger.records import check_workpiece_id
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
@@ -79,7 +80,7 @@ from taskforge.stage30_author.author import (
 from taskforge.stage30_author.program import RLEnvBuildProgram
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft
-from taskforge.stage40_build_with_program.step_store import CacheStatus, check_workpiece_id
+from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, Retry
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
