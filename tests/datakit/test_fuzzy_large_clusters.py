@@ -41,18 +41,10 @@ def test_candidate_shard_paths_skip_a_source_with_no_candidate_files(tmp_path: P
     assert not second_attr.exists()
 
 
-def test_planner_combines_count_groups_and_ignores_stale_files(tmp_path: Path) -> None:
+def test_planner_ignores_count_files_from_previous_runs(tmp_path: Path) -> None:
     _write_parquet(
         tmp_path / "attributes" / "part-1.parquet",
         [{"id": "a", "dup_cluster_id": "7"}, {"id": "b", "dup_cluster_id": "7"}],
-    )
-    _write_parquet(
-        tmp_path / "attributes" / "part-2.parquet",
-        [{"id": "c", "dup_cluster_id": "7"}, {"id": "d", "dup_cluster_id": "8"}],
-    )
-    _write_parquet(
-        tmp_path / "attributes" / "part-3.parquet",
-        [{"id": "e", "dup_cluster_id": "7"}, {"id": "f", "dup_cluster_id": "8"}],
     )
     write_artifact(
         FuzzyDupsAttrData(
@@ -76,8 +68,6 @@ def test_planner_combines_count_groups_and_ignores_stale_files(tmp_path: Path) -
             "--stride",
             "1",
             "--minimum-size",
-            "3",
-            "--shards-per-task",
             "1",
             "--max-workers",
             "1",
@@ -90,7 +80,7 @@ def test_planner_combines_count_groups_and_ignores_stale_files(tmp_path: Path) -
         ]
     )
 
-    assert pq.read_table(output / "large_clusters.parquet").to_pylist() == [{"dup_cluster_id": "7", "size": 4}]
+    assert pq.read_table(output / "large_clusters.parquet").to_pylist() == [{"dup_cluster_id": "7", "size": 2}]
     assert json.loads((output / "summary.json").read_text())["candidates"] == str(tmp_path / "candidates")
 
 

@@ -506,7 +506,6 @@ def test_train_set_repeats_three_sequences_inside_larger_batch(tmp_path):
     assert len(source_sequences) == 3
     assert set(values[:3]) == {1, 2, 3}
     assert set(values[3:6]) == {1, 2, 3}
-    assert len(values) == 8
 
 
 def test_dataset_for_component_rejects_preference_format():

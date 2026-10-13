@@ -814,13 +814,11 @@ class LmDataConfig:
                 raise ValueError(f"Invalid train_weights type: {type(weights)}")
 
         if self.max_train_sequences is not None:
-            if not all(name in self.components for name in self.max_train_sequences):
-                raise ValueError("Max train sequence keys must be subset of component keys.")
-            if any(
-                not isinstance(count, int) or isinstance(count, bool) or count < 1
-                for count in self.max_train_sequences.values()
-            ):
-                raise ValueError("Max train sequence counts must be positive integers.")
+            unknown = sorted(set(self.max_train_sequences) - set(self.components))
+            if unknown:
+                raise ValueError(f"max_train_sequences names unknown components: {unknown}")
+            if any(count < 1 for count in self.max_train_sequences.values()):
+                raise ValueError(f"max_train_sequences counts must be positive: {self.max_train_sequences}")
 
         if self.max_train_sequences is not None or self.num_validation_sequences is not None:
             assert (

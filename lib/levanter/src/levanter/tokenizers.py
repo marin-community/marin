@@ -632,10 +632,8 @@ class HfMarinTokenizer:
         return self._vocab_size
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
-        parts = _safe_split_for_tokenizer(text)
-        if len(parts) <= 1:
+        if len(_safe_split_for_tokenizer(text)) <= 1:
             return self._tokenizer.encode(text, add_special_tokens=add_special_tokens).ids
-        del parts
         return self.encode_batch([text], add_special_tokens=add_special_tokens)[0]
 
     def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
@@ -646,8 +644,8 @@ class HfMarinTokenizer:
         model = self._tokenizer.model
         native_dropout = isinstance(model, HfBPE) and model.dropout is not None and model.dropout > 0
 
-        # Padding is batch-wide, and dropout draws depend on native batch order.
-        # Keep the prior one-call behavior for these tokenizer configurations.
+        # Padding is batch-wide, and dropout draws depend on native batch order,
+        # so these tokenizer configurations encode all parts in one native call.
         if self._tokenizer.padding is not None or native_dropout:
             flat_parts: list[str] = []
             origins: list[int] = []
@@ -780,9 +778,7 @@ def load_tokenizer(
     raise ValueError(f"Unknown backend: {backend}")
 
 
-def tokenizer_content_hash(
-    name_or_path: str,
-) -> str:
+def tokenizer_content_hash(name_or_path: str) -> str:
     """Return a SHA-256 identity for the tokenizer files used by the loader."""
     local_dir = _local_tokenizer_path(name_or_path)
     return f"sha256:{directory_content_hash(pathlib.Path(local_dir))}"

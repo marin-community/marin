@@ -15,7 +15,6 @@ def _noop(_: object) -> None:
 def test_dispatch_forwards_runtime_environment(monkeypatch):
     monkeypatch.setenv("LD_PRELOAD", "libjemalloc.so.2")
     monkeypatch.setenv("MALLOC_CONF", "background_thread:true,narenas:2")
-    monkeypatch.setenv("WANDB_API_KEY", "test-key")
     monkeypatch.setenv("WANDB_MODE", "disabled")
     submitted = []
     job = SimpleNamespace(wait=lambda **_: None)
