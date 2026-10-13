@@ -368,6 +368,9 @@ class MoeDynamicK(StrEnum):
     ``moe_relu_l1 * mean_t sum_e relu(logit + offset)`` on the router logits pushes the count down."""
     EPS = "eps"
     """Skip the routed slots whose combine weight is below ``moe_eps`` times the routed total (no renormalization)."""
+    TOP_P = "top_p"
+    """Keep each token's highest-weight routed slots until they cover ``moe_top_p`` of its combine weight (Huang et
+    al. 2024, "Harder Tasks Need More Experts"), then renormalize."""
     THRESHOLD = "threshold"
     """Keep the ``moe_dynamic_frac`` of all (token, routed slot) pairs in the batch with the largest router logits
     (a batch-level null-routing budget: a token keeps 0 to ``num_experts_per_token`` experts)."""
@@ -698,6 +701,7 @@ class GrugModelConfig:
     """RELU mode keeps the slots with ``logit + moe_relu_offset > 0`` (and the L1 acts on that shifted logit), so a
     positive offset starts training with every routed slot on."""
     moe_eps: float = 0.0
+    moe_top_p: float = 0.0
     moe_null_layers: tuple[int, ...] = ()
     """Null routing on these layers: the router also scores ``num_experts`` zero-computation experts and each
     token takes the top ``2 * num_experts_per_token`` over all ``2 * num_experts`` columns, so a token can spend
@@ -2646,6 +2650,15 @@ class MoEMLP(eqx.Module):
                 keep = unbiased_topk >= jnp.quantile(flat, 1.0 - self.cfg.moe_dynamic_frac)
             elif eps_layer:
                 keep = combine_weights_f >= self.cfg.moe_eps * renorm_sum
+            elif moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.TOP_P:
+                w = jax.lax.stop_gradient(combine_weights_f)
+                # Weight of the slots ranked above each slot (ties broken by slot index).
+                slot = jax.lax.broadcasted_iota(jnp.int32, w.shape, 1)
+                above = (w[:, None, :] > w[:, :, None]) | (
+                    (w[:, None, :] == w[:, :, None]) & (slot[:, None, :] < slot[:, :, None])
+                )
+                mass_above = jnp.sum(jnp.where(above, w[:, None, :], 0.0), axis=-1)
+                keep = mass_above < self.cfg.moe_top_p * jnp.sum(w, axis=-1, keepdims=True)
             else:
                 slot = jax.lax.broadcasted_iota(jnp.int32, unbiased_topk.shape, 1)
                 keep = slot < rearrange(moe_k_keep, "b s -> (b s)")[:, None]
@@ -4454,7 +4467,7 @@ def _moe_k_keep(
     if layer not in cfg.moe_dynamic_layers or cfg.moe_dynamic == MoeDynamicK.NONE:
         return None if cfg.moe_k_static is None else jnp.full_like(norm, cfg.moe_k_static, dtype=jnp.int32)
     k_high, k_low = cfg.num_experts_per_token, cfg.moe_k_low
-    if cfg.moe_dynamic in (MoeDynamicK.RELU, MoeDynamicK.EPS, MoeDynamicK.THRESHOLD):
+    if cfg.moe_dynamic in (MoeDynamicK.RELU, MoeDynamicK.EPS, MoeDynamicK.THRESHOLD, MoeDynamicK.TOP_P):
         return jnp.full_like(norm, k_high, dtype=jnp.int32)
     if cfg.moe_dynamic == MoeDynamicK.POSITION:
         seg = _sconv_segment_ids(mask)
