@@ -81,6 +81,8 @@ NUMERIC_LITERALS = (
     'decimal, scientific-notation number or integer fraction such as "42", "-0.125", "1.5e3" or "1/8". '
     'It is never a float or an expression (not 0.125, not "sqrt(2)").'
 )
+DIAGNOSTICS_CHARS = 4000
+"""The longest ``grade_diagnostics`` text, the cut marker aside: a longer one keeps half at each end."""
 WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
 WEB_ERROR_PREFIX = "error:"
 """How a web tool's output starts when the request failed (``taskforge.llm.web``)."""
@@ -503,8 +505,21 @@ def graded_candidate(reply: str, files: Sequence[TaskResource], grade: GradeResu
 
 
 def grade_diagnostics(grade: GradeResult) -> str:
-    """A grade's error and diagnostics as JSON, cut to 4000 characters, for a prompt."""
-    return json.dumps({"error": grade.error, **grade.diagnostics})[:4000]
+    """A grade's error, detail and diagnostics as JSON, for a prompt.
+
+    The detail holds what a grader program wrote beside its reward: its per-check results and
+    anything else it reports there, often with nothing on stdout. The text puts the error and the
+    detail first, then the grader's stdout, stderr and exit code. When the JSON runs past
+    ``DIAGNOSTICS_CHARS``, the text keeps the first and the last half of that bound around a marker
+    giving the count of characters cut, so a long stdout loses its middle while the detail at the
+    start and the traceback ending stderr both stay. A detail value without a JSON form, which an
+    in-process verifyit grade may hold, appears as its ``str``.
+    """
+    text = json.dumps({"error": grade.error, "detail": grade.detail, **grade.diagnostics}, default=str)
+    if len(text) <= DIAGNOSTICS_CHARS:
+        return text
+    half = DIAGNOSTICS_CHARS // 2
+    return f"{text[:half]} ...[{len(text) - 2 * half} characters cut]... {text[-half:]}"
 
 
 def instruction_problem(text: str, fixtures: Fixtures, grader: Grader) -> str | None:
