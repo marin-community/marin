@@ -102,7 +102,7 @@ def original_rows(
         document = canonical_source_json(data)
         digest = hashlib.sha256(document.encode()).hexdigest()
         if selected.raw_input_sha256 is not None and selected.raw_input_sha256 != digest:
-            if spec.format != SourceFormat.GENERATED:
+            if spec.format != SourceFormat.GENERATED or file.prepared_path is not None:
                 raise ValueError(f"Original source row changed: {selected.locator}")
             yield {
                 "task_id": selected.task_id,

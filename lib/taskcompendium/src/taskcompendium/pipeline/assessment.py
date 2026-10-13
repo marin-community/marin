@@ -37,7 +37,7 @@ from taskcompendium.pipeline.models import Admission, ReviewStatus
 from taskcompendium.pipeline.review import private_evidence_summary, review_payload
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.source_evidence import READ_BLOCK_BYTES, OriginalRow, SourceEvidenceFile, original_rows
-from taskcompendium.pipeline.sources import prepared_component_path, staged_inputs
+from taskcompendium.pipeline.sources import prepared_component_path, prepared_manifest_path, staged_inputs
 from taskcompendium.submission import submission_compatibility, submission_instruction
 
 PACKET_SCHEMA = pa.schema(
@@ -349,13 +349,20 @@ def _original_files(records: dict[str, list[dict[str, Any]]], download: dict[str
         rows[index] = OriginalRow(task_id, identity["source_locator"], identity["raw_input_sha256"])
     overrides = download["source_file_overrides"]
     component = download["files"].get("prepared_component")
+    layout = download["files"].get("prepared_source_revision")
+    if component is not None and layout not in ("2", "3"):
+        raise ValueError(f"Unknown recorded prepared-source layout: {layout}")
     return [
         SourceEvidenceFile(
             file,
             overrides[file]["path"] if file in overrides else str(StoragePath(download["source_input"]) / file),
             rows,
             prepared_path=(
-                str(prepared_component_path(StoragePath(download["source_input"]) / file, component))
+                str(
+                    prepared_manifest_path(StoragePath(download["source_input"]) / file).parent
+                    if layout == "2"
+                    else prepared_component_path(StoragePath(download["source_input"]) / file, component)
+                )
                 if component is not None and file not in overrides
                 else None
             ),
@@ -380,8 +387,12 @@ def prepare_assessment(
     download = None
     if raw_source is not None:
         download = read_json(str(StoragePath(manifest["datasets"]["download"]) / "manifest.json"))
-        # Manifest JSON represents tuple fields as lists.
-        if json.loads(json.dumps(raw_source_identity)) != download["files"]:
+        # Preparation layout is acquisition metadata, not the source reader's semantics.
+        expected_reader = json.loads(json.dumps(raw_source_identity))
+        recorded_reader = dict(download["files"])
+        expected_reader.pop("prepared_source_revision", None)
+        recorded_reader.pop("prepared_source_revision", None)
+        if expected_reader != recorded_reader:
             raise ValueError("Original source reader differs from the curation invocation")
     views = manifest["datasets"]
     telemetry = SourceTelemetry(manifest["source"], output_root)
