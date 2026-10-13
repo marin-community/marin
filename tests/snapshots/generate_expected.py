@@ -85,7 +85,7 @@ def transform_stackexchange(json_str: str) -> str:
             include_links=False,
         ),
     )
-    content = prepare_md_template(title, question, answers, tags, config, prepend_vote_count=False)
+    content = prepare_md_template(title, question, answers, tags, config, votes_after_answer=False)
     return content.strip()
 
 

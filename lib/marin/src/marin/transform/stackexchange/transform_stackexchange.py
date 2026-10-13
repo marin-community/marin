@@ -41,7 +41,7 @@ def prepare_md_template(
     answers: list[dict],
     tags: list[str],
     extract_config: ExtractionConfig,
-    prepend_vote_count: bool = True,
+    votes_after_answer: bool = True,
 ) -> str:
     """
     Prepares a markdown template for a stackexchange question and answer.
@@ -52,7 +52,7 @@ def prepare_md_template(
 
     for answer in answers:
         md_answer = convert_page(answer["body"], config=extract_config)["content"]
-        if prepend_vote_count:
+        if votes_after_answer:
             template += f"\n\n# Answer\n{md_answer}\n> {answer['votes']} votes"
         else:
             template += f"\n\n# Answer\n> {answer['votes']} votes\n{md_answer}"
@@ -82,11 +82,11 @@ def process_record(
     """
     try:
         if not shuffle_answers_template:
-            prepend_vote_count = False
+            votes_after_answer = False
         elif seed is None:
-            prepend_vote_count = random.random() < 0.5
+            votes_after_answer = random.random() < 0.5
         else:
-            prepend_vote_count = random.Random(f"{seed}:{row['id']}").random() < 0.5
+            votes_after_answer = random.Random(f"{seed}:{row['id']}").random() < 0.5
 
         title = row["metadata"]["title"] if "title" in row["metadata"] else row["title"]
         question = row["metadata"]["question"] if "question" in row["metadata"] else row["question"]
@@ -100,7 +100,7 @@ def process_record(
             answers,
             tags,
             extract_config,
-            prepend_vote_count,
+            votes_after_answer,
         )
 
         if content is None:
