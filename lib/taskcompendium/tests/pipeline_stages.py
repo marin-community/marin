@@ -45,6 +45,42 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.runtime.resources import inline_resource
 
+
+def response(task_id: str, confidence: str = "high", quality: str = "good") -> dict[str, Any]:
+    verdict = {
+        "task_id": task_id,
+        "quality": quality,
+        "confidence": confidence,
+        "reference_status": "consistent",
+        "defects": [],
+        "evidence": "The prompt supplies two apples and asks for the same count.",
+    }
+    return {
+        "custom_id": task_id,
+        "response": {
+            "status_code": 200,
+            "body": {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-0",
+                                    "type": "function",
+                                    "function": {"name": "review_task", "arguments": json.dumps(verdict)},
+                                }
+                            ],
+                        },
+                    }
+                ],
+            },
+        },
+    }
+
+
 SOURCE_FILES = SourceFiles("fixture/tasks", "1", ("source.jsonl",), SourceFormat.JSONL)
 SVAMP_RUBRIC = ReviewRubric(
     id="arithmetic-word-problems",

@@ -107,6 +107,15 @@ request budget.
 Retries constrain the tool's task ID to the selected item, preventing a copied
 hash typo from misattributing a judgment. Identity validation still rejects any
 mismatch; the publisher never repairs model IDs after the fact.
+
+Chat transport allows up to 64 requests per worker process, selected with
+`--review-concurrency`. Eight concurrently grading sources at 64 requests each
+can issue up to 512 requests in flight. Local reviewers share one process limit;
+remote worker processes have separate limits. Byte groups do not impose a
+completion barrier. Each task still has its own request, judgment and trace;
+`--review-mode batch` selects the provider's separate asynchronous batch API.
+Tune concurrency from measured throughput and errors for the chosen endpoint.
+
 The cohort label is unknown for an empty sample, unavailable judgments or a
 missing TaskSpec. Otherwise bad takes precedence over some_issues, unknown,
 and good. Read the verdict counts alongside this conservative label. Missing

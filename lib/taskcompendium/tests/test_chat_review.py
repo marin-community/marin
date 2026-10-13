@@ -12,8 +12,7 @@ from taskcompendium.pipeline.query_cache import cached_request_output
 from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, valid_review_completion
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 
-from .pipeline_stages import svamp_row_task
-from .test_pipeline import response
+from .pipeline_stages import response, svamp_row_task
 
 
 class UnusedBatchClient:

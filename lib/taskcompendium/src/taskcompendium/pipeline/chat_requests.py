@@ -8,6 +8,8 @@ import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
+from itertools import chain
 from threading import BoundedSemaphore
 from typing import Any, Protocol
 
@@ -22,7 +24,7 @@ from taskcompendium.pipeline.review_requests import (
     request_batches,
 )
 
-MAX_DIRECT_CONCURRENT_REQUESTS = 8
+MAX_DIRECT_CONCURRENT_REQUESTS = 64
 # Concurrent reviewer invocations share this process-wide admission limit.
 # Zephyr subprocesses each have their own limit; this does not cap the pool.
 _DIRECT_REQUEST_CAPACITY = BoundedSemaphore(MAX_DIRECT_CONCURRENT_REQUESTS)
@@ -86,15 +88,11 @@ def chat_output(
         requests, max_requests=DEFAULT_MAX_BATCH_REQUESTS, max_bytes=max_batch_bytes, oversized=oversized
     )
     with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
-        for group in groups:
-            futures = []
-            for request in group:
-                futures.append((request, executor.submit(_chat_request, client, request)))
-            for request, future in futures:
-                result = future.result()
-                observations[request["custom_id"]] = result.observation
-                metrics.update_counter("review/direct/submitted_requests", 1)
-                metrics.update_counter("review/direct/provider_seconds", result.provider_seconds)
-                metrics.update_counter("review/direct/admission_seconds", result.admission_seconds)
+        results = executor.map(partial(_chat_request, client), chain.from_iterable(groups))
+        for result in results:
+            observations[result.observation.request_ids[0]] = result.observation
+            metrics.update_counter("review/direct/submitted_requests", 1)
+            metrics.update_counter("review/direct/provider_seconds", result.provider_seconds)
+            metrics.update_counter("review/direct/admission_seconds", result.admission_seconds)
     ordered = [observations[request["custom_id"]] for request in requests]
     return RequestOutput(tuple(requests), ordered)
