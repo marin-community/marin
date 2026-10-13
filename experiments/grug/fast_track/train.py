@@ -1870,9 +1870,21 @@ def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
         )
         state_leaves, state_treedef = jax.tree.flatten(state)
         compile_start = time.perf_counter()
-        _flat_train_step(train_step_fn, state_treedef).lower(state_leaves, batch).compile()
+        compiled = _flat_train_step(train_step_fn, state_treedef).lower(state_leaves, batch).compile()
         logger.info("Seed compile of the train step took %.0f s", time.perf_counter() - compile_start)
+        _log_memory_analysis(compiled)
     _publish_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
+
+
+def _log_memory_analysis(compiled: jax.stages.Compiled) -> None:
+    """Log the compiled train step's memory analysis (argument, output, alias, temp and code sizes) in GiB."""
+    stats = compiled.memory_analysis()
+    sizes = {
+        name.removesuffix("_in_bytes"): getattr(stats, name) / 2**30
+        for name in dir(stats)
+        if name.endswith("_in_bytes") and getattr(stats, name)
+    }
+    logger.info("Train step memory (GiB): %s", ", ".join(f"{k} {v:.2f}" for k, v in sorted(sizes.items())))
 
 
 def _publish_xla_autotune_cache(path: str) -> None:
@@ -1967,6 +1979,7 @@ def _compile_on_process_zero(lowered: jax.stages.Lowered, directory: str) -> jax
     if jax.process_index() == 0:
         start = time.perf_counter()
         compiled = lowered.compile()
+        _log_memory_analysis(compiled)
         payload, _, _ = serialize(compiled)
         with fsspec.open(path, "wb") as f:
             f.write(payload)
