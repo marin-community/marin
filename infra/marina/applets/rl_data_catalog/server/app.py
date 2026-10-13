@@ -194,7 +194,6 @@ def create_api(services: AppletServices) -> FastAPI:
             "source": source["declaration"]["display_name"],
             "report": {
                 **row,
-                "basis": "sampled_model_opinions",
                 "assessment": summaries,
                 "evidence": {"samples": samples},
             },
