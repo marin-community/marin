@@ -20,6 +20,53 @@ from experiments.post_training.smartie.data import (
     split_real_tasks,
 )
 from experiments.post_training.smartie.deployment import ImageDeployment, LockImage
+from experiments.post_training.smartie.filter_structural import filter_structural
+
+
+@pytest.mark.parametrize("broken_native", [False, True])
+def test_structural_filter_preserves_holdout_and_removes_text_or_token_matches(tmp_path, broken_native):
+    tokens = tmp_path / "tokens"
+    native = tmp_path / "native"
+    tokens.mkdir()
+    native.mkdir()
+    definitions = {
+        "train": [("text-match", "shared", [1]), ("token-match", "different", [2]), ("keep", "unique", [3])],
+        "validation": [("heldout", "shared", [2])],
+    }
+    for split, cases in definitions.items():
+        rows = [
+            dict(
+                case_id=case,
+                task_id=case,
+                prompt_sha256=digest,
+                prompt_token_ids=ids,
+                family="code_fence",
+                control="close_required",
+            )
+            for case, digest, ids in cases
+        ]
+        (tokens / f"{split}.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+        payloads = [arithmetic_task(id="structure-closure:" + case) for case, _, _ in reversed(cases)]
+        if broken_native and split == "validation":
+            payloads = [arithmetic_task(id="unrelated")]
+        pq.write_table(
+            pa.table({"lowered_task_spec": [lowered(task).model_dump_json() for task in payloads]}),
+            native / f"{split}.parquet",
+        )
+    output = tmp_path / "filtered"
+    if broken_native:
+        with pytest.raises(ValueError, match="identity mismatch"):
+            filter_structural(tokens, native, output)
+        assert not (output / "manifest.json").exists()
+        return
+    report = filter_structural(tokens, native, output)
+    assert report["excluded_train_case_ids"] == ["text-match", "token-match"]
+    assert report["outputs"]["train"]["rows"] == 1
+    assert json.loads((output / "train.jsonl").read_text())["case_id"] == "keep"
+    actual = pq.read_table(output / "train.parquet")["lowered_task_spec"].to_pylist()
+    assert [LoweredTaskSpec.model_validate_json(row).task.id for row in actual] == ["structure-closure:keep"]
+    assert (output / "validation.parquet").read_bytes() == (native / "validation.parquet").read_bytes()
+    assert (output / "validation.jsonl").read_bytes() == (tokens / "validation.jsonl").read_bytes()
 
 
 def test_lock_image_deployment_preserves_task_contract_and_rejects_changed_lock(tmp_path):
