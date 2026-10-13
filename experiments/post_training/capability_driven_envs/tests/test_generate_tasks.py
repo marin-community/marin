@@ -12,6 +12,8 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+import click
+from click.testing import CliRunner
 from pydantic import BaseModel, ValidationError
 from rigging.timing import Duration, ExponentialBackoff
 from taskcompendium.models import TaskSpec
@@ -23,31 +25,35 @@ from taskforge.llm.client import (
     StructuredResult,
     Usage,
 )
+from taskforge.llm.glm_client import Pool
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 
+from experiments.post_training.capability_driven_envs.catalog import example_catalog_path
 from experiments.post_training.capability_driven_envs.generate_tasks import (
-    CATALOG,
+    GLM_HIGH_TOKEN_ENV,
     SUMMARY_FILE,
     TASK_STATUS,
     generate_tasks,
     main,
+    pool_token,
     run_program,
     selected_ideas,
     task_items,
     write_outputs,
 )
 from experiments.post_training.capability_driven_envs.program_prompt import (
-    EXAMPLE_PROGRAM,
     ProgramSubmission,
+    example_program_source,
 )
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 
 CAPABILITY = "d43.culinary.scaling"
 COMPLETION = Completion(
     content="",
     reasoning="a recipe-scaling task",
     tool_calls=(),
-    finish_reason=FinishReason.TOOL_CALLS,
+    finish_reason=FinishReason.STOP,
     usage=Usage(prompt_tokens=100, completion_tokens=50, reasoning_tokens=10, cached_tokens=0),
     wall_time=1.0,
     ttft=0.1,
@@ -75,12 +81,12 @@ class CannedModel:
         self.output_types.append(output_type)
         if self.errors:
             raise self.errors.pop(0)
-        value = output_type.model_validate({"source": EXAMPLE_PROGRAM.read_text()})
+        value = output_type.model_validate({"source": example_program_source()})
         return StructuredResult(value, (COMPLETION,))
 
 
 def test_example_program_writes_a_task_spec_with_the_given_id():
-    run = asyncio.run(run_program(EXAMPLE_PROGRAM.read_text(), "scaling--03", timeout=60))
+    run = asyncio.run(run_program(example_program_source(), "scaling--03", timeout=60))
 
     assert (run.exit_code, run.failure) == (0, None)
     assert run.task is not None and run.task.id == "scaling--03"
@@ -134,13 +140,16 @@ def test_failed_program_keeps_its_stderr():
     assert run.exit_code == 1 and "bad input" in run.stderr
 
 
-def test_program_that_does_not_compile_is_rejected_at_submission():
+@pytest.mark.parametrize(
+    "source", ["def broken(:\n", "x = 1\x00\n", "-" * 1_000_000 + "1\n"], ids=["syntax", "null-byte", "deep-nesting"]
+)
+def test_program_that_does_not_compile_is_rejected_at_submission(source: str):
     with pytest.raises(ValidationError, match="does not compile"):
-        ProgramSubmission(source="def broken(:\n")
+        ProgramSubmission(source=source)
 
 
 def test_driver_saves_each_task_and_its_completions_once_at_the_end(tmp_path: Path):
-    ideas = selected_ideas(CATALOG, [CAPABILITY])
+    ideas = selected_ideas(example_catalog_path(), [CAPABILITY])
     model = CannedModel()
 
     generated = asyncio.run(generate_tasks(model, task_items(ideas, 2), LLMPolicy(), 60, concurrency=2))
@@ -154,18 +163,18 @@ def test_driver_saves_each_task_and_its_completions_once_at_the_end(tmp_path: Pa
     for item_id in item_ids:
         item_dir = output / item_id
         assert TaskSpec.model_validate_json((item_dir / "task.json").read_text()).id == item_id
-        assert (item_dir / "program.py").read_text() == EXAMPLE_PROGRAM.read_text()
+        assert (item_dir / "program.py").read_text() == example_program_source()
         [completion] = json.loads((item_dir / "completions.json").read_text())
         assert completion["usage"]["prompt_tokens"] == 100
         assert CAPABILITY in json.loads((item_dir / "request.json").read_text())[-1]["content"]
 
 
 def test_item_without_a_valid_submission_keeps_its_completions_and_no_program(tmp_path: Path):
-    ideas = selected_ideas(CATALOG, [CAPABILITY])
+    ideas = selected_ideas(example_catalog_path(), [CAPABILITY])
 
     generated = asyncio.run(
         generate_tasks(
-            CannedModel(errors=[StructuredOutputError(ValueError("no tool call"), (COMPLETION, COMPLETION))]),
+            CannedModel(errors=[StructuredOutputError(ValueError("not a JSON object"), (COMPLETION, COMPLETION))]),
             task_items(ideas, 1),
             LLMPolicy(),
             60,
@@ -186,7 +195,7 @@ def test_item_without_a_valid_submission_keeps_its_completions_and_no_program(tm
     ids=["unavailable", "context-exhausted"],
 )
 def test_model_error_fails_only_its_item(tmp_path: Path, error: Exception):
-    ideas = selected_ideas(CATALOG, [CAPABILITY])
+    ideas = selected_ideas(example_catalog_path(), [CAPABILITY])
 
     generated = asyncio.run(generate_tasks(CannedModel(errors=[error]), task_items(ideas, 2), LLMPolicy(), 60, 1))
     write_outputs(tmp_path / "run", generated)
@@ -199,20 +208,28 @@ def test_model_error_fails_only_its_item(tmp_path: Path, error: Exception):
 
 
 @pytest.mark.parametrize("flag", ["--samples", "--concurrency"])
-def test_main_refuses_a_count_below_one(tmp_path: Path, capsys: pytest.CaptureFixture[str], flag: str):
-    token_file = tmp_path / "token.env"
-    token_file.write_text("GLM_API_TOKEN=test-token\n")
-    argv = [
-        "--output-dir",
-        str(tmp_path / "run"),
-        "--base-url",
-        "http://127.0.0.1:1/v1",
-        "--token-file",
-        str(token_file),
-    ]
+def test_main_refuses_a_count_below_one(tmp_path: Path, flag: str):
+    argv = ["--output-dir", str(tmp_path / "run"), "--base-url", "http://127.0.0.1:1/v1", flag, "0"]
 
-    with pytest.raises(SystemExit):
-        main([*argv, flag, "0"])
+    result = CliRunner().invoke(main, argv)
 
-    assert "must be at least 1" in capsys.readouterr().err
+    assert result.exit_code == 2 and "x>=1" in result.output
     assert not (tmp_path / "run").exists()
+
+
+@pytest.mark.parametrize(
+    "endpoint", [[], ["--base-url", "http://127.0.0.1:1/v1", "--relay-job", "/user/relay"]], ids=["neither", "both"]
+)
+def test_main_needs_exactly_one_of_base_url_and_relay_job(tmp_path: Path, endpoint: list[str]):
+    result = CliRunner().invoke(main, ["--output-dir", str(tmp_path / "run"), *endpoint])
+
+    assert result.exit_code == 2 and "exactly one of --base-url and --relay-job" in result.output
+
+
+def test_pool_selects_its_token_variable(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv(GLM_HIGH_TOKEN_ENV, "high-token")
+    monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
+
+    assert pool_token(Pool.HIGH) == "high-token"
+    with pytest.raises(click.ClickException, match=GLM_BULK_TOKEN_ENV):
+        pool_token(Pool.BULK)

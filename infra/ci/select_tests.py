@@ -185,6 +185,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "taskforge-unit": (
         "lib/taskforge/",
         "experiments/post_training/capability_driven_envs/",
+        "experiments/post_training/glm.py",
         "lib/taskcompendium/",
         "lib/iris/",
         "lib/shellbox/",

@@ -303,8 +303,11 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
     assert set(suites) <= set(full_selection.suites)
 
 
-def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Path) -> None:
-    selection = select_changed_tests(["experiments/post_training/capability_driven_envs/generate_tasks.py"], tmp_path)
+@pytest.mark.parametrize(
+    "path", ["experiments/post_training/capability_driven_envs/generate_tasks.py", "experiments/post_training/glm.py"]
+)
+def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Path, path: str) -> None:
+    selection = select_changed_tests([path], tmp_path)
 
     assert "taskforge-unit" in selection.suites
 

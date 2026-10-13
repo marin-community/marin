@@ -3,7 +3,9 @@
 
 import asyncio
 import json
-from dataclasses import replace
+import socket
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 
 import pytest
 
@@ -15,8 +17,14 @@ from taskforge.llm.client import (
     ModelRequestRejected,
     ModelUnavailable,
 )
-from taskforge.llm.glm_client import GlmClient, GlmEndpoint, Pool
-from taskforge.llm.policy import CONTINUE_PROMPT, GLM_MAX_OUTPUT_TOKENS, LLMPolicy, Message
+from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.policy import (
+    CONTINUE_PROMPT,
+    GLM_MAX_OUTPUT_TOKENS,
+    LLMPolicy,
+    LLMProviderConfig,
+    Message,
+)
 
 MESSAGES: list[Message] = [{"role": "user", "content": "hi"}]
 CONTEXT_ERROR = json.dumps(
@@ -32,17 +40,41 @@ CONTEXT_ERROR = json.dumps(
 )
 
 
+def endpoint(base_url: str) -> GlmEndpoint:
+    return GlmEndpoint(base_url=base_url, token="test-token", pool=Pool.HIGH)
+
+
+@dataclass
+class MovingEndpoint:
+    """Answers each ``current`` call with the next endpoint, then keeps answering the last."""
+
+    endpoints: list[GlmEndpoint]
+    calls: int = 0
+
+    def current(self) -> GlmEndpoint:
+        self.calls += 1
+        return self.endpoints[min(self.calls, len(self.endpoints)) - 1]
+
+
+def complete(
+    source: EndpointSource,
+    provider: LLMProviderConfig,
+    policy: LLMPolicy = LLMPolicy(),
+    request_fields: Mapping[str, object] | None = None,
+) -> Completion:
+    async def call() -> Completion:
+        async with GlmClient(source, provider) as client:
+            return await client.complete(MESSAGES, policy, request_fields)
+
+    return asyncio.run(call())
+
+
 @pytest.fixture
 def run(fake_glm, fast_provider):
     """Run one ``complete`` of ``MESSAGES`` against ``fake_glm``; keyword arguments override provider fields."""
 
     def go(policy=LLMPolicy(), **provider_fields) -> Completion:
-        async def call() -> Completion:
-            endpoint = GlmEndpoint(base_url=fake_glm.base_url, token="test-token", pool=Pool.HIGH)
-            async with GlmClient(endpoint, replace(fast_provider, **provider_fields)) as client:
-                return await client.complete(MESSAGES, policy)
-
-        return asyncio.run(call())
+        return complete(FixedEndpoint(endpoint(fake_glm.base_url)), replace(fast_provider, **provider_fields), policy)
 
     return go
 
@@ -51,16 +83,32 @@ def outcomes(completion_or_error) -> list[AttemptOutcome]:
     return [a.outcome for a in completion_or_error.attempts]
 
 
-def test_stream_assembles_content_reasoning_usage_and_raw_events(fake_glm, run):
+def test_stream_assembles_content_reasoning_usage_and_chunks(fake_glm, run):
     fake_glm.stream(content="Hello there", reasoning="thinking", prompt_tokens=12, completion_tokens=7)
     completion = run()
     assert (completion.content, completion.reasoning) == ("Hello there", "thinking")
     assert completion.finish_reason is FinishReason.STOP
     assert (completion.usage.prompt_tokens, completion.usage.completion_tokens) == (12, 7)
-    assert json.loads(completion.attempts[0].events[-1])["usage"]["completion_tokens"] == 7
+    assert (completion.usage.reasoning_tokens, completion.usage.cached_tokens) == (1, 0)
+    [attempt] = completion.attempts
+    assert len(attempt.events) == 6
+    assert json.loads(attempt.events[1])["choices"][0]["delta"]["reasoning"] == "thin"
+    assert json.loads(attempt.events[-1])["usage"]["completion_tokens"] == 7
     request = fake_glm.requests[0]
     assert request["max_tokens"] == GLM_MAX_OUTPUT_TOKENS
-    assert request["stream"] is True
+    assert (request["stream"], request["stream_options"]) == (True, {"include_usage": True})
+    assert request["chat_template_kwargs"] == {"reasoning_effort": "high"}
+
+
+def test_request_fields_reach_the_wire(fake_glm, fast_provider):
+    tools = [{"type": "function", "function": {"name": "answer", "parameters": {"type": "object"}}}]
+    tool_choice = {"type": "function", "function": {"name": "answer"}}
+    constraint = {"regex": "[0-9]+"}
+    fake_glm.stream(content="42")
+    fields = {"tools": tools, "tool_choice": tool_choice, "structured_outputs": constraint}
+    complete(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider, request_fields=fields)
+    request = fake_glm.requests[0]
+    assert (request["tools"], request["tool_choice"], request["structured_outputs"]) == (tools, tool_choice, constraint)
     assert request["chat_template_kwargs"] == {"reasoning_effort": "high"}
 
 
@@ -106,10 +154,11 @@ def test_retry_after_sets_the_minimum_delay(fake_glm, run):
     [
         {"content": "partial", "finish": "abort"},
         {"content": "partial", "raw_payload": "{not json"},
+        {"content": "partial", "raw_payload": '{"error": {"message": "engine died", "code": 500}}'},
     ],
-    ids=["abort", "malformed"],
+    ids=["abort", "malformed", "error-event"],
 )
-def test_aborted_or_malformed_stream_is_retried(fake_glm, run, stream):
+def test_aborted_malformed_or_errored_stream_is_retried(fake_glm, run, stream):
     fake_glm.stream(**stream)
     fake_glm.stream(content="whole")
     completion = run()
@@ -143,6 +192,27 @@ def test_route_404_holds_without_counting_an_attempt(fake_glm, run):
     completion = run(max_attempts=1)
     assert completion.content == "back"
     assert outcomes(completion) == [AttemptOutcome.ROUTE_MISSING] * 2 + [AttemptOutcome.COMPLETED]
+
+
+def test_route_hold_follows_an_endpoint_that_moved(fake_glm, other_fake_glm, fast_provider):
+    fake_glm.status(404, '{"error": "no route for model glm-5.3"}')
+    other_fake_glm.stream(content="moved")
+    source = MovingEndpoint([endpoint(fake_glm.base_url), endpoint(other_fake_glm.base_url)])
+    completion = complete(source, replace(fast_provider, max_attempts=1))
+    assert completion.content == "moved"
+    assert outcomes(completion) == [AttemptOutcome.ROUTE_MISSING, AttemptOutcome.COMPLETED]
+    assert (len(fake_glm.requests), len(other_fake_glm.requests)) == (1, 1)
+
+
+def test_refused_connection_is_retried_on_the_current_endpoint(fake_glm, fast_provider):
+    with socket.socket() as closed:
+        closed.bind(("127.0.0.1", 0))
+        closed_port = closed.getsockname()[1]
+    fake_glm.stream(content="reached")
+    source = MovingEndpoint([endpoint(f"http://127.0.0.1:{closed_port}/v1"), endpoint(fake_glm.base_url)])
+    completion = complete(source, fast_provider)
+    assert completion.content == "reached"
+    assert outcomes(completion) == [AttemptOutcome.TRANSPORT_ERROR, AttemptOutcome.COMPLETED]
 
 
 def test_pool_without_workers_holds_until_health_recovers(fake_glm, run):
@@ -187,8 +257,8 @@ def test_stall_abandons_attempt_and_retries(fake_glm, run):
     assert len(stalled.events) == 2
 
 
-def test_stream_without_done_is_retried(fake_glm, run):
-    fake_glm.stream(content="cut", send_done=False)
+def test_stream_cut_before_finish_reason_is_retried(fake_glm, run):
+    fake_glm.stream(content="cut", finish=None, send_done=False)
     fake_glm.stream(content="whole")
     completion = run()
     assert completion.content == "whole"

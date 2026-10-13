@@ -66,10 +66,6 @@ class LLMPolicy:
         """The ``chat_template_kwargs`` this policy sends."""
         return {"reasoning_effort": str(self.reasoning_effort)}
 
-    def sampling_fields(self) -> dict[str, object]:
-        """Request-body fields this policy contributes, other than ``max_tokens``."""
-        return {"temperature": self.temperature, "chat_template_kwargs": self.template_kwargs()}
-
 
 @dataclass(frozen=True)
 class LLMProviderConfig:
@@ -85,7 +81,8 @@ class LLMProviderConfig:
         backoff_factor: Growth of the delay after each wait.
         stall_timeout: Seconds with no streamed token before an attempt is abandoned.
         max_connections: httpx connection-pool size; sized for hundreds of concurrent calls.
-        structured_repairs: How many times an invalid tool call is sent back for correction before the call fails.
+        structured_repairs: How many times an invalid structured reply is sent back for correction before the
+            call fails.
     """
 
     model: str

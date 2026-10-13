@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The deliberately basic prompt that asks GLM for a task program, and the tool its reply arrives through.
+"""The deliberately basic prompt that asks GLM for a task program, and the submission its reply must be.
 
 GLM gets one catalog capability and writes one Python program that, run as
 ``python3 program.py <task id> <output path>``, writes a TaskSpec for a task exercising that
 capability. The rules are only the ones the driver checks: the program runs, and its output parses
-as a TaskSpec. The task carries its own grader; nothing here checks the task itself.
+as a TaskSpec. The task carries its own grader; nothing here checks the task itself. The reply is a
+``ProgramSubmission`` JSON object; the server enforces its schema as the response format.
 """
 
 import json
@@ -16,11 +17,10 @@ from pydantic import BaseModel, Field, field_validator
 from taskcompendium.models import TaskSpec
 from taskforge.content_hash import pretty_json
 from taskforge.llm.policy import Message
-from taskforge.llm.structured import tool_name
 
 from experiments.post_training.capability_driven_envs.catalog import CapabilityIdea, capability_idea_record
 
-EXAMPLE_PROGRAM = Path(__file__).with_name("example_program.py")
+EXAMPLE_PROGRAM_FILE = "example_program.py"
 
 SYSTEM_PROMPT = """\
 Your job is to write one Python program that generates one task for training a language-model agent.
@@ -57,7 +57,7 @@ USER_PROMPT = """\
 {capability}
 ```
 
-Write the program for this capability and submit it through the `{tool}` tool.
+Write the program for this capability. Reply with the JSON object for the program submission.
 """
 
 
@@ -69,17 +69,24 @@ class ProgramSubmission(BaseModel):
     @field_validator("source")
     @classmethod
     def compiles(cls, source: str) -> str:
+        # Besides SyntaxError, compile raises ValueError, RecursionError or MemoryError (the parser's
+        # stack overflowing on deep nesting) for some sources; each is an invalid submission, not a crash.
         try:
             compile(source, "program.py", "exec")
-        except SyntaxError as error:
+        except (SyntaxError, ValueError, RecursionError, MemoryError) as error:
             raise ValueError(f"the program does not compile: {error}") from error
         return source
+
+
+def example_program_source() -> str:
+    """The source of the example task program shown to GLM."""
+    return Path(__file__).with_name(EXAMPLE_PROGRAM_FILE).read_text()
 
 
 def program_messages(idea: CapabilityIdea) -> list[Message]:
     """The system rules with the schema and example, then the capability record."""
     system = SYSTEM_PROMPT.format(
-        schema=json.dumps(TaskSpec.model_json_schema(), indent=2), example=EXAMPLE_PROGRAM.read_text()
+        schema=json.dumps(TaskSpec.model_json_schema(), indent=2), example=example_program_source()
     )
-    user = USER_PROMPT.format(capability=pretty_json(capability_idea_record(idea)), tool=tool_name(ProgramSubmission))
+    user = USER_PROMPT.format(capability=pretty_json(capability_idea_record(idea)))
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

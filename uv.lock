@@ -7710,9 +7710,9 @@ version = "0.1.0"
 source = { editable = "lib/taskforge" }
 dependencies = [
     { name = "httpx" },
-    { name = "marin-iris" },
     { name = "marin-rigging" },
     { name = "marin-taskcompendium" },
+    { name = "openai" },
     { name = "pydantic" },
 ]
 
@@ -7726,9 +7726,9 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27,<1" },
-    { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
+    { name = "openai" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
 

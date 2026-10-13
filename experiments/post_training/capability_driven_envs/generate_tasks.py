@@ -10,17 +10,22 @@ program, so the run always writes. Everything stays in memory until every item i
 ``OUTPUT_DIR/<item id>/`` gets ``request.json``, ``completions.json`` (content, reasoning, usage and
 every HTTP attempt), ``program.py``, ``run.json`` and, when the output parses, ``task.json``, and
 ``OUTPUT_DIR/summary.json`` maps each item id to ``task`` or its failure. Item ids are
-``<capability id>--<sample>``. On a laptop, with the GLM router port-forwarded::
+``<capability id>--<sample>``.
+
+The GLM bearer token comes from the environment, and ``--pool`` selects the variable it is read
+from: ``GLM_BULK_TOKEN`` for ``bulk``, ``GLM_HIGH_TOKEN`` for ``high``. The router serves a request
+from the pool its token is bound to, so ``--pool`` must name that pool; it also selects the pool
+the router ``/health`` check waits on. On a laptop, with the GLM router port-forwarded and
+``GLM_BULK_TOKEN`` exported::
 
     uv run --package marin-taskforge --frozen python -m \\
         experiments.post_training.capability_driven_envs.generate_tasks \\
-        --output-dir /tmp/capability-tasks --base-url http://127.0.0.1:18000/v1 \\
-        --token-file <file with a GLM_API_TOKEN= line> --pool high
+        --output-dir /tmp/capability-tasks --base-url http://127.0.0.1:18000/v1 --pool bulk
 
-Inside an Iris task, ``--relay-job`` names the GLM relay job instead of ``--base-url``.
+Inside an Iris task, ``--relay-job`` names the GLM relay job instead of ``--base-url``; the client
+resolves the endpoint from the relay again whenever it starts holding, so a relay that moves is followed.
 """
 
-import argparse
 import asyncio
 import contextlib
 import json
@@ -31,34 +36,45 @@ import signal
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import click
 from pydantic import ValidationError
+from rigging.log_setup import configure_logging
 from taskcompendium.models import TaskSpec
 from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, ModelClient, ModelRequestRejected, ModelUnavailable
-from taskforge.llm.endpoint import GLM_MODEL
-from taskforge.llm.glm_client import GlmClient, GlmEndpoint, Pool, endpoint_in_task
+from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
 from taskforge.llm.structured import StructuredOutputError
 
-from experiments.post_training.capability_driven_envs.catalog import CapabilityIdea, load_capability_ideas
+from experiments.post_training.capability_driven_envs.catalog import (
+    CapabilityIdea,
+    example_catalog_path,
+    load_capability_ideas,
+)
 from experiments.post_training.capability_driven_envs.program_prompt import (
     ProgramSubmission,
     program_messages,
 )
+from experiments.post_training.glm import (
+    DEFAULT_GLM_RELAY_JOB,
+    GLM_BULK_TOKEN_ENV,
+    GLM_MODEL,
+    resolve_glm_base_url,
+)
 
 logger = logging.getLogger(__name__)
 
-CATALOG = Path(__file__).resolve().parent / "data" / "catalog.json"
 FILE_SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
-TOKEN_KEY = "GLM_API_TOKEN"
+GLM_HIGH_TOKEN_ENV = "GLM_HIGH_TOKEN"
+POOL_TOKEN_ENV = {Pool.BULK: GLM_BULK_TOKEN_ENV, Pool.HIGH: GLM_HIGH_TOKEN_ENV}
+"""The environment variable each pool's bearer token is read from; the token binds the pool."""
 PROGRAM_FILE = "program.py"
 TASK_FILE = "task.json"
 SUMMARY_FILE = "summary.json"
 TASK_STATUS = "task"
-OUTPUT_TAIL_CHARS = 20_000
 PROGRAM_ENV = {"PATH": os.defpath}
 """The program's whole environment: none of the driver's variables (credentials among them) reach it."""
 
@@ -75,6 +91,8 @@ GLM_PROVIDER = LLMProviderConfig(
 )
 
 
+# NOTE: stdout and stderr are held in memory and written into run.json; a program that prints without
+# bound can exhaust memory. Truncate or stream to files if that ever happens.
 @dataclass(frozen=True)
 class ProgramRun:
     """One run of a task program. ``exit_code`` is None when it timed out; ``failure`` is None only with ``task``."""
@@ -96,10 +114,6 @@ class GeneratedTask:
     source: str | None
     run: ProgramRun | None
     failure: str | None
-
-
-def _tail(output: bytes) -> str:
-    return output.decode(errors="replace")[-OUTPUT_TAIL_CHARS:]
 
 
 async def run_program(source: str, task_id: str, timeout: float) -> ProgramRun:
@@ -131,15 +145,16 @@ async def run_program(source: str, task_id: str, timeout: float) -> ProgramRun:
             await process.wait()
             return ProgramRun(None, "", "", None, f"the program did not finish within {timeout}s")
         code = process.returncode
+        out, err = stdout.decode(errors="replace"), stderr.decode(errors="replace")
         if code != 0:
-            return ProgramRun(code, _tail(stdout), _tail(stderr), None, f"the program exited with status {code}")
+            return ProgramRun(code, out, err, None, f"the program exited with status {code}")
         if not output.is_file():
-            return ProgramRun(code, _tail(stdout), _tail(stderr), None, "the program wrote no file at the output path")
+            return ProgramRun(code, out, err, None, "the program wrote no file at the output path")
         try:
             task = TaskSpec.model_validate_json(output.read_bytes())
         except ValidationError as error:
-            return ProgramRun(code, _tail(stdout), _tail(stderr), None, f"the output is not a TaskSpec: {error}")
-        return ProgramRun(code, _tail(stdout), _tail(stderr), task, None)
+            return ProgramRun(code, out, err, None, f"the output is not a TaskSpec: {error}")
+        return ProgramRun(code, out, err, task, None)
 
 
 async def generate_task(
@@ -209,13 +224,37 @@ def write_outputs(output_dir: Path, generated: Sequence[GeneratedTask]) -> None:
     (output_dir / SUMMARY_FILE).write_text(json.dumps(summary, indent=2))
 
 
-def read_token(path: Path) -> str:
-    """The value of the ``GLM_API_TOKEN=`` line in ``path``; the value is never echoed."""
-    for line in path.read_text().splitlines():
-        name, separator, value = line.strip().partition("=")
-        if separator and name.strip() == TOKEN_KEY and value.strip():
-            return value.strip()
-    raise ValueError(f"{path} has no non-empty {TOKEN_KEY}= line")
+@dataclass(frozen=True)
+class RelayEndpoint:
+    """The endpoint an Iris GLM relay job registers, resolved on every call so a relay that moves is followed.
+
+    Resolution goes through the Iris client, so this works only inside an Iris task.
+    """
+
+    relay_job: str
+    token: str = field(repr=False)
+    pool: Pool
+
+    def current(self) -> GlmEndpoint:
+        return GlmEndpoint(resolve_glm_base_url(self.relay_job), self.token, self.pool)
+
+
+def pool_token(pool: Pool) -> str:
+    """The bearer token for ``pool``, from its ``POOL_TOKEN_ENV`` variable."""
+    name = POOL_TOKEN_ENV[pool]
+    token = os.environ.get(name, "")
+    if not token:
+        raise click.ClickException(f"--pool {pool} reads its GLM bearer token from {name}, which is not set")
+    return token
+
+
+def endpoint_source(base_url: str | None, relay_job: str | None, pool: Pool) -> EndpointSource:
+    """A fixed endpoint for ``base_url`` or a relay-resolved one for ``relay_job``; exactly one must be given."""
+    if base_url is not None and relay_job is None:
+        return FixedEndpoint(GlmEndpoint(base_url.rstrip("/"), pool_token(pool), pool))
+    if relay_job is not None and base_url is None:
+        return RelayEndpoint(relay_job, pool_token(pool), pool)
+    raise click.UsageError("give exactly one of --base-url and --relay-job")
 
 
 def selected_ideas(catalog: Path, capability_ids: Sequence[str]) -> dict[str, CapabilityIdea]:
@@ -228,46 +267,73 @@ def selected_ideas(catalog: Path, capability_ids: Sequence[str]) -> dict[str, Ca
 
 
 async def _generate(
-    endpoint: GlmEndpoint, items: Sequence[tuple[str, CapabilityIdea]], args: argparse.Namespace
+    source: EndpointSource,
+    items: Sequence[tuple[str, CapabilityIdea]],
+    program_timeout: float,
+    concurrency: int,
 ) -> list[GeneratedTask]:
-    async with GlmClient(endpoint, GLM_PROVIDER) as client:
-        return await generate_tasks(client, items, LLMPolicy(), args.program_timeout, args.concurrency)
+    async with GlmClient(source, GLM_PROVIDER) as client:
+        return await generate_tasks(client, items, LLMPolicy(), program_timeout, concurrency)
 
 
-def positive_int(value: str) -> int:
-    number = int(value)
-    if number < 1:
-        raise argparse.ArgumentTypeError(f"must be at least 1, got {number}")
-    return number
+@click.command()
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=True,
+    help="Where the run is written; must not exist.",
+)
+@click.option(
+    "--catalog",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The capability catalog JSON file. Default: the package's data/example_catalog.json.",
+)
+@click.option("--capability", "capabilities", multiple=True, help="Only this capability id; repeatable.")
+@click.option("--samples", type=click.IntRange(min=1), default=1, show_default=True, help="Tasks per capability.")
+@click.option("--base-url", help="The GLM router's OpenAI-compatible base URL, ending in /v1.")
+@click.option(
+    "--relay-job",
+    help=f"The Iris GLM relay job to resolve the endpoint from, e.g. {DEFAULT_GLM_RELAY_JOB} (inside Iris only).",
+)
+@click.option(
+    "--pool",
+    type=click.Choice([pool.value for pool in Pool]),
+    default=Pool.BULK.value,
+    show_default=True,
+    help=(
+        f"The router pool. It selects the token variable ({GLM_BULK_TOKEN_ENV} for bulk, {GLM_HIGH_TOKEN_ENV} "
+        "for high) and the pool the /health check waits on; it must be the pool the token is bound to."
+    ),
+)
+@click.option("--program-timeout", type=float, default=300.0, show_default=True, help="Seconds each program may run.")
+@click.option(
+    "--concurrency", type=click.IntRange(min=1), default=16, show_default=True, help="Items generated at once."
+)
+def main(
+    output_dir: Path,
+    catalog: Path | None,
+    capabilities: tuple[str, ...],
+    samples: int,
+    base_url: str | None,
+    relay_job: str | None,
+    pool: str,
+    program_timeout: float,
+    concurrency: int,
+) -> None:
+    """Generate TaskSpecs from the capability catalog: one GLM-written program per task.
 
-
-def main(argv: Sequence[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--output-dir", type=Path, required=True, help="where the run is written; must not exist")
-    parser.add_argument("--catalog", type=Path, default=CATALOG, help="the capability catalog JSON file")
-    parser.add_argument("--capability", action="append", default=[], help="only this capability id; repeatable")
-    parser.add_argument("--samples", type=positive_int, default=1, help="tasks per capability")
-    where = parser.add_mutually_exclusive_group(required=True)
-    where.add_argument("--base-url", help="the GLM router's OpenAI-compatible base URL, ending in /v1")
-    where.add_argument("--relay-job", help="the Iris GLM relay job to resolve the endpoint from (inside Iris only)")
-    parser.add_argument("--token-file", type=Path, required=True, help=f"a file with a {TOKEN_KEY}= line")
-    parser.add_argument("--pool", type=Pool, choices=list(Pool), default=Pool.BULK, help="the router pool")
-    parser.add_argument("--program-timeout", type=float, default=300.0, help="seconds each program may run")
-    parser.add_argument("--concurrency", type=positive_int, default=16, help="items generated at once")
-    args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-
-    if args.output_dir.exists():
-        raise FileExistsError(f"{args.output_dir} already exists")
-    items = task_items(selected_ideas(args.catalog, args.capability), args.samples)
-    token = read_token(args.token_file.expanduser())
-    if args.relay_job is not None:
-        endpoint = endpoint_in_task(args.relay_job, token, args.pool)
-    else:
-        endpoint = GlmEndpoint(base_url=args.base_url.rstrip("/"), token=token, pool=args.pool)
-    generated = asyncio.run(_generate(endpoint, items, args))
-    write_outputs(args.output_dir, generated)
-    print(args.output_dir / SUMMARY_FILE)
+    Give exactly one of --base-url (a port-forwarded router) and --relay-job (inside an Iris task).
+    The GLM bearer token is read from the environment variable --pool selects; the token binds the
+    pool that serves the requests, so --pool must name the pool the token is bound to.
+    """
+    configure_logging(logging.INFO)
+    source = endpoint_source(base_url, relay_job, Pool(pool))
+    if output_dir.exists():
+        raise click.BadParameter(f"{output_dir} already exists", param_hint="'--output-dir'")
+    items = task_items(selected_ideas(catalog or example_catalog_path(), capabilities), samples)
+    generated = asyncio.run(_generate(source, items, program_timeout, concurrency))
+    write_outputs(output_dir, generated)
+    click.echo(output_dir / SUMMARY_FILE)
 
 
 if __name__ == "__main__":

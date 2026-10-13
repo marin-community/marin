@@ -4,6 +4,7 @@
 """``fake_glm``: a scripted fake of the GLM router, run as a real local HTTP server.
 
 ``POST /v1/chat/completions`` streams queued responses and ``GET /health`` reports queued worker counts.
+``other_fake_glm`` is a second, independent server, for an endpoint that moves.
 ``fast_provider`` is a provider config whose backoff is a millisecond, so retries and holds are quick.
 """
 
@@ -11,13 +12,15 @@ import json
 import threading
 from collections import deque
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from taskforge.llm.endpoint import GLM_MODEL
 from taskforge.llm.policy import LLMProviderConfig
+
+GLM_MODEL = "glm-5.3"
 
 
 @pytest.fixture
@@ -156,8 +159,8 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-@pytest.fixture
-def fake_glm() -> Iterator[FakeGlm]:
+@contextmanager
+def _serving() -> Iterator[FakeGlm]:
     fake = FakeGlm()
     server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(fake))
     server.daemon_threads = True
@@ -168,3 +171,15 @@ def fake_glm() -> Iterator[FakeGlm]:
     fake.released.set()
     server.shutdown()
     server.server_close()
+
+
+@pytest.fixture
+def fake_glm() -> Iterator[FakeGlm]:
+    with _serving() as fake:
+        yield fake
+
+
+@pytest.fixture
+def other_fake_glm() -> Iterator[FakeGlm]:
+    with _serving() as fake:
+        yield fake
