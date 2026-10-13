@@ -27,7 +27,6 @@ from shellbox.machine import (
 from taskcompendium.models import (
     ANSWER_CALL_NAME,
     DEFAULT_WORKSPACE,
-    SHELL_SIMULATOR_CAPABILITIES,
     AnswerCall,
     FunctionCall,
     FunctionDefinition,
@@ -242,10 +241,8 @@ class ShellFactory:
         validate_machine_spec(task.environment_requirements, self.machine_factory, self.machine_spec)
         validate_output_paths(task.output_paths)
         requirements = task.environment_requirements
-        if (
-            set(requirements.capabilities) - SHELL_SIMULATOR_CAPABILITIES
-            or requirements.tool_providers
-            or any(tool is None or definition.name != tool.definition.name for definition in task.interaction_tools)
+        if requirements.tool_providers or any(
+            tool is None or definition.name != tool.definition.name for definition in task.interaction_tools
         ):
             raise ValueError("Shell factory cannot satisfy these environment requirements")
         async with asyncio.timeout(self.machine_spec.startup_timeout):

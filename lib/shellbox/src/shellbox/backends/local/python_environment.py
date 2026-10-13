@@ -89,7 +89,7 @@ def _build(environment: PythonEnvironment, lock: Path, python_version: str, *, o
         "--require-hashes",
         "--link-mode",
         "copy",
-        *(("--only-binary=:all:", "--no-build") if only_binary else ()),
+        *(("--no-build",) if only_binary else ()),
         str(lock),
     )
 
@@ -160,7 +160,6 @@ def resolve_python_environment(cache: Path, requirements: tuple[str, ...], pytho
                     "compile",
                     "--no-config",
                     "--generate-hashes",
-                    "--only-binary=:all:",
                     "--no-build",
                     "--python-version",
                     python_version,

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -77,7 +78,7 @@ class ImageMachine:
 
 
 @dataclass
-class RecordingImages:
+class RecordingImages(DockerMachineFactory):
     """Fresh ShellSim machines, each recording the image it stands in for."""
 
     backend = Backend.DOCKER

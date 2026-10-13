@@ -12,6 +12,7 @@ from pathlib import Path
 
 from shellbox.backends.qemu.bundle import guest_code_id, stage_bundle
 from shellbox.image import OCI_TAG, DockerfileSource, PreparedImage, RegistryImage
+from shellbox.machine import QemuBundle
 
 
 @dataclass(frozen=True)
@@ -68,3 +69,10 @@ def stage_qemu_image(image: PreparedImage, assets: QemuAssets, cache: Path) -> P
                 raise ValueError("QEMU bundle image digest differs from prepared image")
             staged.rename(bundle)
     return bundle
+
+
+def load_qemu_bundle(path: Path) -> QemuBundle:
+    """Load declared image provenance once when selecting an existing bundle."""
+    metadata_path = path / "image.json"
+    metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
+    return QemuBundle(path, image_reference=metadata.get("image_reference"))

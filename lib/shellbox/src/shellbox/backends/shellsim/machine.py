@@ -15,8 +15,11 @@ import shellsim
 
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+    SHELL_SIMULATOR_CAPABILITIES,
     Backend,
     Command,
+    CommandSemantics,
+    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
@@ -25,6 +28,7 @@ from shellbox.machine import (
     ShellStatus,
     ShellUpdate,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
 
 DEFAULT_CPU_LIMIT = 10_000_000_000
@@ -213,17 +217,31 @@ class ShellSimMachineFactory:
         self.disk = disk
         self.output = output
 
-    async def create(self, spec: MachineSpec) -> ShellSimMachine:
+    def _check_spec(self, spec: MachineSpec) -> PackageSpec:
         if spec.cpus is not None or spec.gpus:
             raise UnsupportedMachineSpec("ShellSim does not provide host CPU or GPU allocations")
         if not isinstance(spec.source, PackageSpec):
             raise UnsupportedMachineSpec("ShellSim requires a PackageSpec source")
         if spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("ShellSim has no guest network")
+        return spec.source
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self._check_spec(spec)
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.SHELL_SIMULATOR,
+            capabilities=SHELL_SIMULATOR_CAPABILITIES,
+            image_reference=None,
+        )
+
+    async def create(self, spec: MachineSpec) -> ShellSimMachine:
+        source = self._check_spec(spec)
         return await asyncio.to_thread(
             ShellSimMachine,
             spec,
-            source=spec.source,
+            source=source,
             context=self.context,
             cpu=self.cpu,
             disk=self.disk,

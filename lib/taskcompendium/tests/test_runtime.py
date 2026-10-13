@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -147,7 +148,7 @@ class FileMachine:
 
 
 @dataclass
-class FileMachines:
+class FileMachines(DockerMachineFactory):
     backend = Backend.DOCKER
     machines: list[FileMachine] = field(default_factory=list)
 
@@ -294,7 +295,7 @@ class LocalGradingMachine:
 
 
 @dataclass
-class LocalGradingMachines:
+class LocalGradingMachines(DockerMachineFactory):
     root: Path
     remove_exit_code: int = 0
     machines: list[LocalGradingMachine] = field(default_factory=list)
@@ -423,7 +424,7 @@ def test_script_grader_reads_captured_state(tmp_path, script_grading_task, state
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
-class UnavailableMachines:
+class UnavailableMachines(DockerMachineFactory):
     backend = Backend.DOCKER
 
     async def create(self, spec):

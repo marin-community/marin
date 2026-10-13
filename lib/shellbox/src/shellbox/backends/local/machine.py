@@ -28,8 +28,11 @@ from bubblewrap_bin import bwrap_path
 from shellbox.backends.local import launch
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandSemantics,
+    ExecutionRequirements,
     ExitReason,
     HostImage,
     MachineSpec,
@@ -37,6 +40,7 @@ from shellbox.machine import (
     PackageSpec,
     Result,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
 
 logger = logging.getLogger(__name__)
@@ -390,14 +394,27 @@ class LocalMachineFactory:
         self.bwrap = _working_bwrap(_bwrap_candidates(bwrap))
         logger.info("Local backend sandboxes commands with %s", self.bwrap)
 
-    async def create(self, spec: MachineSpec) -> LocalMachine:
+    def _check_spec(self, spec: MachineSpec) -> HostImage | PackageSpec:
         if not isinstance(spec.source, (HostImage, PackageSpec)):
             raise UnsupportedMachineSpec(
                 f"The local backend requires HostImage or PackageSpec, not {type(spec.source).__name__}"
             )
         if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
             raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
-        source = spec.source
+        return spec.source
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self._check_spec(spec)
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=LINUX_PROCESS_CAPABILITIES,
+            image_reference=None,
+        )
+
+    async def create(self, spec: MachineSpec) -> LocalMachine:
+        source = self._check_spec(spec)
         host = source if isinstance(source, HostImage) else HostImage()
         if isinstance(source, PackageSpec) and source.pypi_packages is not None:
             installed = await asyncio.to_thread(

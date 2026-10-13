@@ -21,7 +21,17 @@ from dataclasses import dataclass, replace
 
 import pytest
 from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
-from shellbox.machine import Backend, DockerImage, HostImage, MachineSpec
+from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
+    Backend,
+    CommandSemantics,
+    DockerImage,
+    ExecutionRequirements,
+    HostImage,
+    MachineSpec,
+    UnsupportedMachineSpec,
+    check_execution_requirements,
+)
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import ConversationTrace, EnvironmentRequirements, GradingAttempt, TaskResource, TaskSpec
 from taskcompendium.pipeline.controls import FILE_SUBMISSION_MESSAGE
@@ -36,6 +46,19 @@ class LocalGraderFactory:
     """Starts the local grader image as a machine of the backend the environment declares."""
 
     backend: Backend
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        if self.backend == Backend.LOCAL:
+            if not isinstance(spec.source, HostImage):
+                raise UnsupportedMachineSpec("The local grader fixture requires HostImage")
+            check_execution_requirements(
+                requirements,
+                spec,
+                semantics=CommandSemantics.LINUX_PROCESS,
+                capabilities=LINUX_PROCESS_CAPABILITIES,
+            )
+            return
+        DockerMachineFactory().check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> DockerMachine:
         return await DockerMachineFactory().create(replace(spec, source=DockerImage(LOCAL_GRADER_IMAGE)))

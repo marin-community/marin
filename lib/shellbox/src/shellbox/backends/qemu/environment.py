@@ -12,7 +12,7 @@ from pathlib import Path
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 
-from shellbox.backends.qemu.image import QemuAssets
+from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle
 from shellbox.backends.qemu.machine import Acceleration, QemuMachine, QemuMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
@@ -20,7 +20,6 @@ from shellbox.machine import (
     Command,
     ExitReason,
     MachineSpec,
-    QemuBundle,
     ShellSession,
 )
 from shellbox.machine import NetworkPolicy as MachineNetworkPolicy
@@ -122,7 +121,7 @@ class QemuEnvironment(BaseEnvironment):
             assert self._source is not None
             source = self._source
         else:
-            source = QemuBundle(self.guest_bundle)
+            source = load_qemu_bundle(self.guest_bundle)
         spec = MachineSpec(
             source=source,
             workdir=self.task_env_config.workdir
