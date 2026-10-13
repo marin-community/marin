@@ -17,10 +17,12 @@ from shellbox.machine import (
     Backend,
     Command,
     DockerImage,
+    ExecutionRequirements,
     ExitReason,
     Machine,
+    MachineSpec,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
 from taskcompendium.grader import verifyit_package
@@ -122,7 +124,7 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         async def close(self):
             await self.machine.close()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -186,22 +188,26 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         assert (await docker("inspect", machine.name)).exit_code != 0
 
 
-class FixtureImageFactory:
+class FixtureImageFactory(DockerMachineFactory):
     """Execute fixture image commands on the built-in filesystem."""
 
     backend = Backend.DOCKER
 
     async def create(self, spec):
         return await ShellSimMachineFactory().create(
-            replace(spec, source=ShellSimBuiltins(), workdir=spec.workdir or "/workspace")
+            replace(spec, source=PackageSpec(), workdir=spec.workdir or "/workspace")
         )
 
 
 @dataclass
-class RecordingShellSimFactory:
+class RecordingShellSimFactory(DockerMachineFactory):
     backend: Backend = Backend.DOCKER
 
     machines: list[Machine] = field(default_factory=list)
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        factory = ShellSimMachineFactory() if self.backend == Backend.SHELLSIM else DockerMachineFactory()
+        factory.check_environment(requirements, spec)
 
     async def create(self, spec):
         machine = await FixtureImageFactory().create(spec)
@@ -394,7 +400,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
         async def close(self):
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -530,7 +536,7 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
         async def close(self):
             await self.machine.close()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -726,7 +732,7 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(a
         environment_requirements=EnvironmentRequirements(
             command_semantics=command_semantics,
             docker_image=FIXTURE_IMAGE if command_semantics == CommandSemantics.LINUX_PROCESS else None,
-            capabilities=("shell", "filesystem"),
+            capabilities=("shell", "filesystem", "python"),
         ),
         grader=workspace_grader(
             argv=("sh", "/tests/grade.sh"),
@@ -755,7 +761,9 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(a
     simulator = RecordingShellSimFactory(backend=Backend.SHELLSIM)
     model = ReplayModel(
         [
-            shell_call("test ! -f /tests/expected && cp input answer && echo tainted > baseline"),
+            shell_call(
+                "python3 -c 'print(6 + 6)' && test ! -f /tests/expected && cp input answer && echo tainted > baseline"
+            ),
             {"role": "assistant", "content": "Done."},
         ]
     )
@@ -769,7 +777,9 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(a
         )
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
-    assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
+    tool_result = json.loads(model.requests[1].messages[-1]["content"])
+    assert tool_result["exit_code"] == 0
+    assert tool_result["stdout"] == "12\n"
     machines = [*factory.machines, *simulator.machines]
     assert len(machines) == 2
     for machine in machines:
@@ -1024,7 +1034,7 @@ async def test_late_creation_remains_owned_and_closes_after_cancellation(interru
         async def close(self):
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1072,7 +1082,7 @@ async def test_cleanup_outside_attempt_is_bounded_despite_repeated_cancellation(
                 await release.wait()
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1119,7 +1129,7 @@ async def test_startup_failure_cleanup_retains_primary_error_without_private_mes
             closed.set()
             raise OSError("private-cleanup-detail")
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1214,7 +1224,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
         async def close(self):
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1271,7 +1281,7 @@ async def test_execution_user_preflight_fails_during_start_before_model_inferenc
         async def close(self):
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1329,7 +1339,7 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
         async def close(self):
             await self.machine.close()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1438,7 +1448,7 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
         async def close(self):
             await self.machine.close()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):

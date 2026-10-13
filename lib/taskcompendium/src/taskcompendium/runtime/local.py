@@ -22,7 +22,11 @@ from typing import Any
 import verifyit
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.backends.local.python_environment import PythonEnvironment, build_python_environment
+from shellbox.backends.local.python_environment import (
+    DEFAULT_PYTHON_VERSION,
+    PythonEnvironment,
+    build_python_environment,
+)
 from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, NetworkPolicy
 
 from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements, require_resolved_environment
@@ -87,9 +91,6 @@ class _EnvironmentRecord(BaseModel):
     result: LockEnvironment
 
 
-LOCAL_PYTHON_VERSION = "3.12.12"
-"""The CPython installed for local graders; the host's uv must be able to download it."""
-
 COMPLETE_MARKER = ".complete"
 ENVIRONMENT_DIRECTORY = "env"
 RUNTIME_DIRECTORY = "runtime"
@@ -124,7 +125,7 @@ class LocalRuntime:
                 {
                     "lock_sha256": self.lock_sha256,
                     "data": sorted(self.data),
-                    "python": LOCAL_PYTHON_VERSION,
+                    "python": DEFAULT_PYTHON_VERSION,
                     "runtime": runtime_files(),
                 },
                 sort_keys=True,
@@ -171,7 +172,7 @@ class LocalRuntime:
         digest = hashlib.sha256(lock.read_bytes()).hexdigest()
         if digest != self.lock_sha256:
             raise RuntimeError(f"{self.lock_url} has SHA-256 {digest}; its artifact records {self.lock_sha256}")
-        python = str(build_python_environment(self.environment.root, lock, LOCAL_PYTHON_VERSION).python)
+        python = str(build_python_environment(self.environment.root, lock, DEFAULT_PYTHON_VERSION).python)
         # A built image copies each runtime package into its runtime directory and puts that on sys.path.
         runtime = self.root / RUNTIME_DIRECTORY
         for package in RUNTIME_PACKAGES:
@@ -207,15 +208,15 @@ def local_factory() -> MachineFactory:
 
 @dataclass(frozen=True)
 class LocalGraderMachines:
-    """Unbuilt local machines for lock-backed grading environments."""
+    """Unbuilt local grading machines with declared packages or a lock."""
 
     def identity(self) -> dict[str, Any]:
-        return {"backend": Backend.LOCAL.value, "python": LOCAL_PYTHON_VERSION}
+        return {"backend": Backend.LOCAL.value, "python": DEFAULT_PYTHON_VERSION}
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         """Return an unprepared bubblewrap spec; ``memory_mb`` is advisory."""
         require_resolved_environment(environment)
-        if environment.packages_lock is None:
-            raise ValueError("A local grader requires a packages lock")
+        if environment.packages_lock is None and environment.package_spec is None:
+            raise ValueError("A local grader requires a package spec or packages lock")
         spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE)
         return local_factory(), spec
