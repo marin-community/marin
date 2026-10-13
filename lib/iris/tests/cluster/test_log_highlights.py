@@ -102,3 +102,4 @@ _TRACEBACK = [
 )
 def test_failure_highlights_with_mixed_logs_returns_bounded_signal(lines, max_lines, expected):
     assert extract_failure_highlights(lines, max_lines=max_lines) == expected
+    assert extract_failure_highlights(iter(lines), max_lines=max_lines) == expected
