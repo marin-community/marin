@@ -5,6 +5,8 @@
 
 import hashlib
 import json
+import logging
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -16,8 +18,8 @@ import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.lowering import lower_task
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
-from shellbox.machine import MachineFactory
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.sampling import seeded_order
 
@@ -147,17 +149,22 @@ def build_real_dataset(
             identities.update(source_ids)
             training.extend(train)
             validation.extend(val)
-            evidence.append({
-                **asdict(source),
-                "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
-                "shard_sha256": hashes,
-            })
+            evidence.append(
+                {
+                    **asdict(source),
+                    "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                    "shard_sha256": hashes,
+                }
+            )
         except (ValueError, KeyError, TypeError, OSError, NotImplementedError) as error:
             # Source failures are reported together; successful sources are not published alone.
             failures.append({"source": source.root, "task_id": "<source>", "reason": str(error)})
     report = {"sources": evidence, "failures": failures, "seed": seed}
     (output / "conversion-report.json").write_text(json.dumps(report, indent=2))
     if failures:
+        summary = Counter(failure["reason"].splitlines()[0] for failure in failures)
+        for reason, count in summary.most_common(20):
+            logging.warning("Conversion failure: count=%d reason=%s", count, reason[:500])
         raise ValueError(f"Dataset publication rejected: {len(failures)} failures; see {output}/conversion-report.json")
     if not training or not validation:
         raise ValueError("Cannot publish empty real-task splits")

@@ -10,15 +10,25 @@ from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.spec import LoweredTaskSpec
 from rolloutengine.test_support import arithmetic_task, lowered, machine_runtime
 
-from experiments.post_training.smartie.data import AdmittedInput, build_real_dataset, convert_admitted_source, split_real_tasks
+from experiments.post_training.smartie.data import (
+    AdmittedInput,
+    build_real_dataset,
+    convert_admitted_source,
+    split_real_tasks,
+)
 
 
 def test_admitted_tasks_roundtrip_and_split_without_order_leakage():
     tasks = [arithmetic_task(id=f"task-{index}") for index in range(10)]
     rows = [{"task_id": task.id, "task_json": task.model_dump_json()} for task in tasks]
     manifest = {
-        "mode": "full", "status": "completed", "intended_use": "train", "unprocessed_rows": 0,
-        "source_dataset": "fixture", "source_revision": "1", "admission_counts": {"admitted": 10},
+        "mode": "full",
+        "status": "completed",
+        "intended_use": "train",
+        "unprocessed_rows": 0,
+        "source_dataset": "fixture",
+        "source_revision": "1",
+        "admission_counts": {"admitted": 10},
     }
     converted = convert_admitted_source(
         manifest, rows, machine=machine_runtime(), session=lowered(tasks[0]).session, factories={}
@@ -37,8 +47,13 @@ def test_admitted_tasks_roundtrip_and_split_without_order_leakage():
 def test_conversion_reports_all_invalid_rows_and_population_mismatch():
     task = arithmetic_task()
     manifest = {
-        "mode": "full", "status": "completed", "intended_use": "train", "unprocessed_rows": 0,
-        "source_dataset": "fixture", "source_revision": "1", "admission_counts": {"admitted": 4},
+        "mode": "full",
+        "status": "completed",
+        "intended_use": "train",
+        "unprocessed_rows": 0,
+        "source_dataset": "fixture",
+        "source_revision": "1",
+        "admission_counts": {"admitted": 4},
     }
     rows = [
         {"task_id": "bad-json", "task_json": "{}"},
@@ -52,8 +67,11 @@ def test_conversion_reports_all_invalid_rows_and_population_mismatch():
     assert len(result.tasks) == 1
     with pytest.raises(ValueError, match="completed FULL"):
         convert_admitted_source(
-            {**manifest, "mode": "quick"}, rows,
-            machine=machine_runtime(), session=lowered(task).session, factories={},
+            {**manifest, "mode": "quick"},
+            rows,
+            machine=machine_runtime(),
+            session=lowered(task).session,
+            factories={},
         )
 
 
@@ -70,16 +88,29 @@ def test_source_files_publish_native_splits_only_after_all_sources_pass(tmp_path
         if invalid:
             rows[0]["task_json"] = "{}"
         pq.write_table(pa.Table.from_pylist(rows), root / "final/part-00000.parquet")
-        (root / "manifest.json").write_text(json.dumps({
-            "mode": "full", "status": "completed", "intended_use": "train", "unprocessed_rows": 0,
-            "source_dataset": "fixture", "source_revision": "1", "admission_counts": {"admitted": 4},
-            "datasets": {"final": str(root / "final")},
-        }))
+        (root / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "mode": "full",
+                    "status": "completed",
+                    "intended_use": "train",
+                    "unprocessed_rows": 0,
+                    "source_dataset": "fixture",
+                    "source_revision": "1",
+                    "admission_counts": {"admitted": 4},
+                    "datasets": {"final": str(root / "final")},
+                }
+            )
+        )
         inputs.append(AdmittedInput(str(root), 4, 1))
     output = tmp_path / "dataset"
     kwargs = dict(
-        sources=tuple(inputs), output=StoragePath(str(output)), seed=42,
-        machine=machine_runtime(), session=lowered(arithmetic_task()).session, factories={},
+        sources=tuple(inputs),
+        output=StoragePath(str(output)),
+        seed=42,
+        machine=machine_runtime(),
+        session=lowered(arithmetic_task()).session,
+        factories={},
     )
     if invalid:
         with pytest.raises(ValueError, match="publication rejected"):
