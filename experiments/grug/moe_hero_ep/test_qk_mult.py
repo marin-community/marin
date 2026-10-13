@@ -85,7 +85,7 @@ def test_qk_mult_long_scale_scales_global_layers_and_leaves_local_layers_alone(r
     assert np.max(np.abs(np.asarray(global_scaled) - np.asarray(global_base))) > 1e-4
 
 
-def test_qk_mult_long_scale_of_one_keeps_the_model_output():
+def test_qk_mult_long_scale_reaches_the_logits_through_the_layer_scan():
     mesh = _explicit_mesh(1, 1, 1, 1, 1)
     base = dataclasses.replace(_tiny_config(), num_layers=2, rope_fused=True)
     tokens = jax.random.randint(jax.random.key(63), (2, 8), 0, base.vocab_size)
@@ -96,10 +96,8 @@ def test_qk_mult_long_scale_of_one_keeps_the_model_output():
 
     with set_mesh(mesh):
         default = logits(base)
-        one = logits(dataclasses.replace(base, qk_mult_long_scale=1.0))
         scaled = logits(dataclasses.replace(base, qk_mult_long_scale=1.3))
 
-    np.testing.assert_array_equal(one, default)
     # Layer 1 is global (global_every=2), so a long scale other than 1.0 must reach the logits.
     assert np.max(np.abs(np.asarray(scaled) - np.asarray(default))) > 1e-4
 

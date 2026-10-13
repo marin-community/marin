@@ -668,7 +668,7 @@ class CausalSelfAttention(eqx.Module):
                 k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
         # The long-layer scale is a second multiply, in the same order as june_tpu_67b_a2b and the
-        # vLLM GrugMoE backend. The default 1.0 skips it, so default configs lower as before.
+        # vLLM GrugMoE backend. A scale of 1.0 adds no op to the graph.
         if self.cfg.qk_mult_long_scale != 1.0:
             q = q * jnp.where(is_global, self.cfg.qk_mult_long_scale, 1.0)
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
