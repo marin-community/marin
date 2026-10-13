@@ -18,6 +18,7 @@ HANDOFF_CHECKPOINT=s3://hero-checkpoints/marin/grug/hero-fa4sm100-nomask-step146
 WANDB_FORK_FROM='hero-fa4sm100-nomask-step146k?_step=231463'
 SEQ_LEN=4096
 QK_MULT=1.3
+QK_MULT_LONG_SCALE=1.0
 CAPACITY_FACTOR=1.15
 # Step at which the lineage left 4K context and the parent's cumulative training FLOPs through it;
 # 0 while the run still trains at 4K. Later handoffs keep both.
@@ -168,6 +169,7 @@ IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-e
     --size d6144 \
     --seq-len "$SEQ_LEN" \
     --qk-mult "$QK_MULT" \
+    --qk-mult-long-scale "$QK_MULT_LONG_SCALE" \
     --capacity-factor "$CAPACITY_FACTOR" \
     "${context_args[@]}" \
     --version 2026.08.19.2 \

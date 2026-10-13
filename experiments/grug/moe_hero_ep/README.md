@@ -174,7 +174,8 @@ decay. Canonical eval stays at 4K packing, so the inherited `eval_dropless/*` se
 A switch is set in `trigger_hero.sh` with `SEQ_LEN`, `QK_MULT` (all attention layers),
 `CAPACITY_FACTOR`, `CONTEXT_SWITCH_STEP` (the step N at which the lineage left 4K), and
 `FLOPS_BASELINE_TOTAL` (the parent's `throughput/total_gflops` × 1e9 at W&B `_step` N−1, which
-counts N updates). Later handoffs keep the last two. Each Harrier bucket then skips the unread rest of
+counts N updates). Later handoffs keep the last two. `QK_MULT_LONG_SCALE` multiplies `QK_MULT` on
+the global layers only, so a global-only arm keeps `QK_MULT=1.3`. Each Harrier bucket then skips the unread rest of
 the shuffle window it was reading at the switch, about 52B tokens at a 216000 handoff, so no data
 repeats. Keep the data seed, component order, and token store unchanged. The QK and capacity values
 need measured evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed

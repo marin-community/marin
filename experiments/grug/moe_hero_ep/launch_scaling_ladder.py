@@ -159,6 +159,7 @@ def build_ladder_run(
     size: str,
     seq_len: int,
     qk_mult: float | None = None,
+    qk_mult_long_scale: float = 1.0,
     capacity_factor: float | None = None,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
@@ -216,6 +217,7 @@ def build_ladder_run(
     model = _ladder_model(size, seq_len)
     if qk_mult is not None:
         model = dataclasses.replace(model, qk_mult=qk_mult)
+    model = dataclasses.replace(model, qk_mult_long_scale=qk_mult_long_scale)
     if capacity_factor is not None:
         model = dataclasses.replace(model, capacity_factor=capacity_factor)
     if num_steps is None:
@@ -403,6 +405,13 @@ def build_ladder_run(
     help="Query/key attention multiplier on all layers. Required when changing the context length.",
 )
 @click.option(
+    "--qk-mult-long-scale",
+    type=click.FloatRange(min=0, min_open=True),
+    default=1.0,
+    show_default=True,
+    help="Extra multiplier on --qk-mult for the global (full-causal) layers only.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
@@ -455,6 +464,7 @@ def main(
     size: str,
     seq_len: int,
     qk_mult: float | None,
+    qk_mult_long_scale: float,
     capacity_factor: float | None,
     num_steps: int | None,
     checkpoint_every: int | None,
@@ -468,6 +478,7 @@ def main(
         size=size,
         seq_len=seq_len,
         qk_mult=qk_mult,
+        qk_mult_long_scale=qk_mult_long_scale,
         capacity_factor=capacity_factor,
         num_steps=num_steps,
         checkpoint_every=checkpoint_every,
