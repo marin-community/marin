@@ -2096,9 +2096,11 @@ class KimiDeltaAttention(eqx.Module):
         o = self.o_norm(o.astype(x.dtype))
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
         gate = jax.nn.sigmoid(fused["g"] if fused else _proj(cfg, x, self.w_g))
-        head_gate = jnp.mean(rearrange(gate.astype(jnp.float32), "... (n d) -> ... n d", d=head_dim), axis=-1)
-        head_keep = _head_gate_keep(cfg, head_gate, stats)
-        gate = gate * jnp.repeat(head_keep, head_dim, axis=-1).astype(gate.dtype)
+        gate_heads = rearrange(gate, "... (n d) -> ... n d", d=head_dim)
+        head_keep = _head_gate_keep(cfg, jnp.mean(gate_heads.astype(jnp.float32), axis=-1), stats)
+        if cfg.attn_head_skip:
+            gate_heads = gate_heads * head_keep[..., None].astype(gate.dtype)
+            gate = rearrange(gate_heads, "... n d -> ... (n d)")
         o = o * gate
         out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec())
         return out, stats
