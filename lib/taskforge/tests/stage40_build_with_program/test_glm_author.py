@@ -8,7 +8,7 @@ from taskforge.llm.recording import CallLedger
 from taskforge.llm.structured import schema_instruction
 from taskforge.stage30_author.author import PROGRAM_FILE, Revision, RevisionKind
 from taskforge.stage30_author.loader import load_program_source
-from taskforge.stage40_build_with_program.glm_author import AUTHOR_DIR, GlmAuthor, ProgramSubmission
+from taskforge.stage40_build_with_program.glm_author import AUTHOR_DIR, NOTES_LIMIT, GlmAuthor, ProgramSubmission
 from tests.stage30_author.programs import PROGRAM
 from tests.stage40_build_with_program.conftest import WORKPIECE, SAMPLING
 
@@ -32,6 +32,9 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     assert (item_dir / PROGRAM_FILE).read_text() == PROGRAM
     assert "may not import 'os'" in fake_glm.requests[1]["messages"][-2]["content"]
     assert json.loads((item_dir / AUTHOR_DIR / "00" / "request.json").read_text()) == fake_glm.requests[0]["messages"]
+    schema = fake_glm.requests[0]["response_format"]["json_schema"]["schema"]
+    assert list(schema["properties"]) == ["notes", "source"]
+    assert schema["properties"]["notes"]["maxLength"] == NOTES_LIMIT
 
 
 async def test_a_revision_continues_from_the_program_the_item_holds(proposal, glm_client, fake_glm, ledger, tmp_path):
