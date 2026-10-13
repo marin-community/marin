@@ -363,8 +363,9 @@ class MoeDynamicK(StrEnum):
     """``num_experts_per_token`` for the ``moe_dynamic_frac`` of tokens whose attention output has the largest
     norm in the batch, else ``moe_k_low``."""
     RELU = "relu"
-    """Keep the routed slots whose router logit is positive (zero to ``num_experts_per_token`` experts); an L1
-    penalty ``moe_relu_l1 * mean_t sum_e relu(logit)`` on the router logits pushes the count down."""
+    """Combine weight ``relu(logit + moe_relu_offset)`` (unnormalized, scaled so the sum is about
+    ``routing_renorm_sum`` at init), so a token keeps zero to ``num_experts_per_token`` experts; an L1 penalty
+    ``moe_relu_l1 * mean_t sum_e relu(logit + offset)`` on the router logits pushes the count down."""
     EPS = "eps"
     """Skip the routed slots whose combine weight is below ``moe_eps`` times the routed total (no renormalization)."""
     THRESHOLD = "threshold"
@@ -2636,7 +2637,10 @@ class MoEMLP(eqx.Module):
         if moe_k_keep is not None:
             eps_layer = moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.EPS
             if relu_layer:
-                keep = unbiased_topk + self.cfg.moe_relu_offset > 0
+                # ReMoE-style: the ReLU itself is the (unnormalized) combine weight, so pushing logits down costs loss.
+                shifted = unbiased_topk + self.cfg.moe_relu_offset
+                keep = shifted > 0
+                combine_weights_f = jax.nn.relu(shifted) * (renorm_sum / (k * max(self.cfg.moe_relu_offset, 1.0)))
             elif moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.THRESHOLD:
                 flat = reshard(jax.lax.stop_gradient(unbiased_topk), P(None, None))
                 keep = unbiased_topk >= jnp.quantile(flat, 1.0 - self.cfg.moe_dynamic_frac)
@@ -2647,7 +2651,7 @@ class MoEMLP(eqx.Module):
                 keep = slot < rearrange(moe_k_keep, "b s -> (b s)")[:, None]
             combine_weights_f = jnp.where(keep, combine_weights_f, 0.0)
             renorms = (RouterCombine.SOFTMAX_RENORM, RouterCombine.SIGMOID_RENORM, RouterCombine.SQRT_SOFTPLUS_RENORM)
-            if self.cfg.router_combine in renorms and not eps_layer:
+            if self.cfg.router_combine in renorms and not (eps_layer or relu_layer):
                 denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
                 combine_weights_f = combine_weights_f * (renorm_sum / (denom + 1e-9))
             active_k = jnp.mean(jnp.sum(keep.astype(jnp.float32), axis=-1))
