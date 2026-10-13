@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from transformers import PretrainedConfig
 from haliax.partitioning import ResourceAxis
 from haliax.state_dict import from_torch_compatible_state_dict
 from jax import random
@@ -17,13 +18,13 @@ from jax.sharding import Mesh
 
 from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel
 from levanter.utils.activation import ActivationFunctionEnum
-from levanter.testing.vlm import get_single_image
+from PIL import Image
 from levanter.testing.helpers import use_test_mesh
 
 from levanter.testing.helpers import skip_if_no_torch
 
 
-def _hf_siglip2_vision_config():
+def _hf_siglip2_vision_config() -> PretrainedConfig:
     """Return a tiny Siglip2VisionConfig for testing."""
     from transformers import (  # noqa: PLC0415  # optional reference
         Siglip2VisionConfig as HfSiglip2VisionConfig,
@@ -44,7 +45,7 @@ def _hf_siglip2_vision_config():
 
 
 @skip_if_no_torch
-def test_siglip2_vision_from_hf_config():
+def test_siglip2_vision_from_hf_config() -> None:
     """Test conversion from HuggingFace config to Levanter config."""
     hf_config = _hf_siglip2_vision_config()
     config = Siglip2VisionConfig.from_hf_config(hf_config)
@@ -57,7 +58,7 @@ def test_siglip2_vision_from_hf_config():
 
 
 @skip_if_no_torch
-def test_siglip2_vision_to_hf_config():
+def test_siglip2_vision_to_hf_config() -> None:
     """Test conversion from Levanter config to HuggingFace config."""
     config = Siglip2VisionConfig(
         hidden_size=64,
@@ -79,7 +80,7 @@ def test_siglip2_vision_to_hf_config():
 
 
 @skip_if_no_torch
-def test_siglip2_vision_config_roundtrip():
+def test_siglip2_vision_config_roundtrip() -> None:
     """Test that converting HF -> Levanter -> HF preserves the config."""
     hf_config_1 = _hf_siglip2_vision_config()
     levanter_config = Siglip2VisionConfig.from_hf_config(hf_config_1)
@@ -93,7 +94,7 @@ def test_siglip2_vision_config_roundtrip():
 
 
 @skip_if_no_torch
-def test_siglip2_vision_activation_function_mapping():
+def test_siglip2_vision_activation_function_mapping() -> None:
     """Test that various activation functions are correctly mapped."""
     from transformers import (  # noqa: PLC0415  # optional reference
         Siglip2VisionConfig as HfSiglip2VisionConfig,
@@ -112,7 +113,7 @@ def test_siglip2_vision_activation_function_mapping():
 
 
 @skip_if_no_torch
-def test_siglip2_vision_roundtrip():
+def test_siglip2_vision_roundtrip() -> None:
     """Test loading HuggingFace weights into Levanter and roundtrip conversion."""
     import torch  # noqa: PLC0415  # optional reference
     from transformers import (  # noqa: PLC0415  # optional reference
@@ -191,7 +192,7 @@ def test_siglip2_vision_roundtrip():
 
 
 @skip_if_no_torch
-def test_siglip2_vision_real_image():
+def test_siglip2_vision_real_image() -> None:
     """Test Siglip2 vision model with real image using HF processor."""
     import torch  # noqa: PLC0415  # optional reference
     from transformers import (  # noqa: PLC0415  # optional reference
@@ -201,7 +202,7 @@ def test_siglip2_vision_real_image():
 
     jax.config.update("jax_default_matmul_precision", "float32")
 
-    image = get_single_image()
+    image = Image.fromarray(np.random.default_rng(0).integers(0, 256, (224, 224, 3), dtype=np.uint8))
     model_name = "google/siglip2-so400m-patch16-naflex"
 
     try:

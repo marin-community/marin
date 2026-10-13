@@ -1,6 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 
 import numpy as np
 from haliax.state_dict import to_state_dict as eqx_to_state_dict, with_prefix
@@ -10,8 +13,9 @@ from haliax._src.state_dict import default_eqx_module_from_state_dict
 
 
 import logging
+from jaxtyping import PRNGKeyArray
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple, Type
+from typing import Self, Callable, Dict, Optional, Tuple, Type
 
 import jax
 from levanter.models.vision_model import VisionEncoderConfig
@@ -263,11 +267,6 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
         return Axis(name="num_patches", size=self.num_patches)
 
 
-# =====================
-# Siglip2 MLP
-# =====================
-
-
 class Siglip2MLP(eqx.Module):
     """
     MLP module for Siglip2 Vision Transformer.
@@ -280,7 +279,7 @@ class Siglip2MLP(eqx.Module):
     act: Callable = eqx.field(static=True)
 
     @staticmethod
-    def init(Embed: Axis, Mlp: Axis, activation_fn: ActivationFunctionEnum, *, key) -> "Siglip2MLP":
+    def init(Embed: Axis, Mlp: Axis, activation_fn: ActivationFunctionEnum, *, key: PRNGKeyArray) -> "Siglip2MLP":
         """
         Initialize Siglip2MLP.
 
@@ -308,7 +307,7 @@ class Siglip2MLP(eqx.Module):
         return Siglip2MLP(fc1, fc2, activation_fn_callable)
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, *, key: PRNGKeyArray | None = None) -> NamedArray:
         """
         Forward pass through MLP.
 
@@ -323,11 +322,6 @@ class Siglip2MLP(eqx.Module):
         x = self.act(x)
         x = self.fc2(x)
         return x
-
-
-# =====================
-# Siglip2 Attention
-# =====================
 
 
 class Siglip2Attention(eqx.Module):
@@ -346,7 +340,7 @@ class Siglip2Attention(eqx.Module):
     inference: bool  # Whether to run in inference mode (disables dropout)
 
     @staticmethod
-    def init(config: Siglip2VisionConfig, *, key) -> "Siglip2Attention":
+    def init(config: Siglip2VisionConfig, *, key: PRNGKeyArray) -> "Siglip2Attention":
         """
         Initialize Siglip2Attention.
 
@@ -378,7 +372,7 @@ class Siglip2Attention(eqx.Module):
         x: NamedArray,
         mask: Optional[AttentionMask] = None,
         *,
-        key=None,
+        key: PRNGKeyArray | None = None,
     ) -> NamedArray:
         """
         Forward pass through attention.
@@ -480,11 +474,6 @@ class Siglip2Attention(eqx.Module):
         return self.out_proj(attn_output.astype(x.dtype))
 
 
-# =====================
-# Siglip2 Encoder Layer
-# =====================
-
-
 class Siglip2EncoderLayer(eqx.Module):
     """
     Siglip2 Encoder Layer.
@@ -502,7 +491,7 @@ class Siglip2EncoderLayer(eqx.Module):
     mlp: Siglip2MLP  # MLP module
 
     @staticmethod
-    def init(config: Siglip2VisionConfig, *, key) -> "Siglip2EncoderLayer":
+    def init(config: Siglip2VisionConfig, *, key: PRNGKeyArray) -> "Siglip2EncoderLayer":
         """
         Initialize Siglip2EncoderLayer.
 
@@ -531,7 +520,7 @@ class Siglip2EncoderLayer(eqx.Module):
         x: NamedArray,
         mask: Optional[AttentionMask] = None,
         *,
-        key=None,
+        key: PRNGKeyArray | None = None,
     ) -> NamedArray:
         """
         Forward pass through encoder layer.
@@ -561,11 +550,6 @@ class Siglip2EncoderLayer(eqx.Module):
         return x
 
 
-# =====================
-# Siglip2 Vision Embeddings
-# =====================
-
-
 class Siglip2VisionEmbeddings(eqx.Module):
     """
     Vision embeddings for Siglip2.
@@ -579,7 +563,7 @@ class Siglip2VisionEmbeddings(eqx.Module):
     position_embedding: hnn.Embedding
 
     @staticmethod
-    def init(config: Siglip2VisionConfig, *, key) -> "Siglip2VisionEmbeddings":
+    def init(config: Siglip2VisionConfig, *, key: PRNGKeyArray) -> "Siglip2VisionEmbeddings":
         """
         Initialize Siglip2VisionEmbeddings.
 
@@ -616,7 +600,9 @@ class Siglip2VisionEmbeddings(eqx.Module):
         return Siglip2VisionEmbeddings(config, patch_embedding, position_embedding)
 
     @named_call
-    def __call__(self, pixel_values: NamedArray, spatial_shapes=None, *, key=None) -> NamedArray:
+    def __call__(
+        self, pixel_values: NamedArray, spatial_shapes: np.ndarray | None = None, *, key: PRNGKeyArray | None = None
+    ) -> NamedArray:
         """
         Forward pass through vision embeddings.
 
@@ -711,11 +697,6 @@ class Siglip2VisionEmbeddings(eqx.Module):
         return embeddings
 
 
-# =====================
-# Siglip2 Vision Transformer
-# =====================
-
-
 class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
     """
     Siglip2 Vision Transformer.
@@ -736,7 +717,7 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
         return {"layers": "encoder.layers"}  # HF uses encoder.layers instead of layers
 
     @staticmethod
-    def init(config: Siglip2VisionConfig, *, key) -> "Siglip2VisionTransformer":
+    def init(config: Siglip2VisionConfig, *, key: PRNGKeyArray) -> "Siglip2VisionTransformer":
         """
         Initialize Siglip2VisionTransformer.
 
@@ -769,10 +750,10 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
         self,
         pixel_values: NamedArray,
         mask: Optional[AttentionMask] = None,
-        spatial_shapes=None,
+        spatial_shapes: np.ndarray | None = None,
         output_hidden_states: bool = False,
         *,
-        key=None,
+        key: PRNGKeyArray | None = None,
     ) -> Siglip2VisionModelOutput:
         """
         Forward pass through vision transformer.
@@ -805,7 +786,12 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
             # Use scan_via to collect hidden states from each layer
             all_hidden_states = [hidden_states]  # Start with embeddings
 
-            def apply_layer(block, carry, mask_arg, key_arg):
+            def apply_layer(
+                block: Siglip2EncoderLayer,
+                carry: NamedArray,
+                mask_arg: AttentionMask | NamedArray | None,
+                key_arg: PRNGKeyArray | None,
+            ) -> tuple[NamedArray, NamedArray]:
                 """Apply a single layer and return (new_carry, output_to_collect)"""
                 new_carry = block(carry, mask_arg, key=key_arg)
                 return new_carry, new_carry
@@ -830,11 +816,6 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
         return Siglip2VisionModelOutput(last_hidden_state=last_hidden_state, hidden_states=result_hidden_states)
 
 
-# =====================
-# Siglip2 Multihead Attention Pooling Head
-# =====================
-
-
 class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
     """
     Multihead attention pooling head for Siglip2.
@@ -854,7 +835,7 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
     inference: bool  # Whether to run in inference mode (disables dropout)
 
     @staticmethod
-    def init(config: Siglip2VisionConfig, *, key) -> "Siglip2MultiheadAttentionPoolingHead":
+    def init(config: Siglip2VisionConfig, *, key: PRNGKeyArray) -> "Siglip2MultiheadAttentionPoolingHead":
         """
         Initialize Siglip2MultiheadAttentionPoolingHead.
 
@@ -930,7 +911,7 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
         hidden_states: NamedArray,
         mask: Optional[AttentionMask] = None,
         *,
-        key=None,
+        key: PRNGKeyArray | None = None,
     ) -> NamedArray:
         """
         Forward pass through attention pooling head.
@@ -1049,7 +1030,7 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
 
         return state_dict
 
-    def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None):
+    def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None) -> Self:
         """Load from HuggingFace state dict format with combined in_proj."""
 
         # Load probe
@@ -1129,11 +1110,6 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
         )
 
 
-# =====================
-# Siglip2 Vision Model (HF-compatible wrapper)
-# =====================
-
-
 class Siglip2VisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializationMixin[Siglip2VisionConfig]):
     """
     Siglip2 Vision Model with HuggingFace compatibility.
@@ -1154,12 +1130,12 @@ class Siglip2VisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializat
         # We use a dummy axis for compatibility
         return Axis(name="vocab", size=1)
 
-    def get_hf_config(self):
+    def get_hf_config(self) -> HfConfig:
         """Override to avoid requiring vocab_size for vision models."""
         return self.config.to_hf_config()
 
     @classmethod
-    def init(cls, Vocab: Axis, config: Siglip2VisionConfig, *, key) -> "Siglip2VisionModel":
+    def init(cls, Vocab: Axis, config: Siglip2VisionConfig, *, key: PRNGKeyArray) -> "Siglip2VisionModel":
         """
         Initialize Siglip2VisionModel.
 
@@ -1179,10 +1155,10 @@ class Siglip2VisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializat
         self,
         pixel_values: NamedArray,
         mask: Optional[AttentionMask] = None,
-        spatial_shapes=None,
+        spatial_shapes: np.ndarray | None = None,
         output_hidden_states: bool = False,
         *,
-        key=None,
+        key: PRNGKeyArray | None = None,
     ) -> Siglip2VisionModelOutput:
         """
         Forward pass through vision model.
@@ -1205,7 +1181,7 @@ class Siglip2VisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializat
         """Map Levanter field names to HuggingFace state dict keys."""
         return {}  # Keep vision_model prefix as-is (matches HF structure)
 
-    def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None):
+    def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None) -> Self:
         """Load from state dict."""
 
         # Use default loading

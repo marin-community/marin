@@ -15,7 +15,7 @@ from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel
 
 
 @pytest.mark.parametrize("encoder", ["siglip", "siglip2"])
-def test_vision_checkpoint_roundtrip_preserves_jitted_predictions(encoder):
+def test_vision_checkpoint_roundtrip_preserves_jitted_predictions(encoder: str) -> None:
     parameters = dict(hidden_size=16, intermediate_size=32, num_hidden_layers=1, num_attention_heads=2, patch_size=16)
     batch = hax.Axis("batch", 1)
     if encoder == "siglip":
@@ -36,7 +36,7 @@ def test_vision_checkpoint_roundtrip_preserves_jitted_predictions(encoder):
     restored = from_torch_compatible_state_dict(other, to_torch_compatible_state_dict(model))
     np.testing.assert_allclose(forward(restored), expected, rtol=1e-5, atol=1e-5)
 
-    def objective(network):
+    def objective(network: SiglipVisionModel | Siglip2VisionModel) -> jax.Array:
         features = network(pixels).last_hidden_state.array
         return jnp.sum(features * jnp.arange(features.shape[-1]))
 
@@ -47,7 +47,7 @@ def test_vision_checkpoint_roundtrip_preserves_jitted_predictions(encoder):
 
 
 @pytest.mark.asyncio
-async def test_image_repetition_crosses_epoch_boundary_and_stops():
+async def test_image_repetition_crosses_epoch_boundary_and_stops() -> None:
     source = ListAsyncDataset([{"text": "first"}, {"text": "second"}])
     repeated = RepeatedImageDataset(source, epochs=2)
     assert await repeated.async_len() == 4

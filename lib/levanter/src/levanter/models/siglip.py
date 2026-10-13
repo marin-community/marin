@@ -1,13 +1,17 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 
 import numpy as np
 from haliax._src.state_dict import default_eqx_module_from_state_dict
 
 
+from jaxtyping import PRNGKeyArray
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple, Type
+from typing import Self, Callable, Dict, Optional, Tuple, Type
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 from levanter.models.vision_model import VisionEncoderConfig
@@ -29,11 +33,6 @@ from haliax.state_dict import ModuleWithStateDictSerialization  # noqa: E402
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, ModelWithHfSerializationMixin  # noqa: E402
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention  # noqa: E402
-
-
-# =====================
-# SigLIP Vision Model Output
-# =====================
 
 
 @dataclass
@@ -262,11 +261,6 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
         return Axis(name="num_patches", size=num_patches)
 
 
-# =====================
-# SigLIP MLP
-# =====================
-
-
 class SiglipMLP(eqx.Module):
     """
     MLP module for SigLIP Vision Transformer.
@@ -279,7 +273,7 @@ class SiglipMLP(eqx.Module):
     act: Callable = eqx.field(static=True)
 
     @staticmethod
-    def init(Embed: Axis, Mlp: Axis, activation_fn: ActivationFunctionEnum, *, key) -> "SiglipMLP":
+    def init(Embed: Axis, Mlp: Axis, activation_fn: ActivationFunctionEnum, *, key: PRNGKeyArray) -> "SiglipMLP":
         """
         Initialize SiglipMLP.
 
@@ -307,7 +301,7 @@ class SiglipMLP(eqx.Module):
         return SiglipMLP(fc1, fc2, activation_fn_callable)
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, *, key: PRNGKeyArray | None = None) -> NamedArray:
         """
         Forward pass through MLP.
 
@@ -322,11 +316,6 @@ class SiglipMLP(eqx.Module):
         x = self.act(x)
         x = self.fc2(x)
         return x
-
-
-# =====================
-# SigLIP Attention
-# =====================
 
 
 class SiglipAttention(eqx.Module):
@@ -344,7 +333,7 @@ class SiglipAttention(eqx.Module):
     out_proj: hnn.Linear  # Output projection from (Heads, HeadSize) to Embed
 
     @staticmethod
-    def init(config: SiglipVisionConfig, *, key) -> "SiglipAttention":
+    def init(config: SiglipVisionConfig, *, key: PRNGKeyArray) -> "SiglipAttention":
         """
         Initialize SiglipAttention.
 
@@ -376,7 +365,7 @@ class SiglipAttention(eqx.Module):
         x: NamedArray,
         mask: Optional[AttentionMask] = None,
         *,
-        key=None,
+        key: PRNGKeyArray | None = None,
     ) -> NamedArray:
         """
         Forward pass through attention.
@@ -479,11 +468,6 @@ class SiglipAttention(eqx.Module):
         return self.out_proj(attn_output.astype(x.dtype))
 
 
-# =====================
-# SigLIP Encoder Layer
-# =====================
-
-
 class SiglipEncoderLayer(eqx.Module):
     """
     SigLIP Encoder Layer.
@@ -501,7 +485,7 @@ class SiglipEncoderLayer(eqx.Module):
     mlp: SiglipMLP  # MLP module
 
     @staticmethod
-    def init(config: SiglipVisionConfig, *, key) -> "SiglipEncoderLayer":
+    def init(config: SiglipVisionConfig, *, key: PRNGKeyArray) -> "SiglipEncoderLayer":
         """
         Initialize SiglipEncoderLayer.
 
@@ -530,7 +514,7 @@ class SiglipEncoderLayer(eqx.Module):
         x: NamedArray,
         mask: Optional[AttentionMask] = None,
         *,
-        key=None,
+        key: PRNGKeyArray | None = None,
     ) -> NamedArray:
         """
         Forward pass through encoder layer.
@@ -561,11 +545,6 @@ class SiglipEncoderLayer(eqx.Module):
         return x
 
 
-# =====================
-# SigLIP Vision Embeddings
-# =====================
-
-
 class SiglipVisionEmbeddings(eqx.Module):
     """
     Vision embeddings for SigLIP.
@@ -579,7 +558,7 @@ class SiglipVisionEmbeddings(eqx.Module):
     position_embedding: hnn.Embedding
 
     @staticmethod
-    def init(config: SiglipVisionConfig, *, key) -> "SiglipVisionEmbeddings":
+    def init(config: SiglipVisionConfig, *, key: PRNGKeyArray) -> "SiglipVisionEmbeddings":
         """
         Initialize SiglipVisionEmbeddings.
 
@@ -625,7 +604,7 @@ class SiglipVisionEmbeddings(eqx.Module):
         return SiglipVisionEmbeddings(config, patch_embedding, position_embedding)
 
     @named_call
-    def __call__(self, pixel_values: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, pixel_values: NamedArray, *, key: PRNGKeyArray | None = None) -> NamedArray:
         """
         Forward pass through vision embeddings.
 
@@ -667,11 +646,6 @@ class SiglipVisionEmbeddings(eqx.Module):
         return patch_embeds + pos_embeds
 
 
-# =====================
-# SigLIP Vision Transformer
-# =====================
-
-
 class SiglipVisionTransformer(ModuleWithStateDictSerialization):
     """
     SigLIP Vision Transformer.
@@ -692,7 +666,7 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
         return {"layers": "encoder.layers"}  # HF uses encoder.layers instead of layers
 
     @staticmethod
-    def init(config: SiglipVisionConfig, *, key) -> "SiglipVisionTransformer":
+    def init(config: SiglipVisionConfig, *, key: PRNGKeyArray) -> "SiglipVisionTransformer":
         """
         Initialize SiglipVisionTransformer.
 
@@ -727,7 +701,7 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
         mask: Optional[AttentionMask] = None,
         output_hidden_states: bool = False,
         *,
-        key=None,
+        key: PRNGKeyArray | None = None,
     ) -> SiglipVisionModelOutput:
         """
         Forward pass through vision transformer.
@@ -759,7 +733,12 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
             # Use scan_via to collect hidden states from each layer
             all_hidden_states = [hidden_states]  # Start with embeddings
 
-            def apply_layer(block, carry, mask_arg, key_arg):
+            def apply_layer(
+                block: SiglipEncoderLayer,
+                carry: NamedArray,
+                mask_arg: AttentionMask | NamedArray | None,
+                key_arg: PRNGKeyArray | None,
+            ) -> tuple[NamedArray, NamedArray]:
                 """Apply a single layer and return (new_carry, output_to_collect)"""
                 new_carry = block(carry, mask_arg, key=key_arg)
                 return new_carry, new_carry
@@ -784,11 +763,6 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
         return SiglipVisionModelOutput(last_hidden_state=last_hidden_state, hidden_states=result_hidden_states)
 
 
-# =====================
-# SigLIP Vision Model (HF-compatible wrapper)
-# =====================
-
-
 class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializationMixin[SiglipVisionConfig]):
     """
     SigLIP Vision Model with HuggingFace compatibility.
@@ -809,12 +783,12 @@ class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializati
         # We use a dummy axis for compatibility
         return Axis(name="vocab", size=1)
 
-    def get_hf_config(self):
+    def get_hf_config(self) -> HfConfig:
         """Override to avoid requiring vocab_size for vision models."""
         return self.config.to_hf_config()
 
     @classmethod
-    def init(cls, Vocab: Axis, config: SiglipVisionConfig, *, key) -> "SiglipVisionModel":
+    def init(cls, Vocab: Axis, config: SiglipVisionConfig, *, key: PRNGKeyArray) -> "SiglipVisionModel":
         """
         Initialize SiglipVisionModel.
 
@@ -836,7 +810,7 @@ class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializati
         mask: Optional[AttentionMask] = None,
         output_hidden_states: bool = False,
         *,
-        key=None,
+        key: PRNGKeyArray | None = None,
     ) -> SiglipVisionModelOutput:
         """
         Forward pass through vision model.
@@ -856,7 +830,7 @@ class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializati
         """Map Levanter field names to HuggingFace state dict keys."""
         return {}  # Keep vision_model prefix as-is (matches HF structure)
 
-    def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None):
+    def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None) -> Self:
         """Load from state dict."""
 
         # Use default loading
