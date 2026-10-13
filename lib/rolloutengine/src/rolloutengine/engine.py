@@ -4,10 +4,11 @@
 """Rollout iteration, cancellation, and model execution."""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, replace
 from functools import partial
+from typing import Any
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -59,7 +60,7 @@ class ShellboxRolloutEngine:
         factories: Mapping[str, MachineFactory],
         *,
         sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
-        agent: Callable[[Machine | None, AgentCompletion], Awaitable[None]] | None = None,
+        agent: Callable[[Machine | None, AgentCompletion], Coroutine[Any, Any, None]] | None = None,
     ):
         self.model = model
         self.factories = factories
@@ -146,6 +147,7 @@ class ShellboxRolloutEngine:
             raise RolloutInterrupted(completed, RolloutOperation.PREPARE) from error
         messages = list(start.messages)
         options = start.options
+        replay_prompt = start.prompt_token_ids
         completed = replace(completed, messages=tuple(messages))
         prompt: tuple[int, ...] = ()
         tokens: tuple[int, ...] = ()
@@ -167,7 +169,7 @@ class ShellboxRolloutEngine:
                                     options,
                                     tokens,
                                     assistant_index,
-                                    start.prompt_token_ids if index == 0 else None,
+                                    replay_prompt,
                                 )
                             )
                     except GenerationLimitReached as limit:
@@ -192,13 +194,10 @@ class ShellboxRolloutEngine:
                         raise RolloutContractError("Model logprobs must align with response tokens")
                     if not turn.response_token_ids:
                         raise RolloutContractError("Model response contains no token evidence")
+                    if replay_prompt is not None and turn.prompt_token_ids != replay_prompt:
+                        raise RolloutContractError("Model transport changed the replay token prefix")
+                    replay_prompt = None
                     if assistant_index is None:
-                        if (
-                            index == 0
-                            and start.prompt_token_ids is not None
-                            and turn.prompt_token_ids != start.prompt_token_ids
-                        ):
-                            raise RolloutContractError("Model transport changed the initial replay token prefix")
                         prompt = turn.prompt_token_ids
                         tokens = prompt
                     if turn.prompt_token_ids[: len(tokens)] != tokens:
@@ -246,8 +245,11 @@ class ShellboxRolloutEngine:
                     stop_reason = turn.stop_reason
                     if transition.next_options is not None:
                         options = transition.next_options
+                    if transition.next_prompt_token_ids is not None and transition.reset_conversation is None:
+                        raise RolloutContractError("Exact next-turn tokens require a conversation reset")
                     if transition.reset_conversation is not None and index + 1 < limits.max_turns:
                         messages = list(transition.reset_conversation)
+                        replay_prompt = transition.next_prompt_token_ids
                         prompt = tokens = masks = ()
                         logprobs = ()
                         steps.clear()

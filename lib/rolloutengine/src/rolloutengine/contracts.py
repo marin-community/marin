@@ -119,6 +119,7 @@ class Transition:
     grade: GradeResult | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
     next_options: dict[str, Any] | None = None
+    next_prompt_token_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)

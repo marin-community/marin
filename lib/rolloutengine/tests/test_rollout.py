@@ -231,6 +231,41 @@ async def test_session_replaces_model_options_after_conversation_reset(next_opti
 
 
 @pytest.mark.parametrize("alter_prefix", [False, True])
+async def test_external_agent_preserves_exact_tokens_after_history_reset(alter_prefix):
+    requests = []
+    prefixes = [(10, 11), (90, 91, 92)]
+
+    async def agent(complete):
+        for index, prefix in enumerate(prefixes):
+            await complete(SessionStart(({"role": "user", "content": f"turn {index}"},), {}, prefix))
+
+    async def model(request):
+        index = len(requests)
+        requests.append(request)
+        served = prefixes[index]
+        if index == 1 and alter_prefix:
+            served = (90, 91, 99)
+        return ModelTurn({"role": "assistant", "content": "done"}, served, (5,), (-0.1,), "stop")
+
+    async def grade(_messages, *, stop_reason):
+        return GradeResult(Outcome.GRADED, 1.0)
+
+    runner = ShellboxRolloutEngine(
+        model, {}, sessions={"agent": lambda _task, _machine: ExternalAgentSession(agent, grade)}
+    )
+    task = lowered(arithmetic_task(), task_session="agent")
+    if alter_prefix:
+        with pytest.raises(RolloutContractError, match="replay token prefix"):
+            await runner.run(task)
+    else:
+        result = await runner.run(task)
+        assert result.prompt_token_ids == prefixes[1]
+        assert result.response_token_ids == (5,)
+        assert result.loss_mask == (1,)
+    assert [request.prompt_token_ids for request in requests] == prefixes
+
+
+@pytest.mark.parametrize("alter_prefix", [False, True])
 async def test_session_replays_exact_initial_tokens_and_rejects_transport_changes(alter_prefix):
     prefix = (128000, 42, 128005)
 

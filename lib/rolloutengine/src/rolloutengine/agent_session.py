@@ -5,7 +5,7 @@
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -41,7 +41,7 @@ class ExternalAgentSession:
 
     def __init__(
         self,
-        run_agent: Callable[[AgentCompletion], Awaitable[None]],
+        run_agent: Callable[[AgentCompletion], Coroutine[Any, Any, None]],
         grader: AgentGrader,
     ):
         self.run_agent = run_agent
@@ -100,8 +100,17 @@ class ExternalAgentSession:
         prefix = (*previous.request.messages, turn.message)
         # Native agents may compact history or change the available tools.
         # Both require a new exact-token prefix instead of appending observations.
-        if request.messages[: len(prefix)] != prefix or request.options != previous.request.options:
-            return Transition(done=False, reset_conversation=request.messages, next_options=request.options)
+        if (
+            request.prompt_token_ids is not None
+            or request.messages[: len(prefix)] != prefix
+            or request.options != previous.request.options
+        ):
+            return Transition(
+                done=False,
+                reset_conversation=request.messages,
+                next_options=request.options,
+                next_prompt_token_ids=request.prompt_token_ids,
+            )
         return Transition(done=False, observations=request.messages[len(prefix) :])
 
     async def grade(self, messages: tuple[dict[str, Any], ...], *, stop_reason: str) -> GradeResult:
