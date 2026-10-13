@@ -11,6 +11,7 @@ import pytest
 from levanter.data.text.datasets import BlockShuffleConfig
 from marin.execution.lazy import StepContext
 
+from experiments.grug.moe_hero_ep import launch_scaling_ladder
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HarrierContextPhase
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
@@ -180,13 +181,22 @@ def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
     ]
 
 
+def _set_hero_seq_len(monkeypatch, seq_len):
+    # A context-switch branch sets HERO_MODEL.max_seq_len, which reaches the launcher as HERO_MODEL_CONFIG.
+    monkeypatch.setattr(
+        launch_scaling_ladder,
+        "HERO_MODEL_CONFIG",
+        dataclasses.replace(launch_scaling_ladder.HERO_MODEL_CONFIG, max_seq_len=seq_len),
+    )
+
+
 @pytest.mark.parametrize("seq_len", [8192, 16384])
-def test_context_switch_preserves_optimizer(seq_len):
+def test_context_switch_preserves_optimizer(monkeypatch, seq_len):
     parent_step = build_ladder_run(run_id="context-parent", size="d6144", version="dev")
+    _set_hero_seq_len(monkeypatch, seq_len)
     child_step = build_ladder_run(
         run_id="context-child",
         size="d6144",
-        seq_len=seq_len,
         qk_mult=1.48,
         version="dev",
         context_phases=(HarrierContextPhase(end_step=231_600, seq_len=4096),),
@@ -199,13 +209,13 @@ def test_context_switch_preserves_optimizer(seq_len):
     assert child.optimizer == parent.optimizer
 
 
-def test_hero_context_history_rebuilds_the_prior_phases_it_trained_with():
+def test_hero_context_history_rebuilds_the_prior_phases_it_trained_with(monkeypatch):
     # Each launch re-derives the earlier phases' stages and shuffle from the current code, so a change to
     # them would silently move the data offsets of a run that has already switched context.
+    _set_hero_seq_len(monkeypatch, 65536)
     step = build_ladder_run(
         run_id="context-history",
         size="d6144",
-        seq_len=65536,
         qk_mult=1.6,
         version="dev",
         context_phases=(

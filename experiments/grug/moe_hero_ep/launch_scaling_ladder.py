@@ -184,10 +184,8 @@ def build_ladder_run(
     *,
     run_id: str,
     size: str,
-    seq_len: int | None = None,
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
-    capacity_factor: float | None = None,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
     eval_every: int | None = None,
@@ -213,8 +211,8 @@ def build_ladder_run(
     attn_gate and router weights, and because the decay reads the Adam step count it also applies at
     the right point when a run resumes an existing checkpoint. Pass 0 to opt out.
 
-    ``seq_len``, ``qk_mult``, ``qk_mult_long_scale``, and ``capacity_factor`` override the rung's model
-    config when set; the hero's own values live in ``HERO_MODEL``.
+    ``qk_mult`` and ``qk_mult_long_scale`` override the rung's model config when set; the hero's own
+    values, including its context length and capacity factor, live in ``HERO_MODEL``.
 
     ``context_phases`` is the d6144 hero's context history (``HERO_CONTEXT_PHASES`` from the CLI), and
     ``flops_baseline_total`` its cumulative training FLOPs at the last switch. Each data bucket resumes at
@@ -226,17 +224,11 @@ def build_ladder_run(
     if size not in LADDER_RACKS:
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
-    overrides = {
-        name: value
-        for name, value in (
-            ("max_seq_len", seq_len),
-            ("qk_mult", qk_mult),
-            ("qk_mult_long_scale", qk_mult_long_scale),
-            ("capacity_factor", capacity_factor),
-        )
-        if value is not None
-    }
-    model = dataclasses.replace(_ladder_model(size), **overrides)
+    model = _ladder_model(size)
+    if qk_mult is not None:
+        model = dataclasses.replace(model, qk_mult=qk_mult)
+    if qk_mult_long_scale is not None:
+        model = dataclasses.replace(model, qk_mult_long_scale=qk_mult_long_scale)
     seq_len = model.max_seq_len
     flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len) if size == "d6144" else None
 
@@ -412,12 +404,6 @@ def build_ladder_run(
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
 @click.option(
-    "--seq-len",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Override the rung's training context length. The sequence batch adjusts to preserve tokens per step.",
-)
-@click.option(
     "--qk-mult",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
@@ -428,12 +414,6 @@ def build_ladder_run(
     type=click.FloatRange(min=0, min_open=True),
     default=None,
     help="Override the extra query/key multiplier on the global (full-causal) layers only.",
-)
-@click.option(
-    "--capacity-factor",
-    type=click.FloatRange(min=0, min_open=True),
-    default=None,
-    help="Override the rung's expert receiver capacity.",
 )
 @click.option("--size", required=True, type=click.Choice(sorted(LADDER_RACKS)), help="Ladder rung width.")
 @click.option(
@@ -474,10 +454,8 @@ def build_ladder_run(
 def main(
     run_id: str,
     size: str,
-    seq_len: int | None,
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
-    capacity_factor: float | None,
     num_steps: int | None,
     checkpoint_every: int | None,
     eval_every: int | None,
@@ -488,10 +466,8 @@ def main(
     return build_ladder_run(
         run_id=run_id,
         size=size,
-        seq_len=seq_len,
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
-        capacity_factor=capacity_factor,
         num_steps=num_steps,
         checkpoint_every=checkpoint_every,
         eval_every=eval_every,
