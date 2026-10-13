@@ -6,6 +6,7 @@
 import argparse
 import hashlib
 import json
+import logging
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -34,6 +35,17 @@ LEGACY_REVIEW_FIELDS = {
     "difficulty",
     "traces",
 }
+VERIFICATION_SUMMARY_FIELDS = (
+    "status",
+    "eligible_count",
+    "sample_count",
+    "counts",
+    "pass_fraction",
+    "policy",
+    "suite",
+    "implementation_revision",
+)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -147,6 +159,19 @@ def _unavailable_assessment(record: dict[str, Any], files: dict[str, str]) -> di
     }
 
 
+def _inventory_assessment(assessment: dict[str, Any]) -> dict[str, Any]:
+    curation = assessment.get("curation")
+    if curation is None:
+        return assessment
+    verification = curation.get("verification")
+    if verification is not None:
+        verification = {name: verification.get(name) for name in VERIFICATION_SUMMARY_FIELDS}
+    summary = {**assessment, "curation": {**curation, "verification": verification}}
+    for cohort in ("admitted", "excluded"):
+        summary[cohort] = {name: value for name, value in assessment[cohort].items() if name != "examples"}
+    return summary
+
+
 def _publication(
     store: DataStore, view: ReadView, run_id: str, sources: Iterable[RlDataSource], *, legacy_archive_url: str | None
 ) -> dict[str, Any]:
@@ -222,6 +247,7 @@ def _publication(
             "status": AssessmentStatus.SKIPPED,
             "reason": "No conversion pipeline" if declaration["pipeline"] is None else "No assessment published",
         }
+        assessment = _inventory_assessment(assessment)
         row = {**declaration, "declaration": declaration, "assessment": assessment}
         row["quality"] = assessment.get("admitted", {}).get("grade")
         row["curation"] = assessment.get("curation")
@@ -269,8 +295,9 @@ def publish_catalog(
                 on_conflict=OnConflict.SUPERSEDE,
             )
             document = _publication(store, store.read_view(), run_id, sources, legacy_archive_url=legacy_archive_url)
-            # Point reads otherwise reopen every small evidence shard from each publication.
-            store.compact(BlobTables.DESCRIPTORS)
+            # Per-file evidence transactions leave separate shards for point readers to reopen.
+            result = store.compact(BlobTables.DESCRIPTORS)
+            logger.info("Catalog blob descriptor compaction: %s", result)
             with store.transaction() as transaction:
                 uri = transaction.write_object(f"catalog/snapshots/{run_id}.json", _json(document))
                 transaction.table("catalog_snapshots").add(asdict(CatalogSnapshot(run_id, document["created_at"], uri)))

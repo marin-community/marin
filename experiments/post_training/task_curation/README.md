@@ -153,6 +153,8 @@ records. It archives sampled packets, judgments and inference traces before
 changing the current snapshot pointer. Publication compacts blob descriptors, so evidence
 reads do not reopen every shard written by earlier publications. Evidence URIs
 and older read views remain valid.
+The inventory keeps control counts and policies; detailed control evidence and
+model examples remain in the linked archived report.
 
 A failed retry keeps a previous grade only when its report pipeline key matches.
 A changed key with a failed assessment

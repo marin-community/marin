@@ -140,6 +140,12 @@ def test_published_catalog_freezes_evidence_and_selects_only_matching_pipeline_g
         "processed_rows": 2,
         "unprocessed_rows": 0,
         "admission_counts": {"admitted": 2},
+        "verification": {
+            "status": "passed",
+            "counts": {"checked": 2, "passed": 2},
+            "results": [{"task_id": task_id, "stdout": "Detailed control output"}],
+            "evidence": [{"task_id": task_id, "reference": "Private control reference"}],
+        },
     }
     (curated / "manifest.json").write_text(json.dumps(curation))
     report = {
@@ -191,6 +197,11 @@ def test_published_catalog_freezes_evidence_and_selects_only_matching_pipeline_g
     assert current_catalog(root) == first
     by_id = {row["id"]: row for row in first["sources"]}
     assert by_id[source.info.id]["task_count"] == 2
+    verification = by_id[source.info.id]["curation"]["verification"]
+    assert verification["status"] == "passed" and verification["counts"] == {"checked": 2, "passed": 2}
+    assert "results" not in verification and "evidence" not in verification
+    archived = json.loads(ReadView(root).resolve(by_id[source.info.id]["assessment"]["report_uri"]))
+    assert archived["curation"]["verification"] == curation["verification"]
     native = by_id[inventory_only.info.id]
     assert native["task_count"] == 50 and native["assessment"]["status"] == "skipped"
     assert native["quality"] is None and "review_url" not in native
