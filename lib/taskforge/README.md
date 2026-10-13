@@ -85,31 +85,36 @@ memoizing a helper calls it the same way with a key of its own.
 `StageFunctions`. Each stage returns an event with an exit, and the transition table in
 `stage_coordinator/item_machine.py` gives the next stage:
 
-| stage    | event          | exit      | next     |
-|----------|----------------|-----------|----------|
-| triage   | `TRIAGED`      | accept    | author   |
-| triage   | `TRIAGED`      | reject    | done     |
-| author   | `AUTHORED`     | authored  | build    |
-| build    | `BUILT`        | built     | validate |
-| build    | `BUILD_FAILED` | revise    | author   |
-| build    | `BUILD_FAILED` | reject    | done     |
-| validate | `VALIDATED`    | validated | review   |
-| review   | `DECIDED`      | accept    | done     |
-| review   | `DECIDED`      | reject    | done     |
-| review   | `DECIDED`      | retry     | validate |
-| review   | `DECIDED`      | abandon   | done     |
-| review   | `DECIDED`      | modify    | author   |
+| stage    | event           | exit      | next     |
+|----------|-----------------|-----------|----------|
+| triage   | `TRIAGED`       | accept    | author   |
+| triage   | `TRIAGED`       | reject    | done     |
+| author   | `AUTHORED`      | authored  | build    |
+| author   | `AUTHOR_FAILED` | revise    | author   |
+| author   | `AUTHOR_FAILED` | reject    | done     |
+| build    | `BUILT`         | built     | validate |
+| build    | `BUILD_FAILED`  | revise    | author   |
+| build    | `BUILD_FAILED`  | reject    | done     |
+| validate | `VALIDATED`     | validated | review   |
+| review   | `DECIDED`       | accept    | done     |
+| review   | `DECIDED`       | reject    | done     |
+| review   | `DECIDED`       | retry     | validate |
+| review   | `DECIDED`       | abandon   | done     |
+| review   | `DECIDED`       | modify    | author   |
 
 From `done`, a `TERMINAL` event closes the item as accepted, rejected or abandoned. A stage
-raising an exception closes it as failed. `ItemBudget` bounds the build failures an item may revise
-after and the review retries it may follow. The coordinator spends the budget when it records the
-event, choosing revise or reject, retry or abandon. A build error costs a revision, except
-`BuildInfrastructureFailure`, `ModelUnavailable` and `OSError`, which fail the item at the build
-stage.
+raising an exception closes it as failed. `ItemBudget` bounds the build and author failures an item
+may revise after and the review retries it may follow. The coordinator spends the budget when it
+records the event, choosing revise or reject, retry or abandon. A build error costs a revision,
+except `BuildInfrastructureFailure`, `ModelUnavailable` and `OSError`, which fail the item at the
+build stage. An author call raising `StructuredOutputError` costs a revision from the same budget.
+Its structured reply stayed invalid through the repair turns, as when the output limit cut it, and
+the next author call samples again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error
+fails the item at the author stage.
 
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
-item's build failures so far, and the build stage loads the program from that file with
+item's build and author failures so far, and the build stage loads the program from that file with
 `StageFunctions.load_program`, so the author runs once per revision. Each author call writes a new
 `authored/<k>/`, so a relaunch resuming at build finds the program its `AUTHORED` event records
 even when a killed process re-authored the item after the last save. A program defined in
@@ -125,10 +130,10 @@ A run root holds:
 ```
 items/<item_id>/events.json
 items/<item_id>/rounds/<n>/
-    authored/<k>/program.json      the manifest of the program authored after k build failures
+    authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it
     draft/                         task.json, provenance.json
-    build-failures/<k>.txt         the traceback of the k-th build failure
+    build-failures/<k>.txt         the traceback of the k-th build or author failure
     validation.json                the summary returned by validate
     decision.json                  the decision returned by review
 store/                             the step store: blobs/, items/<item_id>/steps/
@@ -141,12 +146,16 @@ rejected item then returns its terminal without calling a stage or writing a byt
 the caller's own log after a failed save of `events.json` writes the file and returns. An abandoned
 item goes back to validation with its retries reset, and a failed one resumes at the stage that
 raised, with the step store serving the build steps already run. A build failure in the program's
-own code spends a revision and sends the item back to the author. The item fails in place instead,
-and the relaunch builds the same program again with its revisions unspent, when:
+own code spends a revision and sends the item back to the author, and so does an author call whose
+structured reply stays invalid after its repairs (`StructuredOutputError`). The item fails in place
+instead, with its revisions unspent, when:
 
-- the build host fails (`BuildInfrastructureFailure`);
-- the model is unavailable (`ModelUnavailable`);
+- the build host fails (`BuildInfrastructureFailure`), and the relaunch builds the same program
+  again;
+- the model is unavailable (`ModelUnavailable`), at the author or the build stage;
 - storage fails, or a blob or memo is missing (`OSError`).
+
+The relaunch then resumes at the stage that raised.
 
 A process killed mid-item leaves `events.json` as the item's last terminal wrote it, or leaves
 none, so the next run starts again from that terminal or from triage, and the step store serves the

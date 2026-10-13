@@ -18,15 +18,22 @@ item to a terminal:
 5. It saves the log to the event store, after every other file of the item.
 
 Each stage runs through an adapter in this module. The adapter calls the caller's function, writes
-the round's files, and returns the stage's event. A build raising ``BuildFailure`` or any other
-error costs a revision, recorded as ``BUILD_FAILED``, unless the error is a
-``BuildInfrastructureFailure``, ``ModelUnavailable`` or ``OSError``. Those errors, like an
-exception from any other stage, end the run with ``TERMINAL`` failed. The coordinator then saves the log and
-re-raises, and the next ``run_item`` on the item resumes at that stage, with the step store serving
-the steps already built.
+the round's files, and returns the stage's event. The coordinator spends a build revision on:
+
+* a build raising ``BuildFailure`` or any other error, recorded as ``BUILD_FAILED``, unless the
+  error is a ``BuildInfrastructureFailure``, ``ModelUnavailable`` or ``OSError``;
+* an author raising ``StructuredOutputError``, recorded as ``AUTHOR_FAILED``. The author's
+  structured reply stayed invalid through its repairs, as when the output limit cut it, and a new
+  call samples again.
+
+For either error the adapter writes the failure text to ``build-failures/<k>.txt`` in the round
+directory. The files share a counter, ``ItemState.build_revisions``, because both errors spend the
+same budget. Any other exception, from these stages or any other, ends the run with ``TERMINAL``
+failed. The coordinator then saves the log and re-raises, and the next ``run_item`` on the item
+resumes at that stage, with the step store serving the steps already built.
 
 The author stage writes each author call's files to ``authored/<k>/`` in the round directory,
-with ``k`` set to the item's build failures so far (``ItemState.build_revisions``):
+with ``k`` set to the item's build and author failures so far (``ItemState.build_revisions``):
 
 * ``program.json``, the program's manifest;
 * ``program.py``, the program's source, when the author returned one.
@@ -54,6 +61,7 @@ from rigging.filesystem.atomic import atomic_rename
 from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.structured import StructuredOutputError
 from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
@@ -97,9 +105,12 @@ BUDGET_DIGEST = "budget_digest"
 MODEL_DIGEST = "model_digest"
 TRIAGE_EXITS: Mapping[TriageDecision, Exit] = {TriageDecision.ACCEPT: Exit.ACCEPT, TriageDecision.REJECT: Exit.REJECT}
 FAILURE_CHARS = 6000
-"""The length of the traceback tail kept from a build failure for the author's revision."""
+"""The length of the traceback tail kept from a build or author failure for the author's revision."""
 ATTR_CHARS = 500
-"""The length of the failure text kept in a ``BUILD_FAILED`` event. The failure file keeps the rest."""
+"""The length of the failure text kept in a ``BUILD_FAILED`` or ``AUTHOR_FAILED`` event.
+
+The failure file keeps the rest.
+"""
 
 
 @dataclass(frozen=True)
@@ -107,7 +118,8 @@ class ItemBudget:
     """The revisions and retries each item may spend.
 
     Attributes:
-        max_build_revisions: The build failures an item may revise after. The next failure rejects it.
+        max_build_revisions: The build and author failures an item may revise after. The next failure
+            rejects it.
         max_validation_retries: The review ``Retry`` decisions an item may follow before it is abandoned.
     """
 
@@ -159,7 +171,7 @@ class _Item:
         return self.directory / ROUNDS_DIR / str(round)
 
     def authored_dir(self, state: ItemState) -> Path:
-        """The directory of the author call made at ``state``, keyed by the build failures so far."""
+        """The directory of the author call made at ``state``, keyed by the build and author failures so far."""
         return self.round_dir(state.round) / AUTHORED_DIR / str(state.build_revisions)
 
 
@@ -171,10 +183,10 @@ async def run_item(coordinator: StageCoordinator, item_id: str, proposal: object
     Otherwise it writes nothing. An ``ABANDONED`` item re-enters validation with its retries reset,
     and a ``FAILED`` one resumes at the stage that raised.
 
-    A build failure spends one of the item's build revisions and sends the item back to the author.
-    When the build raises ``BuildInfrastructureFailure``, ``ModelUnavailable`` or an ``OSError``,
-    the item fails in place with its revisions unspent, and the next ``run_item`` builds the same
-    program again.
+    A build failure, or an author raising ``StructuredOutputError``, spends one of the item's build
+    revisions and sends the item back to the author. When the build raises
+    ``BuildInfrastructureFailure``, ``ModelUnavailable`` or an ``OSError``, the item fails in place
+    with its revisions unspent, and the next ``run_item`` builds the same program again.
 
     Raises:
         ValueError: ``item_id`` is unsafe as a directory name, the item was opened for another
@@ -245,11 +257,11 @@ async def _triage(item: _Item, state: ItemState) -> ItemEvent:
 
 
 def _revision(item: _Item, state: ItemState) -> Revision | None:
-    """Read what the round's author call revises: nothing, the last build failure, or review's findings."""
+    """Read what the round's author call revises: nothing, the last build or author failure, or review's findings."""
     match state.revision:
         case RevisionKind.NONE:
             return None
-        case RevisionKind.BUILD_FAILURE:
+        case RevisionKind.BUILD_FAILURE | RevisionKind.AUTHOR_FAILURE:
             failure = item.round_dir(state.round) / FAILURES_DIR / f"{state.build_revisions}.txt"
             return Revision(kind=state.revision, detail=failure.read_text())
         case RevisionKind.MODIFY:
@@ -260,8 +272,19 @@ def _revision(item: _Item, state: ItemState) -> Revision | None:
 
 
 async def _author(item: _Item, state: ItemState) -> ItemEvent:
-    """Ask the author for the program and write its manifest and any source to ``authored/<k>/``."""
-    authored = item.coordinator.stages.author(item.proposal, _revision(item, state))
+    """Ask the author for the program and write its manifest and any source to ``authored/<k>/``.
+
+    An author raising ``StructuredOutputError`` returned no valid reply even after its repairs, as
+    when the output limit cut the reply. The adapter writes the failure to ``build-failures/`` and
+    returns ``AUTHOR_FAILED``, so the next author call samples again with the failure as its
+    revision. Every other exception passes through unchanged, and ``run_item`` fails the item in
+    place at the author stage.
+    """
+    try:
+        authored = item.coordinator.stages.author(item.proposal, _revision(item, state))
+    except StructuredOutputError as error:
+        attrs = _failure_attrs(item, state, error)
+        return ItemEvent(EventKind.AUTHOR_FAILED, state.round, state.proposal_digest, attrs)
     directory = item.authored_dir(state)
     _write(directory / PROGRAM_MANIFEST_FILE, pretty_json(program_manifest(authored.program)).encode())
     if authored.source is not None:
@@ -316,21 +339,32 @@ async def _build(item: _Item, state: ItemState) -> ItemEvent:
     except (BuildInfrastructureFailure, ModelUnavailable, OSError):
         raise
     except Exception as error:
-        failures = state.build_revisions + 1
-        relative = Path(ROUNDS_DIR) / str(state.round) / FAILURES_DIR / f"{failures}.txt"
-        failure = "".join(traceback.format_exception(error))[-FAILURE_CHARS:]
-        _write(item.directory / relative, failure.encode())
         attrs = {
-            EXIT: Exit.REVISE if failures <= coordinator.budget.max_build_revisions else Exit.REJECT,
+            **_failure_attrs(item, state, error),
             "step": (error.step or "") if isinstance(error, BuildFailure) else "",
-            "failure": f"{type(error).__name__}: {error}"[:ATTR_CHARS],
-            "failure_file": str(relative),
         }
         return ItemEvent(EventKind.BUILD_FAILED, state.round, program.digest, attrs)
     steps = draft.provenance.steps
     hits = sum(outcome.status is CacheStatus.HIT for outcome in steps)
     attrs = {EXIT: Exit.BUILT, "program_digest": program.digest, "steps": str(len(steps)), "hits": str(hits)}
     return ItemEvent(EventKind.BUILT, state.round, digest(draft.task), attrs)
+
+
+def _failure_attrs(item: _Item, state: ItemState, error: Exception) -> dict[str, str]:
+    """Write the traceback tail of the item's next failure to ``build-failures/<k>.txt``, and return its attrs.
+
+    ``k`` is ``build_revisions + 1``, counting build and author failures together. The attrs exit
+    revise while ``k`` is within ``max_build_revisions`` and reject past it.
+    """
+    failures = state.build_revisions + 1
+    relative = Path(ROUNDS_DIR) / str(state.round) / FAILURES_DIR / f"{failures}.txt"
+    failure = "".join(traceback.format_exception(error))[-FAILURE_CHARS:]
+    _write(item.directory / relative, failure.encode())
+    return {
+        EXIT: Exit.REVISE if failures <= item.coordinator.budget.max_build_revisions else Exit.REJECT,
+        "failure": f"{type(error).__name__}: {error}"[:ATTR_CHARS],
+        "failure_file": str(relative),
+    }
 
 
 async def _validate(item: _Item, state: ItemState) -> ItemEvent:

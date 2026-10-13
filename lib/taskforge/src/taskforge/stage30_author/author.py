@@ -26,6 +26,8 @@ class RevisionKind(StrEnum):
 
     NONE = "none"
     BUILD_FAILURE = "build_failure"
+    AUTHOR_FAILURE = "author_failure"
+    """The previous author call returned no valid program, as when the output limit cut its reply."""
     MODIFY = "modify"
 
 

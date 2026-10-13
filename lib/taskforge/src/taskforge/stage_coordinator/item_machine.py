@@ -8,25 +8,29 @@ log. ``transition`` then looks up the event's exit in a transition table to move
 next stage. ``DEFAULT_TRANSITIONS`` holds the table below, and a caller may pass its own table to
 re-target an edge::
 
-    stage     event         exit       next      bookkeeping
-    --------  ------------  ---------  --------  ------------------------------------------------
-    TRIAGE    TRIAGED       accept     AUTHOR
-    TRIAGE    TRIAGED       reject     DONE      closing rejected (task)
-    AUTHOR    AUTHORED      authored   BUILD     program_digest
-    BUILD     BUILT         built      VALIDATE  task_digest; revision none
-    BUILD     BUILD_FAILED  revise     AUTHOR    build_revisions + 1; revision build_failure
-    BUILD     BUILD_FAILED  reject     DONE      build_revisions + 1; closing rejected (budget)
-    VALIDATE  VALIDATED     validated  REVIEW
-    REVIEW    DECIDED       accept     DONE      closing accepted (labelled with the band)
-    REVIEW    DECIDED       reject     DONE      closing rejected (the decision's kind)
-    REVIEW    DECIDED       retry      VALIDATE  retries + 1
-    REVIEW    DECIDED       abandon    DONE      retries + 1; closing abandoned
-    REVIEW    DECIDED       modify     AUTHOR    round + 1; task_digest cleared; revision modify
-    DONE      TERMINAL      -          -         terminal = the closing's terminal
-    any       TERMINAL      -          (stays)   terminal failed, when ``terminal`` is ``failed``
+    stage     event          exit       next      bookkeeping
+    --------  -------------  ---------  --------  ------------------------------------------------
+    TRIAGE    TRIAGED        accept     AUTHOR
+    TRIAGE    TRIAGED        reject     DONE      closing rejected (task)
+    AUTHOR    AUTHORED       authored   BUILD     program_digest
+    AUTHOR    AUTHOR_FAILED  revise     AUTHOR    build_revisions + 1; revision author_failure
+    AUTHOR    AUTHOR_FAILED  reject     DONE      build_revisions + 1; closing rejected (budget)
+    BUILD     BUILT          built      VALIDATE  task_digest; revision none
+    BUILD     BUILD_FAILED   revise     AUTHOR    build_revisions + 1; revision build_failure
+    BUILD     BUILD_FAILED   reject     DONE      build_revisions + 1; closing rejected (budget)
+    VALIDATE  VALIDATED      validated  REVIEW
+    REVIEW    DECIDED        accept     DONE      closing accepted (labelled with the band)
+    REVIEW    DECIDED        reject     DONE      closing rejected (the decision's kind)
+    REVIEW    DECIDED        retry      VALIDATE  retries + 1
+    REVIEW    DECIDED        abandon    DONE      retries + 1; closing abandoned
+    REVIEW    DECIDED        modify     AUTHOR    round + 1; task_digest cleared; revision modify
+    DONE      TERMINAL       -          -         terminal = the closing's terminal
+    any       TERMINAL       -          (stays)   terminal failed, when ``terminal`` is ``failed``
 
 The coordinator checks the item's budget when it records the event spending it. It picks revise or
-reject for ``BUILD_FAILED`` and retry or abandon for ``DECIDED``, so ``transition`` reads no budget.
+reject for ``AUTHOR_FAILED`` and ``BUILD_FAILED``, and retry or abandon for ``DECIDED``, so
+``transition`` reads no budget. ``AUTHOR_FAILED`` and ``BUILD_FAILED`` both count toward
+``build_revisions``.
 
 ``derive_state`` folds an item's events into its ``ItemState`` by calling ``transition`` on each
 event in turn. The state is computed again from the events on every read and is stored nowhere.
@@ -68,6 +72,8 @@ class EventKind(StrEnum):
     """digest: the proposal's. attrs: exit."""
     AUTHORED = "authored"
     """digest: the program's. attrs: exit, revision (the ``RevisionKind`` the program answers)."""
+    AUTHOR_FAILED = "author_failed"
+    """digest: the proposal's. attrs: exit, failure (truncated), failure_file."""
     BUILD_FAILED = "build_failed"
     """digest: the program's. attrs: exit, step, failure (truncated), failure_file."""
     BUILT = "built"
@@ -107,7 +113,7 @@ class Exit(StrEnum):
 
 EXITS: Mapping[Stage, frozenset[Exit]] = {
     Stage.TRIAGE: frozenset({Exit.ACCEPT, Exit.REJECT}),
-    Stage.AUTHOR: frozenset({Exit.AUTHORED}),
+    Stage.AUTHOR: frozenset({Exit.AUTHORED, Exit.REVISE, Exit.REJECT}),
     Stage.BUILD: frozenset({Exit.BUILT, Exit.REVISE, Exit.REJECT}),
     Stage.VALIDATE: frozenset({Exit.VALIDATED}),
     Stage.REVIEW: frozenset({Exit.ACCEPT, Exit.REJECT, Exit.RETRY, Exit.ABANDON, Exit.MODIFY}),
@@ -117,6 +123,7 @@ EXITS: Mapping[Stage, frozenset[Exit]] = {
 EVENT_STAGES: Mapping[EventKind, Stage] = {
     EventKind.TRIAGED: Stage.TRIAGE,
     EventKind.AUTHORED: Stage.AUTHOR,
+    EventKind.AUTHOR_FAILED: Stage.AUTHOR,
     EventKind.BUILD_FAILED: Stage.BUILD,
     EventKind.BUILT: Stage.BUILD,
     EventKind.VALIDATED: Stage.VALIDATE,
@@ -132,6 +139,8 @@ DEFAULT_TRANSITIONS: Transitions = MappingProxyType(
         (Stage.TRIAGE, Exit.ACCEPT): Stage.AUTHOR,
         (Stage.TRIAGE, Exit.REJECT): Stage.DONE,
         (Stage.AUTHOR, Exit.AUTHORED): Stage.BUILD,
+        (Stage.AUTHOR, Exit.REVISE): Stage.AUTHOR,
+        (Stage.AUTHOR, Exit.REJECT): Stage.DONE,
         (Stage.BUILD, Exit.BUILT): Stage.VALIDATE,
         (Stage.BUILD, Exit.REVISE): Stage.AUTHOR,
         (Stage.BUILD, Exit.REJECT): Stage.DONE,
@@ -147,6 +156,7 @@ DEFAULT_TRANSITIONS: Transitions = MappingProxyType(
 CLOSING_EDGES = frozenset(
     {
         (Stage.TRIAGE, Exit.REJECT),
+        (Stage.AUTHOR, Exit.REJECT),
         (Stage.BUILD, Exit.REJECT),
         (Stage.REVIEW, Exit.ACCEPT),
         (Stage.REVIEW, Exit.REJECT),
@@ -229,7 +239,7 @@ class ItemState:
         task_digest: The digest of this round's built task, or ``None`` before the build.
         revision: The kind of revision the next author call answers. A build of a program without
             source asks the author again with it, so only ``BUILT`` clears it.
-        build_revisions: The build failures so far.
+        build_revisions: The build failures and failed author calls so far.
         retries: The review ``Retry`` decisions since the item opened or was last abandoned.
         closing: The ``TERMINAL`` event due, while the stage is ``DONE``.
         terminal: The item's terminal, until a later event clears it.
@@ -305,13 +315,14 @@ def transition(state: ItemState, event: ItemEvent, table: Transitions = DEFAULT_
             return replace(state, program_digest=event.digest)
         case (EventKind.BUILT, Exit.BUILT):
             return replace(state, task_digest=event.digest, revision=RevisionKind.NONE)
+        case (EventKind.AUTHOR_FAILED, Exit.REVISE):
+            return replace(state, build_revisions=state.build_revisions + 1, revision=RevisionKind.AUTHOR_FAILURE)
+        case (EventKind.AUTHOR_FAILED, Exit.REJECT):
+            return _out_of_revisions(state, RevisionKind.AUTHOR_FAILURE)
         case (EventKind.BUILD_FAILED, Exit.REVISE):
             return replace(state, build_revisions=state.build_revisions + 1, revision=RevisionKind.BUILD_FAILURE)
         case (EventKind.BUILD_FAILED, Exit.REJECT):
-            failures = state.build_revisions + 1
-            reason = f"no buildable program after {failures} build failures"
-            closing = Closing(Terminal.REJECTED, reason, RejectKind.BUDGET)
-            return replace(state, build_revisions=failures, revision=RevisionKind.BUILD_FAILURE, closing=closing)
+            return _out_of_revisions(state, RevisionKind.BUILD_FAILURE)
         case (EventKind.DECIDED, Exit.ACCEPT):
             band = BandOutcome(attrs["band"])
             reason = CALIBRATED if band is BandOutcome.IN_BAND else f"{OUTSIDE_BAND}: {band}"
@@ -326,6 +337,14 @@ def transition(state: ItemState, event: ItemEvent, table: Transitions = DEFAULT_
             return replace(state, round=state.round + 1, task_digest=None, revision=RevisionKind.MODIFY)
         case _:
             raise ValueError(f"{kind} cannot exit {way}")
+
+
+def _out_of_revisions(state: ItemState, revision: RevisionKind) -> ItemState:
+    """Count the failure that spent the last build revision, and close the item as rejected on its budget."""
+    failures = state.build_revisions + 1
+    reason = f"no buildable program after {failures} build and author failures"
+    closing = Closing(Terminal.REJECTED, reason, RejectKind.BUDGET)
+    return replace(state, build_revisions=failures, revision=revision, closing=closing)
 
 
 def _terminal(state: ItemState, terminal: Terminal) -> ItemState:

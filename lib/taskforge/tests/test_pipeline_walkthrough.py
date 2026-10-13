@@ -17,10 +17,12 @@ review accepts it, unless a test passes other functions. Reading top to bottom:
 4. a relaunch with another proposal, budget or model digest is refused, as is a program other than
    the authored one, from the author or from ``program.py``;
 5. a build failure costs a revision, and the failure after the last revision rejects the item;
-6. a failed build host or a missing file fails the item at build without spending a revision, and
+6. an author reply cut at the output limit after its repairs costs a revision the same way, and the
+   author is asked again with the failure, while an unavailable model fails the item at the author;
+7. a failed build host or a missing file fails the item at build without spending a revision, and
    a relaunch resumes there, even after a killed process re-authored the item;
-7. an unavailable model fails the item at validation, and a relaunch resumes there;
-8. a ``Modify`` decision sends the item back to the author in round 1 with the findings.
+8. an unavailable model fails the item at validation, and a relaunch resumes there;
+9. a ``Modify`` decision sends the item back to the author in round 1 with the findings.
 """
 
 import base64
@@ -48,8 +50,9 @@ from taskcompendium.models import (
 )
 from verifyit.spec import NumericSpec
 
-from taskforge.llm.client import Completion, ModelUnavailable, StructuredResult
+from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
+from taskforge.llm.structured import StructuredOutputError
 from taskforge.stage20_triage.verdict import TriageDecision, accept
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
 from taskforge.stage30_author.loader import load_program_source
@@ -62,10 +65,11 @@ from taskforge.stage30_author.program import (
 from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build.run import DRAFT_DIR, TASK_FILE, TaskDraft, load_draft, run_build
 from taskforge.stage40_build.step_store import model_digest
-from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify
+from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
 from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
     DECISION_FILE,
+    FAILURES_DIR,
     STORE_DIR,
     VALIDATION_FILE,
     ItemBudget,
@@ -402,13 +406,97 @@ async def test_a_build_failure_costs_a_revision_and_the_next_one_rejects_the_ite
     assert revision is not None and "the numbers do not multiply to the answer" in revision.detail
 
 
+CUT_REPLY = Completion(
+    content='{"source": "import base64\\n',
+    reasoning="",
+    tool_calls=(),
+    finish_reason=FinishReason.LENGTH,
+    usage=Usage(prompt_tokens=0, completion_tokens=0, reasoning_tokens=0, cached_tokens=0),
+    wall_time=0.0,
+    ttft=0.0,
+    decode_time=0.0,
+    continuations=0,
+    attempts=(),
+)
+
+
+class CutAuthor:
+    """An author whose first ``cuts`` replies are cut at the output limit, returning ``SOURCE`` after.
+
+    It records each revision asked for.
+    """
+
+    def __init__(self, cuts: int) -> None:
+        self.cuts = cuts
+        self.revisions: list[Revision | None] = []
+
+    def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+        self.revisions.append(revision)
+        if len(self.revisions) <= self.cuts:
+            raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
+        return AuthoredProgram(load_program_source(SOURCE), SOURCE)
+
+
+async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_author_samples_again(tmp_path):
+    # 6. The cut reply spends the one revision, and the next author call receives the failure.
+    author = CutAuthor(cuts=1)
+    log = InMemoryEventLog()
+
+    assert (
+        await run_item(coordinator(tmp_path, replace(STAGES, author=author)), ITEM, PROPOSAL, log) is Terminal.ACCEPTED
+    )
+    assert exits(log) == [*ACCEPTED_EXITS[:2], ("author_failed", "revise"), *ACCEPTED_EXITS[2:]]
+    revision = author.revisions[1]
+    assert revision is not None and revision.kind is RevisionKind.AUTHOR_FAILURE
+    assert "the reply was cut at the output limit" in revision.detail
+    round_dir = tmp_path / "items" / ITEM / "rounds" / "0"
+    assert (round_dir / FAILURES_DIR / "1.txt").read_text() == revision.detail
+    assert (round_dir / AUTHORED_DIR / "1" / PROGRAM_FILE).read_text() == SOURCE
+
+
+async def test_author_replies_cut_past_the_budget_reject_the_item_on_its_budget(tmp_path):
+    # 6. With one revision in the budget, the second cut reply closes the item.
+    author = CutAuthor(cuts=2)
+    log = InMemoryEventLog()
+
+    assert (
+        await run_item(coordinator(tmp_path, replace(STAGES, author=author)), ITEM, PROPOSAL, log) is Terminal.REJECTED
+    )
+    assert exits(log) == [
+        *ACCEPTED_EXITS[:2],
+        ("author_failed", "revise"),
+        ("author_failed", "reject"),
+        ("terminal", "rejected"),
+    ]
+    assert log.events()[-1].attrs["kind"] == RejectKind.BUDGET
+    assert [None if revision is None else revision.kind for revision in author.revisions] == [
+        None,
+        RevisionKind.AUTHOR_FAILURE,
+    ]
+
+
+def unavailable_author(proposal: object, revision: Revision | None) -> AuthoredProgram:
+    raise ModelUnavailable("the hold ran out", ())
+
+
+async def test_an_unavailable_model_fails_the_item_at_the_author_with_its_revisions_unspent(tmp_path):
+    # 6. ModelUnavailable from the author is not the author's failure, so the item fails in place.
+    with pytest.raises(ModelUnavailable):
+        await run_item(
+            coordinator(tmp_path, replace(STAGES, author=unavailable_author)), ITEM, PROPOSAL, InMemoryEventLog()
+        )
+    state = derive_state(JsonEventStore(tmp_path).load(ITEM) or ())
+    assert (state.stage, state.terminal, state.build_revisions) == (Stage.AUTHOR, Terminal.FAILED, 0)
+    assert not (tmp_path / "items" / ITEM / "rounds" / "0" / FAILURES_DIR).exists()
+
+
 @pytest.mark.parametrize(
     "error",
     [HOST_FAILURE, FileNotFoundError("blobs/ab/abcdef is missing")],
     ids=["build host", "missing file"],
 )
 async def test_a_failure_outside_the_program_fails_the_item_at_build_and_a_relaunch_resumes_there(tmp_path, error):
-    # 6. BuildInfrastructureFailure or an OSError saves the item as failed in place with its revisions unspent.
+    # 7. BuildInfrastructureFailure or an OSError saves the item as failed in place with its revisions unspent.
     stages = replace(STAGES, author=SourceAuthor(), build=FailsOnce(error))
     with pytest.raises(type(error), match=str(error)):
         await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, InMemoryEventLog())
@@ -426,7 +514,7 @@ async def fails_in_the_program(*args: Any) -> TaskDraft:
 
 
 async def test_a_relaunch_after_a_killed_re_author_builds_the_program_its_authored_event_records(tmp_path):
-    # 6. A re-author killed before the save leaves authored/1/, and the relaunch loads authored/0/.
+    # 7. A re-author killed before the save leaves authored/1/, and the relaunch loads authored/0/.
     first = replace(STAGES, author=SourceAuthor(), build=FailsOnce())
     with pytest.raises(BuildInfrastructureFailure):
         await run_item(coordinator(tmp_path, first), ITEM, PROPOSAL, InMemoryEventLog())
@@ -459,7 +547,7 @@ class UnavailableOnce:
 
 
 async def test_an_unavailable_model_fails_the_item_at_validation_and_a_relaunch_resumes_there(tmp_path):
-    # 7. ModelUnavailable saves the item as failed in place, and the next run_item re-enters validation.
+    # 8. ModelUnavailable saves the item as failed in place, and the next run_item re-enters validation.
     validate_once = UnavailableOnce()
     with pytest.raises(ModelUnavailable):
         await run_item(
@@ -475,7 +563,7 @@ async def test_an_unavailable_model_fails_the_item_at_validation_and_a_relaunch_
 
 
 async def test_a_modify_decision_re_authors_the_item_in_round_one_with_the_findings(tmp_path):
-    # 8. The author of the next round receives review's findings.
+    # 9. The author of the next round receives review's findings.
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
     stages = replace(STAGES, author=author, review=lambda summary: decisions.pop(0))

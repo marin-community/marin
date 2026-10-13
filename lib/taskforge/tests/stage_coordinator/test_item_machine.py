@@ -83,6 +83,30 @@ def test_a_build_failure_revises_or_rejects_as_its_event_says(way, stage, closin
     assert (None if state.closing is None else (state.closing.terminal, state.closing.kind)) == closing
 
 
+@pytest.mark.parametrize(
+    ("way", "stage", "closing"),
+    [("revise", Stage.AUTHOR, None), ("reject", Stage.DONE, (Terminal.REJECTED, RejectKind.BUDGET))],
+)
+def test_an_author_failure_revises_or_rejects_as_its_event_says(way, stage, closing):
+    failed = ItemEvent(EventKind.AUTHOR_FAILED, 0, "p1", {EXIT: way, "failure": "cut", "failure_file": "f"})
+
+    state = derive_state(numbered(OPENED, TRIAGED, failed))
+
+    assert (state.stage, state.build_revisions, state.revision) == (stage, 1, RevisionKind.AUTHOR_FAILURE)
+    assert (None if state.closing is None else (state.closing.terminal, state.closing.kind)) == closing
+
+
+def test_an_author_failure_after_a_build_failure_spends_the_same_budget():
+    build_failed = ItemEvent(
+        EventKind.BUILD_FAILED, 0, "prog1", {EXIT: "revise", "step": "", "failure": "boom", "failure_file": "f1"}
+    )
+    author_failed = ItemEvent(EventKind.AUTHOR_FAILED, 0, "p1", {EXIT: "revise", "failure": "cut", "failure_file": "f2"})
+
+    state = derive_state(numbered(OPENED, TRIAGED, AUTHORED, build_failed, author_failed, AUTHORED))
+
+    assert (state.stage, state.build_revisions, state.revision) == (Stage.BUILD, 2, RevisionKind.AUTHOR_FAILURE)
+
+
 def test_a_modify_decision_starts_the_next_round_and_its_revision_holds_until_built():
     log = [*VALIDATED_LOG, decided(exit="modify", findings="too easy")]
     modified = derive_state(numbered(*log))
