@@ -7,17 +7,31 @@ import json
 
 import pytest
 from verifyit.json_comparison import NumericTypePolicy
-from verifyit.spec import ExactSpec, McqSpec, NumericSpec, ScriptSpec, Spec, StructuredExactSpec
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import (
+    RUBRIC_LABELS,
+    ExactSpec,
+    JudgeSpec,
+    McqSpec,
+    NumericSpec,
+    ScriptSpec,
+    Spec,
+    StructuredExactSpec,
+)
 
 from taskcompendium.grader import verifyit_package
-from taskcompendium.grading import grade_answer
+from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
     CommandSemantics,
     ConversationInput,
+    ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
+    FinalAction,
+    FunctionDefinition,
     Grader,
     GradingAttempt,
     JsonAnswer,
@@ -31,7 +45,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.models import RuntimeEvidence, grading_attempt
 from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import submission_compatibility
+from taskcompendium.submission import native_action_text, submission_compatibility
 
 GRADING_ENVIRONMENT = EnvironmentRequirements(
     docker_image="private/grader@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
@@ -144,6 +158,99 @@ def test_captured_null_state_is_a_submission_but_missing_state_is_not():
     captured = grade_answer(task, _attempt(task, "Done.", StateSubmission(None)))
     assert (missing.status, missing.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
     assert (captured.status, captured.reward) == (Outcome.GRADED, 1.0)
+
+
+def test_remote_judge_control_grades_a_typed_native_action_through_the_supplied_endpoint(judge_server):
+    response = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="transport-id", name="lookup", arguments={"query": "weather"}),)
+    )
+    candidate = native_action_text(response)
+    package = verifyit_package(
+        JudgeSpec(
+            references=("Public conversation and tool schema",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the proposed action.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            model="fixture-judge",
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = TaskSpec(
+        id="judged-native-action",
+        context=ConversationInput(events=(TextMessage(role="user", content="Look up the weather."),)),
+        environment_requirements=EnvironmentRequirements(),
+        final_tools=(
+            FunctionDefinition(
+                name="lookup",
+                parameters={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            ),
+        ),
+        answer_type=AnswerType.NATIVE_ACTION,
+        answer_format=FinalAction(require_call=True, max_calls=1),
+        grader=package.grader,
+        source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+    )
+    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, response)))
+
+    result = grade_remote_judge_answer(
+        task,
+        attempt,
+        JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert result.detail["verdict"] == "PASS"
+    assert len(judge_server.requests) == 1
+    assert candidate in judge_server.requests[0]["messages"][-1]["content"]
+
+
+def test_remote_judge_rejects_an_empty_candidate_without_calling_the_endpoint():
+    package = verifyit_package(
+        JudgeSpec(
+            references=("Complete the task.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = TaskSpec(
+        id="empty-judged-native-action",
+        context=ConversationInput(events=(TextMessage(role="user", content="Look up the weather."),)),
+        environment_requirements=EnvironmentRequirements(),
+        final_tools=(
+            FunctionDefinition(
+                name="lookup",
+                parameters={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            ),
+        ),
+        answer_type=AnswerType.NATIVE_ACTION,
+        answer_format=FinalAction(max_calls=1),
+        grader=package.grader,
+        source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+    )
+
+    result = grade_remote_judge_answer(
+        task,
+        _attempt(task, " \n"),
+        JudgeConnection("http://unused.invalid/v1", "secret"),
+    )
+
+    assert (result.status, result.reward, result.detail) == (
+        Outcome.GRADED,
+        0.0,
+        {"reason": "empty_candidate"},
+    )
 
 
 @pytest.mark.parametrize("state,reward", [("null", 1.0), ('{"value": 1}', 0.0)])

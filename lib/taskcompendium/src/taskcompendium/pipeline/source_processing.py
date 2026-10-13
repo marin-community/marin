@@ -17,6 +17,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
+from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import Mode
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -93,7 +94,7 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "13"
+SOURCE_PIPELINE_REVISION = "14"
 PANEL_ROWS_PER_SHARD = 16
 ROWS_PER_SHARD = 1000
 MAX_PREPARATION_SHARDS = 64
@@ -104,7 +105,6 @@ SCRATCH_PHASES = ("sample", "full", "quality", "audited", "filtered", "verified"
 VERIFY_REPORT_PATH = "verify/report.json"
 """A source's verification report, relative to its output."""
 NO_CONTROLS_REASON = "The source declares no controls"
-JUDGE_GRADED_REASON = "judge grader; no control path yet"
 EXPANDED_QUALITY = frozenset({SourceQualityStatus.UNREVIEWED, SourceQualityStatus.TRUST, SourceQualityStatus.CENSUS})
 """Panel decisions that let a full-mode run convert every row; rows outside the panel inherit the decision."""
 
@@ -132,6 +132,7 @@ class SourcePipelineConfig:
     filter_policy: FilterPolicy
     normalized_shards: int
     machines: GradingMachines | None
+    judge_connection: JudgeConnection | None = None
 
 
 @dataclass(frozen=True)
@@ -615,19 +616,9 @@ def _filter(run: _SourceRun) -> None:
         )
 
 
-def _judge_graded(panel: _Panel) -> bool:
-    """Whether a verifyit judge grades every task the panel converted."""
-    tasks = [row["audit"]["normalized"] for row in panel.normalized if row["audit"]["normalized"] is not None]
-    return bool(tasks) and all(_judge_grader(TaskSpec.model_validate(task).grader) for task in tasks)
-
-
-def _verify(run: _SourceRun, panel: _Panel) -> tuple[dict[str, Any], StoragePath]:
+def _verify(run: _SourceRun) -> tuple[dict[str, Any], StoragePath]:
     """Run the recipe's controls on the filtered rows; return the verified manifest and its stage directory."""
     filtered = run.scratch("filtered")
-    # TODO(rl-data): judge test path. A judge control would verify judge-graded sources here
-    # instead of skipping them; see the rl-data judge test path issue.
-    if _judge_graded(panel):
-        return _skipped_verification(filtered, JUDGE_GRADED_REASON), filtered
     if run.recipe.controls is None:
         return _skipped_verification(filtered, NO_CONTROLS_REASON), filtered
     verified = run.scratch("verified")
@@ -636,7 +627,7 @@ def _verify(run: _SourceRun, panel: _Panel) -> tuple[dict[str, Any], StoragePath
             str(filtered),
             str(verified),
             run.config.verification_policy,
-            control_suite(run.recipe.controls, run.config.machines),
+            control_suite(run.recipe.controls, run.config.machines, run.config.judge_connection),
             run.config.execution.max_workers,
             run.config.execution.worker_resources,
             context=run.context,
@@ -915,7 +906,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     prepared = _expand_full(run, panel) if expanded and not panel.census else run.scratch("sample")
     unavailable_reviews = _audit(run, prepared, review)
     _filter(run)
-    verification, checked = _verify(run, panel)
+    verification, checked = _verify(run)
     verification_status = SourceVerificationStatus(verification["verification"]["status"])
     _write_download_manifest(run, panel.sample.population_count)
     admissions = _export_sidecars(run, panel, decision, checked, verification_status, expanded=expanded)

@@ -47,6 +47,7 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.graders imp
     REASONING_GYM_CONTROLS,
     REPLY_CONTROLS,
     TOOL_ACTION_CONTROLS,
+    TOOLCALL_SCHEMA_CONTROLS,
     VERIFIER_REVISION,
     convert_calendar,
     convert_code,
@@ -209,10 +210,14 @@ def attach_placeholder_source(row: dict[str, Any], context: ConversionContext) -
 ACTION_COMPARISON_CRITERION = f"""
 Only when agent_ref.name is single_step_tool_use_with_argument_comparison_agent,
 swe_pivot_single_step_tool_use_with_argument_comparison_agent, or
-toolcall_schema_single_step_tool_use_with_argument_comparison_agent at verifier revision {VERIFIER_REVISION},
-expected_action.type=message accepts any nonempty assistant text with no tool calls; the stored message is not a
-literal answer key. For expected_action.type=function_call, the scorer requires one call with the expected name and
-recursively matching argument keys and values, allowing floating-point tolerance 1e-6.
+toolcall_schema_single_step_tool_use_with_argument_comparison_agent at verifier revision {VERIFIER_REVISION}, apply the
+following rules. For toolcall_schema rows, a semantic judge checks a native call or direct response against the public
+conversation and advertised JSON Schemas, accepting supported equivalent arguments rather than hidden exact wording.
+The legacy expected_action is retained only as private provenance and cannot reject an otherwise valid public task.
+Message targets from the two SWE next-action agents use the same semantic judge because their source scorer accepts any
+nonempty assistant text without checking its meaning. Their function-call targets must name an advertised tool and
+supply a schema-valid argument object; the source scorer requires the expected name and recursively matching argument
+keys and values, allowing floating-point tolerance 1e-6.
 """
 
 AGENTIC_SAFETY_RUBRIC = """
@@ -330,7 +335,8 @@ Check the complete role/tool sequence and advertised schemas against expected_ac
 environment state.
 
 Historical observations are public context. Expected future tool calls and reward state are hidden evidence; multiple
-valid actions require the original comparison rules rather than invented exact matching.
+valid actions in toolcall_schema rows are judged against the public request and schemas rather than hidden exact
+arguments. The SWE next-action rows retain their original deterministic comparison rules.
 {ACTION_COMPARISON_CRITERION}"""
 
 
@@ -382,7 +388,7 @@ SAFETY = Component(convert_ungraded, SAFETY_RUBRIC)
 STRUCTURED_OUTPUT = scored(convert_structured_output, INSTRUCTION_FOLLOWING_RUBRIC)
 SWE_REPO = Component(convert_ungraded_agent, SWE_REPO_RUBRIC)
 TAU_PIVOT = Component(convert_ungraded_agent, TOOL_USE_RUBRIC)
-TOOLCALL_SCHEMA = scored(convert_tool_action, TOOL_USE_RUBRIC, TOOL_ACTION_CONTROLS)
+TOOLCALL_SCHEMA = scored(convert_tool_action, TOOL_USE_RUBRIC, TOOLCALL_SCHEMA_CONTROLS)
 
 HS3_EN = Component(
     convert_ungraded,
@@ -461,6 +467,19 @@ COMPONENTS: dict[str, Component] = {
     f"ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/{SweSplit.SWE_GYM}": SWE_REPO,
     f"ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/{SweSplit.SWE_REBENCH}": SWE_REPO,
 }
+
+BASE_RECIPE_VERSION = "3"
+REPAIRED_GRADER_PATHS = frozenset(
+    {
+        "ultra_sft_step3200_nvarc_transductive",
+        "ultra_sft_step3200_structured_outputs_v2",
+        "ultra_sft_step3200_structured_outputs_v3",
+        "ultra_sft_step3200_toolcall_schema",
+        "ultra_v3_agentic_rl_step73_structured_outputs_v2",
+    }
+)
+REPAIRED_RECIPE_VERSION = "4"
+TOOLCALL_SCHEMA_RECIPE_VERSION = "5"
 
 
 # Counts come from a complete selection audit of ULTRA_REVISION's blend files,
@@ -1483,7 +1502,11 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
                 prepared_component=name,
             ),
             convert=component.convert,
-            version="3",
+            version=(
+                TOOLCALL_SCHEMA_RECIPE_VERSION
+                if path == "ultra_sft_step3200_toolcall_schema"
+                else REPAIRED_RECIPE_VERSION if path in REPAIRED_GRADER_PATHS else BASE_RECIPE_VERSION
+            ),
             intended_use=IntendedUse.TRAIN,
             rubric=component.rubric,
             controls=component.controls,

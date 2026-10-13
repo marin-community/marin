@@ -51,6 +51,7 @@ from taskcompendium.pipeline.fingerprints import callable_identity, recipe_code_
 from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFileOverride, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     RESOURCE_BUDGET_BYTES,
+    ControlExecution,
     Controls,
     Converter,
     FilterPolicy,
@@ -73,6 +74,7 @@ from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVI
 from taskcompendium.pipeline.sources import conversion_shards, source_files_identity, staged_files
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 from taskcompendium.runtime.local import LocalGraderMachines
+from verifyit.modes.grade_judge import JudgeConnection
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
@@ -358,19 +360,29 @@ def _source_config(
 
 
 def _execution_config(
-    settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None
+    settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None, controls: Controls | None
 ) -> SourcePipelineConfig:
-    if rubric is None or config.execution.reviewer is not None:
-        return config
-    if settings.review_cache is None:
-        raise click.UsageError("Recipe review requires --review-cache")
-    reviewer = _reviewer(
-        cast(ReviewConfig, config.review),
-        settings.base_url if settings.base_url is not None else resolve_glm_base_url(settings.relay_job),
-        review_cache=settings.review_cache,
-        review_concurrency=settings.review_concurrency,
+    needs_reviewer = rubric is not None and config.execution.reviewer is None
+    needs_judge = (
+        controls is not None and controls.execution == ControlExecution.REMOTE_JUDGE and config.judge_connection is None
     )
-    return replace(config, execution=replace(config.execution, reviewer=reviewer))
+    if not needs_reviewer and not needs_judge:
+        return config
+    base_url = settings.base_url if settings.base_url is not None else resolve_glm_base_url(settings.relay_job)
+    token = os.environ[GLM_BULK_TOKEN_ENV]
+    if needs_reviewer:
+        if settings.review_cache is None:
+            raise click.UsageError("Recipe review requires --review-cache")
+        reviewer = _reviewer(
+            cast(ReviewConfig, config.review),
+            base_url,
+            review_cache=settings.review_cache,
+            review_concurrency=settings.review_concurrency,
+        )
+        config = replace(config, execution=replace(config.execution, reviewer=reviewer))
+    if needs_judge:
+        config = replace(config, judge_connection=JudgeConnection(base_url, token))
+    return config
 
 
 def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
@@ -731,7 +743,7 @@ def _run_source(
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
     assert options.recipe_settings is not None
-    config = _execution_config(options.recipe_settings, config, pipeline.rubric)
+    config = _execution_config(options.recipe_settings, config, pipeline.rubric, pipeline.controls)
     _validate_input_identity(pipeline, options.inputs, run.identity)
     file_overrides = (
         {name: SourceFileOverride(**file) for name, file in run.identity["input_overrides"]["files"].items()}

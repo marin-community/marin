@@ -4,7 +4,8 @@
 """Score a Nemotron Ultra next-action reply with the vendored NeMo Gym scorer and print the reward.
 
 The scorer compares the reply, read as the chat message in ``/tests/conversation.json``, with the row's
-``expected_action``: one call with the expected name and arguments, or any text without calls.
+``expected_action``: one call with the expected name and arguments. The converter sends message targets to a semantic
+judge instead of packaging this scorer.
 """
 
 import json

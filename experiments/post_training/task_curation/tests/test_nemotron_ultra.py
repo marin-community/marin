@@ -15,21 +15,26 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import grader_config
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
+    AnswerType,
     AssistantToolCalls,
     ConversationToolCall,
     ConversationTrace,
+    FinalAction,
     GradingAttempt,
     NoGrader,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
     grades_in_process,
+    verifyit_spec,
 )
 from taskcompendium.pipeline.controls import run_controls
+from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask, Reply
 from taskcompendium.pipeline.sources import SourceShard, prepared_component_path, staged_raw_file_rows
 from taskcompendium.runtime.task_grading import grade_task
+from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -363,12 +368,6 @@ def test_math_placeholder_restores_question_and_answer(tmp_path, ground_truth, e
         ("ultra_sft_step3200_rdkit", {"property_type": "similarity"}, "unsupported", "unsupported_chemistry_property"),
         ("ultra_sft_step3200_rdkit", {"expected_answer": "nan"}, "source_defect", "nonfinite_chemistry_target"),
         (
-            "ultra_sft_step3200_toolcall_schema",
-            {"expected_action": {"type": "computer_call"}},
-            "unsupported",
-            "unsupported_action_type",
-        ),
-        (
             "ultra_sft_step3200_nvarc_transductive",
             {"agent_ref": {"name": "other_agent"}},
             "unsupported",
@@ -399,6 +398,24 @@ def test_converter_rejects_rows_its_grader_cannot_score(path, changes, kind, rea
     result = convert_row(RECIPES[name], {**COMPONENT_ROWS[path], **changes})
     assert isinstance(result, ImportRejection)
     assert (result.kind, result.reason) == (ImportFailureKind(kind), reason)
+
+
+def test_structured_output_repairs_repeated_required_fields():
+    path = "ultra_sft_step3200_structured_outputs_v2"
+    schema = {
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+        "required": ["count", "count"],
+    }
+    result = convert_row(
+        RECIPES[pipeline_name("rlvr2", path)],
+        {**COMPONENT_ROWS[path], "schema_str": json.dumps(schema)},
+    )
+    assert isinstance(result, NormalizedTask)
+    assert json.loads(grader_config(result.task)["contract"]["schema_str"])["required"] == ["count"]
+    assert [(change.field, change.reason) for change in result.changes] == [
+        ("schema_str", "Remove repeated names from JSON Schema required lists")
+    ]
 
 
 def task_for(path: str, staged, **changes) -> TaskSpec:
@@ -441,27 +458,88 @@ def test_code_golden_submits_the_source_solution(staged):
     assert CODE_CONTROLS.golden(task_for("ultra_sft_step3200_comp_coding", staged, gold_standard_solution="")) is None
 
 
-def test_tool_action_golden_calls_the_expected_tool(staged):
-    task = task_for("ultra_sft_step3200_toolcall_schema", staged)
+def test_exact_tool_action_golden_calls_the_expected_tool(staged):
+    task = task_for(
+        "ultra_sft_step3200_toolcall_schema",
+        staged,
+        agent_ref={"name": "single_step_tool_use_with_argument_comparison_agent"},
+    )
     assert TOOL_ACTION_CONTROLS.golden is not None
     expected = COMPONENT_ROWS["ultra_sft_step3200_toolcall_schema"]["expected_action"]
     call = ConversationToolCall(call_id="control", name=expected["name"], arguments=json.loads(expected["arguments"]))
     assert TOOL_ACTION_CONTROLS.golden(task) == Reply(AssistantToolCalls(calls=(call,)))
 
 
-def test_tool_action_conversion_rejects_duplicate_public_tools(staged):
+def test_tool_action_conversion_removes_identical_duplicate_public_tools(staged):
     path = "ultra_sft_step3200_toolcall_schema"
     row = COMPONENT_ROWS[path]
     request = row["responses_create_params"]
     tools = request["tools"]
     duplicate = {**row, "responses_create_params": {**request, "tools": [*tools, tools[0]]}}
     result = convert_row(RECIPES[pipeline_name("rlvr2", path)], duplicate, inputs=staged)
-    assert isinstance(result, ImportRejection)
-    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, "duplicate_tool_name")
+    assert isinstance(result, NormalizedTask)
+    assert [tool.name for tool in result.task.final_tools] == [tool["name"] for tool in tools]
+    assert [(change.field, change.replacement) for change in result.changes if change.field.startswith("tools")] == [
+        (f"tools[{len(tools)}]", "Removed")
+    ]
 
     task = task_for(path, staged)
+    assert task.answer_type == AnswerType.NATIVE_ACTION
+    assert task.answer_format == FinalAction(max_calls=1)
     assert [tool.name for tool in task.final_tools] == [tool["name"] for tool in tools]
-    assert grader_config(task)["contract"]["expected_action"] == row["expected_action"]
+    assert any(isinstance(event, AssistantToolCalls) for event in task.context.events)
+    assert isinstance(task.grader, VerifyitGrader)
+    spec = verifyit_spec(task.grader)
+    assert isinstance(spec, JudgeSpec)
+    assert not spec.exact_gate_answers
+    assert task.resources.verifier == ()
+    assert row["expected_action"]["arguments"] not in json.dumps(spec.references)
+
+
+def test_tool_message_action_uses_semantic_grading(staged):
+    content = "Please tell me which company you want me to look up."
+    task = task_for(
+        "ultra_sft_step3200_toolcall_schema",
+        staged,
+        expected_action={"type": "message", "content": content},
+    )
+    assert task.answer_type == AnswerType.NATIVE_ACTION
+    assert task.answer_format == FinalAction(max_calls=1)
+    assert isinstance(task.grader, VerifyitGrader)
+    assert isinstance(verifyit_spec(task.grader), JudgeSpec)
+
+    row = COMPONENT_ROWS["ultra_sft_step3200_toolcall_schema"]
+    request = row["responses_create_params"]
+    no_tools = {
+        **row,
+        "expected_action": {"type": "message", "content": content},
+        "responses_create_params": {**request, "tools": []},
+    }
+    text_task = converted_task(
+        RECIPES[pipeline_name("rlvr2", "ultra_sft_step3200_toolcall_schema")], no_tools, inputs=staged
+    )
+    assert text_task.answer_type == AnswerType.TEXT
+
+
+def test_toolcall_schema_ignores_broken_legacy_target(staged):
+    task = task_for("ultra_sft_step3200_toolcall_schema", staged, expected_action={"type": "broken"})
+    assert task.answer_type == AnswerType.NATIVE_ACTION
+    assert isinstance(task.grader, VerifyitGrader)
+    assert isinstance(verifyit_spec(task.grader), JudgeSpec)
+    assert task.resources.verifier == ()
+    assert '"expected_action"' not in task.model_dump_json()
+
+
+def test_toolcall_schema_legacy_targets_do_not_create_conflicting_references(staged):
+    original = task_for("ultra_sft_step3200_toolcall_schema", staged)
+    alternative = task_for(
+        "ultra_sft_step3200_toolcall_schema",
+        staged,
+        expected_action={"type": "message", "content": "Please clarify the location."},
+    )
+
+    assert deduplication_key(original) == deduplication_key(alternative)
+    assert semantic_digest(original, include_reference=True) == semantic_digest(alternative, include_reference=True)
 
 
 def test_reasoning_gym_golden_is_the_rows_answer(staged):

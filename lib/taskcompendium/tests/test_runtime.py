@@ -26,7 +26,7 @@ from shellbox.machine import (
     ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
-from verifyit.spec import ScriptSpec, render_spec, spec_from_table
+from verifyit.spec import RUBRIC_LABELS, JudgeSpec, ScriptSpec, render_spec, spec_from_table
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradingFailure, Outcome
@@ -43,6 +43,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
+    FinalAction,
     FunctionCall,
     FunctionDefinition,
     GradingAttempt,
@@ -277,8 +278,8 @@ class LocalGradingMachine:
             if SPEC_PATH in command.argv:
                 spec_path = self.local(SPEC_PATH)
                 spec = spec_from_table(tomllib.loads(spec_path.read_text()))
-                assert isinstance(spec, ScriptSpec)
-                spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
+                if isinstance(spec, ScriptSpec):
+                    spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
                 argv.extend(("--logs-dir", str(self.local("/logs/verifier"))))
         else:
             assert program in {"bash", "sh"}, command.argv
@@ -409,6 +410,46 @@ def test_script_grader_scores_captured_files_in_sandbox_and_task_grading(
     assert (runtime.status, runtime.reward) == (Outcome.GRADED, reward)
     assert (tmp_path / "tests/test.sh").read_bytes() == SCRIPT_GRADER
     assert all(machine.closed for machine in factory.machines)
+
+
+def test_native_action_judge_grader_receives_the_semantic_action_in_its_sandbox(tmp_path, shell_task):
+    candidate = '{"arguments":{"index":3},"name":"lookup","type":"function_call"}'
+    package = verifyit_package(
+        JudgeSpec(
+            references=("Use the lookup function.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the proposed action.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            exact_gate_answers=(candidate,),
+            exact_gate_label="PASS",
+        ),
+        environment=GRADER_ENVIRONMENT,
+    )
+    task = shell_task.model_copy(
+        update={
+            "context": ConversationInput(events=(TextMessage(role="user", content="Look up index 3."),)),
+            "final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+            "answer_type": AnswerType.NATIVE_ACTION,
+            "answer_format": FinalAction(require_call=True, max_calls=1),
+            "grader": package.grader,
+            "resources": ResourceGroups(verifier=package.resources),
+            "output_paths": (),
+        }
+    )
+    action = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="transport-only", name="lookup", arguments={"index": 3}),)
+    )
+    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, action)))
+
+    result = grade_task(
+        task,
+        attempt,
+        machine_factory=LocalGradingMachines(tmp_path),
+        machine_spec=GRADER_MACHINE,
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
 
 
 @pytest.mark.parametrize("state,reward", [('{"ready":true}', 1.0), ('{"ready":false}', 0.0)])
