@@ -54,8 +54,7 @@ fi
 
 # Create the tracker lineage once, outside the coordinator and training retry loops.
 # launch verifies the same child and lets training resume it without fork_from.
-uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" "$IRIS_CONFIG" \
-  "$SEQ_LEN" "$FLOPS_BASELINE_TOTAL" "$CONTEXT_SWITCH_STEP" <<'PYTHON'
+uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" "$IRIS_CONFIG" <<'PYTHON'
 import csv
 import io
 import os
@@ -67,8 +66,7 @@ import wandb
 from iris.cluster.types import TERMINAL_JOB_STATES
 from levanter.tracker.wandb import _WANDB_FORK_FROM_PATTERN
 
-(mode, run_id, project, fork_from, checkpoint, launch_commit, iris_config,
- seq_len, baseline_total, context_switch_step) = sys.argv[1:]
+mode, run_id, project, fork_from, checkpoint, launch_commit, iris_config = sys.argv[1:]
 entity = "marin-community"
 lineage = {
     "hero_handoff_checkpoint": checkpoint,
@@ -84,11 +82,6 @@ if parent_id == run_id:
 checkpoint_step = re.fullmatch(r"step-(\d+)", checkpoint.rstrip("/").rsplit("/", 1)[-1])
 if checkpoint_step is None:
     raise ValueError(f"HANDOFF_CHECKPOINT must end in step-<N>: {checkpoint}")
-context_switch = int(seq_len) != 4096
-if context_switch and float(baseline_total) <= 0:
-    raise ValueError("A context switch requires the parent's cumulative FLOPs at the switch step")
-if context_switch != (0 < int(context_switch_step) <= int(checkpoint_step[1])):
-    raise ValueError("CONTEXT_SWITCH_STEP must be set, at or before the handoff, exactly when SEQ_LEN is not 4K")
 # The child resumes at checkpoint step N and logs training step N first; W&B starts a fork at
 # _step + 1, so any fork point at or past N makes the child's rows fail step monotonicity.
 if int(fork["step"]) >= int(checkpoint_step[1]):
