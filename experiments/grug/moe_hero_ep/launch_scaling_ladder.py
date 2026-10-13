@@ -80,7 +80,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     validation_datasets,
     with_transport_remat_mode,
 )
-from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
     SMALL_SHAPES,
@@ -262,20 +262,13 @@ def build_ladder_run(
     if checkpoint_every is not None:
         keep_permanent = [{"every": checkpoint_every}]
 
-    # The optimizer's LR/epsilon are compute-scaled from the token budget and width; the hero builder
-    # already does this at d6144, so reuse it there and the shared MoeHeuristic at the narrow rungs.
-    if size == "d6144":
-        _, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size, seq_len=seq_len)
-    else:
-        optimizer = dataclasses.replace(
-            MoeHeuristic().build_optimizer_config(
-                num_train_steps=num_steps,
-                batch_size=batch_size,
-                hidden_dim=model.hidden_dim,
-                seq_len=seq_len,
-            ),
-            use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
-        )
+    # The optimizer's LR/epsilon are compute-scaled from the tokens per step, token budget, and width.
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=num_steps,
+        batch_size=batch_size,
+        hidden_dim=model.hidden_dim,
+        seq_len=seq_len,
+    )
     optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
 
     # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state

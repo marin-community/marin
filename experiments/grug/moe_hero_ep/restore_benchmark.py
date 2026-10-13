@@ -249,9 +249,7 @@ def main(
     batch_size = HERO_EP_BATCH_SIZE * replica_groups
     if model_size == HERO_MODEL_SIZE:
         model = with_transport_remat_mode(HERO_MODEL_CONFIG)
-        _, optimizer = build_hero_configs(
-            num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size, seq_len=model.max_seq_len
-        )
+        _, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
     else:
         shape = SMALL_SHAPES[model_size]
         model = _small_model(
