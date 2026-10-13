@@ -1,0 +1,21 @@
+{
+  "scope": "CompletedSC40pilotandretiredpreemptedTISbatchattempts;replacementTISinteractive40resultpending.",
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 5560,
+      "bytes": 6990627921,
+      "manifest_sha256": "a53e4f07411f8c7ef7d8f192ac5ad32acb2667ac323228e124a4336199a8aa93",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s0-pilot-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 5167,
+      "bytes": 59833670,
+      "manifest_sha256": "dc2ced0af0c5de967f6d93b9798fa6e0a6e02b7955bfba7dd5d978ff6ad59208",
+      "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s0-pilot-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+    }
+  ]
+}

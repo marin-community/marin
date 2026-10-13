@@ -1477,12 +1477,13 @@
       "configuration_sha256": "74d8edaf6450a158b4d074bb6a7dd2062877e4d9db4542f1273dc79672e390b8",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 2,
       "bundle_id": "77f3d5482a8cdf40d419ce7b1975b916c9c69c61f6ee244bc1503faa07a5dee9",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce.json.gz"
     }
   ],
-  "observed_at": "2026-10-13T18:38:53.336757+00:00"
+  "observed_at": "2026-10-13T20:17:59.248975+00:00"
 }

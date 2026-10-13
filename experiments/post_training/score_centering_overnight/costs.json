@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-13T18:38:53.336757+00:00",
+  "observed_at": "2026-10-13T20:17:59.248975+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -4046,6 +4046,48 @@
       "allocated_seconds": 45.219,
       "allocated_h100_hours": 0.10048666666666667,
       "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "4df2fdc81f5d9dc8",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791916670461",
+      "finished_at_ms": "1791922541555",
+      "node_name": "g73a62a",
+      "terminal_reason": "",
+      "stage": "Qwen transfer pilot",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "74d8edaf6450a158b4d074bb6a7dd2062877e4d9db4542f1273dc79672e390b8",
+      "allocated_seconds": 5871.094,
+      "allocated_h100_hours": 13.046875555555555,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce.json.gz"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "d91749f5d763cb23",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791916670461",
+      "finished_at_ms": "1791922535963",
+      "node_name": "g845f76",
+      "terminal_reason": "",
+      "stage": "Qwen transfer pilot",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "74d8edaf6450a158b4d074bb6a7dd2062877e4d9db4542f1273dc79672e390b8",
+      "allocated_seconds": 5865.502,
+      "allocated_h100_hours": 13.034448888888889,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce.json.gz"
     }
   ],
   "terminal_h100_hours": 54.25557777777778,
@@ -4061,45 +4103,8 @@
     "Qwen GPU qualification": 98.52069999999999,
     "Snowball noise calibration": 235.28845555555557,
     "Snowball incumbent qualification": 92.46114222222224,
-    "Qwen transfer pilot": 29.91481777777777
+    "Qwen transfer pilot": 55.99614222222222
   },
   "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
-  "active_attempts": [
-    {
-      "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce/0",
-      "attempt_id": "0",
-      "attempt_uid": "4df2fdc81f5d9dc8",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791916670461",
-      "finished_at_ms": "",
-      "node_name": "g73a62a",
-      "terminal_reason": "",
-      "stage": "Qwen transfer pilot",
-      "cluster": "cw-us-east-02a",
-      "priority": "interactive",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "74d8edaf6450a158b4d074bb6a7dd2062877e4d9db4542f1273dc79672e390b8",
-      "allocated_h100_hours_so_far": 0.13972390439775256
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce/1",
-      "attempt_id": "0",
-      "attempt_uid": "d91749f5d763cb23",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791916670461",
-      "finished_at_ms": "",
-      "node_name": "g845f76",
-      "terminal_reason": "",
-      "stage": "Qwen transfer pilot",
-      "cluster": "cw-us-east-02a",
-      "priority": "interactive",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "74d8edaf6450a158b4d074bb6a7dd2062877e4d9db4542f1273dc79672e390b8",
-      "allocated_h100_hours_so_far": 0.13972390439775256
-    }
-  ]
+  "active_attempts": []
 }

@@ -1,0 +1,19 @@
+{
+  "configs": [
+    {
+      "path": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v4/curriculum-sc-s0.yaml",
+      "sha256": "009a5386d55e732fa8bf80da2ec562502bfabab7bc1703785da879198c026b1a"
+    },
+    {
+      "path": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/curriculum-tis-s0.yaml",
+      "sha256": "74d8edaf6450a158b4d074bb6a7dd2062877e4d9db4542f1273dc79672e390b8"
+    }
+  ],
+  "placement": {
+    "sc": "batch2nodes,pilot-a3",
+    "tis": "interactive2nodes,pilot-a4 after4batchpreemptions"
+  },
+  "recovery_run_id": "sc-qwen-transfer-curriculum-tis-s0-pilot-a3-01a126ce",
+  "recovery_cost_included": true,
+  "scope": "Onepairedseed040updateexploratorypilot;no populationinterval/equivalenceclaim. FailedbatchallocationsincludedinTISquality-vs-costcurve,allrawrecordsremainpreserved."
+}

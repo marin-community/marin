@@ -31,14 +31,15 @@ def paired_recipe(config: dict) -> dict:
     return json.loads(json.dumps(recipe).replace(config["run"]["id"], "PAIRED_RUN"))
 
 
-def summarize(config: dict, audit: dict, cache: Path, costs: dict) -> dict:
+def summarize(config: dict, audit: dict, cache: Path, costs: dict, *, recovery_run_ids: tuple[str, ...] = ()) -> dict:
     run_id = config["run"]["id"]
     updates = config["skyrl"]["trainer"]["max_steps"]
     assert audit["run_id"] == run_id and audit["audit_passed"]
     assert audit["audit_scope"] == "complete native curriculum run"
     assert audit["source"] == config["runtime"]["launcher_commit"]
     assert audit["completed_updates"] == updates
-    attempts = [row for row in costs["attempts"] if row["task_id"].rsplit("/", 1)[0] == "/romain/" + run_id]
+    allocation_jobs = {"/romain/" + identity for identity in (run_id, *recovery_run_ids)}
+    attempts = [row for row in costs["attempts"] if row["task_id"].rsplit("/", 1)[0] in allocation_jobs]
     assert attempts and all(int(row["finished_at_ms"]) for row in attempts)
     metrics = [
         json.loads((cache / "exports/training_metrics" / f"train-{step:08d}.json").read_text())
@@ -82,6 +83,7 @@ def summarize(config: dict, audit: dict, cache: Path, costs: dict) -> dict:
         "ppo_clip_fractions": [row["policy/ppo_clip_ratio"] for row in metrics],
         "learner_evidence": audit["learner_evidence"],
         "total_allocated_h100_hours": sum(row["allocated_h100_hours"] for row in attempts),
+        "recovery_run_ids": list(recovery_run_ids),
         "source_task_errors": audit["source_task_errors"],
         "cost_basis": (
             "All recorded task allocation intervals, including failed attempts, setup, evaluation and checkpointing."
@@ -98,10 +100,27 @@ def main() -> None:
     parser.add_argument("--costs", type=Path, required=True)
     parser.add_argument("--mode", choices=("pilot", "main"), required=True)
     parser.add_argument("--common-source-rows", type=Path)
+    parser.add_argument("--recovery-config", type=Path, action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     costs = json.loads(args.costs.read_text())
     configs = [yaml.safe_load(path.read_text()) for path in sorted(args.config_dir.glob(args.pattern))]
+    recoveries = {config["run"]["id"]: [] for config in configs}
+    for path in args.recovery_config:
+        previous = yaml.safe_load(path.read_text())
+        matches = [
+            config
+            for config in configs
+            if config["run"]["seed"] == previous["run"]["seed"]
+            and config["runtime"]["launcher_commit"] == previous["runtime"]["launcher_commit"]
+            and config["skyrl"]["trainer"]["algorithm"]["score_centering_enabled"]
+            == previous["skyrl"]["trainer"]["algorithm"]["score_centering_enabled"]
+            and paired_recipe(config) == paired_recipe(previous)
+        ]
+        assert len(matches) == 1, f"Recovery configuration has no unique matching scientific recipe: {path}"
+        identity = previous["run"]["id"]
+        assert identity not in recoveries and all(identity not in values for values in recoveries.values())
+        recoveries[matches[0]["run"]["id"]].append(identity)
     seeds = (0,) if args.mode == "pilot" else (0, 1, 2)
     assert len(configs) == 2 * len(seeds)
     if args.mode == "pilot":
@@ -113,7 +132,7 @@ def main() -> None:
         run_id = config["run"]["id"]
         path = args.audit_dir / f"{run_id}.json"
         audit = read_json(path if path.exists() else path.with_suffix(".json.gz"))
-        runs.append(summarize(config, audit, args.cache_dir / run_id, costs))
+        runs.append(summarize(config, audit, args.cache_dir / run_id, costs, recovery_run_ids=tuple(recoveries[run_id])))
     assert len({run["source"] for run in runs}) == 1
     members = set(json.loads(args.common_source_rows.read_text())) if args.common_source_rows else None
     if members is not None:
