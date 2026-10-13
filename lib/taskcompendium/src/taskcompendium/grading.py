@@ -159,6 +159,8 @@ def grade_remote_judge_answer(task: TaskSpec, attempt: GradingAttempt, connectio
         if isinstance(submission, TextSubmission):
             candidate = submission.value
         elif isinstance(submission, ActionSubmission):
+            if isinstance(submission.message, TextMessage) and not submission.message.content.strip():
+                return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
             candidate = native_action_text(submission.message)
         else:
             raise TypeError(f"A judge cannot grade a {type(submission).__name__}")
