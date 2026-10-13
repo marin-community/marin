@@ -52,6 +52,7 @@ from taskcompendium.pipeline.models import Admission, Disposition, FilterPolicy,
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
 from taskcompendium.pipeline.source_quality import (
+    MAX_SOURCE_QUALITY_SAMPLE_SIZE,
     SOURCE_QUALITY_REVISION,
     QualitySampleCoverage,
     SourceQualityPolicy,
@@ -906,8 +907,8 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     config = run.config
     if config.normalized_shards < 1:
         raise ValueError("Canonical normalized shard count must be positive")
-    if config.quality_policy.sample_size > 100:
-        raise ValueError("The initial raw task panel is capped at 100")
+    if config.quality_policy.sample_size > MAX_SOURCE_QUALITY_SAMPLE_SIZE:
+        raise ValueError(f"The initial raw task panel is capped at {MAX_SOURCE_QUALITY_SAMPLE_SIZE}")
     panel = _sample_panel(run)
     review = config.review if run.recipe.rubric is not None else None
     decision = _gate_quality(run, panel, review)

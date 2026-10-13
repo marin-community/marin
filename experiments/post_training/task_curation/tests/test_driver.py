@@ -211,6 +211,13 @@ def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog, mo
     assert not (tmp_path / "report.json").exists()
 
 
+def test_oversized_quality_panel_is_rejected_before_source_work(tmp_path, catalog):
+    result = CliRunner().invoke(main, [*arguments(tmp_path), "--run", "--quality-sample-size", "101"])
+    assert result.exit_code == 2
+    assert "101 is not in the range 1<=x<=100" in result.output
+    assert not (tmp_path / "report.json").exists()
+
+
 def test_gvisor_image_backend_requires_a_controller_outside_an_iris_job(tmp_path, catalog, monkeypatch):
     monkeypatch.setattr("experiments.post_training.task_curation.driver.get_job_info", lambda: None)
     options = [*arguments(tmp_path), "--image-backend", "gvisor"]

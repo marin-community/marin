@@ -21,7 +21,7 @@ from taskcompendium.pipeline.assessment import AssessmentSampling
 from taskcompendium.pipeline.assessment_review import ASSESSMENT_RUBRIC, AssessmentModel
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
-from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_SAMPLE_SIZE
+from taskcompendium.pipeline.source_quality import MAX_SOURCE_QUALITY_SAMPLE_SIZE, SOURCE_QUALITY_SAMPLE_SIZE
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
@@ -128,7 +128,12 @@ def _publish_campaign(report_path: str, selected: dict[str, RlDataSource]) -> No
     help="Controller for --image-backend gvisor; defaults to the current Iris job's controller.",
 )
 @click.option("--seed", type=int, default=0)
-@click.option("--quality-sample-size", type=click.IntRange(min=1), default=SOURCE_QUALITY_SAMPLE_SIZE, show_default=True)
+@click.option(
+    "--quality-sample-size",
+    type=click.IntRange(min=1, max=MAX_SOURCE_QUALITY_SAMPLE_SIZE),
+    default=SOURCE_QUALITY_SAMPLE_SIZE,
+    show_default=True,
+)
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
 @click.option(
     "--curation-attempt",
