@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-13T20:24:45.918338+00:00",
+  "observed_at": "2026-10-13T20:57:43.781233+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -4123,7 +4123,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "d765a18d08f71efb8b33d0e22c30fb789608e9683a8ee56abfb7906e0285b19e",
-      "allocated_h100_hours_so_far": 0.1603074179755317
+      "allocated_h100_hours_so_far": 4.5555582957797585
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce/1",
@@ -4141,7 +4141,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "d765a18d08f71efb8b33d0e22c30fb789608e9683a8ee56abfb7906e0285b19e",
-      "allocated_h100_hours_so_far": 0.14741852919260662
+      "allocated_h100_hours_so_far": 4.542669406996833
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce/0",
@@ -4159,7 +4159,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "ff48b8d8ec63f97872d2456599d1ceb4d3db124ebf02d73158c8e2b9c99c4025",
-      "allocated_h100_hours_so_far": 0.07240741782718235
+      "allocated_h100_hours_so_far": 4.467658295631408
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce/1",
@@ -4177,7 +4177,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "ff48b8d8ec63f97872d2456599d1ceb4d3db124ebf02d73158c8e2b9c99c4025",
-      "allocated_h100_hours_so_far": 0.07240741782718235
+      "allocated_h100_hours_so_far": 4.467658295631408
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce/0",
@@ -4195,7 +4195,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "75bfcba7e68299f0bd703bfe2dbb0e58747f17c025172449c55a6c4d8214b007",
-      "allocated_h100_hours_so_far": 0.07240741782718235
+      "allocated_h100_hours_so_far": 4.467658295631408
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce/1",
@@ -4213,7 +4213,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "75bfcba7e68299f0bd703bfe2dbb0e58747f17c025172449c55a6c4d8214b007",
-      "allocated_h100_hours_so_far": 0.07240741782718235
+      "allocated_h100_hours_so_far": 4.467658295631408
     }
   ]
 }

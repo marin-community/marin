@@ -8,6 +8,7 @@ import copy
 import json
 import math
 from pathlib import Path
+from urllib.parse import urlparse
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -46,10 +47,11 @@ def summarize(config: dict, audit: dict, cache: Path, costs: dict, *, recovery_r
         for step in range(1, updates + 1)
     ]
     assert all(math.isfinite(row["policy/raw_grad_norm"]) for row in metrics)
+    metric_prefix = urlparse(config["artifacts"]["export_root"]).path.lstrip("/").rstrip("/") + "/training_metrics/"
     inventory = {
-        row["Key"].rsplit("/", 1)[-1]: row
+        row["Key"].removeprefix(metric_prefix): row
         for row in json.loads((cache / "object_inventory.json").read_text())
-        if "/exports/training_metrics/eval-" in row["Key"]
+        if row["Key"].startswith(metric_prefix)
     }
     row_points = {point["completed_updates"]: point["rows"] for point in audit["evaluation_rows"]}
     points = []

@@ -1,0 +1,16 @@
+{
+  "run_id": "sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scope": "Actual first update admission only; not final scientific endpoint.",
+  "configured_updates": 300,
+  "applied_updates": 1,
+  "gradient_norm": 0.18232037127017975,
+  "logical_batch_rows": 512,
+  "retained_rows": 2,
+  "loss_tokens_checked": 240,
+  "natural_head_width": 128,
+  "group_admission_seconds": 64.43193959444761,
+  "policy_training_seconds": 14.165691636502743,
+  "metric_sha256": "cc754cb0b2dffd1991608dfe395a6e8632962905c280b7d9be218805d7987d3f",
+  "early_path_passed": true
+}

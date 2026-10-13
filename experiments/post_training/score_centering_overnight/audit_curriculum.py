@@ -35,6 +35,17 @@ def audit(
     recorded_learner_steps: bool = False,
     ordinary_incumbent: bool = False,
 ) -> dict:
+    uri = config["artifacts"]["attempts_root"].removesuffix("/attempts")
+    prefix = urlparse(uri).path.lstrip("/").rstrip("/") + "/"
+    inventory = {
+        item["Key"].removeprefix(prefix): item for item in json.loads((root / "object_inventory.json").read_text())
+    }
+
+    def require_current_attempt(path: Path) -> None:
+        if archive_after_ms:
+            item = inventory[str(path.relative_to(root))]
+            assert item["last_modified_ms"] >= archive_after_ms, f"Artifact predates selected attempt: {path}"
+
     resolved = yaml.safe_load((root / "resolved-launch.yaml").read_text())["config"]
     assert resolved["runtime"]["launcher_commit"] == config["runtime"]["launcher_commit"]
     trainer = resolved["skyrl"]["trainer"]
@@ -58,7 +69,9 @@ def audit(
         assert algorithm["off_policy_correction_rules"] == [{"kind": "token", "action": "truncate", "high": 2.0}]
     evidence = []
     for step in range(1, updates + 1):
-        metrics = json.loads((root / "exports/training_metrics" / f"train-{step:08d}.json").read_text())
+        metric_path = root / "exports/training_metrics" / f"train-{step:08d}.json"
+        require_current_attempt(metric_path)
+        metrics = json.loads(metric_path.read_text())
         assert metrics["policy/policy_update_steps"] == 1 and metrics["policy/skipped_steps"] == 0
         assert math.isfinite(metrics["policy/raw_grad_norm"])
         expected_age = (step - 1) % refresh_period
@@ -76,7 +89,9 @@ def audit(
             assert metrics["policy/log_ratio_abs_max"] == 0 and metrics["policy/ppo_clip_ratio"] == 0
         if not platform_scope:
             assert metrics["async/rejected_count"] == 0
-        batch = pickle.loads((root / "exports/dumped_data" / f"global_step_{step}_training_input.pkl").read_bytes())
+        capture_path = root / "exports/dumped_data" / f"global_step_{step}_training_input.pkl"
+        require_current_attempt(capture_path)
+        batch = pickle.loads(capture_path.read_bytes())
         assert batch.metadata["global_step"] == step and batch.metadata["source_batch_size"] == batch_size
         mask = batch["loss_mask"].bool()
         if ordinary_incumbent:
@@ -157,12 +172,9 @@ def audit(
     evaluation_rows = {}
     errors = []
     prefetch_records = 0
-    inventory = {
-        item["Key"].split("/attempts/", 1)[-1]: item for item in json.loads((root / "object_inventory.json").read_text())
-    }
     selected_archives = []
     for path in (root / "attempts/trajectories").glob("**/*.zip"):
-        item = inventory[str(path.relative_to(root / "attempts"))]
+        item = inventory[str(path.relative_to(root))]
         if archive_after_ms and item["last_modified_ms"] < archive_after_ms:
             continue
         selected_archives.append(item)
@@ -262,6 +274,8 @@ def audit(
         expected_members = 756 if config["skyrl"]["context_budget"]["request_window_tokens"] == 8192 else 753
     assert len(first) == expected_members and set(first.values()) == {generator["eval_n_samples_per_prompt"]}
     assert all(members == first for members in memberships.values())
+    for step in quality:
+        require_current_attempt(root / "exports/training_metrics" / f"eval-{step:08d}.json")
     membership_sha256 = hashlib.sha256(
         json.dumps(
             [[source_row, list(tokens), count] for (source_row, tokens), count in sorted(first.items())],
@@ -342,10 +356,12 @@ def main() -> None:
         ordinary_incumbent=args.ordinary_incumbent,
     )
     checkpoint = urlparse(config["artifacts"]["checkpoint_root"])
-    marker = client.get_object(
+    marker_object = client.get_object(
         Bucket=checkpoint.netloc, Key=checkpoint.path.lstrip("/") + "/latest_ckpt_global_step.txt"
-    )["Body"].read()
+    )
+    marker = marker_object["Body"].read()
     assert int(marker) == result["completed_updates"]
+    assert int(marker_object["LastModified"].timestamp() * 1000) >= args.archive_after_ms
     write_json(args.output, result)
     print(
         json.dumps(
