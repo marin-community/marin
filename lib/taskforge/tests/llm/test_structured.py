@@ -84,13 +84,15 @@ def test_second_failure_raises_with_both_completions(fake_glm, run):
     assert [c.content for c in error.value.completions] == ["not json", "still not json"]
 
 
-def test_valid_but_length_cut_reply_is_repaired_not_continued(fake_glm, run):
+def test_length_cut_first_reply_raises_without_a_repair(fake_glm, run):
     fake_glm.stream(content=PARIS, finish="length")
-    fake_glm.stream(content='{"city": "Paris", "millions": 2.14}')
-    result = run()
-    assert result.value.millions == 2.14
-    assert [c.continuations for c in result.completions] == [0, 0]
-    assert "cut off" in fake_glm.requests[1]["messages"][-1]["content"]
+    fake_glm.stream(content=PARIS)
+    with pytest.raises(StructuredOutputError) as error:
+        run()
+    assert len(fake_glm.requests) == 1
+    assert len(error.value.completions) == 1
+    assert error.value.completions[0].continuations == 0
+    assert "cut off" in str(error.value)
 
 
 def test_length_cut_repair_raises(fake_glm, run):

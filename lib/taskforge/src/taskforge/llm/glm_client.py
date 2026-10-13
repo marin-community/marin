@@ -365,10 +365,10 @@ class GlmClient:
         """Request a reply as ``output_type`` and return it validated, repairing invalid replies.
 
         vLLM decodes the answer under ``output_type``'s JSON schema with xgrammar, after the reasoning
-        block. The client then validates the reply with ``output_type`` to run its pydantic validators
-        and to reject a reply cut off by the output limit. It sends an invalid reply back for
-        correction up to the provider's ``structured_repairs`` times, then raises
-        ``StructuredOutputError``.
+        block. The client then validates the reply with ``output_type`` to run its pydantic validators.
+        It sends an invalid reply back for correction up to the provider's ``structured_repairs``
+        times, then raises ``StructuredOutputError``. A reply cut off by the output limit raises
+        ``StructuredOutputError`` at once, with no repair.
         """
         return await complete_structured(self, messages, output_type, policy, self._provider.structured_repairs)
 
