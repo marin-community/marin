@@ -92,6 +92,34 @@ def test_direct_review_reuses_exact_cache_across_modes_and_source_ids(tmp_path):
     assert abandoned.read_bytes() == original
 
 
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+def test_cached_request_output_preserves_unicode_separators(tmp_path, separator):
+    requests = [{"custom_id": "task", "body": {"prompt": "Count apples."}}]
+    row = response("task")
+    function = row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]
+    verdict = json.loads(function["arguments"])
+    verdict["evidence"] = f"First paragraph{separator}Second paragraph"
+    function["arguments"] = json.dumps(verdict, ensure_ascii=False)
+    raw = json.dumps(row, ensure_ascii=False)
+    calls = []
+
+    def submit(selected):
+        calls.append(selected)
+        return RequestOutput(tuple(selected), [RequestObservation(("task",), raw + "\n")])
+
+    options = dict(
+        cache_root=str(tmp_path / "cache"),
+        model_revision="pinned",
+        valid_completion=valid_review_completion,
+        submit=submit,
+    )
+    first = cached_request_output(requests, **options)
+    second = cached_request_output(requests, **options)
+    assert first.output == second.output == raw
+    assert second.cache_hits == ("task",)
+    assert calls == [requests]
+
+
 @pytest.mark.parametrize("corruption", ["malformed", "mismatched", "invalid_output", "invalid_shape"])
 def test_invalid_cache_entry_does_not_block_inference(tmp_path, corruption):
     calls = []

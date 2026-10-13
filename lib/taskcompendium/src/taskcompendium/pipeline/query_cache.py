@@ -175,7 +175,9 @@ def _submitted_completions(
     missing_requests = list(misses.values())
     result = submit(missing_requests)
     rows = {}
-    for line in result.output.splitlines():
+    for line in result.output.split("\n"):
+        if not line.strip():
+            continue
         task_id = json.loads(line)["custom_id"]
         if task_id not in misses:
             raise ValueError(f"Unexpected batch response ID: {task_id}")
