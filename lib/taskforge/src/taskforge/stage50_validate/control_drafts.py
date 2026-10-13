@@ -12,6 +12,10 @@ must grade both, and they are also the usual reference and malformed controls. T
 from the draft's ``grader`` step output (``stage40_build.run.step_output``), so the reference
 answer validation replays is the one the build checked.
 
+The request lists the task's output paths, the only files a control may write, since the grader
+reads nothing else from the candidate's machine. ``check_control_files`` sends back a control
+writing any other file, such as one of the task's own files or the build's reference files.
+
 The accepted controls go to ``<directory>/controls.json`` (``spec.controls.controls_json``), and
 ``controls.replay`` replays them, each as a trial named by its id with a pass or fail verdict.
 """
@@ -19,7 +23,7 @@ The accepted controls go to ``<directory>/controls.json`` (``spec.controls.contr
 import base64
 import shlex
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field, field_validator
 from rigging.filesystem.atomic import atomic_rename
@@ -65,7 +69,11 @@ CONTROL_AUTHOR = "validate.write_controls"
 
 class ControlDraft(BaseModel):
     id: str = Field(description="Short id: letters, digits, '.', '_' or '-'.")
-    kind: ControlKind
+    kind: ControlKind = Field(
+        description="positive: a correct candidate the grader must accept, at least reward_min; negative: a wrong, "
+        "shortcut or reward-hacking candidate it must reject, at most reward_max; malformed: an empty or "
+        "unparseable reply it must reject, at most reward_max."
+    )
     category: ControlCategory = Field(
         description="positive: known_correct; negative: plausible_wrong, task_specific_shortcut or reward_hack; "
         "malformed: empty_or_malformed."
@@ -78,7 +86,9 @@ class ControlDraft(BaseModel):
     )
     final_reply: str = Field(description="The candidate's final reply.")
     files: list[FileDraft] = Field(
-        description="Files the candidate writes under workspace/ (relative to the machine root) before replying."
+        description="Files the candidate writes before replying, relative to the machine root. Only the task's "
+        "output paths may appear here, never the task's own files or the build's reference files; for a task "
+        "without output paths, leave the list empty."
     )
     reward_min: float | None = Field(description="Positive controls: the minimum reward, e.g. 0.99. Otherwise null.")
     reward_max: float | None = Field(
@@ -150,6 +160,29 @@ def _is_graded(control: Control, graded: Sequence[GradedCandidate], exempt_repli
     return any(c.reply == final.content and not c.files for c in graded)
 
 
+def check_control_files(drafts: Sequence[ControlDraft], output_paths: Sequence[str]) -> None:
+    """Refuse a control that writes a file outside the task's ``output_paths``.
+
+    The grader reads a candidate's files only at its output paths, so a control writing any other
+    file tests nothing the grader sees.
+
+    Raises:
+        ValueError: naming each such control and its files.
+    """
+    roots = [PurePosixPath(path) for path in output_paths]
+
+    def captured(file: FileDraft) -> bool:
+        return any(PurePosixPath(f"/{file.path}").is_relative_to(root) for root in roots)
+
+    outside = {draft.id: paths for draft in drafts if (paths := [f.path for f in draft.files if not captured(f)])}
+    if outside:
+        allowed = ", ".join(output_paths) if output_paths else "none, so every control is a final reply alone"
+        raise ValueError(
+            f"controls {sorted(outside)} write files outside the task's output paths: {outside}. Control files are "
+            f"only the task's output paths ({allowed})"
+        )
+
+
 def check_controls_not_graded(controls: Sequence[Control], grader: Grader) -> None:
     """Refuse a control that repeats a candidate in ``grader.prototyped``, other than the exempt two.
 
@@ -165,6 +198,16 @@ def check_controls_not_graded(controls: Sequence[Control], grader: Grader) -> No
             f"controls {repeated} are candidates the grader step graded while it prototyped the grader. Controls "
             "are written, not graded: write candidates the grader has not seen"
         )
+
+
+def output_paths_text(output_paths: Sequence[str]) -> str:
+    """The request's statement of the files a control may write."""
+    if not output_paths:
+        return "The task has no output paths, so every control is a final reply alone with no files."
+    return (
+        "A control's files are only these output paths, the files the grader reads from the candidate's machine: "
+        f"{', '.join(output_paths)}."
+    )
 
 
 async def write_controls(
@@ -195,6 +238,7 @@ async def write_controls(
         f"# Answer contract\n\n{grader.answer_contract}\n\n{SUBMISSION}\n\n"
         f"# Reference reply\n\n{grader.reference_reply}\n\n"
         f"# Reference files\n\n{files_text(grader.reference_files, '/')}\n\n"
+        f"# Output paths\n\n{output_paths_text(task.output_paths)}\n\n"
         "Write the fixed controls from the proposal's 'Grader design and controls' section: at least one "
         "known_correct positive control with concern reference (reward_min 0.99), one plausible_wrong control "
         "with concern acceptance, one task_specific_shortcut or reward_hack control with concern shortcut, and "
@@ -206,6 +250,7 @@ async def write_controls(
 
     async def problem(submitted: ControlsDraft) -> str | None:
         try:
+            check_control_files(submitted.controls, task.output_paths)
             controls = [control_from_draft(c) for c in submitted.controls]
             validate_controls(task, controls)
             check_controls_not_graded(controls, grader)
