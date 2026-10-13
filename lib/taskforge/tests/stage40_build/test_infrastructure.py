@@ -29,7 +29,7 @@ from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_
 from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build.infrastructure import InfrastructureCause
 from taskforge.stage40_build.run import DRAFT_DIR, ResearchRequirement, run_build
-from taskforge.stage40_build.sandbox_effects import build_machine, publish_image, try_grader
+from taskforge.stage40_build.sandbox_effects import build_machine, grade_candidate, publish_image
 from tests.stage40_build.conftest import FACTORIES, ITEM, SAMPLING
 
 SHELLSIM = draft.requirements(image=None)
@@ -125,7 +125,7 @@ async def test_host_failures_in_a_machine_are_infrastructure(context, factory, c
             await prepared.run(Command(argv=("true",)))
     with pytest.raises(BuildInfrastructureFailure) as grader_failure:
         # The candidate's workspace file is a shell command in the task machine.
-        await try_grader(
+        await grade_candidate(
             on_host,
             SHELLSIM,
             GRADER,
@@ -145,7 +145,7 @@ async def test_a_machine_backend_the_host_lacks_is_infrastructure(context):
         async with build_machine(on_host.services, DOCKER, MACHINE):
             pass
     with pytest.raises(BuildInfrastructureFailure) as grader_failure:
-        await try_grader(on_host, DOCKER, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
+        await grade_candidate(on_host, DOCKER, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
 
     assert machine_failure.value.cause == grader_failure.value.cause == InfrastructureCause.NO_FACTORY
 
@@ -174,7 +174,7 @@ async def test_an_image_or_spec_the_program_chose_stays_the_programs_failure(con
         async with build_machine(on_host.services, SHELLSIM, MACHINE):
             pass
     with pytest.raises(RolloutInterrupted) as interrupted:
-        await try_grader(on_host, SHELLSIM, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
+        await grade_candidate(on_host, SHELLSIM, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
 
     assert interrupted.value.__cause__ is error
 
@@ -192,7 +192,7 @@ def grading_program(wrapped: bool):
     @rl_env_build_sink
     async def task(context: RLEnvBuildContext) -> TaskSpec:
         try:
-            await try_grader(context, SHELLSIM, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
+            await grade_candidate(context, SHELLSIM, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
         except Exception as error:
             if not wrapped:
                 raise

@@ -19,7 +19,7 @@ The steps, in run order:
    ``DockerBuild``, which ``publish_image`` pushes; the step's output memoizes the pinned reference.
 4. ``grader`` writes the grader: an in-process verifyit grader (exact, numeric, math, mcq) when the
    answer is one value, otherwise a Python grader program in a verifier machine. Before it returns,
-   the step grades its reference answer and the empty answer with ``try_grader``. A reference below
+   the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
    ``FULL_CREDIT`` or an empty answer above ``REJECTION_CEILING`` goes back to the model, and after
    ``ATTEMPTS`` requests the build fails. The returned ``Grader`` holds the reference answer and
    every graded candidate.
@@ -44,7 +44,7 @@ from taskforge.stage10_proposal.model import Environment, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build.context import BuildFailure, RLEnvBuildContext
 from taskforge.stage40_build.outputs import Fixtures, GradedCandidate, Grader, Instructions, Sources
-from taskforge.stage40_build.sandbox_effects import publish_image, try_grader
+from taskforge.stage40_build.sandbox_effects import grade_candidate, publish_image
 from taskforge.stage40_build.sdk import (
     ANSWER_FORMAT,
     DOCKER_IMAGE_REQUIREMENTS,
@@ -150,7 +150,7 @@ async def grader(
         try:
             package = grader_package(submitted, fixtures, requirements)
             paths = output_paths(package, reference_files)
-            reference = await try_grader(
+            reference = await grade_candidate(
                 context,
                 requirements,
                 package,
@@ -180,7 +180,7 @@ async def grader(
                     "the grader wrote no per-check results: put a non-empty detail.checks in "
                     f"{draft.GRADER_VERDICT_PATH}"
                 )
-        empty = await try_grader(
+        empty = await grade_candidate(
             context,
             requirements,
             package,

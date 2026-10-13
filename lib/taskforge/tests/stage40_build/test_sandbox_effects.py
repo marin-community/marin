@@ -20,7 +20,7 @@ from verifyit.spec import ExactSpec, McqSpec, NumericSpec, StructuredExactSpec
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 from taskforge.stage40_build.context import BuildFailure
-from taskforge.stage40_build.sandbox_effects import build_machine, publish_image, try_grader
+from taskforge.stage40_build.sandbox_effects import build_machine, grade_candidate, publish_image
 
 SHELLSIM = draft.requirements(image=None)
 MACHINE = draft.machine(startup_timeout=60)
@@ -68,7 +68,7 @@ class RecordingImageBuilder:
         ),
     ],
 )
-async def test_try_grader_grades_answers_through_the_answer_format(
+async def test_grade_candidate_grades_answers_through_the_answer_format(
     context,
     requirements: EnvironmentRequirements | None,
     grader: GraderPackage,
@@ -77,20 +77,20 @@ async def test_try_grader_grades_answers_through_the_answer_format(
     right: str,
     wrong: str,
 ):
-    graded = await try_grader(context(), requirements, grader, answer_type, answer_format, "question", right)
-    rejected = await try_grader(context(), requirements, grader, answer_type, answer_format, "question", wrong)
+    graded = await grade_candidate(context(), requirements, grader, answer_type, answer_format, "question", right)
+    rejected = await grade_candidate(context(), requirements, grader, answer_type, answer_format, "question", wrong)
 
     assert (graded.status, graded.reward) == (Outcome.GRADED, 1.0)
     assert rejected.reward == 0.0
 
 
-async def test_try_grader_grades_the_workspace_a_candidate_leaves(context):
+async def test_grade_candidate_grades_the_workspace_a_candidate_leaves(context):
     grader = draft.python_grader(
         READS_REPORT, {}, environment=draft.grader_environment(None), answer_path=draft.ANSWER_PATH, timeout=60
     )
 
     async def grade(report: str) -> float | None:
-        result = await try_grader(
+        result = await grade_candidate(
             context(),
             SHELLSIM,
             grader,
@@ -107,10 +107,10 @@ async def test_try_grader_grades_the_workspace_a_candidate_leaves(context):
     assert await grade("total=41\n") == 0.0
 
 
-async def test_try_grader_refuses_an_answer_format_that_cannot_carry_the_answer(context):
+async def test_grade_candidate_refuses_an_answer_format_that_cannot_carry_the_answer(context):
     grader = draft.answer_grader(ExactSpec(expected=("42",)))
     with pytest.raises(BuildFailure, match="json_value cannot carry a text answer"):
-        await try_grader(context(), SHELLSIM, grader, AnswerType.TEXT, JsonValueAnswer(), "question", "42")
+        await grade_candidate(context(), SHELLSIM, grader, AnswerType.TEXT, JsonValueAnswer(), "question", "42")
 
 
 async def test_machine_installs_the_files_and_runs_the_setup(context):
