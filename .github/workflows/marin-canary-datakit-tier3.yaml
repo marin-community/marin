@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: '0 1 * * 1'  # Weekly, Monday 01:00 UTC
   workflow_dispatch:
+    inputs:
+      first_wait_timeout:
+        description: Seconds that the first job waits before the continued job takes over the wait.
+        default: "20700"
 
 permissions:
   contents: read
@@ -12,7 +16,12 @@ permissions:
 jobs:
   datakit-nemotron-ferry:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # GH-hosted runners cap at 6h; nemotron high (~28% of medium) targets 6h compute
+    # GH-hosted runners cap a job at 6h. When the first wait times out, the
+    # datakit-nemotron-ferry-continued job continues it, up to the Iris job timeout.
+    timeout-minutes: 350
+    outputs:
+      job_id: ${{ steps.submit.outputs.job_id }}
+      wait_state: ${{ steps.wait.outputs.state }}
     concurrency:
       # A run on a branch must not cancel the scheduled run on main.
       group: datakit-nemotron-ferry-${{ github.ref }}
@@ -72,7 +81,7 @@ jobs:
           # once the tokenize job is fixed.
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
-            --timeout 21600 \
+            --timeout 36000 \
             --region=europe-west4 \
             --memory=4G --disk=5G --cpu=1 --extra=cpu \
             --enable-extra-resources \
@@ -104,12 +113,13 @@ jobs:
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
-            --timeout 20700 \
+            --timeout "${{ inputs.first_wait_timeout || 20700 }}" \
+            --timeout-policy defer \
             --resource-exhaustion-policy shutdown \
             --github-output
 
       - name: Capture perf report
-        if: success() && steps.wait.outputs.resource_exhausted != 'true'
+        if: success() && steps.wait.outputs.succeeded == 'true' && steps.wait.outputs.resource_exhausted != 'true'
         shell: bash -l {0}
         run: |
           uv run python scripts/ci/collect_perf_metrics.py \
@@ -121,7 +131,7 @@ jobs:
             --gcs-prefix gs://marin-us-central1/infra/datakit/ferry_perf
 
       - name: Upload perf report
-        if: success() && steps.wait.outputs.resource_exhausted != 'true'
+        if: success() && steps.wait.outputs.succeeded == 'true' && steps.wait.outputs.resource_exhausted != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: datakit-tier3-perf-report
@@ -170,11 +180,142 @@ jobs:
           wandb-project: ${{ env.WANDB_PROJECT }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
+  datakit-nemotron-ferry-continued:
+    needs: datakit-nemotron-ferry
+    if: needs.datakit-nemotron-ferry.outputs.wait_state == 'WAIT_TIMED_OUT'
+    runs-on: ubuntu-latest
+    timeout-minutes: 280
+    concurrency:
+      group: datakit-nemotron-ferry-continued-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      JOB_ID: ${{ needs.datakit-nemotron-ferry.outputs.job_id }}
+      SMOKE_RUN_ID: datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}
+      FERRY_STATUS_PATH: gs://marin-us-central1/tmp/ttl=1d/ci/datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
+      WANDB_ENTITY: marin-community
+      WANDB_PROJECT: marin
+      IRIS_CONFIG: lib/iris/config/marin.yaml
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+
+      - name: Continue to wait for datakit nemotron ferry
+        id: wait
+        shell: bash -l {0}
+        run: |
+          # No --timeout: the Iris job timeout (36,000s) stops the ferry before this job times out.
+          uv run python scripts/ci/iris_monitor.py wait \
+            --job-id "$JOB_ID" \
+            --iris-config "${{ env.IRIS_CONFIG }}" \
+            --poll-interval 30 \
+            --resource-exhaustion-policy shutdown \
+            --github-output
+
+      - name: Capture perf report
+        if: success() && steps.wait.outputs.resource_exhausted != 'true'
+        shell: bash -l {0}
+        run: |
+          uv run python scripts/ci/collect_perf_metrics.py \
+            --job-id "$JOB_ID" \
+            --iris-config "${{ env.IRIS_CONFIG }}" \
+            --status "$FERRY_STATUS_PATH" \
+            --report-name tier3 \
+            --out perf-report.json \
+            --gcs-prefix gs://marin-us-central1/infra/datakit/ferry_perf
+
+      - name: Upload perf report
+        if: success() && steps.wait.outputs.resource_exhausted != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: datakit-tier3-perf-report
+          path: perf-report.json
+          retention-days: 90
+
+      - name: Capture failure diagnostics
+        if: failure() || cancelled()
+        continue-on-error: true
+        env:
+          DIAG_DIR: ${{ github.workspace }}/datakit-nemotron-diagnostics
+        run: |
+          mkdir -p "$DIAG_DIR"
+          uv run python scripts/ci/iris_monitor.py collect \
+            --job-id "$JOB_ID" \
+            --iris-config "${{ env.IRIS_CONFIG }}" \
+            --provider gcp \
+            --output-dir "$DIAG_DIR" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --controller-label iris-marin-controller \
+            --service-account "$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ssh-key ~/.ssh/google_compute_engine
+
+      - name: Upload diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: datakit-nemotron-diagnostics
+          path: datakit-nemotron-diagnostics/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Launch Loom triage
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
+        uses: ./.github/actions/loom-canary-triage
+        timeout-minutes: 5
+        with:
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
+          lane: datakit-nemotron
+          job-id: ${{ env.JOB_ID }}
+          run-id: ${{ env.SMOKE_RUN_ID }}
+          iris-config: ${{ env.IRIS_CONFIG }}
+          wandb-entity: ${{ env.WANDB_ENTITY }}
+          wandb-project: ${{ env.WANDB_PROJECT }}
+          gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. See the datakit-smoke workflow for rationale.
   notify-slack:
-    needs: datakit-nemotron-ferry
-    if: always() && (needs.datakit-nemotron-ferry.result == 'failure' || needs.datakit-nemotron-ferry.result == 'cancelled') && github.event_name == 'schedule'
+    needs: [datakit-nemotron-ferry, datakit-nemotron-ferry-continued]
+    if: |
+      always() && github.event_name == 'schedule' && (
+        contains(fromJSON('["failure", "cancelled"]'), needs.datakit-nemotron-ferry.result) ||
+        contains(fromJSON('["failure", "cancelled"]'), needs.datakit-nemotron-ferry-continued.result)
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
