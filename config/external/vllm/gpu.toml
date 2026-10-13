@@ -1,20 +1,19 @@
-# Immutable staged candidate; qualification and protected promotion remain pending.
-release_tag = "marin-vllm-gpu-staged-candidate-47b411d5785d"
-source_commit = "47b411d5785d1c3dee0328334472d70310c53feb"
-version = "0.0.0.dev20261006+marin.47b411d5785d.cu132"
+release_tag = "marin-vllm-gpu-20261012-3a054c458ca8"
+source_commit = "3a054c458ca8a32609ba2bc578c4d9b93eabb395"
+version = "0.0.0.dev20261012+marin.3a054c458ca8.cu132"
 torch_backend = "cu132"
 torch_version = "2.14.1+cu132"
 
 [[wheels]]
 architecture = "aarch64"
 sm_targets = ["10.0"]
-url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-staged-candidate-47b411d5785d/vllm-0.0.0.dev20261006%2Bmarin.47b411d5785d.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
-sha256 = "34b45989785fb556c22e40a89f6d0c496b1235c03b457ce0fc35fb28a2050d0d"
-constraints_url = "https://raw.githubusercontent.com/marin-community/vllm/47b411d5785d1c3dee0328334472d70310c53feb/infra/release/gpu-constraints-aarch64.txt"
+url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261012-3a054c458ca8/vllm-0.0.0.dev20261012%2Bmarin.3a054c458ca8.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
+sha256 = "e8520d4493e5a60f9f6aa96ea3bc80c42e45258e4d2c45882869fc5921df3e15"
+constraints_url = "https://raw.githubusercontent.com/marin-community/vllm/3a054c458ca8a32609ba2bc578c4d9b93eabb395/infra/release/gpu-constraints-aarch64.txt"
 
 [[wheels]]
 architecture = "x86_64"
 sm_targets = ["9.0"]
-url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-staged-candidate-47b411d5785d/vllm-0.0.0.dev20261006%2Bmarin.47b411d5785d.cu132-cp38-abi3-manylinux_2_28_x86_64.whl"
-sha256 = "720b4651a42a0a579f3c7fe1e585bcbb3dd2a68aed548974a48f162229a592d6"
-constraints_url = "https://raw.githubusercontent.com/marin-community/vllm/47b411d5785d1c3dee0328334472d70310c53feb/infra/release/gpu-constraints.txt"
+url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261012-3a054c458ca8/vllm-0.0.0.dev20261012%2Bmarin.3a054c458ca8.cu132-cp38-abi3-manylinux_2_28_x86_64.whl"
+sha256 = "bd4d3d58d831dffd2a831ee1e39e9a9a8b181610ea77067c0ab620cdc9b270a3"
+constraints_url = "https://raw.githubusercontent.com/marin-community/vllm/3a054c458ca8a32609ba2bc578c4d9b93eabb395/infra/release/gpu-constraints.txt"
