@@ -3,6 +3,7 @@
 
 """Validate and execute Python tools authored in the serving dashboard."""
 
+import argparse
 import ast
 import dataclasses
 import json
@@ -11,16 +12,18 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-import shellsim
 from pydantic import BaseModel, ConfigDict, TypeAdapter, create_model
+
+from marin.inference.shellsim_runtime import (
+    DEFAULT_PYPI_CATALOG,
+    tool_environment,
+)
 
 MAX_PYTHON_TOOL_SOURCE_BYTES = 64 * 1024
 _PYTHON_TOOL_FILENAME = "<chat-python-tools>"
 _SHELLSIM_PROGRAM_PATH = "/work/marin-tool.py"
 _SHELLSIM_RESULT_PATH = "/work/.marin-tool-result.json"
-_SHELLSIM_CPU_LIMIT = 10_000_000
-_SHELLSIM_MEMORY_LIMIT = 64 * 1024 * 1024
-_SHELLSIM_DISK_LIMIT = 4 * 1024 * 1024
+_SHELLSIM_CPU_LIMIT = 2_000_000_000
 _SHELLSIM_OUTPUT_LIMIT = 1024 * 1024
 _SCALAR_ANNOTATIONS: dict[str, Any] = {
     "bool": bool,
@@ -222,21 +225,20 @@ with _marin_open({_SHELLSIM_RESULT_PATH!r}, "w") as _marin_output:
 """
 
 
-def _invoke_tool(request: PythonToolRequest) -> bytes:
+def _invoke_tool(request: PythonToolRequest, *, catalog: str = DEFAULT_PYPI_CATALOG) -> bytes:
     tools = {tool.name: tool for tool in python_tools_from_source(request.source)}
     tool = tools.get(request.name)
     if tool is None:
         raise ValueError(f"Unknown Python tool {request.name!r}")
     validated = tool.validate_arguments(request.arguments)
 
-    environment = shellsim.Context().Environment(
+    environment = tool_environment(
+        catalog,
         cpu=_SHELLSIM_CPU_LIMIT,
-        memory=_SHELLSIM_MEMORY_LIMIT,
-        disk=_SHELLSIM_DISK_LIMIT,
         output=_SHELLSIM_OUTPUT_LIMIT,
     )
     environment.write_file(_SHELLSIM_PROGRAM_PATH, _shellsim_source(request, tool, validated))
-    result = environment.run(f"python3.14 {_SHELLSIM_PROGRAM_PATH}")
+    result = environment.run(f"python {_SHELLSIM_PROGRAM_PATH}")
     if result.stdout:
         sys.stderr.buffer.write(result.stdout)
     if result.stderr:
@@ -248,9 +250,11 @@ def _invoke_tool(request: PythonToolRequest) -> bytes:
 
 
 def _main() -> None:
-    if len(sys.argv) != 2:
-        raise ValueError(f"Expected one Python tool operation, got {sys.argv[1:]!r}")
-    operation = PythonToolOperation(sys.argv[1])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("operation", type=PythonToolOperation, choices=list(PythonToolOperation))
+    parser.add_argument("--catalog", default=DEFAULT_PYPI_CATALOG)
+    args = parser.parse_args()
+    operation = args.operation
     match operation:
         case PythonToolOperation.DEFINITIONS:
             request = PythonToolDefinitionsRequest.from_payload(json.load(sys.stdin))
@@ -258,7 +262,7 @@ def _main() -> None:
             sys.stdout.buffer.write(json.dumps(definitions).encode())
         case PythonToolOperation.INVOKE:
             request = PythonToolRequest.from_payload(json.load(sys.stdin))
-            result = _invoke_tool(request)
+            result = _invoke_tool(request, catalog=args.catalog)
             sys.stdout.buffer.write(result)
 
 

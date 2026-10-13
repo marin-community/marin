@@ -1086,7 +1086,10 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
 
     with serve_app_background(_fake_vllm_app(), upstream_sock):
         app = build_dashboard_app(
-            upstream_base_url=f"http://127.0.0.1:{upstream_port}", model_id="fake-model", info=info
+            shellsim_catalog=os.environ["SHELLSIM_TEST_CATALOG"],
+            upstream_base_url=f"http://127.0.0.1:{upstream_port}",
+            model_id="fake-model",
+            info=info,
         )
         with serve_app_background(app, dashboard_sock):
             base = f"http://127.0.0.1:{dashboard_port}"
@@ -1155,7 +1158,12 @@ def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
                 )
             )
             upstream_base_url = proxy.endpoint.base_url.removesuffix("/v1")
-        app = build_dashboard_app(upstream_base_url=upstream_base_url, model_id="fake-model", info=info)
+        app = build_dashboard_app(
+            shellsim_catalog=os.environ["SHELLSIM_TEST_CATALOG"],
+            upstream_base_url=upstream_base_url,
+            model_id="fake-model",
+            info=info,
+        )
         stack.enter_context(serve_app_background(app, dashboard_sock))
         base = f"http://127.0.0.1:{dashboard_port}"
         tokenization_payload = {
@@ -1186,7 +1194,12 @@ def test_dashboard_health_reports_loading_when_upstream_down():
         endpoint="/serve/fake",
     )
     # Point at a closed port so the upstream health probe fails fast.
-    app = build_dashboard_app(upstream_base_url=f"http://127.0.0.1:{_free_port()}", model_id="fake-model", info=info)
+    app = build_dashboard_app(
+        shellsim_catalog=os.environ["SHELLSIM_TEST_CATALOG"],
+        upstream_base_url=f"http://127.0.0.1:{_free_port()}",
+        model_id="fake-model",
+        info=info,
+    )
     with serve_app_background(app, dashboard_sock):
         response = requests.get(f"http://127.0.0.1:{dashboard_port}/health", timeout=10)
     assert response.status_code == 503

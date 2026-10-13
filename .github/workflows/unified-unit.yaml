@@ -96,6 +96,12 @@ jobs:
         if: matrix.setup == 'rust'
         run: python3 scripts/rust_mode.py dev
 
+      - name: Prepare ShellSim test ports
+        if: matrix.package == 'marin-core'
+        run: |
+          catalog=$(uv run --python ${{ matrix.python }} --package ${{ matrix.package }} ${{ matrix.extras }} --group test python infra/ci/prepare_shellsim_ports.py)
+          echo "SHELLSIM_TEST_CATALOG=$catalog" >> "$GITHUB_ENV"
+
       - env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         # pytest exits 5 when it collects no tests. The diff-based selector can hand a lane
@@ -130,6 +136,11 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+
+      - name: Prepare ShellSim test ports
+        run: |
+          catalog=$(uv run --package marin-core --extra cpu --group test python infra/ci/prepare_shellsim_ports.py)
+          echo "SHELLSIM_TEST_CATALOG=$catalog" >> "$GITHUB_ENV"
 
       - name: Run slow CPU tests
         env:
@@ -344,6 +355,10 @@ jobs:
           cache-dependency-glob: "uv.lock"
       # TaskCompendium supplies the locked Shellbox base package. Backend extras
       # remain optional; tests skip the SDK-dependent adapters when absent.
+      - name: Prepare ShellSim test ports
+        run: |
+          catalog=$(uv run --package marin-taskcompendium --frozen --group test python infra/ci/prepare_shellsim_ports.py)
+          echo "SHELLSIM_TEST_CATALOG=$catalog" >> "$GITHUB_ENV"
       - name: Test Shellbox
         run: uv run --package marin-taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
 
@@ -360,6 +375,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
+      - name: Prepare ShellSim test ports
+        run: |
+          catalog=$(uv run --package marin-taskcompendium --frozen --extra pipeline --group test python infra/ci/prepare_shellsim_ports.py)
+          echo "SHELLSIM_TEST_CATALOG=$catalog" >> "$GITHUB_ENV"
       - name: Test TaskCompendium
         run: uv run --package marin-taskcompendium --frozen --extra pipeline --group test pytest lib/taskcompendium/tests -q
 
@@ -380,6 +399,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
+      - name: Prepare ShellSim test ports
+        run: |
+          catalog=$(uv run --package marin-rolloutengine --frozen --group test python infra/ci/prepare_shellsim_ports.py)
+          echo "SHELLSIM_TEST_CATALOG=$catalog" >> "$GITHUB_ENV"
       - name: Test rollout execution and private grading
         run: >-
           uv run --package marin-rolloutengine --frozen --group test pytest

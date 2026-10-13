@@ -195,10 +195,12 @@ class FixtureImageFactory(DockerMachineFactory):
 
     backend = Backend.DOCKER
 
+    def __init__(self, simulator: ShellSimMachineFactory | None = None):
+        self.simulator = simulator or ShellSimMachineFactory()
+        self.packages = PackageSpec(pypi_packages=("pytest",)) if simulator is not None else PackageSpec()
+
     async def create(self, spec):
-        return await ShellSimMachineFactory().create(
-            replace(spec, source=PackageSpec(), workdir=spec.workdir or "/workspace")
-        )
+        return await self.simulator.create(replace(spec, source=self.packages, workdir=spec.workdir or "/workspace"))
 
 
 @dataclass
@@ -206,13 +208,14 @@ class RecordingShellSimFactory(DockerMachineFactory):
     backend: Backend = Backend.DOCKER
 
     machines: list[Machine] = field(default_factory=list)
+    simulator: ShellSimMachineFactory | None = None
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
         factory = ShellSimMachineFactory() if self.backend == Backend.SHELLSIM else DockerMachineFactory()
         factory.check_environment(requirements, spec)
 
     async def create(self, spec):
-        machine = await FixtureImageFactory().create(spec)
+        machine = await FixtureImageFactory(self.simulator).create(spec)
         self.machines.append(machine)
         return machine
 
@@ -993,7 +996,9 @@ async def test_ungraded_task_reports_reason_without_a_verifier_machine():
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
-async def test_script_grader_reads_answer_and_conversation_files_without_a_task_machine(answer, reward):
+async def test_script_grader_reads_answer_and_conversation_files_without_a_task_machine(
+    answer, reward, shellsim_factory
+):
     script = (
         b"import json\n"
         b"messages = json.load(open('/tests/conversation.json'))\n"
@@ -1005,7 +1010,7 @@ async def test_script_grader_reads_answer_and_conversation_files_without_a_task_
         grader=ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADER_ENVIRONMENT),
         resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)),
     )
-    factory = RecordingShellSimFactory()
+    factory = RecordingShellSimFactory(simulator=shellsim_factory)
     record = await engine(ReplayModel([{"role": "assistant", "content": answer}]), {"local": factory}).run(
         lowered(task, verifier_machine=machine_runtime())
     )
@@ -1017,7 +1022,9 @@ async def test_script_grader_reads_answer_and_conversation_files_without_a_task_
 
 @pytest.mark.parametrize("answer,reward", [(b"\x00\xff\r\n", 1.0), (b"incorrect", 0.0)])
 @pytest.mark.parametrize("command_semantics", [CommandSemantics.LINUX_PROCESS, CommandSemantics.SHELL_SIMULATOR])
-async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(answer, reward, command_semantics):
+async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(
+    answer, reward, command_semantics, shellsim_factory
+):
     task = file_task(
         environment_requirements=EnvironmentRequirements(
             command_semantics=command_semantics,
@@ -1047,8 +1054,8 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(a
             ),
         ),
     )
-    factory = RecordingShellSimFactory()
-    simulator = RecordingShellSimFactory(backend=Backend.SHELLSIM)
+    factory = RecordingShellSimFactory(simulator=shellsim_factory)
+    simulator = RecordingShellSimFactory(backend=Backend.SHELLSIM, simulator=shellsim_factory)
     model = ReplayModel(
         [
             shell_call(

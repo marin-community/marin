@@ -412,10 +412,6 @@ def run(argv: list[str] | None = None) -> int:
     if invocation is None or args.dry_run:
         return 0
 
-    if selection.reason == BROAD_TRIGGER_REASON:
-        print("\n==> pytest (shared test environment changed)", flush=True)
-        return subprocess.run(top_level_pytest_command(extra_args), cwd=repo_root, check=False).returncode
-
     native_packages = [package.label for package in invocation.packages if package.source_build]
     if native_packages and not native_sources_enabled(repo_root):
         labels = ", ".join(native_packages)
@@ -425,6 +421,27 @@ def run(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    if "SHELLSIM_TEST_CATALOG" not in os.environ and any(
+        package.label in {"marin", "shellbox", "taskcompendium", "rolloutengine"} for package in invocation.packages
+    ):
+        command = [
+            "uv",
+            "run",
+            "--all-packages",
+            "--no-default-groups",
+            *(value for extra in invocation.extras for value in ("--extra", extra)),
+            "--group",
+            "test",
+            "python",
+            "infra/ci/prepare_shellsim_ports.py",
+        ]
+        prepared = subprocess.run(command, cwd=repo_root, capture_output=True, text=True, check=True)
+        os.environ["SHELLSIM_TEST_CATALOG"] = prepared.stdout.strip()
+
+    if selection.reason == BROAD_TRIGGER_REASON:
+        print("\n==> pytest (shared test environment changed)", flush=True)
+        return subprocess.run(top_level_pytest_command(extra_args), cwd=repo_root, check=False).returncode
 
     lanes = pytest_lanes(invocation, args.workers)
     if len(lanes) == 1:

@@ -11,6 +11,7 @@ import click
 from fray.types import ResourceConfig
 from iris.cluster.client.job_info import get_job_info
 from shellbox.backends.iris.machine import IrisMachineFactory
+from shellbox.backends.shellsim.catalog import DEFAULT_PYPI_CATALOG
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -97,6 +98,8 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
 )
 @click.option(
     "--simulator-catalog",
+    default=DEFAULT_PYPI_CATALOG,
+    show_default=True,
     help="Portable software catalog URL or path; use an immutable snapshot for cached campaign results.",
 )
 @click.option("--seed", type=int, default=0)
@@ -146,7 +149,7 @@ def main(
     container_profile: str,
     image_backend: str | None,
     controller_url: str | None,
-    simulator_catalog: str | None,
+    simulator_catalog: str,
     seed: int,
     verification_sample_size: int,
     report_path: str | None,

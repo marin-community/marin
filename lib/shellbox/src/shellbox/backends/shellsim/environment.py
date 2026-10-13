@@ -14,6 +14,7 @@ from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 from rigging.filesystem.storage_path import StoragePath
 
+from shellbox.backends.shellsim.catalog import DEFAULT_PYPI_CATALOG
 from shellbox.backends.shellsim.machine import (
     DEFAULT_CPU_LIMIT,
     DEFAULT_DISK_LIMIT,
@@ -34,8 +35,8 @@ from shellbox.machine import (
 
 
 @cache
-def _worker_context() -> shellsim.Context:
-    return shellsim.Context()
+def _worker_context(catalog: str | None) -> shellsim.Context:
+    return shellsim.Context(pypi_catalog=catalog)
 
 
 def _download_target(target: Path | StoragePath | str) -> Path | StoragePath:
@@ -66,7 +67,13 @@ class ShellSimEnvironment(BaseEnvironment):
         **kwargs,
     ):
         self.factory = ShellSimMachineFactory(
-            context=context if context is not None else _worker_context(),
+            context=(
+                context
+                if context is not None
+                else _worker_context(
+                    DEFAULT_PYPI_CATALOG if package_spec.pypi_packages is not None or package_spec.tools else None
+                )
+            ),
             cpu=cpu_limit,
             disk=disk_limit_bytes,
             output=output_limit_bytes,

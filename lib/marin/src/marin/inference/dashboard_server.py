@@ -50,6 +50,7 @@ from marin.inference.python_tool_routes import (
     shell_workspace_response,
 )
 from marin.inference.repository_snapshot import repository_snapshot_response
+from marin.inference.shellsim_runtime import DEFAULT_PYPI_CATALOG, prepare_tool_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -114,15 +115,19 @@ def build_dashboard_app(
     model_id: str,
     info: ServingInfo,
     request_timeout_seconds: float = 600.0,
+    shellsim_catalog: str = DEFAULT_PYPI_CATALOG,
 ) -> Starlette:
-    """Build the Starlette app fronting a local serving backend.
+    """Prepare tool ports and build the app fronting a local serving backend.
 
     Args:
         upstream_base_url: Root URL of the backend's OpenAI server (without ``/v1``).
         model_id: The model id the backend reports; surfaced to the dashboard.
         info: Static serving metadata returned from ``/info``.
         request_timeout_seconds: Per-request timeout for upstream proxying.
+        shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
     """
+    logger.info("Preparing dashboard CPython and NumPy from %s", shellsim_catalog)
+    prepare_tool_runtime(shellsim_catalog)
     state: dict[str, httpx.AsyncClient] = {}
     chat_shares = _ChatShareStore()
 
@@ -187,7 +192,7 @@ def build_dashboard_app(
             media_type=upstream_response.headers.get("content-type"),
         )
 
-    return Starlette(
+    app = Starlette(
         routes=[
             Route("/", index),
             Route("/dashboard", index),
@@ -205,6 +210,8 @@ def build_dashboard_app(
         ],
         lifespan=lifespan,
     )
+    app.state.shellsim_catalog = shellsim_catalog
+    return app
 
 
 def bind_serving_socket(host: str, port: int) -> socket.socket:

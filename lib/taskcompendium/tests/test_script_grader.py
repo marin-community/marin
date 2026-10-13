@@ -75,8 +75,8 @@ REWARD_JSON = "/logs/verifier/reward.json"
 class VerifyitImageMachine:
     """A ShellSim machine whose image provides the verifyit CLI.
 
-    ShellSim's Python lacks the standard library verifyit needs, so the CLI runs on the host against
-    copies of the machine's ``/tests`` and workspace, and its verdict is written back.
+    The verifyit CLI is a test-only host fake operating on copies of the machine's ``/tests``
+    and workspace; ordinary Python grader scripts run inside ShellSim.
     """
 
     machine: Machine
@@ -113,8 +113,12 @@ class FixtureImageFactory(DockerMachineFactory):
 
     backend = Backend.DOCKER
 
+    def __init__(self, simulator: ShellSimMachineFactory | None = None):
+        self.simulator = simulator or ShellSimMachineFactory()
+        self.packages = PackageSpec(pypi_packages=("pytest",)) if simulator is not None else PackageSpec()
+
     async def create(self, spec: MachineSpec) -> VerifyitImageMachine:
-        return VerifyitImageMachine(await ShellSimMachineFactory().create(replace(spec, source=PackageSpec())))
+        return VerifyitImageMachine(await self.simulator.create(replace(spec, source=self.packages)))
 
 
 def arithmetic_task(grader: Grader) -> TaskSpec:
@@ -370,7 +374,7 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
 
 
 @pytest.mark.asyncio
-async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading():
+async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading(shellsim_factory):
     agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
     await agent.run(
         Command(("sh", "-c", "mkdir -p /app/out/nested && echo a > /app/out/a.txt && echo b > /app/out/nested/b.txt"))
@@ -404,7 +408,7 @@ async def test_script_grader_collects_and_copies_task_machine_outputs_before_gra
     task = arithmetic_task(grader)
 
     result = await grade_in_sandbox(
-        task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
+        task, answered(task, "12"), FixtureImageFactory(shellsim_factory), GRADER_MACHINE, task_machine=agent
     )
 
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
@@ -418,7 +422,7 @@ async def test_script_grader_collects_and_copies_task_machine_outputs_before_gra
 
 
 @pytest.mark.asyncio
-async def test_script_grader_reads_extracted_answer_and_conversation_at_declared_paths():
+async def test_script_grader_reads_extracted_answer_and_conversation_at_declared_paths(shellsim_factory):
     report = (
         "import json\n"
         "detail = {\n"
@@ -437,7 +441,7 @@ async def test_script_grader_reads_extracted_answer_and_conversation_at_declared
     task = arithmetic_task(grader).model_copy(update={"answer_format": JsonAnswer()})
     final = json.dumps({"answer": "12"})
 
-    result = await grade_in_sandbox(task, answered(task, final), FixtureImageFactory(), GRADER_MACHINE)
+    result = await grade_in_sandbox(task, answered(task, final), FixtureImageFactory(shellsim_factory), GRADER_MACHINE)
 
     assert result.status == Outcome.GRADED, result.error
     assert result.detail == {

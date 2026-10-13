@@ -50,8 +50,12 @@ class FixtureImageFactory(DockerMachineFactory):
 
     backend = Backend.DOCKER
 
+    def __init__(self, simulator: ShellSimMachineFactory | None = None):
+        self.simulator = simulator or ShellSimMachineFactory()
+        self.packages = PackageSpec(pypi_packages=("pytest",)) if simulator is not None else PackageSpec()
+
     async def create(self, spec):
-        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
+        return await self.simulator.create(replace(spec, source=self.packages))
 
 
 def _task(package, answer_type=AnswerType.TEXT, answer_format=PlainText(), final_tools=()):
@@ -88,10 +92,8 @@ def test_json_schema_grader_reads_private_schema_and_scores_document():
 
 
 STATE_GRADER = b"""import json
-import os
 
 config = '/tests/config.json'
-assert os.stat(config).st_mode & 0o777 == 0o600
 expected = json.load(open(config))['expected']
 actual = json.load(open('/app/state.json'))['value']
 with open('/logs/verifier/reward.json', 'w') as reward:
@@ -100,9 +102,9 @@ with open('/logs/verifier/reward.json', 'w') as reward:
 
 
 @pytest.mark.parametrize("value,reward,passed", [(3, 1.0, True), (4, 0.0, False)])
-def test_script_grader_reads_private_configuration_and_captured_state(value, reward, passed):
+def test_script_grader_reads_private_configuration_and_captured_state(value, reward, passed, shellsim_factory):
     grader = ScriptGrader(
-        argv=("python3", "/tests/grade.py"),
+        argv=("sh", "-c", 'test "$(stat -c %a /tests/config.json)" = 600 && python3 /tests/grade.py'),
         environment=GRADING_ENVIRONMENT,
         answer_path=None,
         reward=FileReward(
@@ -114,7 +116,7 @@ def test_script_grader_reads_private_configuration_and_captured_state(value, rew
     result = grade_task(
         task,
         _attempt(task, TextMessage(role="assistant", content="Done"), StateSubmission({"value": value})),
-        machine_factory=FixtureImageFactory(),
+        machine_factory=FixtureImageFactory(shellsim_factory),
         machine_spec=GRADING_MACHINE,
     )
     assert (result.status, result.reward, result.passed, result.detail) == (
@@ -122,7 +124,7 @@ def test_script_grader_reads_private_configuration_and_captured_state(value, rew
         reward,
         passed,
         {"actual": value},
-    )
+    ), (result.error, result.diagnostics)
 
 
 @pytest.mark.parametrize(
@@ -196,7 +198,7 @@ def _lookup(index, content="A native action"):
         ),
     ],
 )
-def test_native_action_script_grader_receives_the_final_message(answer_format, final, expected):
+def test_native_action_script_grader_receives_the_final_message(answer_format, final, expected, shellsim_factory):
     grader = ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADING_ENVIRONMENT)
     task = _task(
         GraderPackage(grader, (inline_resource("grade.py", NATIVE_ACTION_GRADER),)),
@@ -204,5 +206,7 @@ def test_native_action_script_grader_receives_the_final_message(answer_format, f
         answer_format,
         final_tools=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),
     )
-    result = grade_task(task, _attempt(task, final), machine_factory=FixtureImageFactory(), machine_spec=GRADING_MACHINE)
+    result = grade_task(
+        task, _attempt(task, final), machine_factory=FixtureImageFactory(shellsim_factory), machine_spec=GRADING_MACHINE
+    )
     assert (result.status, result.reward) == expected

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 import os
 import shutil
@@ -17,7 +18,8 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.machine import HostImage, NetworkPolicy
+from shellbox.machine import Command, HostImage, NetworkPolicy
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
@@ -316,3 +318,18 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
         assert result["stages"] == ["download", "normalize", "final"]
     finally:
         client.shutdown()
+
+
+def test_shell_only_campaign_does_not_load_ports_catalog(tmp_path):
+    machines = CampaignMachines(simulator_catalog=(tmp_path / "absent-catalog.json").as_uri())
+    factory, spec = machines.machine(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR), 2048)
+
+    async def check():
+        machine = await factory.create(spec)
+        try:
+            result = await machine.run(Command(("sh", "-c", "echo hello > answer; cat answer")))
+            assert (result.exit_code, result.stdout) == (0, b"hello\n")
+        finally:
+            await machine.close()
+
+    asyncio.run(check())

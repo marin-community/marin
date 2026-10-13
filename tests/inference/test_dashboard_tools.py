@@ -26,8 +26,8 @@ from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
 MULTIPLY_TOOL_SOURCE = '''
 def multiply(value: int, factor: int = 2) -> int:
     """Multiply a value by an optional factor."""
-    print("running multiply")
-    return value * factor
+    import numpy as np
+    return int(np.multiply(value, factor))
 '''
 
 HOST_ENVIRONMENT_TOOL_SOURCE = '''
@@ -190,6 +190,7 @@ def dashboard_tool_base_url() -> Iterator[str]:
         upstream_base_url="http://127.0.0.1:1",
         model_id="fake-model",
         info=info,
+        shellsim_catalog=os.environ["SHELLSIM_TEST_CATALOG"],
     )
 
     with serve_app_background(app, dashboard_sock):
@@ -306,7 +307,7 @@ def test_dashboard_shell_workspace_replays_git_branch_workflow(dashboard_tool_ba
             "command": (
                 "git switch main; "
                 "git merge fix; "
-                "python3.14 test_calculator.py; "
+                "python -B test_calculator.py; "
                 "git log --format='%s' --all; "
                 "printf '\\nSTATUS\\n'; "
                 "git status --short"
