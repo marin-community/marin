@@ -27,10 +27,13 @@ the round's files, and returns the stage's event. The coordinator spends a build
   call samples again.
 
 For either error the adapter writes the failure text to ``build-failures/<k>.txt`` in the round
-directory. The files share a counter, ``ItemState.build_revisions``, because both errors spend the
-same budget. Any other exception, from these stages or any other, ends the run with ``TERMINAL``
-failed. The coordinator then saves the log and re-raises, and the next ``run_item`` on the item
-resumes at that stage, with the step store serving the steps already built.
+directory: a first line locating the failure, then the traceback tail. For a build failure, the
+first line gives the step and the program line the failure came from, since the last frames of a
+traceback are often library code. The files share a counter, ``ItemState.build_revisions``,
+because both errors spend the same budget. Any other exception, from these stages or any other,
+ends the run with ``TERMINAL`` failed. The coordinator then saves the log and re-raises, and the
+next ``run_item`` on the item resumes at that stage, with the step store serving the steps already
+built.
 
 The author stage writes each author call's files to ``authored/<k>/`` in the round directory,
 with ``k`` set to the item's build and author failures so far (``ItemState.build_revisions``):
@@ -49,6 +52,7 @@ refuses a program whose digest differs from the ``AUTHORED`` event.
 The layout of the run root is in ``lib/taskforge/README.md``.
 """
 
+import inspect
 import json
 import traceback
 from collections.abc import Awaitable, Callable, Mapping
@@ -107,7 +111,7 @@ TRIAGE_EXITS: Mapping[TriageDecision, Exit] = {TriageDecision.ACCEPT: Exit.ACCEP
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build or author failure for the author's revision."""
 ATTR_CHARS = 500
-"""The length of the failure text kept in a ``BUILD_FAILED`` or ``AUTHOR_FAILED`` event.
+"""The length of the failure's first line kept in a ``BUILD_FAILED`` or ``AUTHOR_FAILED`` event.
 
 The failure file keeps the rest.
 """
@@ -283,7 +287,7 @@ async def _author(item: _Item, state: ItemState) -> ItemEvent:
     try:
         authored = item.coordinator.stages.author(item.proposal, _revision(item, state))
     except StructuredOutputError as error:
-        attrs = _failure_attrs(item, state, error)
+        attrs = _failure_attrs(item, state, error, _error_line(error))
         return ItemEvent(EventKind.AUTHOR_FAILED, state.round, state.proposal_digest, attrs)
     directory = item.authored_dir(state)
     _write(directory / PROGRAM_MANIFEST_FILE, pretty_json(program_manifest(authored.program)).encode())
@@ -315,8 +319,9 @@ async def _build(item: _Item, state: ItemState) -> ItemEvent:
     """Build the authored program, spending a revision only on a failure the author can fix.
 
     A ``BuildFailure`` or any other exception from the program's own code becomes ``BUILD_FAILED``,
-    and the next author call receives its traceback. These errors pass through unchanged, so
-    ``run_item`` fails the item in place and spends no revision:
+    and the next author call receives its traceback, led by the line from ``_build_failure_line``.
+    These errors pass through unchanged, so ``run_item`` fails the item in place and spends no
+    revision:
 
     * ``BuildInfrastructureFailure``, raised when the build host fails;
     * ``ModelUnavailable``, raised when the model stays unreachable;
@@ -340,7 +345,7 @@ async def _build(item: _Item, state: ItemState) -> ItemEvent:
         raise
     except Exception as error:
         attrs = {
-            **_failure_attrs(item, state, error),
+            **_failure_attrs(item, state, error, _build_failure_line(error, program)),
             "step": (error.step or "") if isinstance(error, BuildFailure) else "",
         }
         return ItemEvent(EventKind.BUILD_FAILED, state.round, program.digest, attrs)
@@ -350,21 +355,90 @@ async def _build(item: _Item, state: ItemState) -> ItemEvent:
     return ItemEvent(EventKind.BUILT, state.round, digest(draft.task), attrs)
 
 
-def _failure_attrs(item: _Item, state: ItemState, error: Exception) -> dict[str, str]:
-    """Write the traceback tail of the item's next failure to ``build-failures/<k>.txt``, and return its attrs.
+def _failure_attrs(item: _Item, state: ItemState, error: Exception, first_line: str) -> dict[str, str]:
+    """Write the item's next failure to ``build-failures/<k>.txt``, and return its attrs.
 
-    ``k`` is ``build_revisions + 1``, counting build and author failures together. The attrs exit
-    revise while ``k`` is within ``max_build_revisions`` and reject past it.
+    The file holds ``first_line``, a blank line, then the tail of the traceback. ``k`` is
+    ``build_revisions + 1``, counting build and author failures together. The attrs exit revise
+    while ``k`` is within ``max_build_revisions`` and reject past it, and keep ``first_line`` as
+    ``failure``.
     """
     failures = state.build_revisions + 1
     relative = Path(ROUNDS_DIR) / str(state.round) / FAILURES_DIR / f"{failures}.txt"
-    failure = "".join(traceback.format_exception(error))[-FAILURE_CHARS:]
-    _write(item.directory / relative, failure.encode())
+    tail = "".join(traceback.format_exception(error))[-FAILURE_CHARS:]
+    _write(item.directory / relative, f"{first_line}\n\n{tail}".encode())
     return {
         EXIT: Exit.REVISE if failures <= item.coordinator.budget.max_build_revisions else Exit.REJECT,
-        "failure": f"{type(error).__name__}: {error}"[:ATTR_CHARS],
+        "failure": first_line[:ATTR_CHARS],
         "failure_file": str(relative),
     }
+
+
+def _error_line(error: BaseException) -> str:
+    """Give the error's type and the first line of its message, or the type alone for an empty message."""
+    message = error.message if isinstance(error, BuildFailure) else str(error)
+    first = message.partition("\n")[0]
+    return f"{type(error).__name__}: {first}" if first else type(error).__name__
+
+
+def _build_failure_line(error: Exception, program: RLEnvBuildProgram) -> str:
+    """Locate a build failure in the program and describe it in a line.
+
+    The function finds the program's frames by the file of each step's function. For a program
+    from ``load_program_source`` that file is ``<taskforge_program_...>``, the name the loader
+    registers in ``linecache``. It then picks a traceback from the error's chain:
+
+    1. the innermost exception whose traceback passes through the program, since the runner
+       re-raises a step's ``BuildFailure`` from the original;
+    2. otherwise the innermost exception with a traceback.
+
+    In that traceback it takes the step, ``BuildFailure.step`` or else the outermost program frame
+    running a step's function, and the deepest program frame from the step's frame on. The line
+    reads, for a failure raised in the program, in library code called from it, or with no program
+    frame at all::
+
+        NameError: name 'scale' is not defined at numbers, program line 12: return scale * 2
+        TypeError: ... in library code at pydantic/main.py:253 (__init__), called from numbers, program line 12: ...
+        ValueError: ... outside the program, at taskforge/stage40_build/run.py:124 (run)
+    """
+    files = {inspect.getfile(node.fn) for node in (*program.steps.values(), program.sink)}
+    steps = {*program.steps, program.sink.name}
+    named = error.step if isinstance(error, BuildFailure) else None
+    tracebacks = [traceback.extract_tb(link.__traceback__) for link in reversed(_exception_chain(error))]
+    passing = [frames for frames in tracebacks if any(frame.filename in files for frame in frames)]
+    frames = passing[0] if passing else next((frames for frames in tracebacks if frames), [])
+    headline = _error_line(error)
+    if not frames:
+        return headline
+    last = frames[-1]
+    library = f"{Path(*Path(last.filename).parts[-2:])}:{last.lineno} ({last.name})"
+    inside = [index for index, frame in enumerate(frames) if frame.filename in files]
+    wanted = {named} if named is not None else steps
+    entries = [index for index in inside if frames[index].name in wanted]
+    step = named or (frames[entries[0]].name if entries else None)
+    deepest = [index for index in inside if not entries or index >= entries[0]]
+    if not deepest:
+        return f"{headline} outside the program{f' in step {step}' if step else ''}, at {library}"
+    frame = frames[deepest[-1]]
+    location = f"{f'{step}, ' if step else ''}program line {frame.lineno}: {(frame.line or '').strip()}"
+    if deepest[-1] == len(frames) - 1:
+        return f"{headline} at {location}"
+    return f"{headline} in library code at {library}, called from {location}"
+
+
+def _exception_chain(error: BaseException) -> list[BaseException]:
+    """List ``error`` and the exceptions it was raised from or during, outermost first."""
+    chain: list[BaseException] = []
+    link: BaseException | None = error
+    while link is not None and link not in chain:
+        chain.append(link)
+        if link.__cause__ is not None:
+            link = link.__cause__
+        elif link.__suppress_context__:
+            link = None
+        else:
+            link = link.__context__
+    return chain
 
 
 async def _validate(item: _Item, state: ItemState) -> ItemEvent:

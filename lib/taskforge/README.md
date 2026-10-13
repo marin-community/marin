@@ -133,7 +133,7 @@ items/<item_id>/rounds/<n>/
     authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it
     draft/                         task.json, provenance.json
-    build-failures/<k>.txt         the traceback of the k-th build or author failure
+    build-failures/<k>.txt         the k-th build or author failure: its step and program line, then its traceback
     validation.json                the summary returned by validate
     decision.json                  the decision returned by review
 store/                             the step store: blobs/, items/<item_id>/steps/

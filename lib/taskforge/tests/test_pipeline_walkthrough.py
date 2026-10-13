@@ -16,7 +16,9 @@ review accepts it, unless a test passes other functions. Reading top to bottom:
    ``authored/<k>/program.py``;
 4. a relaunch with another proposal, budget or model digest is refused, as is a program other than
    the authored one, from the author or from ``program.py``;
-5. a build failure costs a revision, and the failure after the last revision rejects the item;
+5. a build failure costs a revision, and the failure after the last revision rejects the item; the
+   failure text starts with the step and the program line the failure came from, also when library
+   code called from that line raised;
 6. an author reply cut at the output limit after its repairs costs a revision the same way, and the
    author is asked again with the failure, while an unavailable model fails the item at the author;
 7. a failed build host or a missing file fails the item at build without spending a revision, and
@@ -203,14 +205,14 @@ class RecordingAuthor:
 
 
 class SourceAuthor:
-    """Returns ``source`` with the program loaded from it, and counts its calls."""
+    """Returns ``source`` with the program loaded from it, and records each revision asked for."""
 
     def __init__(self, source: str = SOURCE) -> None:
         self.source = source
-        self.calls = 0
+        self.revisions: list[Revision | None] = []
 
     def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
-        self.calls += 1
+        self.revisions.append(revision)
         return AuthoredProgram(load_program_source(self.source), self.source)
 
 
@@ -333,7 +335,7 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
     assert await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, log) is Terminal.ACCEPTED
 
     assert exits(log) == ACCEPTED_EXITS
-    assert (author.calls, loaded) == (1, [SOURCE])
+    assert (len(author.revisions), loaded) == (1, [SOURCE])
     assert (tmp_path / "items" / ITEM / "rounds" / "0" / AUTHORED_DIR / "0" / PROGRAM_FILE).read_text() == SOURCE
     assert log.events()[2].digest == PROGRAM.digest
 
@@ -403,7 +405,59 @@ async def test_a_build_failure_costs_a_revision_and_the_next_one_rejects_the_ite
     asked = [None if revision is None else revision.kind for revision in author.revisions]
     assert asked == [None, None, RevisionKind.BUILD_FAILURE, RevisionKind.BUILD_FAILURE]
     revision = author.revisions[-1]
-    assert revision is not None and "the numbers do not multiply to the answer" in revision.detail
+    assert revision is not None
+    assert revision.detail.startswith(
+        "BuildFailure: the numbers do not multiply to the answer at broken, program line "
+        + str(inspect.getsourcelines(broken.fn)[1] + 2)
+        + ': raise BuildFailure("the numbers do not multiply to the answer")\n'
+    )
+
+
+NUMBERS_FILE = 'InlineFile(content_base64=base64.b64encode(b"6 7\\n").decode())'
+
+
+def program_line(source: str, text: str) -> str:
+    """The ``program line N: <line>`` part of a failure's first line, for the line of ``source`` holding ``text``."""
+    lines = source.splitlines()
+    number = next(number for number, line in enumerate(lines, start=1) if text in line)
+    return f"program line {number}: {lines[number - 1].strip()}"
+
+
+async def failure_first_lines(root: Path, source: str) -> tuple[str, str, str]:
+    """Run an item authoring ``source`` to its rejection, and return the first line of its failure text.
+
+    It returns the line from ``build-failures/1.txt``, from the revision detail the second author
+    call received, and from the ``failure`` attr of the first ``BUILD_FAILED`` event.
+    """
+    author = SourceAuthor(source)
+    log = InMemoryEventLog()
+    assert await run_item(coordinator(root, replace(STAGES, author=author)), ITEM, PROPOSAL, log) is Terminal.REJECTED
+    revision = author.revisions[1]
+    assert revision is not None and revision.kind is RevisionKind.BUILD_FAILURE
+    text = (root / "items" / ITEM / "rounds" / "0" / FAILURES_DIR / "1.txt").read_text()
+    assert text == revision.detail
+    built = next(event for event in log.events() if event.kind == "build_failed")
+    return text.splitlines()[0], revision.detail.splitlines()[0], built.attrs["failure"]
+
+
+async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp_path):
+    # 5. The loaded program's numbers step reads an undefined name, and the first line points at it.
+    source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)")
+    assert source != SOURCE
+    expected = "NameError: name 'encoded_numbers' is not defined at numbers, " + program_line(
+        source, "content_base64=encoded_numbers"
+    )
+    assert await failure_first_lines(tmp_path, source) == (expected,) * 3
+
+
+async def test_a_library_error_called_from_a_step_still_reports_the_program_line(tmp_path):
+    # 5. pydantic raises inside TaskResource, and the first line names the step's call into it.
+    source = SOURCE.replace(NUMBERS_FILE, '"6 7"')
+    assert source != SOURCE
+    first_line, detail_line, attr = await failure_first_lines(tmp_path, source)
+    assert first_line == detail_line == attr
+    assert first_line.startswith("ValidationError: 1 validation error for TaskResource in library code at pydantic/")
+    assert first_line.endswith(", called from numbers, " + program_line(source, "return TaskResource("))
 
 
 CUT_REPLY = Completion(
