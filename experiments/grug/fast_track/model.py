@@ -702,6 +702,9 @@ class GrugModelConfig:
     positive offset starts training with every routed slot on."""
     moe_eps: float = 0.0
     moe_top_p: float = 0.0
+    moe_k_layers: tuple[int, ...] = ()
+    """Static per-layer routed counts (one per layer, each <= ``num_experts_per_token``): every layer routes top
+    ``num_experts_per_token`` and keeps its first ``moe_k_layers[layer]`` slots. Overrides ``moe_k_static``."""
     moe_null_layers: tuple[int, ...] = ()
     """Null routing on these layers: the router also scores ``num_experts`` zero-computation experts and each
     token takes the top ``2 * num_experts_per_token`` over all ``2 * num_experts`` columns, so a token can spend
@@ -993,6 +996,10 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
+        if self.moe_k_layers and (
+            len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
+        ):
+            raise ValueError("moe_k_layers needs one count per layer, each <= num_experts_per_token")
         if self.scan_save_routed_output and not self.scan_layers:
             raise ValueError("scan_save_routed_output saves the routed output across the scan_layers backward")
         if self.moe_shared_placement != SharedExpertPlacement.FUSED and self.fp8_recipe in _DENSE_FP8_SIM:
@@ -4464,6 +4471,8 @@ def _moe_k_keep(
     """Each token's routed-expert count on ``moe_dynamic_layers`` (``MoeDynamicK``); None elsewhere. RELU / EPS
     decide inside the router, so their layers get ``num_experts_per_token`` everywhere (it marks the layer)."""
     norm = jnp.sum(jnp.square(jax.lax.stop_gradient(attn_out).astype(jnp.float32)), axis=-1)  # [B, S]
+    if cfg.moe_k_layers:
+        return jnp.full_like(norm, cfg.moe_k_layers[layer], dtype=jnp.int32)
     if layer not in cfg.moe_dynamic_layers or cfg.moe_dynamic == MoeDynamicK.NONE:
         return None if cfg.moe_k_static is None else jnp.full_like(norm, cfg.moe_k_static, dtype=jnp.int32)
     k_high, k_low = cfg.num_experts_per_token, cfg.moe_k_low
