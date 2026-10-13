@@ -283,7 +283,8 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig, dependency: Externa
         chat_template_kwargs=dict(config.chat_template_kwargs),
         max_length=config.max_length,
         runtime=EvalchemyRuntimeConfig(
-            requirement=dependency.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
+            requirement=dependency.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras)),
+            memory=config.runtime_memory if config.runtime_memory is not None else EvalchemyRuntimeConfig.memory,
         ),
         judge=config.judge,
     )

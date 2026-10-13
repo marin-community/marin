@@ -93,6 +93,7 @@ class EvalchemyConfig(BaseModel):
     chat_template_kwargs: Mapping[str, bool] = Field(default_factory=dict)
     max_length: int | None = None
     max_tokens: int | None = None
+    runtime_memory: str | None = None
     runtime_extras: tuple[str, ...] = ()
     judge: EvalchemyJudgeConfig | None = None
 
