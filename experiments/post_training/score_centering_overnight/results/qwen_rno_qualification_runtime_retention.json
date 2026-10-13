@@ -1,0 +1,10 @@
+{
+  "run_id": "sc-qwen-transfer-runtime-qual-rno-sc-s0-a1-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "objects": 3128,
+  "bytes": 493731585,
+  "manifest_sha256": "ae1d606057941fb0deb332bc08fd1748e168ccf8acb81a7c6d52b0e3508b211c",
+  "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-rno-sc-s0-a1-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+  "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+  "complete": true
+}

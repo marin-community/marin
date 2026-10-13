@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-13T23:23:36.484997+00:00",
+  "observed_at": "2026-10-13T23:27:20.771159+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -4547,6 +4547,44 @@
       "configuration_sha256": "336b78895f5802213a8bbf603bfddb485c27281abeb4ada2820f36960806404d",
       "observed_at": "2026-10-13T23:23:33.030250+00:00",
       "allocated_h100_hours_so_far": 5.736160555945502
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "dd948e7629517693",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791933911335",
+      "finished_at_ms": "",
+      "node_name": "g86299e",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "167bdb214b533a6bc355b84a3f47c55239ec8471ec12a3641e2c8098ffa3f2d5",
+      "observed_at": "2026-10-13T23:27:20.771159+00:00",
+      "allocated_h100_hours_so_far": 0.2876359086566501
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "6cb94f3cf024867b",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791933911335",
+      "finished_at_ms": "",
+      "node_name": "gb99af0",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "167bdb214b533a6bc355b84a3f47c55239ec8471ec12a3641e2c8098ffa3f2d5",
+      "observed_at": "2026-10-13T23:27:20.771159+00:00",
+      "allocated_h100_hours_so_far": 0.2876359086566501
     }
   ]
 }
