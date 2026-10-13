@@ -80,6 +80,24 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
             "must return TaskSpec",
         ),
         (
+            lambda s: s.replace("from verifyit.spec import ExactSpec\n", ""),
+            r"no import, definition, assignment or builtin binds: `ExactSpec` \(line \d+\)",
+        ),
+        (
+            lambda s: s.replace("        ANSWER_FORMAT,\n", "        ANSWER_FROMAT,\n"),
+            r"`ANSWER_FROMAT` \(line \d+\); did you mean 'ANSWER_FORMAT'\?",
+        ),
+        (
+            lambda s: s.replace("sdk import ANSWER_FORMAT", "sdk import ANSWER_FROMAT").replace(
+                "        ANSWER_FORMAT,\n", "        ANSWER_FROMAT,\n"
+            ),
+            r"has no name 'ANSWER_FROMAT'; did you mean 'ANSWER_FORMAT'\?",
+        ),
+        (
+            lambda s: s.replace("stage40_build_with_program.outputs import", "stage40_build_with_program.output import"),
+            r"may not import 'taskforge.stage40_build_with_program.output'; did you mean 'taskforge.stage40_build_with_program.outputs'\?",
+        ),
+        (
             lambda s: s.replace("sink=assemble", "assemble"),
             "pass the final step to `rl_env_build_program` as `sink=`",
         ),
@@ -100,6 +118,10 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
         "step-left-out",
         "no-grader",
         "sink-type",
+        "unbound-name",
+        "misspelt-name",
+        "misspelt-import",
+        "misspelt-module",
         "no-sink-keyword",
         "step-as-sink",
     ],

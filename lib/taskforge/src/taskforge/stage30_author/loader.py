@@ -14,8 +14,11 @@ the GLM author also sends it back within its structured call.
    ``PROGRAM = rl_env_build_program(..., sink=...)``.
    A step reads whatever else it needs from its inputs, its own body or the build SDK
    (``taskforge.stage40_build_with_program.sdk`` and its sibling modules), which ``SDK_VERSION`` covers. The
-   pass also refuses a name from ``UNSAFE_BUILTINS`` that the program uses without binding it,
-   since running the program would only fail on it later.
+   pass also refuses a name the program reads without binding it anywhere, by an import, a
+   definition, an assignment or a parameter, unless ``SAFE_BUILTINS`` holds it. A missing import
+   or a misspelt name would otherwise fail in the middle of a build, after the steps before it
+   spent their model calls. The refusal names the closest bound name, if one is close. The check
+   ignores scope, so it misses a name bound in one function and read in another.
 2. It runs the module with imports limited to ``ALLOWED_IMPORTS`` and builtins to
    ``SAFE_BUILTINS``, which keeps a program to the SDK's functions; programs are trusted model
    output in the builder's process, so this is no security boundary. The build SDK belongs to a
@@ -35,11 +38,12 @@ them, and loading a source twice returns the same program. A refused source is u
 
 import ast
 import builtins
+import difflib
 import importlib
 import linecache
 import sys
 import types
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from types import ModuleType
 
 from taskcompendium.models import TaskSpec
@@ -126,13 +130,27 @@ def _restricted_import(
     submodules = [f"{name}.{item}" for item in fromlist or ()]
     allowed = name in ALLOWED_IMPORTS or (bool(submodules) and all(module in ALLOWED_IMPORTS for module in submodules))
     if level != 0 or not allowed:
-        raise ImportError(f"build programs may not import {name!r}; allowed: {sorted(ALLOWED_IMPORTS)}")
+        raise ImportError(
+            f"build programs may not import {name!r}{_suggestion(name, ALLOWED_IMPORTS)}; "
+            f"allowed: {sorted(ALLOWED_IMPORTS)}"
+        )
     if "." in name and not fromlist:
         raise ImportError(f"use 'from {name} import ...' rather than 'import {name}'")
     if name not in ALLOWED_IMPORTS:
         for module in submodules:
             importlib.import_module(module)
-    return importlib.import_module(name)
+    module = importlib.import_module(name)
+    for item in fromlist or ():
+        if item != "*" and not hasattr(module, item):
+            public = [attribute for attribute in vars(module) if not attribute.startswith("_")]
+            raise ImportError(f"{name!r} has no name {item!r}{_suggestion(item, public)}")
+    return module
+
+
+def _suggestion(name: str, candidates: Iterable[str]) -> str:
+    """``"; did you mean 'x'?"`` for the closest of ``candidates`` to ``name``, or ``""`` when none is close."""
+    matches = difflib.get_close_matches(name, list(candidates), n=1)
+    return f"; did you mean {matches[0]!r}?" if matches else ""
 
 
 SAFE_BUILTINS: dict[str, object] = {
@@ -163,7 +181,7 @@ def load_program_source(source: str) -> RLEnvBuildProgram:
     except SyntaxError as error:
         raise ValueError(f"the program does not parse: {error}") from error
     _check_module_level(tree)
-    _check_builtins(tree)
+    _check_names(tree)
     filename = f"<{name}>"
     linecache.cache[filename] = (len(source), None, source.splitlines(keepends=True), filename)
     module = types.ModuleType(name)
@@ -239,21 +257,54 @@ def _check_module_level(tree: ast.Module) -> None:
         raise ValueError(f"line {node.lineno}: {_statement(node)} is not allowed at module level. {MODULE_RULE}")
 
 
-def _check_builtins(tree: ast.Module) -> None:
-    loaded: set[str] = set()
+MODULE_GLOBALS = frozenset({"__file__"})
+"""Names ``load_program_source`` binds in the module before it runs the program."""
+
+
+def _bound_names(tree: ast.Module) -> set[str]:
     bound: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            (loaded if isinstance(node.ctx, ast.Load) else bound).add(node.id)
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            bound.add(node.id)
         elif isinstance(node, ast.arg):
             bound.add(node.arg)
         elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             bound.add(node.name)
         elif isinstance(node, ast.alias):
             bound.add((node.asname or node.name).split(".")[0])
-    unavailable = sorted((loaded & UNSAFE_BUILTINS) - bound)
-    if unavailable:
-        raise ValueError(f"the program uses builtins that do not exist for build programs: {unavailable}")
+        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name is not None:
+            bound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest is not None:
+            bound.add(node.rest)
+        elif isinstance(node, ast.Global | ast.Nonlocal):
+            bound.update(node.names)
+        elif isinstance(node, ast.TypeVar | ast.ParamSpec | ast.TypeVarTuple):
+            bound.add(node.name)
+    return bound
+
+
+def _check_names(tree: ast.Module) -> None:
+    bound = _bound_names(tree)
+    unsafe: set[str] = set()
+    unbound: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load) or node.id in bound:
+            continue
+        if node.id in UNSAFE_BUILTINS:
+            unsafe.add(node.id)
+        elif node.id not in SAFE_BUILTINS and node.id not in MODULE_GLOBALS:
+            unbound[node.id] = min(node.lineno, unbound.get(node.id, node.lineno))
+    if unsafe:
+        raise ValueError(f"the program uses builtins that do not exist for build programs: {sorted(unsafe)}")
+    if unbound:
+        problems = [
+            f"`{name}` (line {line}){_suggestion(name, bound | SAFE_BUILTINS.keys())}"
+            for name, line in sorted(unbound.items(), key=lambda item: item[1])
+        ]
+        raise ValueError(
+            f"the program reads names that no import, definition, assignment or builtin binds: {', '.join(problems)}. "
+            "Import each SDK name the program uses from its module"
+        )
 
 
 def _checked_program(module: ModuleType) -> RLEnvBuildProgram:

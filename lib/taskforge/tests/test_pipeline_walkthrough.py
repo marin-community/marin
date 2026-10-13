@@ -457,8 +457,12 @@ async def failure_first_lines(root: Path, source: str) -> tuple[str, str, str]:
 
 
 async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp_path):
-    source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)")
-    assert source != SOURCE
+    """The loader refuses a name that nothing binds, so the step declares it global and never assigns it."""
+    declared = "async def numbers(context: RLEnvBuildContext) -> TaskResource:\n"
+    source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)").replace(
+        declared, declared + "    global encoded_numbers\n", 1
+    )
+    assert source.count("global encoded_numbers") == 1
     expected = "NameError: name 'encoded_numbers' is not defined at numbers, " + program_line(
         source, "content_base64=encoded_numbers"
     )
