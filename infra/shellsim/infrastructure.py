@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build pinned worker images and declare the HTTPS ports proxy.
+"""Build the Shellsim image and declare its HTTPS ports proxy.
 
 The upstream server streams one durable prefix. The existing Kubernetes secret
 supplies a dedicated read-only object-store key; providers use ambient credentials.
