@@ -1,8 +1,5 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
-const $ = id => document.getElementById(id);
 const state = {reviews: []};
-function node(tag, value) {const item = document.createElement(tag); if (value !== undefined) item.textContent = value; return item;}
-async function json(url) {const response = await fetch(url); if (!response.ok) throw new Error(`Archive read failed (${response.status})`); return response.json();}
 function render() {
   const search = $("search").value.toLowerCase(), fragment = document.createDocumentFragment();
   for (const review of state.reviews.filter(item => `${item.source_id} ${item.id}`.toLowerCase().includes(search))) {

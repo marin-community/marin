@@ -137,9 +137,13 @@ def _publish_campaign(report_path: str, selected: dict[str, RlDataSource]) -> No
     help="New curation key for retrying incomplete controls; successful review requests remain cached.",
 )
 @click.option("--assess/--skip-assessment", default=None, help="Automatic for FULL; opt in for SAMPLE. QUICK skips it.")
-@click.option("--assessment-sample-size", type=click.IntRange(min=1), default=100, show_default=True)
+@click.option(
+    "--assessment-sample-size", type=click.IntRange(min=1), default=AssessmentSampling.admitted, show_default=True
+)
 @click.option("--curated-inventory", help="Full-run inventory of retained source/manifest entries to reassess.")
-@click.option("--excluded-sample-size", type=click.IntRange(min=0), default=20, show_default=True)
+@click.option(
+    "--excluded-sample-size", type=click.IntRange(min=0), default=AssessmentSampling.excluded, show_default=True
+)
 @click.option(
     "--assessment-rubric", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Extra rubric criteria."
 )

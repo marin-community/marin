@@ -92,25 +92,30 @@ def source_record(connection: Connection, source_id: str) -> tuple[dict[str, Any
     return record["source"], record["catalog_root"]
 
 
-def refresh_catalog(connection: Connection, root: str) -> dict[str, Any]:
+def refresh_catalog(connection: Connection) -> dict[str, Any]:
     lock = connection.execute(
         text("SELECT pg_try_advisory_xact_lock(hashtext(current_schema() || '/curation-refresh'))")
     ).scalar_one()
     if not lock:
         return {"busy": True}
     previous = saved_catalog(connection)
-    document = published_catalog(root, previous)
+    document = published_catalog(previous["catalog_root"], previous)
     changed = document["snapshot_id"] != previous["snapshot_id"] or document["revision"] != previous["revision"]
     if changed:
         save_catalog(connection, document)
     return {"busy": False, "changed": changed, "snapshot_id": document["snapshot_id"]}
 
 
+def archived_document(root: str, uri: str) -> dict[str, Any]:
+    try:
+        return evidence_document(root, uri)
+    except FileNotFoundError as error:
+        raise HTTPException(404, str(error)) from error
+
+
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
-    with engine.connect() as connection:
-        root = saved_catalog(connection)["catalog_root"]
 
     @api.get("/sources")
     def sources() -> dict[str, Any]:
@@ -120,7 +125,10 @@ def create_api(services: AppletServices) -> FastAPI:
                 text("SELECT synced_at FROM curation_catalog WHERE name = 'latest'")
             ).scalar_one()
         rows = [
-            {**row, "assessment": {name: value for name, value in row["assessment"].items() if name != "samples"}}
+            {
+                **{name: value for name, value in row.items() if name != "declaration"},
+                "assessment": {name: value for name, value in row["assessment"].items() if name != "samples"},
+            }
             for row in document["sources"]
         ]
         return {
@@ -138,7 +146,7 @@ def create_api(services: AppletServices) -> FastAPI:
         data = source["assessment"]
         if data["status"] != "complete":
             raise HTTPException(404, data.get("reason", "Assessment unavailable"))
-        return {"source": source["display_name"], "report": evidence_document(catalog_root, data["report_uri"])}
+        return {"source": source["display_name"], "report": archived_document(catalog_root, data["report_uri"])}
 
     @api.get("/evidence")
     def evidence(source_id: str, task_id: str) -> dict[str, Any]:
@@ -149,12 +157,12 @@ def create_api(services: AppletServices) -> FastAPI:
         )
         if sample is None:
             raise HTTPException(404, "Task is outside this assessment sample")
-        return evidence_document(catalog_root, sample["evidence_uri"])
+        return archived_document(catalog_root, sample["evidence_uri"])
 
     @api.post("/refresh")
     def refresh() -> dict[str, Any]:
         with engine.begin() as connection:
-            return refresh_catalog(connection, root)
+            return refresh_catalog(connection)
 
     @api.get("/archive")
     def archive() -> dict[str, Any]:

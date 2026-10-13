@@ -188,14 +188,14 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
         if path.exists():
             with path.open("rb") as stream:
                 documents[name] = stream.read()
-    paths = {**outcome.get("planned_evidence", {}), **((outcome.get("result") or {}).get("evidence") or {})}
+    paths = _outcome_evidence(outcome)
     for stage in ("assessment_inputs", "assessment_judgments"):
         if stage not in paths:
             continue
         filenames = (
-            ("manifest.json", "telemetry.json", "curation.json")
+            (MANIFEST_FILENAME, TELEMETRY_FILENAME, "curation.json")
             if stage == "assessment_inputs"
-            else ("manifest.json", "telemetry.json")
+            else (MANIFEST_FILENAME, TELEMETRY_FILENAME)
         )
         for filename in filenames:
             path = StoragePath(paths[stage]) / filename
@@ -229,8 +229,12 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
     return SourceDocuments(outcome["name"], documents, applicability)
 
 
+def _outcome_evidence(outcome: dict[str, Any]) -> dict[str, str]:
+    return {**outcome.get("planned_evidence", {}), **((outcome.get("result") or {}).get("evidence") or {})}
+
+
 def _curation_root(outcome: dict[str, Any]) -> StoragePath:
-    paths = {**outcome.get("planned_evidence", {}), **((outcome.get("result") or {}).get("evidence") or {})}
+    paths = _outcome_evidence(outcome)
     manifest = paths.get("manifest")
     return StoragePath(manifest).parent if manifest is not None else StoragePath(outcome["path"])
 
@@ -384,7 +388,7 @@ def append_curation_catalog(
                     controls_inconsistent=counts.get("inconsistent", 0) if counts is not None else None,
                 )
                 transaction.table("sources").add(asdict(source))
-                paths = {**outcome.get("planned_evidence", {}), **result.get("evidence", {})}
+                paths = _outcome_evidence(outcome)
                 assessment_report = parsed.get("assessment_report.json")
                 if "assessment_report" not in paths:
                     assessment_status = AssessmentStatus.SKIPPED

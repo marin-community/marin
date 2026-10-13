@@ -1,9 +1,6 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
-const $ = id => document.getElementById(id);
 const source = new URLSearchParams(location.search).get("source");
 const labels = {good: "Good", some_issues: "Some issues", bad: "Bad", unknown: "Unknown"};
-function node(tag, value, className) {const item = document.createElement(tag); if (value !== undefined) item.textContent = value; if (className) item.className = className; return item;}
-async function json(url) {const response = await fetch(url); if (!response.ok) throw new Error(`Evidence read failed (${response.status})`); return response.json();}
 function summary(report) {
   const target = $("summary");
   for (const cohort of ["admitted", "excluded"]) {

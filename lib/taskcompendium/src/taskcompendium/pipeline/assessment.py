@@ -87,6 +87,13 @@ class RowLocation:
 
 
 @dataclass(frozen=True)
+class SelectedFile:
+    view: str
+    path: str
+    groups: dict[int, dict[int, str]]
+
+
+@dataclass(frozen=True)
 class SubmissionContract:
     answer_type: AnswerType
     instruction: str | None
@@ -160,11 +167,11 @@ def write_json(path: str, value: dict[str, Any]) -> None:
         stream.write("\n")
 
 
-def _indexed_rows(path: str, *, excluded: bool) -> Iterator[dict[str, Any]]:
-    columns = ["task_id", "admission", "filter_reasons"] if excluded else ["task_id"]
+def _indexed_rows(path: str, *, cohort: Cohort) -> Iterator[dict[str, Any]]:
+    columns = ["task_id", "admission", "filter_reasons"] if cohort == Cohort.EXCLUDED else ["task_id"]
     for row in load_parquet(InputFileSpec(path, columns=columns)):
         reason = None
-        if excluded:
+        if cohort == Cohort.EXCLUDED:
             if row["admission"] == "admitted":
                 continue
             reason = (row["filter_reasons"] or [row["admission"]])[0]
@@ -184,14 +191,6 @@ def _unique_row(task_id: str, rows: Iterator[dict[str, Any]]) -> dict[str, Any]:
 
 def _order(row: dict[str, Any], *, seed: int) -> tuple[str, str]:
     return seeded_order(row["task_id"], seed)
-
-
-def _sample_rows(rows: Iterator[dict[str, Any]], *, size: int, seed: int) -> tuple[int, list[dict[str, Any]]]:
-    return seeded_sample(rows, size=size, key=partial(_order, seed=seed))
-
-
-def _merge_rows(samples: Iterator[tuple[int, list[dict[str, Any]]]], *, size: int, seed: int):
-    return merge_sample_rows(samples, size=size, key=partial(_order, seed=seed))
 
 
 def _reason_samples(rows: Iterator[dict[str, Any]], *, size: int, seed: int) -> dict[str, tuple[int, list[dict]]]:
@@ -283,21 +282,19 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
     return {"task_id": row["task_id"], "evidence": evidence, "omissions": omissions}
 
 
-def _selected_evidence(
-    file: tuple[str, str, dict[int, dict[int, str]]], *, sampling: AssessmentSampling
-) -> Iterator[dict[str, Any]]:
-    """Decode each selected row group once, projecting only selected records."""
-    view, path, groups = file
-    with open_file(path, block_size=EVIDENCE_READ_BLOCK_BYTES) as stream:
+def _selected_evidence(file: SelectedFile, *, sampling: AssessmentSampling) -> Iterator[dict[str, Any]]:
+    """Yield bounded evidence for selected records from a Parquet file."""
+    with open_file(file.path, block_size=EVIDENCE_READ_BLOCK_BYTES) as stream:
         parquet = pq.ParquetFile(stream)
-        columns = [name for name in parquet.schema_arrow.names if AUDIT_FIELD_OWNERS.get(name, view) == view]
-        for group, selected in groups.items():
+        columns = [name for name in parquet.schema_arrow.names if AUDIT_FIELD_OWNERS.get(name, file.view) == file.view]
+        # Selected rows from the same group share one decode.
+        for group, selected in file.groups.items():
             table = parquet.read_row_group(group, columns=columns)
             rows = table.take(pa.array(list(selected), type=pa.int64())).to_pylist()
             for task_id, row in zip(selected.values(), rows, strict=True):
                 if row["task_id"] != task_id:
                     raise ValueError(f"Selected row changed after ID scan: {task_id}")
-                yield _project_evidence(view, row, sampling)
+                yield _project_evidence(file.view, row, sampling)
 
 
 def _packet(
@@ -339,11 +336,11 @@ def prepare_assessment(
         with telemetry.phase("select") as phase:
             admitted = (
                 Dataset.from_files(str(StoragePath(views["final"]) / "*.parquet"))
-                .flat_map(partial(_indexed_rows, excluded=False))
+                .flat_map(partial(_indexed_rows, cohort=Cohort.ADMITTED))
                 .group_by(_task_id, reducer=_unique_row)
                 .reduce(
-                    partial(_sample_rows, size=sampling.admitted, seed=sampling.seed),
-                    partial(_merge_rows, size=sampling.admitted, seed=sampling.seed),
+                    partial(seeded_sample, size=sampling.admitted, key=partial(_order, seed=sampling.seed)),
+                    partial(merge_sample_rows, size=sampling.admitted, key=partial(_order, seed=sampling.seed)),
                 )
             )
             admitted_count, admitted_rows = execute_phase(
@@ -351,7 +348,7 @@ def prepare_assessment(
             ).results[0]
             excluded = (
                 Dataset.from_files(str(StoragePath(views["verify"]) / "*.parquet"))
-                .flat_map(partial(_indexed_rows, excluded=True))
+                .flat_map(partial(_indexed_rows, cohort=Cohort.EXCLUDED))
                 .group_by(_task_id, reducer=_unique_row)
                 .reduce(
                     partial(_reason_samples, size=sampling.excluded, seed=sampling.seed),
@@ -392,9 +389,9 @@ def prepare_assessment(
                     ] = task_id
             projected = execute_phase(
                 context,
-                Dataset.from_list([(view, path, indices) for (view, path), indices in files.items()]).flat_map(
-                    partial(_selected_evidence, sampling=sampling)
-                ),
+                Dataset.from_list(
+                    [SelectedFile(view, path, indices) for (view, path), indices in files.items()]
+                ).flat_map(partial(_selected_evidence, sampling=sampling)),
                 telemetry=phase,
             ).results
             records: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -428,7 +425,7 @@ def prepare_assessment(
 
 
 def assessment_summary(inputs_root: str, judgments_root: str) -> dict[str, Any]:
-    """Keep release opinions, diagnostic opinions and executed controls separate."""
+    """Build a source report from prepared evidence and validated judgments."""
     inputs = read_json(str(StoragePath(inputs_root) / "manifest.json"))
     judgments = read_json(str(StoragePath(judgments_root) / "manifest.json"))
     packets = {row["task_id"]: row for path in inputs["packet_paths"] for row in load_parquet(path)}

@@ -24,6 +24,8 @@ from experiments.post_training.task_curation.config import RecipeSettings
 INPUTS_VERSION = "2026.10.12.8"
 JUDGMENTS_VERSION = "2026.10.12.5"
 REPORT_VERSION = "2026.10.12.3"
+REQUEST_TIMEOUT = 60
+REQUEST_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -69,12 +71,14 @@ def _judge(
     if execution.review.mode == ReviewMode.CHAT:
         submit = partial(
             chat_output,
-            OpenAIChatClient(base_url, token, timeout=60),
+            OpenAIChatClient(base_url, token, timeout=REQUEST_TIMEOUT),
             max_concurrent=execution.review_concurrency,
         )
     else:
         submit = partial(
-            batch_output, OpenAIBatchClient(base_url, token, timeout=60, request_attempts=3), poll_seconds=5.0
+            batch_output,
+            OpenAIBatchClient(base_url, token, timeout=REQUEST_TIMEOUT, request_attempts=REQUEST_ATTEMPTS),
+            poll_seconds=5.0,
         )
     grade_assessment(
         runtime.context,
@@ -122,7 +126,7 @@ def assessment_pipeline(
     runtime: CampaignRuntime,
     execution: RecipeSettings,
 ) -> AssessmentStages:
-    """Keep preparation reusable when only the rubric or model changes."""
+    """Return the evidence preparation, judgment and report stages for a source."""
     inputs = apply(
         f"rl-assessment/{source}/inputs",
         partial(_prepare, runtime),

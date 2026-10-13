@@ -25,8 +25,9 @@ for declaration fields and artifact outputs.
 3. If adding a module, import it and include its `sources()` results in
    [all_sources()](../sources.py). Add a behavioral conversion test in the family
    test module, and run it with [test_catalog.py](../tests/test_catalog.py).
-4. Run a SAMPLE or FULL campaign for the new source to publish it in the curation
-   catalog, then export the published inventory from the repository root:
+4. Run a SAMPLE or FULL campaign to publish the updated inventory. Any campaign
+   includes all source declarations; select the new source to also curate and
+   assess it. Export the published inventory from the repository root:
 
    ```bash
    uv run --with-editable './lib/taskcompendium[pipeline]' python \

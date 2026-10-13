@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>RL Data Atlas</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="assessment.css"><script src="app.js" defer></script>
+  <title>RL Data Atlas</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="assessment.css"><script src="common.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
 <header class="masthead"><a class="brand" href="./">open athena / research tools</a><a href="archive.html">Historical reviews ↗</a></header>
@@ -19,7 +19,7 @@
     <div class="filters">
       <label>Catalog<select id="origin"><option value="all">All catalogs</option></select></label>
       <label>Sampled grade<select id="quality"><option value="all">All grades</option><option value="good">Good</option><option value="some_issues">Some issues</option><option value="bad">Bad</option><option value="unknown">Unknown</option><option value="unassessed">Unassessed</option></select></label>
-      <label>Curation<select id="curation"><option value="all">All outcomes</option><option value="completed">Completed</option><option value="incomplete">Incomplete</option><option value="gated">Gated</option><option value="inventory">Inventory only</option></select></label>
+      <label>Curation<select id="curation"><option value="all">All outcomes</option><option value="sampled">Sampled</option><option value="completed">Completed</option><option value="incomplete">Incomplete</option><option value="gated">Gated</option><option value="inventory">Inventory only</option></select></label>
       <label>Type<select id="type"><option value="all">All types</option><option>RLVR</option><option>Alignment</option><option>Agentic</option></select></label>
       <button id="reset" class="text-button">Reset</button>
     </div>

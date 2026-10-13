@@ -4,6 +4,8 @@
 mirrors the published [curation catalog](task-curation.md#run-catalog). The catalog
 owns source declarations, executed curation outcomes and sampled grading reports.
 Atlas caches its current snapshot in Postgres and serves archived evidence.
+TaskSpec is the task format used by RL training. Zephyr prepares the evidence;
+GLM is the model that judges each sampled task against the grading rubric.
 
 ```mermaid
 flowchart LR
@@ -16,8 +18,9 @@ flowchart LR
 
 ## Reading grades
 
-Each FULL pipeline is assessed automatically. The default sample is 100 admitted
-tasks and up to 20 excluded rows. SAMPLE opts in with `--assess`. Read admitted
+Each [FULL campaign](task-curation.md#run-a-campaign) is assessed automatically.
+The default sample is 100 admitted tasks and up to 20 excluded rows. SAMPLE opts
+in with `--assess` on the same campaign command. Read admitted
 opinions separately from excluded diagnostics and executed controls. Grading
 never changes task admission. Input populations may overlap.
 
@@ -37,19 +40,18 @@ with a skip reason. No running assessment state is published.
 Publishing a curation campaign archives selected packets, judgments, request
 traces and reports before selecting the current catalog snapshot. Inventory rows
 carry counts, control policies and evidence links. Detailed controls and model
-examples remain in the reports. Publication compacts blob descriptors so point
-reads avoid reopening every shard from per-file evidence transactions. Run
-publication and maintenance in the data's storage region.
+examples remain in the reports. Run catalog publication in the data's storage
+region because it archives evidence from the curation outputs.
 
 Atlas reads the published snapshot during deployment. Its authenticated Refresh catalog action
 reads `catalog_current` and atomically replaces the saved mirror. Private visits
-also refresh it; public visits read the saved mirror. A failed refresh preserves
+also refresh it on page load; public visits read the saved mirror. A failed refresh preserves
 the last saved snapshot. Atlas has no manual rating overlay or independent
 source registry. Current data lives in its `curation_catalog` Postgres table.
 
 ## Historical reviews
 
-Historical reviews opens the earlier review collections and raw artifacts.
+The Historical reviews page opens the earlier review collections and raw artifacts.
 Legacy source ratings, difficulty measurements and defect records remain in the
 applet's original Postgres tables. They do not contribute to current grades.
 The archive preserves storage and original IDs; it does not reproduce the old
@@ -60,7 +62,9 @@ review or difficulty workflows.
 Source code lives in `infra/marina/applets/rl_data_catalog/`. The backend reads
 the catalog from object storage using Marina's credentials; deployment never
 launches conversion or inference. To use a different catalog, change the explicit
-root in `server/catalog.py`. The reader supports GCS, S3 and local paths.
+root in `server/catalog.py`. The reader supports GCS, S3 and local paths. A live
+catalog must be published at a storage URL that Marina can read; local cache
+paths are suitable for local previews only.
 
 ```bash
 uv run marina validate infra/marina/applets/rl_data_catalog

@@ -49,5 +49,5 @@ def published_catalog(root: str, previous: dict[str, Any] | None = None) -> dict
 def evidence_document(root: str, uri: str) -> dict[str, Any]:
     data = ReadView(root).resolve(uri)
     if data is None:
-        raise ValueError("Archived evidence is unavailable")
+        raise FileNotFoundError("Archived evidence is unavailable")
     return json.loads(data)

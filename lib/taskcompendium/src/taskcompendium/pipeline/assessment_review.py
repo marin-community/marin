@@ -276,4 +276,6 @@ def grade_assessment(
             },
         )
         if counts[ReviewStatus.UNAVAILABLE]:
-            raise IncompleteAssessment(f"{counts['unavailable']} judgments unavailable; retained at {output_root}")
+            raise IncompleteAssessment(
+                f"{counts[ReviewStatus.UNAVAILABLE]} judgments unavailable; retained at {output_root}"
+            )

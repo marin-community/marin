@@ -12,6 +12,12 @@ from taskcompendium.pipeline.assessment import read_json, write_json
 from taskcompendium.pipeline.models import SourceStatus
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
+from experiments.post_training.task_curation.curation_catalog import (
+    FILTER_MANIFEST_FILENAME,
+    MANIFEST_FILENAME,
+    REVIEW_MANIFEST_FILENAME,
+    TELEMETRY_FILENAME,
+)
 from experiments.post_training.task_curation.source import RlDataSource
 
 REASSESSMENT_VERSION = "2026.10.12.4"
@@ -58,30 +64,33 @@ def _validated_curated(*, manifest_path: str, expected: CuratedSource, output_ro
     views = manifest["datasets"]
     retained = StoragePath(manifest_path).parent
     output = StoragePath(output_root)
-    for filename in ("telemetry.json", "identity.json", "work/filtered/manifest.json", "review/manifest.json"):
+    for filename in (TELEMETRY_FILENAME, "identity.json", FILTER_MANIFEST_FILENAME, REVIEW_MANIFEST_FILENAME):
         original = retained / filename
         if original.exists():
             (output / filename).write_bytes(original.read_bytes(), auto_mkdir=True)
-    telemetry_path = output / "telemetry.json"
+    telemetry_path = output / TELEMETRY_FILENAME
     manifest["telemetry"] = str(telemetry_path) if telemetry_path.exists() else None
     # An inconclusive control result remains evidence; reassessment changes no admission.
     result = PipelineResult(
         SourceStatus(manifest["status"]),
         {name: views[name] for name in ("normalize", "final")},
-        {**{name: views[name] for name in ("download", "review", "verify")}, "manifest": str(output / "manifest.json")},
+        {
+            **{name: views[name] for name in ("download", "review", "verify")},
+            "manifest": str(output / MANIFEST_FILENAME),
+        },
         ("adopt_curated",),
     )
-    write_json(str(StoragePath(output_root) / "manifest.json"), manifest)
+    write_json(str(StoragePath(output_root) / MANIFEST_FILENAME), manifest)
     return CampaignArtifact(path=output_root, status=result.status, result=result)
 
 
 def reassessment_input(source: RlDataSource, root: str) -> ArtifactStep[CampaignArtifact]:
-    """Keep the original producer's name/version as the adopted upstream key."""
+    """Return a validated curation artifact for reassessing retained FULL outputs."""
     path = StoragePath(root)
     original = ArtifactStep.adopt(
         f"data/rl/{path.parent.name}",
         path.name,
-        str(path / "manifest.json"),
+        str(path / MANIFEST_FILENAME),
         kind=Artifact,
     )
     dataset = source.dataset

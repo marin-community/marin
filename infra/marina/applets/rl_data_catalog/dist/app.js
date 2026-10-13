@@ -1,15 +1,8 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
-const $ = id => document.getElementById(id);
 const number = new Intl.NumberFormat("en-US");
 const labels = {good: "Good", some_issues: "Some issues", bad: "Bad", unknown: "Unknown", unassessed: "Unassessed"};
 const state = {sources: [], sort: "display_name", direction: 1};
-const columns = [["display_name", "Source"], ["origin", "Catalog"], ["task_count", "Input rows"], ["admitted", "Admitted rows"], ["quality", "Sampled grade"], ["sample", "Admitted / excluded sample"], ["curation", "Curation"], ["controls", "Executed controls"], ["type", "Type"]];
-function node(tag, value, className) {
-  const element = document.createElement(tag);
-  if (value !== undefined) element.textContent = value;
-  if (className) element.className = className;
-  return element;
-}
+const columns = [["display_name", "Source"], ["origin", "Catalog"], ["task_count", "Input rows"], ["admitted", "Admitted rows"], ["quality", "Sampled grade"], ["sample", "Admitted / excluded sample"], ["curation", "Curation"], ["controls", "Executed controls"], ["type", "Type"], ["status", "Availability"]];
 function grade(row) {return row.assessment.status === "complete" ? row.assessment.admitted.grade : "unassessed";}
 function value(row, key) {
   if (key === "quality") return grade(row);
@@ -76,7 +69,7 @@ async function load() {
   const selection = $("origin").value;
   $("origin").replaceChildren(node("option", "All catalogs")); $("origin").firstChild.value = "all";
   for (const origin of [...new Set(data.sources.map(row => row.origin))].sort()) {const option = node("option", origin); option.value = origin; $("origin").append(option);}
-  $("origin").value = selection; render();
+  $("origin").value = [...$("origin").options].some(option => option.value === selection) ? selection : "all"; render();
 }
 async function refresh() {
   $("refresh").disabled = true; $("message").textContent = "Reading the published curation catalog…";
@@ -93,6 +86,6 @@ $("export").addEventListener("click", () => {
   const cell = (row, key) => key === "sample" ? `${row.assessment.admitted?.sample_count || 0} / ${row.assessment.excluded?.sample_count || 0}` : value(row, key);
   const csv = [columns.map(([, title]) => quote(title)).join(","), ...filtered().map(row => columns.map(([key]) => quote(cell(row, key))).join(","))].join("\r\n");
   const url = URL.createObjectURL(new Blob([csv], {type: "text/csv;charset=utf-8"}));
-  const anchor = node("a"); anchor.href = url; anchor.download = "rl-data-atlas.csv"; anchor.click(); URL.revokeObjectURL(url);
+  const anchor = node("a"); anchor.href = url; anchor.download = "rl-data-atlas.csv"; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 load().then(() => {$("message").textContent = "Showing the saved curation catalog."; if (!$("refresh").hidden) refresh();}).catch(error => {$("message").textContent = error.message;});

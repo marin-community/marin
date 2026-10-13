@@ -194,9 +194,10 @@ def _publication(
         if legacy_archive_url is None:
             legacy_archive_url = prior_document["legacy_archive_url"]
     selected = {}
+    completed = {(row["source_id"], row["pipeline_key"]): row for row in view.iter_rows("catalog_assessments")}
     for record in records:
         source_id = record["source_id"]
-        recorded = view.point("catalog_assessments", source_id=source_id, pipeline_key=record["pipeline_key"])
+        recorded = completed.get((source_id, record["pipeline_key"]))
         if recorded is not None:
             selected[source_id] = json.loads(recorded["assessment_json"])
             if record["status"] != AssessmentStatus.COMPLETE:

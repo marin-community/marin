@@ -195,3 +195,17 @@ def test_atlas_routes_serve_catalog_evidence_and_archive(catalog_database) -> No
         assert archived["collection"] == {"reviews": []}
         assert archived["artifacts"] == [{"path": "nested/trace.txt", "sha256": "digest"}]
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
+        updated = {**catalog_document(root, [{**source, "task_count": 8}]), "snapshot_id": "next"}
+        with DataStore.open(root, writer_id="refresh") as store:
+            store.table(
+                "catalog_current",
+                primary_key=("name",),
+                schema=pa.schema([(name, pa.string()) for name in ("name", "snapshot_id", "document_uri")]),
+            )
+            with store.transaction() as transaction:
+                document_uri = transaction.write_object("next.json", json.dumps(updated).encode())
+                transaction.table("catalog_current").add(
+                    {"name": "latest", "snapshot_id": "next", "document_uri": document_uri}
+                )
+        assert client.post("/refresh").json() == {"busy": False, "changed": True, "snapshot_id": "next"}
+        assert client.get("/sources").json()["sources"][0]["task_count"] == 8
