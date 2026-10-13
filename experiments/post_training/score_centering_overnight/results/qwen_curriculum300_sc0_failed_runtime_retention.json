@@ -1,0 +1,9 @@
+{
+  "scope": "Failed curriculumSCseed0main-a2 partial10updateattempt; no finalscientificendpoint. Allruntimeobjects samebucket conditionalETag/length/provenancecopied.",
+  "run_id": "sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "objects": 3650,
+  "bytes": 1855743234,
+  "manifest_sha256": "e12eea2f495daa8e437075a0077b7fbd23a8e4e08404a20f43daf90618da40d2",
+  "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce/retained-runtime/promotion-manifest-01a126ce.json"
+}

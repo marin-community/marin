@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-13T20:57:43.781233+00:00",
+  "observed_at": "2026-10-13T21:27:27.273491+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -4088,6 +4088,46 @@
       "allocated_h100_hours": 13.034448888888889,
       "outcome": "succeeded with retained audit",
       "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-qwen-transfer-curriculum-tis-s0-pilot-a4-01a126ce.json.gz"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "225f3978e443b3d9",
+      "state": "5",
+      "exit_code": "1",
+      "started_at_ms": "1791923053335",
+      "finished_at_ms": "1791925481563",
+      "node_name": "g73bb8a",
+      "terminal_reason": "^^^^^^^\n  File \"/usr/local/lib/python3.12/concurrent/futures/_base.py\", line 401, in __get_result\n    raise self._exception\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/marinskyrl/skyrl-train/skyrl_train/rollouts/buffer.py\", line 533, in admit\n    raise GroupAdmissionStalledError(\nskyrl_train.group_admission.GroupAdmissionStalledError: no rollout group admitted for 600s: policy_step=11 admitted=8/64 leases=56 rejections={}\n2026-10-13 21:04:01.208 | ERROR    | skyrl_train.entrypo",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "75bfcba7e68299f0bd703bfe2dbb0e58747f17c025172449c55a6c4d8214b007",
+      "allocated_seconds": 2428.228,
+      "allocated_h100_hours": 5.3960622222222225,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "0e4b51aed3211d32",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791923053335",
+      "finished_at_ms": "1791925481563",
+      "node_name": "g845f76",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "75bfcba7e68299f0bd703bfe2dbb0e58747f17c025172449c55a6c4d8214b007",
+      "allocated_seconds": 2428.228,
+      "allocated_h100_hours": 5.3960622222222225,
+      "outcome": "failed engineering attempt"
     }
   ],
   "terminal_h100_hours": 54.25557777777778,
@@ -4103,7 +4143,8 @@
     "Qwen GPU qualification": 98.52069999999999,
     "Snowball noise calibration": 235.28845555555557,
     "Snowball incumbent qualification": 92.46114222222224,
-    "Qwen transfer pilot": 55.99614222222222
+    "Qwen transfer pilot": 55.99614222222222,
+    "Qwen transfer main": 10.792124444444445
   },
   "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
   "active_attempts": [
@@ -4123,7 +4164,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "d765a18d08f71efb8b33d0e22c30fb789608e9683a8ee56abfb7906e0285b19e",
-      "allocated_h100_hours_so_far": 4.5555582957797585
+      "allocated_h100_hours_so_far": 8.518874424298604
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s0-pilot-a4-01a126ce/1",
@@ -4141,7 +4182,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "d765a18d08f71efb8b33d0e22c30fb789608e9683a8ee56abfb7906e0285b19e",
-      "allocated_h100_hours_so_far": 4.542669406996833
+      "allocated_h100_hours_so_far": 8.505985535515679
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce/0",
@@ -4159,7 +4200,7 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "ff48b8d8ec63f97872d2456599d1ceb4d3db124ebf02d73158c8e2b9c99c4025",
-      "allocated_h100_hours_so_far": 4.467658295631408
+      "allocated_h100_hours_so_far": 8.430974424150255
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-pilot-a4-01a126ce/1",
@@ -4177,15 +4218,15 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "ff48b8d8ec63f97872d2456599d1ceb4d3db124ebf02d73158c8e2b9c99c4025",
-      "allocated_h100_hours_so_far": 4.467658295631408
+      "allocated_h100_hours_so_far": 8.430974424150255
     },
     {
-      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce/0",
+      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s1-main-a2-01a126ce/0",
       "attempt_id": "0",
-      "attempt_uid": "225f3978e443b3d9",
+      "attempt_uid": "99f1e34a8fb37a65",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791923053335",
+      "started_at_ms": "1791925493087",
       "finished_at_ms": "",
       "node_name": "g73bb8a",
       "terminal_reason": "",
@@ -4194,16 +4235,16 @@
       "priority": "batch",
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "75bfcba7e68299f0bd703bfe2dbb0e58747f17c025172449c55a6c4d8214b007",
-      "allocated_h100_hours_so_far": 4.467658295631408
+      "configuration_sha256": "d7c61049f9e5df41dc465b74077b2086d9768a94d6c9461dc2824a7fadba792d",
+      "allocated_h100_hours_so_far": 3.009303313361274
     },
     {
-      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce/1",
+      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s1-main-a2-01a126ce/1",
       "attempt_id": "0",
-      "attempt_uid": "0e4b51aed3211d32",
+      "attempt_uid": "a28ba9f5d49edb42",
       "state": "3",
       "exit_code": "",
-      "started_at_ms": "1791923053335",
+      "started_at_ms": "1791925516111",
       "finished_at_ms": "",
       "node_name": "g845f76",
       "terminal_reason": "",
@@ -4212,8 +4253,8 @@
       "priority": "batch",
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "75bfcba7e68299f0bd703bfe2dbb0e58747f17c025172449c55a6c4d8214b007",
-      "allocated_h100_hours_so_far": 4.467658295631408
+      "configuration_sha256": "d7c61049f9e5df41dc465b74077b2086d9768a94d6c9461dc2824a7fadba792d",
+      "allocated_h100_hours_so_far": 2.958138868543837
     }
   ]
 }
