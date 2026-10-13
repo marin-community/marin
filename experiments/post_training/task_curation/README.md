@@ -102,6 +102,10 @@ custom source readers reuse the recorded auxiliary inputs. Reports include
 original-row evidence coverage. This repeats source reading, without repeating
 conversion or controls. Pipelines without original source records declare no
 reader through `CatalogConfig.assessment_source`.
+An irreproducible generator row retains its recorded locator, hash and rejection
+reason, with an explicit original-evidence omission. Regenerated content with a
+different hash never enters the packet. File-backed identity mismatches fail the
+preparation stage.
 
 A malformed or unavailable response is retried twice; remaining
 failures retain partial grades and fail the stage. Batch transport separately

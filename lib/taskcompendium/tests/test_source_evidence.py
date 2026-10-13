@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -75,3 +76,36 @@ def test_original_evidence_rejects_changed_or_missing_rows(tmp_path, failure):
     file = SourceEvidenceFile(path.name, str(path), {index: OriginalRow("task", f"{path.name}:{index}", expected)})
     with pytest.raises(ValueError, match="Original source row"):
         list(original_rows(file, spec=spec, context=ConversionContext({}, None), preview_characters=40))
+
+
+@dataclass(frozen=True)
+class GeneratedEvidenceRows:
+    count: int = 1
+
+    def size(self, _path, _context):
+        return 2
+
+    def __call__(self, _path, _context, _part, indices):
+        for index in sorted(indices):
+            yield index, {"text": "retained" if index == 0 else "changed generation"}
+
+
+def test_irreproducible_generator_keeps_identity_without_fabricating_original_content(tmp_path):
+    path = tmp_path / "generator.whl"
+    expected = raw_input_sha256({"text": "retained"})
+    rows = {index: OriginalRow(f"task-{index}", f"{path.name}:{index}", expected) for index in (0, 1)}
+    spec = SourceFiles("fixture", "pin", (path.name,), SourceFormat.GENERATED, parts=GeneratedEvidenceRows())
+    recovered = list(
+        original_rows(
+            SourceEvidenceFile(path.name, str(path), rows),
+            spec=spec,
+            context=ConversionContext({}, None),
+            preview_characters=100,
+        )
+    )
+    assert len(recovered) == 2 and recovered[0]["evidence"]["source"]["available"]
+    missing = recovered[1]
+    assert missing["task_id"] == "task-1" and not missing["evidence"]["source"]["available"]
+    assert missing["evidence"]["source"]["raw_input_sha256"] == expected
+    assert "preview" not in missing["evidence"]["source"]
+    assert missing["omissions"] == ["source: original generated row could not be reproduced"]

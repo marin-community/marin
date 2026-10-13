@@ -470,7 +470,7 @@ def prepare_assessment(
                     raise ValueError("Original source evidence does not cover the selected sample")
                 for row in recovered:
                     records[row["task_id"]].append(row)
-                source_rows = len(recovered)
+                source_rows = sum(row["evidence"]["source"]["available"] for row in recovered)
         with telemetry.phase("packets"):
             packet_path = str(StoragePath(output_root) / "packets/part-00000.parquet")
             write_parquet_file(
@@ -482,7 +482,11 @@ def prepare_assessment(
             str(StoragePath(output_root) / "manifest.json"),
             {
                 "schema_version": 1,
-                "source_evidence": {"reader_declared": raw_source is not None, "rows": source_rows},
+                "source_evidence": {
+                    "reader_declared": raw_source is not None,
+                    "rows": source_rows,
+                    "unavailable_rows": len(selected) - source_rows if raw_source is not None else 0,
+                },
                 "source": manifest["source"],
                 "curated_root": curated_root,
                 "scope": manifest["mode"],

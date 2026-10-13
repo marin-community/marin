@@ -102,13 +102,28 @@ def original_rows(
         document = canonical_source_json(data)
         digest = hashlib.sha256(document.encode()).hexdigest()
         if selected.raw_input_sha256 is not None and selected.raw_input_sha256 != digest:
-            raise ValueError(f"Original source row changed: {selected.locator}")
+            if spec.format != SourceFormat.GENERATED:
+                raise ValueError(f"Original source row changed: {selected.locator}")
+            yield {
+                "task_id": selected.task_id,
+                "evidence": {
+                    "source": {
+                        "locator": selected.locator,
+                        "raw_input_sha256": selected.raw_input_sha256,
+                        "regenerated_sha256": digest,
+                        "available": False,
+                    }
+                },
+                "omissions": ["source: original generated row could not be reproduced"],
+            }
+            continue
         truncated = len(document) > preview_characters
         yield {
             "task_id": selected.task_id,
             "evidence": {
                 "source": {
                     "locator": selected.locator,
+                    "available": True,
                     "raw_input_sha256": digest,
                     "characters": len(document),
                     "preview": document[:preview_characters],

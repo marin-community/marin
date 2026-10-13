@@ -187,8 +187,8 @@ def generated_rows(
 ) -> Iterator[tuple[int, dict[str, Any]]]:
     """Run one part of ``generate.py`` with the unpacked generator wheel first on ``PYTHONPATH``.
 
-    Yields the part's rows with their indices in the whole generated source, only those in
-    ``indices`` when given.
+    Yields the requested indices from this part. An irreproducible entry can
+    differ from a full run; callers recovering original data must check its hash.
     """
     arguments = ["rows", generator_version, json.dumps(dict(excluded_generators)), str(part), str(parts)]
     if indices is not None:
