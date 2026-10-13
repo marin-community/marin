@@ -265,6 +265,10 @@ def relu2_expert_mlp_mxfp8_fwd(x_packed, w_up, w_down, cu):
     """``relu(x W_up)^2 W_down`` with MXFP8 operands; ``x_packed`` is ``mx_pack_rows`` of the rows, as dispatched.
 
     Same contract as ``_relu2_expert_mlp_quack_fwd``: rows past ``cu[-1]`` are unspecified."""
+    # Tie the weights to this call's rows before quantizing them: inside a layer scan, XLA otherwise hoists the
+    # quantization of the stacked weights out of the loop and keeps every layer's quantized copies live (+16 GiB at
+    # the GB200 recipe).
+    x_packed, w_up, w_down = jax.lax.optimization_barrier((x_packed, w_up, w_down))
     values, exponents = mx_unpack_rows(x_packed, w_up.shape[1])
     pre, post, post_scales = mxfp8_relu2_grouped_gemm(
         values, padded_scale_rows(exponents, cu), *mx_weights(jnp.swapaxes(w_up, 1, 2)), cu
@@ -278,6 +282,7 @@ def relu2_expert_mlp_mxfp8_backward_input(res, dy):
     ``_relu2_expert_mlp_quack_wgrads`` with the dequantized rows the forward multiplied."""
     x_packed, w_up, w_down, pre, cu = res
     dtype = dy.dtype
+    dy, w_up, w_down = jax.lax.optimization_barrier((dy, w_up, w_down))  # as in the forward
     # Only MXFP8 copies of the row tensors stay live through the backward (the bf16 ``dy`` dies here); the bf16
     # weight-gradient GEMMs read short-lived dequantized copies, the values the other GEMMs multiplied.
     dy_values, dy_exponents = mx_quantize_rows(dy)
