@@ -144,6 +144,24 @@ async def test_a_control_set_the_model_never_gets_right_fails_as_the_controls_st
     assert not (tmp_path / CONTROLS_FILE).exists()
 
 
+async def test_a_control_writing_files_outside_the_output_paths_goes_back_to_the_model(
+    glm_client, fake_glm, ledger, tmp_path
+):
+    written_out = json.loads(controls("41"))
+    written_out["controls"][0]["files"] = [{"path": "workspace/answer.txt", "content": "42\n", "executable": False}]
+    fake_glm.stream(content=json.dumps(written_out))
+    fake_glm.stream(content=controls("41"))
+
+    written = await write_controls(
+        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+    )
+
+    assert "the task has no output paths" in fake_glm.requests[0]["messages"][-2]["content"].lower()
+    repair = fake_glm.requests[1]["messages"][-2]["content"]
+    assert "controls ['P-reference'] write files outside the task's output paths" in repair
+    assert [c.id for c in written] == ["P-reference", "N1-shortcut", "N2-off-by-two", "N3"]
+
+
 async def test_control_files_with_shell_metacharacters_in_their_paths_are_written_verbatim():
     path = "workspace/it's $HOME/a b.txt"
     submitted = ControlDraft.model_validate(
