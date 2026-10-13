@@ -145,7 +145,7 @@ unchanged, so their memoized outputs are reused.
 """
 
 
-NOTES_LIMIT = 1000
+NOTES_LIMIT = 2000
 """The longest ``ProgramSubmission.notes`` in characters, room for two to five sentences."""
 
 
@@ -156,7 +156,8 @@ class ProgramSubmission(BaseModel):
     # the bounded notes come first and the reply ends with the program's last line.
     notes: str = Field(
         max_length=NOTES_LIMIT,
-        description="Two to five sentences on what the program builds and any deviation from the proposal.",
+        description=f"At most {NOTES_LIMIT} characters; two to five sentences on what the program builds and "
+        "any deviation from the proposal.",
     )
     source: str = Field(
         description="The complete Python module text, the whole program, ending with "

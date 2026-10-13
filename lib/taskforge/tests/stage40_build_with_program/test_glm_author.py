@@ -52,7 +52,8 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     assert json.loads((item_dir / AUTHOR_DIR / "00" / "request.json").read_text()) == fake_glm.requests[0]["messages"]
     schema = fake_glm.requests[0]["response_format"]["json_schema"]["schema"]
     assert list(schema["properties"]) == ["notes", "source"]
-    assert schema["properties"]["notes"]["maxLength"] == NOTES_LIMIT
+    assert schema["properties"]["notes"]["maxLength"] == NOTES_LIMIT == 2000
+    assert schema["properties"]["notes"]["description"].startswith("At most 2000 characters;")
 
 
 async def test_a_revision_continues_from_the_program_the_item_holds(proposal, glm_client, fake_glm, ledger, tmp_path):
