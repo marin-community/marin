@@ -143,6 +143,17 @@ def test_turn_terminator_does_not_supply_missing_closers_or_erase_content(respon
         assert score_closure(content, '{"a":"<|eot_id|>"}', ClosureFormat.JSON).success
 
 
+def test_structural_stop_marker_remains_part_of_completed_tool_call():
+    response = '<tool_call>{"name":"shell","arguments":{}}</tool_call>'
+    content = closure_response_content(response, stop_reason="stop", terminal_markers=("</tool_call>",))
+    assert score_closure(content, response, ClosureFormat.TOOL).success
+
+
+def test_delimited_json_accepts_numeric_payload_before_closer():
+    response = "<tool_call>1</tool_call>"
+    assert score_closure(response, response, ClosureFormat.TOOL).success
+
+
 @pytest.mark.parametrize(
     ("candidate", "expected", "preserved"),
     [

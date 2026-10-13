@@ -55,8 +55,9 @@ _FENCE_INDENT = r" {0,3}"
 
 
 class _JsonPrefix:
-    def __init__(self, text: str):
+    def __init__(self, text: str, *, number_terminator: str = ""):
         self.text = text
+        self.number_terminator = number_terminator
         self.position = 0
         self.open: list[str] = []
 
@@ -98,7 +99,7 @@ class _JsonPrefix:
         start = self.position
         while self.position < len(self.text):
             char = self.text[self.position]
-            if char in _WHITESPACE + ",]}":
+            if char in _WHITESPACE + ",]}" or char == self.number_terminator:
                 break
             candidate = self.text[start : self.position + 1]
             if not _NUMBER_PREFIX.fullmatch(candidate):
@@ -263,7 +264,7 @@ def delimited_json_closure_state(prefix: str, *, opener: str, closer: str) -> Cl
     opening_state = _opening_marker_state(prefix, opener, closer)
     if opening_state is not None:
         return opening_state
-    parser = _JsonPrefix(prefix[len(opener) :])
+    parser = _JsonPrefix(prefix[len(opener) :], number_terminator=closer[0])
     try:
         parser.value()
         parser.skip_space()

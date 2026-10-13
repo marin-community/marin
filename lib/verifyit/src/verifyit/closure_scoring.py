@@ -4,6 +4,7 @@
 """Content-preserving scoring for explicitly required structure completion."""
 
 import json
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -19,6 +20,7 @@ from verifyit.structure_closure import (
 from verifyit.tool_call_markup import JSON_WHITESPACE, THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
 CLOSURE_REGION_SCORER = "closure_region_v1"
+_STRUCTURAL_CLOSERS = frozenset((TOOL_CLOSE, THINK_CLOSE, "}", "]", '"'))
 
 
 def closure_response_content(text: str, *, stop_reason: str, terminal_markers: tuple[str, ...]) -> str:
@@ -29,6 +31,10 @@ def closure_response_content(text: str, *, stop_reason: str, terminal_markers: t
     """
     if stop_reason == "stop":
         for marker in terminal_markers:
+            if not marker or marker.strip() in _STRUCTURAL_CLOSERS:
+                continue
+            if re.fullmatch(r"(?:`{3,}|~{3,})", marker.strip()):
+                continue
             if text.endswith(marker):
                 return text[: -len(marker)]
     return text
