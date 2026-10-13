@@ -350,7 +350,7 @@ def _original_files(records: dict[str, list[dict[str, Any]]], download: dict[str
     overrides = download["source_file_overrides"]
     component = download["files"].get("prepared_component")
     layout = download["files"].get("prepared_source_revision")
-    if component is not None and layout not in ("2", "3"):
+    if component is not None and layout not in (None, "2", "3"):
         raise ValueError(f"Unknown recorded prepared-source layout: {layout}")
     return [
         SourceEvidenceFile(
@@ -363,7 +363,7 @@ def _original_files(records: dict[str, list[dict[str, Any]]], download: dict[str
                     if layout == "2"
                     else prepared_component_path(StoragePath(download["source_input"]) / file, component)
                 )
-                if component is not None and file not in overrides
+                if component is not None and layout is not None and file not in overrides
                 else None
             ),
         )

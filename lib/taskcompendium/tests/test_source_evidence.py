@@ -79,7 +79,7 @@ def test_original_evidence_rejects_changed_or_missing_rows(tmp_path, failure):
         list(original_rows(file, spec=spec, context=ConversionContext({}, None), preview_characters=40))
 
 
-@pytest.mark.parametrize("layout, override", [("2", False), ("3", False), ("3", True)])
+@pytest.mark.parametrize("layout, override", [(None, False), (None, True), ("2", False), ("3", False), ("3", True)])
 def test_recovery_uses_recorded_acquisition_layout_and_local_overrides(tmp_path, layout, override):
     raw = tmp_path / "source.jsonl"
     data = {"text": "original"}
@@ -89,7 +89,7 @@ def test_recovery_uses_recorded_acquisition_layout_and_local_overrides(tmp_path,
         if layout == "2"
         else prepared_component_path(StoragePath(str(raw)), "selected")
     )
-    if override:
+    if override or layout is None:
         raw.write_text(json.dumps(data) + "\n")
     else:
         prepared.parent.mkdirs()
@@ -104,7 +104,7 @@ def test_recovery_uses_recorded_acquisition_layout_and_local_overrides(tmp_path,
     files = _original_files(records, download)
     recovered = list(original_rows(files[0], spec=spec, context=ConversionContext({}, None), preview_characters=100))
     assert recovered[0]["evidence"]["source"]["preview"] == json.dumps(data, sort_keys=True, separators=(",", ":"))
-    assert files[0].prepared_path == (None if override else str(prepared))
+    assert files[0].prepared_path == (None if override or layout is None else str(prepared))
 
 
 def test_recorded_generated_content_cannot_be_downgraded_to_regeneration_failure(tmp_path):
