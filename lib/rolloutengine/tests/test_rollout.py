@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import httpx
 import pytest
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -52,7 +53,8 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
-from verifyit.spec import FunctionCall, PredictedActionSpec, StructuredExactSpec, parse_spec
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import FunctionCall, JudgeSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
 
 from rolloutengine.agent_session import ExternalAgentSession
 from rolloutengine.cleanup import finish_cleanup
@@ -82,6 +84,70 @@ FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(
     command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=FIXTURE_IMAGE
 )
+
+
+@pytest.mark.parametrize("verdict,reward", [("PASS", 1.0), ("FAIL", 0.0), ("unparseable", None)])
+@pytest.mark.parametrize("native_action", [False, True])
+async def test_remote_judge_grades_on_host_without_creating_verifier_machine(
+    monkeypatch, verdict, reward, native_action
+):
+    requests = []
+
+    def send(client, request, **kwargs):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "judge-response",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "fixture-judge",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": verdict}, "finish_reason": "stop"}],
+            },
+        )
+
+    monkeypatch.setattr(httpx.Client, "send", send)
+    task = arithmetic_task(
+        grader=verifyit_package(
+            JudgeSpec(
+                rubric="labels",
+                references=("The answer is twelve",),
+                model="fixture-judge",
+                system_prompt="Grade the answer",
+                prompt_template="{reference}\n{candidate}",
+                label_scores={"PASS": 1.0, "FAIL": 0.0},
+            ),
+            environment=GRADER_ENVIRONMENT,
+        ).grader
+    )
+    response = {"role": "assistant", "content": "twelve"}
+    if native_action:
+        task = task.model_copy(
+            update={
+                "answer_type": AnswerType.NATIVE_ACTION,
+                "answer_format": FinalAction(require_call=True, max_calls=1),
+                "final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+            }
+        )
+        response = {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": '{"query":"twelve"}'}}
+            ],
+        }
+    model = ReplayModel([response])
+    factory = RecordingShellSimFactory()
+    record = await ShellboxRolloutEngine(
+        model.complete, {"docker": factory}, judge_connection=JudgeConnection("https://judge.invalid/v1", "judge-secret")
+    ).run(lowered(task, verifier_machine=machine_runtime(backend="docker")))
+    assert record.grade.reward == reward
+    assert record.grade.status == (Outcome.INFRA_ERROR if reward is None else Outcome.GRADED)
+    assert not factory.machines
+    assert requests[0].headers["authorization"] == "Bearer judge-secret"
+    assert "twelve" in requests[0].content.decode()
+    assert "judge-secret" not in task.model_dump_json()
+    assert "judge-secret" not in json.dumps(record.messages)
 
 
 @pytest.mark.parametrize("compact", [False, True])

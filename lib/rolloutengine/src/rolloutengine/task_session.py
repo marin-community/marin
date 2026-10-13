@@ -29,6 +29,7 @@ from taskcompendium.submission import (
     require_submission_compatibility,
     submission_instruction,
 )
+from verifyit.modes.grade_judge import JudgeConnection
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
@@ -85,12 +86,14 @@ class _ShellboxTaskSession:
         factories: Mapping[str, MachineFactory],
         cleanup: _Cleanup,
         resources: AsyncExitStack,
+        judge_connection: JudgeConnection | None,
     ):
         self.lowered = lowered
         self.machine = machine
         self.factories = factories
         self.cleanup = cleanup
         self.resources = resources
+        self.judge_connection = judge_connection
         self.shell_tool = resolve_shell_tool(lowered.task, lowered.session.shell_tool)
 
     async def prepare(self) -> SessionStart:
@@ -136,6 +139,7 @@ class _ShellboxTaskSession:
             self.cleanup,
             self.resources,
             stop_reason=stop_reason,
+            judge_connection=self.judge_connection,
         )
 
     async def close(self) -> None:

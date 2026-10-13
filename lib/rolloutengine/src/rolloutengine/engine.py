@@ -14,6 +14,7 @@ from shellbox.machine import Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import conversation_messages
+from verifyit.modes.grade_judge import JudgeConnection
 
 from rolloutengine.agent_session import AgentCompletion, ExternalAgentSession
 from rolloutengine.cleanup import _Cleanup
@@ -52,7 +53,12 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
 
 
 class ShellboxRolloutEngine:
-    """Generate exact-token rollouts from lowered single-stage tasks."""
+    """Generate exact-token rollouts from lowered single-stage tasks.
+
+    An explicit judge connection runs judge graders on the rollout host. Other
+    graders keep their declared execution environment. Credentials remain in
+    the connection and are not added to task specifications or machines.
+    """
 
     def __init__(
         self,
@@ -61,11 +67,13 @@ class ShellboxRolloutEngine:
         *,
         sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
         agent: Callable[[Machine | None, AgentCompletion], Coroutine[Any, Any, None]] | None = None,
+        judge_connection: JudgeConnection | None = None,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
         self.agent = agent
+        self.judge_connection = judge_connection
 
     async def run(self, lowered: LoweredTaskSpec) -> RolloutData:
         """Run one attempt; release its resources outside the attempt deadline."""
@@ -121,7 +129,9 @@ class ShellboxRolloutEngine:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
         try:
             if lowered.session.task_session == SHELLBOX_SESSION:
-                session = _ShellboxTaskSession(lowered, machine, self.factories, cleanup, resources)
+                session = _ShellboxTaskSession(
+                    lowered, machine, self.factories, cleanup, resources, self.judge_connection
+                )
             else:
                 session = self.sessions[lowered.session.task_session](lowered, machine)
         except Exception as error:
