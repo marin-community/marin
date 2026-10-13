@@ -8,17 +8,16 @@ import json
 import os
 from pathlib import Path
 
-import fsspec
 import shellsim
+from rigging.filesystem.storage_path import StoragePath
+from shellbox.backends.shellsim.catalog import DEFAULT_PYPI_CATALOG
 
-DEFAULT_CATALOG = "https://shellsim.rjp.io/ports/catalog.json"
 TEST_PACKAGES = ("numpy", "pytest")
 
 
 def prepare_test_catalog(catalog: str, output: Path) -> str:
     cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "shellsim/ports"
-    with fsspec.open(catalog, "rt") as source:
-        data = json.load(source)
+    data = json.loads(StoragePath(catalog).read_text())
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(data))
     shellsim.Context(pypi_catalog=output, cache_dir=cache).Environment(pypi_packages=TEST_PACKAGES)
@@ -42,7 +41,7 @@ def prepare_test_catalog(catalog: str, output: Path) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--catalog", default=DEFAULT_CATALOG)
+    parser.add_argument("--catalog", default=DEFAULT_PYPI_CATALOG)
     parser.add_argument("--output", type=Path, default=Path("build/shellsim-tests/catalog.json"))
     args = parser.parse_args()
     print(prepare_test_catalog(args.catalog, args.output))

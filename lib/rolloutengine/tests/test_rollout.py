@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
+from infra.ci.shellsim_test_runtime import ShellSimImageFactory
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
@@ -22,7 +23,6 @@ from shellbox.machine import (
     ExitReason,
     Machine,
     MachineSpec,
-    PackageSpec,
     Result,
     UnsupportedMachineSpec,
 )
@@ -190,19 +190,6 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         assert (await docker("inspect", machine.name)).exit_code != 0
 
 
-class FixtureImageFactory(DockerMachineFactory):
-    """Execute fixture image commands on the built-in filesystem."""
-
-    backend = Backend.DOCKER
-
-    def __init__(self, simulator: ShellSimMachineFactory | None = None):
-        self.simulator = simulator or ShellSimMachineFactory()
-        self.packages = PackageSpec(pypi_packages=("pytest",)) if simulator is not None else PackageSpec()
-
-    async def create(self, spec):
-        return await self.simulator.create(replace(spec, source=self.packages, workdir=spec.workdir or "/workspace"))
-
-
 @dataclass
 class RecordingShellSimFactory(DockerMachineFactory):
     backend: Backend = Backend.DOCKER
@@ -215,7 +202,7 @@ class RecordingShellSimFactory(DockerMachineFactory):
         factory.check_environment(requirements, spec)
 
     async def create(self, spec):
-        machine = await FixtureImageFactory(self.simulator).create(spec)
+        machine = await ShellSimImageFactory(self.simulator).create(spec)
         self.machines.append(machine)
         return machine
 
@@ -565,7 +552,7 @@ async def test_reasoning_only_response_grades_missing_answer_or_existing_files(s
             turn = await replay.complete(request)
             return replace(turn, stop_reason=stop_reason) if turn.message is empty else turn
 
-        return await RolloutEngine(complete, {"local": FixtureImageFactory()}).run(lowered(task, **runtime))
+        return await RolloutEngine(complete, {"local": ShellSimImageFactory()}).run(lowered(task, **runtime))
 
     missing = await run(arithmetic_task(), [empty])
     assert missing.grade.reward == 0.0
@@ -769,7 +756,7 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
             {"role": "assistant", "content": "Done."},
         ]
     )
-    result = await engine(model, {"local": FixtureImageFactory()}).run(
+    result = await engine(model, {"local": ShellSimImageFactory()}).run(
         lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime(), shell_tool=binding)
     )
 
@@ -833,7 +820,7 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
         backend = Backend.DOCKER
 
         async def create(self, spec):
-            return TimeoutMachine(await FixtureImageFactory().create(spec))
+            return TimeoutMachine(await ShellSimImageFactory().create(spec))
 
     message = shell_call("hang", call_id="first")
     message["tool_calls"].extend(
@@ -899,7 +886,7 @@ async def test_answer_call_retains_submission_tool_and_finishes():
         ],
     }
     model = ReplayModel([message])
-    result = await engine(model, {"local": FixtureImageFactory()}).run(lowered(task, machine=machine_runtime()))
+    result = await engine(model, {"local": ShellSimImageFactory()}).run(lowered(task, machine=machine_runtime()))
     assert result.grade.reward == 1.0
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["submit_answer", "shell"]
 
@@ -931,7 +918,7 @@ async def test_native_action_preserves_configured_call_limits(calls, expected):
 async def test_workspace_state_receives_shell_presentation_without_answer_tools():
     task = file_task(answer_type=AnswerType.WORKSPACE_STATE, answer_format=AnswerCall())
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
-    record = await engine(model, {"local": FixtureImageFactory()}).run(
+    record = await engine(model, {"local": ShellSimImageFactory()}).run(
         lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert record.grade.reward == 1.0
@@ -1093,7 +1080,7 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
             return await super().complete(request)
 
     record = await engine(
-        LimitedModel([shell_call("echo 12 > /workspace/answer")]), {"local": FixtureImageFactory()}
+        LimitedModel([shell_call("echo 12 > /workspace/answer")]), {"local": ShellSimImageFactory()}
     ).run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert record.stop_reason == "length"
     assert (record.grade.status, record.grade.reward) == (
@@ -1116,7 +1103,7 @@ async def test_model_transport_must_preserve_exact_token_evidence(violation):
             "stop",
         )
 
-    runner = RolloutEngine(complete, {"local": FixtureImageFactory()})
+    runner = RolloutEngine(complete, {"local": ShellSimImageFactory()})
     with pytest.raises(RolloutContractError):
         await runner.run(lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime()))
 
@@ -1165,7 +1152,7 @@ async def test_reward_file_priority_rejects_fallback_and_agent_scores(script, st
         ),
     )
     record = await engine(
-        ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": FixtureImageFactory()}
+        ReplayModel([{"role": "assistant", "content": "Done."}]), {"local": ShellSimImageFactory()}
     ).run(lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime()))
     assert (record.grade.status, record.grade.reward, record.grade.failure) == (status, reward, failure)
     if reward == 0:

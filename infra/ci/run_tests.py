@@ -381,6 +381,23 @@ def _print_plan(
         print(f"Dedicated CI suites not run locally: {', '.join(selection.suites)}")
 
 
+def prepare_shellsim_test_runtime(invocation: PytestInvocation, repo_root: Path) -> str:
+    """Prepare ports before starting pytest and return the local catalog URI."""
+    command = [
+        "uv",
+        "run",
+        "--all-packages",
+        "--no-default-groups",
+        *(value for extra in invocation.extras for value in ("--extra", extra)),
+        "--group",
+        "test",
+        "python",
+        "infra/ci/prepare_shellsim_ports.py",
+    ]
+    prepared = subprocess.run(command, cwd=repo_root, stdout=subprocess.PIPE, text=True, check=True)
+    return prepared.stdout.strip()
+
+
 def run(argv: list[str] | None = None) -> int:
     """Run the selected local tests and return a process exit status."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -425,19 +442,7 @@ def run(argv: list[str] | None = None) -> int:
     if "SHELLSIM_TEST_CATALOG" not in os.environ and any(
         package.label in {"marin", "shellbox", "taskcompendium", "rolloutengine"} for package in invocation.packages
     ):
-        command = [
-            "uv",
-            "run",
-            "--all-packages",
-            "--no-default-groups",
-            *(value for extra in invocation.extras for value in ("--extra", extra)),
-            "--group",
-            "test",
-            "python",
-            "infra/ci/prepare_shellsim_ports.py",
-        ]
-        prepared = subprocess.run(command, cwd=repo_root, capture_output=True, text=True, check=True)
-        os.environ["SHELLSIM_TEST_CATALOG"] = prepared.stdout.strip()
+        os.environ["SHELLSIM_TEST_CATALOG"] = prepare_shellsim_test_runtime(invocation, repo_root)
 
     if selection.reason == BROAD_TRIGGER_REASON:
         print("\n==> pytest (shared test environment changed)", flush=True)

@@ -4,12 +4,10 @@
 """Grader packages and their observable verdicts."""
 
 import json
-from dataclasses import replace
 
 import pytest
-from shellbox.backends.docker.machine import DockerMachineFactory
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, MachineSpec, PackageSpec, RegistryImage
+from infra.ci.shellsim_test_runtime import ShellSimImageFactory
+from shellbox.machine import MachineSpec, RegistryImage
 from verifyit.spec import JsonSchemaSpec, NumericSpec, ScriptSpec
 
 from taskcompendium.grader import GraderPackage, verifyit_package
@@ -43,19 +41,6 @@ from taskcompendium.runtime.task_grading import grade_task
 IMAGE = "fixture@sha256:" + "0" * 64
 GRADING_ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS)
 GRADING_MACHINE = MachineSpec(RegistryImage(IMAGE))
-
-
-class FixtureImageFactory(DockerMachineFactory):
-    """Run the pinned fixture image's commands on the ShellSim built-ins."""
-
-    backend = Backend.DOCKER
-
-    def __init__(self, simulator: ShellSimMachineFactory | None = None):
-        self.simulator = simulator or ShellSimMachineFactory()
-        self.packages = PackageSpec(pypi_packages=("pytest",)) if simulator is not None else PackageSpec()
-
-    async def create(self, spec):
-        return await self.simulator.create(replace(spec, source=self.packages))
 
 
 def _task(package, answer_type=AnswerType.TEXT, answer_format=PlainText(), final_tools=()):
@@ -116,7 +101,7 @@ def test_script_grader_reads_private_configuration_and_captured_state(value, rew
     result = grade_task(
         task,
         _attempt(task, TextMessage(role="assistant", content="Done"), StateSubmission({"value": value})),
-        machine_factory=FixtureImageFactory(shellsim_factory),
+        machine_factory=ShellSimImageFactory(shellsim_factory),
         machine_spec=GRADING_MACHINE,
     )
     assert (result.status, result.reward, result.passed, result.detail) == (
@@ -207,6 +192,6 @@ def test_native_action_script_grader_receives_the_final_message(answer_format, f
         final_tools=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),
     )
     result = grade_task(
-        task, _attempt(task, final), machine_factory=FixtureImageFactory(shellsim_factory), machine_spec=GRADING_MACHINE
+        task, _attempt(task, final), machine_factory=ShellSimImageFactory(shellsim_factory), machine_spec=GRADING_MACHINE
     )
     assert (result.status, result.reward) == expected
