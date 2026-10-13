@@ -61,6 +61,20 @@ def initializer_model() -> ArtifactHfModel:
     )
 
 
+def exported_model(*, checkpoint_uri: str, checkpoint_version: str, manifest_identity: str) -> ArtifactHfModel:
+    """Bind an immutable campaign export and the initializer's pinned tokenizer."""
+    model = ArtifactStep.adopt(
+        user_owned_name("models/structure-closure-export"),
+        checkpoint_version,
+        checkpoint_uri,
+        kind=LevanterCheckpoint,
+        config={"manifest_identity": manifest_identity},
+    )
+    return ArtifactHfModel(
+        step=model, tokenizer_uri=MODEL_REPOSITORY, tokenizer_revision=MODEL_REVISION, relative_path=""
+    )
+
+
 def build_evaluation(*, name: str, data: ArtifactStep, model: ArtifactHfModel) -> ArtifactStep:
     """Evaluate an immutable closure cohort with an explicit model artifact."""
     return skyrl_step(
