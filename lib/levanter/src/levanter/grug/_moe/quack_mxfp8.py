@@ -338,15 +338,23 @@ def _axes(entry) -> tuple[str, ...]:
     return (entry,) if isinstance(entry, str) else tuple(entry)
 
 
+def _token_axes_only(w_spec: P, batch_axes: tuple[str, ...]) -> P:
+    """``w_spec`` with every mesh axis that does not shard the tokens dropped (the gradient is resharded to it after)."""
+    entries = []
+    for entry in w_spec:
+        axes = tuple(axis for axis in _axes(entry) if axis in batch_axes)
+        entries.append(axes if axes else None)
+    return P(*entries)
+
+
 def _reduce_partial_to_spec(dw: jax.Array, w_spec: P, batch_axes: tuple[str, ...]) -> jax.Array:
-    """Sum a per-shard partial weight gradient over the token axes, leaving it sharded as ``w_spec``."""
+    """Sum a per-shard partial weight gradient over the token axes, leaving it sharded as ``w_spec`` (token axes
+    only, see ``_token_axes_only``)."""
     reduced: list[str] = []
     for dim, entry in enumerate(w_spec):
         axes = _axes(entry)
         if not axes:
             continue
-        if any(axis not in batch_axes for axis in axes):
-            raise NotImplementedError(f"weight sharding {w_spec} uses a non-token axis; tokens are on {batch_axes}")
         dw = jax.lax.psum_scatter(dw, axes, scatter_dimension=dim, tiled=True)
         reduced.extend(axes)
     rest = tuple(axis for axis in batch_axes if axis not in reduced)
@@ -354,17 +362,16 @@ def _reduce_partial_to_spec(dw: jax.Array, w_spec: P, batch_axes: tuple[str, ...
 
 
 def _token_spec(x_spec: P, ndim: int) -> P:
+    """``x``'s spec padded to ``ndim`` with the feature dim unsharded (the kernels need whole rows)."""
     entries = tuple(x_spec) + (None,) * (ndim - len(tuple(x_spec)))
-    if entries[-1] is not None:
-        raise ValueError(f"mx_linear needs an unsharded feature dim, got {x_spec}")
-    return P(*entries)
+    return P(*entries[:-1], None)
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(2,))
 def mx_linear(x: jax.Array, w: jax.Array, out_sharding: P | None = None) -> jax.Array:
     """``x[..., K] @ w[K, N]`` with MXFP8 operands in all three GEMMs, on QuACK's block-scaled SM100 kernel.
 
-    Tokens may be sharded on any leading axes; the feature dims of ``x`` must not be. ``w`` is gathered like the
+    Tokens may be sharded on any leading axes; a sharded feature dim of ``x`` is gathered first. ``w`` is gathered like the
     einsum it replaces would gather it, and its gradient comes back sharded as ``w``. Every GEMM quantizes both of
     its operands along its own contraction axis (the weight gradient along tokens), as ``levanter.grug.mxfp8``
     simulates."""
@@ -378,7 +385,9 @@ def _mx_linear_fwd(x, w, out_sharding):
     def local(xl, wl):
         return mxfp8_matmul(xl.reshape(-1, k), wl).reshape(*xl.shape[:-1], n)
 
-    y = jax.shard_map(local, in_specs=(x_spec, P(None, None)), out_specs=x_spec)(x, reshard(w, P(None, None)))
+    y = jax.shard_map(local, in_specs=(x_spec, P(None, None)), out_specs=x_spec)(
+        reshard(x, x_spec), reshard(w, P(None, None))
+    )
     if out_sharding is not None:
         y = reshard(y, out_sharding)
     return y, (x, w)
@@ -387,21 +396,24 @@ def _mx_linear_fwd(x, w, out_sharding):
 def _mx_linear_bwd(out_sharding, res, g):
     del out_sharding
     x, w = res
-    x_spec = _token_spec(jax.typeof(x).sharding.spec, x.ndim)
+    x_orig_spec = jax.typeof(x).sharding.spec
+    x_spec = _token_spec(x_orig_spec, x.ndim)
     w_spec = jax.typeof(w).sharding.spec
     batch_axes = tuple(axis for entry in x_spec for axis in _axes(entry))
+    dw_spec = _token_axes_only(w_spec, batch_axes)
     k, n = w.shape
     g = reshard(g, x_spec)
 
     def local(xl, gl, wl):
         x2, g2 = xl.reshape(-1, k), gl.reshape(-1, n)
         dx = mxfp8_matmul_dgrad(g2, wl).reshape(xl.shape)
-        dw = _reduce_partial_to_spec(mxfp8_matmul_wgrad(x2, g2), w_spec, batch_axes)
+        dw = _reduce_partial_to_spec(mxfp8_matmul_wgrad(x2, g2), dw_spec, batch_axes)
         return dx, dw
 
-    dx, dw = jax.shard_map(local, in_specs=(x_spec, x_spec, P(None, None)), out_specs=(x_spec, w_spec))(
-        x, g, reshard(w, P(None, None))
+    dx, dw = jax.shard_map(local, in_specs=(x_spec, x_spec, P(None, None)), out_specs=(x_spec, dw_spec))(
+        reshard(x, x_spec), g, reshard(w, P(None, None))
     )
+    dx, dw = reshard(dx, x_orig_spec), reshard(dw, w_spec)
     return dx.astype(x.dtype), dw.astype(w.dtype)
 
 
