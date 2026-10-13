@@ -1,0 +1,10 @@
+{
+  "scope": "Completed faithful SCseed0 main-a3 runtime retention; pairedscientificmatrixinprogress.",
+  "run_id": "sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "objects": 22200,
+  "bytes": 39235300402,
+  "manifest_sha256": "2a14a014db2254c93b6e1de877124225a698871693ceea55e04c6cb3731ee7e9",
+  "durable_manifest": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+  "verification": "Samebucket conditionalcopy/sourceETag/destinationlength/provenance; native persistent artifacts unchanged."
+}
