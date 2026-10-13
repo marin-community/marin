@@ -14,7 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     concurrency:
-      group: datakit-tier2-ferry
+      # A run on a branch must not cancel the scheduled run on main.
+      group: datakit-tier2-ferry-${{ github.ref }}
       cancel-in-progress: true
     env:
       SMOKE_RUN_ID: datakit-tier2-ferry-${{ github.run_id }}-${{ github.run_attempt }}
