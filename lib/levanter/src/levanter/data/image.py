@@ -7,6 +7,7 @@
 import pyarrow.parquet as pq
 
 import abc
+import copy
 import asyncio
 import dataclasses
 import json
@@ -21,7 +22,6 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import datasets
 import equinox as eqx
-import fsspec
 import jax
 import numpy as np
 from draccus import field
@@ -51,15 +51,13 @@ from transformers import (  # noqa: E402
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
-from transformers.utils import logging as transformers_logging  # noqa: E402
 
 # Image loading dependencies - imported at module level for performance
 from io import BytesIO  # noqa: E402
 
 import requests  # noqa: E402
 from PIL import Image  # noqa: E402
-from rigging.filesystem.storage_path import StoragePath  # noqa: E402
-from rigging.filesystem.factory import url_to_fs  # noqa: E402
+from rigging.filesystem.storage_path import StoragePath, prefix_join  # noqa: E402
 
 logger = logging.getLogger("levanter.data.image")
 
@@ -89,7 +87,7 @@ class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
         format = _sniff_format_for_dataset(url)
         if format == ".parquet":
 
-            with fsspec.open(url, "rb") as f:
+            with StoragePath(url).open("rb") as f:
                 table = pq.read_table(f)
                 data = table.to_pydict()
                 num_rows = table.num_rows
@@ -99,7 +97,7 @@ class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
                         "text": data[self.text_key][idx],
                     }
         else:
-            with fsspec.open(url, "r", compression="infer") as f:
+            with StoragePath(url).open("r", compression="infer") as f:
                 match format:
                     case ".jsonl":
                         for line in f:
@@ -150,7 +148,7 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
         if format == ".parquet":
             # Handle parquet files
 
-            with fsspec.open(url, "rb") as f:
+            with StoragePath(url).open("rb") as f:
                 table = pq.read_table(f)
                 data = table.to_pydict()
                 num_rows = table.num_rows
@@ -162,7 +160,7 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
                         "videos": data["videos"][idx] if "videos" in data else [],
                     }
         else:
-            with fsspec.open(url, "r", compression="infer") as f:
+            with StoragePath(url).open("r", compression="infer") as f:
                 match format:
                     case ".jsonl":
                         for line in f:
@@ -188,138 +186,37 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
                         raise ValueError(f"Unknown format {format}")
 
 
-class CustomVLMProcessor(ProcessorMixin):
+def processor_with_tokenizer(
+    processor: ProcessorMixin,
+    tokenizer: PreTrainedTokenizerBase,
+    *,
+    image_token: str,
+    video_token: str,
+) -> ProcessorMixin:
+    """Copy a processor with explicit modality tokens and a compatible tokenizer.
+
+    Retains the original processor class, its image expansion logic, and its other
+    modality processors. Shared sub-processors are not mutated.
     """
-    Custom VLM processor that combines components from different sources.
-
-    This allows using a different tokenizer (e.g., Qwen3-1.7B) while keeping
-    the image/video processing from the original processor. Instead of mutating
-    the original processor's tokenizer, this creates a new processor instance
-    that properly combines the components.
-    """
-
-    attributes = ["image_processor", "tokenizer", "video_processor"]
-    image_processor_class = "AutoImageProcessor"
-    tokenizer_class = "AutoTokenizer"
-    video_processor_class = "AutoVideoProcessor"
-
-    # Critical tokens for validation when combining processors
-    CRITICAL_SPECIAL_TOKENS = ["<|im_start|>", "<|im_end|>"]
-    CRITICAL_ROLE_TOKENS = ["assistant", "user", "system"]
-
-    def __init__(
-        self,
-        image_processor: Any,
-        tokenizer: PreTrainedTokenizerBase,
-        video_processor: Any = None,
-        *,
-        chat_template: str | None = None,
-        image_token: str = "<image>",
-        video_token: str = "<video>",
-        num_image_tokens: int | None = None,
-        vision_feature_select_strategy: str | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """
-        Initialize the custom processor with combined components.
-
-        Args:
-            image_processor: Image processor from the original VLM processor
-            tokenizer: New tokenizer to use (e.g., from Qwen3-1.7B)
-            video_processor: Optional video processor from the original VLM processor
-            chat_template: Chat template for formatting conversations
-            image_token: Token used for image placeholders
-            video_token: Token used for video placeholders
-            num_image_tokens: Number of tokens per image
-            vision_feature_select_strategy: Strategy for selecting vision features
-        """
-        self.num_image_tokens = num_image_tokens
-        self.vision_feature_select_strategy = vision_feature_select_strategy
-        self.image_token = image_token
-        self.video_token = video_token
-        self.image_token_id = tokenizer.convert_tokens_to_ids(image_token)
-        self.video_token_id = tokenizer.convert_tokens_to_ids(video_token)
-
-        super().__init__(image_processor, tokenizer, video_processor, chat_template=chat_template)
-
-    @classmethod
-    def from_processor_and_tokenizer(
-        cls,
-        original_processor: ProcessorMixin,
-        new_tokenizer: PreTrainedTokenizerBase,
-        *,
-        image_token: str,
-        video_token: str,
-    ) -> "CustomVLMProcessor":
-        """
-        Create a CustomVLMProcessor by combining original processor components with a new tokenizer.
-
-        This factory method validates that the new tokenizer is compatible with the original
-        processor's tokenizer, then creates a new processor instance that combines them.
-
-        Args:
-            original_processor: The original VLM processor (e.g., LlavaOnevisionProcessor)
-            new_tokenizer: The new tokenizer to use (e.g., from Qwen3-1.7B)
-
-        Returns:
-            A new CustomVLMProcessor instance
-
-        Raises:
-            AssertionError: If tokenizers are incompatible (vocab_size, critical tokens, etc.)
-            NotImplementedError: If the new tokenizer type is not supported
-        """
-        old_tokenizer = original_processor.tokenizer
-
-        # Validate vocab_size matches
-        assert old_tokenizer.vocab_size == new_tokenizer.vocab_size, (
-            f"Tokenizer vocab size mismatch: processor has {old_tokenizer.vocab_size}, "
-            f"new tokenizer has {new_tokenizer.vocab_size}"
-        )
-
-        # Validate critical special tokens have the same IDs
-        for token in cls.CRITICAL_SPECIAL_TOKENS:
-            old_id = old_tokenizer.convert_tokens_to_ids(token)
-            new_id = new_tokenizer.convert_tokens_to_ids(token)
-            assert old_id == new_id, (
-                f"Critical special token '{token}' ID mismatch: " f"processor has {old_id}, new tokenizer has {new_id}"
-            )
-
-        # Validate role tokens have the same IDs
-        for token in cls.CRITICAL_ROLE_TOKENS:
-            old_id = old_tokenizer.convert_tokens_to_ids(token)
-            new_id = new_tokenizer.convert_tokens_to_ids(token)
-            assert old_id == new_id, (
-                f"Critical role token '{token}' ID mismatch: " f"processor has {old_id}, new tokenizer has {new_id}"
-            )
-
-        # Validate eos_token_id matches
-        assert old_tokenizer.eos_token_id == new_tokenizer.eos_token_id, (
-            f"eos_token_id mismatch: processor has {old_tokenizer.eos_token_id}, "
-            f"new tokenizer has {new_tokenizer.eos_token_id}"
-        )
-
-        # Placeholder tokens belong to the processor contract, not an LM family.
-        for token in (image_token, video_token):
-            if token not in new_tokenizer.get_vocab():
-                raise ValueError(f"Tokenizer does not contain the configured modality token {token!r}")
-
-        result = cls(
-            image_processor=original_processor.image_processor,
-            tokenizer=new_tokenizer,
-            video_processor=getattr(original_processor, "video_processor", None),
-            chat_template=getattr(original_processor, "chat_template", None),
-            image_token=image_token,
-            video_token=video_token,
-            num_image_tokens=getattr(original_processor, "num_image_tokens", None),
-            vision_feature_select_strategy=getattr(original_processor, "vision_feature_select_strategy", None),
-        )
-
-        logger.info(
-            f"Created CustomVLMProcessor with {type(new_tokenizer).__name__} "
-            f"(vocab_size={new_tokenizer.vocab_size})"
-        )
-
-        return result
+    old_tokenizer = processor.tokenizer
+    if old_tokenizer.eos_token_id != tokenizer.eos_token_id:
+        raise ValueError("Replacement tokenizer must preserve the EOS token ID")
+    old_modality_tokens = {getattr(processor, "image_token", None), getattr(processor, "video_token", None)}
+    for token in old_tokenizer.all_special_tokens:
+        if token not in old_modality_tokens and old_tokenizer.convert_tokens_to_ids(
+            token
+        ) != tokenizer.convert_tokens_to_ids(token):
+            raise ValueError(f"Replacement tokenizer changes special token {token!r}")
+    for token in (image_token, video_token):
+        if token not in tokenizer.get_vocab():
+            raise ValueError(f"Tokenizer does not contain the configured modality token {token!r}")
+    result = copy.copy(processor)
+    result.tokenizer = tokenizer
+    result.image_token = image_token
+    result.video_token = video_token
+    result.image_token_id = tokenizer.convert_tokens_to_ids(image_token)
+    result.video_token_id = tokenizer.convert_tokens_to_ids(video_token)
+    return result
 
 
 def image_source_urls(urls: Sequence[str]) -> list[str]:
@@ -327,8 +224,7 @@ def image_source_urls(urls: Sequence[str]) -> list[str]:
     result: list[str] = []
     for specification in urls:
         for path in StoragePath(specification).expand_glob():
-            fs, key = url_to_fs(str(path))
-            if fs.isdir(key):
+            if path.isdir():
                 result.extend(str(match) for match in (path / "**/*.parquet").glob())
             else:
                 result.append(str(path))
@@ -406,7 +302,7 @@ def load_image_from_path_or_url(path_or_url: str) -> Image.Image:
         response.raise_for_status()
         image = Image.open(BytesIO(response.content))
     elif path_or_url.startswith(("gs://", "s3://")):
-        with fsspec.open(path_or_url, "rb") as f:
+        with StoragePath(path_or_url).open("rb") as f:
             image = Image.open(f)
             image.load()
     else:
@@ -606,7 +502,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         # Create a custom processor with the new tokenizer if specified
         if tokenizer is not None:
-            self.processor = CustomVLMProcessor.from_processor_and_tokenizer(
+            self.processor = processor_with_tokenizer(
                 processor,
                 tokenizer,
                 image_token=image_token or processor.image_token,
@@ -1416,9 +1312,8 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
             if self._raw_data is not None:
                 return
 
-            logger.info("Loading raw data into memory for streaming...")
+            logger.info("Loading raw records into memory for indexed image access...")
 
-            # Pre-allocate list and use list extend for better performance
             raw_data: list[Dict[str, Any]] = []
             for shard_name in self.source.shard_names:
                 # Use list extend instead of individual appends
@@ -1695,7 +1590,7 @@ class ImageIODatasetConfig(ImageDatasetSourceConfig, ImageTaskConfig):
         split: str,
         cache_options: CacheOptions = CacheOptions.default(),
     ) -> Optional[ProcessedImageCache]:
-        split_cache_dir = os.path.join(self.cache_dir, split)
+        split_cache_dir = prefix_join(self.cache_dir, split)
 
         try:
             return ProcessedImageCache.load(split_cache_dir)
@@ -1770,7 +1665,7 @@ class ConversationIODatasetConfig(ConversationDatasetSourceConfig, ImageTaskConf
         split: str,
         cache_options: CacheOptions = CacheOptions.default(),
     ) -> Optional[ProcessedImageCache]:
-        split_cache_dir = os.path.join(self.cache_dir, split)
+        split_cache_dir = prefix_join(self.cache_dir, split)
 
         try:
             return ProcessedImageCache.load(split_cache_dir)
@@ -2110,7 +2005,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     def build_streaming_datasets(
         self, split: str, max_num_patches: Optional[int] = None
     ) -> Dict[str, OnDemandImageDataset]:
-        """Build streaming datasets that process images on-the-fly without caching."""
+        """Build indexed datasets that retain raw records and process images on demand."""
         datasets_dict = {}
 
         # Use provided max_num_patches, otherwise try to extract from processor
@@ -2225,23 +2120,3 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     @property
     def sources(self) -> Mapping[str, Union[ImageDatasetSourceConfig, ConversationDatasetSourceConfig]]:
         return self.configs
-
-
-# =============================================================================
-# LLaVA-OneVision Processor Classes
-# =============================================================================
-# Adapted from HuggingFace Transformers library:
-# https://github.com/huggingface/transformers/blob/main/src/transformers/models/llava_onevision/processing_llava_onevision.py
-#
-# Original code copyright 2024 The HuggingFace Inc. team.
-# Licensed under the Apache License, Version 2.0.
-#
-# We acknowledge the LLaVA-OneVision team for their excellent work:
-# https://github.com/LLaVA-VL/LLaVA-NeXT
-# Paper: https://arxiv.org/abs/2408.03326
-#
-# These classes provide custom processor implementation for LLaVA-OneVision models
-# with additional support for padding mode and fixed-shape processing.
-
-# Get a transformers logger for the processor
-_processor_logger = transformers_logging.get_logger(__name__)

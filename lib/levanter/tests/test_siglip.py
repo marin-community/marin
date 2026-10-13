@@ -174,7 +174,7 @@ def test_siglip_vision_embeddings_vs_hf() -> None:
 
 @skip_if_no_torch
 def test_siglip_vision_real_image() -> None:
-    """Test SigLIP vision model with real image using HF processor."""
+    """Test SigLIP vision model with generated pixels using the HF processor."""
     import torch  # noqa: PLC0415  # optional reference
     from transformers import (  # noqa: PLC0415  # optional reference
         SiglipImageProcessor,

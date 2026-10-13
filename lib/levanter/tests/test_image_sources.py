@@ -11,8 +11,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PIL import Image
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import CLIPImageProcessor, CLIPProcessor, PreTrainedTokenizerFast
 
-from levanter.data.image import ImageConversationUrlDataSource, ImageDatasetSourceConfig, image_source_urls, load_image
+from levanter.data.image import (
+    processor_with_tokenizer,
+    ImageConversationUrlDataSource,
+    ImageDatasetSourceConfig,
+    image_source_urls,
+    load_image,
+)
 
 
 def test_image_references_preserve_pixels(tmp_path: Path) -> None:
@@ -28,7 +37,11 @@ def test_image_references_preserve_pixels(tmp_path: Path) -> None:
 
 def test_conversation_source_preserves_other_modalities(tmp_path: Path) -> None:
     path = tmp_path / "records.jsonl"
-    record = {"messages": [{"role": "user", "content": [{"type": "audio"}]}], "audio": ["sound.wav"], "videos": ["clip.mp4"]}
+    record = {
+        "messages": [{"role": "user", "content": [{"type": "audio"}]}],
+        "audio": ["sound.wav"],
+        "videos": ["clip.mp4"],
+    }
     path.write_text(json.dumps(record) + "\n")
     source = ImageConversationUrlDataSource([str(path)])
     loaded = list(source.open_shard(source.shard_names[0]))
@@ -61,4 +74,22 @@ def test_directory_and_brace_shards_are_reopenable(tmp_path: Path) -> None:
     first.touch()
     second.touch()
     assert image_source_urls([str(tmp_path)]) == sorted([str(first), str(second)])
-    assert image_source_urls([str(tmp_path / "{a,missing}.parquet")]) == [str(first), str(tmp_path / "missing.parquet")]
+    assert image_source_urls([str(tmp_path / "{a,missing}.parquet")]) == [
+        str(first),
+        str(tmp_path / "missing.parquet"),
+    ]
+
+
+def test_processor_replacement_uses_configured_modality_tokens() -> None:
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0, "<visual>": 1, "<clip>": 2}, unk_token="[UNK]")),
+        unk_token="[UNK]",
+    )
+    image_processor = CLIPImageProcessor()
+    original = CLIPProcessor(image_processor=image_processor, tokenizer=tokenizer)
+    replaced = processor_with_tokenizer(original, tokenizer, image_token="<visual>", video_token="<clip>")
+    assert isinstance(replaced, CLIPProcessor)
+    assert replaced is not original
+    assert replaced.image_token_id == 1
+    assert replaced.video_token_id == 2
+    assert replaced.image_processor is image_processor
