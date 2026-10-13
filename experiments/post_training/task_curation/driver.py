@@ -20,6 +20,7 @@ from shellbox.machine import Backend, MachineFactory
 from taskcompendium.pipeline.assessment import AssessmentSampling
 from taskcompendium.pipeline.assessment_review import ASSESSMENT_RUBRIC, AssessmentModel
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
+from taskcompendium.pipeline.query_cache import compact_query_cache
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.pipeline.source_quality import MAX_SOURCE_QUALITY_SAMPLE_SIZE, SOURCE_QUALITY_SAMPLE_SIZE
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
@@ -388,6 +389,9 @@ def main(
             scope.callback(client.shutdown)
             scope.enter_context(set_current_client(client))
         assert report_path is not None
+        if assessment is not None:
+            assert recipe_settings.review_cache is not None
+            compact_query_cache(recipe_settings.review_cache)
         try:
             run_campaign(
                 steps,

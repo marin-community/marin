@@ -13,6 +13,8 @@ from functools import partial
 from typing import Any
 
 from finestore.cache import PersistentKvCache
+from finestore.layout import BlobTables
+from finestore.store import DataStore
 from zephyr import counters
 
 from taskcompendium.pipeline.review_requests import (
@@ -24,6 +26,12 @@ from taskcompendium.pipeline.review_requests import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def compact_query_cache(root: str) -> None:
+    """Consolidate lookup metadata between campaigns, retaining cached response objects."""
+    with DataStore.open(root, writer_id="query-cache-compaction") as store:
+        store.compact(BlobTables.DESCRIPTORS)
 
 
 @dataclass(frozen=True)

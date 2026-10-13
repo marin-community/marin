@@ -112,6 +112,8 @@ failures retain partial grades and fail the stage. Batch transport separately
 retries a failed HTTP request up to three times. Reruns reuse successful
 request-cache entries. Missing required evidence keeps the source's sampled
 quality unknown even when the model supplies a favorable opinion.
+Assessment campaigns compact request-cache lookup metadata before execution;
+cached responses and objects held by concurrent readers remain intact.
 Invalid structured replies, including token truncation, use the existing curation
 review retry budget of 8,192 tokens. First attempts use 4,096; transport failures
 do not increase the current budget. Valid cached judgments keep their original

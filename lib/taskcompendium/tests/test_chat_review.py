@@ -5,10 +5,12 @@ import json
 
 import pytest
 from finestore.cache import PersistentKvCache
+from finestore.layout import BlobTables
+from finestore.reader import ReadView
 
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow, ReviewRubric, ReviewStatus
-from taskcompendium.pipeline.query_cache import cached_request_output
+from taskcompendium.pipeline.query_cache import cached_request_output, compact_query_cache
 from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, valid_review_completion
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 
@@ -224,3 +226,20 @@ def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monk
     assert result.output == raw
     assert submitted == requests
     assert result.observations[0].output == raw
+
+
+def test_campaign_cache_compaction_preserves_values_and_consolidates_lookups(tmp_path):
+    root = str(tmp_path / "cache")
+    expected = {"first": b"response one", "second": b"response two"}
+    for key, value in expected.items():
+        cache = PersistentKvCache.at(root)
+        cache.store(key, value)
+        cache.close()
+    assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 2
+    compact_query_cache(root)
+    assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 1
+    cache = PersistentKvCache.at(root)
+    try:
+        assert cache.load_many(list(expected)) == expected
+    finally:
+        cache.close()
