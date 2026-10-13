@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import os
+import random
+import subprocess
+import sys
 from pathlib import Path
 
 from marin.schemas.web.convert import ResiliparseConfig
@@ -74,6 +79,44 @@ def test_process_record_basic():
     assert "text" in result
     assert "# Question" in result["text"]
     assert "# Answer" in result["text"]
+
+
+def test_process_record_seeded_layout_is_stable_across_hash_seeds():
+    script = """
+import json
+import sys
+
+from marin.schemas.web.convert import ResiliparseConfig
+from marin.transform.stackexchange.transform_stackexchange import process_record
+
+row = json.load(sys.stdin)
+print(process_record(row, ResiliparseConfig(), seed=42)["text"])
+"""
+    outputs = []
+    for hash_seed in ("1", "3"):
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            input=json.dumps(SAMPLE_STACKEXCHANGE_RECORD),
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONHASHSEED": hash_seed},
+        )
+        outputs.append(completed.stdout)
+
+    assert outputs[0] == outputs[1]
+
+
+def test_process_record_seeded_layout_preserves_global_random_state():
+    original_state = random.getstate()
+    try:
+        random.seed(123)
+        expected_next = random.random()
+        random.seed(123)
+        process_record(SAMPLE_STACKEXCHANGE_RECORD, ResiliparseConfig(), seed=42)
+        assert random.random() == expected_next
+    finally:
+        random.setstate(original_state)
 
 
 def test_process_stackexchange_dump(tmp_path: Path, write_jsonl_gz, read_all_jsonl_gz):

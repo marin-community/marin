@@ -81,9 +81,12 @@ def process_record(
         Transformed record in Dolma format, or None if record should be skipped
     """
     try:
-        if seed is not None:
-            random.seed(seed + hash(row["id"]))
-        prepend_vote_count = random.random() < 0.5 if shuffle_answers_template else False
+        if not shuffle_answers_template:
+            prepend_vote_count = False
+        elif seed is None:
+            prepend_vote_count = random.random() < 0.5
+        else:
+            prepend_vote_count = random.Random(f"{seed}:{row['id']}").random() < 0.5
 
         title = row["metadata"]["title"] if "title" in row["metadata"] else row["title"]
         question = row["metadata"]["question"] if "question" in row["metadata"] else row["question"]
