@@ -17,20 +17,30 @@ import reasoning_gym
 
 sys.path.insert(0, "/tests")
 
+from reasoning_gym_answer import markdown_answer
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, last_boxed_answer
 
 
-def candidate(reply: str) -> str:
+def candidate(reply: str, expected: str | None = None) -> str:
+    """Extract an explicit final answer without treating free-form reasoning as the answer."""
     text = final_answer_text(reply)
     blocks = re.findall(r"<answer>(.*?)</answer>", text, re.DOTALL)
-    return blocks[-1].strip() if blocks else last_boxed_answer(text) or text.strip()
+    if blocks:
+        return blocks[-1].strip()
+    boxed = last_boxed_answer(text)
+    if boxed is not None:
+        return boxed
+    section = markdown_answer(text, expected)
+    if section is not None:
+        return section
+    return text.strip()
 
 
 def main() -> None:
     contract = json.loads(Path("/tests/config.json").read_text())["contract"]
     entry = {"question": contract["question"], "answer": contract.get("answer"), "metadata": contract["metadata"]}
     scorer = reasoning_gym.get_score_answer_fn(contract["metadata"]["source_dataset"])
-    print(float(scorer(candidate(Path("/app/answer.txt").read_text()), entry)))
+    print(float(scorer(candidate(Path("/app/answer.txt").read_text(), contract.get("answer")), entry)))
 
 
 if __name__ == "__main__":

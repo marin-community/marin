@@ -474,6 +474,28 @@ def test_configured_judge_labels_on_real_http_boundary(tmp_path, fake_judge, rep
     ]
 
 
+@pytest.mark.parametrize(
+    ("candidate", "final_answer"),
+    [
+        ("<think>hidden contradiction</think>visible answer", "visible answer"),
+        ("template reasoning</thinking>visible answer<|eot_id|>", "visible answer"),
+    ],
+)
+def test_label_judge_can_exclude_candidate_reasoning(tmp_path, fake_judge, candidate, final_answer):
+    fake_judge.replies = ["[[A=B]]"]
+    spec = _label_spec(strip_candidate_reasoning_blocks=True)
+    result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, candidate))
+    assert result.reward == 1.0
+    assert fake_judge.prompts == [f"A: reference answer\nB: {final_answer}"]
+
+
+def test_unfinished_candidate_reasoning_is_an_empty_answer(tmp_path, fake_judge):
+    spec = _label_spec(strip_candidate_reasoning_blocks=True)
+    result = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "<think>unfinished"))
+    assert (result.reward, result.detail) == (0.0, {"reason": "no_output"})
+    assert fake_judge.requests == []
+
+
 @pytest.mark.parametrize("reason", ["length", "content_filter", "tool_calls", None])
 def test_configured_judge_incomplete_score_cannot_pass(tmp_path, fake_judge, reason):
     fake_judge.replies = ["[[A=B]]"]

@@ -159,6 +159,8 @@ def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
         raise InvalidTask("label_case must be sensitive or upper")
     if spec.rubric not in RUBRICS:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
+    if type(spec.strip_candidate_reasoning_blocks) is not bool:
+        raise InvalidTask("strip_candidate_reasoning_blocks must be boolean")
     if spec.rubric == RUBRIC_LABELS and (
         not isinstance(spec.system_prompt, str)
         or not isinstance(spec.prompt_template, str)
@@ -227,6 +229,8 @@ def grade_judge_candidate(
     policy = empty_output_policy(spec)
     if not isinstance(candidate, str):
         raise InvalidTask("judge candidate must be text")
+    if spec.strip_candidate_reasoning_blocks:
+        candidate = _final_answer_text(candidate)
     if policy is EmptyOutputPolicy.ZERO and not candidate.strip():
         return scored(0.0, reason="no_output")
     context = context[:CONTEXT_LIMIT]
@@ -312,6 +316,18 @@ def _label_answer(reply: str, strip_reasoning: bool) -> str:
     if any(start in reply for start, _ in pairs):
         raise RuntimeError("judge has unfinished reasoning")
     return reply.strip().removesuffix("<|eot_id|>").strip()
+
+
+def _final_answer_text(text: str) -> str:
+    """Remove explicit hidden-reasoning spans while preserving unmarked answer text."""
+    pairs = (("<think>", "</think>"), ("<thinking>", "</thinking>"), ("<|start_think|>", "<|end_think|>"))
+    for opening, closing in pairs:
+        text = re.sub(re.escape(opening) + ".*?" + re.escape(closing), "", text, flags=re.DOTALL)
+    closing = max((text.rfind(end) + len(end) for _, end in pairs if end in text), default=0)
+    text = text[closing:]
+    if any(opening in text for opening, _ in pairs):
+        return ""
+    return text.strip().removesuffix("<|eot_id|>").strip()
 
 
 def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
