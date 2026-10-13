@@ -1426,7 +1426,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=822d200ed79ec2b6fc0cbdb2b56122eb7110cef1" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=75ac6f2f9cd48f7755a3dda8d9f2c6e1fbf7b224" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1581,7 +1581,7 @@ secrets = [
 [[package]]
 name = "marin-rolloutengine"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=c0b0d23f774c7b3bea1d6bb84e010921ff434ea9#c0b0d23f774c7b3bea1d6bb84e010921ff434ea9" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=f6acc0157a3008d8aae6fe0a12cf573a03a0fed9#f6acc0157a3008d8aae6fe0a12cf573a03a0fed9" }
 dependencies = [
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
@@ -1592,7 +1592,7 @@ dependencies = [
 [[package]]
 name = "marin-shellbox"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=c0b0d23f774c7b3bea1d6bb84e010921ff434ea9#c0b0d23f774c7b3bea1d6bb84e010921ff434ea9" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=f6acc0157a3008d8aae6fe0a12cf573a03a0fed9#f6acc0157a3008d8aae6fe0a12cf573a03a0fed9" }
 dependencies = [
     { name = "bubblewrap-bin", marker = "sys_platform == 'linux'" },
     { name = "httpx" },
@@ -1611,7 +1611,7 @@ shellsim = [
 [[package]]
 name = "marin-taskcompendium"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=c0b0d23f774c7b3bea1d6bb84e010921ff434ea9#c0b0d23f774c7b3bea1d6bb84e010921ff434ea9" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=f6acc0157a3008d8aae6fe0a12cf573a03a0fed9#f6acc0157a3008d8aae6fe0a12cf573a03a0fed9" }
 dependencies = [
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-shellbox" },
@@ -1623,7 +1623,7 @@ dependencies = [
 [[package]]
 name = "marin-verifyit"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=c0b0d23f774c7b3bea1d6bb84e010921ff434ea9#c0b0d23f774c7b3bea1d6bb84e010921ff434ea9" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=f6acc0157a3008d8aae6fe0a12cf573a03a0fed9#f6acc0157a3008d8aae6fe0a12cf573a03a0fed9" }
 dependencies = [
     { name = "tomli-w" },
 ]
@@ -1647,7 +1647,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=822d200ed79ec2b6fc0cbdb2b56122eb7110cef1#822d200ed79ec2b6fc0cbdb2b56122eb7110cef1" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=75ac6f2f9cd48f7755a3dda8d9f2c6e1fbf7b224#75ac6f2f9cd48f7755a3dda8d9f2c6e1fbf7b224" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
