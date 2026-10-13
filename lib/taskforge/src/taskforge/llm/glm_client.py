@@ -43,6 +43,8 @@ sent them.
 
 ``complete_structured`` sends ``output_type``'s JSON schema as the ``response_format`` with
 continuations off, then validates the reply and asks for repairs through ``taskforge.llm.structured``.
+That module also appends a user turn describing each field, since the chat template renders nothing
+from ``response_format``.
 """
 
 import asyncio
@@ -366,10 +368,12 @@ class GlmClient:
         """Request a reply as ``output_type`` and return it validated, repairing invalid replies.
 
         vLLM decodes the answer under ``output_type``'s JSON schema with xgrammar, after the reasoning
-        block. The client then validates the reply with ``output_type`` to run its pydantic validators
-        and to reject a reply cut off by the output limit. It sends an invalid reply back for
+        block. The model reads the fields from the last user turn, holding
+        ``taskforge.llm.structured.schema_instruction(output_type)``. The client then validates the
+        reply with ``output_type`` to run its pydantic validators. It sends an invalid reply back for
         correction up to the provider's ``structured_repairs`` times, then raises
-        ``StructuredOutputError``.
+        ``StructuredOutputError``. A reply cut off by the output limit raises ``StructuredOutputError``
+        at once, with no repair.
         """
         return await complete_structured(self, messages, output_type, policy, self._provider.structured_repairs)
 

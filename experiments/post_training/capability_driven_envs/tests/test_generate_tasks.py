@@ -166,7 +166,9 @@ def test_driver_saves_each_task_and_its_completions_once_at_the_end(tmp_path: Pa
         assert (item_dir / "program.py").read_text() == example_program_source()
         [completion] = json.loads((item_dir / "completions.json").read_text())
         assert completion["usage"]["prompt_tokens"] == 100
-        assert CAPABILITY in json.loads((item_dir / "request.json").read_text())[-1]["content"]
+        request = json.loads((item_dir / "request.json").read_text())
+        assert CAPABILITY in request[-2]["content"]
+        assert request[-1]["content"].startswith("Reply with one JSON object")
 
 
 def test_item_without_a_valid_submission_keeps_its_completions_and_no_program(tmp_path: Path):

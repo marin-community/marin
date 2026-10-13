@@ -254,20 +254,21 @@ def _write_workspace_file(environment: shellsim.Environment, name: str, content:
 
 
 def shell_command_result(request: ShellWorkspaceRequest) -> ShellCommandResult:
-    environment = shellsim.Environment(
+    environment = shellsim.Context().Environment(
         cpu=_SHELLSIM_CPU_LIMIT,
         memory=_SHELLSIM_MEMORY_LIMIT,
         disk=_SHELLSIM_DISK_LIMIT,
         output=_SHELLSIM_OUTPUT_LIMIT,
     )
     _seed_workspace(environment, request.files, request.commits)
+    shell = environment.create_shell()
     for index, command in enumerate(request.history, start=1):
-        replayed = environment.run(command)
+        replayed = shell.run(command)
         if environment.terminated:
             reason = replayed.stop_reason or "resource limit"
             raise ValueError(f"Shell workspace history command {index} terminated the simulation: {reason}")
 
-    result = environment.run(request.command)
+    result = shell.run(request.command)
     return ShellCommandResult(
         exit_code=result.returncode,
         stdout=result.stdout_text,

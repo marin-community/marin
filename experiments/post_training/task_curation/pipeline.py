@@ -17,7 +17,7 @@ import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from functools import partial
+from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -42,7 +42,7 @@ from shellbox.machine import (
     MachineFactory,
     MachineSpec,
     NetworkPolicy,
-    ShellSimBuiltins,
+    PackageSpec,
     UnsupportedMachineSpec,
 )
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, require_resolved_environment
@@ -237,6 +237,16 @@ class CampaignMachines:
     image_factory: MachineFactory | None = None
     image_cpus: int = IMAGE_MACHINE_CPUS
     local: LocalGraderMachines = field(default_factory=LocalGraderMachines)
+    simulator_catalog: str | None = None
+
+    @cached_property
+    def _simulator_factory(self) -> MachineFactory:
+        try:
+            import shellsim  # noqa: PLC0415
+            from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
+        except ImportError as error:
+            raise UnsupportedMachineSpec("Simulator controls require the Shellbox shellsim extra") from error
+        return ShellSimMachineFactory(context=shellsim.Context(pypi_catalog=self.simulator_catalog))
 
     def identity(self) -> dict[str, Any]:
         factory = self.image_factory
@@ -254,6 +264,7 @@ class CampaignMachines:
             "simulator": {
                 "backend": Backend.SHELLSIM.value,
                 "factory": "shellbox.backends.shellsim.machine.ShellSimMachineFactory",
+                "catalog": self.simulator_catalog,
             },
             "network": NetworkPolicy.DENY.value,
         }
@@ -261,12 +272,8 @@ class CampaignMachines:
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         require_resolved_environment(environment)
         if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-            try:
-                from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
-            except ImportError as error:
-                raise UnsupportedMachineSpec("Simulator controls require the Shellbox shellsim extra") from error
-            return ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins(), network=NetworkPolicy.DENY)
-        if environment.packages_lock is not None:
+            return self._simulator_factory, MachineSpec(PackageSpec(), network=NetworkPolicy.DENY, memory_mb=memory_mb)
+        if environment.packages_lock is not None or environment.package_spec is not None:
             return self.local.machine(environment, memory_mb)
         if environment.docker_image is None:
             raise UnsupportedMachineSpec("Native campaign execution requires a pinned image or package lock")

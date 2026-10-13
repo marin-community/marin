@@ -8,7 +8,11 @@ system message carries the rules for the program, the TaskSpec JSON schema and `
 as a worked example. The user message carries the capability record.
 
 GLM replies with a ``ProgramSubmission`` JSON object, decoded under its schema as the response
-format. The driver in ``generate_tasks`` runs the submitted program as
+format. The messages here leave the reply format out. ``taskforge.llm.structured.complete_structured``
+appends a last user turn asking for the object, rendered from ``ProgramSubmission``'s docstring and
+the description of its ``source`` field, so both are written as instructions to the model.
+
+The driver in ``generate_tasks`` runs the submitted program as
 ``python3 program.py <task id> <output path>``. The program writes a TaskSpec to the output path,
 for a task exercising the capability. The driver then confirms that the program exited with status 0
 and that its output parses as a TaskSpec. The prompt limits its rules to what the driver checks,
@@ -63,14 +67,17 @@ USER_PROMPT = """\
 {capability}
 ```
 
-Write the program for this capability. Reply with the JSON object for the program submission.
+Write the program for this capability.
 """
 
 
 class ProgramSubmission(BaseModel):
-    """Submit the complete task program."""
+    """The program submission for the capability above."""
 
-    source: str = Field(description="The complete Python program: it writes the TaskSpec JSON to argv[2].")
+    source: str = Field(
+        description="The complete Python program text, the whole module and nothing else. "
+        "It runs as program.py and writes the TaskSpec JSON to argv[2]."
+    )
 
     @field_validator("source")
     @classmethod

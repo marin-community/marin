@@ -10,7 +10,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Machine, MachineFactory, MachineSpec
+from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
+from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, ScriptGrader
@@ -40,12 +41,15 @@ class DelegatingLocalFactory:
     def backend(self) -> Backend:
         return Backend.LOCAL
 
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self.base.check_environment(requirements, spec)
+
     async def create(self, spec: MachineSpec) -> Machine:
         return await self.base.create(replace(spec, env={**spec.env, "WRAPPER_MARKER": "wrapped"}))
 
 
 @dataclass(frozen=True)
-class UnavailableLocalFactory:
+class UnavailableLocalFactory(LocalMachineFactory):
     backend: Backend = Backend.LOCAL
 
     async def create(self, _spec: MachineSpec) -> Machine:
@@ -54,8 +58,6 @@ class UnavailableLocalFactory:
 
 @pytest.fixture
 def local_grading_factory():
-    from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable  # noqa: PLC0415
-
     if os.geteuid() != 0:
         pytest.skip("Local grader staging requires a root host process")
     try:
