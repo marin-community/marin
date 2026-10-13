@@ -577,30 +577,32 @@ def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, che
 
     Returns whether the generated file already matched (the drift signal `--check` reports on).
     """
-    vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
-    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
-    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
     return synchronize_file(
         GENERATED_PINS,
-        render_pins(
-            dependencies,
-            vllm_gpu_release=vllm_gpu_release,
-            vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
-            tpu_inference_fork_requirement=(
-                f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
-            ),
-        ),
+        render_generated_pins(dependencies, load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)),
         check=check,
     )
 
 
-def promote_gpu_release(manifest_path: Path) -> None:
-    """Re-pin gpu.toml from a promoted manifest and regenerate external_dependencies.py.
+def render_generated_pins(dependencies: tuple[LockedDependency, ...], vllm_gpu_release: VllmGpuRelease) -> str:
+    """Render packaged dependency pins."""
+    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
+    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
+    return render_pins(
+        dependencies,
+        vllm_gpu_release=vllm_gpu_release,
+        vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
+        tpu_inference_fork_requirement=(
+            f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
+        ),
+    )
 
-    ``manifest_path`` is a ``marin-vllm-gpu-manifest.json`` downloaded from the fork release;
-    the fork's release pipeline is the only writer of that artifact. The rendered pin is
-    validated on a staging file before it atomically replaces the canonical one, so a manifest
-    that renders but violates a loader invariant leaves the existing pin in place.
+
+def promote_gpu_release(manifest_path: Path) -> None:
+    """Update the GPU descriptor and packaged pins from a published release manifest.
+
+    Validate and render both outputs before replacing the descriptor. A validation or
+    rendering failure leaves the existing pins in place.
     """
     manifest = json.loads(manifest_path.read_text())
     rendered = render_gpu_release_toml(manifest)
@@ -609,12 +611,13 @@ def promote_gpu_release(manifest_path: Path) -> None:
         handle.write(rendered)
         staging = Path(handle.name)
     try:
-        load_vllm_gpu_release(staging)
+        release = load_vllm_gpu_release(staging)
+        dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
+        generated = render_generated_pins(dependencies, release)
         staging.replace(VLLM_GPU_RELEASE_CONFIG)
+        synchronize_file(GENERATED_PINS, generated, check=False)
     finally:
         staging.unlink(missing_ok=True)
-    dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
-    regenerate_generated_pins(dependencies, check=False)
     print(f"re-pinned vllm GPU release {manifest['release']['tag']} from {manifest_path}")
 
 

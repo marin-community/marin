@@ -322,6 +322,6 @@ def test_task_validation_rejects_invalid_grading_contracts(specification, update
 
 def test_task_json_rejects_prior_schema_version(specification):
     payload = json.loads(specification.model_dump_json())
-    payload["schema_version"] = "0.25"
+    payload["schema_version"] = "0.26"
     with pytest.raises(ValidationError):
         TaskSpec.model_validate_json(json.dumps(payload))

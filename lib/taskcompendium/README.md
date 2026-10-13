@@ -36,13 +36,14 @@ flowchart LR
 | `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
 | `environment_requirements` | Required capabilities, pinned initial workspace, and named tool-provider contracts. |
 | `final_tools` | An ordered list of functions that terminate a chat. They are not backed by a tool provider. |
-| `interaction_tools` | Executable function declarations used by the optional episode runtime. |
+| `interaction_tools` | Task-owned function definitions advertised to the agent. |
+| `tool_bindings` | Explicit bindings from interaction-tool names to execution behavior; shell bindings identify the command argument. |
 | `output_paths` | Absolute submission files or recursive directory roots collected by the runtime, outside private grading mounts. |
 | `answer_type` | The semantic result: `text`, `number`, `json`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
-| `schema_version` | Version of the serialized spec: `0.26`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.27`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
@@ -346,5 +347,5 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.26` replaces backend permissions with command semantics. Reconvert
+Schema `0.27` adds explicit task-owned shell tool bindings. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.

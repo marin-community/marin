@@ -10,13 +10,12 @@ state, the conversation, and copied artifacts. The agent's own machine never gra
 
 import asyncio
 import errno
-import io
 import json
 import math
 import os
 import tarfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -43,7 +42,6 @@ from taskcompendium.models import (
     ScriptGrader,
     Submission,
     SubmissionFailure,
-    TaskResource,
     TaskSpec,
     TextMessage,
     TextSubmission,
@@ -56,9 +54,9 @@ from taskcompendium.models import (
     verifyit_answer_file,
     verifyit_spec,
 )
-from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, validate_machine_spec
+from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, setup_user, validate_machine_spec
 from taskcompendium.runtime.output_capture import selected_output_files
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.staging import StagedFile, resource_files, write_archive
 from taskcompendium.submission import conversation_messages, require_submission_compatibility
 
 GRADING_TIMEOUT = 600.0
@@ -83,14 +81,6 @@ class _StepFailed(Exception):
         self.result = result
 
 
-@dataclass(frozen=True)
-class _StagedFile:
-    path: str
-    data: bytes
-    mode: int = 0o644
-    mtime_ns: int | None = None
-
-
 def _verifyit_answer_bytes(submission: Submission) -> bytes:
     """A text or JSON submission as the verifyit spec's answer file."""
     match submission:
@@ -108,56 +98,14 @@ def _script_answer_bytes(submission: Submission) -> bytes:
     return _verifyit_answer_bytes(submission)
 
 
-def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, ...]) -> list[_StagedFile]:
+def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, ...]) -> list[StagedFile]:
     selected = selected_output_files(task.output_paths, attempt.files)
     selected.update({path: attempt.files[path] for path in paths if path in attempt.files})
     for path in selected:
         candidate = PurePosixPath(path)
         if not candidate.is_absolute() or ".." in candidate.parts or under_grader_root(path):
             raise ValueError(f"Captured file cannot be staged for grading: {path}")
-    return [_StagedFile(path, data) for path, data in selected.items()]
-
-
-def _resource_files(resources: tuple[TaskResource, ...], root: str) -> list[_StagedFile]:
-    return [
-        _StagedFile(
-            f"{root}/{resource.path}",
-            resource_bytes(resource),
-            0o644 if resource.mode is None else int(resource.mode, 8),
-            resource.mtime_ns,
-        )
-        for resource in resources
-    ]
-
-
-def _archive_member(path: str, *, size: int = 0, mode: int = 0o644, mtime: int = 0) -> tarfile.TarInfo:
-    member = tarfile.TarInfo(path.removeprefix("/"))
-    member.size = size
-    member.mode = mode
-    member.mtime = mtime
-    return member
-
-
-def _write_archive(archive_path: Path, files: list[_StagedFile], artifacts: list[tuple[Path, str]]) -> None:
-    """Write files and downloaded artifacts; integer timestamps avoid PAX headers where possible."""
-    with tarfile.open(archive_path, "w") as archive:
-        for file in files:
-            member = _archive_member(file.path, size=len(file.data), mode=file.mode)
-            if file.mtime_ns is not None:
-                seconds, nanos = divmod(file.mtime_ns, 1_000_000_000)
-                member.mtime = seconds
-                member.pax_headers = {"mtime": f"{seconds}.{nanos:09d}"}
-            archive.addfile(member, io.BytesIO(file.data))
-        for local, target in artifacts:
-            for path in [local, *sorted(local.rglob("*"))] if local.is_dir() else [local]:
-                name = target if path == local else f"{target}/{path.relative_to(local).as_posix()}"
-                info = archive.gettarinfo(str(path), name.removeprefix("/"))
-                info.mtime, info.uid, info.gid, info.uname, info.gname = int(info.mtime), 0, 0, "", ""
-                if info.isfile():
-                    with path.open("rb") as data:
-                        archive.addfile(info, data)
-                else:
-                    archive.addfile(info)
+    return [StagedFile(path, data) for path, data in selected.items()]
 
 
 async def _run_checked(machine: Machine, command: Command, failure: str) -> None:
@@ -464,22 +412,22 @@ def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: floa
 
 
 def _grading_files(
-    task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGrading, submissions: list[_StagedFile]
-) -> list[_StagedFile]:
+    task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGrading, submissions: list[StagedFile]
+) -> list[StagedFile]:
     """The archive entries for one attempt, in install order."""
     # Later archive entries replace earlier ones, so agent files replace the resources they edit.
     files = [
-        *_resource_files(task.resources.verifier, "/tests"),
-        *_resource_files(task.resources.all + task.resources.worker, ""),
+        *resource_files(task.resources.verifier, "/tests"),
+        *resource_files(task.resources.all + task.resources.worker, ""),
         *submissions,
     ]
     if attempt.state is not None and all(file.path != STATE_PATH for file in submissions):
-        files.append(_StagedFile(STATE_PATH, json.dumps(attempt.state.value, allow_nan=False).encode()))
+        files.append(StagedFile(STATE_PATH, json.dumps(attempt.state.value, allow_nan=False).encode()))
     if grading.spec is not None:
-        files.append(_StagedFile(SPEC_PATH, render_spec(grading.spec).encode()))
+        files.append(StagedFile(SPEC_PATH, render_spec(grading.spec).encode()))
     if isinstance(grading.grader, ScriptGrader):
         messages = conversation_messages(attempt.conversation.events)
-        files.append(_StagedFile(grading.grader.conversation_path, json.dumps(messages, allow_nan=False).encode()))
+        files.append(StagedFile(grading.grader.conversation_path, json.dumps(messages, allow_nan=False).encode()))
     return files
 
 
@@ -506,10 +454,10 @@ async def grade_in_sandbox(
         if grading.spec is not None and task.answer_type in CONVERSATION_ANSWERS:
             require_submission_compatibility(task)
             assert answer_file is not None
-            submissions.append(_StagedFile(answer_file, _verifyit_answer_bytes(answer_submission(task, attempt))))
+            submissions.append(StagedFile(answer_file, _verifyit_answer_bytes(answer_submission(task, attempt))))
         elif isinstance(grading.grader, ScriptGrader) and grading.grader.answer_path is not None:
             answer = _script_answer_bytes(answer_submission(task, attempt))
-            submissions.append(_StagedFile(grading.grader.answer_path, answer))
+            submissions.append(StagedFile(grading.grader.answer_path, answer))
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
     if (
@@ -542,7 +490,7 @@ async def grade_empty_in_sandbox(
         assert grading.spec is not None
         answer_file = verifyit_answer_file(grading.spec)
     attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))))
-    submissions = [] if answer_file is None else [_StagedFile(answer_file, b"")]
+    submissions = [] if answer_file is None else [StagedFile(answer_file, b"")]
     return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, None, dict(os.environ))
 
 
@@ -550,7 +498,7 @@ async def _grade_staged(
     task: TaskSpec,
     attempt: GradingAttempt,
     grading: _SandboxGrading,
-    submissions: list[_StagedFile],
+    submissions: list[StagedFile],
     factory: MachineFactory,
     machine_spec: MachineSpec,
     task_machine: Machine | None,
@@ -581,7 +529,7 @@ async def _grade_staged(
                 if await _download_artifact(task_machine, artifact, local, grading.limit):
                     downloaded.append((local, artifact.target))
             archive_path = root / "grading.tar"
-            _write_archive(archive_path, files, downloaded)
+            write_archive(archive_path, files, downloaded)
             async with asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(
                     prepare_machine_spec,
@@ -590,6 +538,8 @@ async def _grade_staged(
                     machine_spec,
                     host_environment,
                 )
+                if attempt.stop_reason is not None:
+                    prepared = replace(prepared, env={**prepared.env, "TASKCOMPENDIUM_STOP_REASON": attempt.stop_reason})
                 machine = await factory.create(prepared)
             try:
                 return await _grade_on(
@@ -600,6 +550,7 @@ async def _grade_staged(
                     grading.spec,
                     grading.grader,
                     grading.limit,
+                    user=setup_user(factory.backend),
                 )
             finally:
                 await machine.close()
@@ -617,17 +568,19 @@ async def _grade_on(
     spec: Spec | None,
     grader: VerifyitGrader | ScriptGrader,
     timeout: float,
+    *,
+    user: str | None,
 ) -> GradeResult:
     await machine.upload(archive_path, STAGING_ARCHIVE)
     await _run_checked(
         machine,
-        Command(("tar", "-xf", STAGING_ARCHIVE, "-C", "/"), cwd="/", timeout=timeout, user=ROOT),
+        Command(("tar", "-xf", STAGING_ARCHIVE, "-C", "/"), cwd="/", timeout=timeout, user=user),
         "Could not unpack grading inputs",
     )
     # The archive holds references and tests; protecting /tests does not protect a copy in /tmp.
     await _run_checked(
         machine,
-        Command(("rm", "-f", STAGING_ARCHIVE), cwd="/", timeout=timeout, user=ROOT),
+        Command(("rm", "-f", STAGING_ARCHIVE), cwd="/", timeout=timeout, user=user),
         "Could not remove the grading archive",
     )
     await _run_checked(
@@ -638,7 +591,7 @@ async def _grade_on(
     for setup in environment.setup_commands:
         await _run_checked(
             machine,
-            Command(("sh", "-c", setup), timeout=timeout, user=ROOT),
+            Command(("sh", "-c", setup), timeout=timeout, user=user),
             "Grading environment setup failed",
         )
     if spec is not None:

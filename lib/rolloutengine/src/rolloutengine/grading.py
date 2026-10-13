@@ -28,6 +28,8 @@ async def _grade_rollout(
     factories: Mapping[str, MachineFactory],
     cleanup: _Cleanup,
     resources: AsyncExitStack,
+    *,
+    stop_reason: str,
 ) -> GradeResult:
     """Grade in process, or in a fresh verifier machine that the attempt owns."""
     task = lowered.task
@@ -36,7 +38,7 @@ async def _grade_rollout(
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     conversation = chat_conversation(list(messages))
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
-        return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation))
+        return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
     timeout = lowered.session.verifier_timeout
     files = (
         {}
@@ -45,7 +47,7 @@ async def _grade_rollout(
             machine, task.output_paths, timeout=timeout, limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
         )
     )
-    attempt = GradingAttempt(conversation, files)
+    attempt = GradingAttempt(conversation, files, stop_reason=stop_reason)
     assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
     selection = lowered.runtime.verifier_machine
     assert selection is not None

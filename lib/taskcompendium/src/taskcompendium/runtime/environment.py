@@ -27,6 +27,11 @@ from taskcompendium.runtime.local import local_runtime
 _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
 
 
+def setup_user(backend: Backend) -> str | None:
+    """Use the host user for local writable roots and root for image-owned directories."""
+    return None if backend == Backend.LOCAL else "0"
+
+
 def resolve_env_vars(environment: Mapping[str, str], host_environment: Mapping[str, str]) -> dict[str, str]:
     """Resolve whole-value ``${NAME}`` and ``${NAME:-default}`` references."""
     resolved = {}

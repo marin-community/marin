@@ -18,6 +18,7 @@ from taskcompendium.models import (
     require_resolved_environment,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
+from taskcompendium.runtime.shell import resolve_shell_tool
 
 from rolloutengine.contracts import TaskSession
 from rolloutengine.machines import _machine_spec
@@ -78,6 +79,9 @@ def validate_lowered_task(
         if lowered.session.task_session not in sessions:
             raise ValueError(f"Unknown task session: {lowered.session.task_session!r}")
         return
+    shell_tool = resolve_shell_tool(task, lowered.session.shell_tool)
+    if shell_tool is not None and lowered.runtime.task_machine is None:
+        raise ValueError("Shell tools require a task machine")
     limits = lowered.session
     if (
         limits.command_timeout is not None
@@ -89,7 +93,9 @@ def validate_lowered_task(
         raise ValueError("Session grading requires a registered task session")
     if task.answer_type == AnswerType.STATE:
         raise NotImplementedError("The Shellbox session does not capture state answers")
-    if task.interaction_tools or task.environment_requirements.tool_providers:
+    if task.environment_requirements.tool_providers or any(
+        shell_tool is None or tool.name != shell_tool.definition.name for tool in task.interaction_tools
+    ):
         raise NotImplementedError("Native tool providers require a registered task session")
     if set(task.environment_requirements.capabilities) - {"shell", "filesystem"}:
         raise NotImplementedError("The Shellbox session supports only shell and filesystem capabilities")

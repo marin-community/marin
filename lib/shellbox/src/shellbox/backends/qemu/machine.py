@@ -483,7 +483,6 @@ class QemuMachineFactory:
         assets: QemuAssets | None = None,
         bundle_cache: Path | None = None,
         image_cache: Path | None = None,
-        skopeo: Path | None = None,
         authfile: Path | None = None,
         policy: Path | None = None,
     ):
@@ -491,7 +490,6 @@ class QemuMachineFactory:
         self.assets = assets
         self.bundle_cache = bundle_cache
         self.image_cache = image_cache
-        self.skopeo = skopeo
         self.authfile = authfile
         self.policy = policy
 
@@ -503,9 +501,9 @@ class QemuMachineFactory:
         if spec.memory_mb is not None and spec.memory_mb <= 0:
             raise ValueError("memory_mb must be positive")
         if isinstance(spec.source, (RegistryImage, DockerfileSource)):
-            if self.image_cache is None or self.skopeo is None:
-                raise UnsupportedMachineSpec("Registry images and Dockerfiles require an image cache and Skopeo")
-            cache = process_image_cache(self.image_cache, self.skopeo, self.authfile, self.policy)
+            if self.image_cache is None:
+                raise UnsupportedMachineSpec("Registry images and Dockerfiles require an image cache")
+            cache = process_image_cache(self.image_cache, self.authfile, self.policy)
             image = await asyncio.to_thread(cache.prepare, spec.source)
             spec = replace(spec, source=image)
         if isinstance(spec.source, PreparedImage):

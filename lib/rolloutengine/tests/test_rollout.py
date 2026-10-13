@@ -19,7 +19,6 @@ from shellbox.machine import (
     DockerImage,
     ExitReason,
     Machine,
-    NetworkPolicy,
     Result,
     ShellSimBuiltins,
     UnsupportedMachineSpec,
@@ -40,25 +39,24 @@ from taskcompendium.models import (
     FunctionDefinition,
     JsonValueAnswer,
     NoGrader,
-    PlainText,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
     SessionGrader,
-    Source,
+    ShellToolBinding,
     TaskSpec,
     TextMessage,
     VerifierArtifact,
 )
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
-from verifyit.spec import FunctionCall, NumericSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
+from verifyit.spec import FunctionCall, PredictedActionSpec, StructuredExactSpec, parse_spec
 
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     GenerationLimitReached,
-    ModelRequest,
     ModelTurn,
     RolloutContractError,
     RolloutInterrupted,
@@ -68,14 +66,21 @@ from rolloutengine.contracts import (
 )
 from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.lowering import lower_task
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from rolloutengine.spec import LoweredTaskSpec
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
+from rolloutengine.test_support import (
+    TWELVE,
+    ReplayModel,
+    arithmetic_task,
+    engine,
+    lowered,
+    machine_runtime,
+)
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(
     command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=FIXTURE_IMAGE
 )
-TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
 
 
 @pytest.mark.docker
@@ -181,18 +186,6 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         assert (await docker("inspect", machine.name)).exit_code != 0
 
 
-@dataclass
-class ReplayModel:
-    messages: list[dict]
-    requests: list[ModelRequest] = field(default_factory=list)
-
-    async def complete(self, request: ModelRequest) -> ModelTurn:
-        self.requests.append(request)
-        index = len(self.requests) - 1
-        prompt = (*request.prefix_token_ids, 90, 91) if request.prefix_token_ids else (10, 11)
-        return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), "stop")
-
-
 class FixtureImageFactory:
     """Execute fixture image commands on the built-in filesystem."""
 
@@ -214,21 +207,6 @@ class RecordingShellSimFactory:
         machine = await FixtureImageFactory().create(spec)
         self.machines.append(machine)
         return machine
-
-
-def arithmetic_task(**update) -> TaskSpec:
-    return TaskSpec.model_validate(
-        {
-            "id": "arithmetic",
-            "context": ConversationInput(events=(TextMessage(role="user", content="What is six plus six?"),)),
-            "environment_requirements": EnvironmentRequirements(),
-            "answer_type": AnswerType.NUMBER,
-            "answer_format": PlainText(),
-            "grader": verifyit_package(TWELVE).grader,
-            "source": Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
-            **update,
-        }
-    )
 
 
 def workspace_grader(**fields) -> ScriptGrader:
@@ -277,46 +255,33 @@ def shell_call(command: str, *, call_id: str = "write") -> dict:
     }
 
 
-def machine_runtime(**overrides) -> MachineRuntimeSpec:
-    return MachineRuntimeSpec(
-        **{
-            "backend": "local",
-            "network": NetworkPolicy.DENY,
-            "cpus": None,
-            "memory_mb": None,
-            "storage_mb": None,
-            "gpus": 0,
-            "user": None,
-            "startup_timeout": None,
-            "cleanup_timeout": None,
-            **overrides,
-        }
+@pytest.mark.parametrize("stop_reason", ["stop", "length"])
+async def test_reasoning_only_response_grades_missing_answer_or_existing_files(stop_reason):
+    empty = {"role": "assistant", "content": None, "reasoning": "Still working."}
+
+    async def run(task, messages, **runtime):
+        replay = ReplayModel(messages)
+
+        async def complete(request):
+            turn = await replay.complete(request)
+            return replace(turn, stop_reason=stop_reason) if turn.message is empty else turn
+
+        return await ShellboxRolloutEngine(complete, {"local": FixtureImageFactory()}).run(lowered(task, **runtime))
+
+    missing = await run(arithmetic_task(), [empty])
+    assert missing.grade.reward == 0.0
+    assert missing.messages[-1] == empty
+    task = file_task(
+        b'if [ "$(cat /workspace/answer)" = 12 ] && '
+        b'[ "$TASKCOMPENDIUM_STOP_REASON" = "' + stop_reason.encode() + b'" ]; then echo 1; else echo 0; fi'
     )
-
-
-def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) -> LoweredTaskSpec:
-    return LoweredTaskSpec(
-        task=task,
-        runtime=TaskRuntimeSpec(task_machine=machine, verifier_machine=verifier_machine),
-        session=TaskSessionSpec(
-            **{
-                "task_session": "shellbox",
-                "max_turns": 3,
-                "model_turn_timeout": None,
-                "command_timeout": None,
-                "tool_turn_timeout": None,
-                "total_turn_timeout": None,
-                "attempt_timeout": None,
-                "verifier_timeout": 5,
-                "cleanup_timeout": 5,
-                **limits,
-            }
-        ),
+    submitted = await run(
+        task,
+        [shell_call("echo 12 > /workspace/answer"), empty],
+        machine=machine_runtime(),
+        verifier_machine=machine_runtime(),
     )
-
-
-def engine(model, factories=None, *, sessions=None) -> ShellboxRolloutEngine:
-    return ShellboxRolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
+    assert (submitted.grade.status, submitted.grade.reward) == (Outcome.GRADED, 1.0)
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
@@ -449,7 +414,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
         async def advance(self, turn):
             return Transition(done=True)
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             return GradeResult(Outcome.GRADED, float(messages[0]["content"] == "learner:0"))
 
         async def close(self):
@@ -468,15 +433,45 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
     assert closed.is_set()
 
 
-async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations():
+@pytest.mark.parametrize("interface", ["default", "renamed", "task-owned"])
+async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(interface):
+    binding = ShellToolConfig() if interface == "default" else ShellToolConfig(name="terminal", command_parameter="cmd")
+    task = file_task()
+    name, parameter = binding.name, binding.command_parameter
+    if interface == "task-owned":
+        name, parameter = "Bash", "script"
+        definition = FunctionDefinition(
+            name=name,
+            description="Use Bash to write the answer file.",
+            parameters={
+                "type": "object",
+                "properties": {parameter: {"type": "string", "description": "Bash source"}},
+                "required": [parameter],
+                "additionalProperties": False,
+            },
+        )
+        task = file_task(
+            context=ConversationInput(
+                events=(TextMessage(role="user", content="Use Bash to write 12 to /workspace/answer."),)
+            ),
+            interaction_tools=(definition,),
+            tool_bindings={name: ShellToolBinding(command_parameter=parameter)},
+        )
+        task = TaskSpec.model_validate_json(task.model_dump_json())
+    command = "values=(12); [[ ! -f /tests/grade.sh ]] && echo ${values[0]} > /workspace/answer"
+    message = shell_call(command)
+    message["tool_calls"][0]["function"] = {
+        "name": name,
+        "arguments": json.dumps({parameter: command}),
+    }
     model = ReplayModel(
         [
-            shell_call("values=(12); [[ ! -f /tests/grade.sh ]] && echo ${values[0]} > /workspace/answer"),
+            message,
             {"role": "assistant", "content": "Done."},
         ]
     )
     result = await engine(model, {"local": FixtureImageFactory()}).run(
-        lowered(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime(), shell_tool=binding)
     )
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
@@ -485,6 +480,31 @@ async def test_shell_calls_keep_private_files_hidden_and_mask_tool_observations(
     assert result.logprobs == (-0.5, 0.0, 0.0, -0.5)
     assert model.requests[1].messages[-1]["tool_call_id"] == "write"
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
+    tools = model.requests[0].options["tools"]
+    assert [tool["function"]["name"] for tool in tools] == [name]
+    assert tools[0]["function"]["parameters"]["required"] == [parameter]
+    if interface == "task-owned":
+        assert tools[0]["function"] == task.interaction_tools[0].model_dump(exclude_none=True)
+        assert model.requests[0].messages[0]["content"] == "Use Bash to write 12 to /workspace/answer."
+    response = next(message for message in result.messages if message["role"] == "assistant")
+    assert response["tool_calls"][0]["function"]["name"] == name
+
+
+async def test_shell_binding_collision_rejects_before_machine_or_model_start():
+    task = file_task(final_tools=(FunctionDefinition(name="terminal", parameters={"type": "object"}),))
+    factory = RecordingShellSimFactory()
+    model = ReplayModel([])
+    with pytest.raises(ValueError):
+        await engine(model, {"local": factory}).run(
+            lowered(
+                task,
+                machine=machine_runtime(),
+                verifier_machine=machine_runtime(),
+                shell_tool=ShellToolConfig(name="terminal"),
+            )
+        )
+    assert factory.machines == []
+    assert model.requests == []
 
 
 async def test_command_timeouts_return_observations_and_allow_the_model_to_finish():
@@ -617,7 +637,7 @@ async def test_workspace_state_receives_shell_presentation_without_answer_tools(
     )
     assert record.grade.reward == 1.0
     assert model.requests[0].messages[:-1] == ({"role": "user", "content": "What is six plus six?"},)
-    assert model.requests[0].messages[-1] == {"role": "user", "content": WORKSPACE_INSTRUCTION}
+    assert model.requests[0].messages[-1] == {"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name="shell")}
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
 
 
@@ -898,7 +918,7 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
                 await asyncio.Future()
             return Transition(done=phase == "grade")
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             if phase == "grade":
                 entered.set()
                 await asyncio.Future()
@@ -964,7 +984,7 @@ async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
         async def advance(self, turn):
             return Transition(done=False, observations=({"role": "user", "content": "Continue."},))
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             assert messages[-1]["role"] == "assistant"
             grading.set()
             await release_grade.wait()
@@ -1162,7 +1182,7 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
                 await wait_for_deadline()
             return Transition(done=True)
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             await wait_for_deadline()
 
         async def close(self):
@@ -1212,7 +1232,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
             assert (result.exit_code, result.stdout) == (0, b"learner")
             return Transition(done=True)
 
-        async def grade(self, messages):
+        async def grade(self, messages, *, stop_reason):
             return GradeResult(Outcome.GRADED, 1.0)
 
         async def close(self):

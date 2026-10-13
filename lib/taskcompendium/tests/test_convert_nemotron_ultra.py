@@ -109,6 +109,23 @@ def test_agent_and_text_requests_admit_only_their_grading_agents():
     assert isinstance(text_request(without_tools, ("fixture_agent",)), BlendRequest)
 
 
+@pytest.mark.parametrize(
+    "duplicate",
+    [TOOL, {**TOOL, "parameters": {"type": "object"}}, {"type": "function", "function": TOOL}],
+    ids=["identical", "different-schema", "nested"],
+)
+def test_blend_request_rejects_duplicate_advertised_functions_as_source_defect(duplicate):
+    result = blend_request(
+        row(responses_create_params={"input": [{"role": "user", "content": "Find x."}], "tools": [TOOL, duplicate]})
+    )
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason, result.detail) == (
+        ImportFailureKind.SOURCE_DEFECT,
+        "duplicate_tool_name",
+        "lookup",
+    )
+
+
 def test_blend_component_names_agent_keyed_rows_by_agent():
     assert blend_component(row()) == "component"
     assert blend_component({"agent_ref": {"name": "next_action_agent"}}) == "agent:next_action_agent"

@@ -12,16 +12,20 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.reader import ReadView
+from fray.local_backend import LocalClient
 from taskcompendium.convert.answers import answer_task, exact_answer_task
 from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from verifyit.spec import ExactSpec
+from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed, CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
 from experiments.post_training.task_curation.local import run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
@@ -43,7 +47,14 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, down
         for name, pipeline in pipelines.items()
     }
     steps = {name: source.pipeline(source, options) for name, source in sources.items()}
-    return run_local_steps(steps, output_root, runtime=runtime, max_workers=max_workers, download_cache=download_cache)
+    return run_local_steps(
+        steps,
+        output_root,
+        runtime=runtime,
+        max_workers=max_workers,
+        download_cache=download_cache,
+        source_ids={name: source.info.id for name, source in sources.items()},
+    )
 
 
 def convert_local_answer(row, context):
@@ -94,11 +105,47 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     assert verifyit_spec(grader) == ExactSpec(("two",), ignore_case=False)
     environment = cast(EnvironmentRequirements, grader.environment)
     assert environment.packages_lock == str(source.grader.lock.resolve())
+    catalog = ReadView(str(output / "catalog"))
+    recorded = list(catalog.iter_rows("sources"))
+    successful = next(row for row in recorded if row["atlas_id"] == f"fixture:{source.name}")
+    assert successful["processed_rows"] == 1
+    assert successful["admitted"] is None
+    assert successful["verification_status"] is None
 
 
 def answer_from_auxiliary(row, context):
     answer = (context.inputs["answers"] / "answer.txt").read_text()
     return exact_answer_task(row, prompt=row.data["prompt"], answers=(answer,), ignore_case=False)
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+def test_quick_blend_root_uses_current_raw_rows_with_missing_or_stale_preparation(local_source, tmp_path, prepared):
+    primary = tmp_path / "input"
+    primary.mkdir()
+    file = primary / "rows.jsonl"
+    file.write_text('{"dataset":"fixture","prompt":"Old question","answer":"old"}\n')
+    if prepared:
+        with ZephyrContext(
+            client=LocalClient(), max_workers=2, chunk_storage_prefix=str(tmp_path / "prepare")
+        ) as context:
+            prepare_blend(str(file), context)
+    file.write_text('{"dataset":"fixture","prompt":"Current question","answer":"current"}\n')
+    source = replace(
+        local_source,
+        source=HfSource(
+            "fixture/questions",
+            "a" * 40,
+            (file.name,),
+            SourceFormat.JSONL,
+            prepare=prepare_blend,
+            prepared_component="fixture",
+        ),
+    )
+    output = tmp_path / "output"
+    run_recipes({source.name: source}, primary, output, inputs={}, max_workers=1, download_cache=tmp_path / "downloads")
+    task = converted_task(output, source.name)
+    assert task.context.events[0].content == "Current question"
+    assert verifyit_spec(cast(VerifyitGrader, task.grader)) == ExactSpec(("current",), ignore_case=False)
 
 
 def converted_task(output: Path, name: str) -> TaskSpec:
@@ -155,6 +202,10 @@ def test_local_campaign_stages_pinned_inputs_and_reuses_downloads_offline(tmp_pa
     assert {file: file.read_bytes() for file in payloads} == payloads
     assert (cold / source.name / "manifest.json").read_bytes() == manifest_bytes
     assert json.loads((cold / "campaign.json").read_text())["counts"] == {"failed": 1}
+    report = json.loads((cold / "campaign.json").read_bytes())
+    failed = ReadView(str(cold / "catalog")).point("sources", run_id=report["run_id"], name=source.name)
+    assert failed["manifest_evidence"] == "unconfirmed"
+    assert failed["processed_rows"] is None
 
     shutil.rmtree(remote)
     warm = tmp_path / "warm"
