@@ -13,6 +13,7 @@ fixture in ``tests/conftest.py``. The web check also needs the Parallel key file
 
 import asyncio
 import json
+import re
 import threading
 import time
 from collections.abc import Iterator, Sequence
@@ -125,6 +126,12 @@ def executed(run: AgentRun, name: str) -> list[str]:
     return [
         r.output for t in run.turns for r in t.tool_results if r.call.name == name and r.outcome is ToolOutcome.EXECUTED
     ]
+
+
+def last_integer(text: str) -> int | None:
+    """The last integer written in ``text``, or None when it holds no digits."""
+    numbers = re.findall(r"-?\d+", text)
+    return int(numbers[-1]) if numbers else None
 
 
 async def timed_agent(
@@ -470,7 +477,8 @@ def test_twenty_concurrent_agents_share_one_client(glm_source, live_provider, ev
                 "wall_time": r[1],
                 "completion_tokens": r[0].usage.completion_tokens,
                 "file": r[2],
-                "expected": str(n * n + 7),
+                "number": last_integer(r[2]),
+                "expected": n * n + 7,
             }
         )
         for n, r in enumerate(results)
@@ -486,7 +494,8 @@ def test_twenty_concurrent_agents_share_one_client(glm_source, live_provider, ev
         per_agent=per_agent,
     )
     assert [a for a in per_agent if "error" in a] == []
-    assert [a["agent"] for a in per_agent if a["file"] != a["expected"]] == []
+    # At temperature 1.0 an agent sometimes writes the arithmetic along with the result, as in "3 * 3 + 7 = 16".
+    assert [a["agent"] for a in per_agent if a["number"] != a["expected"]] == []
 
 
 @pytest.mark.live_glm
