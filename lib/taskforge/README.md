@@ -30,6 +30,8 @@ src/taskforge/
   stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
                                step_store.py: step keys, memos, the memo store and `memoized`;
                                run.py: `run_program`, `run_build`, the draft and `WorkpieceBuildProvenance`
+  stage50_validate/            trials.py: trials on RolloutEngine; classify.py: the failure classifier;
+                               controls.py: control replay; outcome.py, evidence.py: outcomes and their totals
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
 
@@ -43,8 +45,9 @@ other package, along with the other wrong-way imports. `scripts/ledger_summary.p
 and tokens per kind and step over JSONL ledgers. The cluster scripts run on Iris and document their
 submit commands in their docstrings: `scripts/build_image_job.py` builds a `DockerBuild` context and
 pushes it to a registry digest through `scripts/push_image_task.py`, and
-`scripts/iris_machine_probe.py` probes the shellbox Iris backend. `docker/grader-base` is the build
-context of the grader base image.
+`scripts/iris_machine_probe.py` probes the shellbox Iris backend, and
+`scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved from
+a relay job. `docker/grader-base` is the build context of the grader base image.
 
 ## Proposals
 
@@ -286,6 +289,21 @@ A process killed mid-workpiece leaves `events.json` as the workpiece's last term
 leaves none, so the next run starts again from that terminal or from triage, and the step store
 serves the build steps already run. A file-backed `WorkpieceEventLog` saving each event on append is
 planned with the ledger.
+## Validation
+
+`stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
+`LoweredTaskSpec` through `RolloutEngine`. `TrialPlan.deadlines` and `EngineSettings`
+replace the builder's session limits, and `task_digest(lowered)` hashes what runs, answer format
+included. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
+`stage50_validate.classify.classify` is the only failure classifier. A trial is attempted again for
+a retryable cause, and for a broken token contract within `TrialPlan.token_contract_retries`;
+`TrialPlan.first_attempt` numbers attempts after the ones on disk, so a re-entered trial continues
+where it stopped. Solver trials sample on `SOLVER_TRANSPORT`, the token-id route.
+`stage50_validate.evidence.Evidence(outcomes, contract_retries).reward_stats(kind)` totals the
+graded trials and the attempts a broken contract discarded.
+`stage50_validate.controls.replay(lowered, controls, plan, settings, tokenize)` replays each control
+as one `CONTROL` trial named by its id, with `llm.rollout_model.ServerRenderer` serving `tokenize`
+from the served chat template.
 
 ## Testing
 
