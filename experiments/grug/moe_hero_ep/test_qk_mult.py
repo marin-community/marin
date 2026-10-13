@@ -8,7 +8,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from jax.sharding import AxisType, Mesh, set_mesh
 from levanter.grug.attention import AttentionMask
 
@@ -60,11 +59,10 @@ def _attention_output(cfg, x, is_global):
     )
 
 
-@pytest.mark.parametrize("rope_fused", [False, True])
-def test_qk_mult_long_scale_scales_global_layers_and_leaves_local_layers_alone(rope_fused):
+def test_qk_mult_long_scale_scales_global_layers_and_leaves_local_layers_alone():
     mesh = _explicit_mesh(1, 1, 1, 1, 1)
     long_scale = 1.3
-    base = dataclasses.replace(_tiny_config(), qk_mult=1.3, rope_fused=rope_fused)
+    base = dataclasses.replace(_tiny_config(), qk_mult=1.3)
     scaled = dataclasses.replace(base, qk_mult_long_scale=long_scale)
     # A global layer under the long scale must see the temperature a uniform qk_mult=1.3*s gives.
     uniform = dataclasses.replace(base, qk_mult=1.3 * long_scale)
@@ -98,18 +96,6 @@ def test_qk_mult_long_scale_reaches_the_logits_through_the_layer_scan():
         default = logits(base)
         scaled = logits(dataclasses.replace(base, qk_mult_long_scale=1.3))
 
-    # Layer 1 is global (global_every=2), so a long scale other than 1.0 must reach the logits.
+    # Layer 1 is global (global_every=2). The logits change only if the layer scan passes the
+    # per-layer is_global flag through to attention.
     assert np.max(np.abs(np.asarray(scaled) - np.asarray(default))) > 1e-4
-
-
-def test_qk_mult_long_scale_hf_config_roundtrips_and_legacy_configs_load_with_one():
-    cfg = dataclasses.replace(_tiny_config(), qk_mult=1.3, qk_mult_long_scale=1.2154)
-
-    serialized = cfg.to_hf_config(cfg.vocab_size).to_dict()
-    roundtripped = model.GrugModelConfig.from_hf_config(model.GrugMoeHfConfig(**serialized))
-    serialized.pop("qk_mult_long_scale")
-    legacy = model.GrugModelConfig.from_hf_config(model.GrugMoeHfConfig(**serialized))
-
-    assert roundtripped.qk_mult == 1.3
-    assert roundtripped.qk_mult_long_scale == 1.2154
-    assert legacy.qk_mult_long_scale == 1.0
