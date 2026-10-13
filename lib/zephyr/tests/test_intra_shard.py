@@ -200,3 +200,15 @@ def test_worker_bound_source_skips_extra_stages_then_splits_after_reshard(tmp_pa
         StageType.MAP_WORKER,
         StageType.CONCAT,
     ]
+
+
+def test_group_by_followed_by_map_runs_on_whole_shard(context):
+    dataset = (
+        Dataset.from_list(range(6))
+        .group_by(key=lambda row: row % 2, reducer=lambda key, rows: (key, sum(rows)), num_output_shards=1)
+        .map(lambda item: (item[0], item[1] * 2))
+    )
+
+    plan = compute_plan(dataset, parallelism=2)
+    assert [stage.stage_type for stage in plan.stages] == [StageType.MAP_WORKER, StageType.REDUCE_WORKER]
+    assert context.execute(dataset).results == [(0, 12), (1, 18)]

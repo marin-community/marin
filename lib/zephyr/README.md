@@ -52,7 +52,8 @@ footers and divides row ranges into up to four tasks per worker, capped at one
 task per row. It gives larger row ranges more tasks. Existing shards stay
 intact when they already fill the worker pool, avoiding extra `Split` and
 `Concat` stages. A later reshard to fewer shards can still split existing
-intermediate chunks.
+intermediate chunks. Row maps after `group_by` stay with the reduce stage and
+run on each whole output shard.
 `Concat` restores each original shard's row order and ID before writes, joins,
 windows, `take_per_shard`, and `map_shard`. Output filenames and shard counts
 therefore stay the same. The default is `OFF`.

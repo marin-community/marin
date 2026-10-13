@@ -663,7 +663,8 @@ def _fuse_operations(
             state.end_stage()
             state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
             current_shards = op.num_output_shards or current_shards
-            splittable_refs = True
+            # Maps following a reduction stay on its output shard.
+            splittable_refs = False
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
