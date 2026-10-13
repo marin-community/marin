@@ -791,11 +791,12 @@ def _export_sidecars(
 def _source_status(
     mode: SourceProcessingMode,
     quality: SourceQualityStatus,
+    verification: SourceVerificationStatus,
     *,
     processed_all: bool,
 ) -> SourceStatus:
     # Per-task validation defers unavailable rows without blocking the whole source.
-    if quality == SourceQualityStatus.INCOMPLETE:
+    if quality == SourceQualityStatus.INCOMPLETE or verification == SourceVerificationStatus.INCONCLUSIVE:
         return SourceStatus.INCOMPLETE
     if quality == SourceQualityStatus.REJECT:
         return SourceStatus.GATED
@@ -817,7 +818,9 @@ def _write_manifest(
 ) -> None:
     """Write the review and verify reports and manifests, then the source manifest that joins every view."""
     output, recipe, config = run.output, run.recipe, run.config
-    report = verification["verification"]
+    report = {key: value for key, value in verification["verification"].items() if key not in {"results", "evidence"}}
+    if run.recipe.controls is not None and report["status"] != SourceVerificationStatus.SKIPPED:
+        report["trial_report"] = str(run.scratch("verified") / "verification.json")
     telemetry = str(output / TELEMETRY_FILENAME)
     manifest = {
         "telemetry": telemetry,
@@ -922,6 +925,7 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     status = _source_status(
         config.mode,
         decision.status,
+        verification_status,
         processed_all=expanded or panel.census,
     )
     _write_manifest(

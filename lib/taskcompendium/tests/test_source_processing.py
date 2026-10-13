@@ -555,7 +555,7 @@ def test_source_retry_reuses_successful_reviews_after_unavailable_evidence(tmp_p
     reviewer = BatchReviewer(service, "fixture", "revision", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
     config = pipeline_config(SourceProcessingMode.FULL, reviewer, machines=unavailable)
     first = run_pipeline(recipe, source, tmp_path / "output", config)
-    assert first.status == ("incomplete" if failure == "quality_panel" else "completed")
+    assert first.status == "incomplete"
     assert Path(first.manifest_path).exists()
     submitted = sum(len(rows) for rows in service.files.values())
     first_files = set(service.files)
@@ -844,7 +844,7 @@ def test_judge_graded_source_skips_verification_and_admits_its_rows(tmp_path, co
     verification = read_json(tmp_path / "output/verify/report.json")
     assert verification["status"] == "skipped"
     assert verification["reason"] == "judge grader; no control path yet"
-    assert verification["results"] == []
+    assert "trial_report" not in verification
     assert result.status == "completed"
     assert manifest["admission"] == "admitted"
     assert manifest["admission_counts"] == {"admitted": 3}
@@ -855,7 +855,7 @@ def test_judge_graded_source_skips_verification_and_admits_its_rows(tmp_path, co
     "machines,admission,status",
     [
         (FixtureGradingMachines(), "admitted", "completed"),
-        (FixtureGradingMachines(UnavailableImages()), "deferred", "completed"),
+        (FixtureGradingMachines(UnavailableImages()), "deferred", "incomplete"),
     ],
     ids=["verified", "machines_unavailable"],
 )

@@ -182,8 +182,8 @@ class SourceStatus(StrEnum):
 
     ``SAMPLED``: a sample-mode run processed only its panel. ``COMPLETED``: every row was processed,
     by full expansion or because the panel is a census. ``GATED``: a quality gate rejected the source.
-    ``INCOMPLETE``: the quality gate could not decide; evidence is retained for a retry. Per-task
-    control failures and infrastructure errors reject or defer their rows separately.
+    ``INCOMPLETE``: the quality gate could not decide, or no controls could complete; evidence is
+    retained for a retry. Per-task control failures and infrastructure errors affect their rows.
     """
 
     SAMPLED = "sampled"

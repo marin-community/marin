@@ -141,6 +141,12 @@ remain usable, failed and defective tasks are rejected, and unavailable controls
 defer only their own task. An empty sample remains inconclusive. The 95% threshold
 controls this execution shortcut; it does not set the GLM quality grade.
 
+Completed validation shards checkpoint their trial evidence before returning.
+Reruns retain known individual failures even when a recovered sample permits the
+shortcut. A source with no completed controls remains incomplete for retry.
+The source manifest and `verify/report.json` contain counts and a `trial_report`
+reference; full results are retained once in that report and in shard checkpoints.
+
 A rerun of the same source artifact reuses the complete trials that its earlier
 attempt saved. Trial identity covers the whole task, the controls code, the
 machine backend and worker image, all TaskCompendium, VerifyIT and Shellbox
