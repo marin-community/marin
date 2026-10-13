@@ -35,41 +35,12 @@ try:
 except (ImportError, ModuleNotFoundError):
     pass
 
-# Two families of Pallas-Triton kernels, chosen per GPU family by _triton_kernel_family:
-#
-# - Group grid, adapted from openxla/tokamax@ad75b704:
-#   tokamax/_src/ops/ragged_dot/pallas_triton.py. In particular:
-#   _ragged_dot_kernel/_ragged_dot for the default layout,
-#   _ragged_contracting_dim_dot_kernel/_ragged_contracting_dim_dot for drhs, and
-#   PallasTritonRaggedDot._fwd for the VJP layout dispatch.
-# - Tile map: forward and dlhs launch one program per (group, row tile, column tile) from a
-#   device-side tile map, as megablox's make_group_metadata, instead of a full row grid per group;
-#   dlhs reads the weights transposed in place, and drhs uses one flat grid over all groups.
+# Pallas-Triton tile-map kernels: forward and dlhs launch one program per (group, row tile, column
+# tile) from a device-side tile map, as megablox's make_group_metadata; dlhs reads the weights
+# transposed in place, and drhs uses one flat grid over all groups.
 Implementation: TypeAlias = Literal["auto", "megablox", "triton", "xla"]
 _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
-_TRITON_DEFAULT_BLOCK_N = 128
-_TRITON_BLACKWELL_BLOCK_N = 256
-
-
-def _is_blackwell_gpu_backend() -> bool:
-    if jax.default_backend() != "gpu":
-        return False
-    try:
-        devices = jax.devices("gpu")
-    except RuntimeError:
-        return False
-    if not devices:
-        return False
-    device = devices[0]
-    compute_capability = getattr(device, "compute_capability", None)
-    if compute_capability is not None:
-        try:
-            return float(compute_capability) >= 10.0
-        except (TypeError, ValueError):
-            pass
-    device_kind = getattr(device, "device_kind", "")
-    return any(name in device_kind for name in ("B200", "B300", "GB200", "GB300"))
 
 
 # Megablox GMM tiling (m, k, n). The ``k`` (contraction) dim is the tightest VMEM
@@ -112,192 +83,6 @@ def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.A
     )
 
 
-def _triton_ragged_dot_kernel(
-    a_ref,
-    b_ref,
-    lo_ref,
-    hi_ref,
-    out_ref,
-    *,
-    block_m: int,
-    block_k: int,
-    n: int,
-):
-    """Pallas-Triton ragged dot kernel (no quantization)."""
-    lo = lo_ref[()]
-    hi = hi_ref[()]
-    start_m = lo + pl.program_id(0) * block_m
-
-    @pl.when(start_m < hi)
-    def _compute():
-        span_m = pl.ds(start_m, block_m)
-        start_n = pl.program_id(1) * out_ref.shape[1]
-        acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
-        k = a_ref.shape[1]
-
-        def body(i, acc):
-            start_k = i * block_k
-            span_k = pl.ds(start_k, block_k)
-            if k % block_k:
-                contraction_mask = start_k + jnp.arange(block_k) < k
-                a = plgpu.load(a_ref.at[span_m, span_k], mask=contraction_mask[None, :], other=0.0)
-                b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])], mask=contraction_mask[:, None], other=0.0)
-            else:
-                a = plgpu.load(a_ref.at[span_m, span_k])
-                b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
-            dtype = jnp.result_type(a, b)
-            return acc + pl.dot(a.astype(dtype), b.astype(dtype))
-
-        num_k_blocks = pl.cdiv(k, block_k)
-        acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
-        # Tokamax's BlockRef masks logical output edges; raw Pallas refs do not.
-        store_mask = (start_m + jnp.arange(block_m) < hi)[:, None]
-        if n % out_ref.shape[1]:
-            store_mask &= (start_n + jnp.arange(out_ref.shape[1]) < n)[None, :]
-        plgpu.store(
-            out_ref.at[span_m, pl.ds(0, out_ref.shape[1])],
-            acc.astype(out_ref.dtype),
-            mask=store_mask,
-        )
-
-
-def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
-    block_m = min(128, int(pl.next_power_of_2(m)))
-    max_block_n = _TRITON_BLACKWELL_BLOCK_N if _is_blackwell_gpu_backend() else _TRITON_DEFAULT_BLOCK_N
-    block_n = min(max_block_n, int(pl.next_power_of_2(n)))
-    block_k = min(32, int(pl.next_power_of_2(k)))
-    return block_m, block_n, block_k
-
-
-@functools.lru_cache(maxsize=None)
-def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Callable[..., jax.Array]:
-    """Build the default-layout kernel for one static shape.
-
-    ``pl.pallas_call`` returns a fresh ``jax.jit`` wrapper per call and JAX's
-    tracing cache is keyed on function identity, so building it inline re-traces
-    the kernel and its index maps at every call site.
-    """
-    block_m, block_n, block_k = _triton_default_block_sizes(m, k, n)
-    return pl.pallas_call(
-        lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(
-            a,
-            b,
-            lo,
-            hi,
-            out,
-            block_m=block_m,
-            block_k=block_k,
-            n=n,
-        ),
-        out_shape=jax.ShapeDtypeStruct((m, n), dtype),
-        in_specs=[
-            pl.no_block_spec,
-            pl.BlockSpec((None, k, block_n), lambda _, j, e: (e, 0, j)),
-            pl.BlockSpec((None,), lambda _, __, e: (e,)),
-            pl.BlockSpec((None,), lambda _, __, e: (e,)),
-        ],
-        out_specs=pl.BlockSpec((m, block_n), lambda _, j, __: (0, j)),
-        grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n), num_groups),
-        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
-    )
-
-
-def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
-    """Raw Pallas-Triton grouped matmul for the default ragged-dot layout."""
-    m, k = lhs.shape
-    num_groups, _, n = rhs.shape
-    cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
-    matmul = _triton_default_matmul(m, k, n, num_groups, lhs.dtype)
-    return matmul(lhs, rhs, cum_rows[:-1], cum_rows[1:])
-
-
-def _triton_ragged_contracting_dim_dot_kernel(
-    a_ref,
-    b_ref,
-    lo_ref,
-    hi_ref,
-    out_ref,
-    *,
-    block_m: int,
-    block_k: int,
-    m: int,
-    n: int,
-):
-    """Pallas-Triton ragged dot where the ragged dimension is also contracting."""
-    lo = lo_ref[()]
-    hi = hi_ref[()]
-
-    def body(i, acc, mask_k=False):
-        start_k = lo + i * block_k
-        span_k = pl.ds(start_k, block_k)
-        mask = None
-        other = None
-        if mask_k:
-            mask = (jnp.arange(block_k) < hi - start_k)[:, None]
-            other = 0.0
-        a = plgpu.load(a_ref.at[span_k], mask=mask, other=other)
-        b = plgpu.load(b_ref.at[span_k], mask=mask, other=other)
-        dtype = jnp.result_type(a, b)
-        return acc + pl.dot(a.astype(dtype).T, b.astype(dtype))
-
-    num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), jnp.int32(block_k)), jnp.int32(1))
-    acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
-    acc = jax.lax.fori_loop(0, num_k_blocks - 1, body, acc)
-    acc = body(num_k_blocks - 1, acc, mask_k=True)
-    store_mask = None
-    if m % block_m:
-        store_mask = (pl.program_id(0) * block_m + jnp.arange(block_m) < m)[:, None]
-    if n % out_ref.shape[1]:
-        column_mask = (pl.program_id(1) * out_ref.shape[1] + jnp.arange(out_ref.shape[1]) < n)[None, :]
-        store_mask = column_mask if store_mask is None else store_mask & column_mask
-    plgpu.store(out_ref, acc.astype(out_ref.dtype), mask=store_mask)
-
-
-@functools.lru_cache(maxsize=None)
-def _triton_ragged_contracting_dim_matmul(k: int, m: int, n: int, dtype) -> Callable[..., jax.Array]:
-    """Build the drhs-layout kernel for one static shape, vmapped over groups."""
-    block_m = min(128, int(pl.next_power_of_2(m)))
-    block_n = min(128, int(pl.next_power_of_2(n)))
-    block_k = min(32, int(pl.next_power_of_2(k)))
-    one_group = pl.pallas_call(
-        lambda a, b, lo, hi, out: _triton_ragged_contracting_dim_dot_kernel(
-            a,
-            b,
-            lo,
-            hi,
-            out,
-            block_m=block_m,
-            block_k=block_k,
-            m=m,
-            n=n,
-        ),
-        out_shape=jax.ShapeDtypeStruct((m, n), dtype),
-        in_specs=[
-            pl.BlockSpec((k, block_m), lambda i, j: (0, i)),
-            pl.BlockSpec((k, block_n), lambda i, j: (0, j)),
-            pl.no_block_spec,
-            pl.no_block_spec,
-        ],
-        out_specs=pl.BlockSpec((block_m, block_n), lambda i, j: (i, j)),
-        grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n)),
-        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
-    )
-    return jax.vmap(one_group, in_axes=(None, None, 0, 0))
-
-
-def _triton_ragged_contracting_dim_pallas_call(
-    lhs: jax.Array,
-    rhs: jax.Array,
-    group_sizes: jax.Array,
-) -> jax.Array:
-    """Raw Pallas-Triton grouped matmul for drhs-style ragged contraction."""
-    k, m = lhs.shape
-    _, n = rhs.shape
-    cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
-    matmul = _triton_ragged_contracting_dim_matmul(k, m, n, lhs.dtype)
-    return matmul(lhs, rhs, cum_rows[:-1], cum_rows[1:])
-
-
 class RaggedLayout(StrEnum):
     """Ragged-dot contraction layouts with a Triton kernel.
 
@@ -311,15 +96,6 @@ class RaggedLayout(StrEnum):
     FWD = "fwd"
     DLHS = "dlhs"
     DRHS = "drhs"
-
-
-def _group_grid_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array, layout: RaggedLayout) -> jax.Array:
-    """Group-grid kernels: one full row grid per group, with early exit outside the group's rows."""
-    if layout == RaggedLayout.FWD:
-        return _triton_default_pallas_call(lhs, rhs, group_sizes)
-    if layout == RaggedLayout.DLHS:
-        return _triton_default_pallas_call(lhs, rhs.mT, group_sizes)
-    return _triton_ragged_contracting_dim_pallas_call(lhs, rhs, group_sizes)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -383,9 +159,10 @@ def _gpu_family() -> _GpuFamily:
     return _GpuFamily.OTHER
 
 
-# The group-grid blocks, for layouts and GPU families without a tuned entry below.
+# For GPU families without a tuned entry below. These are the group-grid kernels' former blocks, which
+# fit in the shared memory of every GPU those kernels ran on.
 _TILE_MAP_GENERIC_CONFIG = TritonBlockConfig(
-    block_m=128, block_n=_TRITON_DEFAULT_BLOCK_N, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=1
+    block_m=128, block_n=128, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=1
 )
 _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
     # Swept on MI350X (gfx950) at the June (G=32, K and N of 1280-2560) and Mixtral-like (G=8, 4096x14336)
@@ -721,27 +498,6 @@ def _tile_map_pallas_call(
     return _tile_map_row_matmul(m, k, n, num_groups, lhs.dtype, layout, config)(lhs, rhs, tiles)
 
 
-class TritonKernelFamily(StrEnum):
-    """The two Pallas-Triton kernel families behind ``implementation="triton"``."""
-
-    GROUP_GRID = "group_grid"
-    TILE_MAP = "tile_map"
-
-
-_TRITON_KERNELS: dict[TritonKernelFamily, Callable[[jax.Array, jax.Array, jax.Array, RaggedLayout], jax.Array]] = {
-    TritonKernelFamily.GROUP_GRID: _group_grid_pallas_call,
-    TritonKernelFamily.TILE_MAP: _tile_map_pallas_call,
-}
-# GPU families that run the tile-map kernels; any other GPU runs the group-grid kernels.
-_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT, _GpuFamily.NVIDIA_HOPPER, _GpuFamily.NVIDIA_BLACKWELL})
-
-
-def _triton_kernel_family() -> TritonKernelFamily:
-    if _gpu_family() in _TILE_MAP_GPU_FAMILIES:
-        return TritonKernelFamily.TILE_MAP
-    return TritonKernelFamily.GROUP_GRID
-
-
 _DEFAULT_DIM_NUMS = jax.lax.RaggedDotDimensionNumbers(
     dot_dimension_numbers=(((1,), (1,)), ((), ())),
     lhs_ragged_dimensions=(0,),
@@ -777,10 +533,10 @@ def _triton_pallas_call(
     group_sizes: jax.Array,
     ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
 ) -> jax.Array:
-    """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts, with this GPU's kernel family."""
+    """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts."""
     for layout, dim_nums in _LAYOUT_DIM_NUMS.items():
         if ragged_dot_dimension_numbers == dim_nums:
-            return _TRITON_KERNELS[_triton_kernel_family()](lhs, rhs, group_sizes, layout)
+            return _tile_map_pallas_call(lhs, rhs, group_sizes, layout)
     raise NotImplementedError(f"Unsupported ragged dot dimension numbers for Triton: {ragged_dot_dimension_numbers}")
 
 

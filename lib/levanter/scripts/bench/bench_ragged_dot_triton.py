@@ -10,10 +10,9 @@ local experts and an expert weight ``[G, K, N]``:
     dlhs:  dout [M, N] x rhs [G, K, N]^T -> [M, K]
     drhs:  lhs [M, K]^T x dout [M, N]    -> [G, K, N]
 
-Each case is timed for both Triton kernel families (``tile_map``, used on AMD Instinct and NVIDIA
-GPUs, and ``group_grid``, used on any other GPU), for XLA's ``ragged_dot_general`` (in ``--xla-dtype``,
-since hipBLASLt's grouped GEMM rejects bf16 on gfx950), and for a dense ``jnp.matmul`` with the
-same FLOPs. Tile-map blocks are the ones ``ragged_dot`` picks on this device.
+Each case is timed for the Triton tile-map kernel, for XLA's ``ragged_dot_general`` (in
+``--xla-dtype``, since hipBLASLt's grouped GEMM rejects bf16 on gfx950), and for a dense
+``jnp.matmul`` with the same FLOPs. Tile-map blocks are the ones ``ragged_dot`` picks on this device.
 Each timing warms up for ``--warmup-seconds``, then reports the median of ``--repeats`` windows of
 back-to-back calls.
 
@@ -58,7 +57,6 @@ ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
 
 DTYPES = {"bfloat16": jnp.bfloat16, "float16": jnp.float16}
 LAYOUTS = [layout.value for layout in ragged_dot_module.RaggedLayout]
-KERNEL_FAMILIES = [family.value for family in ragged_dot_module.TritonKernelFamily]
 # June expert MLP per GPU: hidden 2560, expert intermediate 1280 with gate and up fused.
 DEFAULT_WEIGHTS = ("w13:2560x2560", "w2:1280x2560")
 # Every input and output is stacked along this mesh axis, one copy of the case per device.
@@ -195,14 +193,11 @@ def time_call(fn: Callable, args, *, warmup_seconds: float, window_seconds: floa
 
 
 def implementations(case: Case, args, mesh: Mesh) -> list[Timed]:
-    """Both Triton kernel families, plus XLA and a dense matmul unless skipped."""
+    """The Triton tile-map kernel, plus XLA and a dense matmul unless skipped."""
     layout = ragged_dot_module.RaggedLayout(case.layout)
+    triton = spmd(lambda lhs, rhs, gs: ragged_dot_module._tile_map_pallas_call(lhs, rhs, gs, layout), mesh)
     bf16_inputs = case_inputs(case, jnp.bfloat16, mesh)
-    timed = []
-    for family in args.kernel_families:
-        kernels = ragged_dot_module._TRITON_KERNELS[ragged_dot_module.TritonKernelFamily(family)]
-        fn = spmd(lambda lhs, rhs, gs, kernels=kernels: kernels(lhs, rhs, gs, layout), mesh)
-        timed.append(Timed(f"triton_{family}", "bfloat16", fn, bf16_inputs, describe_triton_config(case, family)))
+    timed = [Timed("triton_tile_map", "bfloat16", triton, bf16_inputs, describe_triton_config(case))]
     if not args.skip_xla:
         dim_nums = ragged_dot_module._LAYOUT_DIM_NUMS[layout]
         xla = spmd(
@@ -234,9 +229,7 @@ def sweep_implementations(case: Case, configs: list, mesh: Mesh) -> list[Timed]:
     return timed
 
 
-def describe_triton_config(case: Case, family: str) -> str:
-    if family == ragged_dot_module.TritonKernelFamily.GROUP_GRID:
-        return "group_grid defaults"
+def describe_triton_config(case: Case) -> str:
     layout = ragged_dot_module.RaggedLayout(case.layout)
     m, k, n = triton_problem_dims(case)
     return str(dataclasses.asdict(ragged_dot_module._tile_map_block_config(layout, m, k, n, case.groups)))
@@ -316,7 +309,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--groups", type=int, default=32)
     parser.add_argument("--weights", nargs="+", default=list(DEFAULT_WEIGHTS), help="name:KxN")
     parser.add_argument("--layouts", nargs="+", default=LAYOUTS, choices=LAYOUTS)
-    parser.add_argument("--kernel-families", nargs="+", default=KERNEL_FAMILIES, choices=KERNEL_FAMILIES)
     parser.add_argument("--xla-dtype", choices=sorted(DTYPES), default="float16")
     parser.add_argument("--skip-xla", action="store_true")
     parser.add_argument("--skip-dense", action="store_true")
