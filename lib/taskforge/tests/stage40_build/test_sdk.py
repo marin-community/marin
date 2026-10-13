@@ -5,10 +5,11 @@ import json
 
 import pytest
 from pydantic import BaseModel
+from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.stage40_build.context import BuildFailure
 from taskforge.stage40_build.outputs import WebCall
-from taskforge.stage40_build.sdk import ATTEMPTS, research, structured_until
+from taskforge.stage40_build.sdk import ATTEMPTS, DIAGNOSTICS_CHARS, grade_diagnostics, research, structured_until
 from tests.stage40_build.conftest import web_tool
 
 
@@ -70,3 +71,28 @@ async def test_research_returns_the_finding_under_the_agent_limits(context, prop
     assert finding.notes == "Confirmed 6 x 7 = 42 at https://example.org/table."
     assert "confirm the multiplication table" in fake_glm.requests[0]["messages"][0]["content"]
     assert {request["max_tokens"] for request in fake_glm.requests} == {researching.services.agent_limits.max_tokens}
+
+
+def test_grade_diagnostics_shows_the_checks_a_grader_wrote_in_its_detail():
+    detail = {"checks": [{"name": "reference query", "passed": False, "weight": 1.0}], "reason": "not authorized"}
+    grade = GradeResult(Outcome.GRADED, 0.0, detail=detail, diagnostics={"stdout": "", "stderr": "", "exit_code": 0})
+
+    assert json.loads(grade_diagnostics(grade)) == {
+        "error": None,
+        "detail": detail,
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+    }
+
+
+def test_grade_diagnostics_cuts_a_long_text_in_the_middle():
+    detail = {"checks": [{"name": "total", "passed": False, "weight": 1.0}]}
+    diagnostics = {"stdout": "x" * (3 * DIAGNOSTICS_CHARS), "stderr": "ValueError: bad row 7", "exit_code": 1}
+
+    text = grade_diagnostics(GradeResult(Outcome.GRADED, 0.0, detail=detail, diagnostics=diagnostics))
+
+    assert '"name": "total", "passed": false' in text
+    assert "ValueError: bad row 7" in text
+    assert "characters cut]" in text
+    assert len(text) < DIAGNOSTICS_CHARS + 50

@@ -48,6 +48,10 @@ reward = sum(c["weight"] for c in checks if c["passed"]) / sum(c["weight"] for c
 pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps({"reward": reward, "detail": {"checks": checks}}))
 """
 WRONG_GRADER = GOOD_GRADER.replace('"ANSWER = "', '"RESULT = "')
+FAILED_CHECK_GRADER = """import json, pathlib
+detail = {"checks": [{"name": "reference query", "passed": False, "weight": 1.0}], "reason": "not authorized"}
+pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps({"reward": 0.0, "detail": detail}))
+"""
 NO_CHECKS_GRADER = """import json, pathlib
 pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps({"reward": 1.0}))
 """
@@ -198,6 +202,18 @@ async def test_the_grader_step_sends_back_a_grader_without_per_check_results(con
 
     assert resource_bytes(next(f for f in grader.package.resources if f.path == "grade.py")).decode() == GOOD_GRADER
     assert "no per-check results" in fake_glm.requests[1]["messages"][-2]["content"]
+
+
+async def test_the_grader_step_sends_back_the_checks_its_reference_answer_failed(context, proposal, fake_glm):
+    fake_glm.stream(content=json.dumps(grader_call(FAILED_CHECK_GRADER)))
+    fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
+
+    await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
+
+    feedback = fake_glm.requests[1]["messages"][-2]["content"]
+    assert "the reference answer was graded graded reward=0.0" in feedback
+    assert '"checks": [{"name": "reference query", "passed": false, "weight": 1.0}]' in feedback
+    assert '"reason": "not authorized"' in feedback
 
 
 class RecordingImageBuilder:
