@@ -220,7 +220,8 @@ def ports_release(config: ReleaseConfig) -> ArtifactStep[Artifact]:
 @click.command()
 @click.option("--source-revision", required=True, help="Full Shellsim source commit SHA, including ports recipes.")
 @click.option("--version", required=True, help="Immutable release version; bump when source or runtime changes.")
-@click.option("--worker-image", required=True, help="Iris worker image built with the selected Shellsim runtime.")
+@click.option("--worker-image", help="Override the worker image published by the Pulumi stack.")
+@click.option("--stack", default="cw-us-east-02a", show_default=True, help="Shellsim ports Pulumi stack.")
 @click.option("--url-prefix", default=ASSET_URL_PREFIX, show_default=True)
 @click.option("--work-directory", default="build/ports-release", show_default=True)
 @click.option("--max-workers", default=ReleaseConfig.max_workers, type=click.IntRange(1, 32), show_default=True)
@@ -233,7 +234,8 @@ def ports_release(config: ReleaseConfig) -> ArtifactStep[Artifact]:
 def main(
     source_revision: str,
     version: str,
-    worker_image: str,
+    worker_image: str | None,
+    stack: str,
     work_directory: str,
     url_prefix: str,
     max_workers: int,
@@ -243,6 +245,15 @@ def main(
     do_run: bool,
 ) -> None:
     configure_logging()
+    if worker_image is None:
+        worker_image = subprocess.run(
+            ["pulumi", "stack", "output", "workerImage", "--stack", stack],
+            cwd=Path(__file__).parent,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    logger.info("Using ports worker image %s", worker_image)
     handle = ports_release(
         ReleaseConfig(
             source_revision,

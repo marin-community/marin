@@ -2,5 +2,5 @@ secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings
 config:
   marin-shellsim-ports:cluster: cw-us-east-02a
   marin-shellsim-ports:hostname: ports.oa.dev
-  marin-shellsim-ports:source_revision: d714557abfc9a09ac9205294ab5448f7e7e4e63e
+  marin-shellsim-ports:source_revision: a6d2351713ea0c51c1d7cd780de80f7daa10c35b
   marin-shellsim-ports:prefix: s3://marin-us-east-02a/marin/shellsim/ports

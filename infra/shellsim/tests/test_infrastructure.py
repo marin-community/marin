@@ -18,7 +18,8 @@ class RecordingMocks(Mocks):
         self.resources.append(args)
         outputs = dict(args.inputs)
         if args.typ == "docker-build:index:Image":
-            outputs["ref"] = "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
+            digest = "b" if args.name == "ports-worker-image" else "a"
+            outputs["ref"] = "ghcr.io/marin-community/iris-task@sha256:" + digest * 64
         return args.name, outputs
 
     def call(self, args: MockCallArgs):
@@ -44,7 +45,7 @@ def test_proxy_manifests_keep_credentials_external_and_limit_network(monkeypatch
     mocks = RecordingMocks()
     monitor = RecordingMonitor(mocks)
     pulumi.runtime.set_mocks(mocks, project="marin-shellsim-ports", stack="test", preview=True, monitor=monitor)
-    url = deploy(
+    deployment_outputs = deploy(
         ProxyConfig(
             cluster="cw-us-east-02a",
             hostname="ports.oa.dev",
@@ -54,7 +55,7 @@ def test_proxy_manifests_keep_credentials_external_and_limit_network(monkeypatch
     )
 
     def check(value):
-        assert value == "https://ports.oa.dev"
+        assert value == ["https://ports.oa.dev", "ghcr.io/marin-community/iris-task@sha256:" + "b" * 64]
         resources = {resource.typ: resource.inputs for resource in mocks.resources}
         deployment = resources["kubernetes:apps/v1:Deployment"]["spec"]["template"]["spec"]
         container = deployment["containers"][0]
@@ -91,6 +92,14 @@ def test_proxy_manifests_keep_credentials_external_and_limit_network(monkeypatch
             resources["cloudflare:index/dnsRecord:DnsRecord"]["content"]
             == "iris-cw-us-east-02a.208261-marin-gpu.coreweave.app"
         )
-        assert resources["docker-build:index:Image"]["buildOnPreview"] is False
+        images = {
+            resource.name: resource.inputs for resource in mocks.resources if resource.typ == "docker-build:index:Image"
+        }
+        assert all(image["buildOnPreview"] is False for image in images.values())
+        assert container["image"] == "ghcr.io/marin-community/iris-task@sha256:" + "a" * 64
+        worker = images["ports-worker-image"]
+        assert worker["context"]["location"] == (
+            "https://github.com/rjpower/shellsim.git#d714557abfc9a09ac9205294ab5448f7e7e4e63e"
+        )
 
-    return url.apply(check)
+    return pulumi.Output.all(deployment_outputs.url, deployment_outputs.worker_image).apply(check)

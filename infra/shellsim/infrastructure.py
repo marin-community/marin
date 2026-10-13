@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Declare a small HTTPS storage proxy without handling credential values.
+"""Build pinned worker images and declare the HTTPS ports proxy.
 
 The upstream server streams one durable prefix. The existing Kubernetes secret
 supplies a dedicated read-only object-store key; providers use ambient credentials.
@@ -24,6 +24,7 @@ NAME = "shellsim-ports"
 NAMESPACE = "iris"
 READONLY_SECRET = "shellsim-ports-readonly"
 IMAGE_TAG = "ghcr.io/marin-community/iris-task:shellsim-ports-proxy"
+WORKER_IMAGE_TAG = "ghcr.io/marin-community/iris-task:buildomatic"
 PORT = 8080
 
 
@@ -38,6 +39,12 @@ class ProxyConfig:
     cpu_limit: str = "1"
     memory_request: str = "128Mi"
     memory_limit: str = "512Mi"
+
+
+@dataclass(frozen=True)
+class DeploymentOutputs:
+    url: pulumi.Output[str]
+    worker_image: pulumi.Output[str]
 
 
 def stack_config() -> ProxyConfig:
@@ -59,8 +66,8 @@ def stack_config() -> ProxyConfig:
     )
 
 
-def deploy(config: ProxyConfig) -> pulumi.Output[str]:
-    """Declare image, workload, network policy, ingress, and DNS in this leaf stack."""
+def deploy(config: ProxyConfig) -> DeploymentOutputs:
+    """Build source-pinned images and declare the proxy's restricted network access."""
     prefix = StoragePath(config.prefix)
     if prefix.scheme != "s3":
         raise ValueError("ports proxy requires a CoreWeave S3 prefix")
@@ -82,6 +89,22 @@ def deploy(config: ProxyConfig) -> pulumi.Output[str]:
         build_args={"SOURCE_REVISION": config.source_revision},
         platforms=[docker_build.Platform.LINUX_AMD64],
         tags=[IMAGE_TAG],
+        build_on_preview=False,
+        push=True,
+    )
+    worker_image = docker_build.Image(
+        "ports-worker-image",
+        context=docker_build.BuildContextArgs(
+            location=f"https://github.com/rjpower/shellsim.git#{config.source_revision}"
+        ),
+        dockerfile=docker_build.DockerfileArgs(
+            location=(
+                "https://raw.githubusercontent.com/rjpower/shellsim/"
+                f"{config.source_revision}/ports/buildomatic/images/Dockerfile"
+            )
+        ),
+        platforms=[docker_build.Platform.LINUX_AMD64],
+        tags=[WORKER_IMAGE_TAG],
         build_on_preview=False,
         push=True,
     )
@@ -216,6 +239,7 @@ def deploy(config: ProxyConfig) -> pulumi.Output[str]:
         proxied=False,
         opts=pulumi.ResourceOptions(provider=dns_provider),
     )
-    return pulumi.Output.all(deployment.urn, service.urn, network_policy.urn, ingress.urn, dns.urn).apply(
+    url = pulumi.Output.all(deployment.urn, service.urn, network_policy.urn, ingress.urn, dns.urn).apply(
         lambda _: f"https://{config.hostname}"
     )
+    return DeploymentOutputs(url, worker_image.ref)

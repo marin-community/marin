@@ -5,4 +5,4 @@ runtime:
   name: python
   options:
     virtualenv: ../../.venv
-description: Read-only HTTPS proxy for durable Shellsim guest port assets.
+description: Buildomatic worker image and read-only HTTPS proxy for guest ports.

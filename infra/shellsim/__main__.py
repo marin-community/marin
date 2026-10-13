@@ -6,4 +6,6 @@
 import pulumi
 from infrastructure import deploy, stack_config
 
-pulumi.export("url", deploy(stack_config()))
+deployment = deploy(stack_config())
+pulumi.export("url", deployment.url)
+pulumi.export("workerImage", deployment.worker_image)
