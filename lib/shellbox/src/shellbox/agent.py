@@ -12,10 +12,11 @@ from harbor.models.agent.context import AgentContext
 
 from shellbox.machine import BashSessionProvider, ShellSession, ShellUpdate
 
+BASH_TOOL_NAME = "Bash"
 BASH_TOOL = {
     "type": "function",
     "function": {
-        "name": "Bash",
+        "name": BASH_TOOL_NAME,
         "description": (
             "Run a command in the persistent Bash shell. Directory, variables, functions, and jobs persist. "
             "A completed command returns output and exit_code; a long command returns status=running. "
@@ -129,11 +130,13 @@ class BashAgent(BaseAgent):
                     return
                 for call in calls:
                     name = call["function"]["name"]
-                    arguments = json.loads(call["function"]["arguments"])
-                    if name == "Bash":
+                    if name == BASH_TOOL_NAME:
+                        arguments = json.loads(call["function"]["arguments"])
                         result = _shell_result(await _bash_action(shell, arguments))
                     else:
-                        raise ValueError(f"Unsupported tool: {name}")
+                        result = json.dumps(
+                            {"error": {"type": "unsupported_tool", "name": name, "available_tools": [BASH_TOOL_NAME]}}
+                        )
                     messages.append(
                         {
                             "role": "tool",
