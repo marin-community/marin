@@ -3,43 +3,37 @@
 
 """Project source declarations into the curation catalog inventory."""
 
-from typing import Any
+from finestore.rl.curation import PipelineReference, SourceDeclaration
 
 from experiments.post_training.task_curation.source import RlDataSource
 
 
-def source_row(source: RlDataSource) -> dict[str, Any]:
+def source_declaration(source: RlDataSource) -> SourceDeclaration:
     """Project a source declaration into catalog metadata without executing it."""
     info, pipeline = source.info, source.pipeline
     dataset = source.dataset
     invocation = None
     if pipeline is not None:
-        invocation = {
-            "name": source.name,
-            "version": source.version,
-            "source": dataset.name if dataset else None,
-            "revision": dataset.revision if dataset else None,
-            "files": source.files,
-        }
-    verifier = info.verifier
+        invocation = PipelineReference(
+            name=source.name,
+            version=source.version,
+            source=dataset.name if dataset else None,
+            revision=dataset.revision if dataset else None,
+            files=list(source.files),
+        )
     tags = info.tags
-    row: dict[str, Any] = {
+    row = {
         "id": info.id,
         "name": source.name,
         "display_name": info.title,
         "origin": info.origin,
         "family": info.family,
-        "tags": tags,
+        "tags": list(tags),
         "task_count": info.count,
         "notes": info.notes,
         "dataset_id": dataset.name if dataset else None,
         "dataset_revision": dataset.revision if dataset else None,
         "url": dataset.url if dataset else None,
-        "canonical_source": dataset.name if dataset else None,
-        "canonical_url": dataset.url if dataset else None,
-        "verifier_revision": verifier.revision if verifier else None,
-        "verifier_url": verifier.url if verifier else None,
-        "verifier_name": verifier.name if verifier else None,
         "type": next(
             (
                 label
@@ -56,4 +50,4 @@ def source_row(source: RlDataSource) -> dict[str, Any]:
         "status": "Excluded" if "excluded" in tags else "Available",
         "pipeline": invocation,
     }
-    return row
+    return SourceDeclaration.model_validate(row)

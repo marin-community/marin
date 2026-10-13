@@ -11,7 +11,6 @@ from pathlib import Path
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.pipeline.inputs import SourceFiles
 from taskcompendium.pipeline.models import SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
@@ -29,7 +28,6 @@ class NumbersConfig:
     version: str = "1"
     dataset: SourceReference = NUMBERS_DATASET
     files: tuple[str, ...] = ()
-    assessment_source: SourceFiles | None = None
 
 
 @dataclass(frozen=True)

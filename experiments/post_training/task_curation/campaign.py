@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from threading import Lock
 
+from finestore.rl.curation import AssessmentPaths
 from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
@@ -92,7 +93,7 @@ class SourceOutcome:
     status: str
     error: str | None = None
     result: PipelineResult | None = None
-    planned_evidence: dict[str, str] = field(default_factory=dict)
+    assessment: AssessmentPaths | None = None
     pipeline_key: str | None = None
 
 
@@ -196,7 +197,7 @@ def run_campaign(
     report_path: str,
     source_ids: Mapping[str, str],
     mode: str = "sample",
-    evidence_paths: Mapping[str, dict[str, str]] | None = None,
+    assessments: Mapping[str, AssessmentPaths] | None = None,
 ) -> tuple[SourceOutcome, ...]:
     """Queue source builds, preserve peer outputs on failure, and write the campaign report.
 
@@ -212,7 +213,7 @@ def run_campaign(
             step.name,
             step.path(),
             OutcomeStatus.QUEUED,
-            planned_evidence=(evidence_paths or {}).get(step.name, {}),
+            assessment=(assessments or {}).get(step.name),
             pipeline_key=artifact_identity(step),
         )
         for step in steps
@@ -270,7 +271,7 @@ def run_campaign(
                     with report_lock:
                         outcomes[step.name] = replace(
                             outcome,
-                            planned_evidence=outcomes[step.name].planned_evidence,
+                            assessment=outcomes[step.name].assessment,
                             pipeline_key=outcomes[step.name].pipeline_key,
                         )
                         write_report(CampaignStatus.RUNNING)

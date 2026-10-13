@@ -1,19 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare bounded post-curation evidence and summarize sampled model opinions."""
+"""Prepare bounded samples from TaskSpecs and recorded curation stages."""
 
 import json
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
-from enum import StrEnum
 from functools import partial
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from finestore.rl.curation import Cohort, ModelReference, Verdict
+from finestore.schema import arrow_schema
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
@@ -32,12 +33,9 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles
-from taskcompendium.pipeline.models import Admission, ReviewStatus
+from taskcompendium.pipeline.models import Admission
 from taskcompendium.pipeline.review import private_evidence_summary, review_payload
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
-from taskcompendium.pipeline.source_evidence import READ_BLOCK_BYTES, OriginalRow, SourceEvidenceFile, original_rows
-from taskcompendium.pipeline.sources import prepared_component_path, prepared_shared_path, staged_inputs
 from taskcompendium.submission import submission_compatibility, submission_instruction
 
 PACKET_SCHEMA = pa.schema(
@@ -46,22 +44,14 @@ PACKET_SCHEMA = pa.schema(
         ("cohort", pa.string()),
         ("packet_json", pa.string()),
         ("omissions", pa.list_(pa.string())),
+        ("exclusion_reason", pa.string()),
     ]
 )
 AUDIT_PREVIEW_CHARACTERS = 2048
 AUDIT_FIELD_OWNERS = {"task_json": "normalize", "normalization_changes": "normalize"}
-
-
-class Cohort(StrEnum):
-    ADMITTED = "admitted"
-    EXCLUDED = "excluded"
-
-
-class Verdict(StrEnum):
-    GOOD = "good"
-    SOME_ISSUES = "some_issues"
-    BAD = "bad"
-    UNKNOWN = "unknown"
+PARQUET_READ_BLOCK_BYTES = 4 * 1024 * 1024
+INPUTS_METADATA = "inputs.parquet"
+JUDGMENTS_METADATA = "judgments.parquet"
 
 
 class TaskJudgment(BaseModel):
@@ -79,6 +69,48 @@ class AssessmentSampling:
     seed: int = 0
     max_packet_characters: int = 64_000
     max_task_json_characters: int = 4_000_000
+
+
+class SelectedTask(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    task_id: str
+    cohort: Cohort
+
+
+class SamplePopulation(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    cohort: Cohort
+    population: int
+    sample_count: int
+
+
+class AssessmentInputs(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    source: str
+    scope: str
+    sampling: AssessmentSampling
+    populations: list[SamplePopulation]
+    sample: list[SelectedTask]
+    packet_paths: list[str]
+
+
+class AssessmentJudgments(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    grade_paths: list[str]
+    model: ModelReference
+    rubric: str
+
+
+def assessment_inputs(root: str) -> AssessmentInputs:
+    rows = list(load_parquet(str(StoragePath(root) / INPUTS_METADATA)))
+    (row,) = rows
+    return AssessmentInputs.model_validate(row)
+
+
+def assessment_judgments(root: str) -> AssessmentJudgments:
+    rows = list(load_parquet(str(StoragePath(root) / JUDGMENTS_METADATA)))
+    (row,) = rows
+    return AssessmentJudgments.model_validate(row)
 
 
 @dataclass(frozen=True)
@@ -159,16 +191,6 @@ def _audit_preview(value: str) -> tuple[str | dict[str, Any], bool]:
     return private_evidence_summary(value, "Full value retained in source audit", AUDIT_PREVIEW_CHARACTERS), True
 
 
-def read_json(path: str) -> dict[str, Any]:
-    return json.loads(StoragePath(path).read_text())
-
-
-def write_json(path: str, value: dict[str, Any]) -> None:
-    with StoragePath(path).open("wt", auto_mkdir=True) as stream:
-        json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
-        stream.write("\n")
-
-
 def _indexed_rows(path: str, *, cohort: Cohort) -> Iterator[dict[str, Any]]:
     columns = ["task_id", "admission", "filter_reasons"] if cohort == Cohort.EXCLUDED else ["task_id"]
     for row in load_parquet(InputFileSpec(path, columns=columns)):
@@ -237,7 +259,7 @@ def _diagnostic_sample(groups: dict[str, tuple[int, list[dict]]], size: int, see
 
 def _selected_locations(path: str, *, task_ids: frozenset[str]) -> Iterator[tuple[str, RowLocation]]:
     values = pa.array(sorted(task_ids), type=pa.string())
-    with open_file(path, block_size=READ_BLOCK_BYTES) as stream:
+    with open_file(path, block_size=PARQUET_READ_BLOCK_BYTES) as stream:
         parquet = pq.ParquetFile(stream)
         for group in range(parquet.num_row_groups):
             if parquet.metadata.row_group(group).num_rows == 0:
@@ -279,8 +301,6 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
         omissions.append(f"{view}: evidence exceeds packet budget")
     return {
         "task_id": row["task_id"],
-        "source_locator": row.get("source_locator"),
-        "raw_input_sha256": row.get("raw_input_sha256"),
         "evidence": evidence,
         "omissions": omissions,
     }
@@ -288,7 +308,7 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
 
 def _selected_evidence(file: SelectedFile, *, sampling: AssessmentSampling) -> Iterator[dict[str, Any]]:
     """Yield bounded evidence for selected records from a Parquet file."""
-    with open_file(file.path, block_size=READ_BLOCK_BYTES) as stream:
+    with open_file(file.path, block_size=PARQUET_READ_BLOCK_BYTES) as stream:
         parquet = pq.ParquetFile(stream)
         columns = [
             name
@@ -328,47 +348,8 @@ def _packet(
         "cohort": selected["cohort"],
         "packet_json": json.dumps(evidence, ensure_ascii=False, allow_nan=False, sort_keys=True),
         "omissions": omissions,
+        "exclusion_reason": selected["reason"],
     }
-
-
-def _original_files(records: dict[str, list[dict[str, Any]]], download: dict[str, Any]) -> list[SourceEvidenceFile]:
-    grouped: dict[str, dict[int, OriginalRow]] = {}
-    for task_id, evidence in records.items():
-        identity = next((row for row in evidence if row.get("source_locator") is not None), None)
-        if identity is None:
-            raise ValueError(f"Selected task has no original-row locator: {task_id}")
-        file, index_text = identity["source_locator"].rsplit(":", 1)
-        if file.startswith("/") or ".." in file.split("/"):
-            raise ValueError(f"Original source file must be relative: {file}")
-        if file not in download["staged_files"]:
-            raise ValueError(f"Original source file is outside the recorded inputs: {file}")
-        index = int(index_text)
-        rows = grouped.setdefault(file, {})
-        if index in rows:
-            raise ValueError(f"Selected tasks share an original-row locator: {file}:{index}")
-        rows[index] = OriginalRow(task_id, identity["source_locator"], identity["raw_input_sha256"])
-    overrides = download["source_file_overrides"]
-    component = download["files"].get("prepared_component")
-    layout = download["files"].get("prepared_source_revision")
-    if component is not None and layout not in (None, "2", "3"):
-        raise ValueError(f"Unknown recorded prepared-source layout: {layout}")
-    return [
-        SourceEvidenceFile(
-            file,
-            overrides[file]["path"] if file in overrides else str(StoragePath(download["source_input"]) / file),
-            rows,
-            prepared_path=(
-                str(
-                    prepared_shared_path(StoragePath(download["source_input"]) / file)
-                    if layout == "2"
-                    else prepared_component_path(StoragePath(download["source_input"]) / file, component)
-                )
-                if component is not None and layout is not None and file not in overrides
-                else None
-            ),
-        )
-        for file, rows in sorted(grouped.items())
-    ]
 
 
 def prepare_assessment(
@@ -376,24 +357,12 @@ def prepare_assessment(
     *,
     curated_root: str,
     sampling: AssessmentSampling,
-    raw_source: SourceFiles | None,
-    raw_source_identity: dict[str, Any] | None,
     output_root: str,
 ) -> None:
     """Select admitted and excluded rows, then materialize bounded evidence on workers."""
     if sampling.admitted < 1 or sampling.excluded < 0 or sampling.max_packet_characters < 1:
         raise ValueError("Assessment sampling and packet budgets must be positive")
-    manifest = read_json(str(StoragePath(curated_root) / "manifest.json"))
-    download = None
-    if raw_source is not None:
-        download = read_json(str(StoragePath(manifest["datasets"]["download"]) / "manifest.json"))
-        # Preparation layout is acquisition metadata, not the source reader's semantics.
-        expected_reader = json.loads(json.dumps(raw_source_identity))
-        recorded_reader = dict(download["files"])
-        expected_reader.pop("prepared_source_revision", None)
-        recorded_reader.pop("prepared_source_revision", None)
-        if expected_reader != recorded_reader:
-            raise ValueError("Original source reader differs from the curation invocation")
+    manifest = json.loads((StoragePath(curated_root) / "manifest.json").read_text())
     views = manifest["datasets"]
     telemetry = SourceTelemetry(manifest["source"], output_root)
     with telemetry.record():
@@ -461,111 +430,37 @@ def prepare_assessment(
             records: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for row in projected:
                 records[row["task_id"]].append(row)
-        source_rows = 0
-        if raw_source is not None and selected:
-            with telemetry.phase("source") as phase:
-                assert download is not None
-                recovered = execute_phase(
-                    context,
-                    Dataset.from_list(_original_files(records, download)).flat_map(
-                        partial(
-                            original_rows,
-                            spec=raw_source,
-                            context=ConversionContext(staged_inputs(download["inputs"]), None),
-                            preview_characters=AUDIT_PREVIEW_CHARACTERS,
-                        )
-                    ),
-                    telemetry=phase,
-                ).results
-                if {row["task_id"] for row in recovered} != task_ids or len(recovered) != len(selected):
-                    raise ValueError("Original source evidence does not cover the selected sample")
-                for row in recovered:
-                    records[row["task_id"]].append(row)
-                source_rows = sum(row["evidence"]["source"]["available"] for row in recovered)
         with telemetry.phase("packets"):
             packet_path = str(StoragePath(output_root) / "packets/part-00000.parquet")
             write_parquet_file(
                 (_packet(row, records=records, sampling=sampling) for row in selected), packet_path, schema=PACKET_SCHEMA
             )
             paths = [packet_path]
-        write_json(str(StoragePath(output_root) / "curation.json"), manifest)
-        write_json(
-            str(StoragePath(output_root) / "manifest.json"),
-            {
-                "schema_version": 1,
-                "source_evidence": {
-                    "reader_declared": raw_source is not None,
-                    "rows": source_rows,
-                    "unavailable_rows": len(selected) - source_rows if raw_source is not None else 0,
-                },
-                "source": manifest["source"],
-                "curated_root": curated_root,
-                "scope": manifest["mode"],
-                "sampling": asdict(sampling),
-                "admitted_population": admitted_count,
-                "excluded_population": sum(count for count, _ in groups.values()),
-                "excluded_reasons": {reason: count for reason, (count, _) in groups.items()},
-                "population_scope": (
-                    "Admitted final rows and processed non-admitted verify rows; unprocessed rows excluded"
-                ),
-                "sample": [{"task_id": row["task_id"], "cohort": row["cohort"]} for row in selected],
-                "packet_paths": paths,
-            },
+        populations = {Cohort.ADMITTED: admitted_count, Cohort.EXCLUDED: sum(count for count, _ in groups.values())}
+        metadata = AssessmentInputs(
+            source=manifest["source"],
+            scope=manifest["mode"],
+            sampling=sampling,
+            populations=[
+                SamplePopulation(
+                    cohort=cohort,
+                    population=populations[cohort],
+                    sample_count=sum(row["cohort"] == cohort for row in selected),
+                )
+                for cohort in Cohort
+            ],
+            sample=[SelectedTask(task_id=row["task_id"], cohort=row["cohort"]) for row in selected],
+            packet_paths=paths,
+        )
+        write_parquet_file(
+            [metadata.model_dump(mode="json")],
+            str(StoragePath(output_root) / INPUTS_METADATA),
+            schema=arrow_schema(AssessmentInputs),
         )
 
 
-def assessment_summary(inputs_root: str, judgments_root: str) -> dict[str, Any]:
-    """Build a source report from prepared evidence and validated judgments."""
-    inputs = read_json(str(StoragePath(inputs_root) / "manifest.json"))
-    judgments = read_json(str(StoragePath(judgments_root) / "manifest.json"))
-    packets = {row["task_id"]: row for path in inputs["packet_paths"] for row in load_parquet(path)}
-    grades = [row for path in judgments["grade_paths"] for row in load_parquet(path)]
-    validate_coverage(inputs["sample"], grades)
-    cohorts = {}
-    for cohort in Cohort:
-        rows = [row for row in grades if row["cohort"] == cohort]
-        counts = Counter(row["verdict"] for row in rows)
-        missing = sum("task" not in json.loads(packets[row["task_id"]]["packet_json"]) for row in rows)
-        omissions = sum(bool(packets[row["task_id"]]["omissions"]) for row in rows)
-        complete = all(row["status"] == ReviewStatus.REVIEWED for row in rows)
-        grade = Verdict.UNKNOWN
-        if rows and complete and not missing:
-            if counts[Verdict.BAD]:
-                grade = Verdict.BAD
-            elif counts[Verdict.SOME_ISSUES]:
-                grade = Verdict.SOME_ISSUES
-            elif counts[Verdict.UNKNOWN] == 0:
-                grade = Verdict.GOOD
-        cohorts[cohort] = {
-            "population": inputs[f"{cohort}_population"],
-            "sample_count": len(rows),
-            "reviewed": sum(row["status"] == ReviewStatus.REVIEWED for row in rows),
-            "verdict_counts": dict(counts),
-            "missing_evidence": missing,
-            "packets_with_omissions": omissions,
-            "grade": grade,
-            "examples": [row for row in rows if row["verdict"] != Verdict.GOOD][:5],
-        }
-    return {
-        "schema_version": 1,
-        "source": inputs["source"],
-        "source_evidence": inputs["source_evidence"],
-        "scope": inputs["scope"],
-        "basis": "sampled_model_opinions",
-        "grade_rule": (
-            "Empty sample, missing TaskSpec or unavailable judgments give unknown; "
-            "otherwise bad takes precedence over some_issues, then unknown, then good"
-        ),
-        "assessment": cohorts,
-        "curation": read_json(str(StoragePath(inputs_root) / "curation.json")),
-        "model": judgments["model"],
-        "rubric": judgments["rubric"],
-        "evidence": {"inputs": inputs_root, "judgments": judgments_root},
-    }
-
-
-def validate_coverage(selected: Iterable[dict[str, Any]], rows: list[dict[str, Any]]) -> None:
-    expected = {(row["task_id"], row["cohort"]) for row in selected}
+def validate_coverage(selected: Iterable[SelectedTask], rows: list[dict[str, Any]]) -> None:
+    expected = {(row.task_id, row.cohort) for row in selected}
     actual = {(row["task_id"], row["cohort"]) for row in rows}
     if len(rows) != len(expected) or actual != expected:
         raise ValueError("Grade records do not match the selected assessment sample")

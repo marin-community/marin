@@ -14,9 +14,9 @@ from zephyr.readers import load_parquet
 
 from taskcompendium.pipeline.assessment import (
     AssessmentSampling,
-    assessment_summary,
+    assessment_inputs,
+    assessment_judgments,
     prepare_assessment,
-    read_json,
 )
 from taskcompendium.pipeline.assessment_review import (
     ASSESSMENT_RUBRIC,
@@ -167,12 +167,11 @@ def test_assessment_recovers_identity_mismatch_without_misattributing_grade(cont
         curated_root=str(curated),
         sampling=AssessmentSampling(admitted=2),
         output_root=str(inputs),
-        raw_source=None,
-        raw_source_identity=None,
     )
     judgments = tmp_path / "judgments"
     grade_assessment(
         context,
+        curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
         model=AssessmentModel("fixture", "revision"),
@@ -180,9 +179,9 @@ def test_assessment_recovers_identity_mismatch_without_misattributing_grade(cont
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
     )
-    manifest = read_json(str(judgments / "manifest.json"))
-    rows = [row for path in manifest["grade_paths"] for row in load_parquet(path)]
-    expected = {row["task_id"] for row in read_json(str(inputs / "manifest.json"))["sample"]}
+    manifest = assessment_judgments(str(judgments))
+    rows = [row for path in manifest.grade_paths for row in load_parquet(path)]
+    expected = {row.task_id for row in assessment_inputs(str(inputs)).sample}
     assert {(row["task_id"], row["status"], row["verdict"]) for row in rows} == {
         (task_id, "reviewed", "good") for task_id in expected
     }
@@ -207,12 +206,11 @@ def test_assessment_recovers_truncated_judgment_with_larger_retry_budget(context
         curated_root=str(curated),
         sampling=AssessmentSampling(admitted=1),
         output_root=str(inputs),
-        raw_source=None,
-        raw_source_identity=None,
     )
     judgments = tmp_path / "judgments"
     grade_assessment(
         context,
+        curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
         model=AssessmentModel("fixture", "revision", max_tokens=100, retry_max_tokens=200),
@@ -220,9 +218,8 @@ def test_assessment_recovers_truncated_judgment_with_larger_retry_budget(context
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
     )
-    report = assessment_summary(str(inputs), str(judgments))
-    assert report["assessment"]["admitted"]["reviewed"] == 1
-    assert report["assessment"]["admitted"]["grade"] == "good"
+    rows = [row for path in assessment_judgments(str(judgments)).grade_paths for row in load_parquet(path)]
+    assert [(row["status"], row["verdict"]) for row in rows] == [("reviewed", "good")]
     calls = [json.loads(row) for row in (tmp_path / "calls.jsonl").read_text().splitlines()]
     assert [row["body"]["max_tokens"] for row in calls] == [100, 200]
     assert calls[0]["custom_id"] == calls[1]["custom_id"]
@@ -245,13 +242,10 @@ def test_assessment_retains_curation_evidence_and_retries_only_uncached_requests
         curated_root=str(curated),
         sampling=sampling,
         output_root=str(inputs),
-        raw_source=None,
-        raw_source_identity=None,
     )
-    manifest = read_json(str(inputs / "manifest.json"))
-    assert manifest["admitted_population"] == 4
-    assert manifest["excluded_population"] == 1
-    packets = [row for path in manifest["packet_paths"] for row in load_parquet(path)]
+    manifest = assessment_inputs(str(inputs))
+    assert {row.cohort: row.population for row in manifest.populations} == {"admitted": 4, "excluded": 1}
+    packets = [row for path in manifest.packet_paths for row in load_parquet(path)]
     assert Counter(row["cohort"] for row in packets) == {"admitted": 2, "excluded": 1}
     admitted = next(row for row in packets if row["cohort"] == "admitted")
     evidence = json.loads(admitted["packet_json"])
@@ -265,6 +259,7 @@ def test_assessment_retains_curation_evidence_and_retries_only_uncached_requests
     unavailable.touch()
     judgments = tmp_path / "judgments"
     options = dict(
+        curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
         model=AssessmentModel("fixture", "revision"),
@@ -274,17 +269,16 @@ def test_assessment_retains_curation_evidence_and_retries_only_uncached_requests
     )
     with pytest.raises(IncompleteAssessment):
         grade_assessment(context, **options)
-    partial = read_json(str(judgments / "manifest.json"))
-    assert partial["counts"] == {"reviewed": 2, "unavailable": 1}
+    partial = assessment_judgments(str(judgments))
+    partial_rows = [row for path in partial.grade_paths for row in load_parquet(path)]
+    assert Counter(row["status"] for row in partial_rows) == {"reviewed": 2, "unavailable": 1}
     unavailable.unlink()
     grade_assessment(context, **options)
     calls = [json.loads(row)["custom_id"] for row in (tmp_path / "calls.jsonl").read_text().splitlines()]
     assert Counter(calls) == {row["task_id"]: 4 if row["task_id"] == admitted["task_id"] else 1 for row in packets}
-    report = assessment_summary(str(inputs), str(judgments))
-    assert report["assessment"]["admitted"]["grade"] == "good"
-    # A model's favorable opinion cannot certify missing task evidence.
-    assert report["assessment"]["excluded"]["grade"] == "unknown"
-    assert report["curation"]["admission_counts"]["rejected"] == 1
+    completed = [row for path in assessment_judgments(str(judgments)).grade_paths for row in load_parquet(path)]
+    assert all(row["status"] == "reviewed" for row in completed)
+    assert {row["task_id"] for row in completed} == {row["task_id"] for row in packets}
     assert (judgments / "responses/attempt-01.jsonl").is_file()
 
     repeated = tmp_path / "repeated"
@@ -293,10 +287,8 @@ def test_assessment_retains_curation_evidence_and_retries_only_uncached_requests
         curated_root=str(curated),
         sampling=sampling,
         output_root=str(repeated),
-        raw_source=None,
-        raw_source_identity=None,
     )
-    assert read_json(str(repeated / "manifest.json"))["sample"] == manifest["sample"]
+    assert assessment_inputs(str(repeated)).sample == manifest.sample
 
 
 def test_assessment_rejects_duplicate_ids_before_small_sampling(context, tmp_path):
@@ -316,8 +308,6 @@ def test_assessment_rejects_duplicate_ids_before_small_sampling(context, tmp_pat
             curated_root=str(curated),
             sampling=AssessmentSampling(admitted=1),
             output_root=str(tmp_path / "inputs"),
-            raw_source=None,
-            raw_source_identity=None,
         )
 
 
@@ -329,11 +319,10 @@ def test_empty_release_keeps_excluded_diagnosis(context, tmp_path):
         curated_root=str(curated),
         sampling=AssessmentSampling(),
         output_root=str(inputs),
-        raw_source=None,
-        raw_source_identity=None,
     )
     grade_assessment(
         context,
+        curated_root=str(curated),
         inputs_root=str(inputs),
         rubric=ASSESSMENT_RUBRIC,
         model=AssessmentModel("fixture", "revision"),
@@ -341,10 +330,12 @@ def test_empty_release_keeps_excluded_diagnosis(context, tmp_path):
         cache_root=str(tmp_path / "cache"),
         output_root=str(judgments),
     )
-    report = assessment_summary(str(inputs), str(judgments))
-    assert report["assessment"]["admitted"]["sample_count"] == 0
-    assert report["assessment"]["admitted"]["grade"] == "unknown"
-    assert report["assessment"]["excluded"]["sample_count"] == 1
+    rows = [row for path in assessment_judgments(str(judgments)).grade_paths for row in load_parquet(path)]
+    assert [(row["cohort"], row["status"]) for row in rows] == [("excluded", "reviewed")]
+    assert {row.cohort: row.population for row in assessment_inputs(str(inputs)).populations} == {
+        "admitted": 0,
+        "excluded": 1,
+    }
 
 
 def test_assessment_locates_evidence_after_empty_physical_row_groups(context, tmp_path):
@@ -368,11 +359,9 @@ def test_assessment_locates_evidence_after_empty_physical_row_groups(context, tm
         curated_root=str(curated),
         sampling=AssessmentSampling(admitted=2),
         output_root=str(inputs),
-        raw_source=None,
-        raw_source_identity=None,
     )
-    manifest = read_json(str(inputs / "manifest.json"))
-    packets = [row for path in manifest["packet_paths"] for row in load_parquet(path)]
+    manifest = assessment_inputs(str(inputs))
+    packets = [row for path in manifest.packet_paths for row in load_parquet(path)]
     assert len(packets) == 2
     assert all(json.loads(row["packet_json"])["task"]["id"] == row["task_id"] for row in packets)
 
@@ -410,11 +399,9 @@ def test_assessment_keeps_task_context_when_audit_views_repeat_large_payloads(co
         curated_root=str(curated),
         sampling=sampling,
         output_root=str(inputs),
-        raw_source=None,
-        raw_source_identity=None,
     )
-    manifest = read_json(str(inputs / "manifest.json"))
-    (packet,) = [row for path in manifest["packet_paths"] for row in load_parquet(path)]
+    manifest = assessment_inputs(str(inputs))
+    (packet,) = [row for path in manifest.packet_paths for row in load_parquet(path)]
     evidence = json.loads(packet["packet_json"])
     assert evidence["task"]["id"] == packet["task_id"]
     assert evidence["submission"]["answer_path"] is None

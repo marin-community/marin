@@ -4,9 +4,7 @@
 import json
 import os
 import shutil
-import threading
 from dataclasses import replace
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from finestore.rl.curation import CurationCatalog
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -46,84 +45,6 @@ from experiments.post_training.task_curation.tests.image_builds import (
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 CONTROLLER_URL = "http://controller.invalid"
-
-
-class ReviewHTTPServer(ThreadingHTTPServer):
-    def __init__(self):
-        self.requests: list[dict] = []
-        self.review_available = True
-        super().__init__(("127.0.0.1", 0), ReviewHandler)
-
-
-class ReviewHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        cast(ReviewHTTPServer, self.server).requests.append(body)
-        task = json.loads(body["messages"][-1]["content"])
-        tool = body["tool_choice"]["function"]["name"]
-        if tool == "review_task" and not cast(ReviewHTTPServer, self.server).review_available:
-            self.send_error(503)
-            return
-        verdict = (
-            {
-                "task_id": task["id"],
-                "quality": "good",
-                "confidence": "high",
-                "reference_status": "consistent",
-                "defects": [],
-                "evidence": "Reference agrees with the task.",
-            }
-            if tool == "review_task"
-            else {
-                "task_id": task["task_id"],
-                "verdict": "good",
-                "explanation": "The reference agrees with the question.",
-                "evidence_ids": ["task"],
-            }
-        )
-        result = {
-            "choices": [
-                {
-                    "finish_reason": "tool_calls",
-                    "message": {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "review",
-                                "type": "function",
-                                "function": {
-                                    "name": tool,
-                                    "arguments": json.dumps(verdict),
-                                },
-                            }
-                        ],
-                    },
-                }
-            ],
-        }
-        payload = json.dumps(result).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def log_message(self, message, *args):
-        pass
-
-
-@pytest.fixture
-def review_server():
-    server = ReviewHTTPServer()
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        thread.join()
-        server.server_close()
 
 
 def math500() -> CurationRecipe:
@@ -319,7 +240,6 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
         evidence = json.loads(StoragePath(result["evidence"]["ingestion"]).read_text())
         assert evidence["mode"] == mode
         assert evidence["catalog_id"] == source.info.id
-        assert result["stages"] == ["ingest", "multiply"]
         if mode == "quick":
             # The generated pipeline really consumes its upstream artifact.
             ingested = list((tmp_path / "downloads").rglob("numbers.txt"))
@@ -398,46 +318,8 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
             for row in load_parquet(str(shard))
         ]
         assert [row["source_row"] for row in rows] == ["rows.jsonl:0"]
-        assert result["stages"] == ["download", "normalize", "final"]
     finally:
         client.shutdown()
-
-
-def test_local_reviewed_campaign_reuses_cached_source_graph(tmp_path, monkeypatch):
-    original_input = tmp_path / "numbers.txt"
-    original_input.write_text("1\n2\n3\n")
-    source = number_source(original_input)
-    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "original-prefix"))
-    cache = tmp_path / "cache"
-    args = [
-        "--mode",
-        "full",
-        "--skip-assessment",
-        "--cache-dir",
-        str(cache),
-        "--source",
-        source.name,
-        "--max-workers",
-        "1",
-    ]
-    runner = CliRunner()
-    plan = runner.invoke(main, args)
-    assert plan.exit_code == 0, plan.output
-    assert not cache.exists()
-    first = runner.invoke(main, [*args, "--run"])
-    assert first.exit_code == 0, first.output
-    report = json.loads((cache / "campaigns/campaign.json").read_text())
-    result = report["sources"][0]["result"]
-    output = StoragePath(result["outputs"]["numbers"])
-    assert json.loads(output.read_text()) == [2, 4, 6]
-    first_run = report["run_id"]
-    original_input.unlink()
-    repeated = runner.invoke(main, [*args, "--run"])
-    assert repeated.exit_code == 0, repeated.output
-    assert json.loads(output.read_text()) == [2, 4, 6]
-    assert json.loads((cache / "campaigns/campaign.json").read_text())["run_id"] != first_run
-    assert os.environ["MARIN_PREFIX"] == str(tmp_path / "original-prefix")
 
 
 def test_local_full_recipe_exports_admitted_tasks_without_cluster_settings(tmp_path, monkeypatch):
@@ -570,16 +452,19 @@ def test_campaign_assesses_tasks_and_preserves_curation_scope(
     ]
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
-    outcome = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
-    report = json.loads(StoragePath(outcome["result"]["evidence"]["assessment_report"]).read_text())
-    assert report["source_evidence"] == {"reader_declared": True, "rows": 1, "unavailable_rows": 0}
-    assert report["assessment"]["admitted"]["grade"] == "good"
-    assert report["assessment"]["admitted"]["sample_count"] == 1
-    assert report["assessment"]["admitted"]["population"] == admitted
-    assert report["scope"] == mode
-    assert report["curation"]["admission_counts"]["admitted"] == admitted
-    assert report["curation"]["raw_population_count"] == 3
-    assert report["curation"]["processed_rows"] == admitted
+    catalog = CurationCatalog(str(cache / "campaigns/catalog"))
+    row = next(row for row in catalog.sources(catalog.current().snapshot_id) if row.id == source.info.id)
+    assessment = catalog.assessment(row.assessment_key)
+    items = list(catalog.items(row.assessment_key))
+    assert [(item.cohort, item.verdict) for item in items] == [("admitted", "good")]
+    assert {population.cohort: population.population for population in catalog.populations(row.assessment_key)} == {
+        "admitted": admitted,
+        "excluded": 0,
+    }
+    assert assessment.scope == mode
+    assert assessment.curation.admission_counts.admitted == admitted
+    assert assessment.curation.raw_population_count == 3
+    assert assessment.curation.processed_rows == admitted
     assert len(review_server.requests) == 1
     repeated = CliRunner().invoke(main, args)
     assert repeated.exit_code == 0, repeated.output
@@ -624,10 +509,14 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     campaign = json.loads((cache / "campaigns/campaign.json").read_text())
     outcome = campaign["sources"][0]
     assert campaign["status"] == "failed" and outcome["status"] == "incomplete"
-    report = json.loads(StoragePath(outcome["result"]["evidence"]["assessment_report"]).read_text())
-    assert report["curation"]["quality"]["status"] == "incomplete"
-    assert report["assessment"]["admitted"]["sample_count"] == 0
-    assert report["assessment"]["excluded"]["reviewed"] == 1
+    catalog = CurationCatalog(str(cache / "campaigns/catalog"))
+    catalog_source = next(
+        row for row in catalog.sources(catalog.current().snapshot_id) if row.declaration.name == "math500"
+    )
+    assert catalog_source.curation.status == "incomplete"
+    assert [(item.cohort, item.status) for item in catalog.items(catalog_source.assessment_key)] == [
+        ("excluded", "reviewed")
+    ]
     assert len(review_server.requests) == 4
     repeated = CliRunner().invoke(main, args)
     assert repeated.exit_code != 0

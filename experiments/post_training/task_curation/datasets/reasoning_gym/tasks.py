@@ -62,7 +62,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
     tasktrove_source,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 HERE = Path(__file__).parent
 GENERATE = HERE / "generate.py"
@@ -353,14 +353,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="MarinSkyRL",
                 family="reasoning-gym",
                 tags=("rlvr", "single-turn", "generator", "gym/reasoning_gym"),
-                verifier=SourceReference(
-                    "reasoning_gym",
-                    "c4daad3876de66d27fa1a5c6405269165f4ccfc5bd85e4fc65108a802f8d6109",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/reasoning_gym"
-                    ),
-                ),
             ),
             config=CurationRecipe(
                 name="reasoning_gym_generated",

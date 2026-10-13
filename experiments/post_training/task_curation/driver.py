@@ -28,7 +28,7 @@ from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewM
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_curation.assessment import (
     AssessmentSettings,
-    assessment_evidence,
+    assessment_paths,
     assessment_pipeline,
 )
 from experiments.post_training.task_curation.campaign import (
@@ -47,7 +47,6 @@ from experiments.post_training.task_curation.config import (
 from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
 from experiments.post_training.task_curation.local import local_artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines
-from experiments.post_training.task_curation.reassessment import reassessment_input, retained_sources
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 
@@ -146,13 +145,13 @@ def _publish_campaign(report_path: str, selected: dict[str, RlDataSource]) -> No
 @click.option(
     "--assessment-sample-size", type=click.IntRange(min=1), default=AssessmentSampling.admitted, show_default=True
 )
-@click.option("--curated-inventory", help="Full-run inventory of retained source/manifest entries to reassess.")
 @click.option(
     "--excluded-sample-size", type=click.IntRange(min=0), default=AssessmentSampling.excluded, show_default=True
 )
 @click.option(
     "--assessment-rubric", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Extra rubric criteria."
 )
+@click.option("--assessment-model-revision", help="Grading model revision; defaults to the curation review revision.")
 @click.option("--report-path", help="Required for SAMPLE/FULL; QUICK writes campaign.json under --output-root.")
 @click.option("--source", "sources", multiple=True, help="Catalog source name to execute; repeat to select multiple.")
 @click.option(
@@ -208,9 +207,9 @@ def main(
     curation_attempt: int,
     assess: bool | None,
     assessment_sample_size: int,
-    curated_inventory: str | None,
     excluded_sample_size: int,
     assessment_rubric: Path | None,
+    assessment_model_revision: str | None,
     report_path: str | None,
     sources: tuple[str, ...],
     input_root: Path | None,
@@ -224,10 +223,8 @@ def main(
     selected = _selected_sources(sources)
     runtime = CampaignRuntime()
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
-    if curated_inventory is not None and (processing_mode != SourceProcessingMode.FULL or not assess):
-        raise click.UsageError("--curated-inventory requires FULL assessment")
-    if curation_attempt and (processing_mode == SourceProcessingMode.QUICK or curated_inventory is not None):
-        raise click.UsageError("--curation-attempt requires a native SAMPLE/FULL curation run")
+    if curation_attempt and processing_mode == SourceProcessingMode.QUICK:
+        raise click.UsageError("--curation-attempt requires a SAMPLE/FULL curation run")
     if cache_dir is not None:
         cache_dir = cache_dir.expanduser().resolve()
     if input_root is not None and local_files:
@@ -335,7 +332,7 @@ def main(
             rubric += "\nAdditional criteria:\n" + assessment_rubric.read_text()
         assessment = AssessmentSettings(
             AssessmentSampling(assessment_sample_size, excluded_sample_size, seed),
-            AssessmentModel(review.model, review.model_revision),
+            AssessmentModel(review.model, assessment_model_revision or review.model_revision),
             rubric,
         )
     with ExitStack() as scope:
@@ -343,29 +340,21 @@ def main(
             scope.enter_context(local_artifact_prefix(str(cache_dir)))
             if report_path is None:
                 report_path = str(cache_dir / "campaigns/campaign.json")
-        if curated_inventory is None:
-            steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]
-        else:
-            retained = retained_sources(curated_inventory)
-            missing = selected.keys() - retained.keys()
-            if missing:
-                raise click.UsageError(f"Retained inventory is missing sources: {', '.join(sorted(missing))}")
-            steps = [reassessment_input(source, retained[source.name]) for source in selected.values()]
-        evidence_paths = {}
+        steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]
+        assessments = {}
         if assessment is not None:
             stages = [
                 assessment_pipeline(
                     step,
                     source=source.name,
-                    raw_source=source.config.assessment_source if source.config is not None else None,
                     settings=assessment,
                     runtime=runtime,
                     recipe_settings=recipe_settings,
                 )
                 for step, source in zip(steps, selected.values(), strict=True)
             ]
-            steps = [stage.report for stage in stages]
-            evidence_paths = {stage.report.name: assessment_evidence(stage) for stage in stages}
+            steps = [stage.judgments for stage in stages]
+            assessments = {stage.judgments.name: assessment_paths(stage) for stage in stages}
         pool = CampaignPool(
             max_workers,
             concurrent_sources,
@@ -400,7 +389,7 @@ def main(
                 report_path=report_path,
                 mode=processing_mode,
                 source_ids={step.name: source.info.id for step, source in zip(steps, selected.values(), strict=True)},
-                evidence_paths=evidence_paths,
+                assessments=assessments,
             )
         except CampaignFailed:
             _publish_campaign(report_path, selected)
