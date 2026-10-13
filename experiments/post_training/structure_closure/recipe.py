@@ -30,11 +30,16 @@ class ClosureSupervision(StrEnum):
 
 
 def training_config(
-    *, max_steps: int, eval_batch_size: int, learning_rate: float, supervision: ClosureSupervision
+    *,
+    max_steps: int,
+    eval_batch_size: int,
+    learning_rate: float,
+    supervision: ClosureSupervision,
+    candidate_logprobs: int,
 ) -> dict:
     """Render the full-model smoke recipe; artifact inputs supply model and data paths."""
     plan = ROLE_PLAN
-    geometry = {
+    geometry: dict[str, object] = {
         "tensor_model_parallel_size": 1,
         "pipeline_model_parallel_size": 2,
         "context_parallel_size": 1,
@@ -144,7 +149,7 @@ def training_config(
             "enforce_eager": False,
             "enable_http_endpoint": False,
             "chat_template": None,
-            "sampling_params": {"temperature": 1.0, "top_p": 1.0, "top_k": -1, "logprobs": 32},
+            "sampling_params": {"temperature": 1.0, "top_p": 1.0, "top_k": -1, "logprobs": candidate_logprobs},
             "engine_init_kwargs": {
                 "moe_backend": "triton",
                 "logprobs_mode": "raw_logprobs",

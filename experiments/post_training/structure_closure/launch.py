@@ -43,6 +43,7 @@ def build_run(
     max_steps: int,
     learning_rate: float,
     supervision: ClosureSupervision,
+    candidate_logprobs: int,
 ) -> ArtifactStep:
     """Bind immutable inputs and an explicit 40-H100 role plan to the trainer."""
     name = user_owned_name("models/structure-closure")
@@ -61,7 +62,11 @@ def build_run(
             version=resolve_version(name, None),
             config_yaml=yaml.safe_dump(
                 training_config(
-                    max_steps=max_steps, eval_batch_size=64, learning_rate=learning_rate, supervision=supervision
+                    max_steps=max_steps,
+                    eval_batch_size=64,
+                    learning_rate=learning_rate,
+                    supervision=supervision,
+                    candidate_logprobs=candidate_logprobs,
                 ),
                 sort_keys=False,
             ),
@@ -103,6 +108,7 @@ def build_run(
 @click.option("--parity-version", required=True)
 @click.option("--max-steps", type=click.IntRange(min=1), default=2, show_default=True)
 @click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), default=4e-6, show_default=True)
+@click.option("--candidate-logprobs", type=click.IntRange(min=1), default=32, show_default=True)
 @click.option(
     "--supervision",
     type=click.Choice([mode.value for mode in ClosureSupervision]),
@@ -111,7 +117,13 @@ def build_run(
 )
 @rl_build_options
 def main(
-    cohort: str, parity_uri: str, parity_version: str, max_steps: int, learning_rate: float, supervision: str
+    cohort: str,
+    parity_uri: str,
+    parity_version: str,
+    max_steps: int,
+    learning_rate: float,
+    candidate_logprobs: int,
+    supervision: str,
 ) -> ArtifactStep:
     return build_run(
         cohort=ClosureCohort(cohort),
@@ -120,6 +132,7 @@ def main(
         max_steps=max_steps,
         learning_rate=learning_rate,
         supervision=ClosureSupervision(supervision),
+        candidate_logprobs=candidate_logprobs,
     )
 
 

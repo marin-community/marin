@@ -33,7 +33,13 @@ DATA_URI = "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/c
 
 
 def evaluation_config() -> dict:
-    config = training_config(max_steps=1, eval_batch_size=64, learning_rate=4e-6, supervision=ClosureSupervision.CLOSURE)
+    config = training_config(
+        max_steps=1,
+        eval_batch_size=64,
+        learning_rate=4e-6,
+        supervision=ClosureSupervision.CLOSURE,
+        candidate_logprobs=32,
+    )
     config["entrypoint"] = "generate"
     config["trainer"]["hf_save_interval"] = -1
     # No weights are synchronized in evaluation; expert-block requires a learner layout.
