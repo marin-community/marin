@@ -253,6 +253,31 @@ def test_remote_judge_rejects_an_empty_candidate_without_calling_the_endpoint():
     )
 
 
+def test_remote_judge_provider_error_is_retryable_infrastructure_failure(judge_server):
+    judge_server.status_code = 400
+    package = verifyit_package(
+        JudgeSpec(
+            references=("A reference answer.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            model="fixture-judge",
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = _task(package.grader)
+
+    result = grade_remote_judge_answer(
+        task,
+        _attempt(task, "candidate"),
+        JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+    )
+
+    assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
+    assert len(judge_server.requests) == 1
+
+
 @pytest.mark.parametrize("state,reward", [("null", 1.0), ('{"value": 1}', 0.0)])
 def test_runtime_passes_captured_state_to_in_process_grader(state, reward):
     task = _task(_grader(StructuredExactSpec(expected=None)), AnswerType.STATE)

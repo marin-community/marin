@@ -642,6 +642,11 @@ def tool_action_golden(task: TaskSpec) -> Reply | None:
     return Reply(AssistantToolCalls(calls=(call,)))
 
 
+def tool_action_negative(task: TaskSpec) -> Reply:
+    """Claim an unobserved result, which the semantic tool-action contract must reject."""
+    return answer_reply(task, "I completed the requested action using tool results that are not shown above.")
+
+
 # Components whose rows carry no known answer check only that an empty reply scores zero.
 REPLY_CONTROLS = Controls()
 MATH_CONTROLS = Controls(golden=reference_reply)
@@ -650,7 +655,10 @@ CODE_CONTROLS = Controls(golden=code_golden, memory_mb=CODE_GRADER_MEMORY_MB)
 RDKIT_CONTROLS = Controls(golden=rdkit_golden)
 TOOL_ACTION_CONTROLS = Controls(golden=tool_action_golden)
 # The legacy expected action is provenance, not a known-correct semantic answer. Judge
-# controls therefore verify that an empty answer is rejected; the separately maintained
-# calibration suite supplies human-labeled positive and alternative-answer controls.
-TOOLCALL_SCHEMA_CONTROLS = Controls(execution=ControlExecution.REMOTE_JUDGE)
+# controls therefore reject a nonempty false claim through the remote endpoint; the separately
+# maintained calibration suite supplies human-labeled positive and alternative-answer controls.
+TOOLCALL_SCHEMA_CONTROLS = Controls(
+    negative=tool_action_negative,
+    execution=ControlExecution.REMOTE_JUDGE,
+)
 REASONING_GYM_CONTROLS = Controls(golden=reasoning_gym_golden)

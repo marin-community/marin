@@ -122,15 +122,16 @@ class ControlExecution(StrEnum):
 class Controls:
     """The one control submission that tests a source's grader on each sampled task.
 
-    ``golden(task)`` is a known-correct submission, which must score one. When ``golden`` is
-    absent or returns ``None`` because the source supplies no known-correct answer, the task is
-    graded on an empty submission instead, which must score zero; a sandbox grader grades it in a
-    fresh grading machine. ``memory_mb`` sizes each fresh grading machine. ``execution`` selects
+    ``golden(task)`` is a known-correct submission, which must score one. ``negative(task)`` is a
+    known-invalid submission, which must score zero. When neither callable supplies a submission,
+    the task is graded on an empty submission, which must score zero; a sandbox grader grades it in
+    a fresh grading machine. ``memory_mb`` sizes each fresh grading machine. ``execution`` selects
     the campaign's explicit remote judge connection for judge-graded tasks that cannot run in the
     network-denied sandbox environment.
     """
 
     golden: Callable[[TaskSpec], ControlSubmission | None] | None = None
+    negative: Callable[[TaskSpec], ControlSubmission | None] | None = None
     memory_mb: int = 512
     execution: ControlExecution = ControlExecution.DEFAULT
 

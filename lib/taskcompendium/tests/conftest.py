@@ -17,6 +17,8 @@ class JudgeServer(ThreadingHTTPServer):
     """Record requests to a local OpenAI-compatible judge endpoint."""
 
     requests: list[dict]
+    reply: str
+    status_code: int
 
 
 class JudgeHandler(BaseHTTPRequestHandler):
@@ -33,13 +35,13 @@ class JudgeHandler(BaseHTTPRequestHandler):
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": "PASS"},
+                        "message": {"role": "assistant", "content": server.reply},
                         "finish_reason": "stop",
                     }
                 ],
             }
         ).encode()
-        self.send_response(200)
+        self.send_response(server.status_code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -53,6 +55,8 @@ class JudgeHandler(BaseHTTPRequestHandler):
 def judge_server():
     server = JudgeServer(("127.0.0.1", 0), JudgeHandler)
     server.requests = []
+    server.reply = "PASS"
+    server.status_code = 200
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

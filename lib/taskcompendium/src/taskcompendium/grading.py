@@ -11,6 +11,7 @@ validation and scoring.
 import json
 import math
 
+from openai import APIError
 from verifyit.candidate import Candidate, grade_candidate
 from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
@@ -151,6 +152,6 @@ def grade_remote_judge_answer(task: TaskSpec, attempt: GradingAttempt, connectio
         verdict = grade_judge_candidate(verifier, candidate, connection=connection, runtime=None, context=context)
     except InvalidTask as error:
         return GradeResult(Outcome.INVALID_TASK, None, str(error))
-    except (GradingInfraError, RuntimeError, OSError) as error:
+    except (APIError, GradingInfraError, RuntimeError, OSError) as error:
         return GradeResult(Outcome.INFRA_ERROR, None, str(error))
     return grade_result(verifier, verdict)

@@ -23,7 +23,7 @@ from zephyr.readers import load_jsonl
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec, VerifyitGrader, verifyit_spec
+from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import (
@@ -67,13 +67,11 @@ from .test_pipeline import BatchService, Output
 REFERENCE_CONTROLS = Controls(golden=reference_reply)
 
 
-def judge_reference_reply(task: TaskSpec):
-    spec = verifyit_spec(cast(VerifyitGrader, task.grader))
-    assert isinstance(spec, JudgeSpec)
-    return answer_reply(task, spec.references[0])
+def judge_negative_reply(task: TaskSpec):
+    return answer_reply(task, "A deliberately incorrect answer.")
 
 
-JUDGE_CONTROLS = Controls(golden=judge_reference_reply, execution=ControlExecution.REMOTE_JUDGE)
+JUDGE_CONTROLS = Controls(negative=judge_negative_reply, execution=ControlExecution.REMOTE_JUDGE)
 
 
 @dataclass(frozen=True)
@@ -875,6 +873,7 @@ def test_judge_graded_source_without_controls_is_admitted_unverified(tmp_path):
 
 
 def test_judge_graded_source_runs_controls_through_explicit_remote_connection(tmp_path, judge_server):
+    judge_server.reply = "FAIL"
     source = tmp_path / "source"
     write_jsonl(source, [{**row, "grader": "judge"} for row in apple_rows(3)])
     reviewer = BatchReviewer(BatchService(), "fixture", "revision")

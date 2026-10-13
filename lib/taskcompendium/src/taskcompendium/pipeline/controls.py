@@ -99,6 +99,7 @@ def controls_identity(controls: Controls) -> dict[str, Any]:
     return {
         "revision": CONTROLS_REVISION,
         "golden": callable_identity(controls.golden) if controls.golden is not None else None,
+        "negative": callable_identity(controls.negative) if controls.negative is not None else None,
         "memory_mb": controls.memory_mb,
         "execution": controls.execution.value,
     }
@@ -107,7 +108,7 @@ def controls_identity(controls: Controls) -> dict[str, Any]:
 def control_suite(
     controls: Controls, machines: GradingMachines | None, judge_connection: JudgeConnection | None = None
 ) -> CheckSuite:
-    """Check each sampled task with its golden submission, or an empty one when it has no golden."""
+    """Check each sampled task with a declared positive or negative submission, falling back to empty."""
     return CheckSuite(
         id="controls",
         revision=CONTROLS_REVISION,
@@ -183,6 +184,8 @@ async def _control_checks(
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is not None:
         check = await _control(task, "golden", golden, 1.0, sandbox, remote_judge)
+    elif controls.negative is not None and (negative := controls.negative(task)) is not None:
+        check = await _control(task, "negative", negative, 0.0, sandbox, remote_judge)
     elif sandbox is not None:
         check = await _empty_sandbox_control(task, sandbox)
     else:
