@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import re
 import sys
 
 import pytest
@@ -81,7 +82,7 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
         ),
         (
             lambda s: s.replace("from verifyit.spec import ExactSpec\n", ""),
-            r"no import, definition, assignment or builtin binds: `ExactSpec` \(line \d+\)",
+            r"no import, definition, assignment or builtin binds:\n- `ExactSpec` \(line \d+\)",
         ),
         (
             lambda s: s.replace("        ANSWER_FORMAT,\n", "        ANSWER_FROMAT,\n"),
@@ -176,3 +177,44 @@ def test_a_program_outside_the_rules_is_refused_and_unregistered(edit, problem):
         load_program_source(source)
 
     assert module_name(source) not in sys.modules
+
+
+UNBOUND = re.escape("the program reads names that no import, definition, assignment or builtin binds:")
+IMPORT_EACH = re.escape("Import each SDK name the program uses from its module.")
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (
+            lambda s: s.replace(
+                '    return Question(text="What is 6 * 7?")',
+                '    await qzxv()\n    return Question(text="What is 6 * 7?")',
+            ),
+            rf"{UNBOUND}\n- `qzxv` \(line \d+\)\n{IMPORT_EACH}",
+        ),
+        (
+            lambda s: s.replace(
+                '    return Question(text="What is 6 * 7?")',
+                '    await research(context, "Find the product.")\n    return Question(text="What is 6 * 7?")',
+            ),
+            rf"{UNBOUND}\n- `research` \(line \d+\); did you mean 'research' from taskforge\.stage40_build\.sdk\?\n"
+            rf"{IMPORT_EACH}",
+        ),
+        (
+            lambda s: s.replace("from dataclasses", "import os\nfrom dataclasses"),
+            r"the program failed to load: ImportError: build programs may not import 'os'\. Allowed: \[.*\]",
+        ),
+        (
+            lambda s: s.replace("stage40_build.outputs import", "stage40_build.output import"),
+            r"the program failed to load: ImportError: build programs may not import "
+            r"'taskforge\.stage40_build\.output'; did you mean 'taskforge\.stage40_build\.outputs'\? Allowed: \[.*\]",
+        ),
+    ],
+    ids=["unbound-without-suggestion", "unbound-with-suggestion", "import-without-suggestion", "import-with-suggestion"],
+)
+def test_a_refusal_ends_each_sentence_once_with_or_without_a_suggestion(edit, message):
+    with pytest.raises(ValueError) as refusal:
+        load_program_source(edit(PROGRAM))
+
+    assert re.fullmatch(message, str(refusal.value)), str(refusal.value)
