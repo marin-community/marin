@@ -216,14 +216,9 @@ def _evidence_preview(value: Any, *, text_characters: int, entries: int) -> Any:
             ],
         }
     if isinstance(value, dict):
-        items = list(value.items())
-        result = {
-            key: _evidence_preview(item, text_characters=text_characters, entries=entries)
-            for key, item in items[:entries]
+        return {
+            key: _evidence_preview(item, text_characters=text_characters, entries=entries) for key, item in value.items()
         }
-        if len(items) > entries:
-            return {"total_fields": len(items), "fields": result, "truncated": True}
-        return result
     return value
 
 
@@ -383,12 +378,17 @@ def _packet(
     if len(_evidence_json(evidence)) > sampling.max_packet_characters:
         # Reserve most of the packet for the task; audits must not crowd it out.
         available = sampling.max_packet_characters - 256
-        budgets = {"task": available * 3 // 4}
+        if "task" in evidence:
+            bounded_task = _bounded_evidence(evidence["task"], available * 3 // 4)
+            if bounded_task != evidence["task"]:
+                omissions.append("task: bounded preview; full evidence retained in curation audit")
+            evidence["task"] = bounded_task
+            available -= len(_evidence_json(bounded_task))
         other_sections = [section for section in evidence if section != "task"]
-        audit_budget = (available - budgets["task"]) // max(len(other_sections), 1)
-        budgets.update({section: audit_budget for section in other_sections})
-        for section, value in evidence.items():
-            bounded = _bounded_evidence(value, budgets[section])
+        audit_budget = available // max(len(other_sections), 1)
+        for section in other_sections:
+            value = evidence[section]
+            bounded = _bounded_evidence(value, audit_budget)
             if bounded != value:
                 omissions.append(f"{section}: bounded preview; full evidence retained in curation audit")
             evidence[section] = bounded

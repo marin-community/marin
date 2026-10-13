@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sample completed source outputs and gate publication on repeated controls."""
+"""Use sampled controls to skip validation, falling back to checking each task."""
 
 import json
 import re
@@ -46,7 +46,7 @@ from taskcompendium.pipeline.transforms import is_accepted
 from taskcompendium.pipeline.verification import grader_readiness
 from taskcompendium.runtime.models import RolloutRecord
 
-SOURCE_VERIFICATION_REVISION = "13"
+SOURCE_VERIFICATION_REVISION = "14"
 VERIFICATION_REPORT_FILENAME = "verification.json"
 """The verified stage's report; a rerun at the same output reuses its matching control trials."""
 INFRA_ERROR_RETRIES = 2
@@ -71,6 +71,7 @@ class SourceVerificationPolicy:
 
 class SourceVerificationStatus(StrEnum):
     PASSED = "passed"
+    VALIDATED = "validated"
     SKIPPED = "skipped"
     REJECTED = "rejected"
     INCONCLUSIVE = "inconclusive"
@@ -446,6 +447,16 @@ def gate_source_row(
             row = {**row, "filter_status": "reject", "filter_reasons": [*row["filter_reasons"], *sorted(set(failed))]}
     if not is_accepted(row):
         return row
+    if status == SourceVerificationStatus.VALIDATED:
+        if row["task_id"] not in results:
+            raise ValueError(f"Per-task validation omitted a kept row: {row['task_id']}")
+        if row["grader_readiness"] == GraderReadiness.READY:
+            return row
+        return {
+            **row,
+            "filter_status": "defer",
+            "filter_reasons": [*row["filter_reasons"], "task_validation:unavailable"],
+        }
     if status == SourceVerificationStatus.PASSED:
         if row["task_id"] not in results:
             return {**row, "grader_readiness": GraderReadiness.SOURCE_SAMPLED.value}
@@ -495,18 +506,19 @@ def _with_saved_trials(
     rows: list[dict[str, Any]], prior: Mapping[tuple[str, int], SavedTrial], attempts: int
 ) -> list[dict[str, Any]]:
     """Attach the saved trials whose exact task digest matches each selected row."""
-    selected = []
-    for row in rows:
-        digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
-        selected.append(
-            {
-                **row,
-                "saved_trials": {
-                    attempt: prior[(digest, attempt)] for attempt in range(attempts) if (digest, attempt) in prior
-                },
-            }
-        )
-    return selected
+    return [_with_saved_row(row, prior=prior, attempts=attempts) for row in rows]
+
+
+def _with_saved_row(
+    row: dict[str, Any], *, prior: Mapping[tuple[str, int], SavedTrial], attempts: int
+) -> dict[str, Any]:
+    if not prior:
+        return {**row, "saved_trials": {}}
+    digest = canonical_sha256(TaskSpec.model_validate_json(row["task_json"]).model_dump(mode="json"))
+    return {
+        **row,
+        "saved_trials": {attempt: prior[(digest, attempt)] for attempt in range(attempts) if (digest, attempt) in prior},
+    }
 
 
 def _run_trials(
@@ -532,6 +544,38 @@ def _run_trials(
         ),
         telemetry=run.telemetry,
         operation="trials",
+    ).results
+
+
+def _remaining_trials(
+    run: _VerificationRun,
+    sample: VerificationSample,
+    prior: Mapping[tuple[str, int], SavedTrial],
+    suite: CheckSuite,
+    policy: SourceVerificationPolicy,
+    identity: str,
+    num_shards: int,
+) -> list[VerifiedSample]:
+    selected = frozenset(row["task_id"] for row in sample.rows)
+    return execute_phase(
+        run.context,
+        Dataset.from_files(run.inputs)
+        .load_parquet(columns=["task_id", "task_json", "filter_status"])
+        .filter(is_accepted)
+        .filter(lambda row: row["task_id"] not in selected)
+        .group_by(lambda row: row["task_id"], reducer=lambda _key, rows: rows, num_output_shards=num_shards)
+        .map(partial(_with_saved_row, prior=prior, attempts=policy.attempts))
+        .map(
+            partial(
+                _verify_sample_with_evidence,
+                suite=suite,
+                attempts=policy.attempts,
+                identity=identity,
+                report_path=str(run.report_path),
+            )
+        ),
+        telemetry=run.telemetry,
+        operation="remaining_trials",
     ).results
 
 
@@ -596,7 +640,7 @@ def verify_source(
     telemetry: PhaseTelemetry | None = None,
     context: ZephyrContext | None = None,
 ) -> dict[str, Any]:
-    """Verify an output sample and retain the full audit when publication is denied.
+    """Validate a sample, then each kept task when the sample cannot justify skipping.
 
     Complete trials that an earlier attempt at ``output_path`` saved are reused.
     """
@@ -613,6 +657,17 @@ def verify_source(
         verified = _run_trials(run, sample, prior, suite, policy, identity)
         results = [item.result for item in verified]
         decision = source_verification_report(sample, results, policy)
+        if sample.rows and decision.status in {SourceVerificationStatus.REJECTED, SourceVerificationStatus.INCONCLUSIVE}:
+            verified.extend(
+                _remaining_trials(run, sample, prior, suite, policy, identity, context.max_workers or max_workers)
+            )
+            if len(verified) != sample.eligible_count:
+                raise ValueError("Per-task validation did not cover every eligible task")
+            results = [item.result for item in verified]
+            population = VerificationSample(sample.eligible_count, [{"task_id": result.task_id} for result in results])
+            decision = source_verification_report(population, results, policy).model_copy(
+                update={"status": SourceVerificationStatus.VALIDATED}
+            )
         report = _write_report(run, suite, decision, verified)
         counts = _gate_rows(run, decision, results)
     return _write_manifest(run, counts, report)

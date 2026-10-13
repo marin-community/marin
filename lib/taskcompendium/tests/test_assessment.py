@@ -452,3 +452,6 @@ def test_assessment_summarizes_large_evidence_without_dropping_task(context, tmp
         content = evidence["task"]["context"]["events"][-1]["content"]
         assert content["text"].startswith("Ada has two apples.")
         assert content["suffix"].endswith("How many apples?")
+    else:
+        changes = evidence["normalize"]["normalization_changes"]
+        assert "old old" in json.dumps(changes["items"][0]["original"])

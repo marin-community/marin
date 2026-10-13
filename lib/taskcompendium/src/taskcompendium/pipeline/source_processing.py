@@ -48,7 +48,14 @@ from taskcompendium.pipeline.execution_telemetry import (
     execute_phase,
 )
 from taskcompendium.pipeline.inputs import SourceFileOverride
-from taskcompendium.pipeline.models import Admission, Disposition, FilterPolicy, SourceRecipe, SourceStatus
+from taskcompendium.pipeline.models import (
+    Admission,
+    Disposition,
+    FilterPolicy,
+    GraderReadiness,
+    SourceRecipe,
+    SourceStatus,
+)
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.shard_outputs import ShardOutput, write_shard_outputs
 from taskcompendium.pipeline.source_quality import (
@@ -317,7 +324,7 @@ def _judge_grader(grader: Grader) -> bool:
 
 
 def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -> Admission:
-    """Admit kept rows whose grader runs in process, is a judge, or passed source verification."""
+    """Admit kept rows with runnable graders, individually validated or covered by a passing sample."""
     if row["filter_status"] == Disposition.REJECT.value:
         return Admission.REJECTED
     if row["filter_status"] == Disposition.DEFER.value:
@@ -325,7 +332,12 @@ def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -
     grader = TaskSpec.model_validate_json(row["task_json"]).grader
     if isinstance(grader, NoGrader):
         return Admission.NO_GRADER
-    if grades_in_process(grader) or _judge_grader(grader) or verification == SourceVerificationStatus.PASSED:
+    if (
+        grades_in_process(grader)
+        or _judge_grader(grader)
+        or row["grader_readiness"] == GraderReadiness.READY
+        or verification == SourceVerificationStatus.PASSED
+    ):
         return Admission.ADMITTED
     return Admission.UNVERIFIED
 
@@ -779,16 +791,13 @@ def _export_sidecars(
 def _source_status(
     mode: SourceProcessingMode,
     quality: SourceQualityStatus,
-    verification: SourceVerificationStatus,
     *,
-    verification_infra_errors: int,
     processed_all: bool,
 ) -> SourceStatus:
-    # Unavailable reviews only defer their rows. The source is incomplete when the
-    # quality gate could not decide or a control trial hit an infrastructure error.
-    if quality == SourceQualityStatus.INCOMPLETE or verification_infra_errors > 0:
+    # Per-task validation defers unavailable rows without blocking the whole source.
+    if quality == SourceQualityStatus.INCOMPLETE:
         return SourceStatus.INCOMPLETE
-    if quality == SourceQualityStatus.REJECT or verification == SourceVerificationStatus.REJECTED:
+    if quality == SourceQualityStatus.REJECT:
         return SourceStatus.GATED
     if processed_all:
         return SourceStatus.COMPLETED
@@ -913,8 +922,6 @@ def _run_source_pipeline(run: _SourceRun) -> SourcePipelineResult:
     status = _source_status(
         config.mode,
         decision.status,
-        verification_status,
-        verification_infra_errors=verification["verification"]["counts"]["infra_error"],
         processed_all=expanded or panel.census,
     )
     _write_manifest(

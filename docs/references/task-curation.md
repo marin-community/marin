@@ -302,8 +302,11 @@ Sample and full modes run the reviewed procedure below.
 5. Filter rows into kept, rejected and deferred.
 6. With controls, verify a seeded sample of at most 20 kept rows
    (`--verification-sample-size`): each task's one control runs once in a fresh
-   machine, rerun up to twice more after an infrastructure error, and the source
-   passes at a 95% pass fraction. Judge-graded sources skip this step.
+   machine, rerun up to twice more after an infrastructure error. At a 95% pass
+   fraction, unsampled tasks can skip validation. Otherwise validate every kept
+   task, retaining passes, rejecting failures and deferring unavailable results.
+   Judge-graded sources skip this step. This threshold is independent of sampled
+   GLM quality grades.
 7. Admit rows and write the outputs.
 
 For a standalone task batch, call

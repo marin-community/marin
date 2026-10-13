@@ -24,6 +24,7 @@ from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
+    CheckSuite,
     Controls,
     GraderReadiness,
     RawRow,
@@ -503,6 +504,51 @@ def fixture_control_outcome(task: TaskSpec) -> VerificationReport:
             )
         ]
     )
+
+
+def assigned_controls(task: TaskSpec, *, outcomes: dict[str, CheckStatus]) -> VerificationReport:
+    return VerificationReport(
+        [CheckResult(check="golden", status=outcomes.get(task.id, CheckStatus.PASS), detail="control")]
+    )
+
+
+def test_failed_sample_validates_every_task_and_retains_individual_passes(tmp_path):
+    rows = [
+        {
+            "task_id": task_id,
+            "task_json": schema_task(task_id, OBJECT_SCHEMA).model_dump_json(),
+            "filter_status": "keep",
+            "filter_reasons": [],
+        }
+        for task_id in ("one", "two", "three", "four")
+    ]
+    failed_id = sample_rows(iter(rows), size=1, seed=0).rows[0]["task_id"]
+    unavailable_id = next(row["task_id"] for row in rows if row["task_id"] != failed_id)
+    source = tmp_path / "source"
+    (source / "audit").mkdir(parents=True)
+    (source / "manifest.json").write_text(json.dumps({"input_rows": len(rows)}))
+    pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), source / "audit/part-00000.parquet")
+    suite = CheckSuite(
+        id="controls",
+        revision="1",
+        parameters={},
+        run=partial(assigned_controls, outcomes={failed_id: CheckStatus.FAIL, unavailable_id: CheckStatus.INFRA_ERROR}),
+    )
+    policy = SourceVerificationPolicy(1, 0, 1, 0.95)
+    output = tmp_path / "verified"
+    with ZephyrContext(max_workers=2, name="per-task-fallback") as context:
+        first = verify_source(str(source), str(output), policy, suite, 2, context=context)
+        second = verify_source(str(source), str(output), policy, suite, 2, context=context)
+    assert first["verification"]["status"] == "validated"
+    assert first["verification"]["sample_count"] == first["verification"]["eligible_count"] == 4
+    assert first["dispositions"] == {"keep": 2, "reject": 1, "defer": 1}
+    accepted = pq.read_table(output / "accepted").to_pylist()
+    assert {row["task_id"] for row in accepted} == {"one", "two", "three", "four"} - {failed_id, unavailable_id}
+    assert all(row["grader_readiness"] == "ready" for row in accepted)
+    first_ids = {item["task_id"]: item["execution_id"] for item in first["verification"]["evidence"]}
+    second_ids = {item["task_id"]: item["execution_id"] for item in second["verification"]["evidence"]}
+    assert first_ids[failed_id] == second_ids[failed_id]
+    assert first_ids[unavailable_id] != second_ids[unavailable_id]
 
 
 @pytest.mark.parametrize("empty", [False, True])

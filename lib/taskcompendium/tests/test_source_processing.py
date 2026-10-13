@@ -541,7 +541,7 @@ def test_completed_source_rerun_reuses_inference_cache_without_scratch(tmp_path)
 
 
 @pytest.mark.parametrize("failure", ["quality_panel", "verification"])
-def test_incomplete_source_retry_reuses_successful_reviews(tmp_path, failure):
+def test_source_retry_reuses_successful_reviews_after_unavailable_evidence(tmp_path, failure):
     source = tmp_path / "source"
     population = 1 if failure == "verification" else 125
     write_jsonl(source, apple_rows(population))
@@ -555,7 +555,7 @@ def test_incomplete_source_retry_reuses_successful_reviews(tmp_path, failure):
     reviewer = BatchReviewer(service, "fixture", "revision", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
     config = pipeline_config(SourceProcessingMode.FULL, reviewer, machines=unavailable)
     first = run_pipeline(recipe, source, tmp_path / "output", config)
-    assert first.status == "incomplete"
+    assert first.status == ("incomplete" if failure == "quality_panel" else "completed")
     assert Path(first.manifest_path).exists()
     submitted = sum(len(rows) for rows in service.files.values())
     first_files = set(service.files)
@@ -606,7 +606,7 @@ class PartiallyUnavailableReview(BatchService):
         (SourceProcessingMode.FULL, 125, 0, "trust", 125, "skipped"),
         (SourceProcessingMode.SAMPLE, 30, 0, "census", 30, "skipped"),
         (SourceProcessingMode.FULL, 125, 20, "trust", 125, "skipped"),
-        (SourceProcessingMode.SAMPLE, 125, 0, "trust", 100, "rejected"),
+        (SourceProcessingMode.SAMPLE, 125, 0, "trust", 100, "validated"),
     ],
 )
 def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
@@ -614,17 +614,15 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
 ):
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(population))
-    # A golden the grader rejects fails every sampled control, so the source is rejected.
+    # A failed control sample triggers per-task validation, which rejects every incorrect golden here.
     controls = (
-        Controls(golden=lambda task: answer_reply(task, "__incorrect_answer__")) if verification == "rejected" else None
+        Controls(golden=lambda task: answer_reply(task, "__incorrect_answer__")) if verification == "validated" else None
     )
     recipe = fixture_recipe(convert_svamp, controls=controls)
     service = PartiallyUnavailableReview(bad_count)
     reviewer = BatchReviewer(service, "fixture", "revision", max_attempts=1)
     result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(mode, reviewer))
-    assert result.status == (
-        "gated" if verification == "rejected" else "sampled" if processed < population else "completed"
-    )
+    assert result.status == ("sampled" if processed < population else "completed")
     report = read_json(result.manifest_path)
     assert report["quality"]["status"] == quality
     assert report["unavailable_reviews"] == 1
@@ -635,7 +633,7 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
     assert len(deferred) == 1
     assert deferred[0]["filter_status"] == "defer"
     final = parquet_rows(result.final_path)
-    assert len(final) == (0 if verification == "rejected" else processed - bad_count - 1)
+    assert len(final) == (0 if verification == "validated" else processed - bad_count - 1)
     assert deferred[0]["task_id"] not in {row["task_id"] for row in final}
     assert list((tmp_path / "output/work/quality/evidence").glob("*.parquet"))
 
@@ -857,11 +855,11 @@ def test_judge_graded_source_skips_verification_and_admits_its_rows(tmp_path, co
     "machines,admission,status",
     [
         (FixtureGradingMachines(), "admitted", "completed"),
-        (FixtureGradingMachines(UnavailableImages()), "deferred", "incomplete"),
+        (FixtureGradingMachines(UnavailableImages()), "deferred", "completed"),
     ],
     ids=["verified", "machines_unavailable"],
 )
-def test_sandbox_rows_reach_final_only_after_source_verification_passes(tmp_path, machines, admission, status):
+def test_sandbox_rows_reach_final_only_after_controls_pass(tmp_path, machines, admission, status):
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(3))
     reviewer = BatchReviewer(BatchService(), "fixture", "revision")
