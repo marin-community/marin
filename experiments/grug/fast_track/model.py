@@ -883,6 +883,9 @@ class GrugModelConfig:
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
+    kda_fused_projections: bool = True
+    """Under a real MXFP8 dense ``fp8_recipe``, project KDA's q/k/v/gate (and write/erase) from ``x`` as one
+    block-scaled GEMM over their concatenated weights, so ``x`` is quantized once."""
     moe_mxfp8_dispatch: bool = False
     """With MXFP8 experts (``fp8_recipe``), send the dispatched rows as MXFP8 bytes instead of bf16 rows quantized on
     arrival. Off by default: the extra uint8 transport buffer OOMs NCCL's symmetric memory on the GB200 recipe."""
@@ -1960,7 +1963,7 @@ class KimiDeltaAttention(eqx.Module):
         # Every projection of x as one block-scaled GEMM: x is quantized once and the GEMM is 4-6x wider. Only under
         # the real MXFP8 dense recipes, whose per-projection quantization passes dominate at these widths.
         fused: dict[str, jax.Array] = {}
-        if cfg.fp8_recipe in _DENSE_FP8_REAL and not proj_inputs and kv_input is None:
+        if cfg.kda_fused_projections and cfg.fp8_recipe in _DENSE_FP8_REAL and not proj_inputs and kv_input is None:
             named = {
                 "q": self.w_q,
                 "k": self.w_k,
