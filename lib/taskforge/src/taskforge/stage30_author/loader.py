@@ -139,10 +139,8 @@ def _restricted_import(
     submodules = [f"{name}.{item}" for item in fromlist or ()]
     allowed = name in ALLOWED_IMPORTS or (bool(submodules) and all(module in ALLOWED_IMPORTS for module in submodules))
     if level != 0 or not allowed:
-        raise ImportError(
-            f"build programs may not import {name!r}{_suggestion(name, ALLOWED_IMPORTS)}; "
-            f"allowed: {sorted(ALLOWED_IMPORTS)}"
-        )
+        refusal = _sentence(f"build programs may not import {name!r}{_suggestion(name, ALLOWED_IMPORTS)}")
+        raise ImportError(f"{refusal} Allowed: {sorted(ALLOWED_IMPORTS)}")
     if "." in name and not fromlist:
         raise ImportError(f"use 'from {name} import ...' rather than 'import {name}'")
     if name not in ALLOWED_IMPORTS:
@@ -153,6 +151,11 @@ def _restricted_import(
         if item != "*" and not hasattr(module, item):
             raise ImportError(f"{name!r} has no name {item!r}{_import_suggestion(item, name)}")
     return module
+
+
+def _sentence(text: str) -> str:
+    """``text`` closed as a sentence: unchanged when a suggestion's question mark ends it, else with a period."""
+    return text if text.endswith("?") else f"{text}."
 
 
 def _suggestion(name: str, candidates: Iterable[str]) -> str:
@@ -382,9 +385,10 @@ def _check_names(tree: ast.Module) -> None:
             f"`{name}` (line {line}){_name_suggestion(name, bound | SAFE_BUILTINS.keys())}"
             for name, line in sorted(unbound.items(), key=lambda item: item[1])
         ]
+        listed = "\n".join(f"- {problem}" for problem in problems)
         raise ValueError(
-            f"the program reads names that no import, definition, assignment or builtin binds: {', '.join(problems)}. "
-            "Import each SDK name the program uses from its module"
+            f"the program reads names that no import, definition, assignment or builtin binds:\n{listed}\n"
+            "Import each SDK name the program uses from its module."
         )
 
 
