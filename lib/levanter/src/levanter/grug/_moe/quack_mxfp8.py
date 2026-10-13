@@ -421,7 +421,8 @@ def _mx_linear_fwd(x, w, out_sharding):
     def local(xl, wl):
         return mxfp8_matmul(xl.reshape(-1, k), wl).reshape(*xl.shape[:-1], n)
 
-    y = jax.shard_map(local, in_specs=(x_spec, P(None, None)), out_specs=x_spec)(
+    # The Pallas quantizers' outputs are not vma-annotated, so skip the varying-axes check.
+    y = jax.shard_map(local, in_specs=(x_spec, P(None, None)), out_specs=x_spec, check_vma=False)(
         reshard(x, x_spec), reshard(w, P(None, None))
     )
     if out_sharding is not None:
@@ -446,9 +447,9 @@ def _mx_linear_bwd(out_sharding, res, g):
         dw = _reduce_partial_to_spec(mxfp8_matmul_wgrad(x2, g2), dw_spec, batch_axes)
         return dx, dw
 
-    dx, dw = jax.shard_map(local, in_specs=(x_spec, x_spec, P(None, None)), out_specs=(x_spec, dw_spec))(
-        reshard(x, x_spec), g, reshard(w, P(None, None))
-    )
+    dx, dw = jax.shard_map(
+        local, in_specs=(x_spec, x_spec, P(None, None)), out_specs=(x_spec, dw_spec), check_vma=False
+    )(reshard(x, x_spec), g, reshard(w, P(None, None)))
     dx, dw = reshard(dx, x_orig_spec), reshard(dw, w_spec)
     return dx.astype(x.dtype), dw.astype(w.dtype)
 
