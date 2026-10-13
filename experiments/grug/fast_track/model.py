@@ -5995,6 +5995,72 @@ class Transformer(eqx.Module):
             raise ValueError("neuron_inputs needs ungated shared experts outside moe_shared_placement=overlap")
         return metrics[ROUTING_SELECTED_KEY], metrics[ROUTED_INPUT_KEY], metrics[SHARED_PRE_KEY]
 
+    def routing_neuron_dump(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array,
+        top_neurons: int,
+        chunk: int,
+    ) -> dict[str, jax.Array]:
+        """Per MoE layer, each token's routing and the hidden units its routed experts fire (a debug forward for
+        the routing dump; ungated ReLU^2 experts, ``h = relu(x @ w_up[e])^2``), with ``T = B * S``:
+
+        ``selected`` / ``weights`` ``[L, T, K]``; ``top_ids`` / ``top_vals`` ``[L, T, K, top_neurons]``, each slot's
+        most active hidden units; ``frac_active`` ``[L, T, K]``, the share of the slot's hidden units with a positive
+        pre-activation; ``expert_mean_act`` / ``expert_active_rate`` ``[L, E, I]``, each expert's mean activation and
+        firing rate per unit over the tokens routed to it; ``expert_tokens`` ``[L, E]``."""
+        cfg = self.config
+        if cfg.dense_mlp or cfg.num_null_experts or not cfg.moe_ungated_relu2:
+            raise ValueError("routing_neuron_dump needs ungated ReLU^2 routed experts without null experts")
+        _, metrics = self(token_ids, mask=mask, return_routing=True)
+
+        def replicated(x):
+            return reshard(x, P(*([None] * x.ndim)))
+
+        selected = replicated(metrics[ROUTING_SELECTED_KEY])  # [L, T, K]
+        weights = replicated(metrics[ROUTING_WEIGHTS_KEY]).astype(jnp.float32)
+        routed = replicated(metrics[ROUTED_INPUT_KEY])  # [L, T, R]
+        _, num_tokens, k = selected.shape
+        e = cfg.num_experts
+        out = {
+            name: []
+            for name in ("top_ids", "top_vals", "frac_active", "expert_mean_act", "expert_active_rate", "expert_tokens")
+        }
+        for layer, block in enumerate(self.layers()):
+            w_up = replicated(block.mlp.expert_mlp.w_up)  # [E, R, I]
+            inter = w_up.shape[-1]
+
+            def body(carry, xs, w_up=w_up, inter=inter):
+                act_sum, fire_sum = carry
+                x, sel = xs  # [C, R], [C, K]
+                pre = jnp.einsum("cr,ckri->cki", x, w_up[sel], preferred_element_type=jnp.float32)
+                h = jnp.square(jax.nn.relu(pre))
+                vals, ids = jax.lax.top_k(h, top_neurons)
+                fire = (pre > 0).astype(jnp.float32)
+                flat_sel = sel.reshape(-1)
+                act_sum = act_sum + jax.ops.segment_sum(h.reshape(-1, inter), flat_sel, num_segments=e)
+                fire_sum = fire_sum + jax.ops.segment_sum(fire.reshape(-1, inter), flat_sel, num_segments=e)
+                return (act_sum, fire_sum), (ids.astype(jnp.int16), vals.astype(jnp.float16), jnp.mean(fire, axis=-1))
+
+            xs = (
+                routed[layer].reshape(num_tokens // chunk, chunk, -1),
+                selected[layer].reshape(num_tokens // chunk, chunk, k),
+            )
+            zeros = jnp.zeros((e, inter), jnp.float32)
+            (act_sum, fire_sum), (ids, vals, frac) = jax.lax.scan(body, (zeros, zeros), xs)
+            counts = jnp.zeros((e,), jnp.float32).at[selected[layer].reshape(-1)].add(1.0)
+            denom = jnp.maximum(counts, 1.0)[:, None]
+            out["top_ids"].append(ids.reshape(num_tokens, k, top_neurons))
+            out["top_vals"].append(vals.reshape(num_tokens, k, top_neurons))
+            out["frac_active"].append(frac.reshape(num_tokens, k).astype(jnp.float16))
+            out["expert_mean_act"].append(act_sum / denom)
+            out["expert_active_rate"].append(fire_sum / denom)
+            out["expert_tokens"].append(counts)
+        dump = {name: jnp.stack(parts) for name, parts in out.items()}
+        dump["selected"] = selected.astype(jnp.int16)
+        dump["weights"] = weights.astype(jnp.float16)
+        return dump
+
     def layer_kinds(self) -> tuple[str, ...]:
         """Per layer, its mixer and context, e.g. ``kda_local`` or ``mla_global``."""
         cfg = self.config

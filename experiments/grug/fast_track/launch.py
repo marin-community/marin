@@ -398,6 +398,7 @@ def build_h100_ladder_run(
     xla_autotune: XlaAutotune = XlaAutotune.CACHE,
     watch_interval: int = WATCH_INTERVAL,
     token_dump_skip_layers: tuple[int, ...] = (),
+    routing_dump_steps: tuple[int, ...] = (),
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_frac: float = 0.5,
     resume_from: str | None = None,
@@ -617,6 +618,8 @@ def build_h100_ladder_run(
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 token_dump_path=(prefix_join(ctx.output_path, "token_dump.npz") if token_dump else None),
                 token_dump_skip_layers=token_dump_skip_layers,
+                routing_dump_dir=prefix_join(ctx.output_path, "routing_dump") if routing_dump_steps else None,
+                routing_dump_steps=routing_dump_steps,
                 xla_autotune_cache_path=autotune_cache_path,
                 preload_library_kernels=rung.device == "GB200",
                 first_step_timeout=GB200_FIRST_STEP_TIMEOUT if rung.device == "GB200" else None,
@@ -862,6 +865,12 @@ def _layer_skip_rule(
     help="GB200 kernel choice: the seeded autotune cache, or off (needs --xla_gpu_autotune_level=0 in XLA_FLAGS).",
 )
 @click.option(
+    "--routing-dump-steps",
+    default=None,
+    help="Comma-separated steps: after each, write the routing and routed neuron activity of fixed held-out "
+    "sequences to <output>/routing_dump/step-<step>.npz.",
+)
+@click.option(
     "--token-dump-skip-layers",
     default=None,
     help="Comma-separated layers: the token dump also records each token's loss with every token skipping them.",
@@ -1008,6 +1017,7 @@ def main(
     xla_autotune: str,
     watch_interval: int,
     token_dump_skip_layers: str | None,
+    routing_dump_steps: str | None,
     extra_mlp_start_frac: float,
     layer_skip_layers: str | None,
     layer_skip_rate: float,
@@ -1058,6 +1068,7 @@ def main(
         seed_xla_autotune_cache=seed_xla_autotune_cache,
         xla_autotune=XlaAutotune(xla_autotune),
         watch_interval=watch_interval,
+        routing_dump_steps=tuple(int(x) for x in routing_dump_steps.split(",")) if routing_dump_steps else (),
         token_dump_skip_layers=(
             tuple(int(x) for x in token_dump_skip_layers.split(",")) if token_dump_skip_layers else ()
         ),

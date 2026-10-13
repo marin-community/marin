@@ -300,6 +300,10 @@ class GrugTrainerConfig:
     token_dump_path: str | None = None
     # The token dump also records each token's loss with every token skipping these layers (``LayerSkip``).
     token_dump_skip_layers: tuple[int, ...] = ()
+    # After these steps, run ``ROUTING_DUMP_SEQUENCES`` fixed held-out sequences and write their routing and routed
+    # neuron activity to ``<routing_dump_dir>/step-<step>.npz`` (``write_routing_dump``).
+    routing_dump_dir: str | None = None
+    routing_dump_steps: tuple[int, ...] = ()
     # XLA GPU autotune results shared across runs of the same program (``_use_xla_autotune_cache``): loaded at start
     # when present, written by process 0 after the first step otherwise. None: autotune every compile.
     xla_autotune_cache_path: str | None = None
@@ -1394,6 +1398,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         gc.freeze()
         gc.disable()
         hlo_written = False
+        routing_dump = None
         autotune_published = False
 
         # The step runs on the state's flat leaves (``_flat_train_step``); ``state`` is rebuilt from them each step.
@@ -1575,6 +1580,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     dispatch_start = time.perf_counter()
                     state_leaves, metrics, inline_watch_stats = train_step(state_leaves, batch)
                     state = jax.tree.unflatten(state_treedef, state_leaves)
+                    if (
+                        config.trainer.routing_dump_dir is not None
+                        and current_step + 1 in config.trainer.routing_dump_steps
+                    ):
+                        if routing_dump is None:
+                            routing_dump = _routing_dump_runner(config, mesh)
+                        routing_dump(state)
                     # Host time to hand the step to the devices (rebuilding the state tree, launch).
                     dispatch_time = time.perf_counter() - dispatch_start
                     if inline_watch_stats is not None and watch_due:
@@ -1753,6 +1765,48 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
     with fsspec.open(path, "wb") as f:
         f.write(buffer.getvalue())
     logger.info("Wrote the token dump to %s", path)
+
+
+ROUTING_DUMP_SEQUENCES = 8
+ROUTING_DUMP_TOP_NEURONS = 8
+ROUTING_DUMP_CHUNK = 128
+
+
+def _routing_dump_runner(config: GrugRunConfig, mesh: Mesh):
+    """``state -> None``: writes the routing dump of ``state`` for the same held-out sequences every call."""
+    cfg = config.model
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _held_out_sequences, config.data, seq_len=cfg.max_seq_len, num_sequences=ROUTING_DUMP_SEQUENCES
+        ).result()
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    batch = [jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index]) for x in (tokens, segments)]
+    mp = config.trainer.trainer.mp
+
+    @jax.jit
+    def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
+        model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
+        mask = AttentionMask.causal().with_segment_ids(segment_ids)
+        return model.routing_neuron_dump(tokens, mask, ROUTING_DUMP_TOP_NEURONS, ROUTING_DUMP_CHUNK)
+
+    def write(state: GrugTrainState) -> None:
+        outputs = multihost_utils.process_allgather(run(state.params, state.pending_qb_betas, *batch), tiled=True)
+        if jax.process_index() != 0:
+            return
+        buffer = io.BytesIO()
+        np.savez(
+            buffer,
+            tokens=tokens,
+            segment_ids=segments,
+            step=np.asarray(int(state.step)),
+            **{k: np.asarray(v) for k, v in outputs.items()},
+        )
+        path = f"{config.trainer.routing_dump_dir}/step-{int(state.step)}.npz"
+        with fsspec.open(path, "wb") as f:
+            f.write(buffer.getvalue())
+        logger.info("Wrote the routing dump to %s", path)
+
+    return write
 
 
 def _autotune_dump_file() -> str:
