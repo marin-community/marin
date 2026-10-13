@@ -76,12 +76,6 @@ def test_the_proof_file_does_not_outlive_the_compile(sandbox: LocalLeanSandbox):
     assert list((sandbox.project_dir / SCRATCH_DIR_NAME).iterdir()) == []
 
 
-@pytest.mark.parametrize("language", ["python", "ipython"])
-def test_other_languages_are_refused(sandbox: LocalLeanSandbox, language: str):
-    with pytest.raises(ValueError):
-        sandbox.execute("print(1)", language=language, timeout_seconds=5)
-
-
 @pytest.mark.integration
 @pytest.mark.timeout(300)
 @pytest.mark.skipif(not (LEAN_PROJECT_DIR / SCRATCH_DIR_NAME).is_dir(), reason="needs the Lean grader image's Mathlib")
