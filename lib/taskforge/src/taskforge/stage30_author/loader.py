@@ -27,8 +27,10 @@ the GLM author also sends it back within its structured call.
    later stage than this module, so the program imports it by name at run time rather than this
    module importing it. Before running the module, the pass registers the source in ``linecache``
    under the module's file name, so the step decorator's ``inspect.getsource`` reads each step's
-   text. An import of a name the module lacks gets the same suggestion from ``sdk_exports``, so
-   a name imported from the wrong module comes back with the module defining it. The DAG checks
+   text. An import of a name the module lacks gets a suggestion from ``sdk_exports`` as well. The
+   loader looks first among the names the imported module defines, then in the other modules, so
+   a misspelt name comes back with its spelling in that module, and a name imported from the
+   wrong module comes back with the module defining it. The DAG checks
    of ``rl_env_build_program`` run here and refuse, among others, an input named after no step.
 3. It reads ``PROGRAM`` and requires a step named ``GRADER_STEP`` returning ``GRADER_OUTPUT``, a
    sink made by ``@rl_env_build_sink`` returning ``TaskSpec``, and every step and sink the module
@@ -149,7 +151,7 @@ def _restricted_import(
     module = importlib.import_module(name)
     for item in fromlist or ():
         if item != "*" and not hasattr(module, item):
-            raise ImportError(f"{name!r} has no name {item!r}{_name_suggestion(item, ())}")
+            raise ImportError(f"{name!r} has no name {item!r}{_import_suggestion(item, name)}")
     return module
 
 
@@ -214,6 +216,22 @@ def _name_suggestion(name: str, bound: Iterable[str]) -> str:
     if match in local:
         return f"; did you mean {match!r}?"
     return f"; did you mean {match!r} from {' or '.join(exports[match])}?"
+
+
+def _import_suggestion(name: str, module: str) -> str:
+    """The suggestion for ``from module import name``, looking first among the names ``module`` defines.
+
+    A close name from ``module`` comes before an exact one from another module: ``machine``
+    imported from ``taskforge.stage40_build_with_program.sandbox_effects`` gets ``build_machine`` there, although
+    ``taskforge.spec.draft`` defines a ``machine``. Without a close name in ``module``, or for a
+    former SDK name, the suggestion is ``_name_suggestion``'s.
+    """
+    if name not in RENAMED_SDK_NAMES:
+        own = sorted(export for export, defining in sdk_exports().items() if module in defining)
+        matches = difflib.get_close_matches(name, own, n=1)
+        if matches:
+            return f"; did you mean {matches[0]!r} from {module}?"
+    return _name_suggestion(name, ())
 
 
 SAFE_BUILTINS: dict[str, object] = {

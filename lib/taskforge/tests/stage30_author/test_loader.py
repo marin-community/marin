@@ -103,6 +103,13 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
         ),
         (
             lambda s: s.replace(
+                "sdk import ANSWER_FORMAT\n",
+                "sdk import ANSWER_FORMAT\nfrom taskforge.stage40_build_with_program.sandbox_effects import machine\n",
+            ),
+            r"has no name 'machine'; did you mean 'build_machine' from taskforge\.stage40_build_with_program\.sandbox_effects\?",
+        ),
+        (
+            lambda s: s.replace(
                 '    return Question(text="What is 6 * 7?")',
                 '    await research(context, "Find the product.")\n    return Question(text="What is 6 * 7?")',
             ),
@@ -152,6 +159,7 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
         "misspelt-name",
         "misspelt-import",
         "import-from-wrong-module",
+        "close-name-in-the-imported-module",
         "unimported-sdk-name",
         "former-sdk-name",
         "former-sdk-name-import",
