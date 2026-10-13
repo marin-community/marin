@@ -24,15 +24,6 @@ FLOPS_BASELINE_STEP=0
 FLOPS_BASELINE_TOTAL=0
 # Step at which the lineage left 4K context; 0 while it still trains at 4K. Later handoffs keep it.
 CONTEXT_SWITCH_STEP=0
-shape=$(uv run python - "$SEQ_LEN" <<'PYTHON'
-import sys
-from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
-    HERO_REFERENCE_SEQ_LEN, LADDER_RACKS, ladder_batch_size,
-)
-print(ladder_batch_size(int(sys.argv[1]), LADDER_RACKS["d6144"]), HERO_REFERENCE_SEQ_LEN)
-PYTHON
-)
-read -r GLOBAL_BATCH_SIZE EVAL_SEQ_LEN <<< "$shape"
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
@@ -65,8 +56,7 @@ fi
 # Create the tracker lineage once, outside the coordinator and training retry loops.
 # launch verifies the same child and lets training resume it without fork_from.
 uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" "$IRIS_CONFIG" \
-  "$SEQ_LEN" "$GLOBAL_BATCH_SIZE" "$QK_MULT" "$CAPACITY_FACTOR" "$FLOPS_BASELINE_STEP" "$FLOPS_BASELINE_TOTAL" \
-  "$CONTEXT_SWITCH_STEP" "$EVAL_SEQ_LEN" <<'PYTHON'
+  "$SEQ_LEN" "$FLOPS_BASELINE_STEP" "$FLOPS_BASELINE_TOTAL" "$CONTEXT_SWITCH_STEP" <<'PYTHON'
 import csv
 import io
 import os
@@ -79,21 +69,12 @@ from iris.cluster.types import TERMINAL_JOB_STATES
 from levanter.tracker.wandb import _WANDB_FORK_FROM_PATTERN
 
 (mode, run_id, project, fork_from, checkpoint, launch_commit, iris_config,
- seq_len, batch_size, qk_mult, capacity_factor, baseline_step, baseline_total, context_switch_step,
- eval_seq_len) = sys.argv[1:]
+ seq_len, baseline_step, baseline_total, context_switch_step) = sys.argv[1:]
 entity = "marin-community"
 lineage = {
     "hero_handoff_checkpoint": checkpoint,
     "hero_wandb_fork_from": fork_from,
     "hero_launch_commit": launch_commit,
-    "hero_seq_len": int(seq_len),
-    "hero_batch_size": int(batch_size),
-    "hero_qk_mult": float(qk_mult),
-    "hero_capacity_factor": float(capacity_factor),
-    "hero_eval_seq_len": int(eval_seq_len),
-    "hero_flops_baseline_step": int(baseline_step),
-    "hero_flops_baseline_total": float(baseline_total),
-    "hero_context_switch_step": int(context_switch_step),
 }
 fork = _WANDB_FORK_FROM_PATTERN.fullmatch(fork_from)
 if fork is None:
@@ -104,7 +85,7 @@ if parent_id == run_id:
 checkpoint_step = re.fullmatch(r"step-(\d+)", checkpoint.rstrip("/").rsplit("/", 1)[-1])
 if checkpoint_step is None:
     raise ValueError(f"HANDOFF_CHECKPOINT must end in step-<N>: {checkpoint}")
-context_switch = int(seq_len) != int(eval_seq_len)
+context_switch = int(seq_len) != 4096
 if context_switch and (int(baseline_step) != int(checkpoint_step[1]) or float(baseline_total) <= 0):
     raise ValueError("A context switch requires the parent's cumulative FLOPs at the handoff checkpoint")
 if context_switch != (0 < int(context_switch_step) <= int(checkpoint_step[1])):
@@ -167,10 +148,8 @@ launch_job_name="${RUN_ID}-coord-${short_uuid}"
 echo "Recording hero launch on ${HERO_ISSUE}"
 launch_record_file=$(mktemp)
 trap 'rm -f "$launch_record_file"' EXIT
-printf 'Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinator job: `%s`\n- Target: `%s` (%s)\n- Context: `%s`; global batch: `%s`; QK multiplier: `%s`; capacity: `%s`; eval context: `%s`.\n- FLOPs baseline: `%s` at completed step `%s`; context switch step: `%s`.\n\nW&B fork: `%s`; handoff checkpoint: `%s`.\n' \
+printf 'Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinator job: `%s`\n- Target: `%s` (%s)\n\nW&B fork: `%s`; handoff checkpoint: `%s`.\n' \
   "$RUN_ID" "$launch_commit" "$launch_job_name" "$TARGET_CLUSTER" "$TARGET_DESCRIPTION" \
-  "$SEQ_LEN" "$GLOBAL_BATCH_SIZE" "$QK_MULT" "$CAPACITY_FACTOR" "$EVAL_SEQ_LEN" \
-  "$FLOPS_BASELINE_TOTAL" "$FLOPS_BASELINE_STEP" "$CONTEXT_SWITCH_STEP" \
   "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" > "$launch_record_file"
 gh issue comment "$HERO_ISSUE" --body-file "$launch_record_file"
 echo "Launching hero from commit ${launch_commit}"
