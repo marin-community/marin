@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Declare the ports proxy using ambient provider credentials."""
+"""Build ports images and declare the proxy using ambient provider credentials."""
 
 import pulumi
 from infrastructure import deploy, stack_config
