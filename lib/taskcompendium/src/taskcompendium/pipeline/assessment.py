@@ -50,6 +50,8 @@ PACKET_SCHEMA = pa.schema(
 AUDIT_PREVIEW_CHARACTERS = 2048
 AUDIT_FIELD_OWNERS = {"task_json": "normalize", "normalization_changes": "normalize"}
 PARQUET_READ_BLOCK_BYTES = 4 * 1024 * 1024
+EVIDENCE_VIEWS = ("normalize", "review", "verify")
+TASK_PACKET_OMISSION = "task: projected evidence exceeds packet budget"
 INPUTS_METADATA = "inputs.parquet"
 JUDGMENTS_METADATA = "judgments.parquet"
 
@@ -295,7 +297,7 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
     evidence[view] = row
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence.pop("task", None)
-        omissions.append("task: projected evidence exceeds packet budget")
+        omissions.append(TASK_PACKET_OMISSION)
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence = {view: {"task_id": row["task_id"], "omitted": "section exceeds packet budget"}}
         omissions.append(f"{view}: evidence exceeds packet budget")
@@ -334,12 +336,12 @@ def _packet(
     for record in records.get(task_id, []):
         evidence.update(record["evidence"])
         omissions.extend(record["omissions"])
-    for view in ("normalize", "review", "verify"):
+    for view in EVIDENCE_VIEWS:
         if view not in evidence:
             omissions.append(f"{view}: no row evidence")
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence.pop("task", None)
-        omissions.append("task: projected evidence exceeds packet budget")
+        omissions.append(TASK_PACKET_OMISSION)
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence = {view: {"task_id": task_id, "omitted": "section exceeds packet budget"} for view in evidence}
         omissions.append("audit: evidence exceeds packet budget")
@@ -401,7 +403,7 @@ def prepare_assessment(
         with telemetry.phase("locate") as phase:
             task_ids = frozenset(_task_id(row) for row in selected)
             locations = {}
-            for view in ("normalize", "review", "verify"):
+            for view in EVIDENCE_VIEWS:
                 pairs = execute_phase(
                     context,
                     Dataset.from_files(str(StoragePath(views[view]) / "*.parquet")).flat_map(

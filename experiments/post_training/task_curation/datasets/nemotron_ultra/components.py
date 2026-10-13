@@ -73,13 +73,6 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 ULTRA_REPO = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 ULTRA_REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
 NAME_PREFIX = "nemotron_ultra_"
-ULTRA_VERIFIER_URL = (
-    "https://github.com/marin-community/MarinSkyRL/tree/"
-    "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/nemotron_ultra"
-)
-HARBOR_VERIFIER_URL = (
-    "https://github.com/marin-community/harbor/tree/8abc63e3bdb37af1d345fcac123ef7d2122598f3/src/harbor/verifier"
-)
 
 
 SWE_GYM = HfSource(

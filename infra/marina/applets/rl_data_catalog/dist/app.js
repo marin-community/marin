@@ -45,12 +45,12 @@ function render() {
     fragment.append(tr);
   }
   $("rows").replaceChildren(fragment); $("empty").hidden = rows.length > 0;
-  $("visible-count").textContent = `${number.format(rows.length)} of ${number.format(state.sources.length)} sources · all grades included`;
+  $("visible-count").textContent = `${number.format(rows.length)} of ${number.format(state.sources.length)} sources`;
 }
 function details(row) {
   $("detail-name").textContent = row.display_name; $("detail-notes").textContent = row.notes;
   const controls = row.curation?.verification;
-  const fields = [["Source ID", row.id], ["Dataset revision", row.dataset_revision], ["Pipeline", row.pipeline?.name], ["Grade", labels[grade(row)]], ["Assessment scope", row.assessment.scope], ["Model", row.assessment.model?.model], ["Admitted opinions", row.assessment.admitted?.verdict_counts], ["Excluded opinions", row.assessment.excluded?.verdict_counts], ["Curation", row.curation?.status], ["Admission counts", row.curation?.admission_counts], ["Control status", controls?.status], ["Control counts", controls?.counts], ["Control sample / eligible", controls ? `${controls.sample_count ?? "—"} / ${controls.eligible_count ?? "—"}` : undefined], ["Assessment note", row.assessment.reason || row.assessment.latest_attempt_error]];
+  const fields = [["Source ID", row.id], ["Dataset revision", row.dataset_revision], ["Pipeline", row.pipeline?.name], ["Grade", labels[grade(row)]], ["Assessment scope", row.assessment.scope], ["Model", row.assessment.model?.model], ["Admitted opinions", row.assessment.admitted?.verdict_counts], ["Excluded opinions", row.assessment.excluded?.verdict_counts], ["Curation", row.curation?.status], ["Admission counts", row.curation?.admission_counts], ["Control status", controls?.status], ["Control counts", controls?.counts], ["Control sample / eligible", controls ? `${controls.sample_count ?? "—"} / ${controls.eligible_count ?? "—"}` : undefined], ["Assessment note", row.assessment.reason]];
   $("detail-fields").replaceChildren();
   for (const [title, item] of fields) {if (item === null || item === undefined) continue; const field = node("dl", undefined, "field"); field.append(node("dt", title), node("dd", typeof item === "object" ? JSON.stringify(item) : String(item))); $("detail-fields").append(field);}
   $("detail-links").replaceChildren();

@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import click
-from finestore.rl.curation import CurationCatalog, validate_items
+from finestore.rl.curation import CurationCatalog, JudgmentStatus, validate_items
 from marina.client import DEFAULT_MARINA_URL, marina_request
 
 MAX_BATCH_BYTES = 1_000_000
@@ -40,8 +40,9 @@ def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
     batch: list[str] = []
     size = 2
     for row in rows:
-        encoded = json.dumps(row, allow_nan=False, separators=(",", ":"))
-        length = len(encoded.encode()) + 1
+        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        # The SQL API carries the row array as a JSON string, adding another escape layer.
+        length = len(json.dumps(encoded).encode()) + 1
         if length + 2 > MAX_BATCH_BYTES:
             raise ValueError("One catalog row exceeds the SQL batch budget")
         if size + length > MAX_BATCH_BYTES:
@@ -127,6 +128,8 @@ def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
             raise ValueError("Selected assessment belongs to another source")
         populations, items = catalog.populations(key), list(catalog.items(key))
         validate_items(populations, items)
+        if any(item.status != JudgmentStatus.REVIEWED for item in items):
+            raise ValueError(f"Selected assessment has unavailable judgments: {key}")
         metadata["assessments"].append(assessment.model_dump(mode="json"))
         metadata["populations"].extend(row.model_dump(mode="json") for row in populations)
         metadata["items"].extend(row.model_dump(mode="json") for row in items)
@@ -141,35 +144,10 @@ def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
                 yield {
                     "pipeline_key": item.pipeline_key,
                     "task_id": item.task_id,
-                    "packet": json.dumps(packet, allow_nan=False, separators=(",", ":")),
+                    "packet": json.dumps(packet, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
                 }
 
     counts["packets"] = insert("packets", packet_rows())
-    actual = execute(
-        " UNION ALL ".join(
-            f"SELECT '{table}' AS name, COUNT(*) AS count FROM atlas_{table} WHERE load_id = :load_id"
-            for table in TABLE_COLUMNS
-        ),
-        {"load_id": load_id},
-    )["rows"]
-    if {row["name"]: row["count"] for row in actual} != counts:
-        raise ValueError("SQL staging counts differ from the catalog")
-    invalid = execute(
-        """
-        SELECT
-            (SELECT COUNT(*) FROM atlas_cohort_summary WHERE load_id = :load_id
-                AND reviewed <> sample_count) AS incomplete,
-            (SELECT COUNT(*) FROM atlas_items i LEFT JOIN atlas_packets p
-                USING (load_id, pipeline_key, task_id)
-                WHERE i.load_id = :load_id AND p.task_id IS NULL) AS missing_packets,
-            (SELECT COUNT(*) FROM atlas_items i LEFT JOIN atlas_populations p
-                USING (load_id, pipeline_key, cohort)
-                WHERE i.load_id = :load_id AND p.cohort IS NULL) AS missing_populations
-    """,
-        {"load_id": load_id},
-    )["rows"][0]
-    if any(invalid.values()):
-        raise ValueError(f"SQL assessment coverage failed: {invalid}")
     packet_sizes = execute(
         """
         SELECT COALESCE(SUM(octet_length(packet)), 0) AS packet_bytes,

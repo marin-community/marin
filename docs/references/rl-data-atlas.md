@@ -25,8 +25,7 @@ separate. Grading does not change admission. Input populations may overlap.
 SQL computes each cohort's verdict counts and label. An empty sample, missing
 TaskSpec or unavailable judgment gives Unknown; otherwise Bad takes precedence
 over Some issues, Unknown and Good. Read the task explanations, citations and
-omissions beside the label. These are sampled opinions, not proof that an entire
-source is valid.
+omissions beside the label. These opinions describe the inspected sample.
 
 Assessment keys use ordinary artifact dependencies and explicit versions.
 Changing only the rubric or grading model reuses curation. A failed new key has

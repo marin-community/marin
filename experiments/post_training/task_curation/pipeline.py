@@ -77,7 +77,12 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
+from experiments.post_training.glm import (
+    GLM_BULK_TOKEN_ENV,
+    GLM_REQUEST_ATTEMPTS,
+    GLM_REQUEST_TIMEOUT,
+    resolve_glm_base_url,
+)
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
@@ -93,7 +98,6 @@ CURATION_VERSION = "2026.10.12.1"
 QUICK_VERSION = "2026.10.10.2"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
-REVIEW_REQUEST_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4
 INPUT_OVERRIDES_REVISION = "2"
 
@@ -285,7 +289,7 @@ def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_
     token = os.environ[GLM_BULK_TOKEN_ENV]
     if review.mode == ReviewMode.CHAT:
         return ChatReviewer(
-            OpenAIChatClient(base_url, token, timeout=REVIEW_REQUEST_TIMEOUT),
+            OpenAIChatClient(base_url, token, timeout=GLM_REQUEST_TIMEOUT),
             review.model,
             review.model_revision,
             query_cache_root=review_cache,
@@ -293,7 +297,7 @@ def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_
             max_batch_bytes=review.max_batch_bytes,
         )
     return BatchReviewer(
-        OpenAIBatchClient(base_url, token, timeout=REVIEW_REQUEST_TIMEOUT, request_attempts=3),
+        OpenAIBatchClient(base_url, token, timeout=GLM_REQUEST_TIMEOUT, request_attempts=GLM_REQUEST_ATTEMPTS),
         review.model,
         review.model_revision,
         query_cache_root=review_cache,

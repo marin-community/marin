@@ -14,10 +14,10 @@ from fastapi.testclient import TestClient
 from finestore.rl.curation import (
     ASSESSMENTS,
     CURRENT,
+    INVENTORY,
     ITEMS,
     POPULATIONS,
     SNAPSHOTS,
-    SOURCES,
     Assessment,
     AssessmentItem,
     AssessmentPopulation,
@@ -122,7 +122,7 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False)
                     exclusion_reason="Reference contradiction" if cohort == "excluded" else None,
                 )
             )
-        cur_uri = store.write_object(f"{key}/curation.json", curation.model_dump_json().encode())
+        curation_uri = store.write_object(f"{key}/curation.json", curation.model_dump_json().encode())
         store.flush()
         assessment = Assessment(
             pipeline_key=key,
@@ -131,7 +131,7 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False)
             model={"model": "glm", "revision": "1", "max_tokens": 4096, "max_attempts": 3, "retry_max_tokens": 8192},
             rubric="Check answerability",
             curation=curation,
-            curation_uri=cur_uri,
+            curation_uri=curation_uri,
             traces=[],
         )
         snapshot = CatalogSnapshot(snapshot_id=snapshot_id, created_at="2026-10-13T00:00:00Z", source_count=1)
@@ -154,7 +154,7 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False)
                 )
                 for cohort, count in (("admitted", 2), ("excluded", 1))
             )
-            tx.table(SOURCES).add(source.model_dump(mode="json"))
+            tx.table(INVENTORY).add(source.model_dump(mode="json"))
             tx.table(SNAPSHOTS).add(snapshot.model_dump())
             tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id=snapshot_id).model_dump())
 

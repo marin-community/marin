@@ -152,7 +152,7 @@ def _publish_campaign(report_path: str, selected: dict[str, RlDataSource]) -> No
     "--assessment-rubric", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Extra rubric criteria."
 )
 @click.option("--assessment-model-revision", help="Grading model revision; defaults to the curation review revision.")
-@click.option("--report-path", help="Required for SAMPLE/FULL; QUICK writes campaign.json under --output-root.")
+@click.option("--report-path", help="SAMPLE/FULL report; defaults under --cache-dir. QUICK writes under --output-root.")
 @click.option("--source", "sources", multiple=True, help="Catalog source name to execute; repeat to select multiple.")
 @click.option(
     "--input-root",

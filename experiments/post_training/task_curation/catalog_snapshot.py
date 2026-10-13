@@ -11,10 +11,10 @@ from typing import Any
 from finestore.rl.curation import (
     ASSESSMENTS,
     CURRENT,
+    INVENTORY,
     ITEMS,
     POPULATIONS,
     SNAPSHOTS,
-    SOURCES,
     AdmissionCounts,
     ArchivedFile,
     Assessment,
@@ -39,6 +39,8 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.assessment import assessment_inputs, assessment_judgments, validate_coverage
 from zephyr.readers import load_parquet
 
+from experiments.post_training.task_curation.campaign import CampaignStatus
+from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.source_metadata import source_declaration
 
@@ -155,8 +157,8 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
         with lease_refresh(lease), DataStore.open(root, writer_id=f"{run_id}-catalog") as store:
             register_catalog(store)
             catalog = CurationCatalog(root)
-            run = catalog.view.point("runs", run_id=run_id)
-            if run is None or run["status"] == "running":
+            run = catalog.view.point(RUNS, run_id=run_id)
+            if run is None or run["status"] == CampaignStatus.RUNNING:
                 raise ValueError(f"No terminal curation campaign: {run_id}")
             existing = catalog.view.point(SNAPSHOTS, snapshot_id=run_id)
             if existing is not None:
@@ -224,7 +226,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                 snapshot_id=run_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
             )
             with store.transaction() as transaction:
-                transaction.table(SOURCES).extend(row.model_dump(mode="json") for row in rows)
+                transaction.table(INVENTORY).extend(row.model_dump(mode="json") for row in rows)
                 transaction.table(SNAPSHOTS).add(snapshot.model_dump(mode="json"))
                 transaction.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id=run_id).model_dump())
             return snapshot

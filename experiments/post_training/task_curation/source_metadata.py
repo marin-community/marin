@@ -22,19 +22,19 @@ def source_declaration(source: RlDataSource) -> SourceDeclaration:
             files=list(source.files),
         )
     tags = info.tags
-    row = {
-        "id": info.id,
-        "name": source.name,
-        "display_name": info.title,
-        "origin": info.origin,
-        "family": info.family,
-        "tags": list(tags),
-        "task_count": info.count,
-        "notes": info.notes,
-        "dataset_id": dataset.name if dataset else None,
-        "dataset_revision": dataset.revision if dataset else None,
-        "url": dataset.url if dataset else None,
-        "type": next(
+    return SourceDeclaration(
+        id=info.id,
+        name=source.name,
+        display_name=info.title,
+        origin=info.origin,
+        family=info.family,
+        tags=list(tags),
+        task_count=info.count,
+        notes=info.notes,
+        dataset_id=dataset.name if dataset else None,
+        dataset_revision=dataset.revision if dataset else None,
+        url=dataset.url if dataset else None,
+        type=next(
             (
                 label
                 for tag, label in (("rlvr", "RLVR"), ("agentic", "Agentic"), ("alignment", "Alignment"))
@@ -42,12 +42,11 @@ def source_declaration(source: RlDataSource) -> SourceDeclaration:
             ),
             "",
         ),
-        "turns": next(
+        turns=next(
             (label for tag, label in (("single-turn", "Single-turn"), ("multi-turn", "Multi-turn")) if tag in tags), ""
         ),
-        "is_benchmark": "benchmark" in tags,
-        "kind": "Generator" if "generator" in tags else "Dataset",
-        "status": "Excluded" if "excluded" in tags else "Available",
-        "pipeline": invocation,
-    }
-    return SourceDeclaration.model_validate(row)
+        is_benchmark="benchmark" in tags,
+        kind="Generator" if "generator" in tags else "Dataset",
+        status="Excluded" if "excluded" in tags else "Available",
+        pipeline=invocation,
+    )

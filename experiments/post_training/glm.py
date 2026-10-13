@@ -6,6 +6,8 @@
 from iris.client.client import iris_ctx
 from iris.cluster.types import JobName
 
+GLM_REQUEST_TIMEOUT = 60
+GLM_REQUEST_ATTEMPTS = 3
 GLM_BULK_TOKEN_ENV = "GLM_BULK_TOKEN"
 GLM_MODEL = "glm-5.3"
 DEFAULT_GLM_RELAY_JOB = "/muchanem/glm53-relay"

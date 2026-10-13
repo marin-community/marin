@@ -199,7 +199,7 @@ class CurrentCatalog(CatalogRecord):
 ASSESSMENTS = "curation_assessments"
 POPULATIONS = "curation_populations"
 ITEMS = "curation_items"
-SOURCES = "curation_inventory"
+INVENTORY = "curation_inventory"
 SNAPSHOTS = "curation_snapshots"
 CURRENT = "curation_current"
 ATTEMPTS = "curation_attempts"
@@ -208,7 +208,7 @@ TABLES: dict[str, tuple[type[CatalogRecord], tuple[str, ...]]] = {
     ASSESSMENTS: (Assessment, ("pipeline_key",)),
     POPULATIONS: (AssessmentPopulation, ("pipeline_key", "cohort")),
     ITEMS: (AssessmentItem, ("pipeline_key", "task_id")),
-    SOURCES: (SnapshotSource, ("snapshot_id", "id")),
+    INVENTORY: (SnapshotSource, ("snapshot_id", "id")),
     SNAPSHOTS: (CatalogSnapshot, ("snapshot_id",)),
     CURRENT: (CurrentCatalog, ("name",)),
 }
@@ -254,11 +254,14 @@ class CurationCatalog:
             raise ValueError("Catalog pointer refers to a missing snapshot")
         return CatalogSnapshot.model_validate({key: snapshot[key] for key in CatalogSnapshot.model_fields})
 
+    def _records[T: CatalogRecord](
+        self, table: str, model: type[T], where: list[tuple[str, str, object]]
+    ) -> Iterator[T]:
+        for row in self.view.iter_rows(table, columns=list(model.model_fields), where=where):
+            yield model.model_validate(row)
+
     def sources(self, snapshot_id: str) -> Iterator[SnapshotSource]:
-        for row in self.view.iter_rows(
-            SOURCES, columns=list(SnapshotSource.model_fields), where=[("snapshot_id", "==", snapshot_id)]
-        ):
-            yield SnapshotSource.model_validate(row)
+        return self._records(INVENTORY, SnapshotSource, [("snapshot_id", "==", snapshot_id)])
 
     def assessment(self, pipeline_key: str) -> Assessment:
         row = self.view.point(ASSESSMENTS, pipeline_key=pipeline_key)
@@ -267,27 +270,16 @@ class CurationCatalog:
         return Assessment.model_validate({key: row[key] for key in Assessment.model_fields})
 
     def attempts(self, run_id: str) -> Iterator[AssessmentAttempt]:
-        for row in self.view.iter_rows(
-            ATTEMPTS, columns=list(AssessmentAttempt.model_fields), where=[("run_id", "==", run_id)]
-        ):
-            yield AssessmentAttempt.model_validate(row)
+        return self._records(ATTEMPTS, AssessmentAttempt, [("run_id", "==", run_id)])
 
     def populations(self, pipeline_key: str) -> list[AssessmentPopulation]:
-        return [
-            AssessmentPopulation.model_validate(row)
-            for row in self.view.iter_rows(
-                POPULATIONS,
-                columns=list(AssessmentPopulation.model_fields),
-                where=[("pipeline_key", "==", pipeline_key)],
-            )
-        ]
+        return list(self._records(POPULATIONS, AssessmentPopulation, [("pipeline_key", "==", pipeline_key)]))
 
     def items(self, pipeline_key: str, *, cohort: Cohort | None = None) -> Iterator[AssessmentItem]:
         where: list[tuple[str, str, object]] = [("pipeline_key", "==", pipeline_key)]
         if cohort is not None:
             where.append(("cohort", "==", cohort.value))
-        for row in self.view.iter_rows(ITEMS, columns=list(AssessmentItem.model_fields), where=where):
-            yield AssessmentItem.model_validate(row)
+        return self._records(ITEMS, AssessmentItem, where)
 
     def packet(self, pipeline_key: str, task_id: str) -> dict[str, Any]:
         row = self.view.point(ITEMS, pipeline_key=pipeline_key, task_id=task_id)
@@ -296,7 +288,7 @@ class CurationCatalog:
         return self.document(row["packet_uri"])
 
     def packets(self, items: Sequence[AssessmentItem]) -> Iterator[tuple[AssessmentItem, dict[str, Any]]]:
-        """Read a source's archived packets in one bounded blob request."""
+        """Read a bounded set of archived packets in one blob request."""
         references = [parse_uri(item.packet_uri) for item in items]
         if any(ref is None or ref.table != BlobTables.DESCRIPTORS for ref in references):
             raise ValueError("Task packets must be archived in this catalog")

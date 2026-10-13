@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source identity and assessments, independent of the Atlas presentation."""
+"""Source declarations and their curation pipeline interfaces."""
 
 from dataclasses import dataclass
 from typing import Protocol

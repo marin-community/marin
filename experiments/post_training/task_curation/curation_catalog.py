@@ -21,6 +21,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.execution_telemetry import TELEMETRY_FILENAME
 
 CATALOG_DIRECTORY = "catalog"
+RUNS = "runs"
 MANIFEST_FILENAME = "manifest.json"
 FILTER_MANIFEST_FILENAME = "work/filtered/manifest.json"
 REVIEW_MANIFEST_FILENAME = "review/manifest.json"
@@ -239,15 +240,15 @@ def append_curation_catalog(
     if len(by_name) != len(documents) or set(by_name) != {outcome["name"] for outcome in outcomes}:
         raise ValueError("Catalog documents must cover exactly the reported sources")
     with DataStore.open(root, writer_id=run_id) as store:
-        if store.read_view().point("runs", run_id=run_id) is not None:
+        if store.read_view().point(RUNS, run_id=run_id) is not None:
             raise ValueError(f"Catalog invocation already exists: {run_id}")
-        store.table("runs", primary_key=("run_id",), schema=arrow_schema(CurationRun))
+        store.table(RUNS, primary_key=("run_id",), schema=arrow_schema(CurationRun))
         store.table("sources", primary_key=("run_id", "name"), schema=arrow_schema(CurationSource))
         store.table("phases", primary_key=("run_id", "name", "ordinal"), schema=arrow_schema(CurationPhase))
         register_catalog(store)
         with store.transaction() as transaction:
             report_uri = transaction.write_object(f"runs/{run_id}/report.json", report_bytes)
-            transaction.table("runs").add(
+            transaction.table(RUNS).add(
                 asdict(
                     CurationRun(
                         run_id=run_id,

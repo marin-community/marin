@@ -123,7 +123,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 LEFT JOIN (
                     SELECT load_id, pipeline_key,
                         jsonb_object_agg(cohort, to_jsonb(v) - 'load_id' - 'pipeline_key' - 'cohort') AS cohorts
-                    FROM atlas_cohort_summary v GROUP BY load_id, pipeline_key
+                    FROM atlas_cohort_summary v WHERE v.load_id = :load_id GROUP BY load_id, pipeline_key
                 ) summary ON summary.load_id = s.load_id AND summary.pipeline_key = s.assessment_key
                 WHERE s.load_id = :load_id ORDER BY s.id
             """

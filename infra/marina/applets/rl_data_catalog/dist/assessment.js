@@ -7,7 +7,7 @@ function summary(report) {
     const data = report.assessment[cohort], section = node("section", undefined, "assessment-card");
     section.append(node("h2", cohort === "admitted" ? "Admitted task opinions" : "Excluded row diagnostics"));
     section.append(node("p", `${labels[data.grade]} · ${data.reviewed}/${data.sample_count} reviewed · population ${data.population.toLocaleString()}`));
-    section.append(node("p", Object.entries(data.verdict_counts).map(([verdict, count]) => `${labels[verdict]} ${count}`).join(" · ")));
+    section.append(node("p", ["good", "some_issues", "bad", "unknown"].map(verdict => `${labels[verdict]} ${data.verdict_counts[verdict]}`).join(" · ")));
     section.append(node("p", `Missing required evidence: ${data.missing_evidence}. Packets with omissions: ${data.packets_with_omissions}.`));
     target.append(section);
   }
@@ -39,4 +39,4 @@ function samples(report) {
     $("samples").append(section);
   }
 }
-(async () => {try {const data = await json(`api/assessment?source_id=${encodeURIComponent(source)}`); $("title").textContent = data.source; $("message").textContent = `${data.report.basis} · ${data.report.scope} curation`; summary(data.report); samples(data.report); $("report").textContent = JSON.stringify(data.report, null, 2);} catch (error) {$("title").textContent = "Assessment unavailable"; $("message").textContent = error.message;}})();
+(async () => {try {const data = await json(`api/assessment?source_id=${encodeURIComponent(source)}`); $("title").textContent = data.source; $("message").textContent = `Sampled model opinions · ${data.report.scope} curation`; summary(data.report); samples(data.report); $("report").textContent = JSON.stringify(data.report, null, 2);} catch (error) {$("title").textContent = "Assessment unavailable"; $("message").textContent = error.message;}})();

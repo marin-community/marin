@@ -17,14 +17,17 @@ from taskcompendium.pipeline.chat_requests import chat_output
 from taskcompendium.pipeline.review_requests import batch_output
 from taskcompendium.pipeline.stages import ReviewMode
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
+from experiments.post_training.glm import (
+    GLM_BULK_TOKEN_ENV,
+    GLM_REQUEST_ATTEMPTS,
+    GLM_REQUEST_TIMEOUT,
+    resolve_glm_base_url,
+)
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import RecipeSettings
 
 INPUTS_VERSION = "2026.10.13.5"
 JUDGMENTS_VERSION = "2026.10.13.1"
-REQUEST_TIMEOUT = 60
-REQUEST_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -77,13 +80,13 @@ def _judge(
     if recipe_settings.review.mode == ReviewMode.CHAT:
         submit = partial(
             chat_output,
-            OpenAIChatClient(base_url, token, timeout=REQUEST_TIMEOUT),
+            OpenAIChatClient(base_url, token, timeout=GLM_REQUEST_TIMEOUT),
             max_concurrent=recipe_settings.review_concurrency,
         )
     else:
         submit = partial(
             batch_output,
-            OpenAIBatchClient(base_url, token, timeout=REQUEST_TIMEOUT, request_attempts=REQUEST_ATTEMPTS),
+            OpenAIBatchClient(base_url, token, timeout=GLM_REQUEST_TIMEOUT, request_attempts=GLM_REQUEST_ATTEMPTS),
             poll_seconds=5.0,
         )
     grade_assessment(
