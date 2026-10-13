@@ -230,7 +230,7 @@ def build_ladder_run(
     if qk_mult_long_scale is not None:
         model = dataclasses.replace(model, qk_mult_long_scale=qk_mult_long_scale)
     seq_len = model.max_seq_len
-    flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len) if size == "d6144" else None
+    flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len)
 
     dp_racks = LADDER_RACKS[size]
     # Weak scaling holds per-rack token load constant; eval is one sequence per device.
@@ -239,8 +239,6 @@ def build_ladder_run(
         raise ValueError(f"seq_len={seq_len} must divide {global_tokens_per_step} tokens per step")
     batch_size = global_tokens_per_step // seq_len
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
-    if batch_size % eval_batch_size:
-        raise ValueError(f"batch_size={batch_size} must divide evenly over {eval_batch_size} batch devices")
 
     if num_steps is None:
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))

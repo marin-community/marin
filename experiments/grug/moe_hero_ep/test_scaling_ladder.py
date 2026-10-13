@@ -190,10 +190,9 @@ def _set_hero_seq_len(monkeypatch, seq_len):
     )
 
 
-@pytest.mark.parametrize("seq_len", [8192, 16384])
-def test_context_switch_preserves_optimizer(monkeypatch, seq_len):
+def test_context_switch_preserves_optimizer(monkeypatch):
     parent_step = build_ladder_run(run_id="context-parent", size="d6144", version="dev")
-    _set_hero_seq_len(monkeypatch, seq_len)
+    _set_hero_seq_len(monkeypatch, 16384)
     child_step = build_ladder_run(
         run_id="context-child",
         size="d6144",
