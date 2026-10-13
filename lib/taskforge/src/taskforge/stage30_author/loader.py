@@ -1,46 +1,283 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load a build program from the Python source an author wrote.
+"""Load the source of an authored build program as an ``RLEnvBuildProgram``.
 
-``load_program_source`` is the plain loader. It runs the source with the full builtins and any
-import the source asks for. The author PR replaces it with a restricted loader, which allows a
-fixed set of imports and runs the source with safe builtins only.
+``load_program_source`` checks the source in three passes, and each refusal is a ``ValueError``
+whose message an author can act on. The caller turns it into the next round's revision detail, and
+the GLM author also sends it back within its structured call.
+
+1. Before running anything it reads the module's top level. A step's memo key covers its own
+   source alone, so a helper function or a constant beside the steps could change without
+   changing any key. The top level may therefore hold only imports, classes (the output models of
+   the steps), ``@rl_env_build_step`` steps, the ``@rl_env_build_sink`` sink and, last,
+   ``PROGRAM = rl_env_build_program(..., sink=...)``.
+   A step reads whatever else it needs from its inputs, its own body or the build SDK
+   (``taskforge.stage40_build_with_program.sdk`` and its sibling modules), which ``SDK_VERSION`` covers. The
+   pass also refuses a name from ``UNSAFE_BUILTINS`` that the program uses without binding it,
+   since running the program would only fail on it later.
+2. It runs the module with imports limited to ``ALLOWED_IMPORTS`` and builtins to
+   ``SAFE_BUILTINS``, which keeps a program to the SDK's functions; programs are trusted model
+   output in the builder's process, so this is no security boundary. The build SDK belongs to a
+   later stage than this module, so the program imports it by name at run time rather than this
+   module importing it. Before running the module, the pass registers the source in ``linecache``
+   under the module's file name, so the step decorator's ``inspect.getsource`` reads each step's
+   text. The DAG checks of ``rl_env_build_program`` run here and refuse, among others, an input
+   named after no step.
+3. It reads ``PROGRAM`` and requires a step named ``GRADER_STEP`` returning ``GRADER_OUTPUT``, a
+   sink made by ``@rl_env_build_sink`` returning ``TaskSpec``, and every step and sink the module
+   defines to be part of ``PROGRAM``.
+
+The module is registered in ``sys.modules`` as ``taskforge_program_<sha256 prefix>``, one name per
+distinct source, so pydantic resolves the program's own output models while the store decodes
+them, and loading a source twice returns the same program. A refused source is unregistered.
 """
 
+import ast
+import builtins
+import importlib
 import linecache
 import sys
 import types
+from collections.abc import Mapping, Sequence
+from types import ModuleType
+
+from taskcompendium.models import TaskSpec
 
 from taskforge.content_hash import sha256_hex
-from taskforge.stage30_author.program import RLEnvBuildProgram
+from taskforge.stage30_author.program import RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
 
-PROGRAM_ATTR = "PROGRAM"
-"""The module attribute holding the source's program."""
+PROGRAM_NAME = "PROGRAM"
+STEP_DECORATOR = "rl_env_build_step"
+SINK_DECORATOR = "rl_env_build_sink"
+SINK_KEYWORD = "sink"
+PROGRAM_CONSTRUCTOR = "rl_env_build_program"
 MODULE_PREFIX = "taskforge_program_"
+GRADER_STEP = "grader"
+"""The step whose output validation reads the reference answer and the prototyped candidates from."""
+GRADER_OUTPUT = "taskforge.stage40_build_with_program.outputs.Grader"
+"""The qualified name of the type the grader step returns."""
+
+ALLOWED_IMPORTS = frozenset(
+    {
+        "taskforge.stage10_proposal.model",
+        "taskforge.stage30_author.program",
+        "taskforge.stage40_build_with_program.context",
+        "taskforge.stage40_build_with_program.outputs",
+        "taskforge.stage40_build_with_program.sandbox_effects",
+        "taskforge.stage40_build_with_program.sdk",
+        "taskforge.stage40_build_with_program.step_store",
+        "taskforge.stage40_build_with_program.template.standard",
+        "taskforge.spec.draft",
+        "taskforge.spec.verdict",
+        "taskforge.spec.controls",
+        "taskforge.llm.agent",
+        "taskforge.llm.policy",
+        "taskforge.sandbox.images",
+        "taskcompendium.grader",
+        "taskcompendium.models",
+        "taskcompendium.runtime.resources",
+        "taskcompendium.grading",
+        "taskcompendium.grading_result",
+        "taskcompendium.submission",
+        "verifyit.spec",
+        "pydantic",
+        "__future__",
+        "asyncio",
+        "base64",
+        "hashlib",
+        "collections",
+        "collections.abc",
+        "dataclasses",
+        "decimal",
+        "enum",
+        "fractions",
+        "functools",
+        "itertools",
+        "json",
+        "math",
+        "re",
+        "shlex",
+        "statistics",
+        "string",
+        "textwrap",
+        "typing",
+    }
+)
+UNSAFE_BUILTINS = frozenset(
+    {"open", "exec", "eval", "compile", "input", "breakpoint", "globals", "locals", "vars", "help", "exit", "quit"}
+)
+MODULE_RULE = (
+    "An authored program defines only imports, output models (classes), steps (`@rl_env_build_step async def`), "
+    "the sink (`@rl_env_build_sink async def ... -> TaskSpec`) and, last, "
+    "`PROGRAM = rl_env_build_program(<steps>, sink=<sink>)` at module level. A step's memo key covers its own "
+    "source and its output model alone, so whatever else a step reads belongs in its body or its inputs, or comes "
+    "from an SDK function."
+)
+
+
+def _restricted_import(
+    name: str,
+    globals: Mapping[str, object] | None = None,  # noqa: A002 - __import__ signature
+    locals: Mapping[str, object] | None = None,  # noqa: A002 - __import__ signature
+    fromlist: Sequence[str] | None = None,
+    level: int = 0,
+) -> ModuleType:
+    submodules = [f"{name}.{item}" for item in fromlist or ()]
+    allowed = name in ALLOWED_IMPORTS or (bool(submodules) and all(module in ALLOWED_IMPORTS for module in submodules))
+    if level != 0 or not allowed:
+        raise ImportError(f"build programs may not import {name!r}; allowed: {sorted(ALLOWED_IMPORTS)}")
+    if "." in name and not fromlist:
+        raise ImportError(f"use 'from {name} import ...' rather than 'import {name}'")
+    if name not in ALLOWED_IMPORTS:
+        for module in submodules:
+            importlib.import_module(module)
+    return importlib.import_module(name)
+
+
+SAFE_BUILTINS: dict[str, object] = {
+    **{name: value for name, value in vars(builtins).items() if name not in UNSAFE_BUILTINS},
+    "__import__": _restricted_import,
+}
+
+
+def module_name(source: str) -> str:
+    """The ``sys.modules`` name of the program compiled from ``source``."""
+    return f"{MODULE_PREFIX}{sha256_hex(source.encode())[:16]}"
 
 
 def load_program_source(source: str) -> RLEnvBuildProgram:
-    """Run ``source`` as a fresh module and return its ``PROGRAM``.
-
-    The loader names the module ``taskforge_program_`` plus the first 16 hex digits of the sha256
-    of ``source``. It registers the module in ``sys.modules`` and its text in ``linecache``, so
-    ``rl_env_build_step`` and ``rl_env_build_sink`` can read each step's source with
-    ``inspect.getsource``.
+    """Check and run ``source`` as a build program module and return its ``PROGRAM``.
 
     Raises:
-        ValueError: the module defines no ``PROGRAM``, or its ``PROGRAM`` is not an ``RLEnvBuildProgram``.
+        ValueError: the source does not parse, breaks the module-level rule, uses an unsafe
+            builtin, fails while it runs (an import outside ``ALLOWED_IMPORTS`` or a DAG check of
+            ``rl_env_build_program``, for example), or its ``PROGRAM`` lacks a ``grader`` step
+            returning the build SDK's ``Grader`` or a sink made by ``@rl_env_build_sink``.
     """
-    name = f"{MODULE_PREFIX}{sha256_hex(source.encode())[:16]}"
+    name = module_name(source)
+    if name in sys.modules:
+        return sys.modules[name].PROGRAM
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as error:
+        raise ValueError(f"the program does not parse: {error}") from error
+    _check_module_level(tree)
+    _check_builtins(tree)
     filename = f"<{name}>"
-    module = types.ModuleType(name)
-    module.__file__ = filename
     linecache.cache[filename] = (len(source), None, source.splitlines(keepends=True), filename)
+    module = types.ModuleType(name)
+    module.__dict__.update({"__builtins__": SAFE_BUILTINS, "__file__": filename})
     sys.modules[name] = module
-    exec(compile(source, filename, "exec"), module.__dict__)
-    if PROGRAM_ATTR not in vars(module):
-        raise ValueError(f"{name} defines no {PROGRAM_ATTR}")
-    program = vars(module)[PROGRAM_ATTR]
+    try:
+        try:
+            exec(compile(tree, filename, "exec"), module.__dict__)
+        except Exception as error:
+            raise ValueError(f"the program failed to load: {type(error).__name__}: {error}") from error
+        return _checked_program(module)
+    except ValueError:
+        del sys.modules[name]
+        raise
+
+
+def _is_docstring(node: ast.stmt) -> bool:
+    return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+
+
+def _is_step(node: ast.stmt) -> bool:
+    return (
+        isinstance(node, ast.AsyncFunctionDef)
+        and len(node.decorator_list) == 1
+        and isinstance(node.decorator_list[0], ast.Name)
+        and node.decorator_list[0].id in (STEP_DECORATOR, SINK_DECORATOR)
+    )
+
+
+def _is_program_assignment(node: ast.stmt) -> bool:
+    return (
+        isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == PROGRAM_NAME
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == PROGRAM_CONSTRUCTOR
+    )
+
+
+def _statement(node: ast.stmt) -> str:
+    if isinstance(node, ast.FunctionDef):
+        return f"the function `{node.name}`"
+    if isinstance(node, ast.AsyncFunctionDef):
+        return (
+            f"the async function `{node.name}`, which is not a single-decorator "
+            f"`@{STEP_DECORATOR}` step or `@{SINK_DECORATOR}` sink"
+        )
+    if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign | ast.TypeAlias):
+        return f"an assignment (`{ast.unparse(node).splitlines()[0][:80]}`)"
+    return f"a statement (`{ast.unparse(node).splitlines()[0][:80]}`)"
+
+
+def _check_module_level(tree: ast.Module) -> None:
+    statements = tree.body[1:] if tree.body and _is_docstring(tree.body[0]) else tree.body
+    if not statements or not _is_program_assignment(statements[-1]):
+        raise ValueError(
+            f"the program must end with `{PROGRAM_NAME} = {PROGRAM_CONSTRUCTOR}(<steps>, sink=<sink>)`. "
+            f"{MODULE_RULE}"
+        )
+    assignment = statements[-1]
+    assert isinstance(assignment, ast.Assign) and isinstance(assignment.value, ast.Call)
+    call = assignment.value
+    if not any(keyword.arg == SINK_KEYWORD for keyword in call.keywords):
+        raise ValueError(
+            f"line {call.lineno}: pass the final step to `{PROGRAM_CONSTRUCTOR}` as `{SINK_KEYWORD}=`, "
+            f"decorated with `@{SINK_DECORATOR}`. {MODULE_RULE}"
+        )
+    for node in statements[:-1]:
+        if isinstance(node, ast.Import | ast.ImportFrom | ast.ClassDef) or _is_step(node):
+            continue
+        raise ValueError(f"line {node.lineno}: {_statement(node)} is not allowed at module level. {MODULE_RULE}")
+
+
+def _check_builtins(tree: ast.Module) -> None:
+    loaded: set[str] = set()
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            (loaded if isinstance(node.ctx, ast.Load) else bound).add(node.id)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            bound.add(node.name)
+        elif isinstance(node, ast.alias):
+            bound.add((node.asname or node.name).split(".")[0])
+    unavailable = sorted((loaded & UNSAFE_BUILTINS) - bound)
+    if unavailable:
+        raise ValueError(f"the program uses builtins that do not exist for build programs: {unavailable}")
+
+
+def _checked_program(module: ModuleType) -> RLEnvBuildProgram:
+    program = module.__dict__.get(PROGRAM_NAME)
     if not isinstance(program, RLEnvBuildProgram):
-        raise ValueError(f"{name}.{PROGRAM_ATTR} is a {type(program).__name__}, not an RLEnvBuildProgram")
+        raise ValueError(f"`{PROGRAM_NAME}` must be what `{PROGRAM_CONSTRUCTOR}(...)` returns")
+    grader = program.steps.get(GRADER_STEP)
+    if grader is None or _qualified_name(grader.output_type) != GRADER_OUTPUT:
+        raise ValueError(f"the program needs a step named {GRADER_STEP!r} that returns {GRADER_OUTPUT}")
+    sink = program.sink
+    if not isinstance(sink, RLEnvBuildSink):
+        raise ValueError(f"the sink {sink.name!r} must be decorated with `@{SINK_DECORATOR}`, not `@{STEP_DECORATOR}`")
+    if sink.output_type is not TaskSpec:
+        raise ValueError(f"the sink {sink.name!r} returns {sink.output_type!r}; it must return TaskSpec")
+    defined = {
+        value.name
+        for value in vars(module).values()
+        if isinstance(value, RLEnvBuildStep | RLEnvBuildSink) and value.fn.__module__ == module.__name__
+    }
+    unused = sorted(defined - {*program.steps, sink.name})
+    if unused:
+        raise ValueError(f"steps {unused} are defined but not passed to `{PROGRAM_CONSTRUCTOR}`")
     return program
+
+
+def _qualified_name(output_type: object) -> str:
+    return f"{getattr(output_type, '__module__', '')}.{getattr(output_type, '__qualname__', '')}"

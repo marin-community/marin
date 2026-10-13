@@ -26,11 +26,21 @@ src/taskforge/
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
-                               loader.py: `load_program_source`, the plain loader of a program's source
+                               loader.py: `load_program_source`, the restricted loader of authored programs
   stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
+                               services.py: RLEnvBuildServices, AgentLimits;
+                               outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
+                               sandbox_effects.py: `machine`, `try_grader`, `publish_image`;
+                               sdk.py: the functions, schemas and constants steps call;
+                               infrastructure.py: host failures told apart from program failures;
+                               template/standard.py: the standard six-step program;
+                               glm_author.py: GlmAuthor and its prompts;
                                step_store.py: step keys, memos, the memo store and `memoized`;
-                               run.py: `run_program`, `run_build`, the draft and `WorkpieceBuildProvenance`
+                               run.py: `run_program`, `run_build`, `build_model_digest`, the draft and
+                               `WorkpieceBuildProvenance`
   stage50_validate/            trials.py: trials on RolloutEngine; classify.py: the failure classifier;
+                               lowering.py: `lower`, a task lowered for the validating host;
+                               control_drafts.py: `write_controls`, the controls of a draft round;
                                controls.py: control replay; outcome.py, evidence.py: outcomes and their totals
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
@@ -172,10 +182,11 @@ returning a value of its annotated type. The final step returns a `TaskSpec` and
 `@rl_env_build_sink` in place of `@rl_env_build_step`. The author passes the steps, and the sink as
 the keyword `sink`, to `rl_env_build_program`. That call orders the steps so each runs after its
 inputs, puts the sink last, and refuses a step whose output reaches neither another step nor the
-sink. A step receives an `RLEnvBuildContext` (workpiece id, model, sampling policy) as its first
-parameter. The decorator reads the step's inputs from the parameters after it, and the runner
-passes each one by name: another step's output, or the caller's proposal for a parameter called
-`proposal`. `tests/stage40_build_with_program/test_run.py` builds this toy program, abridged here:
+sink. A step receives an `RLEnvBuildContext` (workpiece id, round, model, sampling policy, services,
+and the running step's name) as its first parameter. The decorator reads the step's inputs from
+the parameters after it, and the runner passes each one by name: another step's output, or the
+caller's proposal for a parameter called `proposal`. `tests/stage40_build_with_program/test_run.py`
+builds this toy program, abridged here:
 
 ```python
 @rl_env_build_step
@@ -189,8 +200,8 @@ async def grader(context: RLEnvBuildContext) -> GraderPackage:
 
 
 @rl_env_build_sink
-async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage, proposal: dict) -> TaskSpec:
-    return TaskSpec(...)  # the prompt from proposal["task"], numbers as a worker resource, grader.grader
+async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage, proposal: TaskProposal) -> TaskSpec:
+    return TaskSpec(...)  # the proposal's prompt, numbers as a worker resource, grader.grader
 
 
 PROGRAM = rl_env_build_program(numbers, grader, sink=task)
@@ -198,17 +209,58 @@ PROGRAM = rl_env_build_program(numbers, grader, sink=task)
 
 `run_build` runs the program and writes `draft/task.json` and `draft/provenance.json`. The second
 file lists every step, the sink last, with the stored memo of its output and whether this build hit
-or missed the cache for it. The memo files in the store carry no status, because the store writes
-a memo only on a miss.
+or missed the cache for it, or reran it because the caller named it in `invalidate`. The memo files
+in the store carry no status, because the store writes a memo only on a miss or a rerun.
+`step_output(draft, store_root, name, output_type)` reads a step's output back.
 
 Each step's output is memoized under a key built from `SDK_VERSION`, a source digest, the content
-digest of each input, and a digest of the model and its sampling policy. The decorator computes the
-source digest over the step's own source text and everything the step reaches in its own module:
-the helpers it calls, the constants it reads, the classes in its return annotation at any depth,
-and what those classes reach in turn. Names bound by imports stay out; a library type such as
-`TaskSpec` falls under `SDK_VERSION`, so a library change comes with an `SDK_VERSION` bump.
+digest of each input, and `build_model_digest(model, sampling, services)`. The decorator computes
+the source digest over the step's own source text, followed by the source of its output type when
+the program defines that class beside the step. An output type imported from a library, such as
+`TaskSpec`, falls under `SDK_VERSION`. A step should therefore read everything it depends on from
+its inputs, its own body or an output type defined beside it. Editing a helper defined outside the
+body leaves the key unchanged, so a library change of that kind comes with an `SDK_VERSION` bump.
+The model digest covers the model id, the sampling policy, the agent loops' reasoning replay and
+their limits (`AgentLimits`), so a build that drops reasoning, or bounds its agents differently,
+reruns every step; `run_build(model_digest=...)` overrides it. The machines, images, web tools and
+ledger in `RLEnvBuildServices` stay out of every key and out of every output.
 Because inputs enter the key by content, a step that reruns and returns the same output leaves its
-consumers cached.
+consumers cached. The runner memoizes each step through `step_store.memoized`, and a driver
+memoizing a helper calls it the same way with a key of its own. Every step records a `STEP` span
+with its key digest and cache status, and its model and tool calls carry its name as `step`; a
+build without a ledger records nothing.
+
+A step uses the host through `sandbox_effects`: `machine` prepares a machine as a task attempt
+would, `try_grader` grades a candidate reply and workspace through `RolloutEngine.run`, and
+`publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
+first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
+cause chain, even one the program wrapped, so the caller retries or abandons the item instead of
+asking the author for a revision.
+
+`stage40_build_with_program/template/standard.py` is the standard program: five steps and the sink `assemble`.
+
+```
+sources(proposal) -> fixtures(proposal, sources) -> requirements(proposal, fixtures)
+    -> grader(proposal, fixtures, requirements) -> instructions(proposal, fixtures, requirements, grader)
+    -> assemble(proposal, fixtures, requirements, grader, instructions) -> TaskSpec
+```
+
+`sources` researches each research item of the proposal on the web, and
+`run_build(research=ResearchRequirement.ENFORCED)` fails a build whose `Sources` lacks a finding for one of them.
+`grader` grades its own reference answer and the empty answer with `try_grader` before it returns,
+sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
+grader that rejects its own reference is a build failure. The `Grader` it returns holds the
+reference answer and every candidate it graded.
+
+`stage40_build_with_program.glm_author.GlmAuthor` asks GLM for a program with the template as its example, and
+returns an `AuthoredProgram` holding the program and its source, which
+`stage30_author.loader.load_program_source` loads. The loader refuses a module whose top level
+holds anything but imports, classes, steps, the sink and a final
+`PROGRAM = rl_env_build_program(..., sink=...)`, because a step's key covers its own source and its
+output type alone, so an edit to a helper beside the steps would leave every key unchanged. It also
+refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `Grader`, and a
+program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
+the author receives.
 
 ## The stage machine
 
@@ -293,6 +345,13 @@ leaves none, so the next run starts again from that terminal or from triage, and
 serves the build steps already run. A file-backed `WorkpieceEventLog` saving each event on append is
 planned with the ledger.
 ## Validation
+
+`stage50_validate.lowering.lower(task, host, factories)` lowers a draft's task for the validating
+host. `stage50_validate.control_drafts.write_controls(task, grader, proposal, ...)` asks the model
+for the round's fixed controls from the proposal's control plan and writes them to
+`controls.json`. It reads the reference answer from the draft's `grader` step output and sends
+back a control that repeats a candidate the grader step graded, other than the reference and the
+empty answer.
 
 `stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
 `LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on

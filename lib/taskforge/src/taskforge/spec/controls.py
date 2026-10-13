@@ -1,21 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Builder-authored fixed controls and the rules a control set must meet.
+"""Fixed controls for a task and the rules a control set must meet.
 
 A control is a candidate submission with a known label and the grade it must
 receive. Its payload is either a scripted transcript (the assistant turns to
 replay, shell calls included) or a workspace (files installed in the task
 machine before grading).
-Validation replays controls through RolloutEngine; this module only checks
-that a control set is well formed and complete for a task.
+Validation replays controls through RolloutEngine. This module checks that a
+control set is well formed and complete for a task, and turns a candidate's
+files and reply into the assistant turns a replay serves.
 """
 
+import base64
+import json
 import math
 import re
+import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import PurePosixPath
+from typing import Any
 
 from pydantic import TypeAdapter
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -28,8 +34,10 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import ShellToolConfig
 
+from taskforge.sandbox.images import DEFAULT_MODE
 from taskforge.spec.draft import SHELL_CAPABILITY
 
 SHELL_TOOL = ShellToolConfig()
@@ -213,6 +221,50 @@ def shell_turn(*commands: tuple[str, str]) -> AssistantToolCalls:
 def reply(content: str) -> TextMessage:
     """A final assistant text reply."""
     return TextMessage(role="assistant", content=content)
+
+
+def wire_message(turn: TextMessage | AssistantToolCalls) -> dict[str, Any]:
+    """A transcript turn as the chat message a GLM rollout model would have produced."""
+    if isinstance(turn, TextMessage):
+        return {"role": "assistant", "content": turn.content, "reasoning_content": ""}
+    return {
+        "role": "assistant",
+        "content": turn.content or "",
+        "reasoning_content": "",
+        "tool_calls": [
+            {
+                "id": call.call_id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": json.dumps(call.arguments, ensure_ascii=False)},
+            }
+            for call in turn.calls
+        ],
+    }
+
+
+def workspace_turn(index: int, file: TaskResource) -> AssistantToolCalls:
+    """One shell call that writes ``file`` as the agent would: its parent made, its bytes, its mode.
+
+    ``file.path`` is relative to the machine root, as a task's own resources are.
+    """
+    target = PurePosixPath("/", file.path)
+    path = shlex.quote(str(target))
+    directory = shlex.quote(str(target.parent))
+    data = shlex.quote(base64.b64encode(resource_bytes(file)).decode())
+    mode = file.mode or DEFAULT_MODE
+    command = f"mkdir -p {directory} && printf %s {data} | base64 -d > {path} && chmod {mode} {path}"
+    return shell_turn((f"workspace-{index}", command))
+
+
+def candidate_turns(final_reply: str, files: Sequence[TaskResource]) -> tuple[dict[str, Any], ...]:
+    """The assistant turns of a candidate that writes ``files`` with one shell call each, then replies.
+
+    A validation control with a workspace payload replays these turns, and so does
+    ``try_grader`` when it prototypes a grader on a candidate, so both grade the state an agent
+    would leave.
+    """
+    turns = [wire_message(workspace_turn(index, file)) for index, file in enumerate(files)]
+    return (*turns, wire_message(reply(final_reply)))
 
 
 def validate_controls(task: TaskSpec, controls: Sequence[Control]) -> None:

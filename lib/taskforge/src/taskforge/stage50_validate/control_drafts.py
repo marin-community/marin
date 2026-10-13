@@ -1,0 +1,231 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Write the fixed controls of a draft round from its task and its grader's stored output.
+
+``write_controls`` asks the model for the controls the proposal's "Grader design and controls"
+section calls for, so their ids and expectations follow the proposal. It sends a submission back
+when ``validate_controls`` refuses the set or when a control repeats a candidate the grader step
+graded while it prototyped the grader (``check_controls_not_graded``): controls are written, not
+fitted to the grader. The reference answer and the empty answer are exempt, since the grader step
+must grade both, and they are also the usual reference and malformed controls. The grader comes
+from the draft's ``grader`` step output (``stage40_build_with_program.run.step_output``), so the reference
+answer validation replays is the one the build checked.
+
+The accepted controls go to ``<directory>/controls.json`` (``spec.controls.controls_json``), and
+``controls.replay`` replays them, each as a trial named by its id with a pass or fail verdict.
+"""
+
+import base64
+import shlex
+from collections.abc import Sequence
+from pathlib import Path
+
+from pydantic import BaseModel, Field, field_validator
+from rigging.filesystem.atomic import atomic_rename
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import TaskResource, TaskSpec, TextMessage, format_conversation
+from taskcompendium.runtime.resources import resource_bytes
+
+from taskforge.llm.client import ModelClient
+from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.recording import CallLedger
+from taskforge.spec.controls import (
+    REJECTION_CEILING,
+    Control,
+    ControlCategory,
+    ControlConcern,
+    ControlKind,
+    Expectation,
+    Transcript,
+    Workspace,
+    controls_json,
+    parse_controls,
+    reply,
+    shell_turn,
+    validate_controls,
+)
+from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage40_build_with_program.context import BuildFailure
+from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
+from taskforge.stage40_build_with_program.sdk import (
+    SUBMISSION,
+    FileDraft,
+    checked_structured,
+    files_text,
+    task_messages,
+    under_workspace,
+)
+
+CONTROLS_FILE = "controls.json"
+CONTROLS_STEP = "controls"
+"""The ``BuildFailure.step`` of a control set the model never got right."""
+CONTROL_AUTHOR = "validate.write_controls"
+
+
+class ControlDraft(BaseModel):
+    id: str = Field(description="Short id: letters, digits, '.', '_' or '-'.")
+    kind: ControlKind
+    category: ControlCategory = Field(
+        description="positive: known_correct; negative: plausible_wrong, task_specific_shortcut or reward_hack; "
+        "malformed: empty_or_malformed."
+    )
+    concern: ControlConcern = Field(
+        description="The part of the grader the control exercises. known_correct: reference (the reference "
+        "solution), acceptance (another answer that must count as right) or extraction; plausible_wrong: "
+        "acceptance or extraction; task_specific_shortcut and reward_hack: shortcut or extraction; "
+        "empty_or_malformed: extraction or acceptance."
+    )
+    final_reply: str = Field(description="The candidate's final reply.")
+    files: list[FileDraft] = Field(
+        description="Files the candidate writes under workspace/ (relative to the machine root) before replying."
+    )
+    reward_min: float | None = Field(description="Positive controls: the minimum reward, e.g. 0.99. Otherwise null.")
+    reward_max: float | None = Field(
+        description=f"Negative and malformed controls: the maximum reward, at most {REJECTION_CEILING}."
+    )
+    rationale: str = Field(description="Why this candidate must receive that grade.")
+
+    @field_validator("files")
+    @classmethod
+    def workspace(cls, files: list[FileDraft]) -> list[FileDraft]:
+        return under_workspace(files)
+
+
+class ControlsDraft(BaseModel):
+    """Submit the fixed controls for the task."""
+
+    controls: list[ControlDraft]
+
+
+def control_payload(draft: ControlDraft) -> Transcript:
+    """The control as a transcript: one shell turn writing its files, if it has any, then its final reply."""
+    if not draft.files:
+        return Transcript(turns=(reply(draft.final_reply),))
+    commands = tuple(
+        (
+            f"{draft.id}-write-{index}",
+            f"mkdir -p {shlex.quote('/' + f.path.rsplit('/', 1)[0])} && "
+            f"printf %s {shlex.quote(base64.b64encode(f.content.encode()).decode())} "
+            f"| base64 -d > {shlex.quote(f'/{f.path}')}",
+        )
+        for index, f in enumerate(draft.files)
+    )
+    return Transcript(turns=(shell_turn(*commands), reply(draft.final_reply)))
+
+
+def control_from_draft(draft: ControlDraft) -> Control:
+    """The ``Control`` a submitted draft describes, expecting a graded attempt within its reward bounds."""
+    return Control(
+        id=draft.id,
+        kind=draft.kind,
+        category=draft.category,
+        concern=draft.concern,
+        author=CONTROL_AUTHOR,
+        payload=control_payload(draft),
+        expect=Expectation(status=Outcome.GRADED, reward_min=draft.reward_min, reward_max=draft.reward_max),
+    )
+
+
+def file_set(files: Sequence[TaskResource]) -> frozenset[tuple[str, bytes]]:
+    """``files`` as (path, content) pairs, so two file lists compare by what they install."""
+    return frozenset((resource.path, resource_bytes(resource)) for resource in files)
+
+
+def _is_graded(control: Control, graded: Sequence[GradedCandidate], exempt_replies: frozenset[str]) -> bool:
+    """Whether ``control`` is one of the ``graded`` candidates.
+
+    A workspace control matches a candidate with the same files. A reply-only transcript matches a
+    candidate with the same reply and no files. A transcript with shell calls writes files no
+    candidate records, so it matches on its final reply alone, unless that reply is exempt.
+    """
+    if isinstance(control.payload, Workspace):
+        files = file_set(control.payload.files)
+        return bool(files) and any(file_set(c.files) == files for c in graded)
+    final = control.payload.turns[-1]
+    if not isinstance(final, TextMessage):
+        return False
+    if control.payload.calls():
+        return final.content not in exempt_replies and any(c.reply == final.content for c in graded)
+    return any(c.reply == final.content and not c.files for c in graded)
+
+
+def check_controls_not_graded(controls: Sequence[Control], grader: Grader) -> None:
+    """Refuse a control that repeats a candidate in ``grader.prototyped``, other than the exempt two.
+
+    Raises:
+        ValueError: naming the controls that repeat a prototyped candidate.
+    """
+    exempt = {("", file_set(())), (grader.reference_reply, file_set(grader.reference_files))}
+    candidates = [c for c in grader.prototyped if (c.reply, file_set(c.files)) not in exempt]
+    exempt_replies = frozenset({"", grader.reference_reply})
+    repeated = [control.id for control in controls if _is_graded(control, candidates, exempt_replies)]
+    if repeated:
+        raise ValueError(
+            f"controls {repeated} are candidates the grader step graded while it prototyped the grader. Controls "
+            "are written, not graded: write candidates the grader has not seen"
+        )
+
+
+async def write_controls(
+    task: TaskSpec,
+    grader: Grader,
+    proposal: TaskProposal,
+    model: ModelClient,
+    sampling: LLMPolicy,
+    record: CallLedger,
+    directory: Path,
+) -> tuple[Control, ...]:
+    """Write the fixed controls of ``task`` to ``<directory>/controls.json`` and return them.
+
+    Args:
+        task: The draft's task.
+        grader: The output of the draft's grader step.
+        proposal: The proposal the task was built from.
+        model: The model that writes the controls.
+        sampling: Its sampling policy.
+        record: Where its calls are recorded.
+        directory: The draft round's directory.
+
+    Raises:
+        BuildFailure: ``ATTEMPTS`` submissions all had a problem; ``step`` is ``CONTROLS_STEP``.
+    """
+    request = (
+        f"# Task conversation\n\n{format_conversation(task.context.events)}\n\n"
+        f"# Answer contract\n\n{grader.answer_contract}\n\n{SUBMISSION}\n\n"
+        f"# Reference reply\n\n{grader.reference_reply}\n\n"
+        f"# Reference files\n\n{files_text(grader.reference_files, '/')}\n\n"
+        "Write the fixed controls from the proposal's 'Grader design and controls' section: at least one "
+        "known_correct positive control with concern reference (reward_min 0.99), one plausible_wrong control "
+        "with concern acceptance, one task_specific_shortcut or reward_hack control with concern shortcut, and "
+        "one empty_or_malformed control with concern extraction (negative and malformed controls: reward_max at "
+        f"most {REJECTION_CEILING}). Keep extraction controls few: they pin only how the answer is parsed. "
+        "A negative control must be a candidate the grader scores at most "
+        f"{REJECTION_CEILING}; if the proposal's partial-credit controls would score higher, leave them out."
+    )
+
+    async def problem(submitted: ControlsDraft) -> str | None:
+        try:
+            controls = [control_from_draft(c) for c in submitted.controls]
+            validate_controls(task, controls)
+            check_controls_not_graded(controls, grader)
+        except ValueError as error:
+            return str(error)
+        return None
+
+    try:
+        submitted = await checked_structured(
+            model, sampling, record, task_messages(proposal, request), ControlsDraft, problem
+        )
+    except BuildFailure as failure:
+        raise BuildFailure(failure.message, CONTROLS_STEP) from failure
+    controls = tuple(control_from_draft(c) for c in submitted.controls)
+    directory.mkdir(parents=True, exist_ok=True)
+    with atomic_rename(str(directory / CONTROLS_FILE)) as temp:
+        Path(temp).write_bytes(controls_json(controls))
+    return controls
+
+
+def load_controls(directory: Path) -> tuple[Control, ...]:
+    """Read the controls ``write_controls`` wrote to ``directory``."""
+    return parse_controls((directory / CONTROLS_FILE).read_bytes())

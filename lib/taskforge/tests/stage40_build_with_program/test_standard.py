@@ -1,0 +1,281 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The standard template built end to end on ShellSim, with the fake GLM writing every draft."""
+
+import inspect
+import json
+from collections.abc import Mapping
+from dataclasses import replace
+
+import pytest
+from rolloutengine.contracts import ModelRequest, ModelTurn
+from rolloutengine.engine import RolloutEngine
+from shellbox.machine import Backend
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
+from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import ExactSpec
+
+from taskforge.sandbox.factories import MachineHost
+from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
+from taskforge.spec import draft
+from taskforge.spec.draft import VERDICT_REWARD, answer_grader
+from taskforge.stage10_proposal.model import Environment
+from taskforge.stage30_author.loader import load_program_source
+from taskforge.stage40_build_with_program.context import BuildFailure
+from taskforge.stage40_build_with_program.outputs import Fixtures, Grader
+from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build, step_output
+from taskforge.stage40_build_with_program.sdk import (
+    ATTEMPTS,
+    WORKDIR,
+    FileDraft,
+    GraderDraft,
+    grader_package,
+    machine_facts,
+    task_file,
+)
+from taskforge.stage40_build_with_program.step_store import CacheStatus
+from taskforge.stage40_build_with_program.template import standard
+from taskforge.stage50_validate.lowering import lower
+from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING, web_tool
+
+GOOD_GRADER = """import json, pathlib
+final = pathlib.Path("/app/answer.txt").read_text().strip()
+expected = pathlib.Path("/tests/key.txt").read_text().strip()
+checks = [{"name": "answer line", "passed": final.endswith("ANSWER = " + expected), "weight": 1.0}]
+reward = sum(c["weight"] for c in checks if c["passed"]) / sum(c["weight"] for c in checks)
+pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps({"reward": reward, "detail": {"checks": checks}}))
+"""
+WRONG_GRADER = GOOD_GRADER.replace('"ANSWER = "', '"RESULT = "')
+NO_CHECKS_GRADER = """import json, pathlib
+pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps({"reward": 1.0}))
+"""
+IMAGE = f"registry.example/taskforge-tasks/d00@sha256:{'2' * 64}"
+REFERENCE_REPLY = "6 * 7 = 42\nANSWER = 42"
+SHELLSIM = draft.requirements(image=None, workdir=WORKDIR)
+
+
+def file(path: str, content: str) -> dict:
+    return {"path": path, "content": content, "executable": False}
+
+
+def grader_call(script: str) -> dict:
+    return {
+        "kind": "script",
+        "script": script,
+        "private_files": [],
+        "expected": "",
+        "tolerance": 0.0,
+        "answer_contract": "End the reply with a line `ANSWER = <n>`.",
+        "reference_reply": REFERENCE_REPLY,
+        "reference_files": [],
+        "secret_values": ["42"],
+    }
+
+
+def serve_until_the_grader(fake_glm) -> None:
+    """The research run and the fixtures submission, the model calls before the grader step."""
+    fake_glm.stream(tool_calls=(("web_search", '{"query": "6 times 7"}'),), finish="tool_calls")
+    fake_glm.stream(content="Confirmed: 6 x 7 = 42 (https://example.org/table).")
+    fake_glm.stream(
+        content=json.dumps(
+            {
+                "agent_files": [file("workspace/question.txt", "What is 6 * 7?")],
+                "private_files": [file("key.txt", "42")],
+                "facts": "6 * 7 = 42",
+                "solver_machine": "shellsim",
+            }
+        )
+    )
+
+
+async def build(program, proposal, services, glm_client, tmp_path, queries):
+    return await run_build(
+        program,
+        proposal,
+        WORKPIECE,
+        tmp_path / "round",
+        str(tmp_path / "store"),
+        glm_client,
+        SAMPLING,
+        replace(services, web_tools=(web_tool(queries),)),
+        0,
+        research=ResearchRequirement.ENFORCED,
+    )
+
+
+async def answer(request: ModelRequest) -> ModelTurn:
+    return ModelTurn({"role": "assistant", "content": "ANSWER = 42"}, (1, 2), (3,), None, "stop")
+
+
+async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_the_store(
+    proposal, services, glm_client, fake_glm, tmp_path
+):
+    serve_until_the_grader(fake_glm)
+    # The first grader gives the reference answer no credit; the step feeds that back and asks again.
+    fake_glm.stream(content=json.dumps(grader_call(WRONG_GRADER)))
+    fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
+    # The first instruction leaks the graded answer.
+    fake_glm.stream(content=json.dumps({"system": "", "instruction": "Show that 6 * 7 = 42. End with ANSWER = <n>."}))
+    fake_glm.stream(content=json.dumps({"system": "", "instruction": "Read question.txt. End with `ANSWER = <n>`."}))
+    queries: list[Mapping[str, object]] = []
+    program = load_program_source(inspect.getsource(standard))
+
+    draft = await build(program, proposal, services, glm_client, tmp_path, queries)
+    again = await build(program, proposal, services, glm_client, tmp_path, queries)
+
+    assert queries == [{"query": "6 times 7"}]
+    assert not fake_glm.responses
+    assert [outcome.status for outcome in draft.provenance.steps] == [CacheStatus.MISS] * 6
+    assert {outcome.status for outcome in again.provenance.steps} == {CacheStatus.HIT}
+    assert again.task == draft.task
+    task = draft.task
+    assert [f.path for f in task.resources.worker] == ["workspace/question.txt"]
+    assert isinstance(task.grader, ScriptGrader) and task.grader.environment.docker_image == GRADER_BASE_IMAGE
+    assert {f.path: resource_bytes(f).decode() for f in task.resources.verifier} == {
+        "grade.py": GOOD_GRADER,
+        "config.json": "{}",
+        "key.txt": "42",
+    }
+    assert "42" not in json.dumps(task.context.model_dump(mode="json"))
+    fixtures_request = fake_glm.requests[2]["messages"][-2]["content"]
+    assert "### research[0]: confirm the multiplication table\nConfirmed: 6 x 7 = 42" in fixtures_request
+
+    grader = step_output(draft, str(tmp_path / "store"), "grader", Grader)
+    assert grader.reference_reply == REFERENCE_REPLY
+    assert [(c.reply, c.reward) for c in grader.prototyped] == [
+        (REFERENCE_REPLY, 0.0),
+        (REFERENCE_REPLY, 1.0),
+        ("", 0.0),
+    ]
+
+    lowered = lower(task, MachineHost.LAPTOP, FACTORIES)
+    assert lowered.runtime.task_machine is not None and lowered.runtime.task_machine.backend == Backend.SHELLSIM
+    assert lowered.runtime.verifier_machine is not None and lowered.runtime.verifier_machine.backend == Backend.DOCKER
+    rollout = await RolloutEngine(answer, FACTORIES).run(lowered)
+    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_a_grader_that_rejects_its_own_reference_answer_fails_the_build(
+    proposal, services, glm_client, fake_glm, tmp_path
+):
+    serve_until_the_grader(fake_glm)
+    for _ in range(ATTEMPTS):
+        fake_glm.stream(content=json.dumps(grader_call(WRONG_GRADER)))
+
+    with pytest.raises(BuildFailure, match=r"the reference answer was graded graded reward=0\.0") as failure:
+        await build(standard.PROGRAM, proposal, services, glm_client, tmp_path, [])
+
+    assert failure.value.step == "grader"
+    assert not (tmp_path / "round" / "draft").exists()
+
+
+FIXTURES = Fixtures(
+    agent_files=(task_file(FileDraft.model_validate(file("workspace/question.txt", "What is 6 * 7?"))),),
+    private_files=(task_file(FileDraft.model_validate(file("key.txt", "42"))),),
+    facts="6 * 7 = 42",
+    solver_machine="shellsim",
+)
+
+
+async def test_the_grader_step_sends_back_a_numeric_answer_that_is_not_a_literal(context, proposal, fake_glm):
+    for expected in ("sqrt(1764)", "42"):
+        submission = {**grader_call(""), "kind": "numeric", "expected": expected, "reference_reply": "42"}
+        fake_glm.stream(content=json.dumps(submission))
+
+    grader = await standard.grader.fn(context(), proposal, replace(FIXTURES, agent_files=()), SHELLSIM)
+
+    assert isinstance(grader.package.grader, VerifyitGrader) and grader.package.grader.mode == "numeric"
+    assert "numeric value requires one finite scalar literal" in fake_glm.requests[1]["messages"][-2]["content"]
+
+
+async def test_the_grader_step_sends_back_a_grader_without_per_check_results(context, proposal, fake_glm):
+    fake_glm.stream(content=json.dumps(grader_call(NO_CHECKS_GRADER)))
+    fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
+
+    grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
+
+    assert resource_bytes(next(f for f in grader.package.resources if f.path == "grade.py")).decode() == GOOD_GRADER
+    assert "no per-check results" in fake_glm.requests[1]["messages"][-2]["content"]
+
+
+class RecordingImageBuilder:
+    def __init__(self) -> None:
+        self.published: list[tuple[DockerBuild, str]] = []
+
+    async def publish(self, build: DockerBuild, repository: str) -> str:
+        self.published.append((build, repository))
+        return IMAGE
+
+
+async def test_a_container_task_publishes_its_image_and_grades_in_a_copy_of_it(context, proposal, fake_glm):
+    container = replace(proposal, header=replace(proposal.header, environment=Environment.CONTAINER))
+    dockerfile = "FROM python:3.12-slim\nWORKDIR /workspace\n"
+    fake_glm.stream(content=json.dumps({"dockerfile": dockerfile, "context_files": []}))
+    images = RecordingImageBuilder()
+    fixtures = replace(FIXTURES, agent_files=())
+
+    requirements = await standard.requirements.fn(context(images=images), container, fixtures)
+    package = grader_package(GraderDraft.model_validate(grader_call("print(1.0)")), fixtures, requirements)
+
+    assert requirements.docker_image == IMAGE
+    assert [resource_bytes(f).decode() for f in images.published[0][0].files] == [dockerfile]
+    shell = package.grader
+    assert isinstance(shell, ScriptGrader)
+    assert (shell.environment.docker_image, shell.reward) == (IMAGE, VERDICT_REWARD)
+    assert (shell.argv, shell.cwd, shell.answer_path) == (
+        ("python3", "/tests/grade.py"),
+        "/workspace",
+        "/app/answer.txt",
+    )
+    assert [(a.source, a.target, a.kind) for a in shell.artifacts] == [
+        ("/workspace", "/workspace", ArtifactKind.DIRECTORY)
+    ]
+    assert sorted(f.path for f in package.resources) == ["grade.py", "key.txt"]
+
+
+async def test_cpython_fixtures_choose_the_grader_base_image(context, proposal):
+    requirements = await standard.requirements.fn(context(), proposal, replace(FIXTURES, solver_machine="cpython"))
+    package = grader_package(GraderDraft.model_validate(grader_call(GOOD_GRADER)), FIXTURES, requirements)
+
+    assert requirements.docker_image == GRADER_BASE_IMAGE
+    assert machine_facts(requirements).startswith("The task machine is a container with CPython 3.12")
+    assert isinstance(package.grader, ScriptGrader) and package.grader.environment.docker_image == GRADER_BASE_IMAGE
+
+
+LEDGER_LINE = "2024-03-01,ACME-SUPPLY,invoice 8812,1234.56,approved by finance"
+
+
+@pytest.mark.parametrize(
+    ("instruction", "problem"),
+    [
+        ("Reconcile the ledger. " + "Check every entry carefully. " * 130, "words outside the answer contract"),
+        (f"Reconcile the ledger. The first entry is:\n{LEDGER_LINE}\n", "copies solver-visible file lines"),
+        ("Reconcile workspace/ledger.csv by hand and report the total.", "asks for work by hand"),
+    ],
+    ids=["over-500-words", "inlined-fixture-line", "by-hand"],
+)
+async def test_the_instructions_step_sends_back_an_instruction_with_a_problem(
+    context, proposal, fake_glm, instruction, problem
+):
+    contract = "End the reply with a line `ANSWER = <n>`."
+    good = f"Reconcile workspace/ledger.csv and report the approved total. {contract}"
+    fake_glm.stream(content=json.dumps({"system": "", "instruction": instruction}))
+    fake_glm.stream(content=json.dumps({"system": "", "instruction": good}))
+    ledger = task_file(FileDraft.model_validate(file("workspace/ledger.csv", LEDGER_LINE)))
+    fixtures = replace(FIXTURES, agent_files=(ledger,), private_files=(), solver_machine="cpython")
+    grader = Grader(
+        package=answer_grader(ExactSpec(expected=("1234.56",))),
+        answer_contract=contract,
+        reference_reply="ANSWER = 1234.56",
+        reference_files=(),
+        secret_values=(),
+        prototyped=(),
+    )
+    requirements = draft.requirements(image=GRADER_BASE_IMAGE, workdir=WORKDIR)
+
+    text = await standard.instructions.fn(context(), proposal, fixtures, requirements, grader)
+
+    assert text.instruction == good
+    assert problem in fake_glm.requests[1]["messages"][-2]["content"]
