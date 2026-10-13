@@ -1,0 +1,62 @@
+{
+  "selected_configs": [
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-sc-s0.yaml",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-sc-s1.yaml",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-sc-s2.yaml",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-tis-s0.yaml",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-tis-s1.yaml",
+    "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_v3/curriculum-tis-s2.yaml"
+  ],
+  "recovery_mappings": [
+    {
+      "retired_configuration": "qwen_transfer_main_v3/curriculum-sc-s0.yaml",
+      "retired_run": "sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce",
+      "final_run": "sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "same_learning_recipe": true
+    },
+    {
+      "retired_configuration": "qwen_transfer_main_v3/curriculum-sc-s1.yaml",
+      "retired_run": "sc-qwen-transfer-curriculum-sc-s1-main-a2-01a126ce",
+      "final_run": "sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "same_learning_recipe": true
+    },
+    {
+      "retired_configuration": "qwen_transfer_main_v3/curriculum-sc-s2.yaml",
+      "retired_run": "sc-qwen-transfer-curriculum-sc-s2-main-a2-01a126ce",
+      "final_run": "sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "same_learning_recipe": true
+    },
+    {
+      "retired_configuration": "qwen_transfer_main_v3/curriculum-tis-s0.yaml",
+      "retired_run": "sc-qwen-transfer-curriculum-tis-s0-main-a2-01a126ce",
+      "final_run": "sc-qwen-transfer-curriculum-tis-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "same_learning_recipe": true
+    },
+    {
+      "retired_configuration": "qwen_transfer_main_v3/curriculum-tis-s1.yaml",
+      "retired_run": "sc-qwen-transfer-curriculum-tis-s1-main-a2-01a126ce",
+      "final_run": "sc-qwen-transfer-curriculum-tis-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "same_learning_recipe": true
+    },
+    {
+      "retired_configuration": "qwen_transfer_main_v4/curriculum-sc-s0.yaml",
+      "retired_run": "sc-qwen-transfer-curriculum-sc-s0-main-a3-01a126ce",
+      "final_run": "sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "same_learning_recipe": true
+    },
+    {
+      "retired_configuration": "qwen_transfer_main_v4/curriculum-sc-s1.yaml",
+      "retired_run": "sc-qwen-transfer-curriculum-sc-s1-main-a3-01a126ce",
+      "final_run": "sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "same_learning_recipe": true
+    }
+  ],
+  "scope": "Prospective complete300 comparison; no final endpoint claimed. All retired same-recipe allocated attempts included, including failed and preempted partials and zero-cost queued cancellations."
+}
