@@ -17,5 +17,8 @@ GRADER_PACKAGES = Environment(lock=HERE / "grader.lock", data=("nltk:punkt_tab",
 COMPILER_GRADER_PACKAGES = replace(GRADER_PACKAGES, apt=("build-essential",))
 """The grader packages with a C++ toolchain, for graders that compile submissions."""
 
-BUILDABLE_ENVIRONMENTS = (GRADER_PACKAGES, COMPILER_GRADER_PACKAGES)
+LEAN_GRADER_PACKAGES = replace(GRADER_PACKAGES, dockerfile=HERE / "nemotron_ultra/lean.Dockerfile")
+"""The grader packages with Lean 4 and Mathlib, for the Nemotron Ultra Lean proof grader."""
+
+BUILDABLE_ENVIRONMENTS = (GRADER_PACKAGES, COMPILER_GRADER_PACKAGES, LEAN_GRADER_PACKAGES)
 """Explicit environment registrations for the images build CLI."""

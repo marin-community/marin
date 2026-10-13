@@ -5,11 +5,12 @@
 
 An ``Environment`` without an image is built once, as the artifact ``images/env-<identity[:16]>``.
 Its identity is the SHA-256 of everything that determines the build: the pypi pins or the lock's
-bytes, the apt packages, the data, the Python version and platform, the digest-pinned base image,
-the files of the runtime packages every environment carries (verifyit), and where the environment
-runs. The build stores the environment's hash lock in the artifact. When the environment needs apt
-packages the worker image lacks, it also builds an image from a generated Dockerfile, pushes it,
-and records its digest. A run whose declaration is unchanged finds the artifact and builds nothing.
+bytes, the apt packages, the data, the Dockerfile fragment's bytes, the Python version and platform,
+the digest-pinned base image, the files of the runtime packages every environment carries (verifyit),
+and where the environment runs. The build stores the environment's hash lock in the artifact. When
+the environment names a Dockerfile fragment or needs apt packages the worker image lacks, it also
+builds an image from a generated Dockerfile, pushes it, and records its digest. A run whose
+declaration is unchanged finds the artifact and builds nothing.
 """
 
 import hashlib
@@ -66,6 +67,7 @@ class EnvironmentArtifact(Artifact):
     data: list[str]
     python: str
     base_image: str
+    dockerfile_sha256: str | None = None
     image: str | None = None
     tag: str | None = None
 
@@ -90,6 +92,7 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
         "lock_sha256": hashlib.sha256(environment.lock.read_bytes()).hexdigest() if environment.lock else None,
         "apt": sorted(environment.apt),
         "data": sorted(environment.data),
+        "dockerfile_sha256": _fragment_sha256(environment),
         "python": PYTHON_VERSION,
         "platform": PLATFORM,
         "base_image": BASE_IMAGE,
@@ -99,6 +102,10 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
     if placement(environment) == Placement.BUILT_IMAGE:
         identity["image_compression"] = IMAGE_COMPRESSION
     return identity
+
+
+def _fragment_sha256(environment: Environment) -> str | None:
+    return hashlib.sha256(environment.dockerfile.read_bytes()).hexdigest() if environment.dockerfile else None
 
 
 def identity_digest(environment: Environment) -> str:
@@ -166,6 +173,9 @@ def dockerfile(environment: Environment) -> str:
             f" && apt-get install -y --no-install-recommends {' '.join(sorted(environment.apt))}"
             " && rm -rf /var/lib/apt/lists/*"
         )
+    if environment.dockerfile is not None:
+        # Before the lock sync, so toolchain layers stay cached across lock changes.
+        lines.append(environment.dockerfile.read_text().strip())
     lines.append(f"COPY {LOCK_FILE} /opt/task-curation/{LOCK_FILE}")
     lines.append(f"RUN uv pip sync --system --no-cache --require-hashes /opt/task-curation/{LOCK_FILE}")
     packages = nltk_packages(environment.data)
@@ -225,10 +235,9 @@ def _require_tracked(environment: Environment) -> None:
     Consumers recompute the identity from a workspace bundle that has no git metadata and no exec bits,
     so an untracked or executable file here would give them a different identity.
     """
-    if environment.lock is not None and environment.lock.name not in _git_tracked(
-        environment.lock.parent, environment.lock.name
-    ):
-        raise ValueError(f"{environment.lock} must be tracked by git")
+    for hashed in (environment.lock, environment.dockerfile):
+        if hashed is not None and hashed.name not in _git_tracked(hashed.parent, hashed.name):
+            raise ValueError(f"{hashed} must be tracked by git")
     for package in RUNTIME_PACKAGES:
         files = context_files(package)
         found = {file.path for file in files}
@@ -297,6 +306,7 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
         data=list(environment.data),
         python=PYTHON_VERSION,
         base_image=BASE_IMAGE,
+        dockerfile_sha256=_fragment_sha256(environment),
         image=image,
         tag=tag,
     )

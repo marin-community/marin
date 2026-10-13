@@ -2,14 +2,15 @@
 
 A declaration states what its machines need as an `Environment`
 ([`../environment.py`](../environment.py)): `pypi` pins or a uv `lock`, `apt`
-packages, `data` such as `nltk:punkt_tab`, or a digest-pinned `image` used
-as-is. [`build.py`](build.py) builds every environment that does not name an
-image, and the pipeline places each one:
+packages, `data` such as `nltk:punkt_tab`, a checked-in `dockerfile` fragment
+that installs a toolchain, or a digest-pinned `image` used as-is.
+[`build.py`](build.py) builds every environment that does not name an image,
+and the pipeline places each one:
 
 - an `image` runs in a sandbox of that image;
-- `apt` packages outside `WORKER_IMAGE_APT` (the `task` stage of
-  `lib/iris/Dockerfile`) run in a sandbox of an image built for the
-  environment;
+- a `dockerfile` fragment, or `apt` packages outside `WORKER_IMAGE_APT` (the
+  `task` stage of `lib/iris/Dockerfile`), runs in a sandbox of an image built
+  for the environment;
 - every other environment runs in the Zephyr worker, in a uv environment built
   from its lock ([`../environment_runtime.py`](../environment_runtime.py)).
 
@@ -33,6 +34,19 @@ is the environment every grade script in the catalog imports:
 `COMPILER_GRADER_PACKAGES` adds `build-essential` for the TaskTrove
 competitive-programming graders, which compile C++ submissions. The worker image
 installs `build-essential`, so both run in the worker.
+
+`LEAN_GRADER_PACKAGES` adds the fragment
+[`../datasets/nemotron_ultra/lean.Dockerfile`](../datasets/nemotron_ultra/lean.Dockerfile),
+which installs elan under `/opt/elan`, the pinned Lean 4 toolchain and a Mathlib
+project at `/lean4/my_project` with its prebuilt oleans, laid out like the NeMo
+Skills sandbox. It runs in a built image; the Nemotron Ultra Lean grader
+compiles proofs there through
+[`../datasets/nemotron_ultra/scorers/local_lean_sandbox.py`](../datasets/nemotron_ultra/scorers/local_lean_sandbox.py).
+
+A `dockerfile` fragment is self-contained: it downloads what it installs inside
+its own `RUN` steps, so the build context carries only the lock and the generated
+Dockerfile. Its lines follow the apt step and precede the lock sync, so toolchain
+layers stay cached while the lock changes.
 
 [`../datasets/grader.in`](../datasets/grader.in) lists the direct requirements
 grouped by the scorers that need them. Regenerate the lock after changing it:
@@ -67,26 +81,27 @@ campaign uses; it writes the artifacts there. A CoreWeave prefix needs the
 `CW_KEY_ID` and `CW_KEY_SECRET` pair in the environment.
 
 An environment's identity is the SHA-256 of the `pypi` pins or the lock's bytes,
-`apt`, `data`, Python 3.12, the platform `linux/amd64`, the digest-pinned base
-image, the path, mode and content digest of every `verifyit` file (skipping
-`__pycache__`), and its placement. The repository is not part of the identity.
-The build:
+`apt`, `data`, the `dockerfile` fragment's bytes, Python 3.12, the platform
+`linux/amd64`, the digest-pinned base image, the path, mode and content digest
+of every `verifyit` file (skipping `__pycache__`), and its placement. The
+repository is not part of the identity. The build:
 
-1. refuses a `lock` file or `verifyit` file that git does not track, and an
-   executable `verifyit` file, because a workspace bundle has neither and would
-   compute another identity;
+1. refuses a `lock`, `dockerfile` or `verifyit` file that git does not track,
+   and an executable `verifyit` file, because a workspace bundle has neither and
+   would compute another identity;
 2. compiles `pypi` with `uv pip compile --generate-hashes --python-version 3.12
    --python-platform x86_64-unknown-linux-gnu`, or copies `lock`;
 3. for an environment placed in a built image, generates a Dockerfile from the
-   pinned `iris-task` base that runs `apt-get install` of `apt`, `uv pip sync
-   --system --require-hashes` of the lock and the NLTK downloads, and copies
-   `verifyit`; it pushes `<repository>:task-curation-env-<identity[:16]>` for
+   pinned `iris-task` base that runs `apt-get install` of `apt`, the `dockerfile`
+   fragment's lines, `uv pip sync --system --require-hashes` of the lock and the
+   NLTK downloads, and copies `verifyit`; it pushes `<repository>:task-curation-env-<identity[:16]>` for
    linux/amd64 without provenance attestations and resolves the pushed digest
    with `docker buildx imagetools inspect`, which needs `docker buildx` and a
    `docker login` for the repository's registry;
 4. writes the artifact `images/env-<identity[:16]>`, which stores the lock as
    `requirements.lock` and records the identity, the lock's SHA-256, `apt`,
-   `data`, the Python version, the base image, and any built image and tag.
+   `data`, the `dockerfile` fragment's SHA-256, the Python version, the base
+   image, and any built image and tag.
 
 A second run with an unchanged declaration finds the artifact and starts no
 build. Planning a source whose environment has no artifact for its current
