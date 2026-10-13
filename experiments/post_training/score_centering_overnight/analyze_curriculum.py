@@ -28,7 +28,12 @@ def subset_quality(rows: list[dict], members: set[int]) -> float:
 
 def paired_recipe(config: dict) -> dict:
     recipe = copy.deepcopy({"inputs": config["inputs"], "skyrl": config["skyrl"]})
-    recipe["skyrl"]["trainer"]["algorithm"]["score_centering_enabled"] = False
+    algorithm = recipe["skyrl"]["trainer"]["algorithm"]
+    algorithm["score_centering_enabled"] = False
+    if "group_admission" in algorithm:
+        algorithm["group_admission"].pop("stall_timeout", None)
+        if not algorithm["group_admission"]:
+            algorithm.pop("group_admission")
     return json.loads(json.dumps(recipe).replace(config["run"]["id"], "PAIRED_RUN"))
 
 
@@ -86,6 +91,9 @@ def summarize(config: dict, audit: dict, cache: Path, costs: dict, *, recovery_r
         "learner_evidence": audit["learner_evidence"],
         "total_allocated_h100_hours": sum(row["allocated_h100_hours"] for row in attempts),
         "recovery_run_ids": list(recovery_run_ids),
+        "group_admission_watchdog_seconds": config["skyrl"]["trainer"]["algorithm"].get("group_admission", {}).get(
+            "stall_timeout"
+        ),
         "source_task_errors": audit["source_task_errors"],
         "cost_basis": (
             "All recorded task allocation intervals, including failed attempts, setup, evaluation and checkpointing."

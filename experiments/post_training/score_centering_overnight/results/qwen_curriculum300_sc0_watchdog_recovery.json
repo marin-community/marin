@@ -1,0 +1,14 @@
+{
+  "old_run": "sc-qwen-transfer-curriculum-sc-s0-main-a2-01a126ce",
+  "new_run": "sc-qwen-transfer-curriculum-sc-s0-main-a3-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "watchdog_seconds": 2400,
+  "scientific_fields_unchanged": true,
+  "reason": "Original600sadmission watchdog expired before required publication600s deadline and bounded retries could finish.",
+  "failure_log_files": [
+    "qwen-sc0-stall-worker-12c0dcfd9b10a62ddbd0e907fa307ad83f8e6188714b8cbd96202b25-03000000-14453.err",
+    "qwen-sc0-stall-worker-aba79a749366d415e15bd88e3ad4b15f0c89ccc3454687bc55561146-03000000-13997.err"
+  ],
+  "scope": "Engineering timeout recovery only; failed10updateattemptispartial,full300stillrequired.",
+  "configured_publication_deadline_budget_seconds": 2160
+}
