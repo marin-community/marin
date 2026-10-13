@@ -14,6 +14,16 @@ class ClosureCohort(StrEnum):
     VALUE_CONTROLS_V5 = "value-controls-v5"
 
 
+def tool_prompt_probe_dataset() -> ArtifactStep:
+    """Adopt the paired declaration/serialization diagnostic, separate from policy scores."""
+    return ArtifactStep.adopt(
+        user_owned_name("datasets/structure-closure-tool-prompt-probe"),
+        "2026.10.13.1",
+        "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/tool-prompt-probe-tasks-v1",
+        config={"validation_sha256": "6077aff237874efa64d371a81a1128a9cc6399b2506abca4f21f98e3f9472579"},
+    )
+
+
 def structure_closure_dataset(cohort: ClosureCohort) -> ArtifactStep:
     """Adopt a verified native-task cohort with its immutable content hashes."""
     if cohort == ClosureCohort.COPY_V1:
