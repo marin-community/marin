@@ -232,3 +232,54 @@ def test_wait_non_silent_conditions_still_escalate(
 
     assert result.exit_code != 0
     assert cluster.terminated == []
+
+
+@pytest.mark.parametrize(
+    ("timeout_policy", "exit_code", "github_output_lines"),
+    [
+        ("fail", 1, []),
+        (
+            "defer",
+            0,
+            ["job_id=/runner/canary", "state=WAIT_TIMED_OUT", "succeeded=false", "resource_exhausted=false"],
+        ),
+    ],
+)
+def test_wait_timeout_policy_on_a_job_that_still_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    timeout_policy: str,
+    exit_code: int,
+    github_output_lines: list[str],
+) -> None:
+    parent_job_id = "/runner/canary"
+    cluster = FakeClusterClient([job_pb2.JobStatus(job_id=parent_job_id, state=job_pb2.JOB_STATE_RUNNING)])
+    client = IrisClient(cluster)
+    github_output = tmp_path / "github-output"
+    github_output.touch()
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setattr(iris_monitor, "open_iris_client", lambda **_kwargs: nullcontext(client))
+
+    result = CliRunner().invoke(
+        iris_monitor.cli,
+        [
+            "wait",
+            "--job-id",
+            parent_job_id,
+            "--controller-url",
+            "http://iris.test",
+            "--poll-interval",
+            "0.01",
+            "--timeout",
+            "0",
+            "--resource-exhaustion-policy",
+            "escalate",
+            "--timeout-policy",
+            timeout_policy,
+            "--github-output",
+        ],
+    )
+
+    assert result.exit_code == exit_code, result.output
+    assert github_output.read_text().splitlines() == github_output_lines
+    assert cluster.terminated == []
