@@ -109,6 +109,12 @@ Verifyit's own attribution category, which determines whether an incomplete atte
 float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
 repeated records and rejecting unexpected errors.
 
+`structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
+fences. `closure_scoring` compares a completed outer region with a known reference and reports
+syntax, content preservation, and trailing output separately. `tool_call_markup` classifies
+completed `<tool_call>` markup in decoded assistant text. These helpers inspect text; the caller
+retains the sampled tokens and decides when a completed attempt can be scored.
+
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
 already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
