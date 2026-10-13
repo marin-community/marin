@@ -49,12 +49,20 @@ Other deadlines accept `None` or a finite, positive value.
 `backend` identifies a factory in the engine's `factories` mapping.
 `task_session` identifies a factory in its `sessions` mapping.
 The reserved session identifier `shellbox` selects the built-in shell-tool session.
-Custom session factories receive a `TaskSessionContext` and return a fresh session for each attempt.
+Each entry in `sessions` is a callable that receives a `TaskSessionContext` and
+constructs a fresh session for each attempt.
 Its `lowered` and `machine` fields describe that attempt. `task_grader` applies the task's
 `TaskSpec` grader, or is `None` for a `SessionGrader` task that grades itself.
 Sessions that delegate grading call `context.require_task_grader()`; self-grading sessions need no task grader.
-A class that accepts `TaskSessionContext` in its constructor can be registered directly.
-It implements the `TaskSession` protocol through its methods; no base class is required.
+A class whose constructor accepts `TaskSessionContext` can be registered directly:
+
+```python
+from rolloutengine.engine import RolloutEngine
+
+engine = RolloutEngine(model, factories, sessions={"custom": CustomSession})
+```
+
+`CustomSession` implements the `TaskSession` protocol through its methods; no base class is required.
 A machine selection of `None` supplies no machine.
 Answer-only tasks can omit the task machine.
 A grader with an environment requires a `verifier_machine` selection. Every other grader requires `verifier_machine=None`.
@@ -116,17 +124,21 @@ session factory and select its name in `TaskSessionSpec.task_session`.
 Given a model callable, machine factories, and an async `run_agent(machine, complete)` callback:
 
 ```python
-from functools import partial
-
 from rolloutengine.agent_session import AgentTaskSession
 from rolloutengine.engine import RolloutEngine
 
 
 def agent_session(context):
-    return AgentTaskSession(partial(run_agent, context.machine), context.require_task_grader())
+    return AgentTaskSession(
+        lambda complete: run_agent(context.machine, complete),
+        context.require_task_grader(),
+    )
 
 engine = RolloutEngine(model, factories, sessions={"agent": agent_session})
 ```
+
+The function binds this attempt's machine and grader to an agent runner whose
+own API does not accept `TaskSessionContext`.
 
 The engine closes the selected session before the task machine.
 Agents with their own grader can pass that callback to `AgentTaskSession` instead.

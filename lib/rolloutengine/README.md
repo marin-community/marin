@@ -4,7 +4,8 @@
 `RolloutData`: the conversation, exact tokens, loss mask, optional log probabilities, grade, and per-turn records.
 
 Callers supply a model callable, machine factories, and optional `TaskSession`
-factories. Each factory receives a `TaskSessionContext` for one attempt.
+factories. Each factory receives a `TaskSessionContext` for one attempt;
+a session class with that constructor signature can be registered directly.
 Each session prepares model requests, handles responses and tools, and grades the attempt.
 The built-in `shellbox` session uses the same execution
 loop as registered sessions and handles shell tools. `AgentTaskSession` adapts
