@@ -25,10 +25,8 @@ from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheMetadata, SerialCacheWriter
 from levanter.tokenizers import load_tokenizer
 from marin.execution.artifact import Artifact, read_artifact
-from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
@@ -41,6 +39,7 @@ from experiments.grug.fast_track.contracts import (
     FrozenBaselineManifest,
     ResolvedTrainingBudget,
     adopt_artifact_path,
+    content_step_name,
     require_tokenizer_content,
 )
 from experiments.grug.fast_track.corpus_sample import QUALITY_POOL_MULTIPLIER, RawCorpusPool
@@ -488,7 +487,11 @@ def select_scored_pool(
     tie_seed: int,
     num_ranges: int = 256,
 ) -> SelectedQualityPool:
-    """Take a raw random prefix, then rank only that rung pool by score."""
+    """Take a raw random prefix, then rank only that rung pool.
+
+    The candidate and incumbent methods rank by score, then by the seeded tie hash.
+    The random method ranks by the seeded tie hash only.
+    """
     score_column = SCORE_COLUMN
     classifier_identity = pool.classifier_identity
     if selection_method is SelectionMethod.INCUMBENT:
@@ -781,9 +784,7 @@ def build_scored_pool(
         ),
         "extra_dependencies": [(dependency.name, dependency.version) for dependency in extra_dependencies],
     }
-    digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:20]
-    name = f"fast-track/scored-pool/{digest}"
-    version = resolve_version(name, version)
+    step_name = content_step_name("scored-pool", identity, version)
 
     def build_config(ctx: StepContext) -> ScoredPoolBuildConfig:
         return ScoredPoolBuildConfig(
@@ -818,8 +819,8 @@ def build_scored_pool(
             )
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
-        version=version,
+        name=step_name.name,
+        version=step_name.version,
         artifact_type=ScoredPool,
         run=run,
         build_config=build_config,
@@ -841,9 +842,7 @@ def build_quality_features(
         "token_budget": token_budget,
         "harrier": HARRIER_FEATURE_IDENTITY,
     }
-    digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:20]
-    name = f"fast-track/quality-features/{digest}"
-    version = resolve_version(name, version)
+    step_name = content_step_name("quality-features", identity, version)
 
     def build_config(ctx: StepContext) -> QualityFeatureBuildConfig:
         return QualityFeatureBuildConfig(
@@ -869,8 +868,8 @@ def build_quality_features(
             )
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
-        version=version,
+        name=step_name.name,
+        version=step_name.version,
         artifact_type=PreparedQualityPool,
         run=run,
         build_config=build_config,
@@ -918,9 +917,7 @@ def build_quality_data(spec: QualitySpec, *, version: str | None = None) -> Arti
         "method": spec.selection_method.value,
         "tie_seed": spec.tie_seed,
     }
-    digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:20]
-    name = f"fast-track/quality/{digest}"
-    version = resolve_version(name, version)
+    step_name = content_step_name("quality", identity, version)
 
     def build_config(ctx: StepContext) -> QualityBuildConfig:
         return QualityBuildConfig(
@@ -934,7 +931,7 @@ def build_quality_data(spec: QualitySpec, *, version: str | None = None) -> Arti
 
     def run(config: QualityBuildConfig) -> QualityData:
         with ZephyrContext(
-            name=f"fast-track-quality-{digest}",
+            name=f"fast-track-quality-{step_name.digest}",
             resources=config.resources,
             max_workers=QUALITY_POOL_WORKERS,
         ) as ctx:
@@ -948,8 +945,8 @@ def build_quality_data(spec: QualitySpec, *, version: str | None = None) -> Arti
             )
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
-        version=version,
+        name=step_name.name,
+        version=step_name.version,
         artifact_type=QualityData,
         run=run,
         build_config=build_config,

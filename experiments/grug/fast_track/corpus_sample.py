@@ -18,15 +18,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from levanter.data._preprocessor import BatchProcessor
-from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import Artifact, read_artifact
-from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -34,11 +31,12 @@ from zephyr.dataset import Dataset
 from experiments.datakit import hero_data
 from experiments.grug.fast_track.batching import bounded_batches
 from experiments.grug.fast_track.contracts import (
-    TOKENIZATION_CHUNK_CHARS,
     TOKENIZATION_MAX_DOCUMENT_BYTES,
-    TOKENIZATION_POLICY,
     TokenizerSpec,
+    content_step_name,
+    policy_batch_tokenizer,
     require_tokenizer_content,
+    tokenization_policy_identity,
 )
 from experiments.grug.fast_track.label_exclusion import LabelExclusion
 from experiments.grug.fast_track.ranked_pool import RangeTokenTotal, ranked_pool, take_token_prefix
@@ -246,14 +244,7 @@ def _sample_records(
 ) -> Iterator[dict]:
     intervals = _id_intervals(shard.source, seed, cutoff)
     rank_salt = _rank_salt(shard.source, seed)
-    preprocessor = BatchTokenizer(
-        tokenizer,
-        enforce_bos=True,
-        enforce_eos=True,
-        text_field="text",
-        _workaround_len=TOKENIZATION_CHUNK_CHARS,
-        long_string_workaround=True,
-    )
+    preprocessor = policy_batch_tokenizer(tokenizer, text_field="text")
 
     def records() -> Iterator[tuple[dict, int]]:
         with StoragePath(shard.path).open("rb") as stream:
@@ -416,9 +407,7 @@ def prepare_corpus_pool(
 
 def build_corpus_pool(spec: CorpusSampleSpec, *, version: str | None = None) -> ArtifactStep[RawCorpusPool]:
     """Bind corpus sampling to fixed source, tokenizer, seed, and capacity inputs."""
-    digest = hashlib.sha256(canonical_json(_spec_identity(spec)).encode()).hexdigest()[:20]
-    name = f"fast-track/corpus-pool/{digest}"
-    version = resolve_version(name, version)
+    step_name = content_step_name("corpus-pool", _spec_identity(spec), version)
 
     def build_config(ctx: StepContext) -> CorpusSampleConfig:
         return CorpusSampleConfig(spec, ctx.output_path)
@@ -428,8 +417,8 @@ def build_corpus_pool(spec: CorpusSampleSpec, *, version: str | None = None) -> 
             return prepare_corpus_pool(config, ctx=ctx)
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
-        version=version,
+        name=step_name.name,
+        version=step_name.version,
         artifact_type=RawCorpusPool,
         build_config=build_config,
         run=run,
@@ -441,7 +430,5 @@ def _spec_identity(spec: CorpusSampleSpec) -> dict:
         **asdict(spec),
         "label_exclusion": spec.label_exclusion.identity() if spec.label_exclusion else None,
         "sampling_policy": SAMPLING_POLICY,
-        "tokenization_policy": TOKENIZATION_POLICY,
-        "tokenization_chunk_chars": TOKENIZATION_CHUNK_CHARS,
-        "tokenization_max_document_bytes": TOKENIZATION_MAX_DOCUMENT_BYTES,
+        **tokenization_policy_identity(),
     }

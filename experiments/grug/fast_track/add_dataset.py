@@ -4,7 +4,6 @@
 """Prepare a bounded Hugging Face prefix for an add-dataset fast-track run."""
 
 import dataclasses
-import hashlib
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from itertools import islice
@@ -14,15 +13,11 @@ import numpy as np
 from datasets import load_dataset
 from fray.types import ResourceConfig
 from levanter.data._preprocessor import BatchProcessor
-from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.datasets import DatasetComponent, DatasetComponentBase, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, write_levanter_cache
 from levanter.tokenizers import load_tokenizer
-from marin.execution.build_context import resolve_version
-from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.store_builder import write_stats_json
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.storage_path import prefix_join
@@ -31,7 +26,6 @@ from zephyr.dataset import Dataset
 
 from experiments.grug.fast_track.batching import bounded_batches
 from experiments.grug.fast_track.contracts import (
-    TOKENIZATION_CHUNK_CHARS,
     TOKENIZATION_MAX_DOCUMENT_BYTES,
     TOKENIZATION_POLICY,
     TRAIN_SPLIT,
@@ -40,7 +34,10 @@ from experiments.grug.fast_track.contracts import (
     PreparedAddDatasetCache,
     ResolvedTrainingBudget,
     add_dataset_mixture_weights,
+    content_step_name,
+    policy_batch_tokenizer,
     require_tokenizer_content,
+    tokenization_policy_identity,
     unique_token_sample_cap,
 )
 from experiments.grug.fast_track.launch import TrainingSource
@@ -130,12 +127,7 @@ def prepare_add_dataset_cache(
     require_tokenizer_content(tokenizer, config.prefix.tokenizer_hash, owner=f"add-dataset prefix {config.prefix.repo}")
     counts = _PrefixCounts()
     train_path = prefix_join(config.output_path, TRAIN_SPLIT)
-    preprocessor = BatchTokenizer(
-        load_tokenizer(tokenizer),
-        text_field=config.prefix.text_field,
-        long_string_workaround=True,
-        _workaround_len=TOKENIZATION_CHUNK_CHARS,
-    )
+    preprocessor = policy_batch_tokenizer(load_tokenizer(tokenizer), text_field=config.prefix.text_field)
     write_levanter_cache(
         _tokenized_prefix(rows, preprocessor=preprocessor, config=config, counts=counts),
         train_path,
@@ -179,22 +171,17 @@ def add_dataset_cache_step(
     version: str | None = None,
 ) -> ArtifactStep[PreparedAddDatasetCache]:
     """Build a cache handle whose name includes every preparation identity field."""
-    identity = prefix.model_dump() | {
-        "tokenization_policy": TOKENIZATION_POLICY,
-        "tokenization_chunk_chars": TOKENIZATION_CHUNK_CHARS,
-        "tokenization_max_document_bytes": TOKENIZATION_MAX_DOCUMENT_BYTES,
-    }
-    identity_hash = hashlib.sha256(canonical_json(identity).encode()).hexdigest()
-    name = f"fast-track/add-dataset/{identity_hash}"
-    resolved_version = resolve_version(name, version)
-    namespaced_name = user_namespaced_name(name, resolved_version)
+    # This name keeps the full SHA-256 digest that earlier caches use.
+    step_name = content_step_name(
+        "add-dataset", prefix.model_dump() | tokenization_policy_identity(), version, digest_chars=64
+    )
 
     def build_config(ctx: StepContext) -> AddDatasetPreparationConfig:
         return AddDatasetPreparationConfig(prefix=prefix, output_path=ctx.output_path)
 
     return ArtifactStep(
-        name=namespaced_name,
-        version=resolved_version,
+        name=step_name.name,
+        version=step_name.version,
         artifact_type=PreparedAddDatasetCache,
         run=_build_prepared_cache,
         build_config=build_config,

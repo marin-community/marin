@@ -14,14 +14,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.datakit.normalize import generate_id
 from marin.execution.artifact import Artifact, read_artifact
-from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import ensure_parent_dir
 
 from experiments.datakit.embeddings.harrier.pipeline import HARRIER_DIM
+from experiments.grug.fast_track.contracts import content_step_name
 from experiments.grug.fast_track.label_exclusion import LabelExclusion
 from experiments.grug.fast_track.quality import (
     LabelledEmbedding,
@@ -38,6 +37,7 @@ GLM_HARRIER_JOIN_PATH = (
 )
 GLM_ORACLE = "zai-org/GLM-5.2-FP8@ba978f7d347eaf65d22f1a86833408afdb953541"
 LABEL_BATCH = "glm52_rubric_v2"
+PARQUET_READ_BATCH_ROWS = 256
 DUPLICATE_EMBEDDING_POLICY = "first_sorted_path_row"
 LABEL_COLUMNS = ["source", "id", "quality", "score_normalized", "valid", "content_type", "label_batch"]
 JOIN_COLUMNS = ["id", "text", "embedding", *(f"glm52_{name}" for name in LABEL_COLUMNS if name != "id")]
@@ -156,7 +156,7 @@ def _embedding_difference(retained: np.ndarray, duplicate: np.ndarray) -> _Embed
 def _read_original_labels(path: str, hashes: dict[str, str]) -> tuple[dict[tuple[str, str], _Label], dict[str, float]]:
     originals: dict[tuple[str, str], _Label] = {}
     global_scores: dict[str, float] = {}
-    for batch in _read_input(path, hashes).iter_batches(batch_size=256, columns=LABEL_COLUMNS):
+    for batch in _read_input(path, hashes).iter_batches(batch_size=PARQUET_READ_BATCH_ROWS, columns=LABEL_COLUMNS):
         for row in batch.to_pylist():
             label = _label(row)
             key = label.source, label.document_id
@@ -189,7 +189,7 @@ def _read_joined_labels(
     duplicate_rows = []
     for path in paths:
         joined_row = 0
-        for batch in _read_input(path, hashes).iter_batches(batch_size=256, columns=JOIN_COLUMNS):
+        for batch in _read_input(path, hashes).iter_batches(batch_size=PARQUET_READ_BATCH_ROWS, columns=JOIN_COLUMNS):
             for row in batch.to_pylist():
                 label = _label(row, prefix="glm52_")
                 key = label.source, label.document_id
@@ -379,7 +379,7 @@ def read_labelled_embeddings(labels: FrozenQualityLabels) -> list[LabelledEmbedd
     if hashlib.sha256(contents).hexdigest() != labels.table_sha256:
         raise ValueError("frozen quality labels changed after preparation")
     result = []
-    for batch in pq.ParquetFile(io.BytesIO(contents)).iter_batches(batch_size=256):
+    for batch in pq.ParquetFile(io.BytesIO(contents)).iter_batches(batch_size=PARQUET_READ_BATCH_ROWS):
         rows = batch.to_pylist()
         embeddings = normalize_harrier_embeddings(np.asarray([row["embedding"] for row in rows], dtype=np.int8))
         result.extend(
@@ -397,9 +397,7 @@ class _FreezeLabelsConfig:
 
 def build_quality_labels(spec: QualityLabelSpec, *, version: str | None = None) -> ArtifactStep[FrozenQualityLabels]:
     """Bind label validation and freezing as one reusable artifact dependency."""
-    digest = hashlib.sha256(canonical_json(asdict(spec)).encode()).hexdigest()[:20]
-    name = f"fast-track/quality-labels/{digest}"
-    version = resolve_version(name, version)
+    step_name = content_step_name("quality-labels", asdict(spec), version)
 
     def build_config(ctx: StepContext) -> _FreezeLabelsConfig:
         return _FreezeLabelsConfig(spec, ctx.output_path)
@@ -408,8 +406,8 @@ def build_quality_labels(spec: QualityLabelSpec, *, version: str | None = None) 
         return freeze_quality_labels(config.spec, output_path=config.output_path)
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
-        version=version,
+        name=step_name.name,
+        version=step_name.version,
         artifact_type=FrozenQualityLabels,
         build_config=build_config,
         run=run,
@@ -447,16 +445,14 @@ def build_ridge_quality_head(
 ) -> ArtifactStep[FittedRidgeQualityHead]:
     """Fit one ridge candidate without reading audit labels for training or metrics."""
     identity = {"labels": [labels.name, labels.version], "regularization": regularization, "split_seed": split_seed}
-    digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:20]
-    name = f"fast-track/quality-head/{digest}"
-    version = resolve_version(name, version)
+    step_name = content_step_name("quality-head", identity, version)
 
     def build_config(ctx: StepContext) -> _RidgeFitConfig:
         return _RidgeFitConfig(ctx.artifact_path(labels), regularization, split_seed)
 
     return ArtifactStep(
-        name=user_namespaced_name(name, version),
-        version=version,
+        name=step_name.name,
+        version=step_name.version,
         artifact_type=FittedRidgeQualityHead,
         deps=(labels,),
         build_config=build_config,

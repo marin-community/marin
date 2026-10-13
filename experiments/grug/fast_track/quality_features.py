@@ -73,6 +73,26 @@ class QualityFeatureShard:
     documents: int
 
 
+@dataclass(frozen=True)
+class _RawPrefixShard:
+    """One raw prefix shard and its index in raw sample range order."""
+
+    range_key: int
+    path: str
+
+
+@dataclass(frozen=True)
+class _NormalizedRowLocator:
+    """The normalized row of one raw prefix document and its raw position."""
+
+    source: str
+    normalized_shard: str
+    normalized_row: int
+    raw_shard_index: int
+    raw_row_index: int
+    document_id: str
+
+
 class PreparedQualityPool(Artifact):
     """A fixed raw prefix and its aligned cached Harrier feature shards."""
 
@@ -121,14 +141,14 @@ def validate_feature_sources(
     return pins
 
 
-def _normalized_row_locators(raw_prefix_shards: tuple[str, ...]) -> Dataset[dict]:
+def _normalized_row_locators(raw_prefix_shards: tuple[str, ...]) -> Dataset[_NormalizedRowLocator]:
     """Read only IDs and row offsets from the raw prefix."""
-    inputs = [{"range_key": index, "path": path} for index, path in enumerate(raw_prefix_shards)]
+    inputs = [_RawPrefixShard(index, path) for index, path in enumerate(raw_prefix_shards)]
 
-    def read_shard(files: Iterator[dict], _: ShardInfo) -> Iterator[dict]:
+    def read_shard(files: Iterator[_RawPrefixShard], _: ShardInfo) -> Iterator[_NormalizedRowLocator]:
         for item in files:
             row_index = 0
-            with StoragePath(item["path"]).open("rb") as stream:
+            with StoragePath(item.path).open("rb") as stream:
                 parquet = pq.ParquetFile(stream)
                 for batch in parquet.iter_batches(
                     batch_size=FEATURE_BATCH_ROWS,
@@ -139,14 +159,14 @@ def _normalized_row_locators(raw_prefix_shards: tuple[str, ...]) -> Dataset[dict
                             raise ValueError("raw quality rows require string source and ID fields")
                         if not isinstance(row["normalized_shard"], str) or not isinstance(row["normalized_row"], int):
                             raise ValueError("raw quality rows require normalized shard and row locators")
-                        yield {
-                            "source": row["source"],
-                            "normalized_shard": row["normalized_shard"],
-                            "normalized_row": row["normalized_row"],
-                            "raw_shard_index": item["range_key"],
-                            "raw_row_index": row_index,
-                            "id": row["id"],
-                        }
+                        yield _NormalizedRowLocator(
+                            source=row["source"],
+                            normalized_shard=row["normalized_shard"],
+                            normalized_row=row["normalized_row"],
+                            raw_shard_index=item.range_key,
+                            raw_row_index=row_index,
+                            document_id=row["id"],
+                        )
                         row_index += 1
 
     return Dataset.from_list(inputs).reshard(len(inputs)).map_shard(read_shard)
@@ -161,7 +181,7 @@ def _embedding_path(source: QualityFeatureSource, normalized_shard: str) -> str:
 
 def _join_source_shard(
     normalized_shard: str,
-    locators: Iterator[dict],
+    locators: Iterator[_NormalizedRowLocator],
     *,
     source_pins: dict[str, QualityFeatureSource],
 ) -> Iterator[dict]:
@@ -169,7 +189,7 @@ def _join_source_shard(
     first = next(locators, None)
     if first is None:
         return
-    source_name = first["source"]
+    source_name = first.source
     source = source_pins[source_name]
     embedding_path = _embedding_path(source, normalized_shard)
 
@@ -184,12 +204,12 @@ def _join_source_shard(
             row_count = parquet.metadata.row_group(row_group).num_rows
             row_end = row_start + row_count
             selected = []
-            while pending_locator is not None and pending_locator["normalized_row"] < row_end:
-                if pending_locator["source"] != source_name:
+            while pending_locator is not None and pending_locator.normalized_row < row_end:
+                if pending_locator.source != source_name:
                     raise ValueError("one normalized shard has rows from multiple source pins")
-                if pending_locator["normalized_row"] <= previous_row:
+                if pending_locator.normalized_row <= previous_row:
                     raise ValueError("normalized row locators are not unique and ordered")
-                previous_row = pending_locator["normalized_row"]
+                previous_row = pending_locator.normalized_row
                 selected.append(pending_locator)
                 pending_locator = next(locators, None)
             if selected:
@@ -203,17 +223,17 @@ def _join_source_shard(
                     for document_id, embedding in zip(
                         batch.column("id").to_pylist(), batch.column("embedding").to_pylist(), strict=True
                     ):
-                        if selected_index < len(selected) and current_row == selected[selected_index]["normalized_row"]:
+                        if selected_index < len(selected) and current_row == selected[selected_index].normalized_row:
                             locator = selected[selected_index]
-                            if document_id != locator["id"]:
+                            if document_id != locator.document_id:
                                 raise ValueError(
                                     f"Harrier ID differs from normalized ID in {normalized_shard} at row {current_row}"
                                 )
                             if len(embedding) != HARRIER_DIM:
                                 raise ValueError(f"Harrier embedding has the wrong dimension in {embedding_path}")
                             yield {
-                                "raw_shard_index": locator["raw_shard_index"],
-                                "raw_row_index": locator["raw_row_index"],
+                                "raw_shard_index": locator.raw_shard_index,
+                                "raw_row_index": locator.raw_row_index,
                                 "id": document_id,
                                 "embedding": embedding,
                             }
@@ -224,7 +244,7 @@ def _join_source_shard(
             row_start = row_end
         if pending_locator is not None:
             raise ValueError(
-                f"Harrier shard {embedding_path} does not cover normalized row {pending_locator['normalized_row']}"
+                f"Harrier shard {embedding_path} does not cover normalized row {pending_locator.normalized_row}"
             )
 
 
@@ -265,9 +285,9 @@ def prepare_quality_features(
     )
     locators = _normalized_row_locators(raw_prefix.shards)
     matched_features = locators.group_by(
-        key=lambda row: row["normalized_shard"],
+        key=lambda locator: locator.normalized_shard,
         reducer=lambda path, rows: _join_source_shard(path, rows, source_pins=source_pins),
-        sort_by=lambda row: row["normalized_row"],
+        sort_by=lambda locator: locator.normalized_row,
         num_output_shards=min(FEATURE_JOIN_SHARDS, math.ceil(raw_prefix.total_documents / FEATURE_BATCH_ROWS)),
     )
     feature_rows = matched_features.group_by(

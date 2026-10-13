@@ -15,7 +15,7 @@ import math
 import os
 import shlex
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import timedelta
 from enum import StrEnum
 from typing import NoReturn, Protocol
@@ -518,6 +518,38 @@ def build_h100_ladder_run(
 _WANDB_PROJECT = "marin_moe"
 
 
+def seed_options[F: Callable[..., object]](command: F) -> F:
+    """Add the model initialization and training data order seed options."""
+    command = click.option(
+        "--data-seed",
+        type=click.IntRange(min=0),
+        default=None,
+        help="Training data order seed. Omit to derive it from --seed.",
+    )(command)
+    return click.option(
+        "--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed."
+    )(command)
+
+
+def rung_options[F: Callable[..., object]](command: F) -> F:
+    """Add the ladder rung width and the dense or MoE model options."""
+    command = click.option("--dense/--moe", default=False, show_default=True, help="Select the dense or MoE model.")(
+        command
+    )
+    return click.option("--size", type=click.Choice(H100_LADDER_SIZES), default="d512", show_default=True)(command)
+
+
+def ladder_options[F: Callable[..., object]](command: F) -> F:
+    """Add the rung, token budget, and seed options of a fast-track training command."""
+    command = seed_options(command)
+    command = click.option("--num-steps", type=click.IntRange(min=1), default=None)(command)
+    command = click.option("--batch-size", type=click.IntRange(min=1), default=None)(command)
+    command = click.option(
+        "--match", type=click.Choice([mode.value for mode in MatchMode]), default="data", show_default=True
+    )(command)
+    return rung_options(command)
+
+
 def _submit_to_cluster(run_id: str, *, target_cluster: str) -> NoReturn:
     """Run the current command in an Iris coordinator job."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
@@ -577,13 +609,7 @@ def _submit_to_cluster(run_id: str, *, target_cluster: str) -> NoReturn:
     help="Override the step budget directly (else derived from --match).",
 )
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
-@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed.")
-@click.option(
-    "--data-seed",
-    type=click.IntRange(min=0),
-    default=None,
-    help="Training data order seed. Omit to derive it from --seed.",
-)
+@seed_options
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
 @click.option(
     "--save-checkpoints",
@@ -601,7 +627,7 @@ def _submit_to_cluster(run_id: str, *, target_cluster: str) -> NoReturn:
     "--target-cluster",
     default="cw-us-east-02a",
     show_default=True,
-    help="Iris cluster for the submitted job and its data.",
+    help="Iris cluster for the submitted job. The data paths stay on marin-us-east-02a.",
 )
 @build_options
 def main(

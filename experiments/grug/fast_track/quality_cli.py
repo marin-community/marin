@@ -17,11 +17,12 @@ from experiments.grug.fast_track.contracts import adopt_artifact_path
 from experiments.grug.fast_track.corpus_sample import QUALITY_POOL_MULTIPLIER, RawCorpusPool
 from experiments.grug.fast_track.label_exclusion import read_label_exclusion
 from experiments.grug.fast_track.launch import (
-    H100_LADDER_SIZES,
     MatchMode,
     ThroughputResult,
     build_h100_ladder_run,
     resolve_h100_ladder_budget,
+    rung_options,
+    seed_options,
 )
 from experiments.grug.fast_track.quality import DocumentQualityScorer
 from experiments.grug.fast_track.quality_features import PreparedQualityPool
@@ -86,8 +87,7 @@ def _reject_options(options: dict[str, object], reason: str) -> None:
 @click.option("--label-exclusion-manifest", help="Frozen label exclusion manifest path.")
 @click.option("--prepared-features", help="Prepared Harrier feature pool artifact path for a generic scorer.")
 @click.option("--run-id", help="Run identifier for training.")
-@click.option("--size", type=click.Choice(H100_LADDER_SIZES), default="d512", show_default=True)
-@click.option("--dense/--moe", default=False, show_default=True, help="Select the dense or MoE model.")
+@rung_options
 @click.option(
     "--training-tokens", type=click.IntRange(min=1), help="Override the rung token budget for preparation only."
 )
@@ -98,13 +98,7 @@ def _reject_options(options: dict[str, object], reason: str) -> None:
     show_default=True,
 )
 @click.option("--tie-seed", type=click.IntRange(min=0), default=0, show_default=True)
-@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed.")
-@click.option(
-    "--data-seed",
-    type=click.IntRange(min=0),
-    default=None,
-    help="Training data order seed. Omit to derive it from --seed.",
-)
+@seed_options
 @click.option(
     "--stage",
     type=click.Choice([stage.value for stage in QualityStage]),

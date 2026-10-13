@@ -20,10 +20,10 @@ from experiments.grug.fast_track.contracts import (
 )
 from experiments.grug.fast_track.hero_sample import HeroTrainingSource, PreparedHeroSample
 from experiments.grug.fast_track.launch import (
-    H100_LADDER_SIZES,
     V16384_TOKENIZER,
     MatchMode,
     build_h100_ladder_run,
+    ladder_options,
     maximum_h100_ladder_tokens,
     resolve_h100_ladder_budget,
 )
@@ -93,18 +93,7 @@ def _training_token_cap(
 
 @click.command()
 @click.option("--run-id", default=None, help="Run identifier for artifact and W&B names.")
-@click.option("--size", type=click.Choice(H100_LADDER_SIZES), default="d512", show_default=True)
-@click.option("--dense/--moe", default=False, show_default=True, help="Select the dense or MoE model.")
-@click.option("--match", type=click.Choice([mode.value for mode in MatchMode]), default="data", show_default=True)
-@click.option("--batch-size", type=click.IntRange(min=1), default=None)
-@click.option("--num-steps", type=click.IntRange(min=1), default=None)
-@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed.")
-@click.option(
-    "--data-seed",
-    type=click.IntRange(min=0),
-    default=None,
-    help="Training data order seed. Omit to derive it from --seed.",
-)
+@ladder_options
 @click.option("--repository", default=None, help="Hugging Face dataset repository.")
 @click.option("--revision", default=None, help="Immutable Hugging Face commit hash.")
 @click.option("--subset", default=None, help="Hugging Face dataset subset.")

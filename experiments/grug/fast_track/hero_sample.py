@@ -32,10 +32,7 @@ from levanter.store.cache import write_levanter_cache
 from levanter.tokenizers import MarinTokenizer, load_tokenizer, tokenizer_content_hash
 from levanter.utils.jax_utils import key_iterator
 from marin.execution.artifact import Artifact
-from marin.execution.build_context import resolve_version
-from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from pydantic import Field
 from rigging.filesystem.storage_path import prefix_join
@@ -47,9 +44,14 @@ from experiments.grug.fast_track.contracts import (
     FrozenBaselineComponent,
     FrozenBaselineManifest,
     ResolvedTrainingBudget,
+    content_step_name,
     require_tokenizer_content,
 )
-from experiments.grug.fast_track.launch import FlatCacheTrainingSource, maximum_h100_ladder_tokens
+from experiments.grug.fast_track.launch import (
+    V16384_TOKENIZER,
+    FlatCacheTrainingSource,
+    maximum_h100_ladder_tokens,
+)
 from experiments.grug.moe.launch_datakit_moe_mix import _MIXTURE_BLOCK_SIZE
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import _SPEC
 
@@ -57,7 +59,6 @@ logger = logging.getLogger(__name__)
 
 HERO_RECIPE = Path(__file__).parents[1] / "moe_hero_ep" / "harrier_mix_2026_08_18.json"
 HERO_SOURCE_STORE = _SPEC.candidate_store_uri
-HERO_TARGET_TOKENIZER = "hero-bpe-v16384"
 HERO_TARGET_TOKENS = maximum_h100_ladder_tokens()
 HERO_SEQUENCE_LENGTH = 4096
 SAMPLE_TASK_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="16g")
@@ -197,7 +198,7 @@ def _component_cache_path(root: str, name: str) -> str:
 def hero_sample_manifest(root: str) -> FrozenBaselineManifest:
     """Return the main-phase Hero manifest rooted at one sample artifact path."""
     return FrozenBaselineManifest(
-        tokenizer=HERO_TARGET_TOKENIZER,
+        tokenizer=V16384_TOKENIZER,
         components=tuple(
             FrozenBaselineComponent(name, _component_cache_path(root, name), weight)
             for name, weight in _HERO_RECIPE.weights.items()
@@ -338,7 +339,7 @@ def prepare_hero_sample(config: HeroSampleConfig) -> PreparedHeroSample:
             source_cache=prefix_join(HERO_SOURCE_STORE, f"cluster={int(name[1:3])}/quality={name[-1]}"),
             output_cache=_component_cache_path(config.output_path, name),
             source_tokenizer=_HERO_RECIPE.source_tokenizer,
-            target_tokenizer=HERO_TARGET_TOKENIZER,
+            target_tokenizer=V16384_TOKENIZER,
             target_tokens=max(1, required_examples[name]) * HERO_SEQUENCE_LENGTH,
             data_seed=config.data_seed,
             component_index=_HERO_RECIPE.shuffle_order.index(name),
@@ -382,25 +383,23 @@ def hero_sample_step(
 ) -> ArtifactStep[PreparedHeroSample]:
     """Bind the pinned hero sample to one immutable artifact identity."""
     source_tokenizer_hash = tokenizer_content_hash(_HERO_RECIPE.source_tokenizer)
-    target_tokenizer_hash = tokenizer_content_hash(HERO_TARGET_TOKENIZER)
+    target_tokenizer_hash = tokenizer_content_hash(V16384_TOKENIZER)
     identity = {
         "source_store": HERO_SOURCE_STORE,
         "recipe_sha256": _HERO_RECIPE.sha256,
         "phase": "main",
         "loader_policy": HERO_LOADER_POLICY,
         "sequence_length": HERO_SEQUENCE_LENGTH,
-        "tokenizer": HERO_TARGET_TOKENIZER,
+        "tokenizer": V16384_TOKENIZER,
         "source_tokenizer_hash": source_tokenizer_hash,
         "target_tokenizer_hash": target_tokenizer_hash,
         "requested_tokens": requested_tokens,
         "data_seed": data_seed,
     }
-    digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:20]
-    name = f"fast-track/hero-sample/{digest}"
-    resolved_version = resolve_version(name, version)
+    step_name = content_step_name("hero-sample", identity, version)
     return ArtifactStep(
-        name=user_namespaced_name(name, resolved_version),
-        version=resolved_version,
+        name=step_name.name,
+        version=step_name.version,
         artifact_type=PreparedHeroSample,
         run=prepare_hero_sample,
         build_config=lambda ctx: HeroSampleConfig(
