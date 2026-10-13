@@ -16,18 +16,26 @@ TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
 
 @dataclass(frozen=True)
 class ModelRequest:
+    """Request chat generation or an exact initial token-prefix replay.
+
+    With prompt_token_ids, messages are display-only and options are completion
+    sampling options. The transport must not apply a chat template to the IDs.
+    """
+
     messages: tuple[dict[str, Any], ...]
     options: dict[str, Any]
     prefix_token_ids: tuple[int, ...]
     assistant_message_index: int | None
+    prompt_token_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
 class SessionStart:
-    """The initial conversation and model options for one task session."""
+    """Initial messages and options, with an optional exact prompt token prefix."""
 
     messages: tuple[dict[str, Any], ...]
     options: dict[str, Any]
+    prompt_token_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +118,8 @@ class Transition:
     reward_components: dict[str, float] = field(default_factory=dict)
     grade: GradeResult | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
+    next_options: dict[str, Any] | None = None
+    next_prompt_token_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
