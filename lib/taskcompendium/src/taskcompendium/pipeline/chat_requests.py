@@ -31,6 +31,8 @@ _DIRECT_REQUEST_CAPACITY = BoundedSemaphore(MAX_DIRECT_CONCURRENT_REQUESTS)
 
 
 class ChatClient(Protocol):
+    """Transport failures raise builtin ConnectionError or TimeoutError."""
+
     def complete(self, body: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
 
@@ -89,10 +91,15 @@ def chat_output(
     )
     with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
         results = executor.map(partial(_chat_request, client), chain.from_iterable(groups))
-        for result in results:
-            observations[result.observation.request_ids[0]] = result.observation
-            metrics.update_counter("review/direct/submitted_requests", 1)
-            metrics.update_counter("review/direct/provider_seconds", result.provider_seconds)
-            metrics.update_counter("review/direct/admission_seconds", result.admission_seconds)
+        try:
+            for result in results:
+                observations[result.observation.request_ids[0]] = result.observation
+                metrics.update_counter("review/direct/submitted_requests", 1)
+                metrics.update_counter("review/direct/provider_seconds", result.provider_seconds)
+                metrics.update_counter("review/direct/admission_seconds", result.admission_seconds)
+        except BaseException:
+            # Cancel unsent work before the context waits for calls already in flight.
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
     ordered = [observations[request["custom_id"]] for request in requests]
     return RequestOutput(tuple(requests), ordered)
