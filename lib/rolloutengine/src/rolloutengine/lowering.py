@@ -97,8 +97,6 @@ def validate_lowered_task(
         shell_tool is None or tool.name != shell_tool.definition.name for tool in task.interaction_tools
     ):
         raise NotImplementedError("Native tool providers require a registered task session")
-    if set(task.environment_requirements.capabilities) - {"shell", "filesystem"}:
-        raise NotImplementedError("The Shellbox session supports only shell and filesystem capabilities")
     if lowered.runtime.task_machine is None and (
         task.resources.all
         or task.resources.worker

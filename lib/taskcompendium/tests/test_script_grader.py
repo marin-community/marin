@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -22,9 +23,9 @@ from shellbox.machine import (
     ExitReason,
     Machine,
     MachineSpec,
+    PackageSpec,
     RegistryImage,
     Result,
-    ShellSimBuiltins,
 )
 from verifyit.grade import main as verifyit_main
 from verifyit.spec import NumericSpec
@@ -107,13 +108,13 @@ class VerifyitImageMachine:
         await self.machine.close()
 
 
-class FixtureImageFactory:
+class FixtureImageFactory(DockerMachineFactory):
     """Start the pinned fixture image as ShellSim built-ins."""
 
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> VerifyitImageMachine:
-        return VerifyitImageMachine(await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins())))
+        return VerifyitImageMachine(await ShellSimMachineFactory().create(replace(spec, source=PackageSpec())))
 
 
 def arithmetic_task(grader: Grader) -> TaskSpec:
@@ -217,7 +218,7 @@ def local_artifact_factory(tmp_path):
         async def close(self):
             self.closed = True
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         def __init__(self, prepare_artifacts, *, archive_members=(), archive_failure=None):
             self.machines = []
             self.prepare_artifacts = prepare_artifacts
@@ -370,7 +371,7 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
 
 @pytest.mark.asyncio
 async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading():
-    agent = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins(), workdir="/app"))
+    agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
     await agent.run(
         Command(("sh", "-c", "mkdir -p /app/out/nested && echo a > /app/out/a.txt && echo b > /app/out/nested/b.txt"))
     )

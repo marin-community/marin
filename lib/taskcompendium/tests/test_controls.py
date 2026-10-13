@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -16,8 +17,8 @@ from shellbox.machine import (
     DockerImage,
     Machine,
     MachineSpec,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
 from verifyit.spec import SchemaFormat
@@ -77,7 +78,7 @@ class ImageMachine:
 
 
 @dataclass
-class RecordingImages:
+class RecordingImages(DockerMachineFactory):
     """Fresh ShellSim machines, each recording the image it stands in for."""
 
     backend = Backend.DOCKER
@@ -258,7 +259,7 @@ class OracleMachines(FixtureGradingMachines):
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int):
         if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-            return ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins(), memory_mb=memory_mb)
+            return ShellSimMachineFactory(), MachineSpec(PackageSpec(), memory_mb=memory_mb)
         return self.factory, MachineSpec(DockerImage(environment.docker_image or GRADER_IMAGE), memory_mb=memory_mb)
 
 
