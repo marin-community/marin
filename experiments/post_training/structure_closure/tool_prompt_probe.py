@@ -9,25 +9,10 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from rolloutengine.closure_scoring import ClosureFormat, score_closure_region
 from transformers import PreTrainedTokenizerFast
 
-from rolloutengine.closure_scoring import ClosureFormat, score_closure_region
-
-from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
-
-
-TOOL = {
-    "type": "function",
-    "function": {
-        "name": "write_result",
-        "description": "Record the result for a task.",
-        "parameters": {
-            "type": "object",
-            "properties": {"task": {"type": "string"}, "result": {"type": "array"}},
-            "required": ["task", "result"],
-        },
-    },
-}
+from experiments.post_training.structure_closure.token_data import WRITE_RESULT_TOOL, TokenizedCaseRecord
 
 
 def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokenizerFast) -> list[dict]:
@@ -35,13 +20,13 @@ def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokeniz
     body = json.loads(record["prefix"].removeprefix("<tool_call>"))
     messages = [{"role": "user", "content": record["instruction"]}]
     complete = tokenizer.apply_chat_template(
-        messages + [{"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": body}]}],
+        [*messages, {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": body}]}],
         tokenize=False,
         enable_thinking=False,
     )
     native = "<tool_call>" + complete.rsplit("<tool_call>", 1)[1].split("</tool_call>", 1)[0]
     records = []
-    for declaration, tools in (("undeclared", None), ("declared", [TOOL])):
+    for declaration, tools in (("undeclared", None), ("declared", [WRITE_RESULT_TOOL])):
         rendered = tokenizer.apply_chat_template(
             messages, tools=tools, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
@@ -51,26 +36,31 @@ def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokeniz
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
             target_ids = tokenizer.encode("</tool_call>", add_special_tokens=False)
             expected = prefix + "</tool_call>"
-            decoded = tokenizer.decode(prompt_ids + target_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+            decoded = tokenizer.decode(
+                prompt_ids + target_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+            )
             if decoded != prompt + "</tool_call>":
                 raise ValueError(f"Conditional token round trip failed: {variant}")
             if not score_closure_region(expected, expected, ClosureFormat.TOOL).success:
                 raise ValueError(f"Reference tool closure failed: {variant}")
             if variant == "undeclared-compact" and prompt_ids != record["prompt_token_ids"]:
                 raise ValueError("Control arm differs from the frozen v5 prompt")
-            records.append({
-                **record,
-                "case_id": hashlib.sha256(f"{record['case_id']}/{variant}".encode()).hexdigest(),
-                "probe_variant": variant,
-                "source_case_id": record["case_id"],
-                "prefix": prefix,
-                "expected": expected,
-                "prompt_token_ids": prompt_ids,
-                "target_token_ids": target_ids,
-                "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-                "canonical_joint_encoding_matches": tokenizer.encode(prompt + "</tool_call>", add_special_tokens=False)
-                == prompt_ids + target_ids,
-            })
+            records.append(
+                {
+                    **record,
+                    "case_id": hashlib.sha256(f"{record['case_id']}/{variant}".encode()).hexdigest(),
+                    "probe_variant": variant,
+                    "source_case_id": record["case_id"],
+                    "prefix": prefix,
+                    "expected": expected,
+                    "prompt_token_ids": prompt_ids,
+                    "target_token_ids": target_ids,
+                    "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+                    "canonical_joint_encoding_matches": (
+                        tokenizer.encode(prompt + "</tool_call>", add_special_tokens=False) == prompt_ids + target_ids
+                    ),
+                }
+            )
     return records
 
 
@@ -96,7 +86,7 @@ def main() -> None:
         raise ValueError("Requested task count is outside the source cohort")
     tokenizer = PreTrainedTokenizerFast.from_pretrained(args.initializer, local_files_only=True)
     records, failures = [], []
-    for case in cases[:args.tasks]:
+    for case in cases[: args.tasks]:
         try:
             records.extend(paired_tool_probes(case, tokenizer))
         except (ValueError, KeyError, TypeError) as error:

@@ -7,12 +7,67 @@ import argparse
 import hashlib
 import json
 from collections import Counter
+from dataclasses import replace
+from enum import StrEnum
 from pathlib import Path
 from typing import TypedDict
 
 from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.structure_closure.benchmark import ClosureCase, Family, Split, closure_format, score_case
+
+
+class ToolPrompt(StrEnum):
+    COMPACT = "compact"
+    NATIVE_DECLARED = "native-declared"
+
+
+WRITE_RESULT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "write_result",
+        "description": "Record the result for a task.",
+        "parameters": {
+            "type": "object",
+            "properties": {"task": {"type": "string"}, "result": {"type": "array"}},
+            "required": ["task", "result"],
+        },
+    },
+}
+
+
+def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> ClosureCase:
+    """Keep known tool content and control boundaries in the tokenizer's tool format."""
+    body = json.loads(case.expected.removeprefix("<tool_call>").removesuffix("</tool_call>"))
+    rendered = tokenizer.apply_chat_template(
+        [
+            {"role": "user", "content": case.instruction},
+            {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": body}]},
+        ],
+        tools=[WRITE_RESULT_TOOL],
+        tokenize=False,
+        enable_thinking=False,
+    )
+    expected = "<tool_call>" + rendered.rsplit("<tool_call>", 1)[1].split("</tool_call>", 1)[0] + "</tool_call>"
+    if json.loads(expected.removeprefix("<tool_call>").removesuffix("</tool_call>")) != body:
+        raise ValueError("Native serialization changed tool content")
+    if case.control == "close_required":
+        cut = len(expected) - len("</tool_call>")
+    elif case.control == "opener_retention":
+        cut = expected.index("{")
+    elif case.control == "continue_required":
+        cut = expected.index(case.task_id) + max(1, len(case.task_id) // 2)
+    elif case.control == "value_continue_required":
+        cut = expected.index('"task":') + len('"task":')
+    else:
+        raise ValueError(f"Unsupported native tool control: {case.control}")
+    instruction = case.instruction
+    if case.control != "close_required":
+        lead, reference = instruction.rsplit("\nReference:\n", 1)
+        if reference != case.expected:
+            raise ValueError("Instruction reference differs from the case reference")
+        instruction = lead + "\nReference:\n" + expected
+    return replace(case, prefix=expected[:cut], expected=expected, instruction=instruction)
 
 
 class TokenizedCaseRecord(TypedDict):
@@ -31,10 +86,17 @@ class TokenizedCaseRecord(TypedDict):
     canonical_joint_encoding_matches: bool
 
 
-def tokenized_case_record(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> TokenizedCaseRecord:
+def tokenized_case_record(
+    case: ClosureCase, tokenizer: PreTrainedTokenizerFast, *, tool_prompt: ToolPrompt
+) -> TokenizedCaseRecord:
     """Render the pinned template and verify prefix-preserving conditional targets."""
+    tools = None
+    if tool_prompt == ToolPrompt.NATIVE_DECLARED and case.family in (Family.TOOL, Family.REPEATED_OPENER):
+        case = native_tool_case(case, tokenizer)
+        tools = [WRITE_RESULT_TOOL]
     rendered = tokenizer.apply_chat_template(
         [{"role": "user", "content": case.instruction}],
+        tools=tools,
         tokenize=False,
         add_generation_prompt=True,
         enable_thinking=case.family == Family.REASONING,
@@ -75,7 +137,9 @@ def tokenized_case_record(case: ClosureCase, tokenizer: PreTrainedTokenizerFast)
     }
 
 
-def prepare_tokens(cases_directory: Path, initializer: Path, output: Path, context_tokens: int) -> dict:
+def prepare_tokens(
+    cases_directory: Path, initializer: Path, output: Path, context_tokens: int, *, tool_prompt: ToolPrompt
+) -> dict:
     """Audit all branches and retain every failure in one report before launch."""
     if output.exists():
         raise FileExistsError(output)
@@ -97,7 +161,7 @@ def prepare_tokens(cases_directory: Path, initializer: Path, output: Path, conte
                 raw = json.loads(line)
                 case = ClosureCase(**(raw | {"family": Family(raw["family"])}))
                 try:
-                    record = tokenized_case_record(case, tokenizer)
+                    record = tokenized_case_record(case, tokenizer, tool_prompt=tool_prompt)
                     prompt_length = len(record["prompt_token_ids"])
                     target_length = len(record["target_token_ids"])
                     if prompt_length + target_length > context_tokens:
@@ -119,6 +183,7 @@ def prepare_tokens(cases_directory: Path, initializer: Path, output: Path, conte
         "max_target_tokens": max_target,
         "noncanonical_joint_encoding_cases": noncanonical,
         "context_tokens": context_tokens,
+        "tool_prompt": tool_prompt.value,
         "failures": failures,
         "hashes": output_hashes,
         "source_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
@@ -137,8 +202,9 @@ if __name__ == "__main__":
     parser.add_argument("--initializer", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--context-tokens", type=int, required=True)
+    parser.add_argument("--tool-prompt", type=ToolPrompt, choices=list(ToolPrompt), required=True)
     args = parser.parse_args()
-    report = prepare_tokens(args.cases, args.initializer, args.output, args.context_tokens)
+    report = prepare_tokens(args.cases, args.initializer, args.output, args.context_tokens, tool_prompt=args.tool_prompt)
     print(json.dumps({key: value for key, value in report.items() if key not in ("counts", "failures")}))
     print(f"Conversion failures: {len(report['failures'])}")
     raise SystemExit(bool(report["failures"]))
