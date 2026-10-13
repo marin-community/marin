@@ -138,7 +138,9 @@ def main() -> None:
         plot_model(model_rows, limit, f"{short_name} - {base.rsplit('/', 1)[-1]}", args.output_dir / stem)
     metadata = {
         "tracker_sha256": hashlib.sha256(args.tracker.read_bytes()).hexdigest(),
-        "score_precision": "Deltas use the three-decimal tracker point estimates, not unrounded trial aggregates.",
+        "score_precision": (
+            "Deltas use the three-significant-digit tracker point estimates, not unrounded trial aggregates."
+        ),
         "unit": "percentage points",
         "benchmark_count": len(benchmarks),
         "global_color_limit_pp": limit,
