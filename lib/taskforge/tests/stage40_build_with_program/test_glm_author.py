@@ -14,6 +14,7 @@ from taskforge.stage40_build_with_program.glm_author import (
     AUTHOR_DIR,
     COMPLETIONS_FILE,
     NOTES_LIMIT,
+    REFERENCE_SECTIONS,
     GlmAuthor,
     ProgramSubmission,
     sdk_reference,
@@ -29,6 +30,13 @@ def test_the_sdk_reference_lists_the_fields_of_the_task_types_steps_read():
     assert "class EnvironmentRequirements(*, capabilities:" in reference
     assert "docker_image:" in reference
     assert "resource_bytes(resource: taskcompendium.models.TaskResource) -> bytes" in reference
+
+
+def test_each_name_appears_in_one_section_of_the_sdk_reference():
+    names = [name for _, _, section in REFERENCE_SECTIONS for name in section]
+
+    assert sorted({name for name in names if names.count(name) > 1}) == []
+    assert "build_machine(services: " in sdk_reference()
 
 
 def submission(source: str) -> str:

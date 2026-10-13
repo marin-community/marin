@@ -30,14 +30,13 @@ src/taskforge/
   stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
                                services.py: RLEnvBuildServices, AgentLimits;
                                outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
-                               sandbox_effects.py: `machine`, `try_grader`, `publish_image`;
+                               sandbox_effects.py: `build_machine`, `try_grader`, `publish_image`;
                                sdk.py: the functions, schemas and constants steps call;
                                infrastructure.py: host failures told apart from program failures;
                                template/standard.py: the standard six-step program;
                                glm_author.py: GlmAuthor and its prompts;
                                step_store.py: step keys, memos, the memo store and `memoized`;
-                               run.py: `run_program`, `run_build`, `build_model_digest`, the draft and
-                               `WorkpieceBuildProvenance`
+                               run.py: `run_program`, `run_build`, `build_model_digest`, the draft and `WorkpieceBuildProvenance`
   stage50_validate/            trials.py: trials on RolloutEngine; classify.py: the failure classifier;
                                lowering.py: `lower`, a task lowered for the validating host;
                                control_drafts.py: `write_controls`, the controls of a draft round;
@@ -230,7 +229,7 @@ memoizing a helper calls it the same way with a key of its own. Every step recor
 with its key digest and cache status, and its model and tool calls carry its name as `step`; a
 build without a ledger records nothing.
 
-A step uses the host through `sandbox_effects`: `machine` prepares a machine as a task attempt
+A step uses the host through `sandbox_effects`: `build_machine` prepares a machine as a task attempt
 would, `try_grader` grades a candidate reply and workspace through `RolloutEngine.run`, and
 `publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
 first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
