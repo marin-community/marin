@@ -719,6 +719,7 @@ members = [
     "marin-root",
     "marin-shellbox",
     "marin-taskcompendium",
+    "marin-taskforge",
     "marin-verifyit",
     "marin-zephyr",
 ]
@@ -7698,6 +7699,45 @@ provides-extras = ["pipeline"]
 [package.metadata.requires-dev]
 test = [
     { name = "marin-shellbox", extras = ["shellsim"], editable = "lib/shellbox" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
+name = "marin-taskforge"
+version = "0.1.0"
+source = { editable = "lib/taskforge" }
+dependencies = [
+    { name = "httpx" },
+    { name = "marin-rigging" },
+    { name = "marin-taskcompendium" },
+    { name = "openai" },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "click" },
+    { name = "marin-iris" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
+    { name = "openai" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "click" },
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
