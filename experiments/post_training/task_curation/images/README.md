@@ -100,7 +100,8 @@ repository is not part of the identity. The build:
    `docker login` for the repository's registry;
 4. writes the artifact `images/env-<identity[:16]>`, which stores the lock as
    `requirements.lock` and records the identity, the lock's SHA-256, `apt`,
-   `data`, the Python version, the base image, and any built image and tag.
+   `data`, the `dockerfile` fragment's SHA-256, the Python version, the base
+   image, and any built image and tag.
 
 A second run with an unchanged declaration finds the artifact and starts no
 build. Planning a source whose environment has no artifact for its current

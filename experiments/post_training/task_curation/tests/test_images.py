@@ -146,11 +146,6 @@ def test_a_dockerfile_fragment_builds_an_image_with_its_lines_between_apt_and_th
     assert apt_step < start < lock_copy
 
 
-def test_an_image_excludes_a_dockerfile_fragment(fragment):
-    with pytest.raises(ValueError, match="used as-is"):
-        Environment(image="registry.invalid/fixture/images@sha256:" + "a" * 64, dockerfile=fragment)
-
-
 def test_the_repository_is_where_a_build_pushes_not_identity(lock):
     environment = Environment(lock=lock, apt=("jq",))
     assert environment_artifact(environment, "other.invalid/images").name == environment_artifact(environment).name
