@@ -56,7 +56,7 @@ from levanter.grug.grug_moe import (
     qb_beta_topk_shard,
     qb_topk_physical_count,
     reduce_moe_routing_stats,
-    resolve_moe_implementation,
+    validate_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
@@ -328,7 +328,7 @@ class GrugModelConfig:
             raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
-        resolve_moe_implementation(self.moe_implementation)
+        validate_moe_implementation(self.moe_implementation)
 
     @property
     def Embed(self) -> Axis:

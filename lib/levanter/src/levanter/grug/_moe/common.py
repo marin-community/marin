@@ -96,7 +96,7 @@ PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
-    "ring_gather_combine",  # `ring` moving activations only by gather; ROCm runs scatter-adds slowly.
+    "ring_gather_combine",  # `ring` moving activations only by gather; the default on GPUs.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
@@ -184,12 +184,24 @@ class MoEExpertMlpPspecs:
         return P(self.expert, self.intermediate, self.hidden)
 
 
-def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
-    if implementation is None:
-        return "ring"
-    if implementation not in _VALID_MOE_IMPLEMENTATIONS:
+def validate_moe_implementation(implementation: MoeImplementation | str | None) -> None:
+    """Raise unless `implementation` is None or a known implementation. Unlike resolving, this never starts JAX."""
+    if implementation is not None and implementation not in _VALID_MOE_IMPLEMENTATIONS:
         valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
         raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
+
+
+def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
+    """Validate `implementation`, mapping None to the default for the JAX backend.
+
+    The default is `ring_gather_combine` on GPUs, where XLA's scatter-adds are slow and become sorts under
+    deterministic ops, and `ring` elsewhere, because TPUs run the scatter-add combine faster. Reading the backend
+    initializes JAX, so config validation, which can run before `jax.distributed.initialize`, uses
+    `validate_moe_implementation`.
+    """
+    if implementation is None:
+        return "ring_gather_combine" if jax.default_backend() == "gpu" else "ring"
+    validate_moe_implementation(implementation)
     return cast(MoeImplementation, implementation)
 
 

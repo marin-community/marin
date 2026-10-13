@@ -42,6 +42,7 @@ from levanter.grug._moe.common import (
     PspecAxis,
     resolve_moe_implementation,
     split_moe_w13_output,
+    validate_moe_implementation,
 )
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes as _clip_receiver_group_sizes,
@@ -458,8 +459,9 @@ def moe_mlp(
     `token_valid` excludes invalid positions from dispatch, capacity accounting,
     and expert gradients. Omitted validity treats every token as valid.
 
-    Expert-parallel implementations such as `ring` and `ring_gather_combine` run only on an expert axis of size two
-    or more. Without one they fall back to the local `scatter` path, so a single-device call never reaches them.
+    `implementation=None` picks `ring_gather_combine` on GPUs and `ring` on other backends. Expert-parallel
+    implementations such as these run only on an expert axis of size two or more. Without one they fall back to the
+    local `scatter` path, so a single-device call never reaches them.
 
     With `implementation="ragged_all_to_all"` on an expert axis of size two or
     more, SiLU experts with bfloat16 or float32 tokens on an SM100 GPU with
@@ -720,4 +722,5 @@ __all__ = [
     "qb_topk_physical_count",
     "resolve_moe_implementation",
     "split_moe_w13_output",
+    "validate_moe_implementation",
 ]
