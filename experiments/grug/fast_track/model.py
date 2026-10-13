@@ -351,6 +351,24 @@ def apply_gain_fn(fn: NormGainFn, w: jax.Array) -> jax.Array:
     raise ValueError(f"unknown NormGainFn {fn!r}")
 
 
+class MoeDynamicK(StrEnum):
+    """How ``moe_dynamic_layers`` choose each token's routed-expert count, out of the top
+    ``num_experts_per_token`` it routes to. Dropped slots get combine weight 0 (they still run, so this measures
+    the quality of the rule, not its speed); renormalizing combines renormalize over the kept slots."""
+
+    NONE = "none"
+    POSITION = "position"
+    """``num_experts_per_token`` for tokens at document position >= ``moe_dynamic_position``, else ``moe_k_low``."""
+    ATTN_NORM = "attn_norm"
+    """``num_experts_per_token`` for the ``moe_dynamic_frac`` of tokens whose attention output has the largest
+    norm in the batch, else ``moe_k_low``."""
+    RELU = "relu"
+    """Keep the routed slots whose router logit is positive (zero to ``num_experts_per_token`` experts); an L1
+    penalty ``moe_relu_l1 * mean_t sum_e relu(logit)`` on the router logits pushes the count down."""
+    EPS = "eps"
+    """Skip the routed slots whose combine weight is below ``moe_eps`` times the routed total (no renormalization)."""
+
+
 class RouterCombine(StrEnum):
     """How the MoE combine weights of the K selected experts are formed from their unbiased logits."""
 
@@ -653,6 +671,22 @@ class GrugModelConfig:
     num_shared_experts: int = 2
     num_experts: int = 384
     num_experts_per_token: int = 8
+    moe_dynamic: "MoeDynamicK" = dataclasses.field(default_factory=lambda: MoeDynamicK.NONE)
+    """Per-token routed-expert counts on ``moe_dynamic_layers`` (``MoeDynamicK``); ``num_experts_per_token`` is the
+    most a token gets."""
+    moe_dynamic_layers: tuple[int, ...] = ()
+    moe_k_static: int | None = None
+    """Routed-expert count of every token on the other MoE layers when set (they route the top
+    ``num_experts_per_token`` and keep the first this many, i.e. top-``moe_k_static``); None: all of them."""
+    moe_k_low: int = 5
+    moe_small_expert_width: float = 0.0
+    """When > 0, the first half of the routed experts use only this fraction of ``intermediate_dim`` hidden units
+    (the rest are masked to zero, so the function is a mixed-width bank; compute is not saved). E.g. 1/3 with
+    ``intermediate_dim`` 1.5x the base width gives half 0.5x and half 1.5x experts at the base average."""
+    moe_dynamic_position: int = 512
+    moe_dynamic_frac: float = 0.5
+    moe_relu_l1: float = 0.0
+    moe_eps: float = 0.0
     moe_null_layers: tuple[int, ...] = ()
     """Null routing on these layers: the router also scores ``num_experts`` zero-computation experts and each
     token takes the top ``2 * num_experts_per_token`` over all ``2 * num_experts`` columns, so a token can spend
@@ -2511,8 +2545,11 @@ class MoEMLP(eqx.Module):
         router_embed: Float[Array, "B S D"] | None = None,
         null_routing: bool = False,
         saved_routed: Float[Array, "T L"] | None = None,
+        moe_k_keep: Int[Array, "B S"] | None = None,
+        moe_dynamic_layer: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``router_embed`` is the token embedding the router reads under ``router_on_embed``.
+        ``moe_k_keep`` (a ``moe_dynamic_layers`` layer) is each token's routed-expert count (``MoeDynamicK``).
         ``saved_routed`` is this call's combined expert output from the forward (``scan_save_routed_output``):
         the recompute returns it, with the gradient still flowing through the experts.
         ``null_routing`` (a ``moe_null_layers`` layer) routes top-2K over the real and null columns.
@@ -2531,6 +2568,9 @@ class MoEMLP(eqx.Module):
         if router_seed_bias is not None:
             seed_bias = rearrange(router_seed_bias, "b s e -> (b s) e")
             router_logits = router_logits + reshard(seed_bias, _partition_spec_of(router_logits))
+        relu_layer = moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.RELU
+        if relu_layer and self.cfg.moe_relu_l1:
+            router_logits = _relu_l1_grad(router_logits, self.cfg.moe_relu_l1)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         k = self.cfg.num_experts_per_token
         banks = _expert_banks(self.cfg)
@@ -2576,6 +2616,22 @@ class MoEMLP(eqx.Module):
                 combine_weights_f = jax.nn.sigmoid(unbiased_topk)
             denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
             combine_weights_f = combine_weights_f * (renorm_sum / (denom + 1e-9))
+        active_k = jnp.asarray(float(k), jnp.float32)
+        if moe_k_keep is not None:
+            eps_layer = moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.EPS
+            if relu_layer:
+                keep = unbiased_topk > 0
+            elif eps_layer:
+                keep = combine_weights_f >= self.cfg.moe_eps * renorm_sum
+            else:
+                slot = jax.lax.broadcasted_iota(jnp.int32, unbiased_topk.shape, 1)
+                keep = slot < rearrange(moe_k_keep, "b s -> (b s)")[:, None]
+            combine_weights_f = jnp.where(keep, combine_weights_f, 0.0)
+            renorms = (RouterCombine.SOFTMAX_RENORM, RouterCombine.SIGMOID_RENORM, RouterCombine.SQRT_SOFTPLUS_RENORM)
+            if self.cfg.router_combine in renorms and not eps_layer:
+                denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+                combine_weights_f = combine_weights_f * (renorm_sum / (denom + 1e-9))
+            active_k = jnp.mean(jnp.sum(keep.astype(jnp.float32), axis=-1))
         if router_soft_select.SOFT_SELECT is not None:
             biased_sel = jnp.take_along_axis(router_logits + self.router_bias, selected_experts, axis=-1)
             combine_weights_f = router_soft_select.soft_combine(combine_weights_f, biased_sel)
@@ -2623,6 +2679,7 @@ class MoEMLP(eqx.Module):
         margin_min = functools.reduce(jnp.minimum, [lo for _, lo, _ in bank_stats])
         margin_max = functools.reduce(jnp.maximum, [hi for _, _, hi in bank_stats])
         router_stats["qb_beta"] = beta
+        router_stats[f"{_OUTSTAT_PREFIX}moe_active_k"] = active_k
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
 
@@ -2788,6 +2845,8 @@ def moe_and_shared_fused(
     router_embed: Float[Array, "B S D"] | None = None,
     null_routing: bool = False,
     saved_routed: Float[Array, "T L"] | None = None,
+    moe_k_keep: Int[Array, "B S"] | None = None,
+    moe_dynamic_layer: bool = False,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -2856,6 +2915,8 @@ def moe_and_shared_fused(
             router_embed=router_embed,
             null_routing=null_routing,
             saved_routed=saved_routed,
+            moe_k_keep=moe_k_keep,
+            moe_dynamic_layer=moe_dynamic_layer,
         )
 
     routed, stats = routed_mlp()
@@ -3347,6 +3408,8 @@ class Block(eqx.Module):
         router_embed: Float[Array, "B S D"] | None = None,
         null_routing: bool = False,
         saved_routed: Float[Array, "T L"] | None = None,
+        moe_k_keep: Int[Array, "B S"] | None = None,
+        moe_dynamic_layer: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
@@ -3378,6 +3441,8 @@ class Block(eqx.Module):
                 router_embed,
                 null_routing,
                 saved_routed,
+                moe_k_keep=moe_k_keep,
+                moe_dynamic_layer=moe_dynamic_layer,
             )
         else:
             out, stats = self.mlp(
@@ -3389,6 +3454,8 @@ class Block(eqx.Module):
                 router_embed=router_embed,
                 null_routing=null_routing,
                 saved_routed=saved_routed,
+                moe_k_keep=moe_k_keep,
+                moe_dynamic_layer=moe_dynamic_layer,
             )
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
@@ -3553,6 +3620,19 @@ def _bank_config(cfg: "GrugModelConfig", bank: int) -> "GrugModelConfig":
     return cfg
 
 
+def _mixed_width_weights(cfg: "GrugModelConfig", w_up: jax.Array, w_down: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """``moe_small_expert_width``: zero the first half of the experts' hidden units past that fraction."""
+    if not cfg.moe_small_expert_width:
+        return w_up, w_down
+    experts, hidden = w_down.shape[0], w_down.shape[1]
+    small = jnp.arange(experts)[:, None] < experts // 2
+    units = jnp.arange(hidden)[None, :] < round(cfg.moe_small_expert_width * hidden)
+    mask = (~small | units).astype(w_up.dtype)  # [E, I]
+    width = w_up.shape[-1] // hidden  # gated banks concatenate gate and up along the last axis
+    up_mask = jnp.tile(mask, (1, width))[:, None, :]
+    return w_up * up_mask, w_down * mask[:, :, None]
+
+
 def _run_expert_bank(
     em: MoEExpertMlp,
     cfg: "GrugModelConfig",
@@ -3571,8 +3651,7 @@ def _run_expert_bank(
             routed_input,
             selected,
             combine_weights,
-            em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1),
-            em.w_down,
+            *_mixed_width_weights(cfg, em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1), em.w_down),
             activation=(ActivationFunctionEnum.relu2) if ungated else _tied_expert_activation(cfg, em),
             implementation=em.implementation,
             mesh=get_abstract_mesh(),
@@ -4255,9 +4334,10 @@ def _attn_res_sublayers(
         h_shared, z_shared, _ = mix(mlp_partial, 2 * cfg.num_layers + layer_index, False)
         z_mlp = z_mlp + z_shared
         shared_kwargs = {"sum_stream": h_shared, "sum_parts": ("shared",)}
-    mlp_out, router_stats = layer.mlp_branch(
-        h, mask, **shared_kwargs, **_route_kwargs(cfg, physical, token_ids, noise_key, logit_bias)
-    )
+    route = _route_kwargs(cfg, physical, token_ids, noise_key, logit_bias)
+    route["moe_k_keep"] = _moe_k_keep(cfg, physical, mask, attn_out)
+    route["moe_dynamic_layer"] = physical in cfg.moe_dynamic_layers
+    mlp_out, router_stats = layer.mlp_branch(h, mask, **shared_kwargs, **route)
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
@@ -4324,6 +4404,48 @@ def _route_kwargs(
         "null_routing": physical_layer in cfg.moe_null_layers,
         "saved_routed": None if extras is None else extras.get(_SAVED_ROUTED),
     }
+
+
+def _moe_k_keep(
+    cfg: GrugModelConfig, layer: int, mask: AttentionMask | jax.Array, attn_out: Float[Array, "B S D"]
+) -> Int[Array, "B S"] | None:
+    """Each token's routed-expert count on ``moe_dynamic_layers`` (``MoeDynamicK``); None elsewhere. RELU / EPS
+    decide inside the router, so their layers get ``num_experts_per_token`` everywhere (it marks the layer)."""
+    norm = jnp.sum(jnp.square(jax.lax.stop_gradient(attn_out).astype(jnp.float32)), axis=-1)  # [B, S]
+    if layer not in cfg.moe_dynamic_layers or cfg.moe_dynamic == MoeDynamicK.NONE:
+        return None if cfg.moe_k_static is None else jnp.full_like(norm, cfg.moe_k_static, dtype=jnp.int32)
+    k_high, k_low = cfg.num_experts_per_token, cfg.moe_k_low
+    if cfg.moe_dynamic in (MoeDynamicK.RELU, MoeDynamicK.EPS):
+        return jnp.full_like(norm, k_high, dtype=jnp.int32)
+    if cfg.moe_dynamic == MoeDynamicK.POSITION:
+        seg = _sconv_segment_ids(mask)
+        idx = jnp.cumsum(jnp.ones_like(norm, dtype=jnp.int32), axis=1) - 1
+        if seg is None:
+            pos = idx
+        else:
+            start = jnp.pad(seg[:, 1:] != seg[:, :-1], ((0, 0), (1, 0)), constant_values=True)
+            pos = idx - jax.lax.cummax(jnp.where(start, idx, 0), axis=1)
+        high = pos >= cfg.moe_dynamic_position
+    else:
+        high = norm >= jnp.quantile(norm, 1.0 - cfg.moe_dynamic_frac)
+    return jnp.where(high, k_high, k_low).astype(jnp.int32)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
+def _relu_l1_grad(logits: jax.Array, coef: float) -> jax.Array:
+    """Identity whose backward adds the gradient of ``coef * mean_t sum_e relu(logits)``."""
+    return logits
+
+
+def _relu_l1_grad_fwd(logits, coef):
+    return logits, logits > 0
+
+
+def _relu_l1_grad_bwd(coef, positive, g):
+    return (g + (coef / positive.shape[0]) * positive.astype(g.dtype),)
+
+
+_relu_l1_grad.defvjp(_relu_l1_grad_fwd, _relu_l1_grad_bwd)
 
 
 def _merged_router_bias(seed: jax.Array | None, history: jax.Array | None) -> jax.Array | None:
