@@ -109,7 +109,7 @@ def main() -> None:
     registry.update(observed_at=now.isoformat(), jobs=list(jobs.values()))
     costs = json.loads((campaign / "costs.json").read_text())
     attempts = {(row["task_id"], row["attempt_uid"]): row for row in costs["attempts"]}
-    active = []
+    active = [row for row in costs.get("active_attempts", []) if row["cluster"] != args.cluster]
     for observed in csv.DictReader(args.attempts.open()):
         job = jobs[observed["task_id"].rsplit("/", 1)[0]]
         key = observed["task_id"], observed["attempt_uid"]
@@ -137,6 +137,7 @@ def main() -> None:
                 row.update(outcome="succeeded with retained audit", retained_audit=job["retained_audit"])
             attempts[key] = row
         elif start:
+            row["observed_at"] = now.isoformat()
             row["allocated_h100_hours_so_far"] = (now.timestamp() - start / 1000) * row["gpus"] / 3600
             active.append(row)
     totals = defaultdict(float)
@@ -146,6 +147,7 @@ def main() -> None:
         observed_at=now.isoformat(),
         attempts=list(attempts.values()),
         active_attempts=active,
+        terminal_h100_hours=sum(totals.values()),
         terminal_h100_hours_by_stage=dict(totals),
         active_costs="Active intervals are partial observations and excluded from terminal stage totals.",
     )
