@@ -9,40 +9,47 @@ an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
 """
 
 
-from pathlib import Path
+import json
 
-from taskcompendium.convert.executable import (
-    SOLUTION_PATHS,
-    converted_workspace_task,
-    solve_script,
-    tasktrove_archive_task,
-    tasktrove_python_task,
-)
-from taskcompendium.convert.tasktrove import DOCKERFILE, INSTRUCTION, TaskFiles, archive_resources
-from taskcompendium.convert.tasktrove_code_contests import convert_code_contests
-from taskcompendium.convert.tasktrove_codeforces import convert_codeforces
-from taskcompendium.convert.tasktrove_converted_task import (
-    ConvertedTask,
-    ConvertFn,
-    ConvertStatus,
-    Rejected,
-    archive_conversion,
-)
-from taskcompendium.convert.tasktrove_nemotron_data import verifier_data
-from taskcompendium.convert.tasktrove_stdio_cases import SOLUTION_COMMAND, case_files, hidden_case_rejection
-from taskcompendium.convert.tasktrove_taco import convert_taco
-from taskcompendium.convert.verifyit_build import verifyit_build_context
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.spec import Compare, StdioSpec
 
 from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES, VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    DOCKERFILE,
+    INSTRUCTION,
+    VERIFIER_DATA,
+    TaskFiles,
+    archive_resources,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.codeforces import convert_codeforces
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
+    SOLUTION_PATHS,
+    converted_workspace_task,
+    solve_script,
+    tasktrove_archive_task,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import (
+    ConvertedTask,
+    ConvertFn,
+    ConvertStatus,
+    Rejected,
+    archive_conversion,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio_cases import (
+    SOLUTION_COMMAND,
+    case_files,
+    hidden_case_rejection,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
-    ShellSim,
     environment_requirements,
     process_rows,
 )
@@ -126,7 +133,7 @@ def source_stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | Impor
     if isinstance(converted, ImportRejection):
         return converted
     build = verifyit_build_context(converted.dockerfile, archive_resources(row.data).oracle, package=VERIFYIT_PACKAGE)
-    environment = EnvironmentRequirements(docker_build=build)
+    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=build)
     task = converted_workspace_task(
         row,
         converted,
@@ -152,7 +159,7 @@ def convert_taco_task(row: RawRow, _context: ConversionContext) -> NormalizedTas
 
 def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
     """The source's aligned input/output pairs, run with the solution command and compared exactly."""
-    data = verifier_data(task)
+    data = json.loads(task.text(VERIFIER_DATA))
     inputs, outputs = data.get("inputs"), data.get("outputs")
     if not isinstance(inputs, list) or not isinstance(outputs, list) or len(inputs) != len(outputs) or not inputs:
         return Rejected(ConvertStatus.NULL_GRADER, "At least one aligned input/output case is required")
@@ -174,11 +181,12 @@ def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
 
 
 def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    return tasktrove_python_task(
+    return tasktrove_archive_task(
         row,
         convert=convert_competitive_coding,
         environment=environment_requirements(AGENT_IMAGE),
         grader_environment=required_grader_environment(context),
+        output_paths=SOLUTION_PATHS,
     )
 
 
@@ -190,9 +198,7 @@ def stdio_source(
     info: SourceInfo,
     *,
     version: str = "1",
-    environment: Environment | ShellSim = AGENT_IMAGE,
     grader: Environment | None = COMPILER_GRADER_PACKAGES,
-    ships: tuple[Path, ...] = (),
 ) -> RlDataSource[CurationRecipe]:
     return RlDataSource(
         pipeline=process_rows,
@@ -202,8 +208,6 @@ def stdio_source(
             source=tasktrove_source(config),
             convert=TaskTroveConverter(config, convert),
             version=version,
-            ships=ships,
-            environment=environment,
             intended_use=IntendedUse.TRAIN,
             rubric=rubric,
             controls=EXECUTABLE_CONTROLS,
@@ -220,9 +224,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert_code_contests_task,
             CODE_CONTESTS_RUBRIC,
             version="2",
-            environment=ShellSim(),
             grader=None,
-            ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:DCAgent__code-contests-noblock",
                 title="DCAgent/code-contests-noblock",
@@ -272,9 +274,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert_taco_task,
             TACO_RUBRIC,
             version="2",
-            environment=ShellSim(),
             grader=None,
-            ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:laion__exp_rpt_taco-v2",
                 title="laion/exp_rpt_taco-v2",

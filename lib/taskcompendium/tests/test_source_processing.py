@@ -21,7 +21,7 @@ from zephyr.plan import compute_plan
 from zephyr.readers import load_jsonl
 
 from taskcompendium.grader import verifyit_package
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
@@ -175,6 +175,66 @@ def read_json(path) -> dict:
     return json.loads(Path(path).read_text())
 
 
+@pytest.mark.parametrize("rows,limit,shards", [(100, 128, 1), (1001, 128, 2), (2001, 2, 2)])
+def test_small_source_export_preserves_rows_with_fewer_files(tmp_path, rows, limit, shards):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(rows))
+    recipe = fixture_recipe(convert_svamp, rubric=None, controls=REFERENCE_CONTROLS)
+    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    config = pipeline_config(SourceProcessingMode.FULL, reviewer, normalized_shards=limit)
+    result = run_pipeline(recipe, source, tmp_path / "output", config)
+
+    manifest = read_json(result.manifest_path)
+    assert manifest["normalized_shards"] == shards
+    assert manifest["normalized_shard_limit"] == limit
+    expected_ids = {row["task_id"] for row in parquet_rows(Path(result.download_path) / "locators")}
+    assert len(expected_ids) == rows
+    for path in (result.normalize_path, result.review_path, result.verify_path, result.final_path):
+        assert len(list(Path(path).glob("*.parquet"))) == shards
+        exported = parquet_rows(path)
+        assert len(exported) == rows
+        assert {row["task_id"] for row in exported} == expected_ids
+
+
+def test_full_preparation_preserves_joined_rows_across_partition_layouts(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    rows = [{**row, "grader": "in_process"} for row in apple_rows(1001)]
+    rows[1] = {**rows[0], "padding": "same task with different raw content"}
+    rows[999] = rows[998]
+    rows[500] = {**rows[499], "Answer": "501"}
+    rows[333] = {**rows[333], "Answer": "invalid"}
+    rows[5] = {**rows[5], "grader": "none"}
+    rows[6] = {**rows[6], "grader": "none"}
+    write_jsonl(source, rows)
+    recipe = fixture_recipe(convert_mixed_graders, rubric=None)
+    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    config = pipeline_config(SourceProcessingMode.FULL, reviewer, execution=AuditExecution(review_batch_size=2000))
+    snapshots = []
+    for maximum in (1, 64):
+        monkeypatch.setattr("taskcompendium.pipeline.source_processing.MAX_PREPARATION_SHARDS", maximum)
+        output = tmp_path / f"output-{maximum}"
+        result = run_pipeline(recipe, source, output, config)
+        manifest = read_json(result.manifest_path)
+        assert manifest["admission_counts"] == {"admitted": 994, "rejected": 5, "no_grader": 2}
+        snapshot = {
+            view: sorted(parquet_rows(output / view), key=lambda row: row["task_id"])
+            for view in ("normalize", "review", "verify", "final", "download/locators")
+        }
+        assert len(snapshot["download/locators"]) == len(snapshot["normalize"]) == 1001
+        assert len(snapshot["final"]) == 994
+        # Report references live beneath each result's own root.
+        snapshots.append(json.loads(json.dumps(snapshot).replace(str(output), "$OUTPUT")))
+        telemetry = read_json(output / "telemetry.json")
+        prepared = next(phase for phase in telemetry["phases"] if phase["phase"] == "full_prepare")
+        assert prepared["executions"][0]["counters"]["zephyr/records_out"] == min(maximum, 2)
+    assert snapshots[0] == snapshots[1]
+    reviews = {row["source_locator"]: row for row in snapshots[0]["review"]}
+    assert reviews["source.jsonl:1"]["duplicate_of"] == reviews["source.jsonl:0"]["task_id"]
+    assert reviews["source.jsonl:999"]["duplicate_of"] == reviews["source.jsonl:998"]["task_id"]
+    assert reviews["source.jsonl:499"]["filter_reasons"] == ["conflicting_references"]
+    assert reviews["source.jsonl:500"]["filter_reasons"] == ["conflicting_references"]
+
+
 class PanelPlanContext(ZephyrContext):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -199,7 +259,8 @@ def test_raw_sample_is_partition_and_order_independent():
     assert len(whole.rows) == 100
 
 
-def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp_path):
+@pytest.mark.parametrize("num_output_shards", [1, 3, 64])
+def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp_path, num_output_shards):
     source, prepared = tmp_path / "source", tmp_path / "prepared"
     rows = [
         {
@@ -221,6 +282,7 @@ def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp
             recipe,
             None,
             AuditExecution(review_batch_size=2, review_input_bytes=byte_limit),
+            num_output_shards=num_output_shards,
             context=context,
         )
     assert manifest["review_input_bytes"] == byte_limit
@@ -363,7 +425,7 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     assert all(row["raw_input_sha256"] == raw_by_id[row["task_id"]]["raw_input_sha256"] for row in normalized)
     assert all(row["raw_sha256"] != row["raw_input_sha256"] for row in normalized)
     assert all(row["raw_sha256"] is None for row in raw)
-    assert len(list(Path(result.normalize_path).glob("*.parquet"))) == 2
+    assert len(list(Path(result.normalize_path).glob("*.parquet"))) == 1
     assert all("raw_json" not in row for row in raw)
     assert read_json(Path(result.download_path) / "manifest.json")["source_input"] == str(source)
     assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]

@@ -4,7 +4,6 @@
 """Grade a finished rollout with the task's grader, outside the model's machine."""
 
 import asyncio
-import os
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from typing import Any
@@ -14,8 +13,8 @@ from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import GradingAttempt, NoGrader, ScriptGrader, VerifyitGrader
-from taskcompendium.runtime.grading import ROOT, grade_in_sandbox
-from taskcompendium.runtime.shell import captured_output_files
+from taskcompendium.runtime.grading import grade_in_sandbox
+from taskcompendium.runtime.output_capture import captured_output_files
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
@@ -29,6 +28,8 @@ async def _grade_rollout(
     factories: Mapping[str, MachineFactory],
     cleanup: _Cleanup,
     resources: AsyncExitStack,
+    *,
+    stop_reason: str,
 ) -> GradeResult:
     """Grade in process, or in a fresh verifier machine that the attempt owns."""
     task = lowered.task
@@ -37,24 +38,24 @@ async def _grade_rollout(
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     conversation = chat_conversation(list(messages))
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
-        return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation))
+        return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
     timeout = lowered.session.verifier_timeout
     files = (
         {}
         if machine is None
         else await captured_output_files(
-            machine, task.output_paths, timeout=timeout, limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, user=ROOT
+            machine, task.output_paths, timeout=timeout, limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
         )
     )
-    attempt = GradingAttempt(conversation, files)
+    attempt = GradingAttempt(conversation, files, stop_reason=stop_reason)
     assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
     selection = lowered.runtime.verifier_machine
     assert selection is not None
     return await grade_in_sandbox(
         task,
         attempt,
-        _AttemptMachineFactory(selection, factories, cleanup, resources, grader.environment),
-        _machine_spec(grader.environment, selection, dict(os.environ)),
+        _AttemptMachineFactory(selection, factories, cleanup, resources),
+        _machine_spec(grader.environment, selection),
         task_machine=machine,
         timeout=timeout,
     )

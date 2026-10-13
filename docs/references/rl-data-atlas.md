@@ -33,6 +33,17 @@ A changed revision hides a rating that covers a different revision and preserves
 its review link and history. Counts and source information change through the
 repository definitions and a rebuilt applet.
 
+Curation campaigns also write a [FineStore run catalog](task-curation.md#run-catalog)
+beside their campaign reports. It records measured populations, admissions,
+controls, timings and exact evidence snapshots, joined to declarations by stable
+source ID. Atlas does not yet read that archive. A future exporter input can
+overlay compatible FULL-run counts and curation outcomes while preserving the
+complete inventory and saved quality/difficulty collections. SAMPLE or QUICK
+processed counts must not replace population counts. Match input revisions and
+selection, and preserve the selected catalog snapshot and run ID. Temporary
+catalogs expire with their outputs; permanent history requires importing or
+promoting their compact metadata before expiry.
+
 Quality links to a sample-based review: green Good, yellow Some issues, red Bad,
 or gray Unreviewed/Unrated. Review date records the latest actual judgment time.
 Good means the sampled review found no qualifying defects; it does not prove

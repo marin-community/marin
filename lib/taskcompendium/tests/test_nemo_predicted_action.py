@@ -12,7 +12,8 @@ import pytest
 
 from taskcompendium.chat import assistant_message, chat_conversation
 from taskcompendium.grading import grade_answer
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,

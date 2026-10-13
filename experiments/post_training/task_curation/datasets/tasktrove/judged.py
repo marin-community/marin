@@ -15,9 +15,8 @@ import re
 from dataclasses import dataclass, field
 
 from taskcompendium.convert.answers import source_defect, unsupported
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.delivery import rewritten_task
-from taskcompendium.convert.tasktrove import archive_file
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -27,7 +26,8 @@ from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import VERIFIER_DATA, archive_file
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
@@ -169,7 +169,7 @@ def convert_judged(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
     instruction = row.data["instruction"]
     if not instruction.strip():
         return source_defect("missing_instruction", "Public instruction is required")
-    verifier_data = archive_file(row.data, "tests/verifier_data.json")
+    verifier_data = archive_file(row.data, VERIFIER_DATA)
     assert verifier_data is not None
     package = verifyit_package(
         JudgeSpec(criteria=criteria, question=question, rubric=RUBRIC_CHECKLIST),
@@ -349,7 +349,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, convert_judged),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 grader=GRADER_PACKAGES,

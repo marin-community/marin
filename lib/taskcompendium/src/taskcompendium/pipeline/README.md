@@ -82,16 +82,15 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
      The row is rejected with `check:empty`, and because the grader ran, the
      trial counts as checked and passed for the source.
 
-   An `OracleCommand` runs with the task's worker and oracle resources
-   installed in a fresh machine of the task's agent image, whose tools and
-   directories it expects, or of the grader's machine when the task has no
-   agent image. Its output files, or the contents of `answer_file`, become the
+   An `OracleCommand` runs with the task's worker and oracle resources in a
+   fresh machine satisfying the agent's requirements. Empty agent requirements
+   use the grader environment. Its output files, or the contents of `answer_file`, become the
    submission, which the grader then grades in its own environment. Graders
    that run outside the process get their machines from the campaign's
-   `GradingMachines`, which routes each environment by its
-   `compatible_backends`: a `local` environment to a bubblewrap sandbox on the worker
-   with the Python environment built from its `packages_lock`, and an image
-   environment to a sandbox of that image. Every grading machine has network
+   `GradingMachines`, which selects a bubblewrap sandbox on the worker for
+   `packages_lock` requirements and a sandbox of the pinned image for image
+   requirements. Shared runtime preparation validates the selected machine and
+   binds dependencies. Memory settings are advisory. Every grading machine has network
    access denied. Without controls the stage is skipped and sandbox graders
    stay unverified.
 
@@ -150,10 +149,11 @@ defects survive successful retries.
 
 ## Review execution
 
-Full preparation assigns each row to a normalization shard by locator hash, then
-deduplicates and packs model requests into batches before distributing review
-work; the driver prepares the panel the same way without a shuffle. Prepared
-review batches are saved before inference. Batches respect both
+Full preparation uses one deduplication partition per 1,000 selected raw rows,
+capped at 64, using the population count from raw sampling. Rows with the same
+deduplication key stay together, and source locator order determines the
+duplicate survivor. The driver prepares the panel the same way without a
+shuffle. Prepared review batches are saved before inference. Batches respect both
 `review_batch_size` and `review_input_bytes` (64 MiB by default); an oversized
 audit is preserved alone. Review execution uses `review_task_resources`, so
 several model requests can wait on one worker. Completed review shards are
@@ -202,22 +202,21 @@ A source runs these phases in order:
 ## Grading environments
 
 A task's agent environment and its grader's environment are declared separately
-in `EnvironmentRequirements`. A task may run in ShellSim while its grader needs
-an image. An empty `compatible_backends` declares no Shellbox backend; it does
-not allow every backend.
+in `EnvironmentRequirements`. A task may require `SHELL_SIMULATOR` while its grader
+requires `LINUX_PROCESS` with an image or packages lock. Conversation-only tasks
+need no command semantics. Missing packaging never implies simulation.
 
-| Contract | Backend declaration |
+| Contract | Requirement |
 | --- | --- |
-| Built-in shell commands and virtual files preserve the requested behavior | ShellSim may be declared after checking command semantics, paths, quoting, pipes and file metadata. |
-| Arbitrary Python packages, compiled binaries or image-specific dependencies | Use an image-backed backend and pin the image by digest. ShellSim cannot satisfy a required image. |
+| Built-in shell commands and virtual files preserve the requested behavior | Declare `SHELL_SIMULATOR` after checking command semantics, paths, quoting, pipes and file metadata. |
+| Arbitrary Python packages, compiled binaries or image-specific dependencies | Declare `LINUX_PROCESS` with a pinned image or supported packages lock. |
 | Kernel behavior, subprocesses, networking or special filesystem behavior | Check the specific Shellbox backend's support. |
-| Grader has different dependencies from the task | Declare compatibility in the grader's environment. |
-| Rows within a source differ in runtime needs | Emit the correct declaration for each row; do not broaden compatibility to fit the launch. |
+| Grader has different dependencies from the task | Declare those dependencies in the grader's environment. |
+| Rows within a source differ in runtime needs | Emit requirements for each row. |
 
-Compatibility is an author claim. Verification records evidence for the selected
-backend and image; a passing sample on gVisor does not certify ShellSim. An image
-the selected backend cannot run makes verification inconclusive, not the source
-defective.
+Verification records evidence for the selected backend and image; a passing
+sample on gVisor does not certify simulation. Runtime binding rejects unsupported
+requirements before machine creation. This failure does not establish a source defect.
 
 See the [task curation reference](../../../../../docs/references/task-curation.md)
 for the output schema and the experiment's catalog and driver.

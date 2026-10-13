@@ -27,7 +27,7 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, IntendedUse, RawRow
 
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 PREFERENCE_VERIFIER = SourceReference(
@@ -390,7 +390,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=HfSource(HH_REPO, HH_REVISION, (f"{subset.config}/train.jsonl.gz",), SourceFormat.JSONL),
                 convert=convert_hh,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=subset.rubric,
             ),
@@ -413,7 +412,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_kto_component,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=KTO_COMPONENT_RUBRIC,
                 inputs={PARENT_INPUT: HfSource(PARENT_REPO, PARENT_REVISION, (TRAIN_FILE,), SourceFormat.PARQUET)},

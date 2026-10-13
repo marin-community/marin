@@ -12,7 +12,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
 
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 MCQ_VERIFIER = SourceReference(
@@ -111,7 +111,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_gpqa,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.EVAL,
                 rubric=GPQA_RUBRIC,
             ),
@@ -136,7 +135,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_openscience,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=OPENSCIENCE_RUBRIC,
             ),

@@ -8,11 +8,8 @@ private copies of the repository with restored trusted tests.
 """
 
 import json
-from pathlib import Path
 
 from taskcompendium.convert.answers import unsupported
-from taskcompendium.convert.executable import swe_task
-from taskcompendium.convert.tasktrove import archive_files
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     Converter,
@@ -23,8 +20,9 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 
-from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_files
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import swe_task
 from experiments.post_training.task_curation.datasets.tasktrove.repository_build import (
     WORKSPACE,
     repository_build_task,
@@ -36,7 +34,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
     trusted_pytest,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.swe_rebench import convert_swe_rebench_task
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 REPOSITORY_CRITERIA = """
@@ -107,7 +105,6 @@ def repository_source(
     *,
     convert: Converter,
     version: str,
-    ships: tuple[Path, ...] = (),
 ) -> RlDataSource[CurationRecipe]:
     return RlDataSource(
         pipeline=process_rows,
@@ -117,8 +114,6 @@ def repository_source(
             source=tasktrove_source(config),
             convert=TaskTroveConverter(config, convert),
             version=version,
-            ships=ships,
-            environment=ShellSim(),
             intended_use=IntendedUse.TRAIN,
             rubric=rubric,
         ),
@@ -133,7 +128,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             SWE_REBENCH_RUBRIC,
             convert=convert_swe_rebench_task,
             version="3",
-            ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
                 title="DCAgent/swe_rebench_v2_patched_oracle-v2",
@@ -172,7 +166,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             SWESMITH_RUBRIC,
             convert=convert_swesmith_task,
             version="4",
-            ships=(VERIFYIT_PACKAGE,),
             info=SourceInfo(
                 id="Task Trove:laion__swesmith-oracle-filtered-v2",
                 title="laion/swesmith-oracle-filtered-v2",

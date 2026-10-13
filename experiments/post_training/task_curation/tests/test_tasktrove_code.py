@@ -12,23 +12,32 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from taskcompendium.convert.executable import solve_script
-from taskcompendium.convert.tasktrove import SOLVE_SH, TEST_SH, archive_files, unpack_task_binary
-from taskcompendium.convert.tasktrove_nl2bash import OUTPUT_PATH
-from taskcompendium.harbor.export import harbor_record
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.grade import Status, grade
 from verifyit.spec import ScriptSpec, StdioSpec
 
+from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import (
     code,
     nl2bash,
     python_tests,
     structured_outputs,
 )
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    SOLVE_SH,
+    TEST_SH,
+    archive_files,
+    unpack_task_binary,
+)
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import solve_script
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH
 from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.tasktrove.harbor_export import (
+    harbor_payload,
+    harbor_record,
+)
 from experiments.post_training.task_curation.tests.conversion import (
     BASE_IMAGE,
     convert_row,
@@ -196,15 +205,6 @@ def test_conversion_keeps_hidden_tests_and_oracles_private(name):
             "gold_in_instruction",
         ),
         ("tasktrove-e2egit", archive(SUM_PROMPT, {}), ImportFailureKind.UNSUPPORTED, "unsupported_variant"),
-        (
-            "tasktrove-pymethods",
-            archive(
-                "Implement the requested helper.",
-                {"tests/test_solution.py": b"from helpers import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"},
-            ),
-            ImportFailureKind.UNSUPPORTED,
-            "unsupported_public_output_contract",
-        ),
     ],
 )
 def test_ungradable_archives_are_rejected_with_typed_cause(name, row, kind, reason):
@@ -213,16 +213,42 @@ def test_ungradable_archives_are_rejected_with_typed_cause(name, row, kind, reas
     assert (rejection.kind, rejection.reason) == (kind, reason)
 
 
-def test_python_tests_infer_module_file_from_hidden_test_imports():
-    row = archive(
-        "Implement `add(a, b)` returning the sum of two integers.",
-        {"tests/test_solution.py": b"from calculator import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"},
+def test_python_source_preserves_prompt():
+    instruction = "Implement the requested helper.\n"
+    result = cast(
+        NormalizedTask,
+        convert_row(
+            RECIPES["tasktrove-e2egit"],
+            archive(
+                instruction,
+                {"tests/test_solution.py": b"from helpers import add\n\ndef test_add():\n    assert add(2, 3) == 5\n"},
+            ),
+        ),
     )
-    result = convert_row(RECIPES["tasktrove-e2egit"], row)
-    assert isinstance(result, NormalizedTask)
-    assert result.task.output_paths == ("/app/calculator.py",)
-    prompt = result.task.context.events[0].content
-    assert prompt.endswith("Delivery: write the requested implementation to `/app/calculator.py`.\n")
+    assert result.task.context.events[0].content == instruction
+    assert not result.changes
+
+
+def test_python_directory_source_exports_shared_without_capture_and_isolated_with_capture():
+    task = converted_task(RECIPES["tasktrove-e2egit"], python_row())
+    row = {"task_json": task.model_dump_json(), "source_row": "fixture/tasks.parquet:0", "original_path": "fixture"}
+    options = {
+        "grader_image": BASE_IMAGE,
+        "fallback_actor_image": BASE_IMAGE,
+        "family": "python",
+        "verifyit_package_root": VERIFYIT_PACKAGE,
+    }
+    payload = harbor_payload(row, **options)
+    config = tomllib.loads(payload.files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert not config["artifacts"] and "tests/Dockerfile" not in payload.files
+    assert payload.files["instruction.md"].decode() == task.context.events[0].content
+    # Without TaskTrove's shared source recipe, Harbor needs an isolated transfer contract.
+    isolated = task.model_copy(update={"source": task.source.model_copy(update={"dataset": "fixture"})})
+    payload = harbor_payload({**row, "task_json": isolated.model_dump_json()}, **options)
+    config = tomllib.loads(payload.files["task.toml"].decode())
+    assert config["verifier"]["environment_mode"] == "separate"
+    assert config["artifacts"] == [{"source": "/app", "destination": "app"}]
 
 
 def local_stdio(task: TaskSpec, workspace: Path) -> StdioSpec:

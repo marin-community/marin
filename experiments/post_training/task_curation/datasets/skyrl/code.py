@@ -19,18 +19,18 @@ from typing import Any
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB, THREAD_ENVIRONMENT, python_reply
-from taskcompendium.convert.conversation import conversation_task
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
-from taskcompendium.convert.tasktrove import ANSWER_PATH
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import grader_config
 from taskcompendium.models import TaskResource, TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, RawRow, Reply
+from verifyit.spec import DEFAULT_OUTPUT
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, ShellSim, process_rows
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 LCB_VERIFIER = SourceReference(
@@ -109,7 +109,7 @@ def scored_task(
         config,
         environment=required_grader_environment(context),
         timeout=GRADER_TIMEOUT,
-        answer_path=ANSWER_PATH,
+        answer_path=DEFAULT_OUTPUT,
         env=THREAD_ENVIRONMENT,
     )
     return conversation_task(row, events=_with_instruction(events, instruction), package=package, evidence=evidence)
@@ -123,9 +123,17 @@ def convert_apps(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRe
         tests = json.loads(encoded)
     except json.JSONDecodeError:
         return source_defect("invalid_test_contract", "input_output is not valid JSON")
+    except ValueError:
+        return unsupported(
+            "unsupported_test_contract", "input_output contains an integer beyond Python's JSON parser digit limit"
+        )
     inputs, outputs = (tests.get("inputs"), tests.get("outputs")) if isinstance(tests, dict) else (None, None)
     if not isinstance(inputs, list) or not inputs or not isinstance(outputs, list) or len(inputs) != len(outputs):
         return source_defect("invalid_test_contract", "Paired nonempty inputs and outputs are required")
+    try:
+        json.dumps(tests, allow_nan=False)
+    except ValueError:
+        return source_defect("nonfinite_test_contract", "input_output contains a non-finite number")
     # APPS leaves ``solutions`` empty when it has none; anything else must be a JSON list.
     try:
         solutions = json.loads(row.data.get("solutions") or "[]")
@@ -311,13 +319,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", ("train.jsonl",), SourceFormat.JSONL
                 ),
                 convert=convert_apps,
-                version="2",
-                environment=ShellSim(),
+                version="4",
                 intended_use=IntendedUse.TRAIN,
                 rubric=APPS_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
@@ -341,12 +347,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_eurus2_code,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=EURUS2_CODE_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
@@ -369,12 +373,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_verifiable_code,
                 version="2",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=VERIFIABLE_CODE_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
         RlDataSource(
@@ -404,12 +406,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 convert=convert_gretel_text_to_sql,
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=GRETEL_TEXT_TO_SQL_RUBRIC,
                 controls=CONTROLS,
                 grader=GRADER_PACKAGES,
-                ships=(SCORERS,),
             ),
         ),
     ]

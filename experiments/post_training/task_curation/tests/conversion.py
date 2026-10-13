@@ -18,7 +18,6 @@ from experiments.post_training.task_curation.environment import Environment, Pla
 from experiments.post_training.task_curation.images.build import BASE_IMAGE, PYTHON_VERSION, EnvironmentArtifact
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
-    ShellSim,
     environment_requirements,
     source_recipe,
 )
@@ -69,13 +68,11 @@ def convert_row(
 
 
 def converted_task(pipeline: CurationRecipe, data: dict[str, Any], *, inputs: StagedInputs | None = None) -> TaskSpec:
-    """Convert a row that must produce a task whose agent environment matches the declaration."""
+    """Convert a fixture row that must produce a task."""
     result = convert_row(pipeline, data, inputs=inputs)
     if isinstance(result, ImportRejection):
         raise AssertionError(f"{pipeline.name} rejected its fixture row: {result}")
     task = result.task if isinstance(result, NormalizedTask) else result
-    declared = None if isinstance(pipeline.environment, ShellSim) else pipeline.environment.image
-    assert task.environment_requirements.docker_image == declared, pipeline.name
     return task
 
 

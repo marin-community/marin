@@ -186,6 +186,10 @@ the implementation is not useful.
 ## Pytest Style
 
 - Prefer top-level `def test_*` functions with fixtures over test classes.
+- Do not import helpers or constants from another `test_*.py` module. Put shared
+  pytest fixtures in the nearest `conftest.py`, and shared importable helpers in
+  a named support module. Its import must work in package-only and repository-wide
+  runs without adding test directories to the root pytest configuration.
 - Name tests as `test_<subject>_<scenario>_<expected_outcome>`.
 - Use parameterization for meaningful behavior variation.
 - Extend existing test files before creating new ones.

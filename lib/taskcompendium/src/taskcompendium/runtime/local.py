@@ -14,7 +14,7 @@ import json
 import shutil
 import stat
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache, cached_property
 from pathlib import Path
 from typing import Any
@@ -94,7 +94,12 @@ COMPLETE_MARKER = ".complete"
 ENVIRONMENT_DIRECTORY = "env"
 RUNTIME_DIRECTORY = "runtime"
 NLTK_DATA_DIRECTORY = Path("share") / "nltk_data"
-RUNTIME_PARENT = Path("/tmp")
+
+
+def _runtime_parent() -> Path:
+    """Use a mounted node cache for executable environments; local hosts keep the /tmp default."""
+    cache = Path("/cache")
+    return cache / "task-curation" if cache.is_mount() else Path("/tmp")
 
 
 @dataclass(frozen=True)
@@ -109,7 +114,7 @@ class LocalRuntime:
     lock_url: str
     lock_sha256: str
     data: tuple[str, ...]
-    parent: Path = RUNTIME_PARENT
+    parent: Path = field(default_factory=_runtime_parent)
 
     @cached_property
     def identity(self) -> str:
@@ -193,27 +198,24 @@ def local_runtime(lock_url: str) -> LocalRuntime:
 
 
 @cache
-def local_factory(runtime: LocalRuntime) -> MachineFactory:
-    """Create a local factory that mounts the built runtime."""
+def local_factory() -> MachineFactory:
+    """Return the shared bubblewrap machine factory."""
     from shellbox.backends.local.machine import LocalMachineFactory  # noqa: PLC0415
 
-    return LocalMachineFactory(read_only=(runtime.root,), bin_dirs=(runtime.bin_dir,))
+    return LocalMachineFactory()
 
 
 @dataclass(frozen=True)
 class LocalGraderMachines:
-    """Grading machines for environments that declare ``Backend.LOCAL``."""
+    """Unbuilt local machines for lock-backed grading environments."""
 
     def identity(self) -> dict[str, Any]:
         return {"backend": Backend.LOCAL.value, "python": LOCAL_PYTHON_VERSION}
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        """A bubblewrap sandbox with the environment's packages; ``memory_mb`` is not enforced."""
+        """Return an unprepared bubblewrap spec; ``memory_mb`` is advisory."""
         require_resolved_environment(environment)
-        if Backend.LOCAL not in environment.compatible_backends:
-            raise ValueError("Only environments that declare the local backend use a local grader")
-        assert environment.packages_lock is not None
-        runtime = local_runtime(environment.packages_lock)
-        runtime.ensure_built()
-        spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE, env=runtime.variables)
-        return local_factory(runtime), spec
+        if environment.packages_lock is None:
+            raise ValueError("A local grader requires a packages lock")
+        spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE)
+        return local_factory(), spec

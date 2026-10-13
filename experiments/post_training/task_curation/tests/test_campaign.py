@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from finestore.reader import ReadView
 from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -58,6 +59,7 @@ def test_dataset_campaign_retains_named_products_without_review_or_grader_depend
                     chunk_storage_prefix=str(tmp_path / "chunks"),
                 ),
                 report_path=str(tmp_path / "report.json"),
+                source_ids={step.name: source.info.id},
                 mode=mode,
             )
         result = cast(PipelineResult, outcomes[0].result)
@@ -119,7 +121,7 @@ def test_campaign_shares_pool_preserves_peers_and_resumes(tmp_path, monkeypatch)
     try:
         with set_current_client(client):
             with pytest.raises(CampaignFailed):
-                run_campaign(steps, runtime=runtime, pool=pool, report_path=report)
+                run_campaign(steps, runtime=runtime, pool=pool, report_path=report, source_ids={})
             with pytest.raises(RuntimeError, match="active campaign"):
                 _ = runtime.context
             first = json.loads((tmp_path / "report.json").read_text())
@@ -128,7 +130,9 @@ def test_campaign_shares_pool_preserves_peers_and_resumes(tmp_path, monkeypatch)
             assert "RuntimeError: fixture source failed" in first["sources"][1]["error"]
             assert len({id(context) for context in contexts}) == 1
             failed.clear()
-            outcomes = run_campaign(steps, runtime=runtime, pool=replace(pool, concurrent_sources=1), report_path=report)
+            outcomes = run_campaign(
+                steps, runtime=runtime, pool=replace(pool, concurrent_sources=1), report_path=report, source_ids={}
+            )
             with pytest.raises(RuntimeError, match="active campaign"):
                 _ = runtime.context
             assert all(outcome.status == "completed" for outcome in outcomes)
@@ -137,5 +141,13 @@ def test_campaign_shares_pool_preserves_peers_and_resumes(tmp_path, monkeypatch)
             assert calls.count("source-2") == 1
             assert calls.count("source-3") == 1
             assert CampaignResult.raw_load(outcomes[1].path).rows == [3, 6]
+            view = ReadView(str(tmp_path / "catalog"))
+            assert len(list(view.iter_rows("runs"))) == 2
+            recorded = list(view.iter_rows("sources"))
+            assert len(recorded) == 8
+            failures = [row for row in recorded if row["campaign_status"] == "failed"]
+            assert len(failures) == 1
+            assert "fixture source failed" in failures[0]["error"]
+            assert failures[0]["processed_rows"] is None
     finally:
         client.shutdown()

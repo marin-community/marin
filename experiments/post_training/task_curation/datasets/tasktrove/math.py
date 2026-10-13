@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
-from taskcompendium.convert.tasktrove import ANSWER_PATH, SOLVE_SH, archive_files
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
@@ -38,11 +37,16 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
-from verifyit.spec import MathSpec, MathType
+from verifyit.spec import DEFAULT_OUTPUT, MathSpec, MathType
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    SOLVE_SH,
+    VERIFIER_DATA,
+    archive_files,
+)
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 SCORER_RUNNERS = {
@@ -141,7 +145,7 @@ class MathConverter:
         expected_runner = SCORER_RUNNERS.get(hashlib.sha256(scorer).hexdigest())
         if expected_runner is None or hashlib.sha256(runner).hexdigest() != expected_runner:
             return unsupported("unsupported_math_scorer", "Unrecognized original math scorer/runner")
-        if "tests/verifier_data.json" not in files:
+        if VERIFIER_DATA not in files:
             return source_defect("missing_verifier_data", "Original math verifier data is required")
         instruction, data = row.data["instruction"], row.data.get("verifier_data")
         if not instruction.strip() or not isinstance(data, dict):
@@ -167,7 +171,7 @@ class MathConverter:
             MathSpec(expected=expected, math_type=math_type),
             resources=(
                 inline_resource("source/verifier.py", scorer),
-                inline_resource("verifier_data.json", files["tests/verifier_data.json"]),
+                inline_resource("verifier_data.json", files[VERIFIER_DATA]),
                 inline_resource("source/test.sh", runner),
             ),
             environment=required_grader_environment(context),
@@ -200,7 +204,7 @@ convert_openreasoning = MathConverter(sections=(SUBMISSION,), phrases=ANSWER_DEL
 def math_golden(task: TaskSpec) -> ControlSubmission:
     """The source's ``solution/solve.sh`` when it ships one, else its typed reference in a box."""
     if any(resource.path == SOLVE_SH for resource in task.resources.oracle):
-        return OracleCommand(f"bash /{SOLVE_SH}", answer_file=ANSWER_PATH)
+        return OracleCommand(f"bash /{SOLVE_SH}", answer_file=DEFAULT_OUTPUT)
     data = next(resource for resource in task.resources.verifier if resource.path == "verifier_data.json")
     expected = json.loads(resource_bytes(data))["expected_answer"]
     return answer_reply(task, rf"\boxed{{{expected}}}")
@@ -309,7 +313,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, source.convert),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=MATH_CONTROLS,

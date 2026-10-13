@@ -12,9 +12,32 @@ pytest.importorskip("shellsim")
 
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, ExitReason, MachineSpec, ShellSimBuiltins, ShellStatus
+from shellbox.transfer import download_files
 
 PANIC_COMMAND = "cat /workspace/numbers.txt | python3 -c 'import sys; print(sum(int(line) for line in sys.stdin))'"
 PANIC_OUTPUT_LIMIT_BYTES = 64
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_files": 1, "max_bytes": 1024, "max_file_bytes": 1024},
+        {"max_files": 8, "max_bytes": 3, "max_file_bytes": 1024},
+        {"max_files": 8, "max_bytes": 1024, "max_file_bytes": 1},
+    ],
+)
+def test_download_rejects_file_and_byte_overflow(limits):
+    async def check():
+        machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
+        try:
+            result = await machine.run(Command(("sh", "-c", "printf aa > first; printf bb > second")))
+            assert result.exit_code == 0
+            with pytest.raises(RuntimeError):
+                await download_files(machine, ("/workspace",), timeout=10, **limits)
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
 
 
 def test_shell_state_and_one_shot_command() -> None:

@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import JsonValue, ValidationError
 
-from taskcompendium.convert.answers import unsupported
+from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.grader import GraderPackage
 from taskcompendium.models import (
     AnswerType,
@@ -164,6 +164,11 @@ def blend_request(data: Mapping[str, Any]) -> BlendRequest | ImportRejection:
         tools = functions(request.get("tools", []))
     except (ValueError, KeyError, TypeError, ValidationError) as error:
         return unsupported("unsupported_request", str(error))
+    names = set()
+    for tool in tools:
+        if tool.name in names:
+            return source_defect("duplicate_tool_name", tool.name)
+        names.add(tool.name)
     contract = {key: value for key, value in data.items() if key not in {REQUEST_FIELD, "path"}}
     contract["request_options"] = {key: value for key, value in request.items() if key not in {"input", "tools"}}
     reasoning = [item for item in request["input"] if item.get("type") == "reasoning"]

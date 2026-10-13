@@ -24,7 +24,7 @@ from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Grader, NoGrader, TaskSpec, VerifyitGrader, grades_in_process
 from taskcompendium.pipeline.audit_schema import (
     IDENTITY_FIELDS,
@@ -93,8 +93,10 @@ from taskcompendium.pipeline.stages import (
 )
 from taskcompendium.pipeline.transforms import admit_converted_row
 
-SOURCE_PIPELINE_REVISION = "10"
+SOURCE_PIPELINE_REVISION = "13"
 PANEL_ROWS_PER_SHARD = 16
+ROWS_PER_SHARD = 1000
+MAX_PREPARATION_SHARDS = 64
 OUTPUT_VIEWS = ("download", "normalize", "review", "verify", "final")
 SIDECAR_SHARD = "part-{shard:05d}.parquet"
 UNPROCESSED_REVIEW_TEMPLATE = "review/unprocessed-{shard:05d}.parquet"
@@ -119,6 +121,7 @@ class SourcePipelineConfig:
 
     ``machines`` runs sandbox grader controls; ``None`` permits only in-process graders.
     ``review=None`` supports recipes without a model-review rubric.
+    ``normalized_shards`` caps the export partitions; small populations use fewer shards.
     """
 
     mode: SourceProcessingMode
@@ -561,6 +564,7 @@ def _expand_full(run: _SourceRun, panel: _Panel) -> StoragePath:
             run.recipe,
             None,
             run.config.execution,
+            num_output_shards=_population_shard_count(panel.sample.population_count, MAX_PREPARATION_SHARDS),
             context=run.context,
             normalized_rows=conversion_stage(
                 _raw_dataset(
@@ -726,6 +730,11 @@ def _write_export_shard(rows: Iterator[dict[str, Any]], shard: ShardInfo, *, out
     yield admissions
 
 
+def _population_shard_count(population_count: int, maximum: int) -> int:
+    population_shards = (population_count + ROWS_PER_SHARD - 1) // ROWS_PER_SHARD
+    return min(maximum, max(1, population_shards))
+
+
 def _export_sidecars(
     run: _SourceRun,
     panel: _Panel,
@@ -770,7 +779,7 @@ def _export_sidecars(
             .group_by(
                 lambda row: row["task_id"],
                 reducer=lambda _key, rows: rows,
-                num_output_shards=run.config.normalized_shards,
+                num_output_shards=_population_shard_count(panel.sample.population_count, run.config.normalized_shards),
             ).map_shard(partial(_write_export_shard, output=str(output))),
             telemetry=phase,
             operation="export",
@@ -817,7 +826,8 @@ def _write_manifest(
         "implementation_revision": SOURCE_PIPELINE_REVISION,
         "quality_revision": SOURCE_QUALITY_REVISION,
         "verification_revision": SOURCE_VERIFICATION_REVISION,
-        "normalized_shards": config.normalized_shards,
+        "normalized_shards": _population_shard_count(panel.sample.population_count, config.normalized_shards),
+        "normalized_shard_limit": config.normalized_shards,
         "source_input": run.source_input,
         "source_file_overrides": {name: asdict(file) for name, file in (run.source_overrides or {}).items()},
         "datasets": {name: str(output / name) for name in OUTPUT_VIEWS},
