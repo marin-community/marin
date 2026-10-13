@@ -699,6 +699,19 @@ def test_instruction_following_accepts_source_null_constraint_parameters(staged)
     assert spec.constraints[0].params == {}
 
 
+def test_instruction_following_semantically_grades_approximate_language_check(staged):
+    task = task_for(
+        "ultra_sft_step3200_instruction_following",
+        staged,
+        instruction_id_list=["language:response_language"],
+        kwargs=[{"language": "en"}],
+    )
+    spec = verifyit_spec(task.grader)
+    assert isinstance(spec, JudgeSpec)
+    with pytest.raises(RuntimeError, match="remote judge grading"):
+        grade_judge_candidate(spec, "Please respond promptly. Thank you for your assistance.", runtime=None)
+
+
 def test_jailbreak_uses_policy_specific_native_judge(staged):
     task = task_for("ultra_sft_step3200_jailbreak", staged)
     spec = verifyit_spec(task.grader)
