@@ -7718,6 +7718,8 @@ dependencies = [
 
 [package.dev-dependencies]
 test = [
+    { name = "click" },
+    { name = "marin-iris" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -7734,6 +7736,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 test = [
+    { name = "click" },
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },

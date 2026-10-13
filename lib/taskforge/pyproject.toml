@@ -16,7 +16,9 @@ dependencies = [
 ]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+# The taskforge-unit suite also runs experiments/post_training/capability_driven_envs/tests, whose
+# driver needs click for its CLI and marin-iris to resolve the GLM relay inside an Iris task.
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "click", "marin-iris"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskforge"]
