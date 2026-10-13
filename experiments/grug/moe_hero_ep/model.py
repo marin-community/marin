@@ -56,7 +56,7 @@ from levanter.grug.grug_moe import (
     qb_beta_topk_shard,
     qb_topk_physical_count,
     reduce_moe_routing_stats,
-    resolve_moe_implementation,
+    validate_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
@@ -263,6 +263,8 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
+    qk_mult_long_scale: float = 1.0
+    """Extra Q multiplier on the global (full-causal) layers; local layers use ``qk_mult`` alone."""
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -328,7 +330,7 @@ class GrugModelConfig:
             raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
-        resolve_moe_implementation(self.moe_implementation)
+        validate_moe_implementation(self.moe_implementation)
 
     @property
     def Embed(self) -> Axis:
@@ -402,6 +404,7 @@ class GrugModelConfig:
             layer_norm_eps=float(_hf_config_attr(hf_config, ("layer_norm_eps", "rms_norm_eps"), 1e-5)),
             initializer_std=float(_hf_config_attr(hf_config, ("initializer_std", "initializer_range"), 0.02)),
             qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
+            qk_mult_long_scale=float(_hf_config_attr(hf_config, ("qk_mult_long_scale",), 1.0)),
             rope=rope,
             rope_fused=bool(_hf_config_attr(hf_config, ("rope_fused",), False)),
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
@@ -437,6 +440,7 @@ class GrugModelConfig:
             # grug-specific (no public equivalent)
             "latent_dim": self.latent_dim,
             "qk_mult": self.qk_mult,
+            "qk_mult_long_scale": self.qk_mult_long_scale,
             "local_kv_heads": self.local_kv_heads,
             "global_kv_heads": self.global_kv_heads,
             "global_every": self.global_every,
@@ -660,6 +664,8 @@ class CausalSelfAttention(eqx.Module):
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
+        if self.cfg.qk_mult_long_scale != 1.0:
+            q = q * jnp.where(is_global, self.cfg.qk_mult_long_scale, 1.0)
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
         # shard attends its own queries against the whole key sequence. The backends reject a
         # sharded K/V sequence, and the output returns to the residual stream's layout, which
