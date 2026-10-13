@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-12T21:13:47.255112+00:00",
+  "observed_at": "2026-10-13T00:29:49.122887+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -3256,7 +3256,8 @@
       "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
       "allocated_seconds": 3953.895,
       "allocated_h100_hours": 8.786433333333333,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_incumbent_qualification.json.gz"
     },
     {
       "task_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/1",
@@ -3276,7 +3277,8 @@
       "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
       "allocated_seconds": 3953.895,
       "allocated_h100_hours": 8.786433333333333,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_incumbent_qualification.json.gz"
     },
     {
       "task_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/2",
@@ -3296,7 +3298,8 @@
       "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
       "allocated_seconds": 3948.116,
       "allocated_h100_hours": 8.773591111111111,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_incumbent_qualification.json.gz"
     },
     {
       "task_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/3",
@@ -3316,7 +3319,8 @@
       "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
       "allocated_seconds": 3948.116,
       "allocated_h100_hours": 8.773591111111111,
-      "outcome": "succeeded; audit pending"
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_incumbent_qualification.json.gz"
     },
     {
       "task_id": "/romain/sc-snowball-incumbent-runtime-qual-s0-a2-01a126ce/4",
@@ -3336,33 +3340,17 @@
       "configuration_sha256": "2c7d5ec3416a7dbbcb8ad5e7454c534f052f3b590f460e2e8c2620d9d09b1646",
       "allocated_seconds": 3948.116,
       "allocated_h100_hours": 8.773591111111111,
-      "outcome": "succeeded; audit pending"
-    }
-  ],
-  "terminal_h100_hours": 54.25557777777778,
-  "terminal_h100_hours_by_stage": {
-    "reference diagnostics": 14.997133333333334,
-    "reference qualification": 1.1350711111111111,
-    "reference main": 28.411202222222222,
-    "SkyRL qualification": 30.69114888888889,
-    "SkyRL main": 2770.3413866666656,
-    "SkyRL staleness qualification": 7.2194199999999995,
-    "core GPU qualification": 4.532366666666666,
-    "Snowball GPU qualification": 233.0384955555555,
-    "Qwen GPU qualification": 98.52069999999999,
-    "Snowball noise calibration": 235.28845555555557,
-    "Snowball incumbent qualification": 92.46114222222224
-  },
-  "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
-  "active_attempts": [
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/snowball0212_incumbent_qualification.json.gz"
+    },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce/0",
       "attempt_id": "0",
       "attempt_uid": "574b06dbeaf44d0a",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791827834972",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791850309540",
       "node_name": "g73bb8a",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3371,16 +3359,19 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "28e54de9fba8318621bd6f8de1884c0b1c2470da6050f1cb8d8756cb5d344f3b",
-      "allocated_h100_hours_so_far": 26.20507358233134
+      "allocated_seconds": 22474.568,
+      "allocated_h100_hours": 49.943484444444444,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce.json"
     },
     {
       "task_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce/1",
       "attempt_id": "0",
       "attempt_uid": "3d8ec5a83cbaae7f",
-      "state": "3",
-      "exit_code": "",
+      "state": "4",
+      "exit_code": "0",
       "started_at_ms": "1791827834972",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791850303475",
       "node_name": "g845f76",
       "terminal_reason": "",
       "stage": "SkyRL main",
@@ -3389,7 +3380,26 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "28e54de9fba8318621bd6f8de1884c0b1c2470da6050f1cb8d8756cb5d344f3b",
-      "allocated_h100_hours_so_far": 26.20507358233134
+      "allocated_seconds": 22468.503,
+      "allocated_h100_hours": 49.93000666666667,
+      "outcome": "succeeded with retained audit",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s0-a3-01a126ce.json"
     }
-  ]
+  ],
+  "terminal_h100_hours": 54.25557777777778,
+  "terminal_h100_hours_by_stage": {
+    "reference diagnostics": 14.997133333333334,
+    "reference qualification": 1.1350711111111111,
+    "reference main": 28.411202222222222,
+    "SkyRL qualification": 30.69114888888889,
+    "SkyRL main": 2870.2148777777766,
+    "SkyRL staleness qualification": 7.2194199999999995,
+    "core GPU qualification": 4.532366666666666,
+    "Snowball GPU qualification": 233.0384955555555,
+    "Qwen GPU qualification": 98.52069999999999,
+    "Snowball noise calibration": 235.28845555555557,
+    "Snowball incumbent qualification": 92.46114222222224
+  },
+  "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
+  "active_attempts": []
 }
