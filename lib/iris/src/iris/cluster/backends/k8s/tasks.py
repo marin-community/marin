@@ -1248,8 +1248,9 @@ _GC_MAX_AGE_SECONDS = 3600  # 1 hour
 # as they exist — Kueue rebuilds the pod-group Workload from surviving labeled
 # pods — so they cannot get the 1h debugging window plain pods do: every held
 # slot is an idle GPU node. 1 minute is still far above pod-status poll
-# latency (the reconcile loop runs every few seconds), so prompt deletion
-# cannot race exit-status collection.
+# latency (the reconcile loop runs every few seconds). Both retention windows
+# start after the last container finishes so GC cannot immediately remove an
+# old task's final status.
 _GANG_GC_MAX_AGE_SECONDS = 60
 
 # Blocker eviction: minimum interval between reconcile-driven eviction sweeps
@@ -2930,7 +2931,7 @@ class K8sTaskProvider:
         if cleaned:
             logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(cleaned))
 
-        # 2. Age-based sweep: delete terminal pods older than the cutoff and enqueue
+        # 2. Completion-age sweep: delete terminal pods older than the cutoff and enqueue
         #    their task hashes, so step 1 of a later pass cleans up the configmaps and
         #    PDBs once it has confirmed no attempt of that task is active.
         old_pod_names: list[str] = []
@@ -2943,7 +2944,14 @@ class K8sTaskProvider:
             created = meta.get("creationTimestamp", "")
             if not created:
                 continue
-            ts = parse_k8s_timestamp(created).timestamp()
+            finished_at = (
+                status.get("state", {}).get("terminated", {}).get("finishedAt")
+                for status in pod.get("status", {}).get("containerStatuses", [])
+            )
+            ts = max(
+                (parse_k8s_timestamp(finished).timestamp() for finished in finished_at if finished),
+                default=parse_k8s_timestamp(created).timestamp(),
+            )
             task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
             pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
             # Gang sweep: a deletionTimestamp means a prior delete is
