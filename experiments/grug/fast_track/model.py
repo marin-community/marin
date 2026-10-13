@@ -367,6 +367,9 @@ class MoeDynamicK(StrEnum):
     penalty ``moe_relu_l1 * mean_t sum_e relu(logit)`` on the router logits pushes the count down."""
     EPS = "eps"
     """Skip the routed slots whose combine weight is below ``moe_eps`` times the routed total (no renormalization)."""
+    THRESHOLD = "threshold"
+    """Keep the ``moe_dynamic_frac`` of all (token, routed slot) pairs in the batch with the largest router logits
+    (a batch-level null-routing budget: a token keeps 0 to ``num_experts_per_token`` experts)."""
 
 
 class RouterCombine(StrEnum):
@@ -679,6 +682,10 @@ class GrugModelConfig:
     """Routed-expert count of every token on the other MoE layers when set (they route the top
     ``num_experts_per_token`` and keep the first this many, i.e. top-``moe_k_static``); None: all of them."""
     moe_k_low: int = 5
+    attn_head_skip: float = 0.0
+    """Zero each attention head whose output gate, normalized to (0, 1) (MLA's ``2 sigmoid`` halved, KDA's
+    per-channel sigmoid averaged over the head), is below this; 0: off. Every layer logs the fraction of heads
+    under 0.1 (``head_gate_off``) and the fraction skipped."""
     moe_small_expert_width: float = 0.0
     """When > 0, the first half of the routed experts use only this fraction of ``intermediate_dim`` hidden units
     (the rest are masked to zero, so the function is a mixed-width bank; compute is not saved). E.g. 1/3 with
@@ -1659,7 +1666,8 @@ class CausalSelfAttention(eqx.Module):
         xsa = (dot / (v_norm_sq + 1e-6)) * aligned_v
         attn_out = attn_out - xsa
         gate_logit = jnp.einsum("bsd,dn->bsn", x, self.attn_gate).astype(jnp.float32)
-        gate = (2 * jax.nn.sigmoid(gate_logit)).astype(attn_out.dtype)
+        head_keep = _head_gate_keep(self.cfg, jax.nn.sigmoid(gate_logit), stats)
+        gate = (2 * jax.nn.sigmoid(gate_logit) * head_keep).astype(attn_out.dtype)
         gate = gate[..., None]
         attn_out = gate * attn_out
         if head_probe_attn is not None:
@@ -2085,6 +2093,9 @@ class KimiDeltaAttention(eqx.Module):
         o = self.o_norm(o.astype(x.dtype))
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
         gate = jax.nn.sigmoid(fused["g"] if fused else _proj(cfg, x, self.w_g))
+        head_gate = jnp.mean(rearrange(gate.astype(jnp.float32), "... (n d) -> ... n d", d=head_dim), axis=-1)
+        head_keep = _head_gate_keep(cfg, head_gate, stats)
+        gate = gate * jnp.repeat(head_keep, head_dim, axis=-1).astype(gate.dtype)
         o = o * gate
         out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec())
         return out, stats
@@ -2621,6 +2632,9 @@ class MoEMLP(eqx.Module):
             eps_layer = moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.EPS
             if relu_layer:
                 keep = unbiased_topk > 0
+            elif moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.THRESHOLD:
+                flat = reshard(jax.lax.stop_gradient(unbiased_topk), P(None, None))
+                keep = unbiased_topk >= jnp.quantile(flat, 1.0 - self.cfg.moe_dynamic_frac)
             elif eps_layer:
                 keep = combine_weights_f >= self.cfg.moe_eps * renorm_sum
             else:
@@ -4406,6 +4420,22 @@ def _route_kwargs(
     }
 
 
+_HEAD_GATE_OFF = 0.1
+
+
+def _head_gate_keep(cfg: GrugModelConfig, head_gate: Float[Array, "B S N"], stats: dict[str, jax.Array]) -> jax.Array:
+    """``attn_head_skip``'s per-head keep mask (1 / 0) from gates normalized to (0, 1); logs the near-off and
+    skipped head fractions into ``stats``."""
+    g = jax.lax.stop_gradient(head_gate.astype(jnp.float32))
+    stats[f"{_OUTSTAT_PREFIX}head_gate_off"] = jnp.mean((g < _HEAD_GATE_OFF).astype(jnp.float32))
+    if not cfg.attn_head_skip:
+        stats[f"{_OUTSTAT_PREFIX}head_skip_frac"] = jnp.zeros((), jnp.float32)
+        return jnp.ones_like(g)
+    keep = (g >= cfg.attn_head_skip).astype(jnp.float32)
+    stats[f"{_OUTSTAT_PREFIX}head_skip_frac"] = 1.0 - jnp.mean(keep)
+    return keep
+
+
 def _moe_k_keep(
     cfg: GrugModelConfig, layer: int, mask: AttentionMask | jax.Array, attn_out: Float[Array, "B S D"]
 ) -> Int[Array, "B S"] | None:
@@ -4415,7 +4445,7 @@ def _moe_k_keep(
     if layer not in cfg.moe_dynamic_layers or cfg.moe_dynamic == MoeDynamicK.NONE:
         return None if cfg.moe_k_static is None else jnp.full_like(norm, cfg.moe_k_static, dtype=jnp.int32)
     k_high, k_low = cfg.num_experts_per_token, cfg.moe_k_low
-    if cfg.moe_dynamic in (MoeDynamicK.RELU, MoeDynamicK.EPS):
+    if cfg.moe_dynamic in (MoeDynamicK.RELU, MoeDynamicK.EPS, MoeDynamicK.THRESHOLD):
         return jnp.full_like(norm, k_high, dtype=jnp.int32)
     if cfg.moe_dynamic == MoeDynamicK.POSITION:
         seg = _sconv_segment_ids(mask)
@@ -4427,7 +4457,7 @@ def _moe_k_keep(
             pos = idx - jax.lax.cummax(jnp.where(start, idx, 0), axis=1)
         high = pos >= cfg.moe_dynamic_position
     else:
-        high = norm >= jnp.quantile(norm, 1.0 - cfg.moe_dynamic_frac)
+        high = norm >= jnp.quantile(reshard(norm, P(None, None)), 1.0 - cfg.moe_dynamic_frac)
     return jnp.where(high, k_high, k_low).astype(jnp.int32)
 
 
