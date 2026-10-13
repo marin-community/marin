@@ -12,6 +12,7 @@ from pathlib import Path
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 
+from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE, IMAGE_REFERENCE_KEY
 from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle
 from shellbox.backends.qemu.machine import Acceleration, QemuMachine, QemuMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
@@ -56,7 +57,7 @@ class QemuEnvironment(BaseEnvironment):
         self.acceleration = Acceleration(acceleration)
         self.machine: QemuMachine | None = None
         self._source: RegistryImage | DockerfileSource | None = None
-        metadata_path = self.guest_bundle / "image.json" if self.guest_bundle is not None else None
+        metadata_path = self.guest_bundle / IMAGE_METADATA_FILE if self.guest_bundle is not None else None
         self._image_metadata = (
             json.loads(metadata_path.read_text()) if metadata_path is not None and metadata_path.is_file() else {}
         )
@@ -98,7 +99,7 @@ class QemuEnvironment(BaseEnvironment):
             if metadata.get("dockerfile_sha256") != digest:
                 raise ValueError("Prebuilt OCI bundle does not match the task Dockerfile")
         image_reference = self.task_env_config.docker_image
-        if image_reference is not None and metadata.get("image_reference") != image_reference:
+        if image_reference is not None and metadata.get(IMAGE_REFERENCE_KEY) != image_reference:
             raise ValueError("Prebuilt OCI bundle does not match the task image reference")
 
     async def start(self, force_build: bool) -> None:

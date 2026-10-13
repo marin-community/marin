@@ -18,6 +18,7 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
+from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE
 from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle, stage_qemu_image
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
@@ -172,7 +173,7 @@ class QemuMachine:
         self._pty_socket: Path | None = None
         self._shell: QemuShellSession | None = None
         self._lock = asyncio.Lock()
-        metadata_path = self.bundle / "image.json"
+        metadata_path = self.bundle / IMAGE_METADATA_FILE
         self.metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
         self.image_env = dict(item.split("=", 1) for item in self.metadata.get("env", []))
         self.image_workdir = self.metadata.get("cwd", "/workspace")
@@ -542,7 +543,7 @@ class QemuMachineFactory:
         for name in ("qemu-system-x86_64", "vmlinuz", "initramfs.cpio.gz"):
             if not (bundle / name).is_file():
                 raise FileNotFoundError(bundle / name)
-        if (bundle / "image.json").exists() != (bundle / "rootfs.ext4").exists():
+        if (bundle / IMAGE_METADATA_FILE).exists() != (bundle / "rootfs.ext4").exists():
             raise ValueError("OCI guest bundle requires both image.json and rootfs.ext4")
         machine = QemuMachine(spec, self.acceleration, bundle=source)
         await machine.start()

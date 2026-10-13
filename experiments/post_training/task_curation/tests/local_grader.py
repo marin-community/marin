@@ -21,16 +21,13 @@ from dataclasses import dataclass, replace
 
 import pytest
 from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
+from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import (
-    LINUX_PROCESS_CAPABILITIES,
     Backend,
-    CommandSemantics,
     DockerImage,
     ExecutionRequirements,
     HostImage,
     MachineSpec,
-    UnsupportedMachineSpec,
-    check_execution_requirements,
 )
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import ConversationTrace, EnvironmentRequirements, GradingAttempt, TaskResource, TaskSpec
@@ -49,14 +46,7 @@ class LocalGraderFactory:
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
         if self.backend == Backend.LOCAL:
-            if not isinstance(spec.source, HostImage):
-                raise UnsupportedMachineSpec("The local grader fixture requires HostImage")
-            check_execution_requirements(
-                requirements,
-                spec,
-                semantics=CommandSemantics.LINUX_PROCESS,
-                capabilities=LINUX_PROCESS_CAPABILITIES,
-            )
+            check_local_environment(requirements, spec)
             return
         DockerMachineFactory().check_environment(requirements, spec)
 

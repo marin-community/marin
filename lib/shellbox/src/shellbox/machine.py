@@ -229,8 +229,7 @@ class MachineFactory(Protocol):
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
         """Reject unsupported task contracts before preparation or acquisition.
 
-        Checks declared features, not resource availability. Creation shares the
-        source/allocation checks; installation and infrastructure can still fail.
+        Checks declared features, not available capacity or installed executables.
         """
         ...
 

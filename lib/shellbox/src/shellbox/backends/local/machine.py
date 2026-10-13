@@ -351,6 +351,24 @@ class LocalMachine:
         await asyncio.to_thread(shutil.rmtree, self.root)
 
 
+def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec:
+    if not isinstance(spec.source, (HostImage, PackageSpec)):
+        raise UnsupportedMachineSpec(
+            f"The local backend requires HostImage or PackageSpec, not {type(spec.source).__name__}"
+        )
+    if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
+        raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
+    return spec.source
+
+
+def check_local_environment(requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    """Check local execution support without acquiring a bubblewrap sandbox."""
+    _check_spec(spec)
+    check_execution_requirements(
+        requirements, spec, semantics=CommandSemantics.LINUX_PROCESS, capabilities=LINUX_PROCESS_CAPABILITIES
+    )
+
+
 class LocalMachineFactory:
     """Run trusted commands on this host in bubblewrap sandboxes, any number of machines at a time.
 
@@ -394,27 +412,11 @@ class LocalMachineFactory:
         self.bwrap = _working_bwrap(_bwrap_candidates(bwrap))
         logger.info("Local backend sandboxes commands with %s", self.bwrap)
 
-    def _check_spec(self, spec: MachineSpec) -> HostImage | PackageSpec:
-        if not isinstance(spec.source, (HostImage, PackageSpec)):
-            raise UnsupportedMachineSpec(
-                f"The local backend requires HostImage or PackageSpec, not {type(spec.source).__name__}"
-            )
-        if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
-            raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
-        return spec.source
-
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
-        self._check_spec(spec)
-        check_execution_requirements(
-            requirements,
-            spec,
-            semantics=CommandSemantics.LINUX_PROCESS,
-            capabilities=LINUX_PROCESS_CAPABILITIES,
-            image_reference=None,
-        )
+        check_local_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
-        source = self._check_spec(spec)
+        source = _check_spec(spec)
         host = source if isinstance(source, HostImage) else HostImage()
         if isinstance(source, PackageSpec) and source.pypi_packages is not None:
             installed = await asyncio.to_thread(

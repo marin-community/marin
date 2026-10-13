@@ -352,8 +352,6 @@ class DaytonaMachineFactory:
         source: DockerfileSource | RegistryImage
         if isinstance(spec.source, DockerfileSource):
             source = spec.source
-            if source.dockerfile.absolute().parent != source.context.absolute():
-                raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
         elif isinstance(spec.source, RegistryImage):
             source = spec.source
         else:

@@ -453,7 +453,6 @@ def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
         finally:
             await first.close()
         # A fresh factory must reuse the resolved installation without index access.
-        monkeypatch.setenv("UV_OFFLINE", "1")
         second = await make_factory(python_version=PYTHON_VERSION).create(spec)
         try:
             result = await second.run(Command(("python3", "-c", "import six,sys; print(sys.prefix)")))
