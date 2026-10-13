@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 
+from verifyit.json_comparison import JsonValue, NumericTypePolicy, json_values_equal
 from verifyit.structure_closure import (
     ClosureState,
     PrefixStatus,
@@ -17,18 +18,17 @@ from verifyit.structure_closure import (
 )
 from verifyit.tool_call_markup import JSON_WHITESPACE, THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
-SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 CLOSURE_REGION_SCORER = "closure_region_v1"
 
 
-def closure_response_content(text: str, *, stop_reason: str) -> str:
-    """Remove one terminal Snowball control marker from a normally stopped turn.
+def closure_response_content(text: str, *, stop_reason: str, terminal_markers: tuple[str, ...]) -> str:
+    """Remove one caller-defined terminal marker from a normally stopped turn.
 
     Interior markers, repeated terminal markers, and truncated generations remain
-    subject to structural validation. Tool and reasoning closers are content.
+    subject to structural validation. Structural closers remain content.
     """
     if stop_reason == "stop":
-        for marker in SNOWBALL_TURN_END_MARKERS:
+        for marker in terminal_markers:
             if text.endswith(marker):
                 return text[: -len(marker)]
     return text
@@ -78,33 +78,33 @@ def closure_state(text: str, structure_format: ClosureFormat) -> ClosureState:
     raise ValueError(f"Unsupported closure format: {structure_format}")
 
 
-def _json_content(text: str, structure_format: ClosureFormat) -> str:
+def _decoded_json(text: str, structure_format: ClosureFormat) -> JsonValue:
     if structure_format == ClosureFormat.TOOL:
         text = text[len(TOOL_OPEN) :].rstrip(JSON_WHITESPACE)[: -len(TOOL_CLOSE)]
-    # Canonical serialization ignores object order and whitespace, but preserves
-    # distinctions such as true versus 1 that Python container equality loses.
-    return json.dumps(json.loads(text), sort_keys=True, ensure_ascii=True, allow_nan=False)
+    value = json.loads(text)
+    json.dumps(value, allow_nan=False)
+    return value
 
 
 def score_closure(text: str, expected: str, structure_format: ClosureFormat) -> ClosureScore:
     """Check syntax and known content; never infer what unfinished content meant.
 
-    JSON permits key-order and whitespace changes. Numeric spellings canonicalize
-    through Python's JSON decoder; booleans remain distinct from numbers. Opaque
+    JSON permits key-order and whitespace changes. Numeric spellings are decoded
+    before comparison; booleans and integer versus float values stay distinct. Opaque
     reasoning and fence content must match except for trailing whitespace.
     """
     complete = closure_state(text, structure_format).status == PrefixStatus.COMPLETE
     if not complete:
         return ClosureScore(False, False, False)
     if structure_format in (ClosureFormat.JSON, ClosureFormat.TOOL):
-        reference = _json_content(expected, structure_format)
+        reference = _decoded_json(expected, structure_format)
         try:
-            candidate = _json_content(text, structure_format)
+            candidate = _decoded_json(text, structure_format)
         except ValueError:
             # A syntactically valid exponent can overflow the JSON decoder's
             # float representation. It cannot preserve a finite reference value.
             return ClosureScore(True, False, False)
-        preserved = candidate == reference
+        preserved = json_values_equal(reference, candidate, numeric_types=NumericTypePolicy.STRICT)
     else:
         preserved = text.rstrip(JSON_WHITESPACE) == expected.rstrip(JSON_WHITESPACE)
     return ClosureScore(True, preserved, preserved)

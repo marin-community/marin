@@ -113,7 +113,8 @@ repeated records and rejecting unexpected errors.
 fences. `closure_scoring` compares a completed outer region with a known reference and reports
 syntax, content preservation, and trailing output separately. `tool_call_markup` classifies
 completed `<tool_call>` markup in decoded assistant text. These helpers inspect text; the caller
-retains the sampled tokens and decides when a completed attempt can be scored.
+retains the sampled tokens, supplies any generation stop markers, and decides when a completed
+attempt can be scored.
 
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller

@@ -20,6 +20,8 @@ from verifyit.structure_closure import (
     required_code_fence_state,
 )
 
+_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
+
 
 @pytest.mark.parametrize(
     "structure_format,expected,early,changed",
@@ -114,7 +116,7 @@ def test_region_closure_does_not_repair_invalid_or_premature_structure(structure
     assert not score.content_preserved
 
 
-@pytest.mark.parametrize("marker", ["<|eot_id|>", "<|end_of_text|>"])
+@pytest.mark.parametrize("marker", _TURN_END_MARKERS)
 @pytest.mark.parametrize(
     "value,structure_format",
     [
@@ -125,20 +127,33 @@ def test_region_closure_does_not_repair_invalid_or_premature_structure(structure
     ],
 )
 def test_completed_structure_accepts_one_normal_turn_terminator(value, structure_format, marker):
-    content = closure_response_content(value + marker, stop_reason="stop")
+    content = closure_response_content(value + marker, stop_reason="stop", terminal_markers=_TURN_END_MARKERS)
     assert score_closure(content, value, structure_format).success
-    repeated = closure_response_content(value + marker + marker, stop_reason="stop")
+    repeated = closure_response_content(value + marker + marker, stop_reason="stop", terminal_markers=_TURN_END_MARKERS)
     assert not score_closure(repeated, value, structure_format).success
-    truncated = closure_response_content(value + marker, stop_reason="length")
+    truncated = closure_response_content(value + marker, stop_reason="length", terminal_markers=_TURN_END_MARKERS)
     assert not score_closure(truncated, value, structure_format).success
 
 
 @pytest.mark.parametrize("response", ['{"a":[1<|eot_id|>', '{"a":"<|eot_id|>"}<|eot_id|>'])
 def test_turn_terminator_does_not_supply_missing_closers_or_erase_content(response):
-    content = closure_response_content(response, stop_reason="stop")
+    content = closure_response_content(response, stop_reason="stop", terminal_markers=_TURN_END_MARKERS)
     assert not score_closure(content, '{"a":[1]}', ClosureFormat.JSON).success
     if '"<|eot_id|>"' in response:
         assert score_closure(content, '{"a":"<|eot_id|>"}', ClosureFormat.JSON).success
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected", "preserved"),
+    [
+        ('{"a":1e0,"b":true}', '{"b":true,"a":1.0}', True),
+        ('{"a":1.0}', '{"a":1}', False),
+        ('{"a":true}', '{"a":1}', False),
+        ('{"a":1e999}', '{"a":1.0}', False),
+    ],
+)
+def test_json_closure_preserves_types_and_rejects_nonfinite_values(candidate, expected, preserved):
+    assert score_closure(candidate, expected, ClosureFormat.JSON).content_preserved is preserved
 
 
 @pytest.mark.parametrize(

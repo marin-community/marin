@@ -235,6 +235,24 @@ def json_closure_state(prefix: str) -> ClosureState:
     return ClosureState(PrefixStatus.COMPLETE, (), "", completion_offset=completed_at)
 
 
+def _opening_marker_state(prefix: str, opener: str, closer: str) -> ClosureState | None:
+    if not opener or not closer or opener == closer:
+        raise ValueError("Require distinct nonempty markers")
+    if opener.startswith(prefix) and prefix != opener:
+        return ClosureState(PrefixStatus.EXTENDABLE, (), None)
+    if not prefix.startswith(opener):
+        return ClosureState(PrefixStatus.INVALID, (), None, 0, "Expected opening marker")
+    return None
+
+
+def _closed_marker_state(prefix: str, completed_at: int) -> ClosureState:
+    tail = prefix[completed_at:]
+    if not tail.strip(_WHITESPACE):
+        return ClosureState(PrefixStatus.COMPLETE, (), "", completion_offset=completed_at)
+    offset = completed_at + len(tail) - len(tail.lstrip(_WHITESPACE))
+    return ClosureState(PrefixStatus.INVALID, (), None, offset, "Content after closing marker", completed_at)
+
+
 def delimited_json_closure_state(prefix: str, *, opener: str, closer: str) -> ClosureState:
     """Inspect one explicitly delimited JSON region, including its opening marker.
 
@@ -242,12 +260,9 @@ def delimited_json_closure_state(prefix: str, *, opener: str, closer: str) -> Cl
     schema checks here. Trailing non-whitespace content after the close marker
     is outside this single-region contract and is rejected.
     """
-    if not opener or not closer or opener == closer:
-        raise ValueError("Require distinct nonempty JSON delimiters")
-    if opener.startswith(prefix) and prefix != opener:
-        return ClosureState(PrefixStatus.EXTENDABLE, (), None)
-    if not prefix.startswith(opener):
-        return ClosureState(PrefixStatus.INVALID, (), None, 0, "Expected opening marker")
+    opening_state = _opening_marker_state(prefix, opener, closer)
+    if opening_state is not None:
+        return opening_state
     parser = _JsonPrefix(prefix[len(opener) :])
     try:
         parser.value()
@@ -262,12 +277,7 @@ def delimited_json_closure_state(prefix: str, *, opener: str, closer: str) -> Cl
     if closer.startswith(remainder) and remainder != closer:
         return ClosureState(PrefixStatus.EXTENDABLE, (opener,), closer[len(remainder) :])
     if remainder.startswith(closer):
-        tail = remainder[len(closer) :]
-        completed_at = offset + len(closer)
-        if not tail.strip(_WHITESPACE):
-            return ClosureState(PrefixStatus.COMPLETE, (), "", completion_offset=completed_at)
-        offset += len(closer) + len(tail) - len(tail.lstrip(_WHITESPACE))
-        return ClosureState(PrefixStatus.INVALID, (), None, offset, "Content after closing marker", completed_at)
+        return _closed_marker_state(prefix, offset + len(closer))
     matching = 0
     while matching < min(len(remainder), len(closer)) and remainder[matching] == closer[matching]:
         matching += 1
@@ -281,12 +291,9 @@ def paired_marker_closure_state(prefix: str, *, opener: str, closer: str) -> Clo
     special tokens. This is not a parser for prose quoting the marker spelling.
     Content completion requires separate evidence before suffix supervision.
     """
-    if not opener or not closer or opener == closer:
-        raise ValueError("Require distinct nonempty markers")
-    if opener.startswith(prefix) and prefix != opener:
-        return ClosureState(PrefixStatus.EXTENDABLE, (), None)
-    if not prefix.startswith(opener):
-        return ClosureState(PrefixStatus.INVALID, (), None, 0, "Expected opening marker")
+    opening_state = _opening_marker_state(prefix, opener, closer)
+    if opening_state is not None:
+        return opening_state
     body = prefix[len(opener) :]
     close_at = body.find(closer)
     repeat_at = body.find(opener)
@@ -295,12 +302,7 @@ def paired_marker_closure_state(prefix: str, *, opener: str, closer: str) -> Clo
             PrefixStatus.INVALID, (opener,), None, len(opener) + repeat_at + len(opener) - 1, "Repeated opening marker"
         )
     if close_at >= 0:
-        tail = body[close_at + len(closer) :]
-        completed_at = len(opener) + close_at + len(closer)
-        if tail.strip(_WHITESPACE):
-            offset = len(opener) + close_at + len(closer) + len(tail) - len(tail.lstrip(_WHITESPACE))
-            return ClosureState(PrefixStatus.INVALID, (), None, offset, "Content after closing marker", completed_at)
-        return ClosureState(PrefixStatus.COMPLETE, (), "", completion_offset=completed_at)
+        return _closed_marker_state(prefix, len(opener) + close_at + len(closer))
     for length in range(min(len(body), len(closer) - 1), 0, -1):
         if body.endswith(closer[:length]):
             return ClosureState(PrefixStatus.EXTENDABLE, (opener,), closer[length:])
