@@ -91,15 +91,28 @@ def varlen_output_scale_shape(rows: int, cols: int, num_groups: int) -> tuple[in
     return (1, padded_scale_tiles(rows, num_groups), -(-(cols // MX_BLOCK) // _SCALE_ATOM_COLS), 32, 4, 4)
 
 
-def mx_weights(w: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """Group weights ``[E, N, K]`` (contraction last) -> e4m3 ``[E, N, K]`` and blocked e8m0 scales."""
-    values, scales = mx_quantize_rows(w)
-    return values, blocked_scales(scales)
+def mx_weights(w: jax.Array, b_major: str) -> tuple[jax.Array, jax.Array]:
+    """Group weights -> e4m3 in their own layout and blocked e8m0 scales over the logical ``(E, N, K / 32)``.
+
+    ``b_major="k"``: ``w`` is ``[E, N, K]`` (contraction last). ``b_major="n"``: ``w`` is ``[E, K, N]``, quantized
+    along ``K`` in place. Quantizing in the stored layout matters inside the layer scan: a transposed copy makes
+    XLA's layout assignment transpose the whole stacked weight outside the loop (+24 GiB at the GB200 recipe)."""
+    if b_major == "k":
+        values, scales = mx_quantize_rows(w)
+        return values, blocked_scales(scales)
+    if b_major == "n":
+        values, scales = mx_quantize_cols(w)
+        return values, blocked_scales(jnp.swapaxes(scales, 1, 2))
+    raise ValueError(f"b_major must be 'k' or 'n', got {b_major!r}")
 
 
 _TS = cjax.TensorSpec
 _ROWS_SPEC = _TS(divisibility=(1, 16), static=False)
-_WEIGHT_SPEC = _TS(divisibility=(1, 1, 16), static=False)
+_WEIGHT_SPECS = {
+    "k": _TS(divisibility=(1, 1, 16), static=False),
+    # [E, K, N] stored; the kernel's logical order is (E, N, K).
+    "n": _TS(mode=(0, 2, 1), divisibility=(1, 1, 16), static=False),
+}
 _SCALE_SPEC = _TS(static=False)
 _INDEX_SPEC = _TS(static=False)
 _OUT_SPEC = _TS(divisibility=(1, 8), static=False)
@@ -132,14 +145,14 @@ def _build_plain_launcher(*, max_active_clusters, max_swizzle):
     return launcher
 
 
-def mxfp8_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, out_dtype=jnp.bfloat16, max_swizzle=8):
+def mxfp8_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, b_major, out_dtype=jnp.bfloat16, max_swizzle=8):
     """``a[M, K] @ b[e, N, K]^T`` per row group, e4m3 operands with blocked e8m0 scales; rows past ``cu[-1]``
     unspecified. ``a_scales`` is the varlen-m layout, ``b_scales`` ``[E, rn, rk, 32, 4, 4]``."""
     launcher = _build_plain_launcher(max_active_clusters=_max_active_clusters(MXFP8_CLUSTER), max_swizzle=max_swizzle)
     call = cutlass_call(
         launcher,
-        output_shape_dtype=jax.ShapeDtypeStruct((a.shape[0], b.shape[1]), out_dtype),
-        input_spec=(_ROWS_SPEC, _WEIGHT_SPEC, _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC),
+        output_shape_dtype=jax.ShapeDtypeStruct((a.shape[0], b.shape[1 if b_major == "k" else 2]), out_dtype),
+        input_spec=(_ROWS_SPEC, _WEIGHT_SPECS[b_major], _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC),
         output_spec=(_OUT_SPEC,),
         use_static_tensors=False,
     )
@@ -174,11 +187,11 @@ def _build_relu2_launcher(*, max_active_clusters, max_swizzle):
     return launcher
 
 
-def mxfp8_relu2_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, max_swizzle=8):
+def mxfp8_relu2_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, b_major, max_swizzle=8):
     """Block-scaled ``pre = a @ b^T`` with ``relu(pre)^2`` quantized in the epilogue.
 
     Returns ``(pre bf16 [M, N], post e4m3 [M, N], post scales)``, the scales in the varlen-m layout."""
-    rows, cols = a.shape[0], b.shape[1]
+    rows, cols = a.shape[0], b.shape[1 if b_major == "k" else 2]
     launcher = _build_relu2_launcher(max_active_clusters=_max_active_clusters(MXFP8_CLUSTER), max_swizzle=max_swizzle)
     call = cutlass_call(
         launcher,
@@ -187,7 +200,7 @@ def mxfp8_relu2_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, max_swizzl
             jax.ShapeDtypeStruct((rows, cols), jnp.float8_e4m3fn),
             jax.ShapeDtypeStruct(varlen_output_scale_shape(rows, cols, cu_seqlens.shape[0] - 1), jnp.float8_e8m0fnu),
         ),
-        input_spec=(_ROWS_SPEC, _WEIGHT_SPEC, _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC),
+        input_spec=(_ROWS_SPEC, _WEIGHT_SPECS[b_major], _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC),
         output_spec=(_OUT_SPEC, _ROWS_SPEC, _SCALE_SPEC),
         use_static_tensors=False,
     )
@@ -253,7 +266,7 @@ def mxfp8_drelu2_grouped_gemm(dy, dy_scales, b, b_scales, pre, cu_seqlens, *, ma
             jax.ShapeDtypeStruct(varlen_output_scale_shape(rows, cols, cu_seqlens.shape[0] - 1), jnp.float8_e8m0fnu),
             jax.ShapeDtypeStruct((rows, n_tiles), jnp.float32),
         ),
-        input_spec=(_ROWS_SPEC, _WEIGHT_SPEC, _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC, _OUT_SPEC),
+        input_spec=(_ROWS_SPEC, _WEIGHT_SPECS["k"], _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC, _OUT_SPEC),
         output_spec=(_OUT_SPEC, _ROWS_SPEC, _SCALE_SPEC, _TS(static=False)),
         use_static_tensors=False,
     )
@@ -271,9 +284,9 @@ def relu2_expert_mlp_mxfp8_fwd(x, w_up, w_down, cu):
     else:
         values, exponents = mx_quantize_rows(x)
     pre, post, post_scales = mxfp8_relu2_grouped_gemm(
-        values, padded_scale_rows(exponents, cu), *mx_weights(jnp.swapaxes(w_up, 1, 2)), cu
+        values, padded_scale_rows(exponents, cu), *mx_weights(w_up, "n"), cu, b_major="n"
     )
-    y = mxfp8_grouped_gemm(post, post_scales, *mx_weights(jnp.swapaxes(w_down, 1, 2)), cu)
+    y = mxfp8_grouped_gemm(post, post_scales, *mx_weights(w_down, "n"), cu, b_major="n")
     return y, (x, w_up, w_down, pre, cu)
 
 
@@ -285,9 +298,9 @@ def relu2_expert_mlp_mxfp8_backward_input(res, dy):
     dtype = dy.dtype
     dy_values, dy_exponents = mx_quantize_rows(dy)
     post, d_pre_values, d_pre_scales, output_dot = mxfp8_drelu2_grouped_gemm(
-        dy_values, padded_scale_rows(dy_exponents, cu), *mx_weights(w_down), pre, cu
+        dy_values, padded_scale_rows(dy_exponents, cu), *mx_weights(w_down, "k"), pre, cu
     )
-    dx = mxfp8_grouped_gemm(d_pre_values, d_pre_scales, *mx_weights(w_up), cu)
+    dx = mxfp8_grouped_gemm(d_pre_values, d_pre_scales, *mx_weights(w_up, "k"), cu, b_major="k")
     rows, width = d_pre_values.shape
     d_pre = mx_dequantize_rows(d_pre_values, unpadded_scale_rows(d_pre_scales, cu, rows, width // MX_BLOCK), dtype)
     if x.dtype == jnp.uint8:

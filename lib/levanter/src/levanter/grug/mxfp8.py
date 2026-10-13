@@ -65,14 +65,15 @@ def mx_quantize_rows(x: jax.Array) -> tuple[jax.Array, jax.Array]:
 
 
 def mx_quantize_cols(x: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """MXFP8 ``x[T, K]`` along ``T`` (32-row blocks): e4m3 ``[T, K]`` and biased e8m0 exponents ``[T / 32, K]``."""
-    t, k = x.shape
+    """MXFP8 ``x[..., T, K]`` along ``T`` (32-row blocks), in place: e4m3 ``[..., T, K]`` and biased e8m0 exponents
+    ``[..., T / 32, K]``."""
+    *lead, t, k = x.shape
     if t % MX_BLOCK:
         raise ValueError(f"row count {t} must divide {MX_BLOCK}")
-    blocks = x.astype(jnp.float32).reshape(t // MX_BLOCK, MX_BLOCK, k)
-    exponent = _e8m0_exponent(jnp.max(jnp.abs(blocks), axis=1))
+    blocks = x.astype(jnp.float32).reshape(*lead, t // MX_BLOCK, MX_BLOCK, k)
+    exponent = _e8m0_exponent(jnp.max(jnp.abs(blocks), axis=-2))
     scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
-    values = (blocks / scale[:, None, :]).astype(_E4M3).reshape(t, k)
+    values = (blocks / scale[..., None, :]).astype(_E4M3).reshape(*lead, t, k)
     return values, exponent.astype(jnp.uint8)
 
 
