@@ -184,7 +184,7 @@ jobs:
     needs: datakit-nemotron-ferry
     if: needs.datakit-nemotron-ferry.outputs.wait_state == 'WAIT_TIMED_OUT'
     runs-on: ubuntu-latest
-    timeout-minutes: 280
+    timeout-minutes: 355  # The Iris job timeout (36,000s) limits the total run.
     concurrency:
       group: datakit-nemotron-ferry-continued-${{ github.ref }}
       cancel-in-progress: true
