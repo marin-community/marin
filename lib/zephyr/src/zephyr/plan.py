@@ -309,6 +309,8 @@ class PhysicalStage:
     - MAP_WORKER: Normal worker execution (map/filter/write)
     - REDUCE_WORKER: Memory-intensive worker execution (scatter/reduce/join)
     - RESHARD: Redistribute chunks across shards (no worker execution)
+    - SPLIT: Expose ordered chunks as independent tasks
+    - CONCAT: Restore the parent shard layout after split tasks
     """
 
     operations: list[PhysicalOp] = field(default_factory=list)

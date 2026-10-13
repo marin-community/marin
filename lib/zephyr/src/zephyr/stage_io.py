@@ -6,7 +6,8 @@
 These helpers run on the worker side of a Zephyr stage — describing a unit of
 work (``ShardTask``), its result (``TaskResult``), the strategy that executes it
 (``StageRunner``), and the routines that materialise a stage's item stream to
-disk (pickle chunks for map stages, scattered shuffle files for reduce stages).
+disk (pickle or Parquet chunks for map stages, scattered shuffle files for
+reduce stages).
 """
 
 import itertools

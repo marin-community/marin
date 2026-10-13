@@ -35,7 +35,7 @@ def test_parallel_parquet_map_preserves_output_shard(context, tmp_path, explicit
     pq.write_table(pa.table({"id": range(13)}), source, row_group_size=13)
 
     def transform(row):
-        # The later range must finish its mapping before the first can proceed.
+        # The later range must reach its callback before the first can proceed.
         # A single task cannot pass this barrier.
         if row["id"] == 12:
             (tmp_path / "later-range").touch()
