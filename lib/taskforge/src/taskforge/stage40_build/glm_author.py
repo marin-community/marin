@@ -133,13 +133,23 @@ unchanged, so their memoized outputs are reused.
 """
 
 
-class ProgramSubmission(BaseModel):
-    """Submit the complete build program module."""
+NOTES_LIMIT = 1000
+"""The longest ``ProgramSubmission.notes`` in characters, room for two to five sentences."""
 
-    source: str = Field(
-        description="The complete Python module source, ending with PROGRAM = rl_env_build_program(..., sink=assemble)."
+
+class ProgramSubmission(BaseModel):
+    """Submit the build program: a short summary, then the whole module."""
+
+    # The schema lists the fields in declaration order and the model writes them in that order, so
+    # the bounded notes come first and the reply ends with the program's last line.
+    notes: str = Field(
+        max_length=NOTES_LIMIT,
+        description="Two to five sentences on what the program builds and any deviation from the proposal.",
     )
-    notes: str = Field(description="Two to five sentences: what the program builds and any deviation from the proposal.")
+    source: str = Field(
+        description="The complete Python module text, the whole program, ending with "
+        "PROGRAM = rl_env_build_program(..., sink=assemble)."
+    )
 
     @field_validator("source")
     @classmethod
