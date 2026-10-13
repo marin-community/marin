@@ -128,3 +128,56 @@ def quantize_cols(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     if t % MX_BLOCK or k % COL_TILE or x.size > _MAX_CALL_ELEMENTS:
         return mx_quantize_cols(x)
     return mx_quantize_cols_pallas(x)
+
+
+def _rows_cols_kernel(x_ref, row_values_ref, row_exponents_ref, col_values_ref, col_exponents_ref):
+    block = x_ref[...].astype(jnp.float32)  # [32, C]
+    col_exponent = _exponent(jnp.max(jnp.abs(block), axis=0))  # [C]
+    col_scale = jax.lax.bitcast_convert_type(col_exponent << 23, jnp.float32)
+    col_values_ref[...] = (block / col_scale[None, :]).astype(col_values_ref.dtype)
+    col_exponents_ref[0, :] = col_exponent.astype(col_exponents_ref.dtype)
+    for j in range(COL_TILE // MX_BLOCK):
+        part = x_ref[:, j * MX_BLOCK : (j + 1) * MX_BLOCK].astype(jnp.float32)  # [32, 32], from cache
+        row_exponent = _exponent(jnp.max(jnp.abs(part), axis=1))  # [32]
+        row_scale = jax.lax.bitcast_convert_type(row_exponent << 23, jnp.float32)
+        row_values_ref[:, j * MX_BLOCK : (j + 1) * MX_BLOCK] = (part / row_scale[:, None]).astype(row_values_ref.dtype)
+        row_exponents_ref[:, j] = row_exponent.astype(row_exponents_ref.dtype)
+
+
+@functools.partial(jax.jit, static_argnames=("interpret",))
+def mx_quantize_rows_cols_pallas(x: jax.Array, *, interpret: bool = False):
+    """``(mx_quantize_rows(x), mx_quantize_cols(x))`` of a local ``x[T, K]`` reading ``x`` once."""
+    t, k = x.shape
+    if t % MX_BLOCK or k % COL_TILE:
+        raise ValueError(
+            f"mx_quantize_rows_cols_pallas needs T % {MX_BLOCK} == 0 and K % {COL_TILE} == 0, got {x.shape}"
+        )
+    row_values, row_exponents, col_values, col_exponents = pl.pallas_call(
+        _rows_cols_kernel,
+        grid=(t // MX_BLOCK, k // COL_TILE),
+        in_specs=[pl.BlockSpec((MX_BLOCK, COL_TILE), lambda i, j: (i, j))],
+        out_specs=[
+            pl.BlockSpec((MX_BLOCK, COL_TILE), lambda i, j: (i, j)),
+            pl.BlockSpec((MX_BLOCK, COL_TILE // MX_BLOCK), lambda i, j: (i, j)),
+            pl.BlockSpec((MX_BLOCK, COL_TILE), lambda i, j: (i, j)),
+            pl.BlockSpec((1, COL_TILE), lambda i, j: (i, j)),
+        ],
+        out_shape=[
+            jax.ShapeDtypeStruct((t, k), jnp.float8_e4m3fn),
+            jax.ShapeDtypeStruct((t, k // MX_BLOCK), jnp.uint8),
+            jax.ShapeDtypeStruct((t, k), jnp.float8_e4m3fn),
+            jax.ShapeDtypeStruct((t // MX_BLOCK, k), jnp.uint8),
+        ],
+        compiler_params=plt.CompilerParams(num_warps=4, num_stages=1),
+        interpret=interpret,
+        name="mx_quantize_rows_cols",
+    )(x)
+    return (row_values, row_exponents), (col_values, col_exponents)
+
+
+def quantize_rows_cols(x: jax.Array):
+    """``(quantize_rows(x), quantize_cols(x))``, in one pass over ``x`` when the fused kernel fits."""
+    t, k = x.shape
+    if t % MX_BLOCK or k % COL_TILE or x.size > _MAX_CALL_ELEMENTS:
+        return quantize_rows(x), quantize_cols(x)
+    return mx_quantize_rows_cols_pallas(x)

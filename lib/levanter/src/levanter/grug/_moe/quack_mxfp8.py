@@ -33,7 +33,7 @@ from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
-from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows
+from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows, quantize_rows_cols
 from levanter.grug.mxfp8 import MX_BLOCK, mx_dequantize_rows, mx_quantize_cols, mx_quantize_rows, mx_unpack_rows
 from levanter.grug._moe.quack_moe_cute import _ACC, _QUACK_USE_PDL, _max_active_clusters, _mint_epilogue_gemm
 
@@ -358,19 +358,21 @@ def mxfp8_matmul(x: jax.Array, w_values: jax.Array, w_exponents: jax.Array) -> j
     )
 
 
-def mxfp8_matmul_dgrad(g: jax.Array, w_values: jax.Array, w_exponents: jax.Array) -> jax.Array:
-    """Local ``g[T, N] @ w[K, N]^T`` with both operands MXFP8 along ``N``; ``w`` comes quantized along ``N``
-    (``mx_quantize_rows``: e4m3 ``[K, N]``, exponents ``[K, N / 32]``)."""
-    qg, sg = _quantize_rows(g)
+def mxfp8_matmul_dgrad(g_rows: tuple[jax.Array, jax.Array], w_values: jax.Array, w_exponents: jax.Array) -> jax.Array:
+    """Local ``g[T, N] @ w[K, N]^T`` with both operands MXFP8 along ``N``: ``g_rows`` is ``quantize_rows(g)`` and
+    ``w`` comes quantized along ``N`` (``mx_quantize_rows``: e4m3 ``[K, N]``, exponents ``[K, N / 32]``)."""
+    qg, sg = g_rows[0], blocked_scales(g_rows[1][None])
     sw = blocked_scales(w_exponents[None])
-    return _dense_gemm(qg, sg, w_values, sw, a_spec=_K_MAJOR, b_spec=_K_MAJOR, rows=g.shape[0], cols=w_values.shape[0])
+    return _dense_gemm(
+        qg, sg, w_values, sw, a_spec=_K_MAJOR, b_spec=_K_MAJOR, rows=qg.shape[0], cols=w_values.shape[0]
+    )
 
 
-def mxfp8_matmul_wgrad(x: jax.Array, g: jax.Array) -> jax.Array:
-    """Local ``x[T, K]^T @ g[T, N]`` with both operands MXFP8 along ``T``."""
+def mxfp8_matmul_wgrad(x: jax.Array, g_cols: tuple[jax.Array, jax.Array]) -> jax.Array:
+    """Local ``x[T, K]^T @ g[T, N]`` with both operands MXFP8 along ``T``; ``g_cols`` is ``quantize_cols(g)``."""
     qx, sx = _quantize_cols(x)
-    qg, sg = _quantize_cols(g)
-    return _dense_gemm(qx, sx, qg, sg, a_spec=_MN_MAJOR, b_spec=_MN_MAJOR, rows=x.shape[1], cols=g.shape[1])
+    qg, sg = g_cols[0], blocked_scales(g_cols[1].T[None])
+    return _dense_gemm(qx, sx, qg, sg, a_spec=_MN_MAJOR, b_spec=_MN_MAJOR, rows=x.shape[1], cols=qg.shape[1])
 
 
 def _axes(entry) -> tuple[str, ...]:
@@ -474,8 +476,9 @@ def _mx_linear_bwd(out_sharding, res, g):
 
     def local(xl, gl, wv, we):
         x2, g2 = xl.reshape(-1, k), gl.reshape(-1, n)
-        dx = mxfp8_matmul_dgrad(g2, wv, we).reshape(xl.shape)
-        dw = _reduce_partial_to_spec(mxfp8_matmul_wgrad(x2, g2), dw_spec, batch_axes)
+        g_rows, g_cols = quantize_rows_cols(g2)  # one pass over g for both of its GEMMs
+        dx = mxfp8_matmul_dgrad(g_rows, wv, we).reshape(xl.shape)
+        dw = _reduce_partial_to_spec(mxfp8_matmul_wgrad(x2, g_cols), dw_spec, batch_axes)
         return dx, dw
 
     replicated = P(None, None)
