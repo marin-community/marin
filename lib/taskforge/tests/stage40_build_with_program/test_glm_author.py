@@ -3,12 +3,21 @@
 
 import json
 
+import pytest
+
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.recording import CallLedger
-from taskforge.llm.structured import schema_instruction
+from taskforge.llm.structured import StructuredOutputError, schema_instruction
 from taskforge.stage30_author.author import PROGRAM_FILE, Revision, RevisionKind
 from taskforge.stage30_author.loader import load_program_source
-from taskforge.stage40_build_with_program.glm_author import AUTHOR_DIR, NOTES_LIMIT, GlmAuthor, ProgramSubmission, sdk_reference
+from taskforge.stage40_build_with_program.glm_author import (
+    AUTHOR_DIR,
+    COMPLETIONS_FILE,
+    NOTES_LIMIT,
+    GlmAuthor,
+    ProgramSubmission,
+    sdk_reference,
+)
 from tests.stage30_author.programs import PROGRAM
 from tests.stage40_build_with_program.conftest import WORKPIECE, SAMPLING
 
@@ -63,3 +72,33 @@ async def test_a_revision_continues_from_the_program_the_item_holds(proposal, gl
     assert "grader: the reference scored 0.0" in turns[-2]["content"]
     assert turns[-1] == {"role": "user", "content": schema_instruction(ProgramSubmission)}
     assert [(e.step, e.round) for e in ledger.entries if e.kind == EntryKind.LLM_CALL] == [("author", 2)]
+
+
+async def test_an_author_call_that_never_loads_keeps_its_completions(proposal, glm_client, fake_glm, ledger, tmp_path):
+    refused = PROGRAM.replace("from dataclasses", "import os\nfrom dataclasses")
+    fake_glm.stream(content=submission(refused))
+    fake_glm.stream(content=submission(refused))
+    item_dir = tmp_path / "item"
+
+    with pytest.raises(StructuredOutputError):
+        await GlmAuthor(glm_client, SAMPLING, item_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
+
+    completions = json.loads((item_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())
+    assert [json.loads(c["content"])["source"] for c in completions] == [refused, refused]
+    assert not (item_dir / PROGRAM_FILE).exists()
+
+
+async def test_an_author_reply_cut_off_by_the_output_limit_fails_without_a_repair(
+    proposal, glm_client, fake_glm, ledger, tmp_path
+):
+    fake_glm.stream(content=submission(PROGRAM), finish="length")
+    fake_glm.stream(content=submission(PROGRAM))
+    item_dir = tmp_path / "item"
+
+    with pytest.raises(StructuredOutputError):
+        await GlmAuthor(glm_client, SAMPLING, item_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
+
+    assert len(fake_glm.requests) == 1
+    completions = json.loads((item_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())
+    assert [c["finish_reason"] for c in completions] == ["length"]
+    assert not (item_dir / PROGRAM_FILE).exists()
