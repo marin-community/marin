@@ -166,8 +166,8 @@ def build_ladder_run(
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
-    flops_baseline: FlopsBaseline | None = None,
     context_switch_step: int | None = None,
+    flops_baseline_total: float | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
@@ -185,8 +185,9 @@ def build_ladder_run(
     attn_gate and router weights, and because the decay reads the Adam step count it also applies at
     the right point when a run resumes an existing checkpoint. Pass 0 to opt out.
 
-    ``context_switch_step`` is the step at which the run left 4K context. A resumed run at another
-    ``seq_len`` requires it; each data bucket then resumes at its next shuffle window (see
+    ``context_switch_step`` is the step at which the run left 4K context, and ``flops_baseline_total``
+    is the cumulative training FLOPs through that step. A resumed run at another ``seq_len`` requires
+    both; each data bucket then resumes at its next shuffle window (see
     ``LmDataConfig.prior_context_phases``).
     """
     if not run_id.strip():
@@ -196,9 +197,10 @@ def build_ladder_run(
 
     if seq_len != HERO_REFERENCE_SEQ_LEN and qk_mult is None:
         raise ValueError("A changed context length requires an explicit qk_mult (--qk-mult)")
-    resumed_at_new_context = initialize_from_checkpoint is not None and seq_len != HERO_REFERENCE_SEQ_LEN
-    if resumed_at_new_context and (flops_baseline is None or context_switch_step is None):
-        raise ValueError("A resumed context switch requires the handoff FLOPs baseline and the context switch step")
+    if (context_switch_step is None) != (flops_baseline_total is None):
+        raise ValueError("context_switch_step and flops_baseline_total must be set together")
+    if initialize_from_checkpoint is not None and seq_len != HERO_REFERENCE_SEQ_LEN and context_switch_step is None:
+        raise ValueError("A resumed context switch requires context_switch_step and flops_baseline_total")
     if context_switch_step is not None and seq_len == HERO_REFERENCE_SEQ_LEN:
         raise ValueError("context_switch_step applies only to a context length other than 4K")
 
@@ -221,17 +223,17 @@ def build_ladder_run(
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
-    prior_context_phases = (
-        (
+    prior_context_phases: tuple[HarrierContextPhase, ...] = ()
+    flops_baseline = None
+    if context_switch_step is not None and flops_baseline_total is not None:
+        prior_context_phases = (
             HarrierContextPhase(
                 end_step=context_switch_step,
                 seq_len=HERO_REFERENCE_SEQ_LEN,
                 batch_size=global_tokens_per_step // HERO_REFERENCE_SEQ_LEN,
             ),
         )
-        if context_switch_step is not None
-        else ()
-    )
+        flops_baseline = FlopsBaseline(context_switch_step, flops_baseline_total)
     flops_per_example, _ = _compute_flops(model_config=model)
     run_flops = flops_per_example * batch_size * num_steps
     # Skip-to-window offsets assume every source reads its whole cache, which simulated epoching does not.
@@ -456,16 +458,10 @@ def build_ladder_run(
     help="Step at which the run left 4K context. Required to resume at another --seq-len.",
 )
 @click.option(
-    "--flops-baseline-step",
-    type=click.IntRange(min=0),
-    default=None,
-    help="Completed steps at the context switch. Requires --flops-baseline-total.",
-)
-@click.option(
     "--flops-baseline-total",
-    type=click.FloatRange(min=0),
+    type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Cumulative FLOPs at the context switch. Requires --flops-baseline-step.",
+    help="Cumulative training FLOPs through --context-switch-step. Required with it.",
 )
 @build_options
 def main(
@@ -478,17 +474,9 @@ def main(
     checkpoint_every: int | None,
     gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
-    flops_baseline_step: int | None,
-    flops_baseline_total: float | None,
     context_switch_step: int | None,
+    flops_baseline_total: float | None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    if (flops_baseline_step is None) != (flops_baseline_total is None):
-        raise click.UsageError("--flops-baseline-step and --flops-baseline-total must be provided together")
-    flops_baseline = (
-        None
-        if flops_baseline_step is None or flops_baseline_total is None
-        else FlopsBaseline(flops_baseline_step, flops_baseline_total)
-    )
     return build_ladder_run(
         run_id=run_id,
         size=size,
@@ -499,8 +487,8 @@ def main(
         checkpoint_every=checkpoint_every,
         gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
-        flops_baseline=flops_baseline,
         context_switch_step=context_switch_step,
+        flops_baseline_total=flops_baseline_total,
     )
 
 
