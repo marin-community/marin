@@ -169,7 +169,7 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
 at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
-decay. Canonical eval stays at 4K packing, so the inherited `eval_dropless/*` series stay comparable.
+decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
 (`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the

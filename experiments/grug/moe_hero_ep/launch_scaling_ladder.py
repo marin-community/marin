@@ -16,10 +16,10 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
     d6144   11    11264   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
-At 4K, train batch is 1024 x racks. Longer contexts reduce the sequence batch to preserve tokens
-per step; eval keeps 4K sequences at 64 x racks (one sequence per device). Tokens/steps hold 791 tokens
-per active parameter (18T at d6144); FLOPs are the levanter
-analytic estimate (forward+backward, including attention and the latent-MoE correction).
+At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step. Eval
+batch is 64 x racks (one sequence per device). Tokens/steps hold 791 tokens per active parameter
+(18T at d6144); FLOPs are the levanter analytic estimate (forward+backward, including attention and
+the latent-MoE correction).
 
 Changelog:
     2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
@@ -111,8 +111,6 @@ HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 # The hero started at 4K context, and every context keeps its 4K tokens per rack per update.
 HERO_INITIAL_SEQ_LEN = 4096
 HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_INITIAL_SEQ_LEN
-# Eval packing stays at 4K at every training context, so the eval series stays comparable.
-HERO_EVAL_SEQ_LEN = 4096
 # The context lengths the d6144 hero trained at before its current one, oldest first, each with the
 # step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
 HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = ()
@@ -193,7 +191,6 @@ def build_ladder_run(
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
     eval_every: int | None = None,
-    eval_seq_len: int = HERO_EVAL_SEQ_LEN,
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
@@ -383,7 +380,6 @@ def build_ladder_run(
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
-                max_seq_len=eval_seq_len,
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
                 # The capacity-limited eval breaks the ragged train step at d6144 (#8861). The
@@ -461,13 +457,6 @@ def build_ladder_run(
     help="Eval every N steps. Default follows the rung (3000 at d6144, every 5% elsewhere).",
 )
 @click.option(
-    "--eval-seq-len",
-    type=click.IntRange(min=1),
-    default=HERO_EVAL_SEQ_LEN,
-    show_default=True,
-    help="Eval packing length, one sequence per device.",
-)
-@click.option(
     "--gate-router-weight-decay",
     type=click.FloatRange(min=0.0),
     default=0.02,
@@ -492,7 +481,6 @@ def main(
     num_steps: int | None,
     checkpoint_every: int | None,
     eval_every: int | None,
-    eval_seq_len: int,
     gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -507,7 +495,6 @@ def main(
         num_steps=num_steps,
         checkpoint_every=checkpoint_every,
         eval_every=eval_every,
-        eval_seq_len=eval_seq_len,
         gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
         context_phases=HERO_CONTEXT_PHASES if hero else (),
