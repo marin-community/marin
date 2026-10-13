@@ -73,6 +73,20 @@ def padded_scale_rows(scales: jax.Array, cu_seqlens: jax.Array) -> jax.Array:
     return blocked_scales(padded[None])
 
 
+def unpadded_scale_rows(blocked: jax.Array, cu_seqlens: jax.Array, rows: int, sf_k: int) -> jax.Array:
+    """The inverse of ``padded_scale_rows``: per-row exponents ``[rows, sf_k]`` (uint8) from the varlen-m blocked
+    layout. Rows at or past ``cu_seqlens[-1]`` read an arbitrary row's scales."""
+    num, rm, rk = blocked.shape[:3]
+    atoms = jax.lax.bitcast_convert_type(blocked, jnp.uint8).transpose(0, 1, 2, 4, 3, 5)
+    flat = atoms.reshape(num, rm, rk, SCALE_TILE_ROWS, _SCALE_ATOM_COLS).transpose(0, 1, 3, 2, 4)
+    flat = flat.reshape(rm * SCALE_TILE_ROWS, rk * _SCALE_ATOM_COLS)[:, :sf_k]
+    num_groups = cu_seqlens.shape[0] - 1
+    row = jnp.arange(rows, dtype=jnp.int32)
+    group = jnp.minimum(jnp.searchsorted(cu_seqlens[1:], row, side="right").astype(jnp.int32), num_groups - 1)
+    src = jnp.clip(row + SCALE_TILE_ROWS * group - cu_seqlens[group] % SCALE_TILE_ROWS, 0, flat.shape[0] - 1)
+    return flat[src]
+
+
 def varlen_output_scale_shape(rows: int, cols: int, num_groups: int) -> tuple[int, ...]:
     return (1, padded_scale_tiles(rows, num_groups), -(-(cols // MX_BLOCK) // _SCALE_ATOM_COLS), 32, 4, 4)
 
@@ -203,7 +217,7 @@ def _build_drelu2_launcher(*, max_active_clusters, max_swizzle):
     gemm_type = _mint_epilogue_gemm(_drelu2_quant_epilogue(), kind_sig=(("c", "c"),), paired_acc=False)
 
     @cute.jit
-    def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mC, mD, mPostAct, mDPreQ, mDPreSF, mDotPartials):
+    def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mC, mPostAct, mDPreQ, mDPreSF, mDotPartials):
         gemm = _gemm(gemm_type, cutlass.Float8E4M3FN)
         epi_args = gemm_type.EpilogueArguments(
             mAuxOut=mPostAct,
@@ -214,7 +228,9 @@ def _build_drelu2_launcher(*, max_active_clusters, max_swizzle):
         )
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
-        gemm(mA, mB, mD, mC, epi_args, scheduler_args, varlen_args, stream, mSFA, mSFB)
+        # No D: ``d pre`` is stored only quantized (``dpre_q``), which is all the input-gradient GEMM reads and
+        # half the bytes of a bf16 copy; the weight gradient dequantizes it.
+        gemm(mA, mB, None, mC, epi_args, scheduler_args, varlen_args, stream, mSFA, mSFB)
 
     return launcher
 
@@ -222,8 +238,8 @@ def _build_drelu2_launcher(*, max_active_clusters, max_swizzle):
 def mxfp8_drelu2_grouped_gemm(dy, dy_scales, b, b_scales, pre, cu_seqlens, *, max_swizzle=8):
     """ReLU^2 backward fused into ``d post = dy @ b^T`` (block-scaled).
 
-    Returns ``(d_pre bf16, post bf16, d_pre e4m3, d_pre scales, row_dot fp32 [M])`` with
-    ``row_dot = <post, d post>``; the quantized ``d_pre`` feeds the input-gradient GEMM."""
+    Returns ``(post bf16, d_pre e4m3, d_pre scales (varlen-m layout), row_dot fp32 [M])`` with
+    ``row_dot = <post, d post>``."""
     rows, cols = dy.shape[0], b.shape[1]
     if pre.shape != (rows, cols):
         raise ValueError(f"pre must be {(rows, cols)}, got {pre.shape}")
@@ -233,19 +249,16 @@ def mxfp8_drelu2_grouped_gemm(dy, dy_scales, b, b_scales, pre, cu_seqlens, *, ma
         launcher,
         output_shape_dtype=(
             jax.ShapeDtypeStruct((rows, cols), jnp.bfloat16),
-            jax.ShapeDtypeStruct((rows, cols), jnp.bfloat16),
             jax.ShapeDtypeStruct((rows, cols), jnp.float8_e4m3fn),
             jax.ShapeDtypeStruct(varlen_output_scale_shape(rows, cols, cu_seqlens.shape[0] - 1), jnp.float8_e8m0fnu),
             jax.ShapeDtypeStruct((rows, n_tiles), jnp.float32),
         ),
         input_spec=(_ROWS_SPEC, _WEIGHT_SPEC, _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC, _OUT_SPEC),
-        output_spec=(_OUT_SPEC, _OUT_SPEC, _ROWS_SPEC, _SCALE_SPEC, _TS(static=False)),
+        output_spec=(_OUT_SPEC, _ROWS_SPEC, _SCALE_SPEC, _TS(static=False)),
         use_static_tensors=False,
     )
-    d_pre, post, d_pre_q, d_pre_scales, dot_partials = call(
-        dy, b, dy_scales, b_scales, cu_seqlens.astype(jnp.int32), pre
-    )
-    return d_pre, post, d_pre_q, d_pre_scales, jnp.sum(dot_partials, axis=-1)
+    post, d_pre_q, d_pre_scales, dot_partials = call(dy, b, dy_scales, b_scales, cu_seqlens.astype(jnp.int32), pre)
+    return post, d_pre_q, d_pre_scales, jnp.sum(dot_partials, axis=-1)
 
 
 def relu2_expert_mlp_mxfp8_fwd(x_packed, w_up, w_down, cu):
@@ -264,13 +277,18 @@ def relu2_expert_mlp_mxfp8_backward_input(res, dy):
     """``(dx, <y, dy>, wgrad_args)`` of ``relu2_expert_mlp_mxfp8_fwd``; ``wgrad_args`` feed the bf16
     ``_relu2_expert_mlp_quack_wgrads`` with the dequantized rows the forward multiplied."""
     x_packed, w_up, w_down, pre, cu = res
+    dtype = dy.dtype
+    # Only MXFP8 copies of the row tensors stay live through the backward (the bf16 ``dy`` dies here); the bf16
+    # weight-gradient GEMMs read short-lived dequantized copies, the values the other GEMMs multiplied.
     dy_values, dy_exponents = mx_quantize_rows(dy)
-    d_pre, post, d_pre_values, d_pre_scales, output_dot = mxfp8_drelu2_grouped_gemm(
+    post, d_pre_values, d_pre_scales, output_dot = mxfp8_drelu2_grouped_gemm(
         dy_values, padded_scale_rows(dy_exponents, cu), *mx_weights(w_down), pre, cu
     )
     dx = mxfp8_grouped_gemm(d_pre_values, d_pre_scales, *mx_weights(w_up), cu)
-    x = mx_dequantize_rows(*mx_unpack_rows(x_packed, w_up.shape[1]), dy.dtype)
-    return dx, output_dot, (x, d_pre, post, dy, cu)
+    rows, width = d_pre_values.shape
+    d_pre = mx_dequantize_rows(d_pre_values, unpadded_scale_rows(d_pre_scales, cu, rows, width // MX_BLOCK), dtype)
+    x = mx_dequantize_rows(*mx_unpack_rows(x_packed, w_up.shape[1]), dtype)
+    return dx, output_dot, (x, d_pre, post, mx_dequantize_rows(dy_values, dy_exponents, dtype), cu)
 
 
 @cute_launcher_factory
