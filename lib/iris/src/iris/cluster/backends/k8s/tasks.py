@@ -2906,7 +2906,6 @@ class K8sTaskProvider:
         if cleaned:
             logger.info("GC: cleaned up CMs/PDBs for %d pods", len(cleaned))
 
-        # 2. Sweep terminal pods after their completion-based retention window.
         old_pod_names: list[str] = []
         gang_pod_names: list[str] = []
         gang_pod_groups: set[str] = set()
