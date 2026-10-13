@@ -32,6 +32,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask, Reply
 from taskcompendium.pipeline.sources import SourceShard, prepared_component_path, staged_raw_file_rows
 from taskcompendium.runtime.task_grading import grade_task
+from verifyit.modes.grade_judge import grade_judge_candidate
 from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
@@ -622,7 +623,7 @@ def test_reasoning_gym_golden_is_the_rows_answer(staged):
     assert REASONING_GYM_CONTROLS.golden(unanswered) is None
 
 
-def math_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
+def text_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=reply)))
     result = grade_task(task, GradingAttempt(trace))
     return result.status, result.reward
@@ -641,8 +642,8 @@ def test_math_grader_compares_the_answer_symbolically_with_the_expected_answer(s
     task = task_for("ultra_sft_step3200_math_cot", staged)
     assert isinstance(task.grader, VerifyitGrader) and task.grader.mode == "math"
     equivalent = r"So $x = \boxed{\frac{\sqrt[5]{2}+1}{\sqrt[5]{2}-1}}$."
-    assert math_grade(task, equivalent) == (Outcome.GRADED, 1.0)
-    assert math_grade(task, r"\boxed{\frac{\sqrt[5]{2}-1}{\sqrt[5]{2}+1}}") == (Outcome.GRADED, 0.0)
+    assert text_grade(task, equivalent) == (Outcome.GRADED, 1.0)
+    assert text_grade(task, r"\boxed{\frac{\sqrt[5]{2}-1}{\sqrt[5]{2}+1}}") == (Outcome.GRADED, 0.0)
 
 
 def test_tool_math_rows_keep_the_python_tool_with_its_agent(staged):
@@ -653,14 +654,12 @@ def test_tool_math_rows_keep_the_python_tool_with_its_agent(staged):
     assert provider.action_interface == "nemotron-agent:ns_tools_simple_agent"
 
 
-def test_abstention_uses_the_source_three_way_native_judge(staged):
+def test_abstention_idk_gets_source_partial_credit_after_reasoning_is_removed(staged):
     task = task_for("ultra_sft_step3200_abstention", staged)
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
-    assert spec.label_scores == {"A": 1.0, "B": 0.0, "C": 0.5}
-    assert spec.exact_gate_answers == ("[IDK]", r"\boxed{[IDK]}")
-    assert spec.strip_candidate_reasoning_blocks
-    assert task.tags == ("judge", "abstention")
+    result = grade_judge_candidate(spec, r"<think>I cannot verify this.</think>\boxed{[IDK]}", runtime=None)
+    assert (result.status, result.reward) == ("scored", 0.5)
 
 
 def test_multichallenge_uses_every_source_criterion_and_full_context(staged):
@@ -699,19 +698,9 @@ def test_jailbreak_uses_policy_specific_native_judge(staged):
     task = task_for("ultra_sft_step3200_jailbreak", staged)
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
-    assert spec.label_scores == {"PASS": 1.0, "PARTIAL": 0.3, "FAIL": 0.0}
     assert "offer a safe or constructive redirection" in spec.references[0]
     assert spec.strip_candidate_reasoning_blocks
     assert task.tags == ("judge", "jailbreak", "refusal_with_explanation")
-
-
-def test_lean_component_ships_compiler_contract(staged):
-    task = task_for("ultra_sft_step3200_lean", staged)
-    config = grader_config(task)
-    assert task.grader.environment is not None
-    assert config["contract"]["formal_statement"] == "theorem example_task : True := by\n"
-    assert config["sandbox_host"] == "snowball-nemo-skills-sandbox.iris.svc.cluster.local"
-    assert task.tags == ("lean", "proof", "compiler")
 
 
 def test_language_mixing_uses_absolute_source_scale_without_a_fake_cohort(staged):

@@ -22,7 +22,7 @@ from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, l
 
 
 def candidate(reply: str, expected: str | None = None) -> str:
-    """Extract an explicit final answer without treating free-form reasoning as the answer."""
+    """Prefer explicit final-answer wrappers, then preserve the source scorer's text fallback."""
     text = final_answer_text(reply)
     blocks = re.findall(r"<answer>(.*?)</answer>", text, re.DOTALL)
     if blocks:

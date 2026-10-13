@@ -141,6 +141,7 @@ MATH_AGENTS = ("math_with_judge_simple_agent", "ns_tools_simple_agent")
 MATH_VERIFIER = "math_with_judge"
 LEAN_SANDBOX_HOST = "snowball-nemo-skills-sandbox.iris.svc.cluster.local"
 LEAN_SANDBOX_PORT = 6000
+JUDGE_REQUEST_TIMEOUT = 120.0
 
 DAPO = "BytedTsinghua-SIA/DAPO-Math-17k"
 DAPO_PREFIX = (
@@ -350,7 +351,7 @@ def convert_instruction_following(row: RawRow, context: ConversionContext) -> No
         rubric=RUBRIC_CHECKLIST,
         model=GLM_MODEL,
         strip_candidate_reasoning_blocks=True,
-        request_timeout=120.0,
+        request_timeout=JUDGE_REQUEST_TIMEOUT,
     )
     package = verifyit_package(spec, (resource,), environment=required_grader_environment(context))
     normalized = blend_task(row, request, package)
@@ -390,7 +391,7 @@ def convert_abstention(row: RawRow, context: ConversionContext) -> NormalizedTas
         strip_reasoning_blocks=True,
         strip_candidate_reasoning_blocks=True,
         label_scan="lines",
-        request_timeout=120.0,
+        request_timeout=JUDGE_REQUEST_TIMEOUT,
         empty_output=EmptyOutputPolicy.GRADE,
     )
     package = verifyit_package(spec, environment=required_grader_environment(context))
@@ -445,7 +446,7 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> Normalize
         rubric=RUBRIC_CHECKLIST,
         model=GLM_MODEL,
         strip_candidate_reasoning_blocks=True,
-        request_timeout=120.0,
+        request_timeout=JUDGE_REQUEST_TIMEOUT,
         empty_output=EmptyOutputPolicy.GRADE,
     )
     package = verifyit_package(spec, (resource,), environment=required_grader_environment(context))
@@ -455,7 +456,7 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> Normalize
 
 
 def convert_jailbreak(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Judge the row's response policy without exposing or following the adversarial prompt."""
+    """Judge the response against the row's policy and adversarial prompt."""
     request = text_request(row.data, JAILBREAK_AGENTS)
     if isinstance(request, ImportRejection):
         return request
@@ -477,7 +478,7 @@ def convert_jailbreak(row: RawRow, context: ConversionContext) -> NormalizedTask
         strip_reasoning_blocks=True,
         strip_candidate_reasoning_blocks=True,
         label_scan="lines",
-        request_timeout=120.0,
+        request_timeout=JUDGE_REQUEST_TIMEOUT,
         empty_output=EmptyOutputPolicy.GRADE,
     )
     package = verifyit_package(spec, environment=required_grader_environment(context))
@@ -535,7 +536,7 @@ def convert_genrm(row: RawRow, context: ConversionContext) -> NormalizedTask | I
         strip_reasoning_blocks=True,
         strip_candidate_reasoning_blocks=True,
         label_scan="lines",
-        request_timeout=120.0,
+        request_timeout=JUDGE_REQUEST_TIMEOUT,
     )
     package = verifyit_package(spec, environment=required_grader_environment(context))
     normalized = blend_task(row, request, package, changes=tuple(changes))
@@ -682,7 +683,7 @@ def _semantic_tool_action(
         strip_candidate_reasoning_blocks=True,
         label_scan="lines",
         reasoning_effort=TOOL_ACTION_JUDGE_REASONING_EFFORT,
-        request_timeout=120.0,
+        request_timeout=JUDGE_REQUEST_TIMEOUT,
         model=GLM_MODEL,
     )
     # The raw audit ledger preserves the legacy expected action. Do not package it as
