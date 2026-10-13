@@ -1,0 +1,15 @@
+{
+  "type": "snowball",
+  "vocab_size": 128,
+  "hidden_dim": 64,
+  "intermediate_dim": 64,
+  "shared_expert_intermediate_dim": 64,
+  "num_experts": 16,
+  "num_experts_per_token": 4,
+  "num_layers": 5,
+  "num_heads": 8,
+  "num_kv_heads": 4,
+  "head_dim": 16,
+  "max_seq_len": 128,
+  "sliding_window": 16
+}
