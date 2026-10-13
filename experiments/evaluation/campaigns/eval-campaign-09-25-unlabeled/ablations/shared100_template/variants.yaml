@@ -1,0 +1,13 @@
+base_model_config: ../../model-configs/open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09.yaml
+base_model_revision: 462ad9af071055da39ef4bfea1d4ba2c9429a223
+shared_template_sha256: fb5b15f09750ee3e180d60b7eb8968c7ff27c3d2472a4b4c6449c7bacbbb45b2
+antidoom_model: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02
+antidoom_revision: 50fe2f488aee7730bbccc721024b35229075602e
+antidoom_template_sha256: b3f20bc21498407f2815dd1a6c26150192926ccf04f6324ca40a1209bff7d1de
+antidoom_tokenizer_sha256: 6a61ca2105a54e9984169b409581f31cc50330d1b47104af13c221b05e462e45
+shared_tokenizer_sha256: 881c9c36c359e1617afef6f7583403567931b7b4f43f6552d2b2155a131650a2
+shared_and_antidoom_tokenizer_config_sha256: 7c11be094d34bd4bb5cf704584fb71b1164220bcfcc5963321bc6ec03d7ec853
+arms:
+  template_only: Antidoom template; Shared100 tokenizer
+  template_and_tokenizer: Antidoom template and tokenizer.json
+  reasoning_only: Shared100 template with historical reasoning_content rendered in a think block

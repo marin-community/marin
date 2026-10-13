@@ -1,0 +1,11 @@
+tasks: [AIME24OneRepeat]
+task_options:
+  AIME24OneRepeat:
+    num_fewshot: 0
+    task_alias: aime24-one-repeat
+    generation: true
+runtime_extras: [aime24]
+seed: 42
+gen_kwargs: do_sample=true,temperature=0.7
+chat_template_kwargs:
+  enable_thinking: true
