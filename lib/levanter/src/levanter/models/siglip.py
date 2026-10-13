@@ -45,7 +45,7 @@ class SiglipVisionModelOutput:
             Shape: (batch, num_patches, embed)
         hidden_states: Tuple of hidden states from each layer (including embeddings).
             Each element has shape: (batch, num_patches, embed)
-            Only populated when output_hidden_states=True.
+            Contains all layers when requested, otherwise only the final encoder output.
     """
 
     last_hidden_state: NamedArray

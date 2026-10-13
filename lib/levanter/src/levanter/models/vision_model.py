@@ -57,14 +57,3 @@ class VisionEncoderConfig(
     def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter:
         """Create a HuggingFace checkpoint converter for this config."""
         pass
-
-
-class VisionEncoderModel(abc.ABC):
-    """
-    Abstract base class for vision encoder models.
-
-    This is a placeholder for type hints. Concrete implementations
-    should inherit from both this class and equinox.Module.
-    """
-
-    pass
