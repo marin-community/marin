@@ -22,8 +22,8 @@ from shellbox.machine import (
     ExitReason,
     HostImage,
     MachineSpec,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
 from verifyit.spec import ScriptSpec, render_spec, spec_from_table
@@ -455,7 +455,7 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
             )
         }
     )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024)
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024)
     env = await factory.create(task)
     try:
         python = await env.machine.run(Command(("python3", "-c", "print(6 * 7)")))
@@ -520,7 +520,7 @@ async def test_episode_provides_shell_tool_and_collects_nested_output(shell_task
             ),
         )
     )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024, shell_tool=binding)
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024, shell_tool=binding)
     rollout = await run_episode(task, actor, factory, max_steps=2, control="fixture")
     assert rollout.termination == Termination.FINAL_MESSAGE
     assert rollout.evidence().files == {"/workspace/submission/nested/result": b"answer"}
@@ -575,6 +575,8 @@ async def test_local_shell_setup_preserves_host_user_and_task_directory(shell_ta
         update={
             "environment_requirements": requirements.model_copy(
                 update={
+                    "packages_lock": None,
+                    "package_spec": PackageSpec(tools=("sh",)),
                     "capabilities": ("shell", "filesystem"),
                     "working_directory": "/task",
                     "setup_commands": ("cp /workspace/people.csv prepared.csv",),
@@ -582,6 +584,7 @@ async def test_local_shell_setup_preserves_host_user_and_task_directory(shell_ta
             )
         }
     )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
     factory = ShellFactory(machine_factory, MachineSpec(HostImage()), {}, 10, 1024)
     environment = await factory.create(task)
     try:
@@ -605,6 +608,7 @@ async def test_shell_commands_use_required_directory_and_variables(shell_task, m
                 update={
                     "docker_image": None,
                     "command_semantics": CommandSemantics.SHELL_SIMULATOR,
+                    "package_spec": PackageSpec(),
                     "working_directory": "/task",
                     "setup_commands": ("cp /workspace/people.csv prepared.csv",),
                     "environment_variables": {"SETTING": "${TASKCOMPENDIUM_TEST_SETTING}"},
@@ -612,9 +616,10 @@ async def test_shell_commands_use_required_directory_and_variables(shell_task, m
             )
         }
     )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
     factory = ShellFactory(
         ShellSimMachineFactory(),
-        MachineSpec(ShellSimBuiltins(), workdir="/incoming", env={"SETTING": "incoming", "RETAINED": "kept"}),
+        MachineSpec(PackageSpec(), workdir="/incoming", env={"SETTING": "incoming", "RETAINED": "kept"}),
         {},
         1,
         1024,

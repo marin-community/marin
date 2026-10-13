@@ -10,6 +10,8 @@ the venv's ``bin`` directory in ``bin_dirs`` runs that interpreter with no other
 
 import fcntl
 import hashlib
+import json
+import logging
 import os
 import shlex
 import shutil
@@ -18,8 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PYTHON_DIRECTORY = "python"
+DEFAULT_PYTHON_VERSION = "3.12.12"
 VENV_DIRECTORY = "venv"
 COMPLETE_MARKER = ".complete"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -61,7 +65,7 @@ def _uv(*args: str, environment: dict[str, str] | None = None) -> None:
         raise UvError(f"{shlex.join(command)} exited with status {result.returncode}:\n{result.stderr}")
 
 
-def _build(environment: PythonEnvironment, lock: Path, python_version: str) -> None:
+def _build(environment: PythonEnvironment, lock: Path, python_version: str, *, only_binary: bool) -> None:
     install_dir = {"UV_PYTHON_INSTALL_DIR": str(environment.root / PYTHON_DIRECTORY)}
     # --no-bin keeps uv from linking the interpreter into the user's executable directory.
     _uv("python", "install", "--no-config", "--no-bin", python_version, environment=install_dir)
@@ -85,15 +89,19 @@ def _build(environment: PythonEnvironment, lock: Path, python_version: str) -> N
         "--require-hashes",
         "--link-mode",
         "copy",
+        *(("--only-binary=:all:", "--no-build") if only_binary else ()),
         str(lock),
     )
 
 
-def build_python_environment(root: Path, lock: Path, python_version: str) -> PythonEnvironment:
+def build_python_environment(
+    root: Path, lock: Path, python_version: str, *, only_binary: bool = False
+) -> PythonEnvironment:
     """Build a venv under ``root`` with CPython ``python_version`` and the packages of the hash lock ``lock``.
 
     ``python_version`` is a full version such as ``3.12.13``, which uv downloads into ``root``. ``lock`` is a
     requirements file with hashes for every package, as ``uv pip compile --generate-hashes`` writes.
+    ``only_binary`` rejects source distributions so package installation cannot run build hooks.
 
     Concurrent callers on one host build the root once: an exclusive ``flock`` beside it serializes
     builders, and a completion marker records a finished build. A root without the marker is a failed
@@ -113,6 +121,54 @@ def build_python_environment(root: Path, lock: Path, python_version: str) -> Pyt
             return environment
         if root.exists():
             shutil.rmtree(root)
-        _build(environment, lock, python_version)
-        marker.write_text(expected)
+        logger.info("Installing Python %s environment in %s", python_version, root)
+        try:
+            _build(environment, lock, python_version, only_binary=only_binary)
+            marker.write_text(expected)
+        except BaseException:
+            shutil.rmtree(root, ignore_errors=True)
+            raise
     return environment
+
+
+def resolve_python_environment(cache: Path, requirements: tuple[str, ...], python_version: str) -> PythonEnvironment:
+    """Resolve wheel requirements once and reuse their self-contained interpreter.
+
+    The key fixes the requested requirements and Python version. Updating an unpinned
+    requirement requires a fresh cache; existing environments retain their resolved lock.
+    """
+    requirements = tuple(sorted(set(requirements)))
+    if any(
+        not requirement or requirement.startswith("-") or "\n" in requirement or "\r" in requirement
+        for requirement in requirements
+    ):
+        raise ValueError("Package requests must contain one requirement per entry, without pip options")
+    identity = json.dumps((python_version, requirements)).encode()
+    directory = cache.absolute() / hashlib.sha256(identity).hexdigest()
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / "resolve.lock").open("w") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        lock = directory / "requirements.lock"
+        if not lock.exists():
+            logger.info("Resolving %d Python requirements for Python %s", len(requirements), python_version)
+            source = directory / "requirements.in"
+            source.write_text("".join(f"{requirement}\n" for requirement in requirements))
+            pending = directory / "requirements.pending"
+            try:
+                _uv(
+                    "pip",
+                    "compile",
+                    "--no-config",
+                    "--generate-hashes",
+                    "--only-binary=:all:",
+                    "--no-build",
+                    "--python-version",
+                    python_version,
+                    "--output-file",
+                    str(pending),
+                    str(source),
+                )
+                pending.replace(lock)
+            finally:
+                pending.unlink(missing_ok=True)
+        return build_python_environment(directory / "environment", lock, python_version, only_binary=True)

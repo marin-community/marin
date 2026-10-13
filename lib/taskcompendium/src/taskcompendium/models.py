@@ -23,7 +23,7 @@ from typing import Annotated, ClassVar, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
-from shellbox.machine import UnsupportedMachineSpec
+from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
@@ -344,15 +344,6 @@ class CommandSemantics(StrEnum):
 SHELL_SIMULATOR_CAPABILITIES = frozenset({"shell", "filesystem", "python"})
 
 
-class PortableSoftware(BaseModel):
-    """Explicit WASI catalog selection, independent of native Linux package locks."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    pypi_packages: tuple[str, ...] | None = None
-    tools: tuple[str, ...] = ()
-
-
 class EnvironmentRequirements(BaseModel):
     """Operations, initial workspace or unresolved recipe, and tool-provider contracts."""
 
@@ -367,17 +358,23 @@ class EnvironmentRequirements(BaseModel):
     environment_variables: dict[str, str] = Field(default_factory=dict)
     tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
     packages_lock: str | None = Field(default=None, min_length=1)
-    portable_software: PortableSoftware | None = None
+    package_spec: PackageSpec | None = None
 
     @model_validator(mode="after")
     def validate_environment(self) -> "EnvironmentRequirements":
-        if sum(value is not None for value in (self.docker_image, self.docker_build, self.packages_lock)) > 1:
-            raise ValueError("Docker image, build context, and packages lock are mutually exclusive")
+        if (
+            sum(
+                value is not None
+                for value in (self.docker_image, self.docker_build, self.packages_lock, self.package_spec)
+            )
+            > 1
+        ):
+            raise ValueError("Docker image, build context, packages lock and package spec are mutually exclusive")
         if any(value is not None for value in (self.docker_image, self.docker_build, self.packages_lock)):
             if self.command_semantics != CommandSemantics.LINUX_PROCESS:
                 raise ValueError("Native environment dependencies require Linux process semantics")
-        if self.portable_software is not None and self.command_semantics != CommandSemantics.SHELL_SIMULATOR:
-            raise ValueError("Portable software requires shell simulator semantics")
+        if self.package_spec is not None and self.command_semantics is None:
+            raise ValueError("Package requirements need explicit command semantics")
         if (
             self.command_semantics == CommandSemantics.SHELL_SIMULATOR
             and set(self.capabilities) - SHELL_SIMULATOR_CAPABILITIES
@@ -524,11 +521,11 @@ def _require_grader_environment(environment: EnvironmentRequirements) -> None:
             environment.docker_image,
             environment.packages_lock,
             environment.docker_build,
-            environment.portable_software,
+            environment.package_spec,
         )
     ):
         raise ValueError(
-            "A grading environment requires a pinned image, package lock, portable software, or unresolved build context"
+            "A grading environment requires a pinned image, package lock, package spec, or unresolved build context"
         )
     if environment.tool_providers:
         raise ValueError("A grading environment cannot declare tool providers")

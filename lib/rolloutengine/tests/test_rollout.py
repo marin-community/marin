@@ -19,8 +19,8 @@ from shellbox.machine import (
     DockerImage,
     ExitReason,
     Machine,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
 from taskcompendium.grader import verifyit_package
@@ -193,7 +193,7 @@ class FixtureImageFactory:
 
     async def create(self, spec):
         return await ShellSimMachineFactory().create(
-            replace(spec, source=ShellSimBuiltins(), workdir=spec.workdir or "/workspace")
+            replace(spec, source=PackageSpec(), workdir=spec.workdir or "/workspace")
         )
 
 

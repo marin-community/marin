@@ -6,7 +6,7 @@
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
@@ -86,8 +86,10 @@ class DockerImage:
 
 
 @dataclass(frozen=True)
-class ShellSimBuiltins:
-    """Built-ins plus explicitly selected portable catalog software."""
+class PackageSpec:
+    """Python requirements and tools resolved by the selected execution backend."""
+
+    __pydantic_config__: ClassVar[dict[str, str]] = {"extra": "forbid"}
 
     pypi_packages: tuple[str, ...] | None = None
     tools: tuple[str, ...] = ()
@@ -109,7 +111,7 @@ class MachineSpec:
     deadline for the complete create operation.
     """
 
-    source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | ShellSimBuiltins | HostImage
+    source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | PackageSpec | HostImage
     workdir: str = "/workspace"
     env: dict[str, str] = field(default_factory=dict)
     network: NetworkPolicy = NetworkPolicy.DENY

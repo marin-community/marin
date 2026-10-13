@@ -22,9 +22,9 @@ from shellbox.machine import (
     ExitReason,
     Machine,
     MachineSpec,
+    PackageSpec,
     RegistryImage,
     Result,
-    ShellSimBuiltins,
 )
 from verifyit.grade import main as verifyit_main
 from verifyit.spec import NumericSpec
@@ -113,7 +113,7 @@ class FixtureImageFactory:
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> VerifyitImageMachine:
-        return VerifyitImageMachine(await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins())))
+        return VerifyitImageMachine(await ShellSimMachineFactory().create(replace(spec, source=PackageSpec())))
 
 
 def arithmetic_task(grader: Grader) -> TaskSpec:
@@ -370,7 +370,7 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
 
 @pytest.mark.asyncio
 async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading():
-    agent = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins(), workdir="/app"))
+    agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
     await agent.run(
         Command(("sh", "-c", "mkdir -p /app/out/nested && echo a > /app/out/a.txt && echo b > /app/out/nested/b.txt"))
     )

@@ -20,8 +20,8 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     ShellStatus,
     ShellUpdate,
     UnsupportedMachineSpec,
@@ -84,7 +84,7 @@ class ShellSimMachine:
     """One in-memory simulated machine and its private virtual filesystem."""
 
     def __init__(
-        self, spec: MachineSpec, *, source: ShellSimBuiltins, context: shellsim.Context, cpu: int, disk: int, output: int
+        self, spec: MachineSpec, *, source: PackageSpec, context: shellsim.Context, cpu: int, disk: int, output: int
     ):
         self.spec = spec
         self.simulation = context.Environment(
@@ -216,8 +216,8 @@ class ShellSimMachineFactory:
     async def create(self, spec: MachineSpec) -> ShellSimMachine:
         if spec.cpus is not None or spec.gpus:
             raise UnsupportedMachineSpec("ShellSim does not provide host CPU or GPU allocations")
-        if not isinstance(spec.source, ShellSimBuiltins):
-            raise UnsupportedMachineSpec("ShellSim requires a portable ShellSimBuiltins source")
+        if not isinstance(spec.source, PackageSpec):
+            raise UnsupportedMachineSpec("ShellSim requires a PackageSpec source")
         if spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("ShellSim has no guest network")
         return await asyncio.to_thread(

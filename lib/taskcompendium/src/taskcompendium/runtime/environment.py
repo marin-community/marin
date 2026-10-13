@@ -16,8 +16,8 @@ from shellbox.machine import (
     MachineFactory,
     MachineSpec,
     NetworkPolicy,
+    PackageSpec,
     QemuBundle,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
 
@@ -68,8 +68,8 @@ def validate_machine_spec(requirements: EnvironmentRequirements, factory: Machin
     """Reject semantic incompatibilities before building software or acquiring a machine."""
     require_resolved_environment(requirements)
     if requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-        if factory.backend != Backend.SHELLSIM or not isinstance(spec.source, ShellSimBuiltins):
-            raise UnsupportedMachineSpec("Shell simulator semantics require a portable ShellSim source")
+        if factory.backend != Backend.SHELLSIM or not isinstance(spec.source, PackageSpec):
+            raise UnsupportedMachineSpec("Shell simulator semantics require a PackageSpec and Shellsim factory")
         if spec.network != NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("The shell simulator has no guest network")
         return
@@ -87,6 +87,10 @@ def validate_machine_spec(requirements: EnvironmentRequirements, factory: Machin
     if requirements.packages_lock is not None:
         if factory.backend != Backend.LOCAL or not isinstance(spec.source, HostImage):
             raise UnsupportedMachineSpec("Package locks currently require a local HostImage machine")
+        return
+    if requirements.package_spec is not None:
+        if factory.backend != Backend.LOCAL or not isinstance(spec.source, HostImage | PackageSpec):
+            raise UnsupportedMachineSpec("Package requirements need a local or Shellsim factory")
         return
     raise UnsupportedMachineSpec("Native Linux execution requires a pinned image or package lock")
 
@@ -107,9 +111,8 @@ def prepare_machine_spec(
     if requirements.docker_image is not None:
         require_image(spec, requirements.docker_image)
     variables = {}
-    if requirements.portable_software is not None:
-        software = requirements.portable_software
-        spec = replace(spec, source=ShellSimBuiltins(software.pypi_packages, software.tools))
+    if requirements.package_spec is not None:
+        spec = replace(spec, source=requirements.package_spec)
     if requirements.packages_lock is not None:
         runtime = local_runtime(requirements.packages_lock)
         runtime.ensure_built()
