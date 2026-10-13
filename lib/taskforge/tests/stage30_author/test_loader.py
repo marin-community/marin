@@ -91,7 +91,22 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
             lambda s: s.replace("sdk import ANSWER_FORMAT", "sdk import ANSWER_FROMAT").replace(
                 "        ANSWER_FORMAT,\n", "        ANSWER_FROMAT,\n"
             ),
-            r"has no name 'ANSWER_FROMAT'; did you mean 'ANSWER_FORMAT'\?",
+            r"has no name 'ANSWER_FROMAT'; did you mean 'ANSWER_FORMAT' from taskforge\.stage40_build_with_program\.sdk\?",
+        ),
+        (
+            lambda s: s.replace(
+                "sdk import ANSWER_FORMAT\n",
+                "sdk import ANSWER_FORMAT\nfrom taskforge.spec.draft import DOCKER_IMAGE_REQUIREMENTS\n",
+            ),
+            r"'taskforge\.spec\.draft' has no name 'DOCKER_IMAGE_REQUIREMENTS'; "
+            r"did you mean 'DOCKER_IMAGE_REQUIREMENTS' from taskforge\.stage40_build_with_program\.sdk\?",
+        ),
+        (
+            lambda s: s.replace(
+                '    return Question(text="What is 6 * 7?")',
+                '    await research(context, "Find the product.")\n    return Question(text="What is 6 * 7?")',
+            ),
+            r"`research` \(line \d+\); did you mean 'research' from taskforge\.stage40_build_with_program\.sdk\?",
         ),
         (
             lambda s: s.replace("stage40_build_with_program.outputs import", "stage40_build_with_program.output import"),
@@ -121,6 +136,8 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
         "unbound-name",
         "misspelt-name",
         "misspelt-import",
+        "import-from-wrong-module",
+        "unimported-sdk-name",
         "misspelt-module",
         "no-sink-keyword",
         "step-as-sink",
