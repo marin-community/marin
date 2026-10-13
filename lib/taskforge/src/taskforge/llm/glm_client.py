@@ -1,36 +1,48 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The single GLM-5.3 transport: streaming chat completions through the ``openai`` SDK.
+"""GLM-5.3 chat completions through the ``openai`` SDK, retried by the client's own loop.
 
-``GlmClient`` implements ``taskforge.llm.client.ModelClient``; ``LLMProviderConfig`` sets how it
-calls the provider. The SDK builds and sends the request (its own retries are off); this module
-owns retries, holds and stall detection. Every request streams, so a stall (no token for
-``stall_timeout`` seconds) is detected without a wall-clock cap: the SDK's read timeout covers
-bytes, and the client's loop over chunks covers tokens. Each retryable failure (408, 429, 5xx,
-connection errors, stalls, truncated, malformed, or aborted streams) counts against
-``max_attempts`` and is retried with exponential backoff. A missing relay route (404 whose body
-names the route), or a retryable failure while ``/health`` answers 200 and reports zero workers
-for the endpoint's pool, is an infrastructure hold: the client waits for the pool to come back, up
-to ``hold_timeout``, and the failure does not count against ``max_attempts``. A ``/health`` that is
-unreachable or does not report the pool never causes a hold.
+``GlmClient`` implements ``taskforge.llm.client.ModelClient``, with ``LLMProviderConfig`` supplying
+the model, the retry budget and backoff, the hold and stall timeouts and the connection pool. The
+client builds each request and sends it through the SDK with the SDK's retries turned off, then
+retries failed attempts itself. The SDK retries only before a response starts, which rules out
+retrying a stall, an abort, a mid-stream error or a stream ending without usage. The SDK also cannot
+hold on an empty pool or a missing route and returns no record of the individual attempts.
 
-The client asks its ``EndpointSource`` where GLM is when a hold starts, on every hold poll, and
-after a connection error (a relay that moved shows up as connection refused). When the answer
-changes it rebuilds the SDK client on the same connection pool, so the next attempt goes to the
-new endpoint.
+Every request streams. The SDK's read timeout abandons a connection after ``stall_timeout`` seconds
+without bytes, and the client's loop over chunks abandons a stream after as long without a token, so
+a slow reply still producing tokens runs without a wall-clock cap. The SDK's
+``ChatCompletionStreamState`` accumulates the chunks, and the client reads content, reasoning, tool
+calls, finish reason and usage from its snapshot.
 
-A 400 saying the prompt plus ``max_tokens`` exceeds the context window raises ``ContextExhausted``
-at once; the client never lowers ``max_tokens`` and never truncates the prompt. A prompt that long
-is a sign that its parts belong in files, read by the model in an agentic environment, rather than
-in one request. A continuation that overflows the window ends the call with the output gathered so
-far and ``finish_reason == "length"``.
+After a failed attempt, the client handles the failure by kind:
+
+* A 408, 429 or 5xx status, a connection error, a stall, or a stream cut short, malformed or aborted
+  counts against ``max_attempts``. The client retries it after an exponential backoff.
+* A 404 mentioning the route starts an infrastructure hold. So does a retryable failure while
+  ``/health`` answers 200 with zero workers in the endpoint's pool. The client then polls ``/health``
+  until the pool has workers again, for up to ``hold_timeout``, without spending an attempt. An
+  unreachable ``/health``, or a report without the pool, leads to an ordinary counted retry instead.
+* A 400 saying the prompt plus ``max_tokens`` exceeds the context window raises ``ContextExhausted``
+  at once. The client always sends the whole prompt with the policy's full ``max_tokens``. A prompt
+  that long usually means its parts belong in files, for a model in an agentic environment to read.
+  When a continuation overflows the window, the call returns the output gathered so far with
+  ``finish_reason == "length"``.
+
+The client asks its ``EndpointSource`` for the endpoint when a hold starts, on each hold poll and
+after a connection error, since a moved relay shows up as a refused connection. When the answer
+changes, the client rebuilds the SDK client on the same connection pool and sends the next attempt to
+the new endpoint.
 
 vLLM's GLM tool parser reports a reply cut off by ``max_tokens`` inside a tool call as
-``finish_reason == "tool_calls"`` with the partial arguments (measured live). A ``tool_calls``
-segment that used its whole ``max_tokens`` is therefore reported as ``LENGTH``; the chunks in
-``Attempt.events`` keep what the server sent. A call that ends exactly on the budget is reported
-as cut too.
+``finish_reason == "tool_calls"`` with partial arguments (measured live). The client reports a
+``tool_calls`` segment as ``LENGTH`` whenever its completion tokens use up ``max_tokens``, which
+also catches a reply ending exactly on the budget. ``Attempt.events`` holds the chunks as the server
+sent them.
+
+``complete_structured`` sends ``output_type``'s JSON schema as the ``response_format`` with
+continuations off, then validates the reply and asks for repairs through ``taskforge.llm.structured``.
 """
 
 import asyncio
@@ -46,6 +58,7 @@ from typing import Any, Protocol, Self
 
 import httpx
 import openai
+from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel
@@ -76,11 +89,11 @@ from taskforge.llm.structured import complete_structured, response_format
 logger = logging.getLogger(__name__)
 
 API_ROOT = "/v1"
-"""The path suffix of an OpenAI-compatible base URL; the router's ``/health`` sits beside it."""
+"""The path suffix of an OpenAI-compatible base URL. The router serves ``/health`` at the URL without it."""
 RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 CONTEXT_LIMIT_PATTERN = re.compile(r"maximum context length is (\d+) tokens")
 SDK_REQUEST_FIELDS = frozenset({"tools", "tool_choice", "response_format", "parallel_tool_calls"})
-"""Request fields passed to ``chat.completions.create`` by name; every other field goes in ``extra_body``."""
+"""Fields the client passes to ``chat.completions.create`` as keyword arguments, putting the rest in ``extra_body``."""
 ERROR_BODY_LIMIT = 2000
 CONNECT_TIMEOUT = 30.0
 WRITE_TIMEOUT = 120.0
@@ -88,7 +101,7 @@ HEALTH_TIMEOUT = 20.0
 
 
 class Pool(StrEnum):
-    """Router worker pool; the bearer token binds which one serves a request."""
+    """Router worker pool; the bearer token selects the pool serving a request."""
 
     HIGH = "high"
     BULK = "bulk"
@@ -96,9 +109,9 @@ class Pool(StrEnum):
 
 @dataclass(frozen=True)
 class GlmEndpoint:
-    """An OpenAI-compatible base URL ending in ``/v1``, its bearer token, and the pool it serves.
+    """An OpenAI-compatible base URL ending in ``/v1``, with its bearer token and the pool behind it.
 
-    The model requests name is ``LLMProviderConfig.model``.
+    Requests take the model id from ``LLMProviderConfig.model``.
     """
 
     base_url: str
@@ -111,9 +124,11 @@ class GlmEndpoint:
 
 
 class EndpointSource(Protocol):
-    """Where the client reaches GLM now.
+    """Supplies the GLM endpoint for the client's requests.
 
-    The client calls ``current`` again when a hold starts, so a relay that moves is picked up.
+    The client calls ``current`` at construction and again when a hold starts, on each hold poll and
+    after a connection error. When the answer changes, the client sends its next attempt to the new
+    endpoint.
     """
 
     def current(self) -> GlmEndpoint: ...
@@ -121,7 +136,7 @@ class EndpointSource(Protocol):
 
 @dataclass(frozen=True)
 class FixedEndpoint:
-    """An endpoint that never moves."""
+    """Supplies the same endpoint on every call."""
 
     endpoint: GlmEndpoint
 
@@ -138,55 +153,30 @@ class _AttemptFailed(Exception):
         self.retry_after = retry_after
 
 
-@dataclass
-class _Stream:
-    """Accumulates one streamed response."""
+@dataclass(frozen=True)
+class _Segment:
+    """A streamed response as read from the SDK's snapshot, with the client's monotonic timings."""
 
+    content: str
+    reasoning: str
+    tool_calls: tuple[ToolCall, ...]
+    finish_reason: FinishReason
+    usage: Usage
+    ttft: float | None
     started: float
-    content: list[str] = field(default_factory=list)
-    reasoning: list[str] = field(default_factory=list)
-    tool_ids: dict[int, str] = field(default_factory=dict)
-    tool_names: dict[int, str] = field(default_factory=dict)
-    tool_arguments: dict[int, list[str]] = field(default_factory=dict)
-    finish_reason: FinishReason | None = None
-    usage: Usage | None = None
-    ttft: float | None = None
-    finished: float | None = None
+    finished: float
 
-    def add(self, chunk: ChatCompletionChunk) -> bool:
-        """Fold one chunk in; return whether it carried a token."""
-        if chunk.usage is not None:
-            self.usage = _usage(chunk.usage)
-        carried = False
-        for choice in chunk.choices:
-            delta = choice.delta
-            if delta.content:
-                self.content.append(delta.content)
-                carried = True
-            # vLLM's reasoning parser streams the reasoning block in a field the SDK does not model.
-            reasoning = (delta.model_extra or {}).get("reasoning")
-            if reasoning:
-                self.reasoning.append(reasoning)
-                carried = True
-            for call in delta.tool_calls or []:
-                if call.id:
-                    self.tool_ids[call.index] = call.id
-                if call.function is not None and call.function.name:
-                    self.tool_names[call.index] = call.function.name
-                arguments = call.function.arguments if call.function is not None else None
-                self.tool_arguments.setdefault(call.index, []).append(arguments or "")
-                carried = True
-            if choice.finish_reason:
-                self.finish_reason = FinishReason(choice.finish_reason)
-        if carried and self.ttft is None:
-            self.ttft = time.monotonic() - self.started
-        return carried
 
-    def tool_calls(self) -> tuple[ToolCall, ...]:
-        return tuple(
-            ToolCall(id=self.tool_ids[i], name=self.tool_names[i], arguments="".join(self.tool_arguments[i]))
-            for i in sorted(self.tool_names)
-        )
+def _carries_token(chunk: ChatCompletionChunk) -> bool:
+    """Check a chunk for generated text in its content, reasoning or tool-call deltas.
+
+    vLLM's reasoning parser streams reasoning in ``delta.reasoning``, a field outside the SDK's model.
+    A chunk holding only reasoning counts as a token for the stall clock and for ``ttft``.
+    """
+    return any(
+        choice.delta.content or choice.delta.tool_calls or (choice.delta.model_extra or {}).get("reasoning")
+        for choice in chunk.choices
+    )
 
 
 def _usage(usage: CompletionUsage) -> Usage:
@@ -224,10 +214,10 @@ def request_kwargs(
     policy: LLMPolicy,
     request_fields: Mapping[str, object],
 ) -> dict[str, Any]:
-    """The exact ``chat.completions.create`` arguments the client sends.
+    """Build the exact ``chat.completions.create`` arguments the client sends.
 
-    ``request_fields`` named in ``SDK_REQUEST_FIELDS`` are passed by name; the rest (vLLM extras
-    such as ``continue_final_message``) go in ``extra_body``, which the SDK merges into the body.
+    Fields listed in ``SDK_REQUEST_FIELDS`` go in as keyword arguments. The rest, vLLM extras such as
+    ``continue_final_message`` among them, go in ``extra_body`` for the SDK to merge into the body.
     """
     sdk_fields = {key: value for key, value in request_fields.items() if key in SDK_REQUEST_FIELDS}
     extra_fields = {key: value for key, value in request_fields.items() if key not in SDK_REQUEST_FIELDS}
@@ -247,9 +237,10 @@ class GlmClient:
     """Async GLM client. Use as ``async with GlmClient(source, provider) as client``.
 
     Args:
-        source: Where to send requests; asked again when a hold starts or a connection fails.
-        provider: The model, retries, backoff, the infrastructure hold, the stall timeout, the
-            connection pool and the structured-call repair budget.
+        source: Supplies the endpoint. The client asks it again during holds and after a connection
+            error.
+        provider: The model, the retry budget and backoff, the hold and stall timeouts, the connection
+            pool size and the structured-call repair budget.
     """
 
     def __init__(self, source: EndpointSource, provider: LLMProviderConfig):
@@ -271,7 +262,7 @@ class GlmClient:
 
     @property
     def http(self) -> httpx.AsyncClient:
-        """The connection pool the SDK is built on, for the router's non-chat endpoints such as ``/health``."""
+        """The SDK client's connection pool, for requests to the router's other endpoints such as ``/health``."""
         return self._http
 
     async def __aenter__(self) -> Self:
@@ -291,7 +282,7 @@ class GlmClient:
         )
 
     def _refresh_endpoint(self) -> None:
-        """Ask the source where GLM is; rebuild the SDK client if the endpoint moved."""
+        """Ask the source for the endpoint and rebuild the SDK client if it changed."""
         endpoint = self._source.current()
         if endpoint == self._endpoint:
             return
@@ -305,58 +296,53 @@ class GlmClient:
         policy: LLMPolicy,
         request_fields: Mapping[str, object] | None = None,
     ) -> Completion:
-        """Run one logical call, continuing on ``finish_reason == "length"`` per ``policy``.
+        """Run a logical call, continuing after ``finish_reason == "length"`` as ``policy`` allows.
 
-        A continuation that no longer fits the context window ends the call with the segments
-        gathered so far and ``finish_reason == "length"``.
+        When a continuation overflows the context window, the call ends with the segments gathered so
+        far and ``finish_reason == "length"``.
 
         Args:
             messages: Chat messages.
-            policy: Sampling, stall, and continuation policy.
+            policy: Sampling and continuation settings.
             request_fields: Extra request-body fields such as ``tools`` and ``tool_choice``.
         """
         started = time.monotonic()
-        segments: list[_Stream] = []
+        segments: list[_Segment] = []
         attempts: list[Attempt] = []
         conversation = list(messages)
         fields: Mapping[str, object] = request_fields or {}
         while True:
             try:
-                stream = await self._segment(conversation, policy, fields, len(segments), attempts)
+                result = await self._segment(conversation, policy, fields, len(segments), attempts)
             except ContextExhausted:
                 if not segments:
                     raise
                 logger.warning("GLM context is full after %d segments; returning the partial output", len(segments))
                 break
-            segments.append(stream)
+            segments.append(result)
             if (
-                stream.finish_reason is not FinishReason.LENGTH
-                or stream.tool_names
+                result.finish_reason is not FinishReason.LENGTH
+                or result.tool_calls
                 or len(segments) > policy.max_continuations
             ):
                 break
-            content = "".join("".join(s.content) for s in segments)
+            content = "".join(s.content for s in segments)
             if content:
                 conversation = continuation_messages(messages, content)
                 fields = request_fields or {}
             else:
-                reasoning = "".join("".join(s.reasoning) for s in segments)
+                reasoning = "".join(s.reasoning for s in segments)
                 conversation = reasoning_continuation_messages(messages, reasoning)
                 fields = {**(request_fields or {}), **CONTINUE_FINAL_MESSAGE_FIELDS}
-        usage = segments[0].usage
-        assert usage is not None and segments[-1].finish_reason is not None
-        for stream in segments[1:]:
-            assert stream.usage is not None
-            usage = usage + stream.usage
         return Completion(
-            content="".join("".join(s.content) for s in segments),
-            reasoning="".join("".join(s.reasoning) for s in segments),
-            tool_calls=segments[-1].tool_calls(),
+            content="".join(s.content for s in segments),
+            reasoning="".join(s.reasoning for s in segments),
+            tool_calls=segments[-1].tool_calls,
             finish_reason=segments[-1].finish_reason,
-            usage=usage,
+            usage=sum((s.usage for s in segments[1:]), segments[0].usage),
             wall_time=time.monotonic() - started,
             ttft=segments[0].ttft or 0.0,
-            decode_time=sum((s.finished or s.started) - s.started - (s.ttft or 0.0) for s in segments),
+            decode_time=sum(s.finished - s.started - (s.ttft or 0.0) for s in segments),
             continuations=len(segments) - 1,
             attempts=tuple(attempts),
         )
@@ -364,10 +350,11 @@ class GlmClient:
     async def complete_schema(
         self, messages: Sequence[Message], output_type: type[BaseModel], policy: LLMPolicy
     ) -> Completion:
-        """One request whose reply the server constrains to ``output_type``'s JSON schema.
+        """Request a reply constrained to ``output_type``'s JSON schema, with continuations off.
 
-        The request is never continued: a JSON object cut by the output limit cannot be resumed
-        under the schema's grammar, so the reply ends with ``finish_reason == "length"``.
+        vLLM applies the schema's grammar from the start of each request, so a JSON object cut off by
+        the output limit cannot resume in a second request. A cut reply returns with
+        ``finish_reason == "length"``.
         """
         fields = {"response_format": response_format(output_type)}
         return await self.complete(messages, replace(policy, max_continuations=0), fields)
@@ -375,13 +362,13 @@ class GlmClient:
     async def complete_structured[T: BaseModel](
         self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
-        """Return a reply that ``output_type`` validates, requested with ``response_format=output_type``.
+        """Request a reply as ``output_type`` and return it validated, repairing invalid replies.
 
-        vLLM enforces ``output_type``'s JSON schema by structured decoding (xgrammar), applied after
-        the reasoning block. The client still validates the reply with ``output_type``, which covers
-        what the grammar cannot: pydantic validators, and a reply cut off by the output limit. An
-        invalid reply is sent back for correction up to the provider's ``structured_repairs`` times
-        before ``StructuredOutputError``.
+        vLLM decodes the answer under ``output_type``'s JSON schema with xgrammar, after the reasoning
+        block. The client then validates the reply with ``output_type`` to run its pydantic validators
+        and to reject a reply cut off by the output limit. It sends an invalid reply back for
+        correction up to the provider's ``structured_repairs`` times, then raises
+        ``StructuredOutputError``.
         """
         return await complete_structured(self, messages, output_type, policy, self._provider.structured_repairs)
 
@@ -392,9 +379,9 @@ class GlmClient:
         request_fields: Mapping[str, object],
         segment: int,
         attempts: list[Attempt],
-    ) -> _Stream:
-        """Send one request with retries and holds, appending every attempt to ``attempts``."""
-        # Separate schedules, so a hold does not inflate the delay before the next counted retry.
+    ) -> _Segment:
+        """Send a request, retrying and holding as needed, and append each attempt to ``attempts``."""
+        # Retries and hold polls back off on separate schedules, so a hold leaves the next retry's delay as it was.
         retry_backoff = self._backoff.copy()
         hold_backoff = self._backoff.copy()
         max_tokens = policy.max_tokens
@@ -405,7 +392,7 @@ class GlmClient:
             events: list[str] = []
             started_wall, started = time.time(), time.monotonic()
             try:
-                stream = await self._stream(kwargs, events)
+                result = await self._stream(kwargs, events)
             except _AttemptFailed as failure:
                 duration = time.monotonic() - started
                 status, detail = failure.http_status, failure.detail
@@ -440,19 +427,23 @@ class GlmClient:
                 )
                 await asyncio.sleep(delay)
                 continue
-            assert stream.usage is not None
-            if stream.finish_reason is FinishReason.TOOL_CALLS and stream.usage.completion_tokens >= max_tokens:
-                stream.finish_reason = FinishReason.LENGTH
+            if result.finish_reason is FinishReason.TOOL_CALLS and result.usage.completion_tokens >= max_tokens:
+                result = replace(result, finish_reason=FinishReason.LENGTH)
             duration = time.monotonic() - started
             attempts.append(
                 Attempt(segment, AttemptOutcome.COMPLETED, max_tokens, started_wall, duration, 200, "", tuple(events))
             )
-            return stream
+            return result
 
-    async def _stream(self, kwargs: Mapping[str, Any], events: list[str]) -> _Stream:
-        """Run one streamed request, appending each chunk's JSON to ``events``."""
+    async def _stream(self, kwargs: Mapping[str, Any], events: list[str]) -> _Segment:
+        """Stream a request into a segment, appending each chunk's JSON to ``events``."""
         stall_timeout = self._provider.stall_timeout
-        stream = _Stream(started=time.monotonic())
+        # A ``length`` finish drives continuations, but ``get_final_completion`` raises on it, as does
+        # ``handle_chunk`` once the state holds strict tools. The client therefore builds the state without
+        # tools or a response format and reads its snapshot.
+        state = ChatCompletionStreamState()
+        started = time.monotonic()
+        ttft: float | None = None
         try:
             chunks = await self._sdk.chat.completions.create(**kwargs)
             assert isinstance(chunks, openai.AsyncStream)
@@ -465,9 +456,12 @@ class GlmClient:
                     except StopAsyncIteration:
                         break
                     events.append(chunk.model_dump_json())
-                    if stream.add(chunk):
+                    state.handle_chunk(chunk)
+                    if _carries_token(chunk):
                         last_token = time.monotonic()
-                    if stream.finish_reason is FinishReason.ABORT:
+                        if ttft is None:
+                            ttft = last_token - started
+                    if any(choice.finish_reason == FinishReason.ABORT for choice in chunk.choices):
                         raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
         except TimeoutError as error:
             raise _AttemptFailed(AttemptOutcome.STALLED, f"no token for {stall_timeout}s") from error
@@ -478,25 +472,42 @@ class GlmClient:
         except openai.APIConnectionError as error:
             raise _AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"{error}: {error.__cause__!r}") from error
         except openai.APIError as error:
-            # The SDK raises the base class for an ``error`` event inside the stream.
+            # The SDK raises the base ``APIError`` for an ``error`` event inside the stream.
             raise _AttemptFailed(AttemptOutcome.STREAM_ERROR, json.dumps(error.body)[:ERROR_BODY_LIMIT]) from error
         except json.JSONDecodeError as error:
             raise _AttemptFailed(AttemptOutcome.STREAM_ERROR, f"malformed SSE data: {error}") from error
-        # Errors while reading the body come from httpx unwrapped.
+        # httpx raises its own errors, unwrapped, for failures while reading the body.
         except httpx.ReadTimeout as error:
             raise _AttemptFailed(AttemptOutcome.STALLED, f"no bytes for {stall_timeout}s") from error
         except httpx.TransportError as error:
             raise _AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"{type(error).__name__}: {error}") from error
-        if stream.finish_reason is None or stream.usage is None:
+        if not events:
+            raise _AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "stream ended before its first chunk")
+        snapshot = state.current_completion_snapshot
+        if not snapshot.choices or snapshot.choices[0].finish_reason is None or snapshot.usage is None:
             raise _AttemptFailed(AttemptOutcome.INCOMPLETE_STREAM, "stream lacked finish_reason or usage")
-        stream.finished = time.monotonic()
-        return stream
+        choice = snapshot.choices[0]
+        message = choice.message
+        return _Segment(
+            content=message.content or "",
+            # The SDK merges deltas as dicts, so vLLM's extra ``reasoning`` field arrives concatenated.
+            reasoning=(message.model_extra or {}).get("reasoning") or "",
+            tool_calls=tuple(
+                ToolCall(id=call.id, name=call.function.name, arguments=call.function.arguments or "")
+                for call in message.tool_calls or ()
+            ),
+            finish_reason=FinishReason(choice.finish_reason),
+            usage=_usage(snapshot.usage),
+            ttft=ttft,
+            started=started,
+            finished=time.monotonic(),
+        )
 
     async def _pool_empty(self) -> bool:
-        """Whether ``/health`` answers 200 and reports zero workers in this endpoint's pool.
+        """Check whether ``/health`` answers 200 with zero workers in this endpoint's pool.
 
-        An unreachable ``/health``, a non-200 answer, or one that does not name the pool returns
-        False, so the failure that prompted the check counts against ``max_attempts`` instead of holding.
+        The check returns False for an unreachable ``/health``, a non-200 answer or a report without
+        the pool. The caller then counts the failure against ``max_attempts`` instead of holding.
         """
         endpoint = self._endpoint
         try:
@@ -513,9 +524,10 @@ class GlmClient:
         return str(endpoint.pool) in workers and workers[str(endpoint.pool)] == 0
 
     async def _hold(self, deadline: float, backoff: ExponentialBackoff, attempts: Sequence[Attempt]) -> None:
-        """Wait, polling the source and ``/health``, until the pool is no longer reported empty.
+        """Poll the source and ``/health`` with backoff until ``/health`` stops reporting the pool empty.
 
-        Raises ``ModelUnavailable`` once ``deadline`` passes.
+        Raises:
+            ModelUnavailable: ``deadline`` passed first.
         """
         while True:
             if time.monotonic() >= deadline:

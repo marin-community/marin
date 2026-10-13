@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The capability catalog: one ``CapabilityIdea`` per catalog capability, and the records a run keeps of it.
+"""Load the capability catalog as a ``CapabilityIdea`` per capability, and build each idea's prompt record.
 
-A catalog file holds ``catalog_version``, ``curricula`` (each a ``curriculum`` with its ``subject_id``,
-``subject_name`` and ``sections``, of which the ``capability`` sections are ideas) and an optional
-``learning_progression`` of prerequisite edges.
+A catalog file holds a ``catalog_version``, a list of ``curricula`` and an optional
+``learning_progression`` of prerequisite edges. Each entry in ``curricula`` wraps a ``curriculum``
+with a ``subject_id``, a ``subject_name`` and ``sections``. The loader turns every section of kind
+``capability`` into an idea and attaches the prerequisite edges leading into it.
 """
 
 from pathlib import Path
@@ -18,7 +19,7 @@ EXAMPLE_CATALOG_FILE = "example_catalog.json"
 
 
 class Section(BaseModel):
-    """A curriculum section; every field beyond ``kind`` and ``id`` is kept verbatim for the prompt."""
+    """A curriculum section; fields other than ``kind`` and ``id`` pass through verbatim to the prompt."""
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -35,7 +36,7 @@ class Curriculum(BaseModel):
 
 
 class CurriculumEntry(BaseModel):
-    """One element of ``curricula``: the file wraps each curriculum in a ``curriculum`` key."""
+    """An element of ``curricula``, wrapping a curriculum in a ``curriculum`` key."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -43,7 +44,7 @@ class CurriculumEntry(BaseModel):
 
 
 class ProgressionEdge(BaseModel):
-    """A prerequisite edge into ``dependent_id``; its other fields are kept verbatim for the prompt."""
+    """A prerequisite edge into ``dependent_id``; its other fields pass through verbatim to the prompt."""
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -68,11 +69,11 @@ class CatalogDocument(BaseModel):
 
 
 class CapabilityIdea(BaseModel):
-    """One catalog capability with the learning-progression edges that point at it.
+    """A catalog capability with the learning-progression edges leading into it.
 
-    ``capability`` and ``prerequisite_edges`` are source records shown to the model verbatim, so they
-    stay as the catalog's JSON objects. ``capability_hash`` is the ``taskforge.content_hash.digest``
-    of the capability record.
+    ``capability`` and ``prerequisite_edges`` hold the catalog's JSON objects as read, because the
+    prompt shows them to the model verbatim. ``capability_hash`` is the ``taskforge.content_hash.digest``
+    of ``capability``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -87,14 +88,16 @@ class CapabilityIdea(BaseModel):
 
 
 def example_catalog_path() -> Path:
-    """The catalog that ships with this package, ``data/example_catalog.json``."""
+    """The path of this package's example catalog, ``data/example_catalog.json``."""
     return Path(__file__).resolve().parent / "data" / EXAMPLE_CATALOG_FILE
 
 
 def load_capability_ideas(path: Path) -> dict[str, CapabilityIdea]:
     """Read a capability catalog into ideas by id.
 
-    Each idea carries the learning-progression edges whose ``dependent_id`` is that capability.
+    Each idea carries the learning-progression edges whose ``dependent_id`` is that capability. A
+    duplicate capability id, or a learning progression from another catalog version, raises
+    ``ValueError``.
     """
     document = CatalogDocument.model_validate_json(path.read_bytes())
     version = document.catalog_version
@@ -127,7 +130,10 @@ def load_capability_ideas(path: Path) -> dict[str, CapabilityIdea]:
 
 
 def capability_idea_record(idea: CapabilityIdea) -> dict[str, object]:
-    """A capability idea's catalog identifiers and the capability record its prompts show the models."""
+    """Build the JSON object the prompt shows for ``idea``: its catalog identifiers and capability record.
+
+    The record gets the prerequisite edges under ``learning_progression``.
+    """
     return {
         "capability_id": idea.capability_id,
         "subject_id": idea.subject_id,

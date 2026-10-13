@@ -1,20 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The model surface: call records, the errors a call raises, and the ``ModelClient`` protocol.
+"""Records of model calls, the ``ModelClient`` protocol, and the errors its implementations raise.
 
-Every logical call is a ``Completion``: the concatenation of its continuation segments, with the
-``Attempt`` record of every HTTP request it made. A call that fails keeps that record too: every
-HTTP request has an ``Attempt``, and a rejection carries the attempts made so far.
+A logical call returns a ``Completion``, which joins the call's continuation segments and holds an
+``Attempt`` for every HTTP request the call made. The error from a failed call carries the attempts
+made up to that point.
 
-``ModelClient`` is the one interface callers reach a model through: free-text ``complete`` and
-``complete_structured``, which returns a reply validated as a pydantic model with every completion
-the call took. ``taskforge.llm.glm_client.GlmClient`` implements it.
-
-The errors here are the ``ModelClient`` protocol's, and any implementation raises them:
-``ModelRequestRejected`` is a rejection a retry cannot fix, ``ContextExhausted`` a prompt too long
-for the model's context window, and ``ModelUnavailable`` retries or the infrastructure hold
-running out.
+Callers go through ``ModelClient`` for free-text replies (``complete``) and for replies validated
+as a pydantic model (``complete_structured``, which also returns every completion the call took).
+``taskforge.llm.glm_client.GlmClient`` implements it.
 """
 
 from collections.abc import Sequence
@@ -32,7 +27,7 @@ class FinishReason(StrEnum):
     LENGTH = "length"
     TOOL_CALLS = "tool_calls"
     ABORT = "abort"
-    """vLLM aborted the request (for example on worker drain); the attempt is retried."""
+    """vLLM aborted the request, for example while draining a worker. The client retries the attempt."""
 
 
 class AttemptOutcome(StrEnum):
@@ -73,7 +68,7 @@ class Usage:
 
 @dataclass(frozen=True)
 class Attempt:
-    """One HTTP request, successful or not, with the raw SSE ``data:`` payloads it received.
+    """An HTTP request, successful or failed, with the raw SSE ``data:`` payloads it received.
 
     ``segment`` is the continuation index.
     """
@@ -90,10 +85,10 @@ class Attempt:
 
 @dataclass(frozen=True)
 class Completion:
-    """One logical call: the concatenation of its continuation segments.
+    """A logical call, joined from its continuation segments.
 
-    ``ttft`` is measured on the first segment's successful attempt; ``decode_time`` sums, over each
-    segment's successful attempt, the time after its first token. ``wall_time`` includes backoff.
+    ``ttft`` comes from the successful attempt of the first segment. ``decode_time`` adds up the time
+    after the first token in each segment's successful attempt. ``wall_time`` includes backoff.
     """
 
     content: str
@@ -109,7 +104,7 @@ class Completion:
 
 
 class ModelRequestRejected(Exception):
-    """The server rejected the request in a way a retry cannot fix; ``attempts`` ends with the rejected one."""
+    """The server rejected a request for a reason a retry cannot fix; ``attempts`` ends with that request."""
 
     def __init__(self, status: int, body: str, attempts: Sequence[Attempt]):
         super().__init__(f"model server rejected request with HTTP {status}: {body}")
@@ -119,14 +114,14 @@ class ModelRequestRejected(Exception):
 
 
 class ContextExhausted(ModelRequestRejected):
-    """The prompt plus the requested output does not fit the model's context window."""
+    """The prompt plus the requested output exceeds the model's context window."""
 
     def __init__(self, body: str, attempts: Sequence[Attempt]):
         super().__init__(400, body, attempts)
 
 
 class ModelUnavailable(Exception):
-    """Retries or the infrastructure hold ran out; ``attempts`` holds the record."""
+    """The retries or the infrastructure hold ran out; ``attempts`` holds every attempt made."""
 
     def __init__(self, message: str, attempts: Sequence[Attempt]):
         super().__init__(message)
@@ -135,19 +130,21 @@ class ModelUnavailable(Exception):
 
 @dataclass(frozen=True)
 class StructuredResult[T]:
-    """A structured call's validated value and every completion it took, in order (a repair request adds one)."""
+    """The validated value of a structured call, with its completions in order; each repair adds a completion."""
 
     value: T
     completions: tuple[Completion, ...]
 
 
 class ModelClient(Protocol):
-    """A model: ``model`` names it, ``complete`` samples a reply, ``complete_structured`` returns a
-    reply that ``output_type`` validates.
+    """Protocol for calling a model.
 
-    Every implementation raises the errors of this module: ``ModelUnavailable`` once transient
-    failures run out, ``ContextExhausted`` for a prompt that does not fit the context window, and
-    ``ModelRequestRejected`` for any other request no retry can fix.
+    ``model`` is the model id. ``complete`` samples a free-text reply. ``complete_structured`` returns
+    a reply validated as ``output_type``. Implementations raise this module's errors:
+
+    * ``ModelUnavailable`` once the retries or the infrastructure hold run out.
+    * ``ContextExhausted`` for a prompt too long for the model's context window.
+    * ``ModelRequestRejected`` for any other rejection a retry cannot fix.
     """
 
     @property

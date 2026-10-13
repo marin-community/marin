@@ -1,27 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sampling and continuation policy for GLM-5.3 calls, and how the provider is called.
+"""Sampling and continuation settings for GLM-5.3 calls, and the settings for calling the provider.
 
-``LLMPolicy`` is how one logical call samples. ``LLMProviderConfig`` is how the client calls the
-provider: the model, retries and their backoff, the infrastructure hold, the stall timeout and the
-connection pool.
+``LLMPolicy`` sets how a logical call samples. ``LLMProviderConfig`` sets how the client calls the
+provider: the model, the retries and their backoff, the infrastructure hold, the stall timeout and
+the connection pool.
 
-``max_tokens`` defaults to the model's output limit and is never lowered: a prompt too long for
-that limit to fit the context window is an error (``ContextExhausted``), not something the client
-works around, and nothing is ever truncated. A prompt that long is a sign that its parts belong in
-files and the model in an agentic environment that reads them. When a reply stops on
-``finish_reason == "length"`` the client keeps the partial output and continues, up to
-``max_continuations`` times, in one of two ways measured live on GLM-5.3:
+``max_tokens`` defaults to the model's output limit. The client sends it unchanged with the whole
+prompt, so a prompt too long for that budget to fit the context window raises ``ContextExhausted``.
+A prompt that long usually means its parts belong in files, for a model in an agentic environment
+to read.
 
-* Cut off in the answer: the partial answer becomes the assistant turn and a user turn asks the
-  model to continue. (vLLM ``continue_final_message`` is unusable here: the reasoning parser files
-  the continued answer under ``reasoning``.)
-* Cut off while still reasoning (no answer text yet): the assistant turn is left open as
-  ``<think>`` plus the partial reasoning and sent with ``continue_final_message``, so the model
-  resumes the same reasoning and the parser splits the rest into reasoning and answer. A user
-  "continue" turn here instead opens a fresh reasoning block that talks about the cut-off and
-  loops; carrying the reasoning as ``reasoning_content`` does not prevent that.
+When a reply stops with ``finish_reason == "length"``, the client saves the partial output and
+continues, up to ``max_continuations`` times. The continuation depends on where the cut fell, as
+measured live on GLM-5.3:
+
+* Cut off in the answer: the client sends the partial answer as the assistant turn, followed by a
+  user turn asking the model to continue. vLLM's ``continue_final_message`` fails here because the
+  reasoning parser files the continued answer under ``reasoning``.
+* Cut off while still reasoning, before any answer text: the client leaves the assistant turn open
+  as ``<think>`` plus the partial reasoning and sends it with ``continue_final_message``. The model
+  resumes the same reasoning, with the parser splitting the rest into reasoning and answer. A user
+  "continue" turn here would instead open a fresh reasoning block, which talks about the cut-off
+  and loops. Carrying the reasoning as ``reasoning_content`` leaves that loop in place.
 """
 
 from collections.abc import Sequence
@@ -48,7 +50,7 @@ class ReasoningEffort(StrEnum):
 
 @dataclass(frozen=True)
 class LLMPolicy:
-    """How one logical call samples.
+    """Sampling settings for a logical call.
 
     Attributes:
         max_tokens: Output budget per request. Defaults to the model maximum.
@@ -72,14 +74,14 @@ class LLMProviderConfig:
     """How the client calls the LLM provider.
 
     Attributes:
-        model: The model id requests name; it must match the endpoint's model.
-        max_attempts: Attempts per request (each continuation is its own request); when the last one
-            fails the call raises ``ModelUnavailable``. Holds do not count.
+        model: The model id sent with each request; it must match the endpoint's model.
+        max_attempts: Attempts per request, with each continuation a separate request. When the last
+            attempt fails, the call raises ``ModelUnavailable``. Only failures outside a hold count.
         hold_timeout: Seconds an infrastructure hold may last before ``ModelUnavailable``.
         backoff_initial: First delay, in seconds, between attempts and between health polls.
         backoff_maximum: Largest delay, in seconds.
         backoff_factor: Growth of the delay after each wait.
-        stall_timeout: Seconds with no streamed token before an attempt is abandoned.
+        stall_timeout: Seconds without a streamed token before the client abandons an attempt.
         max_connections: httpx connection-pool size; sized for hundreds of concurrent calls.
         structured_repairs: How many times an invalid structured reply is sent back for correction before the
             call fails.

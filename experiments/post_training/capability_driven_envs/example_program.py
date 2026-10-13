@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A task program for ``d43.culinary.scaling``, shown to GLM as the example of what to write.
+"""An example task program for ``d43.culinary.scaling``, included in the prompt to show GLM what to write.
 
-Run as ``python3 example_program.py <task id> <output path>``: it draws a recipe-scaling problem from
-the task id, computes the answer, and writes a TaskSpec whose verifyit grader checks that answer.
+Run as ``python3 example_program.py <task id> <output path>``, the program draws a recipe-scaling
+problem seeded by the task id, computes the answer and writes a TaskSpec with a verifyit grader for
+that answer.
 """
 
 import base64

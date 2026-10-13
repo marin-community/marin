@@ -1,13 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The deliberately basic prompt that asks GLM for a task program, and the submission its reply must be.
+"""A deliberately basic prompt asking GLM for a task program, and the submission GLM replies with.
 
-GLM gets one catalog capability and writes one Python program that, run as
-``python3 program.py <task id> <output path>``, writes a TaskSpec for a task exercising that
-capability. The rules are only the ones the driver checks: the program runs, and its output parses
-as a TaskSpec. The task carries its own grader; nothing here checks the task itself. The reply is a
-``ProgramSubmission`` JSON object; the server enforces its schema as the response format.
+``program_messages`` builds a system message and a user message for a catalog capability. The
+system message carries the rules for the program, the TaskSpec JSON schema and ``example_program.py``
+as a worked example. The user message carries the capability record.
+
+GLM replies with a ``ProgramSubmission`` JSON object, decoded under its schema as the response
+format. The driver in ``generate_tasks`` runs the submitted program as
+``python3 program.py <task id> <output path>``. The program writes a TaskSpec to the output path,
+for a task exercising the capability. The driver then confirms that the program exited with status 0
+and that its output parses as a TaskSpec. The prompt limits its rules to what the driver checks,
+plus guidance on grading and reproducibility. From there on, the task's own grader is the only check
+on the task.
 """
 
 import json
@@ -69,8 +75,9 @@ class ProgramSubmission(BaseModel):
     @field_validator("source")
     @classmethod
     def compiles(cls, source: str) -> str:
-        # Besides SyntaxError, compile raises ValueError, RecursionError or MemoryError (the parser's
-        # stack overflowing on deep nesting) for some sources; each is an invalid submission, not a crash.
+        # For some sources compile raises ValueError, RecursionError or MemoryError instead of SyntaxError,
+        # the last two when deep nesting overflows the parser's stack. The validator reports each as an
+        # invalid submission.
         try:
             compile(source, "program.py", "exec")
         except (SyntaxError, ValueError, RecursionError, MemoryError) as error:
@@ -79,12 +86,16 @@ class ProgramSubmission(BaseModel):
 
 
 def example_program_source() -> str:
-    """The source of the example task program shown to GLM."""
+    """Read the source of the example task program for the prompt."""
     return Path(__file__).with_name(EXAMPLE_PROGRAM_FILE).read_text()
 
 
 def program_messages(idea: CapabilityIdea) -> list[Message]:
-    """The system rules with the schema and example, then the capability record."""
+    """Build the system and user messages for ``idea``.
+
+    The system message holds the rules, the TaskSpec schema and the example program. The user message
+    holds the capability record.
+    """
     system = SYSTEM_PROMPT.format(
         schema=json.dumps(TaskSpec.model_json_schema(), indent=2), example=example_program_source()
     )

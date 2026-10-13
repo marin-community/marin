@@ -205,8 +205,7 @@ def test_route_hold_follows_an_endpoint_that_moved(fake_glm, other_fake_glm, fas
 
 
 def test_refused_connection_is_retried_on_the_current_endpoint(fake_glm, fast_provider):
-    with socket.socket() as closed:
-        closed.bind(("127.0.0.1", 0))
+    with socket.create_server(("127.0.0.1", 0)) as closed:
         closed_port = closed.getsockname()[1]
     fake_glm.stream(content="reached")
     source = MovingEndpoint([endpoint(f"http://127.0.0.1:{closed_port}/v1"), endpoint(fake_glm.base_url)])
@@ -328,7 +327,7 @@ def test_continuation_that_no_longer_fits_returns_the_partial_output(fake_glm, r
     ]
 
 
-def test_continuations_stop_at_policy_bound(fake_glm, run):
+def test_continuations_stop_at_policy_limit(fake_glm, run):
     for part in ("a", "b", "c"):
         fake_glm.stream(content=part, finish="length")
     completion = run(policy=LLMPolicy(max_continuations=2))

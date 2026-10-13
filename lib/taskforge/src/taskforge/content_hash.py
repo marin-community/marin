@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Canonical JSON and the sha256 content hashes Taskforge computes from it.
+"""Canonical JSON encoding and sha256 content hashes over it.
 
-``canonical_json`` is the one encoding Taskforge hashes: sorted keys, compact separators, UTF-8
-text, bytes as base64, and dataclasses and pydantic models by field. ``digest`` is the sha256 of
-it. ``pretty_json`` is the indented form shown to models and written for people to read.
+``canonical_json`` is the encoding Taskforge hashes. It sorts keys, uses compact separators and
+writes UTF-8 text, with bytes as base64 and dataclasses or pydantic models field by field.
+``digest`` returns the sha256 of that encoding. ``pretty_json`` produces the indented form for
+prompts and for files people read.
 """
 
 import hashlib
