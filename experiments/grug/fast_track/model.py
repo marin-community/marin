@@ -883,9 +883,10 @@ class GrugModelConfig:
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
-    kda_fused_projections: bool = True
+    kda_fused_projections: bool = False
     """Under a real MXFP8 dense ``fp8_recipe``, project KDA's q/k/v/gate (and write/erase) from ``x`` as one
-    block-scaled GEMM over their concatenated weights, so ``x`` is quantized once."""
+    block-scaled GEMM over their concatenated weights, so ``x`` is quantized once. Off: 1% slower on the GB200
+    recipe with the Pallas quantizers (lc1-gb200-pq4 15.06 vs pu2 14.91 s/step)."""
     moe_mxfp8_dispatch: bool = False
     """With MXFP8 experts (``fp8_recipe``), send the dispatched rows as MXFP8 bytes instead of bf16 rows quantized on
     arrival. Off by default: the extra uint8 transport buffer OOMs NCCL's symmetric memory on the GB200 recipe."""
