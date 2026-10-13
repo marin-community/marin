@@ -263,6 +263,9 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
+    global_qk_mult: float | None = None
+    """Q scale on the global (full-causal, rope-free) layers; None uses ``qk_mult``. Local layers
+    always use ``qk_mult``. Read it through ``resolved_global_qk_mult``."""
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -349,6 +352,10 @@ class GrugModelConfig:
         return self.hidden_dim // self.num_heads
 
     @property
+    def resolved_global_qk_mult(self) -> float:
+        return self.qk_mult if self.global_qk_mult is None else self.global_qk_mult
+
+    @property
     def stored_kv_heads(self) -> int:
         if self.local_kv_heads is None or self.global_kv_heads is None:
             return self.num_kv_heads
@@ -373,6 +380,7 @@ class GrugModelConfig:
     def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
         rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
         latent_dim = _hf_config_attr(hf_config, ("latent_dim",))
+        global_qk_mult = _hf_config_attr(hf_config, ("global_qk_mult",))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
             hidden_dim=int(_hf_config_attr(hf_config, ("hidden_dim", "hidden_size"), 2048)),
@@ -402,6 +410,7 @@ class GrugModelConfig:
             layer_norm_eps=float(_hf_config_attr(hf_config, ("layer_norm_eps", "rms_norm_eps"), 1e-5)),
             initializer_std=float(_hf_config_attr(hf_config, ("initializer_std", "initializer_range"), 0.02)),
             qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
+            global_qk_mult=None if global_qk_mult is None else float(global_qk_mult),
             rope=rope,
             rope_fused=bool(_hf_config_attr(hf_config, ("rope_fused",), False)),
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
@@ -437,6 +446,7 @@ class GrugModelConfig:
             # grug-specific (no public equivalent)
             "latent_dim": self.latent_dim,
             "qk_mult": self.qk_mult,
+            "global_qk_mult": self.global_qk_mult,
             "local_kv_heads": self.local_kv_heads,
             "global_kv_heads": self.global_kv_heads,
             "global_every": self.global_every,
@@ -500,6 +510,21 @@ def _apply_rotary_embedding_fused(
         return (first_factor * x + second_factor * flipped).astype(dtype)
 
     return _apply(q), _apply(k)
+
+
+def _qk_scale(cfg: GrugModelConfig, is_global: bool | jax.Array) -> float | jax.Array:
+    """Q multiplier for one layer: ``resolved_global_qk_mult`` on global layers, ``qk_mult`` on local.
+
+    ``is_global`` is a traced per-layer scalar inside the layer scan, so the two values are selected
+    with ``jnp.where`` rather than a ``lax.cond``. When they are equal the plain Python float is
+    returned, so configs that leave ``global_qk_mult`` unset trace exactly as before.
+    """
+    local, global_ = cfg.qk_mult, cfg.resolved_global_qk_mult
+    if local == global_:
+        return local
+    if isinstance(is_global, bool):
+        return global_ if is_global else local
+    return jnp.where(is_global, global_, local)
 
 
 class ShortConv(eqx.Module):
@@ -659,7 +684,7 @@ class CausalSelfAttention(eqx.Module):
                 keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
-        q = q * self.cfg.qk_mult
+        q = q * _qk_scale(self.cfg, is_global)
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
         # shard attends its own queries against the whole key sequence. The backends reject a
         # sharded K/V sequence, and the output returns to the residual stream's layout, which

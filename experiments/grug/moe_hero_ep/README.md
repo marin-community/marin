@@ -246,7 +246,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--batch-size` | sets global sequences per step and the optimizer token budget |
 | `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
-| `--qk-mult` | multiplies Q before attention; default 1.3, extension recipe 1.84 |
+| `--qk-mult`, `--global-qk-mult` | multiply Q before attention; `--qk-mult` sets every layer (default 1.3, extension recipe 1.84), and `--global-qk-mult` overrides it on the global full-causal layers only |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |

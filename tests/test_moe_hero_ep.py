@@ -1106,6 +1106,71 @@ def test_latent_moe_hf_config_roundtrip_preserves_the_architecture():
     assert roundtripped.latent_dim == 16
 
 
+def _attention_output(cfg, x, is_global):
+    # Same key and shapes for every config, so each attention module gets identical weights. The
+    # scan passes the layer flag traced, as both disable_rope and is_global; jit with it as an
+    # argument to exercise that path.
+    attn = model.CausalSelfAttention.init(cfg, key=jax.random.key(61))
+    return eqx.filter_jit(lambda h, flag: attn(h, AttentionMask.causal(), disable_rope=flag, is_global=flag))(
+        x, jnp.asarray(is_global)
+    )
+
+
+@pytest.mark.parametrize("rope_fused", [False, True])
+def test_global_qk_mult_scales_global_layers_and_leaves_local_layers_alone(rope_fused):
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    base = dataclasses.replace(_latent_config(), rope_fused=rope_fused)
+    split = dataclasses.replace(base, global_qk_mult=1.7)
+    # A global layer under the split config must see the temperature a uniform qk_mult=1.7 gives.
+    uniform_global = dataclasses.replace(base, qk_mult=1.7)
+    x = jax.random.normal(jax.random.key(62), (2, 8, base.hidden_dim))
+
+    with set_mesh(mesh):
+        local_base = _attention_output(base, x, is_global=False)
+        local_split = _attention_output(split, x, is_global=False)
+        global_base = _attention_output(base, x, is_global=True)
+        global_split = _attention_output(split, x, is_global=True)
+        global_uniform = _attention_output(uniform_global, x, is_global=True)
+
+    # A selected scalar and a constant multiplier compile to different fusions, so the match is to
+    # float32 rounding rather than bitwise; the outputs are O(0.1).
+    np.testing.assert_allclose(local_split, local_base, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(global_split, global_uniform, rtol=1e-6, atol=1e-6)
+    assert np.max(np.abs(np.asarray(global_split) - np.asarray(global_base))) > 1e-4
+
+
+def test_global_qk_mult_equal_to_qk_mult_keeps_the_model_output():
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    base = dataclasses.replace(_latent_config(), num_layers=2, rope_fused=True)
+    tokens = jax.random.randint(jax.random.key(63), (2, 8), 0, base.vocab_size)
+
+    def logits(cfg):
+        transformer = model.Transformer.init(cfg, key=jax.random.key(64))
+        return eqx.filter_jit(transformer.logits)(tokens)
+
+    with set_mesh(mesh):
+        unset = logits(base)
+        equal = logits(dataclasses.replace(base, global_qk_mult=base.qk_mult))
+        split = logits(dataclasses.replace(base, global_qk_mult=1.7))
+
+    np.testing.assert_array_equal(equal, unset)
+    # Layer 1 is global (global_every=2), so a different global multiplier must reach the logits.
+    assert np.max(np.abs(np.asarray(split) - np.asarray(unset))) > 1e-4
+
+
+def test_global_qk_mult_hf_config_roundtrips_and_legacy_configs_use_qk_mult():
+    cfg = dataclasses.replace(_latent_config(), qk_mult=1.3, global_qk_mult=1.58)
+
+    serialized = cfg.to_hf_config(cfg.vocab_size).to_dict()
+    roundtripped = model.GrugModelConfig.from_hf_config(model.GrugMoeHfConfig(**serialized))
+    serialized.pop("global_qk_mult")
+    legacy = model.GrugModelConfig.from_hf_config(model.GrugMoeHfConfig(**serialized))
+
+    assert roundtripped.resolved_global_qk_mult == 1.58
+    assert roundtripped.qk_mult == 1.3
+    assert legacy.resolved_global_qk_mult == 1.3
+
+
 def test_latent_moe_state_dict_contains_the_projection_state():
     mesh = _explicit_mesh(1, 1, 1, 1, 1)
     cfg = _latent_config(latent_dim=16)
