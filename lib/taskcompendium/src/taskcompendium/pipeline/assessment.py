@@ -37,7 +37,7 @@ from taskcompendium.pipeline.models import Admission, ReviewStatus
 from taskcompendium.pipeline.review import private_evidence_summary, review_payload
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
 from taskcompendium.pipeline.source_evidence import READ_BLOCK_BYTES, OriginalRow, SourceEvidenceFile, original_rows
-from taskcompendium.pipeline.sources import prepared_component_path, prepared_manifest_path, staged_inputs
+from taskcompendium.pipeline.sources import prepared_component_path, prepared_shared_path, staged_inputs
 from taskcompendium.submission import submission_compatibility, submission_instruction
 
 PACKET_SCHEMA = pa.schema(
@@ -359,7 +359,7 @@ def _original_files(records: dict[str, list[dict[str, Any]]], download: dict[str
             rows,
             prepared_path=(
                 str(
-                    prepared_manifest_path(StoragePath(download["source_input"]) / file).parent
+                    prepared_shared_path(StoragePath(download["source_input"]) / file)
                     if layout == "2"
                     else prepared_component_path(StoragePath(download["source_input"]) / file, component)
                 )

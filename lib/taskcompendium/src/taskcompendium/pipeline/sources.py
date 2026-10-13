@@ -43,8 +43,12 @@ def raw_input_sha256(data: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_source_json(data).encode()).hexdigest()
 
 
+def prepared_shared_path(file: StoragePath) -> StoragePath:
+    return file.parent / ".curation-parquet" / (file.name + ".parquet")
+
+
 def prepared_manifest_path(file: StoragePath) -> StoragePath:
-    return file.parent / ".curation-parquet" / (file.name + ".parquet") / "manifest.json"
+    return prepared_shared_path(file) / "manifest.json"
 
 
 def prepared_component_path(file: StoragePath, component: str) -> StoragePath:

@@ -359,7 +359,7 @@ def main(
                     raw_source=source.config.assessment_source if source.config is not None else None,
                     settings=assessment,
                     runtime=runtime,
-                    execution=recipe_settings,
+                    recipe_settings=recipe_settings,
                 )
                 for step, source in zip(steps, selected.values(), strict=True)
             ]

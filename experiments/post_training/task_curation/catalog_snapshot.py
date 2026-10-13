@@ -20,8 +20,11 @@ from finestore.store import DataStore, Transaction
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.assessment import validate_coverage
+from taskcompendium.pipeline.models import ReviewStatus
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from zephyr.readers import load_parquet
 
+from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.curation_catalog import AssessmentStatus
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.source_metadata import source_row
@@ -97,7 +100,7 @@ def _completed_assessment(
     prefix = f"assessments/{record['source_id']}/{key}"
     samples = []
     for grade in grades:
-        if grade["status"] != "reviewed":
+        if grade["status"] != ReviewStatus.REVIEWED:
             raise ValueError(f"Completed assessment has an unavailable judgment: {grade['task_id']}")
         packet = packets[grade["task_id"]]
         uri = transaction.write_object(
@@ -240,7 +243,11 @@ def _publication(
         row["quality"] = assessment.get("admitted", {}).get("grade")
         row["curation"] = assessment.get("curation")
         curation = row["curation"]
-        if curation is not None and curation["mode"] == "full" and not curation.get("source_file_overrides"):
+        if (
+            curation is not None
+            and curation["mode"] == SourceProcessingMode.FULL
+            and not curation.get("source_file_overrides")
+        ):
             row["task_count"] = curation["raw_population_count"]
         rows.append(row)
     rows.sort(key=lambda row: row["id"])
@@ -261,7 +268,7 @@ def publish_catalog(
     """Archive cited evidence, then atomically select a terminal campaign's catalog snapshot."""
     view = ReadView(root)
     run = view.point("runs", run_id=run_id)
-    if run is None or run["status"] == "running":
+    if run is None or run["status"] == CampaignStatus.RUNNING:
         raise ValueError(f"No terminal curation catalog invocation: {run_id}")
     root_path = StoragePath(root)
     lease = create_lock(str(root_path / "publication.lock"), worker_id=run_id)

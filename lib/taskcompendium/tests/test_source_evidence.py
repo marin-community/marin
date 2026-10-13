@@ -12,7 +12,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.assessment import _original_files
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.source_evidence import OriginalRow, SourceEvidenceFile, original_rows
-from taskcompendium.pipeline.sources import prepared_component_path, prepared_manifest_path, raw_input_sha256
+from taskcompendium.pipeline.sources import prepared_component_path, prepared_shared_path, raw_input_sha256
 
 
 @pytest.mark.parametrize("representation", ["parquet", "prepared", "jsonl", "prepared_override"])
@@ -85,7 +85,7 @@ def test_recovery_uses_recorded_acquisition_layout_and_local_overrides(tmp_path,
     data = {"text": "original"}
     spec = SourceFiles("fixture", "pin", (raw.name,), SourceFormat.JSONL, prepared_component="selected")
     prepared = (
-        prepared_manifest_path(StoragePath(str(raw))).parent
+        prepared_shared_path(StoragePath(str(raw)))
         if layout == "2"
         else prepared_component_path(StoragePath(str(raw)), "selected")
     )

@@ -76,21 +76,21 @@ def _prepare(
 
 def _judge(
     runtime: CampaignRuntime,
-    execution: RecipeSettings,
+    recipe_settings: RecipeSettings,
     *,
     inputs_root: str,
     rubric: str,
     model: AssessmentModel,
     output_root: str,
 ) -> None:
-    assert execution.review is not None and execution.review_cache is not None
-    base_url = execution.base_url or resolve_glm_base_url(execution.relay_job)
+    assert recipe_settings.review is not None and recipe_settings.review_cache is not None
+    base_url = recipe_settings.base_url or resolve_glm_base_url(recipe_settings.relay_job)
     token = os.environ[GLM_BULK_TOKEN_ENV]
-    if execution.review.mode == ReviewMode.CHAT:
+    if recipe_settings.review.mode == ReviewMode.CHAT:
         submit = partial(
             chat_output,
             OpenAIChatClient(base_url, token, timeout=REQUEST_TIMEOUT),
-            max_concurrent=execution.review_concurrency,
+            max_concurrent=recipe_settings.review_concurrency,
         )
     else:
         submit = partial(
@@ -104,7 +104,7 @@ def _judge(
         rubric=rubric,
         model=model,
         submit=submit,
-        cache_root=execution.review_cache,
+        cache_root=recipe_settings.review_cache,
         output_root=output_root,
     )
 
@@ -143,7 +143,7 @@ def assessment_pipeline(
     raw_source: SourceFiles | None,
     settings: AssessmentSettings,
     runtime: CampaignRuntime,
-    execution: RecipeSettings,
+    recipe_settings: RecipeSettings,
 ) -> AssessmentStages:
     """Return the evidence preparation, judgment and report stages for a source."""
     inputs = apply(
@@ -158,7 +158,7 @@ def assessment_pipeline(
     inputs = replace(inputs, name=f"{inputs.name}-{inputs.fingerprint()[:16]}")
     judgments = apply(
         f"rl-assessment/{source}/judgments",
-        partial(_judge, runtime, execution),
+        partial(_judge, runtime, recipe_settings),
         version=JUDGMENTS_VERSION,
         inputs_root=inputs,
         rubric=settings.rubric,
