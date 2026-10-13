@@ -32,6 +32,7 @@ ERROR_TEXT_LIMIT = 4000
 
 SCHEMA_INSTRUCTION_HEADER = "Reply with one JSON object with these fields:"
 NESTED_FIELD_INDENT = "  "
+REPEATED_MODEL_LINE = "{name} (same fields as above)"
 
 COUNT_BOUNDS = {
     "minLength": ("at least", "character"),
@@ -125,20 +126,40 @@ def _constraints(schema: Mapping[str, Any], defs: Mapping[str, Any]) -> list[str
     return words
 
 
-def _nested_model(schema: Mapping[str, Any], defs: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    """Find the object a field holds, directly, as list items or as a member of an ``anyOf``."""
-    schema = _definition(schema, defs)
-    if "properties" in schema:
-        return schema
-    members = [schema["items"]] if "items" in schema else schema.get("anyOf", [])
+def _ref_name(schema: Mapping[str, Any]) -> str | None:
+    """Return the ``$defs`` key a schema's ``$ref`` points at, or ``None`` for a schema without one."""
+    return schema["$ref"].rsplit("/", 1)[-1] if "$ref" in schema else None
+
+
+def _nested_model(schema: Mapping[str, Any], defs: Mapping[str, Any]) -> tuple[str | None, Mapping[str, Any]] | None:
+    """Find the object a field holds, directly, as list items or as a member of an ``anyOf``.
+
+    The object comes back with its ``$defs`` key, or with ``None`` in place of the key for an object
+    written inline.
+    """
+    resolved = _definition(schema, defs)
+    if "properties" in resolved:
+        return _ref_name(schema), resolved
+    members = [resolved["items"]] if "items" in resolved else resolved.get("anyOf", [])
     for member in members:
         if (nested := _nested_model(member, defs)) is not None:
             return nested
     return None
 
 
-def _field_lines(model: Mapping[str, Any], defs: Mapping[str, Any], indent: str) -> list[str]:
-    """Render a line per field of ``model``, then the fields of a nested object indented below it."""
+def _lead_lines(model: Mapping[str, Any], indent: str) -> list[str]:
+    """Indent each line of a model's docstring, giving an empty list for a model without one."""
+    return [indent + line if line else line for line in model.get("description", "").splitlines()]
+
+
+def _field_lines(model: Mapping[str, Any], defs: Mapping[str, Any], indent: str, path: frozenset[str]) -> list[str]:
+    """Render a line per field of ``model``, each followed by the object it holds, one indent further in.
+
+    For a nested object the function writes the docstring and then recurses into the object's fields.
+    ``path`` holds the ``$defs`` keys of the models between the top-level model and ``model``. When a
+    nested object's key is already in ``path``, the function writes ``REPEATED_MODEL_LINE`` with the
+    model's name and stops there.
+    """
     required = set(model.get("required", ()))
     lines = []
     for name, field in model["properties"].items():
@@ -147,8 +168,15 @@ def _field_lines(model: Mapping[str, Any], defs: Mapping[str, Any], indent: str)
         terms = ", ".join([_type_name(field, defs), *_constraints(field, defs), status])
         lines.append(f"{indent}{name} ({terms})" + (f": {text}" if text else ""))
         nested = _nested_model(field, defs)
-        if nested is not None and not indent:
-            lines += _field_lines(nested, defs, NESTED_FIELD_INDENT)
+        if nested is None:
+            continue
+        key, inner = nested
+        inner_indent = indent + NESTED_FIELD_INDENT
+        if key is not None and key in path:
+            lines.append(inner_indent + REPEATED_MODEL_LINE.format(name=inner.get("title", key)))
+        else:
+            inner_path = path if key is None else path | {key}
+            lines += _lead_lines(inner, inner_indent) + _field_lines(inner, defs, inner_indent, inner_path)
     return lines
 
 
@@ -167,11 +195,28 @@ def schema_instruction(output_type: type[BaseModel]) -> str:
 
     For a list, the constraints on its items follow with an ``each`` prefix. A field without
     constraints renders as ``<name> (<type>, required|optional)``. A field without a description falls
-    back to its title. Fields of a nested model go indented below its field, one level deep.
+    back to its title.
+
+    Below a field holding a model, whether directly, in a list or as an optional, the function writes
+    the model's docstring and its fields one indent further in. It recurses the same way through models
+    at any depth::
+
+        files (list of object, required): The files to write.
+          A file the draft writes.
+          location (object, required)
+            Where the file goes.
+            path (string, required): An absolute output path.
+
+    On the way down it tracks the models between the top level and the current field. When a model
+    turns up again inside itself, the function writes a line such as ``Section (same fields as above)``
+    in place of its fields, so a self-referential model renders in finite text.
     """
     schema = output_type.model_json_schema()
-    lead = [schema["description"]] if "description" in schema else []
-    return "\n".join([SCHEMA_INSTRUCTION_HEADER, *lead, *_field_lines(schema, schema.get("$defs", {}), "")])
+    defs = schema.get("$defs", {})
+    root = _definition(schema, defs)
+    root_name = _ref_name(schema)
+    path = frozenset() if root_name is None else frozenset({root_name})
+    return "\n".join([SCHEMA_INSTRUCTION_HEADER, *_lead_lines(root, ""), *_field_lines(root, defs, "", path)])
 
 
 class CutReplyError(ValueError):

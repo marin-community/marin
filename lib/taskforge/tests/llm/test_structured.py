@@ -175,3 +175,57 @@ def test_schema_instruction_renders_each_field_constraint():
         'severity (string or null, one of: "low", "high", optional)\n'
         "ticket (string, matching ^[A-Z]+-[0-9]+$, required): Ticket"
     )
+
+
+class Location(BaseModel):
+    """Where the file goes."""
+
+    path: str = Field(description="One of the task's output paths, spelled absolutely.")
+
+
+class OutputFile(BaseModel):
+    """A file the draft writes."""
+
+    location: Location
+    text: str = Field(max_length=500, description="The file's contents.")
+
+
+class Draft(BaseModel):
+    """A draft of the change."""
+
+    summary: str = Field(description="What the draft changes.")
+    files: list[OutputFile] = Field(min_length=1, description="The files to write.")
+
+
+def test_schema_instruction_renders_models_nested_two_levels():
+    assert schema_instruction(Draft) == (
+        "Reply with one JSON object with these fields:\n"
+        "A draft of the change.\n"
+        "summary (string, required): What the draft changes.\n"
+        "files (list of object, at least 1 item, required): The files to write.\n"
+        "  A file the draft writes.\n"
+        "  location (object, required)\n"
+        "    Where the file goes.\n"
+        "    path (string, required): One of the task's output paths, spelled absolutely.\n"
+        "  text (string, at most 500 characters, required): The file's contents."
+    )
+
+
+class Section(BaseModel):
+    """A section of the outline."""
+
+    heading: str
+    parent: "Section | None" = None
+    subsections: list["Section"] = Field(default_factory=list)
+
+
+def test_schema_instruction_renders_a_self_referential_model_once():
+    assert schema_instruction(Section) == (
+        "Reply with one JSON object with these fields:\n"
+        "A section of the outline.\n"
+        "heading (string, required): Heading\n"
+        "parent (object or null, optional)\n"
+        "  Section (same fields as above)\n"
+        "subsections (list of object, optional): Subsections\n"
+        "  Section (same fields as above)"
+    )
