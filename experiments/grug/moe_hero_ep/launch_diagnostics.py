@@ -105,7 +105,7 @@ def build_diagnostic_run(
     context_axis_size: int = 1,
     expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
     qk_mult: float | None = None,
-    global_qk_mult: float | None = None,
+    qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
     moe_implementation: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
@@ -170,7 +170,7 @@ def build_diagnostic_run(
             ("latent_dim", latent_dim),
             ("max_seq_len", max_seq_len),
             ("qk_mult", qk_mult),
-            ("global_qk_mult", global_qk_mult),
+            ("qk_mult_long_scale", qk_mult_long_scale),
             ("moe_implementation", moe_implementation),
         )
         if value is not None
@@ -546,10 +546,10 @@ def build_diagnostic_run(
     help="Query/key attention scale multiplier. Defaults to the hero configuration.",
 )
 @click.option(
-    "--global-qk-mult",
+    "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Query/key scale multiplier for the global (full-causal) layers only. Defaults to --qk-mult.",
+    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @build_options
@@ -583,7 +583,7 @@ def main(
     context_axis_size: int,
     expert_axis_size: int,
     qk_mult: float | None,
-    global_qk_mult: float | None,
+    qk_mult_long_scale: float | None,
     restore_from: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
@@ -602,7 +602,7 @@ def main(
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
         qk_mult=qk_mult,
-        global_qk_mult=global_qk_mult,
+        qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,
         moe_implementation=moe_implementation,
         master_param_mode=MasterParamMode(master_params),

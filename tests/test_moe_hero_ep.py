@@ -1117,29 +1117,31 @@ def _attention_output(cfg, x, is_global):
 
 
 @pytest.mark.parametrize("rope_fused", [False, True])
-def test_global_qk_mult_scales_global_layers_and_leaves_local_layers_alone(rope_fused):
+def test_qk_mult_long_scale_scales_global_layers_and_leaves_local_layers_alone(rope_fused):
     mesh = _explicit_mesh(1, 1, 1, 1, 1)
-    base = dataclasses.replace(_latent_config(), rope_fused=rope_fused)
-    split = dataclasses.replace(base, global_qk_mult=1.7)
-    # A global layer under the split config must see the temperature a uniform qk_mult=1.7 gives.
-    uniform_global = dataclasses.replace(base, qk_mult=1.7)
+    long_scale = 1.3
+    base = dataclasses.replace(_latent_config(), qk_mult=1.3, rope_fused=rope_fused)
+    scaled = dataclasses.replace(base, qk_mult_long_scale=long_scale)
+    # A global layer under the long scale must see the temperature a uniform qk_mult=1.3*s gives.
+    uniform = dataclasses.replace(base, qk_mult=1.3 * long_scale)
     x = jax.random.normal(jax.random.key(62), (2, 8, base.hidden_dim))
 
     with set_mesh(mesh):
         local_base = _attention_output(base, x, is_global=False)
-        local_split = _attention_output(split, x, is_global=False)
+        local_scaled = _attention_output(scaled, x, is_global=False)
         global_base = _attention_output(base, x, is_global=True)
-        global_split = _attention_output(split, x, is_global=True)
-        global_uniform = _attention_output(uniform_global, x, is_global=True)
+        global_scaled = _attention_output(scaled, x, is_global=True)
+        global_uniform = _attention_output(uniform, x, is_global=True)
 
-    # A selected scalar and a constant multiplier compile to different fusions, so the match is to
-    # float32 rounding rather than bitwise; the outputs are O(0.1).
-    np.testing.assert_allclose(local_split, local_base, rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(global_split, global_uniform, rtol=1e-6, atol=1e-6)
-    assert np.max(np.abs(np.asarray(global_split) - np.asarray(global_base))) > 1e-4
+    # Two sequential multiplies and one product multiplier round differently, and a selected
+    # scalar compiles to a different fusion, so the match is to float32 rounding rather than
+    # bitwise; the outputs are O(0.1).
+    np.testing.assert_allclose(local_scaled, local_base, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(global_scaled, global_uniform, rtol=1e-6, atol=1e-6)
+    assert np.max(np.abs(np.asarray(global_scaled) - np.asarray(global_base))) > 1e-4
 
 
-def test_global_qk_mult_equal_to_qk_mult_keeps_the_model_output():
+def test_qk_mult_long_scale_of_one_keeps_the_model_output():
     mesh = _explicit_mesh(1, 1, 1, 1, 1)
     base = dataclasses.replace(_latent_config(), num_layers=2, rope_fused=True)
     tokens = jax.random.randint(jax.random.key(63), (2, 8), 0, base.vocab_size)
@@ -1149,26 +1151,26 @@ def test_global_qk_mult_equal_to_qk_mult_keeps_the_model_output():
         return eqx.filter_jit(transformer.logits)(tokens)
 
     with set_mesh(mesh):
-        unset = logits(base)
-        equal = logits(dataclasses.replace(base, global_qk_mult=base.qk_mult))
-        split = logits(dataclasses.replace(base, global_qk_mult=1.7))
+        default = logits(base)
+        one = logits(dataclasses.replace(base, qk_mult_long_scale=1.0))
+        scaled = logits(dataclasses.replace(base, qk_mult_long_scale=1.3))
 
-    np.testing.assert_array_equal(equal, unset)
-    # Layer 1 is global (global_every=2), so a different global multiplier must reach the logits.
-    assert np.max(np.abs(np.asarray(split) - np.asarray(unset))) > 1e-4
+    np.testing.assert_array_equal(one, default)
+    # Layer 1 is global (global_every=2), so a long scale other than 1.0 must reach the logits.
+    assert np.max(np.abs(np.asarray(scaled) - np.asarray(default))) > 1e-4
 
 
-def test_global_qk_mult_hf_config_roundtrips_and_legacy_configs_use_qk_mult():
-    cfg = dataclasses.replace(_latent_config(), qk_mult=1.3, global_qk_mult=1.58)
+def test_qk_mult_long_scale_hf_config_roundtrips_and_legacy_configs_load_with_one():
+    cfg = dataclasses.replace(_latent_config(), qk_mult=1.3, qk_mult_long_scale=1.2154)
 
     serialized = cfg.to_hf_config(cfg.vocab_size).to_dict()
     roundtripped = model.GrugModelConfig.from_hf_config(model.GrugMoeHfConfig(**serialized))
-    serialized.pop("global_qk_mult")
+    serialized.pop("qk_mult_long_scale")
     legacy = model.GrugModelConfig.from_hf_config(model.GrugMoeHfConfig(**serialized))
 
-    assert roundtripped.resolved_global_qk_mult == 1.58
     assert roundtripped.qk_mult == 1.3
-    assert legacy.resolved_global_qk_mult == 1.3
+    assert roundtripped.qk_mult_long_scale == 1.2154
+    assert legacy.qk_mult_long_scale == 1.0
 
 
 def test_latent_moe_state_dict_contains_the_projection_state():

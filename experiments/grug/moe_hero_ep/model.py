@@ -263,9 +263,11 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
-    global_qk_mult: float | None = None
-    """Q scale on the global (full-causal, rope-free) layers; None uses ``qk_mult``. Local layers
-    always use ``qk_mult``. Read it through ``resolved_global_qk_mult``."""
+    qk_mult_long_scale: float = 1.0
+    """Extra multiplier on ``qk_mult`` applied only on the global layers (every ``global_every``-th
+    and the last layer, full causal). Sliding-window layers are unaffected. Intended for YaRN-style
+    attention-temperature scaling at context extension, where softmax logits sharpen with sequence
+    length but sliding-window layers stay bounded by their window."""
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -352,10 +354,6 @@ class GrugModelConfig:
         return self.hidden_dim // self.num_heads
 
     @property
-    def resolved_global_qk_mult(self) -> float:
-        return self.qk_mult if self.global_qk_mult is None else self.global_qk_mult
-
-    @property
     def stored_kv_heads(self) -> int:
         if self.local_kv_heads is None or self.global_kv_heads is None:
             return self.num_kv_heads
@@ -380,7 +378,6 @@ class GrugModelConfig:
     def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
         rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
         latent_dim = _hf_config_attr(hf_config, ("latent_dim",))
-        global_qk_mult = _hf_config_attr(hf_config, ("global_qk_mult",))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
             hidden_dim=int(_hf_config_attr(hf_config, ("hidden_dim", "hidden_size"), 2048)),
@@ -410,7 +407,7 @@ class GrugModelConfig:
             layer_norm_eps=float(_hf_config_attr(hf_config, ("layer_norm_eps", "rms_norm_eps"), 1e-5)),
             initializer_std=float(_hf_config_attr(hf_config, ("initializer_std", "initializer_range"), 0.02)),
             qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
-            global_qk_mult=None if global_qk_mult is None else float(global_qk_mult),
+            qk_mult_long_scale=float(_hf_config_attr(hf_config, ("qk_mult_long_scale",), 1.0)),
             rope=rope,
             rope_fused=bool(_hf_config_attr(hf_config, ("rope_fused",), False)),
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
@@ -446,7 +443,7 @@ class GrugModelConfig:
             # grug-specific (no public equivalent)
             "latent_dim": self.latent_dim,
             "qk_mult": self.qk_mult,
-            "global_qk_mult": self.global_qk_mult,
+            "qk_mult_long_scale": self.qk_mult_long_scale,
             "local_kv_heads": self.local_kv_heads,
             "global_kv_heads": self.global_kv_heads,
             "global_every": self.global_every,
@@ -510,18 +507,6 @@ def _apply_rotary_embedding_fused(
         return (first_factor * x + second_factor * flipped).astype(dtype)
 
     return _apply(q), _apply(k)
-
-
-def _qk_scale(cfg: GrugModelConfig, is_global: bool | jax.Array) -> float | jax.Array:
-    """Q multiplier for one layer: ``resolved_global_qk_mult`` on global layers, ``qk_mult`` on local."""
-    local, global_ = cfg.qk_mult, cfg.resolved_global_qk_mult
-    # Equal scales return the Python float, so a config without global_qk_mult lowers as before.
-    if local == global_:
-        return local
-    if isinstance(is_global, bool):
-        return global_ if is_global else local
-    # Inside the layer scan is_global is traced; select the scale without a per-layer lax.cond.
-    return jnp.where(is_global, global_, local)
 
 
 class ShortConv(eqx.Module):
@@ -681,7 +666,11 @@ class CausalSelfAttention(eqx.Module):
                 keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
-        q = q * _qk_scale(self.cfg, is_global)
+        q = q * self.cfg.qk_mult
+        # The long-layer scale is a second multiply, in the same order as june_tpu_67b_a2b and the
+        # vLLM GrugMoE backend. The default 1.0 skips it, so default configs lower as before.
+        if self.cfg.qk_mult_long_scale != 1.0:
+            q = q * jnp.where(is_global, self.cfg.qk_mult_long_scale, 1.0)
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
         # shard attends its own queries against the whole key sequence. The backends reject a
         # sharded K/V sequence, and the output returns to the residual stream's layout, which
