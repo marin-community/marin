@@ -24,7 +24,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 
 from experiments.datasets.structure_closure import ClosureCohort, structure_closure_dataset
-from experiments.post_training.structure_closure.recipe import ROLE_PLAN, training_config
+from experiments.post_training.structure_closure.recipe import ROLE_PLAN, ClosureSupervision, training_config
 
 MODEL_REPOSITORY = "open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO"
 MODEL_REVISION = "d761ea0a94500c2aa24aa4cd71b5a149d962e5c8"
@@ -36,7 +36,13 @@ CLUSTER = "cw-us-east-02a"
 
 
 def build_run(
-    *, cohort: ClosureCohort, parity_uri: str, parity_version: str, max_steps: int, learning_rate: float
+    *,
+    cohort: ClosureCohort,
+    parity_uri: str,
+    parity_version: str,
+    max_steps: int,
+    learning_rate: float,
+    supervision: ClosureSupervision,
 ) -> ArtifactStep:
     """Bind immutable inputs and an explicit 40-H100 role plan to the trainer."""
     name = user_owned_name("models/structure-closure")
@@ -54,7 +60,10 @@ def build_run(
             name=name,
             version=resolve_version(name, None),
             config_yaml=yaml.safe_dump(
-                training_config(max_steps=max_steps, eval_batch_size=64, learning_rate=learning_rate), sort_keys=False
+                training_config(
+                    max_steps=max_steps, eval_batch_size=64, learning_rate=learning_rate, supervision=supervision
+                ),
+                sort_keys=False,
             ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
@@ -94,14 +103,23 @@ def build_run(
 @click.option("--parity-version", required=True)
 @click.option("--max-steps", type=click.IntRange(min=1), default=2, show_default=True)
 @click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), default=4e-6, show_default=True)
+@click.option(
+    "--supervision",
+    type=click.Choice([mode.value for mode in ClosureSupervision]),
+    default=ClosureSupervision.CLOSURE.value,
+    show_default=True,
+)
 @rl_build_options
-def main(cohort: str, parity_uri: str, parity_version: str, max_steps: int, learning_rate: float) -> ArtifactStep:
+def main(
+    cohort: str, parity_uri: str, parity_version: str, max_steps: int, learning_rate: float, supervision: str
+) -> ArtifactStep:
     return build_run(
         cohort=ClosureCohort(cohort),
         parity_uri=parity_uri,
         parity_version=parity_version,
         max_steps=max_steps,
         learning_rate=learning_rate,
+        supervision=ClosureSupervision(supervision),
     )
 
 

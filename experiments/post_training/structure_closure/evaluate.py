@@ -26,14 +26,14 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.structure_closure.launch import CLUSTER, MODEL_REPOSITORY, MODEL_REVISION, MODEL_URI
-from experiments.post_training.structure_closure.recipe import ROLE_PLAN, training_config
+from experiments.post_training.structure_closure.recipe import ROLE_PLAN, ClosureSupervision, training_config
 
 EVAL_ROLE_PLAN = replace(ROLE_PLAN, colocate_all=True, policy_num_nodes=1)
 DATA_URI = "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-explicit-tasks-v3"
 
 
 def evaluation_config() -> dict:
-    config = training_config(max_steps=1, eval_batch_size=64, learning_rate=4e-6)
+    config = training_config(max_steps=1, eval_batch_size=64, learning_rate=4e-6, supervision=ClosureSupervision.CLOSURE)
     config["entrypoint"] = "generate"
     config["trainer"]["hf_save_interval"] = -1
     # No weights are synchronized in evaluation; expert-block requires a learner layout.

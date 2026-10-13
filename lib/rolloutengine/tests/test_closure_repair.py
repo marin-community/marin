@@ -5,7 +5,12 @@ import json
 
 import pytest
 
-from rolloutengine.closure_repair import ClosureTargetKind, verified_closure_candidates, verified_closure_target
+from rolloutengine.closure_repair import (
+    ClosureTargetKind,
+    verified_closure_candidates,
+    verified_closure_target,
+    verified_continuation_boundary,
+)
 from rolloutengine.closure_scoring import ClosureFormat, closure_state, score_closure
 from rolloutengine.structure_closure import json_closure_state
 
@@ -16,6 +21,85 @@ def codepoints(text: str) -> list[int]:
 
 def text(tokens: list[int]) -> str:
     return "".join(map(chr, tokens))
+
+
+@pytest.mark.parametrize(
+    "structure_format,prefix,expected,closer,continuation",
+    [
+        (ClosureFormat.JSON, '["unfin', '["unfinished"]', '"]', "ished"),
+        (ClosureFormat.JSON, '"unfin', '"unfinished"', '"', "ished"),
+        (
+            ClosureFormat.TOOL,
+            '<tool_call>{"x":"unfin',
+            '<tool_call>{"x":"unfinished"}</tool_call>',
+            '"}</tool_call>',
+            "ished",
+        ),
+        (
+            ClosureFormat.REASONING,
+            "<|start_think|>first",
+            "<|start_think|>first second<|end_think|>",
+            "<|end_think|>",
+            " second",
+        ),
+        (ClosureFormat.CODE_FENCE, "```text\nfirst\n", "```text\nfirst\nsecond\n```", "```", "second\n"),
+    ],
+)
+def test_premature_closure_selects_only_reference_extending_recorded_tokens(
+    structure_format, prefix, expected, closer, continuation
+):
+    pieces = {1000000: closer, 1000001: continuation, 1000002: "unrelated"}
+
+    def decode(tokens):
+        return "".join(pieces[token] if token in pieces else chr(token) for token in tokens)
+
+    prompt = codepoints("context\n" + prefix)
+    boundary = verified_continuation_boundary(
+        prompt,
+        [1000000],
+        [list(pieces)],
+        structure_prefix=prefix,
+        expected=expected,
+        structure_format=structure_format,
+        decode=decode,
+    )
+    assert boundary is not None
+    assert boundary.response_position == 0
+    assert boundary.candidate_token_ids == (1000001,)
+    assert decode([*prompt, 1000001]) == "context\n" + prefix + continuation
+
+
+@pytest.mark.parametrize("response", ['changed"]', 'ished"]', "still open"])
+def test_continuation_target_excludes_content_drift_correct_completion_and_unclosed_response(response):
+    assert (
+        verified_continuation_boundary(
+            codepoints('["unfin'),
+            codepoints(response),
+            [codepoints("ix")] * len(response),
+            structure_prefix='["unfin',
+            expected='["unfinished"]',
+            structure_format=ClosureFormat.JSON,
+            decode=text,
+        )
+        is None
+    )
+
+
+def test_continuation_target_does_not_move_back_before_already_diverged_closing_token():
+    # Separate quote and bracket tokens have already lost the exact reference
+    # prefix by the first outer-completion token.
+    assert (
+        verified_continuation_boundary(
+            codepoints('["unfin'),
+            codepoints('"]'),
+            [codepoints("ix")] * 2,
+            structure_prefix='["unfin',
+            expected='["unfinished"]',
+            structure_format=ClosureFormat.JSON,
+            decode=text,
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(

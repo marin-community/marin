@@ -4,6 +4,7 @@
 """Joint closure-loss recipe for the protocol-FTPO initializer."""
 
 from copy import deepcopy
+from enum import StrEnum
 
 from marin.rl.skyrl import SkyRLRolePlan
 
@@ -23,7 +24,14 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def training_config(*, max_steps: int, eval_batch_size: int, learning_rate: float) -> dict:
+class ClosureSupervision(StrEnum):
+    CLOSURE = "verified_closure"
+    CLOSURE_AND_CONTINUATION = "verified_closure_and_continuation"
+
+
+def training_config(
+    *, max_steps: int, eval_batch_size: int, learning_rate: float, supervision: ClosureSupervision
+) -> dict:
     """Render the full-model smoke recipe; artifact inputs supply model and data paths."""
     plan = ROLE_PLAN
     geometry = {
@@ -85,7 +93,7 @@ def training_config(*, max_steps: int, eval_batch_size: int, learning_rate: floa
                 "off_policy_correction": "none",
                 "dynamic_sampling": {"type": None},
                 "ftpo": {
-                    "boundary": "verified_closure",
+                    "boundary": supervision.value,
                     "margin": 2.0,
                     "lambda_mse": 0.4,
                     "lambda_mse_target": 0.05,

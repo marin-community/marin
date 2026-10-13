@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from rolloutengine.closure_scoring import ClosureFormat, ContinuationOutcome, closure_state, continuation_outcome
 from rolloutengine.structure_closure import ClosureState, PrefixStatus
 
 
@@ -20,6 +21,68 @@ class ClosureTarget:
     kind: ClosureTargetKind
     response_position: int
     repair_token_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ContinuationBoundary:
+    response_position: int
+    candidate_token_ids: tuple[int, ...]
+
+
+def verified_continuation_boundary(
+    prompt_ids: Sequence[int],
+    response_ids: Sequence[int],
+    candidates: Sequence[Sequence[int]],
+    *,
+    structure_prefix: str,
+    expected: str,
+    structure_format: ClosureFormat,
+    decode: Callable[[list[int]], str],
+) -> ContinuationBoundary | None:
+    """Select reference continuations at a verified premature closing token.
+
+    Only closing-only truncations of the supplied reference qualify. Content
+    drift and unstable token boundaries supply no target. Alternatives come
+    from recorded candidates and must extend the exact reference in context.
+    The returned boundary supervises one sampled token, never a repair suffix.
+    """
+    prompt, response = list(prompt_ids), list(response_ids)
+    prompt_text = decode(prompt)
+    if not prompt_text.endswith(structure_prefix):
+        raise ValueError("Structure prefix does not match the exact prompt tokens")
+    generated = decode(prompt + response)
+    if not generated.startswith(prompt_text):
+        raise ValueError("Decoded response rewrites its conditioning prefix")
+    structure = structure_prefix + generated[len(prompt_text) :]
+    if continuation_outcome(structure, expected, structure_format) != ContinuationOutcome.REFERENCE_PREFIX_CLOSED_EARLY:
+        return None
+    before = prompt_text
+    for position, rejected in enumerate(response):
+        after = decode(prompt + response[: position + 1])
+        if before.endswith("\ufffd") or after.endswith("\ufffd"):
+            before = after
+            continue
+        if not after.startswith(before):
+            raise ValueError("Decoded response rewrites its conditioning prefix")
+        completed = closure_state(structure_prefix + after[len(prompt_text) :], structure_format)
+        if completed.completion_offset is None:
+            before = after
+            continue
+        prefix = structure_prefix + before[len(prompt_text) :]
+        if not expected.startswith(prefix):
+            return None
+        chosen = []
+        history = prompt + response[:position]
+        for candidate in dict.fromkeys(candidates[position]):
+            if candidate < 0 or candidate == rejected:
+                continue
+            value = decode([*history, candidate])
+            if not value.startswith(before) or len(value) <= len(before) or value.endswith("\ufffd"):
+                continue
+            if expected.startswith(structure_prefix + value[len(prompt_text) :]):
+                chosen.append(candidate)
+        return ContinuationBoundary(position, tuple(chosen))
+    return None
 
 
 def _verified_closing_suffix(
