@@ -1831,6 +1831,9 @@ def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
     jax.config.update("jax_enable_compilation_cache", False)
     jax.config.update("jax_mock_gpu_topology", topology)
     flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}", "--xla_gpu_shard_autotuning=false"]
+    if config.trainer.hlo_dump_path is not None:
+        # XLA's per-module memory report (largest live buffers at the peak) for the uploaded summary below.
+        flags += [f"--xla_dump_to={SEED_XLA_DUMP_DIR}", "--xla_dump_hlo_module_re=train_step", "--xla_dump_hlo_as_text"]
     os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
     logger.info("Seeding the XLA autotune cache under mock topology %s", topology)
     trainer = config.trainer.trainer
@@ -1873,7 +1876,18 @@ def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
         compiled = _flat_train_step(train_step_fn, state_treedef).lower(state_leaves, batch).compile()
         logger.info("Seed compile of the train step took %.0f s", time.perf_counter() - compile_start)
         _log_memory_analysis(compiled)
+    if config.trainer.hlo_dump_path is not None:
+        _upload_memory_reports(os.path.dirname(config.trainer.hlo_dump_path))
     _publish_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
+
+
+def _upload_memory_reports(directory: str) -> None:
+    """Copy the seed compile's XLA memory-usage reports to ``directory`` (the HLO dump's directory)."""
+    for local in glob.glob(os.path.join(SEED_XLA_DUMP_DIR, "*memory-usage-report*")):
+        remote = prefix_join(directory, os.path.basename(local))
+        with open(local, "rb") as src, fsspec.open(remote, "wb") as dst:
+            dst.write(src.read())
+        logger.info("Uploaded the XLA memory report to %s", remote)
 
 
 def _log_memory_analysis(compiled: jax.stages.Compiled) -> None:
@@ -1949,6 +1963,7 @@ FIRST_STEP_HANG_EXIT_CODE = 75
 # Seconds the other processes wait for process 0 to compile and publish the shared train-step executable.
 SHARED_EXECUTABLE_TIMEOUT = 3600
 # Distributed key-value key under which process 0 publishes its lowered train step's key.
+SEED_XLA_DUMP_DIR = "/tmp/xla_seed_dump"
 SHARED_EXECUTABLE_KEY = "grug/shared_train_step_key"
 
 
