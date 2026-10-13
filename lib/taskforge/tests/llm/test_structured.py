@@ -3,9 +3,11 @@
 
 import asyncio
 from dataclasses import replace
+from enum import StrEnum
+from typing import Annotated, Literal
 
 import pytest
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from taskforge.llm.client import StructuredResult
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
@@ -144,4 +146,32 @@ def test_schema_instruction_renders_nested_models_and_lists():
         "  name (string, required): What to buy.\n"
         "  grams (number or null, optional): Grams\n"
         "steps (list of string, required): Steps"
+    )
+
+
+class Severity(StrEnum):
+    LOW = "low"
+    HIGH = "high"
+
+
+class Review(BaseModel):
+    notes: str = Field(max_length=1000, description="Free-form notes.")
+    score: int = Field(ge=1, le=5, description="The overall score.")
+    confidence: float = Field(gt=0, lt=1)
+    tags: list[Annotated[str, StringConstraints(max_length=20)]] = Field(min_length=1, max_length=5)
+    verdict: Literal["accept", "reject"]
+    severity: Severity | None = None
+    ticket: str = Field(pattern=r"^[A-Z]+-[0-9]+$")
+
+
+def test_schema_instruction_renders_each_field_constraint():
+    assert schema_instruction(Review) == (
+        "Reply with one JSON object with these fields:\n"
+        "notes (string, at most 1000 characters, required): Free-form notes.\n"
+        "score (integer, at least 1, at most 5, required): The overall score.\n"
+        "confidence (number, greater than 0, less than 1, required): Confidence\n"
+        "tags (list of string, at least 1 item, at most 5 items, each at most 20 characters, required): Tags\n"
+        'verdict (string, one of: "accept", "reject", required): Verdict\n'
+        'severity (string or null, one of: "low", "high", optional)\n'
+        "ticket (string, matching ^[A-Z]+-[0-9]+$, required): Ticket"
     )

@@ -6,8 +6,10 @@
 ``complete_structured`` sends the request with ``response_format(output_type)``, the pydantic
 model's JSON schema, and validates the reply with the pydantic model and its validators. The chat
 template renders nothing from ``response_format``, so the loop appends
-``schema_instruction(output_type)`` as the final user turn of every request it sends. The grammar
-enforces the reply's shape, and the appended turn tells the model what each field holds.
+``schema_instruction(output_type)`` as the final user turn of every request it sends. The server's
+grammar enforces the schema, including bounds such as ``maxLength``. The appended turn states each
+field's type, bounds and meaning in words, so the model can keep each value within its bounds as it
+drafts. When a draft runs past ``maxLength``, the grammar closes the string mid-word.
 
 When the output limit cuts a reply off (``FinishReason.LENGTH``), the call fails at once with the
 completions so far. For any other invalid reply the loop sends up to ``max_repairs`` repair requests,
@@ -17,6 +19,7 @@ The loop calls its client through ``SchemaCompletions``, a protocol for sending 
 constrained to a schema, so any transport can serve it.
 """
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
@@ -29,6 +32,19 @@ ERROR_TEXT_LIMIT = 4000
 
 SCHEMA_INSTRUCTION_HEADER = "Reply with one JSON object with these fields:"
 NESTED_FIELD_INDENT = "  "
+
+COUNT_BOUNDS = {
+    "minLength": ("at least", "character"),
+    "maxLength": ("at most", "character"),
+    "minItems": ("at least", "item"),
+    "maxItems": ("at most", "item"),
+}
+NUMBER_BOUNDS = {
+    "minimum": "at least",
+    "maximum": "at most",
+    "exclusiveMinimum": "greater than",
+    "exclusiveMaximum": "less than",
+}
 
 REPAIR_PROMPT = (
     "Your previous output, shown above, failed validation:\n{error}\nReply with one complete, corrected JSON object."
@@ -70,11 +86,43 @@ def _type_name(schema: Mapping[str, Any], defs: Mapping[str, Any]) -> str:
     schema = _definition(schema, defs)
     if "anyOf" in schema:
         return " or ".join(_type_name(member, defs) for member in schema["anyOf"])
-    if "enum" in schema:
-        return "one of " + ", ".join(repr(value) for value in schema["enum"])
     if schema.get("type") == "array":
         return f"list of {_type_name(schema.get('items', {}), defs)}"
     return schema.get("type", "any")
+
+
+def _keyword_text(schema: Mapping[str, Any]) -> list[str]:
+    """Put a schema's own value constraints into words, leaving its ``anyOf`` members and items aside."""
+    words = []
+    if "const" in schema:
+        words.append(f"exactly {json.dumps(schema['const'])}")
+    if "enum" in schema:
+        words.append("one of: " + ", ".join(json.dumps(value) for value in schema["enum"]))
+    for keyword, (relation, unit) in COUNT_BOUNDS.items():
+        if keyword in schema:
+            count = schema[keyword]
+            words.append(f"{relation} {count} {unit}" + ("" if count == 1 else "s"))
+    for keyword, relation in NUMBER_BOUNDS.items():
+        if keyword in schema:
+            words.append(f"{relation} {schema[keyword]}")
+    if "pattern" in schema:
+        words.append(f"matching {schema['pattern']}")
+    return words
+
+
+def _constraints(schema: Mapping[str, Any], defs: Mapping[str, Any]) -> list[str]:
+    """Describe a field's constraints, gathering them from its ``anyOf`` members and its list items too.
+
+    Constraints on list items get an ``each`` prefix, as in ``each at most 200 characters``.
+    """
+    schema = _definition(schema, defs)
+    words = []
+    for member in (schema, *schema.get("anyOf", ())):
+        member = _definition(member, defs)
+        words += _keyword_text(member)
+        if "items" in member:
+            words += [f"each {text}" for text in _keyword_text(_definition(member["items"], defs))]
+    return words
 
 
 def _nested_model(schema: Mapping[str, Any], defs: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -96,7 +144,8 @@ def _field_lines(model: Mapping[str, Any], defs: Mapping[str, Any], indent: str)
     for name, field in model["properties"].items():
         status = "required" if name in required else "optional"
         text = field.get("description") or field.get("title")
-        lines.append(f"{indent}{name} ({_type_name(field, defs)}, {status})" + (f": {text}" if text else ""))
+        terms = ", ".join([_type_name(field, defs), *_constraints(field, defs), status])
+        lines.append(f"{indent}{name} ({terms})" + (f": {text}" if text else ""))
         nested = _nested_model(field, defs)
         if nested is not None and not indent:
             lines += _field_lines(nested, defs, NESTED_FIELD_INDENT)
@@ -106,8 +155,18 @@ def _field_lines(model: Mapping[str, Any], defs: Mapping[str, Any], indent: str)
 def schema_instruction(output_type: type[BaseModel]) -> str:
     """Render ``output_type``'s fields as the plain-text instruction for the final user turn.
 
-    The text opens with ``SCHEMA_INSTRUCTION_HEADER`` and the model's docstring, then gives a line per
-    field as ``<name> (<type>, required|optional): <description>``. A field without a description falls
+    The text opens with ``SCHEMA_INSTRUCTION_HEADER`` and the model's docstring. Each field then gets a
+    line in the form ``<name> (<type>, <constraints>, required|optional): <description>``, for example
+    ``notes (string, at most 1000 characters, required): Free-form notes.`` The constraints come from
+    the field's JSON schema keywords, put into words:
+
+    - ``minLength``/``maxLength`` and ``minItems``/``maxItems`` as counts of characters or items,
+    - ``minimum``/``maximum`` and their exclusive forms as numeric bounds,
+    - ``enum`` and ``const`` as the allowed JSON values,
+    - ``pattern`` as the regex to match.
+
+    For a list, the constraints on its items follow with an ``each`` prefix. A field without
+    constraints renders as ``<name> (<type>, required|optional)``. A field without a description falls
     back to its title. Fields of a nested model go indented below its field, one level deep.
     """
     schema = output_type.model_json_schema()
