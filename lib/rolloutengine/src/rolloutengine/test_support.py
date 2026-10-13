@@ -19,7 +19,7 @@ from taskcompendium.models import (
 from verifyit.spec import NumericSpec
 
 from rolloutengine.contracts import ModelRequest, ModelTurn
-from rolloutengine.engine import ShellboxRolloutEngine
+from rolloutengine.engine import RolloutEngine
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
 
 TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
@@ -90,5 +90,5 @@ def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) ->
     )
 
 
-def engine(model, factories=None, *, sessions=None) -> ShellboxRolloutEngine:
-    return ShellboxRolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
+def engine(model, factories=None, *, sessions=None) -> RolloutEngine:
+    return RolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
