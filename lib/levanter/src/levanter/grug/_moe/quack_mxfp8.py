@@ -33,7 +33,7 @@ from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
-from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows, quantize_rows_cols
+from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows
 from levanter.grug.mxfp8 import MX_BLOCK, mx_dequantize_rows, mx_quantize_cols, mx_quantize_rows, mx_unpack_rows
 from levanter.grug._moe.quack_moe_cute import _ACC, _QUACK_USE_PDL, _max_active_clusters, _mint_epilogue_gemm
 
@@ -476,9 +476,10 @@ def _mx_linear_bwd(out_sharding, res, g):
 
     def local(xl, gl, wv, we):
         x2, g2 = xl.reshape(-1, k), gl.reshape(-1, n)
-        g_rows, g_cols = quantize_rows_cols(g2)  # one pass over g for both of its GEMMs
-        dx = mxfp8_matmul_dgrad(g_rows, wv, we).reshape(xl.shape)
-        dw = _reduce_partial_to_spec(mxfp8_matmul_wgrad(x2, g_cols), dw_spec, batch_axes)
+        # Separate passes: quantize_rows_cols reads g once (1.22x) but keeping both copies live pushes the GB200
+        # recipe over the NCCL memory edge (lc1-gb200-profrc).
+        dx = mxfp8_matmul_dgrad(quantize_rows(g2), wv, we).reshape(xl.shape)
+        dw = _reduce_partial_to_spec(mxfp8_matmul_wgrad(x2, quantize_cols(g2)), dw_spec, batch_axes)
         return dx, dw
 
     replicated = P(None, None)
