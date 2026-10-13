@@ -28,6 +28,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 from rigging.filesystem.atomic import atomic_rename
+from taskcompendium import models as task_models
+from taskcompendium.runtime import resources
 
 from taskforge.llm.agent import shell_tool
 from taskforge.llm.client import Completion, ModelClient
@@ -103,6 +105,10 @@ A task whose solution needs real arithmetic or data processing runs on \
 tables or file contents, names every literal the grader checks, never describes how grading works, \
 and never contains an answer the grader checks. RolloutEngine adds the shell tool and the \
 submission instruction itself.
+- A `TaskResource` holds a `path` and a `source`, an `InlineFile` whose `content_base64` holds the \
+bytes. Read the bytes with `resource_bytes(resource)`, or list files as text with `files_text`. \
+`EnvironmentRequirements` names a task image `docker_image`. The SDK reference below lists every \
+field of both types; use no other attribute.
 - Use model calls (`structured`, `structured_until`, `agent`) for content you cannot compute; compute \
 exact values in Python inside steps. When the host fails, the SDK raises \
 `BuildInfrastructureFailure`; let it propagate.
@@ -186,6 +192,8 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
         ("Sources", "ResearchFinding", "WebCall", "Fixtures", "Grader", "GradedCandidate", "Instructions"),
     ),
     ("Sandbox effects", sandbox_effects, ("machine", "try_grader", "publish_image")),
+    ("Task types", task_models, ("TaskResource", "InlineFile", "EnvironmentRequirements")),
+    ("Resource contents", resources, ("resource_bytes",)),
     (
         "SDK functions, schemas and constants",
         sdk,
