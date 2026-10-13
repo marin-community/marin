@@ -289,7 +289,7 @@ def test_mixed_failure_infrastructure_trial_reexecutes_without_erasing_definite_
     [
         ({"backend": "qemu", "bundle_path": "/tmp/changeable"}, False),
         ({"network": "allow"}, False),
-        ({"execution": "remote_judge"}, False),
+        ({"judge_base_url": "http://judge.invalid/v1"}, False),
         ({"backend": "qemu", "worker_image": "image@sha256:" + "1" * 64}, True),
         (FixtureGradingMachines().identity(), True),
     ],

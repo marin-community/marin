@@ -39,6 +39,7 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (
     PLACEHOLDER_INPUTS,
+    RECIPE_VERSIONS,
     SKYWORK,
     SWE_GYM,
     pipeline_name,
@@ -48,7 +49,9 @@ from experiments.post_training.task_curation.datasets.nemotron_ultra.components 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
     CODE_CONTROLS,
     DAPO,
+    INSTRUCTION_CONTROLS,
     MCQA_CONTROLS,
+    MULTICHALLENGE_CONTROLS,
     RDKIT_CONTROLS,
     REASONING_GYM_CONTROLS,
 )
@@ -478,12 +481,12 @@ def test_competitive_code_rejects_constructive_problem_without_its_special_judge
 
 def test_reasoning_gym_extracts_a_reference_from_an_explicit_markdown_answer_section():
     response = "Reasoning.\n\n## Answer\n\n**The maximum area is 9.**\n\n---\n\nExtra algorithm notes."
-    assert markdown_answer(response) == "9"
+    assert markdown_answer(response) == "The maximum area is 9."
 
 
 def test_reasoning_gym_does_not_extract_a_negated_reference():
     response = "Reasoning.\n\n## Answer\n\nThe answer is not 9."
-    assert markdown_answer(response) == "not 9"
+    assert markdown_answer(response) == "The answer is not 9."
 
 
 def test_reasoning_gym_does_not_replace_a_contradictory_answer_with_the_hidden_target():
@@ -507,6 +510,18 @@ def test_structured_output_repairs_repeated_required_fields():
     assert [(change.field, change.reason) for change in result.changes] == [
         ("schema_str", "Remove repeated names from JSON Schema required lists")
     ]
+
+
+def test_structured_output_does_not_rewrite_schema_data():
+    path = "ultra_sft_step3200_structured_outputs_v2"
+    schema = {"const": {"required": ["x", "x"]}}
+    result = convert_row(
+        RECIPES[pipeline_name("rlvr2", path)],
+        {**COMPONENT_ROWS[path], "schema_str": json.dumps(schema)},
+    )
+    assert isinstance(result, NormalizedTask)
+    assert json.loads(grader_config(result.task)["contract"]["schema_str"]) == schema
+    assert result.changes == ()
 
 
 def task_for(path: str, staged, **changes) -> TaskSpec:
@@ -628,6 +643,31 @@ def test_reasoning_gym_golden_is_the_rows_answer(staged):
     assert REASONING_GYM_CONTROLS.golden(unanswered) is None
 
 
+def test_lean_grader_uses_the_local_toolchain_image(staged):
+    path = "ultra_sft_step3200_lean"
+    recipe = RECIPES[pipeline_name("rlvr2", path)]
+    assert recipe.grader is not None and recipe.grader.dockerfile is not None
+    assert recipe.grader.dockerfile.name == "lean.Dockerfile"
+    task = task_for(path, staged)
+    assert "sandbox_host" not in grader_config(task)
+    assert "local_lean_sandbox.py" in {resource.path for resource in task.resources.verifier}
+
+
+@pytest.mark.parametrize("controls", [INSTRUCTION_CONTROLS, MULTICHALLENGE_CONTROLS])
+def test_semantic_empty_negative_is_an_explicit_submission(staged, controls):
+    assert controls.negative is not None
+    task = task_for("ultra_sft_step3200_instruction_following", staged)
+    assert reply_text(controls.negative(task)) == ""
+
+
+def test_recipe_versions_bump_only_calibrated_or_deterministic_repairs():
+    next_action = "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent"
+    assert RECIPE_VERSIONS[f"{next_action}/SWE-Gym/SWE-Gym"] == "6"
+    assert RECIPE_VERSIONS[f"{next_action}/nebius/SWE-rebench-V2"] == "6"
+    assert "ultra_sft_step3200_instruction_following" not in RECIPE_VERSIONS
+    assert "ultra_sft_step3200_multichallenge_len40k" not in RECIPE_VERSIONS
+
+
 def text_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=reply)))
     result = grade_task(task, GradingAttempt(trace))
@@ -667,29 +707,79 @@ def test_abstention_idk_gets_source_partial_credit_after_reasoning_is_removed(st
     assert (result.status, result.reward) == ("scored", 0.5)
 
 
+@pytest.mark.parametrize(
+    ("path", "answer_type", "rubric", "context", "resources", "tags"),
+    [
+        (
+            "ultra_sft_step3200_multichallenge_len40k",
+            AnswerType.TEXT,
+            "checklist",
+            "multichallenge_context.json",
+            ["multichallenge_context.json"],
+            ("judge", "multichallenge"),
+        ),
+        (
+            "ultra_sft_step3200_instruction_following",
+            AnswerType.TEXT,
+            "checklist",
+            "instruction_context.json",
+            ["instruction_context.json"],
+            ("judge", "instruction-following", "multi-turn"),
+        ),
+        (
+            "ultra_sft_step3200_jailbreak",
+            AnswerType.TEXT,
+            "labels",
+            "",
+            [],
+            ("judge", "jailbreak", "refusal_with_explanation"),
+        ),
+        (
+            "language_mixing_hs3_ultra_genrm_fmt",
+            AnswerType.TEXT,
+            "labels",
+            "",
+            [],
+            ("judge", "preference", "genrm-absolute"),
+        ),
+        *(
+            (path, AnswerType.NATIVE_ACTION, "labels", "", [], ("judge", "tool-use"))
+            for path in (
+                "ultra_sft_step3200_tau_pivot",
+                "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+                "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
+            )
+        ),
+    ],
+)
+def test_semantic_components_package_their_judge_contract(staged, path, answer_type, rubric, context, resources, tags):
+    task = task_for(path, staged)
+    assert task.answer_type == answer_type
+    assert isinstance(task.grader, VerifyitGrader)
+    spec = verifyit_spec(task.grader)
+    assert isinstance(spec, JudgeSpec)
+    assert (spec.rubric, spec.context) == (rubric, context)
+    assert [resource.path for resource in task.resources.verifier] == resources
+    assert task.tags == tags
+    assert "expected_action" not in task.model_dump_json()
+
+
 def test_multichallenge_uses_every_source_criterion_and_full_context(staged):
     task = task_for("ultra_sft_step3200_multichallenge_len40k", staged)
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
-    assert spec.rubric == "checklist"
     assert len(spec.criteria) == 2
     assert "is YES" in spec.criteria[0]
     assert "is NO" in spec.criteria[1]
-    assert spec.context == "multichallenge_context.json"
-    assert [resource.path for resource in task.resources.verifier] == ["multichallenge_context.json"]
-    assert task.tags == ("judge", "multichallenge")
 
 
 def test_instruction_following_combines_formal_and_multiturn_semantic_checks(staged):
     task = task_for("ultra_sft_step3200_instruction_following", staged)
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
-    assert spec.rubric == "checklist"
     assert spec.constraints[0].name == "punctuation:no_comma"
     assert "latest unresolved user request" in spec.criteria[0]
-    assert spec.context == "instruction_context.json"
     assert spec.strip_candidate_reasoning_blocks
-    assert task.tags == ("judge", "instruction-following", "multi-turn")
 
 
 def test_instruction_following_accepts_source_null_constraint_parameters(staged):
@@ -708,8 +798,10 @@ def test_instruction_following_semantically_grades_approximate_language_check(st
     )
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
-    with pytest.raises(RuntimeError, match="remote judge grading"):
-        grade_judge_candidate(spec, "Please respond promptly. Thank you for your assistance.", runtime=None)
+    assert spec.constraints == ()
+    assert any(
+        "language:response_language" in criterion and '"language": "en"' in criterion for criterion in spec.criteria
+    )
 
 
 def test_jailbreak_uses_policy_specific_native_judge(staged):
@@ -718,7 +810,6 @@ def test_jailbreak_uses_policy_specific_native_judge(staged):
     assert isinstance(spec, JudgeSpec)
     assert "offer a safe or constructive redirection" in spec.references[0]
     assert spec.strip_candidate_reasoning_blocks
-    assert task.tags == ("judge", "jailbreak", "refusal_with_explanation")
 
 
 def test_language_mixing_uses_absolute_source_scale_without_a_fake_cohort(staged):
@@ -728,7 +819,6 @@ def test_language_mixing_uses_absolute_source_scale_without_a_fake_cohort(staged
     assert isinstance(spec, JudgeSpec)
     assert spec.label_scores == {"[[1]]": 0.0, "[[2]]": 0.25, "[[3]]": 0.5, "[[4]]": 0.75, "[[5]]": 1.0}
     assert spec.references == ("Score 5 only when the response answers in Polish without introducing another language.",)
-    assert task.tags == ("judge", "preference", "genrm-absolute")
 
 
 def test_language_mixing_removes_empty_interior_user_turns(staged):
@@ -749,20 +839,3 @@ def test_language_mixing_removes_empty_interior_user_turns(staged):
     assert isinstance(result, NormalizedTask)
     assert all(event.content for event in result.task.context.events if isinstance(event, TextMessage))
     assert [(change.field, change.replacement) for change in result.changes] == [("input[2]", "Removed")]
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "ultra_sft_step3200_tau_pivot",
-        "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-    ],
-)
-def test_pivot_components_grade_typed_next_actions_from_public_evidence(staged, path):
-    task = task_for(path, staged)
-    assert task.answer_type == AnswerType.NATIVE_ACTION
-    assert task.answer_format == FinalAction(max_calls=1)
-    assert isinstance(task.grader, VerifyitGrader)
-    assert isinstance(verifyit_spec(task.grader), JudgeSpec)
-    assert "expected_action" not in task.model_dump_json()

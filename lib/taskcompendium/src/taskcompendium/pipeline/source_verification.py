@@ -33,7 +33,6 @@ from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    ControlExecution,
     GraderReadiness,
     VerificationReport,
 )
@@ -152,10 +151,7 @@ def verification_identity(suite: CheckSuite, policy: SourceVerificationPolicy) -
 
 def _reusable_runtime(suite: CheckSuite) -> bool:
     # Online graders do not declare an immutable remote model deployment.
-    if (
-        suite.parameters.get("network") == "allow"
-        or suite.parameters.get("execution") == ControlExecution.REMOTE_JUDGE.value
-    ):
+    if suite.parameters.get("network") == "allow" or "judge_base_url" in suite.parameters:
         return False
     # A local QEMU path can change without changing its name. The immutable
     # worker image identifies the packaged kernel, rootfs and QEMU runtime.

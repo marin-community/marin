@@ -94,7 +94,7 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
    access denied. Without controls the stage is skipped and sandbox graders
    stay unverified.
 
-   A source with remote-judge controls grades its known-correct control through the campaign's
+   A judge-graded source runs its declared positive or negative control through the campaign's
    explicit judge endpoint, outside the grader sandbox. Endpoint credentials are runtime-only and
    are not recorded in task specifications, artifact identities or reports. Judge sources without
    declared controls remain unverified.

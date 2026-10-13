@@ -27,7 +27,6 @@ from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import (
-    ControlExecution,
     Controls,
     FilterPolicy,
     ImportFailureKind,
@@ -71,7 +70,7 @@ def judge_negative_reply(task: TaskSpec):
     return answer_reply(task, "A deliberately incorrect answer.")
 
 
-JUDGE_CONTROLS = Controls(negative=judge_negative_reply, execution=ControlExecution.REMOTE_JUDGE)
+JUDGE_CONTROLS = Controls(negative=judge_negative_reply)
 
 
 @dataclass(frozen=True)

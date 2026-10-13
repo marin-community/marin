@@ -51,7 +51,6 @@ from taskcompendium.pipeline.fingerprints import callable_identity, recipe_code_
 from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFileOverride, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     RESOURCE_BUDGET_BYTES,
-    ControlExecution,
     Controls,
     Converter,
     FilterPolicy,
@@ -370,9 +369,7 @@ def _execution_config(
     settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None, controls: Controls | None
 ) -> SourcePipelineConfig:
     needs_reviewer = rubric is not None and config.execution.reviewer is None
-    needs_judge = (
-        controls is not None and controls.execution == ControlExecution.REMOTE_JUDGE and config.judge_connection is None
-    )
+    needs_judge = controls is not None and config.review is not None and config.judge_connection is None
     if not needs_reviewer and not needs_judge:
         return config
     base_url = settings.base_url if settings.base_url is not None else resolve_glm_base_url(settings.relay_job)
