@@ -12,10 +12,11 @@ the output limit gets no repair: the call raises ``StructuredOutputError`` at on
 
 The author lives with the build stage because its prompt documents the build SDK and the template.
 It keeps each request as sent, ending with the field instruction ``complete_structured`` appends,
-and its completions under ``<item_dir>/author/<n>/``, and writes the accepted source to
-``<item_dir>/program.py`` before it loads the program from it. For a revision it reads that file
-back, since a ``Revision`` carries no source, and continues the conversation with the previous
-program as the model's turn and the revision as the next user turn.
+and its completions under ``<item_dir>/author/<n>/``, including the completions of a call that
+raised ``StructuredOutputError``. It writes the accepted source to ``<item_dir>/program.py`` before
+it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
+no source, and continues the conversation with the previous program as the model's turn and the
+revision as the next user turn.
 """
 
 import inspect
@@ -35,7 +36,7 @@ from taskforge.llm.agent import shell_tool
 from taskforge.llm.client import Completion, ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
-from taskforge.llm.structured import schema_instruction
+from taskforge.llm.structured import StructuredOutputError, schema_instruction
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
 from taskforge.stage10_proposal.model import TaskProposal, render
@@ -312,14 +313,18 @@ class GlmAuthor:
         # The library appends the field instruction as the final user turn; the record keeps what was sent.
         sent = [*messages, {"role": "user", "content": schema_instruction(ProgramSubmission)}]
         _write(record_dir / REQUEST_FILE, json.dumps(sent, indent=2).encode())
-        result = await recorded_structured(
-            self.model,
-            messages,
-            ProgramSubmission,
-            self.sampling,
-            self.record,
-            {"revision": "none" if revision is None else str(revision.kind)},
-        )
+        try:
+            result = await recorded_structured(
+                self.model,
+                messages,
+                ProgramSubmission,
+                self.sampling,
+                self.record,
+                {"revision": "none" if revision is None else str(revision.kind)},
+            )
+        except StructuredOutputError as error:
+            _write(record_dir / COMPLETIONS_FILE, _COMPLETIONS.dump_json(error.completions, indent=2))
+            raise
         _write(record_dir / COMPLETIONS_FILE, _COMPLETIONS.dump_json(result.completions, indent=2))
         source = result.value.source
         _write(self.item_dir / PROGRAM_FILE, source.encode())
