@@ -25,7 +25,11 @@ from taskforge.llm.client import Completion, ModelClient, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import response_format
 
-STORE_VERSION = 3
+STORE_VERSION = 4
+"""Bumped when the request a key covers changes meaning.
+
+4: structured requests carry the field instruction the library appends.
+"""
 
 _COMPLETIONS = TypeAdapter(tuple[Completion, ...])
 
