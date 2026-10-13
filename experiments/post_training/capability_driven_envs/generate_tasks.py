@@ -52,7 +52,7 @@ from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
-from taskforge.llm.structured import StructuredOutputError
+from taskforge.llm.structured import StructuredOutputError, schema_instruction
 
 from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,
@@ -175,14 +175,16 @@ async def generate_task(
     raising it, so the other items proceed and the run still writes its outputs.
     """
     messages = program_messages(idea)
+    # The library appends the field instruction as the final user turn; the record keeps what was sent.
+    request = [*messages, {"role": "user", "content": schema_instruction(ProgramSubmission)}]
     try:
         result = await client.complete_structured(messages, ProgramSubmission, policy)
     except StructuredOutputError as error:
-        return GeneratedTask(item_id, messages, error.completions, None, None, str(error))
+        return GeneratedTask(item_id, request, error.completions, None, None, str(error))
     except (ModelRequestRejected, ModelUnavailable) as error:
-        return GeneratedTask(item_id, messages, (), None, None, str(error))
+        return GeneratedTask(item_id, request, (), None, None, str(error))
     run = await run_program(result.value.source, item_id, program_timeout)
-    return GeneratedTask(item_id, messages, result.completions, result.value.source, run, run.failure)
+    return GeneratedTask(item_id, request, result.completions, result.value.source, run, run.failure)
 
 
 async def generate_tasks(
