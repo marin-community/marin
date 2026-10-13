@@ -63,7 +63,7 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
-    SourceRoot("infra/shellsim_ports", "."),
+    SourceRoot("infra/shellsim", "."),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
@@ -120,7 +120,7 @@ DIFF_DRIVEN_REASON = "diff-driven"
 TEST_DIRS: dict[str, tuple[str, ...]] = {
     **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
     "deploy": ("infra/deploy/tests",),
-    "iac": ("infra/pulumi/tests", "infra/shellsim_ports/tests"),
+    "iac": ("infra/pulumi/tests", "infra/shellsim/tests"),
     "marin": ("tests", "experiments"),
 }
 

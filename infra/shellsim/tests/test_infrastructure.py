@@ -7,7 +7,7 @@ import pulumi
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 from pulumi.runtime.mocks import MockMonitor
 
-from infra.shellsim_ports.infrastructure import ProxyConfig, deploy
+from infra.shellsim.infrastructure import ProxyConfig, deploy
 
 
 class RecordingMocks(Mocks):
