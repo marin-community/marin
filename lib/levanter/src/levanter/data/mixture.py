@@ -48,7 +48,8 @@ class MixtureDataset(AsyncDataset[T]):
             - RESTART_STRATEGY: restart the dataset when it has been exhausted
         key: random key for datasets sampling
         start_offsets: per-dataset index added to every sequence a dataset serves, so a dataset can resume
-            at a chosen read position. Missing names start at 0.
+            at a chosen read position. When given, it must name exactly the datasets with positive weight
+            in some stage.
     """
 
     def __init__(
@@ -90,8 +91,14 @@ class MixtureDataset(AsyncDataset[T]):
             if any(weights.get(name, 0) > 0 for _, weights in self.weight_stages)
         }
         self.dataset_index: list[str] = list(self.datasets.keys())
-        start_offsets = start_offsets or {}
-        self._start_offsets = np.array([start_offsets.get(name, 0) for name in self.dataset_index], dtype=np.int64)
+        if start_offsets is None:
+            start_offsets = {name: 0 for name in self.dataset_index}
+        elif set(start_offsets) != set(self.dataset_index):
+            raise ValueError(
+                f"start_offsets must name exactly the active datasets {sorted(self.dataset_index)}, "
+                f"got {sorted(start_offsets)}"
+            )
+        self._start_offsets = np.array([start_offsets[name] for name in self.dataset_index], dtype=np.int64)
         self.block_size = block_size
         # we pack index and ds id into a single 32 bit, so block size must be at most 2^16
         if block_size >= 2**16:
