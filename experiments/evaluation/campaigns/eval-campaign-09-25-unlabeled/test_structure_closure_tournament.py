@@ -13,6 +13,16 @@ import pytest
 tournament = importlib.import_module(
     "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.structure_closure_tournament"
 )
+refresh = importlib.import_module(
+    "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.analysis.structure_closure_tournament.refresh"
+)
+
+
+def test_score_display_uses_three_significant_digits() -> None:
+    assert refresh._score_text(0) == "0.000"
+    assert refresh._score_text(0.001) == "0.00100"
+    assert refresh._score_text(0.9501) == "0.950"
+    assert refresh._score_text(1) == "1.00"
 
 
 def test_completion_sends_raw_tokens_and_retains_special_tokens(monkeypatch: pytest.MonkeyPatch) -> None:

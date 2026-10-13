@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+from decimal import Decimal
 from pathlib import Path
 
 from iris.cli.connect import open_iris_client
@@ -62,6 +63,14 @@ def _status(state: str) -> str:
     return "CRASHED"
 
 
+def _score_text(score: float) -> str:
+    if score == 0:
+        return "0.000"
+    value = Decimal(str(score))
+    rounded = value.quantize(Decimal(1).scaleb(value.adjusted() - 2))
+    return format(rounded.quantize(Decimal(1).scaleb(rounded.adjusted() - 2)), "f")
+
+
 def _write_table(path: Path, header: list[str], metric: list[str], rows: dict[str, list[str]]) -> None:
     lines = [
         "| " + " | ".join(["Model", *header]) + " |",
@@ -96,7 +105,7 @@ def refresh(standard: Path, manifest: Path, output: Path) -> None:
                     task = f"{family}/{control}"
                     score = record.metrics.get(task, {}).get("syntax_complete")
                     if record.status is RunStatus.SUCCEEDED and score is not None:
-                        cells.append(f"{score:.4f} ({record.results_path})")
+                        cells.append(f"{_score_text(score)} ({record.results_path})")
                     else:
                         cells.append("CRASHED")
                     continue
