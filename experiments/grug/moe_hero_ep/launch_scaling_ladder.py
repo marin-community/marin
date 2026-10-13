@@ -121,8 +121,7 @@ def _hero_flops_baseline(
 ) -> FlopsBaseline | None:
     """Check the hero's context history against ``seq_len`` and return its FLOPs baseline.
 
-    The history starts at 4K and changes context length at every entry, including the current one.
-    ``LmDataConfig`` checks that the end steps increase.
+    The history must start at 4K and change context length at every entry, including the current one.
     """
     seq_lens = [phase.seq_len for phase in context_phases] + [seq_len]
     if seq_lens[0] != HERO_REFERENCE_SEQ_LEN or any(a == b for a, b in itertools.pairwise(seq_lens)):
