@@ -23,8 +23,6 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
-from bubblewrap_bin import bwrap_path
-
 from shellbox.backends.local import launch
 from shellbox.machine import (
     Backend,
@@ -133,6 +131,11 @@ def _sandbox_argv(
 
 def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     """``bwrap`` alone, or the bundled bwrap followed by any bwrap on ``PATH``; the caller probes each in turn."""
+    if sys.platform != "linux":
+        raise SandboxUnavailable("The local bubblewrap backend requires Linux")
+    # This dependency is installed only on Linux.
+    from bubblewrap_bin import bwrap_path  # noqa: PLC0415
+
     if bwrap is not None:
         return (bwrap,)
     system = shutil.which("bwrap")

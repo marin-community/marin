@@ -9,7 +9,7 @@ See ``local_grader`` for building the image these tests run.
 import pytest
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.controls import run_controls
+from taskcompendium.pipeline.controls import ControlRuntime, run_controls
 from taskcompendium.pipeline.models import CheckStatus, ImportRejection, WorkspaceFiles
 from taskcompendium.runtime.resources import inline_resource
 
@@ -51,7 +51,7 @@ def tasks() -> dict[str, tuple[TaskSpec, arc.Controls]]:
 def test_golden_control_scores_the_reference_one(name, machines):
     task, controls = tasks()[name]
     assert controls is not None
-    report = run_controls(task, controls=controls, machines=machines)
+    report = run_controls(task, runtime=ControlRuntime(controls, machines))
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"golden": CheckStatus.PASS}, report
 

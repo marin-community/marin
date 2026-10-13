@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade a source's control submissions through the same grading path rollouts use."""
+"""Grade a source's control submissions through its configured grading boundary."""
 
 import asyncio
 import os
@@ -11,9 +11,11 @@ from typing import Any, Protocol
 
 from shellbox.machine import Command, MachineFactory, MachineSpec
 from verifyit.grade import positive_candidate
-from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import ExactSpec, JudgeSpec, MathSpec, McqSpec, NumericSpec
 
-from taskcompendium.grading_result import GradeResult
+from taskcompendium.grading import grade_remote_judge_answer
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     ConversationTrace,
@@ -34,6 +36,7 @@ from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
+    ControlExecution,
     Controls,
     ControlSubmission,
     OracleCommand,
@@ -47,7 +50,7 @@ from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "12"
+CONTROLS_REVISION = "15"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -96,22 +99,36 @@ def controls_identity(controls: Controls) -> dict[str, Any]:
     return {
         "revision": CONTROLS_REVISION,
         "golden": callable_identity(controls.golden) if controls.golden is not None else None,
+        "negative": callable_identity(controls.negative) if controls.negative is not None else None,
         "memory_mb": controls.memory_mb,
+        "execution": controls.execution.value,
     }
 
 
-def control_suite(controls: Controls, machines: GradingMachines | None) -> CheckSuite:
-    """Check each sampled task with its golden submission, or an empty one when it has no golden."""
+@dataclass(frozen=True)
+class ControlRuntime:
+    controls: Controls
+    machines: GradingMachines | None
+    judge_connection: JudgeConnection | None = None
+
+
+def control_suite(runtime: ControlRuntime) -> CheckSuite:
+    """Check each sampled task with a declared positive or negative submission, falling back to empty."""
+    controls = runtime.controls
     return CheckSuite(
         id="controls",
         revision=CONTROLS_REVISION,
-        parameters={**(machines.identity() if machines is not None else {}), **controls_identity(controls)},
-        run=partial(run_controls, controls=controls, machines=machines),
+        parameters={
+            **(runtime.machines.identity() if runtime.machines is not None else {}),
+            **controls_identity(controls),
+            **({"judge_base_url": runtime.judge_connection.base_url} if runtime.judge_connection is not None else {}),
+        },
+        run=partial(run_controls, runtime=runtime),
     )
 
 
-def run_controls(task: TaskSpec, *, controls: Controls, machines: GradingMachines | None) -> VerificationReport:
-    return asyncio.run(_control_checks(task, controls, machines))
+def run_controls(task: TaskSpec, *, runtime: ControlRuntime) -> VerificationReport:
+    return asyncio.run(_control_checks(task, runtime))
 
 
 def _empty_submission(task: TaskSpec) -> ControlSubmission:
@@ -121,7 +138,20 @@ def _empty_submission(task: TaskSpec) -> ControlSubmission:
     return WorkspaceFiles({})
 
 
-async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingMachines | None) -> VerificationReport:
+def _is_judge_task(task: TaskSpec) -> bool:
+    return isinstance(task.grader, VerifyitGrader) and isinstance(verifyit_spec(task.grader), JudgeSpec)
+
+
+@dataclass(frozen=True)
+class _RemoteJudge:
+    connection: JudgeConnection | None
+
+
+async def _control_checks(
+    task: TaskSpec,
+    runtime: ControlRuntime,
+) -> VerificationReport:
+    controls = runtime.controls
     require_resolved_environment(task.environment_requirements)
     grader = task.grader
     if isinstance(grader, NoGrader | SessionGrader):
@@ -132,21 +162,32 @@ async def _control_checks(task: TaskSpec, controls: Controls, machines: GradingM
                 )
             ]
         )
+    remote_judge = (
+        _RemoteJudge(runtime.judge_connection)
+        if controls.execution == ControlExecution.REMOTE_JUDGE and _is_judge_task(task)
+        else None
+    )
     sandbox = None
-    if not grades_in_process(grader):
+    if not grades_in_process(grader) and not remote_judge:
         environment = grader.environment
         assert environment is not None
         require_resolved_environment(environment)
-        if machines is None:
+        if runtime.machines is None:
             raise ValueError("Sandbox controls require grading machines")
-        sandbox = _Sandbox(machines, controls.memory_mb, _selected_machine(machines, environment, controls.memory_mb))
+        sandbox = _Sandbox(
+            runtime.machines,
+            controls.memory_mb,
+            _selected_machine(runtime.machines, environment, controls.memory_mb),
+        )
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is not None:
-        check = await _control(task, "golden", golden, 1.0, sandbox)
+        check = await _control(task, "golden", golden, 1.0, sandbox, remote_judge)
+    elif controls.negative is not None and (negative := controls.negative(task)) is not None:
+        check = await _control(task, "negative", negative, 0.0, sandbox, remote_judge)
     elif sandbox is not None:
         check = await _empty_sandbox_control(task, sandbox)
     else:
-        check = await _control(task, "empty", _empty_submission(task), 0.0, None)
+        check = await _control(task, "empty", _empty_submission(task), 0.0, None, remote_judge)
     return VerificationReport([check])
 
 
@@ -185,6 +226,7 @@ async def _control(
     submission: ControlSubmission,
     expected: float,
     sandbox: _Sandbox | None,
+    remote_judge: _RemoteJudge | None,
 ) -> CheckResult:
     if isinstance(submission, OracleCommand):
         if sandbox is None:
@@ -203,9 +245,14 @@ async def _control(
         attempt = GradingAttempt(
             ConversationTrace(events=(*task.context.events, FILE_SUBMISSION_MESSAGE)), dict(submission.files)
         )
-    grade: GradeResult = (
-        grade_task(task, attempt) if sandbox is None else await sandbox_grade(task, attempt, *sandbox.grader)
-    )
+    if remote_judge:
+        grade = (
+            grade_remote_judge_answer(task, attempt, remote_judge.connection)
+            if remote_judge.connection is not None
+            else GradeResult(Outcome.INFRA_ERROR, None, "Judge controls require an explicit remote connection")
+        )
+    else:
+        grade = grade_task(task, attempt) if sandbox is None else await sandbox_grade(task, attempt, *sandbox.grader)
     return control_result(grade, name, expected)
 
 

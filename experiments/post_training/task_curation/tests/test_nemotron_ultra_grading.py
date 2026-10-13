@@ -10,7 +10,7 @@ import pytest
 from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskSpec, TextMessage
-from taskcompendium.pipeline.controls import run_controls
+from taskcompendium.pipeline.controls import ControlRuntime, run_controls
 from taskcompendium.pipeline.models import CheckStatus, Reply
 from taskcompendium.runtime.resources import inline_resource
 
@@ -49,20 +49,26 @@ def task(path: str) -> TaskSpec:
 @pytest.mark.parametrize(
     ("path", "submission", "reward"),
     [
+        ("ultra_sft_step3200_abstention", reply(r"\boxed{[IDK]}"), 0.5),
         ("ultra_sft_step3200_calendar_v2", reply(f"<think>Plan.</think>{SCHEDULE}"), 1.0),
         ("ultra_sft_step3200_calendar_v2", reply(EARLY_SCHEDULE), 0.0),
         ("ultra_sft_step3200_ds2_freeform", reply("- apple\n- pear\n- plum"), 1.0),
         ("ultra_sft_step3200_ds2_freeform", reply("apple, pear and plum"), 0.0),
-        ("ultra_sft_step3200_instruction_following", reply("Tea is a drink brewed from leaves."), 1.0),
         ("ultra_sft_step3200_instruction_following", reply("Tea, a drink, is brewed from leaves."), 0.0),
         ("ultra_sft_step3200_stem_mcqa", reply("\\boxed{B}"), 1.0),
         ("ultra_sft_step3200_stem_mcqa", reply("\\boxed{A}"), 0.0),
         ("ultra_sft_step3200_comp_coding", reply(STDIN_BUFFER_SUM), 1.0),
         ("ultra_sft_step3200_structured_outputs_v2", reply('{"count": 3}'), 1.0),
+        ("ultra_sft_step3200_structured_outputs_v2", reply('```json\n{"count": 3}\n```'), 1.0),
         ("ultra_sft_step3200_structured_outputs_v2", reply('{"count": "three"}'), 0.0),
         (STRUCTURED_TOOL, report_call(3), 1.0),
         (STRUCTURED_TOOL, report_call("three"), 0.0),
         ("ultra_sft_step3200_reasoning_gym", reply("x = 50 - 8, so <answer>42</answer>"), 1.0),
+        (
+            "ultra_sft_step3200_reasoning_gym",
+            reply("Work through the grid.\n\n## Answer\n\n**The result is 42.**\n\n---\nExtra notes."),
+            1.0,
+        ),
         ("ultra_sft_step3200_reasoning_gym", reply("<answer>58</answer>"), 0.0),
     ],
 )
@@ -78,7 +84,7 @@ def test_grade_script_scores_the_reply(path, submission, reward, machines):
 def test_golden_control_scores_the_reference_one(path, machines):
     controls = RECIPES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
-    report = run_controls(task(path), controls=controls, machines=machines)
+    report = run_controls(task(path), runtime=ControlRuntime(controls, machines))
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"golden": CheckStatus.PASS}, report
 
@@ -88,12 +94,11 @@ def test_golden_control_scores_the_reference_one(path, machines):
     [
         ("ultra_sft_step3200_calendar_v2", "calendar"),
         ("ultra_sft_step3200_ds2_freeform", "format_verification"),
-        ("ultra_sft_step3200_instruction_following", "instruction_following"),
         ("ultra_sft_step3200_stem_mcqa", "mcqa"),
         ("ultra_sft_step3200_comp_coding", "code_gen"),
         ("ultra_sft_step3200_structured_outputs_v2", "structured_outputs"),
         ("ultra_sft_step3200_rdkit", "rdkit_chemistry"),
-        ("ultra_sft_step3200_toolcall_schema", "tool_call"),
+        ("ultra_sft_step3200_lean", "lean"),
         ("ultra_sft_step3200_reasoning_gym", "answer_extraction"),
     ],
 )

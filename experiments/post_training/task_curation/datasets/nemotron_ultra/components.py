@@ -38,22 +38,34 @@ from zephyr.writers import write_parquet_file
 from experiments.post_training.task_curation.datasets.arc.arc import ULTRA_ARC_CONTROLS, convert_ultra_arc
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import (
+    ABSTENTION_CONTROLS,
     CODE_CONTROLS,
     DAPO,
+    GENRM_CONTROLS,
+    INSTRUCTION_CONTROLS,
+    JAILBREAK_CONTROLS,
+    LEAN_CONTROLS,
     MATH_CONTROLS,
     MCQA_CONTROLS,
+    MULTICHALLENGE_CONTROLS,
     PLACEHOLDER_SOURCE_FIELD,
     RDKIT_CONTROLS,
     REASONING_GYM_CONTROLS,
     REPLY_CONTROLS,
     TOOL_ACTION_CONTROLS,
+    TOOLCALL_SCHEMA_CONTROLS,
     VERIFIER_REVISION,
+    convert_abstention,
     convert_calendar,
     convert_code,
     convert_format,
+    convert_genrm,
     convert_instruction_following,
+    convert_jailbreak,
+    convert_lean,
     convert_math,
     convert_mcqa,
+    convert_multichallenge,
     convert_rdkit,
     convert_reasoning_gym,
     convert_structured_output,
@@ -207,12 +219,12 @@ def attach_placeholder_source(row: dict[str, Any], context: ConversionContext) -
 
 
 ACTION_COMPARISON_CRITERION = f"""
-Only when agent_ref.name is single_step_tool_use_with_argument_comparison_agent,
+When agent_ref.name is single_step_tool_use_with_argument_comparison_agent,
 swe_pivot_single_step_tool_use_with_argument_comparison_agent, or
-toolcall_schema_single_step_tool_use_with_argument_comparison_agent at verifier revision {VERIFIER_REVISION},
-expected_action.type=message accepts any nonempty assistant text with no tool calls; the stored message is not a
-literal answer key. For expected_action.type=function_call, the scorer requires one call with the expected name and
-recursively matching argument keys and values, allowing floating-point tolerance 1e-6.
+toolcall_schema_single_step_tool_use_with_argument_comparison_agent at verifier revision {VERIFIER_REVISION}, a
+semantic judge checks the native next action against the public conversation and advertised JSON Schemas. It accepts
+supported alternative actions and arguments. The legacy expected_action remains private provenance and cannot reject
+an otherwise valid public task or reward an unsupported message.
 """
 
 AGENTIC_SAFETY_RUBRIC = """
@@ -330,7 +342,7 @@ Check the complete role/tool sequence and advertised schemas against expected_ac
 environment state.
 
 Historical observations are public context. Expected future tool calls and reward state are hidden evidence; multiple
-valid actions require the original comparison rules rather than invented exact matching.
+valid next actions are judged against the public request and schemas rather than hidden exact arguments.
 {ACTION_COMPARISON_CRITERION}"""
 
 
@@ -362,27 +374,28 @@ def scored(
     return Component(convert, rubric, controls, grader=GRADER_PACKAGES)
 
 
-ABSTENTION = Component(convert_ungraded, QA_ABSTENTION_RUBRIC)
+ABSTENTION = scored(convert_abstention, QA_ABSTENTION_RUBRIC, ABSTENTION_CONTROLS)
 AGENTIC_SAFETY = Component(convert_ungraded_agent, AGENTIC_SAFETY_RUBRIC)
 CALENDAR = scored(convert_calendar, INSTRUCTION_FOLLOWING_RUBRIC)
 COMPETITIVE_CODE = scored(convert_code, COMPETITIVE_PROGRAMMING_RUBRIC, CODE_CONTROLS)
 FORMAT = scored(convert_format, INSTRUCTION_FOLLOWING_RUBRIC)
-INSTRUCTION_FOLLOWING = scored(convert_instruction_following, INSTRUCTION_FOLLOWING_RUBRIC)
+INSTRUCTION_FOLLOWING = scored(convert_instruction_following, INSTRUCTION_FOLLOWING_RUBRIC, INSTRUCTION_CONTROLS)
 MATH = Component(
     convert_math, MATH_ANSWER_RUBRIC, MATH_CONTROLS, decode=attach_placeholder_source, inputs=PLACEHOLDER_INPUTS
 )
-MATH_PROOF = Component(convert_ungraded, MATH_PROOF_RUBRIC)
+MATH_PROOF = scored(convert_lean, MATH_PROOF_RUBRIC, LEAN_CONTROLS)
 MCQA = scored(convert_mcqa, QA_MULTIPLE_CHOICE_RUBRIC, MCQA_CONTROLS)
-MULTICHALLENGE = Component(convert_ungraded, INSTRUCTION_FOLLOWING_RUBRIC)
+MULTICHALLENGE = scored(convert_multichallenge, INSTRUCTION_FOLLOWING_RUBRIC, MULTICHALLENGE_CONTROLS)
 NEXT_ACTION = scored(convert_tool_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
 NVARC = scored(convert_ultra_arc, ARC_RUBRIC, ULTRA_ARC_CONTROLS)
 RDKIT = scored(convert_rdkit, CHEMISTRY_RUBRIC, RDKIT_CONTROLS)
 REASONING_GYM = scored(convert_reasoning_gym, REASONING_GYM_RUBRIC, REASONING_GYM_CONTROLS)
-SAFETY = Component(convert_ungraded, SAFETY_RUBRIC)
+SAFETY = scored(convert_jailbreak, SAFETY_RUBRIC, JAILBREAK_CONTROLS)
 STRUCTURED_OUTPUT = scored(convert_structured_output, INSTRUCTION_FOLLOWING_RUBRIC)
 SWE_REPO = Component(convert_ungraded_agent, SWE_REPO_RUBRIC)
-TAU_PIVOT = Component(convert_ungraded_agent, TOOL_USE_RUBRIC)
-TOOLCALL_SCHEMA = scored(convert_tool_action, TOOL_USE_RUBRIC, TOOL_ACTION_CONTROLS)
+SWE_NEXT_ACTION = scored(convert_tool_action, SWE_REPO_RUBRIC, TOOL_ACTION_CONTROLS)
+TAU_PIVOT = scored(convert_tool_action, TOOL_USE_RUBRIC, TOOL_ACTION_CONTROLS)
+TOOLCALL_SCHEMA = scored(convert_tool_action, TOOL_USE_RUBRIC, TOOLCALL_SCHEMA_CONTROLS)
 
 HS3_EN = Component(
     convert_ungraded,
@@ -405,11 +418,14 @@ HS3_MULTITURN = Component(
         "its history."
     ),
 )
-LANGUAGE_MIXING = Component(
-    convert_ungraded,
+LANGUAGE_MIXING = scored(
+    convert_genrm,
     preference_rubric(
-        "Check the actual language instructions against the full multilingual history and hidden evaluation principle."
+        "Check the actual language instructions against the full multilingual history and hidden evaluation principle. "
+        "The runnable grader applies the source's 1-5 principle scale to one response and normalizes it to [0, 1]; it "
+        "does not reproduce cohort tie-breaking or length bonuses."
     ),
+    GENRM_CONTROLS,
 )
 SAFETY_PREFERENCE = Component(
     convert_ungraded,
@@ -451,8 +467,8 @@ COMPONENTS: dict[str, Component] = {
     "ultra_sft_step3200_stem_mcqa_cot_rima_new": MCQA,
     "ultra_sft_step3200_structured_outputs_v2": STRUCTURED_OUTPUT,
     "ultra_sft_step3200_structured_outputs_v3": STRUCTURED_OUTPUT,
-    f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_GYM}": SWE_REPO,
-    f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_REBENCH}": SWE_REPO,
+    f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_GYM}": SWE_NEXT_ACTION,
+    f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_REBENCH}": SWE_NEXT_ACTION,
     "ultra_sft_step3200_tau_pivot": TAU_PIVOT,
     "ultra_sft_step3200_toolcall_schema": TOOLCALL_SCHEMA,
     "ultra_v3_agentic_rl_step73_citation_format_v2": FORMAT,
@@ -461,6 +477,35 @@ COMPONENTS: dict[str, Component] = {
     f"ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/{SweSplit.SWE_GYM}": SWE_REPO,
     f"ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/{SweSplit.SWE_REBENCH}": SWE_REPO,
 }
+
+BASE_RECIPE_VERSION = "3"
+REPAIRED_GRADER_PATHS = frozenset(
+    {
+        "ultra_sft_step3200_nvarc_transductive",
+        "ultra_sft_step3200_structured_outputs_v2",
+        "ultra_sft_step3200_structured_outputs_v3",
+        "ultra_sft_step3200_toolcall_schema",
+        "ultra_v3_agentic_rl_step73_structured_outputs_v2",
+    }
+)
+REPAIRED_RECIPE_VERSION = "4"
+TOOLCALL_SCHEMA_RECIPE_VERSION = "5"
+RLVR1_REMEDIATION_RECIPE_VERSION = "6"
+RLVR1_REMEDIATION_PATHS = frozenset(
+    {
+        "language_mixing_hs3_ultra_genrm_fmt",
+        "ultra_sft_step3200_instruction_following",
+        "ultra_sft_step3200_abstention",
+        "ultra_sft_step3200_comp_coding",
+        "ultra_sft_step3200_jailbreak",
+        "ultra_sft_step3200_lean",
+        "ultra_sft_step3200_multichallenge_len40k",
+        "ultra_sft_step3200_reasoning_gym",
+        f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_GYM}",
+        f"ultra_sft_step3200_swe_pivot_len40k/{SweSplit.SWE_REBENCH}",
+        "ultra_sft_step3200_tau_pivot",
+    }
+)
 
 
 # Counts come from a complete selection audit of ULTRA_REVISION's blend files,
@@ -1483,7 +1528,15 @@ def _source(blend: str, path: str) -> RlDataSource[CurationRecipe]:
                 prepared_component=name,
             ),
             convert=component.convert,
-            version="3",
+            version=(
+                RLVR1_REMEDIATION_RECIPE_VERSION
+                if path in RLVR1_REMEDIATION_PATHS
+                else (
+                    TOOLCALL_SCHEMA_RECIPE_VERSION
+                    if path == "ultra_sft_step3200_toolcall_schema"
+                    else REPAIRED_RECIPE_VERSION if path in REPAIRED_GRADER_PATHS else BASE_RECIPE_VERSION
+                )
+            ),
             intended_use=IntendedUse.TRAIN,
             rubric=component.rubric,
             controls=component.controls,

@@ -17,13 +17,23 @@ import reasoning_gym
 
 sys.path.insert(0, "/tests")
 
+from reasoning_gym_answer import markdown_answer
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, last_boxed_answer
 
 
 def candidate(reply: str) -> str:
+    """Prefer explicit final-answer wrappers, then preserve the source scorer's text fallback."""
     text = final_answer_text(reply)
     blocks = re.findall(r"<answer>(.*?)</answer>", text, re.DOTALL)
-    return blocks[-1].strip() if blocks else last_boxed_answer(text) or text.strip()
+    if blocks:
+        return blocks[-1].strip()
+    boxed = last_boxed_answer(text)
+    if boxed is not None:
+        return boxed
+    section = markdown_answer(text)
+    if section is not None:
+        return section
+    return text.strip()
 
 
 def main() -> None:

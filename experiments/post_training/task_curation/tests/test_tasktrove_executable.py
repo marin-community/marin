@@ -22,7 +22,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.controls import run_controls
+from taskcompendium.pipeline.controls import ControlRuntime, run_controls
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (
     CheckStatus,
@@ -226,7 +226,7 @@ def test_linux_file_names_survive_conversion_and_traversal_cannot_produce_task()
 
 def test_task_without_an_oracle_grades_an_empty_submission(executable_task):
     machines = ControlMachines()
-    report = run_controls(without_oracle(executable_task), controls=CONTROLS, machines=machines)
+    report = run_controls(without_oracle(executable_task), runtime=ControlRuntime(CONTROLS, machines))
     assert checks(report) == {"empty": CheckStatus.PASS}
     assert machines.factory.machines and all(machine.closed for machine in machines.factory.machines)
 
@@ -236,7 +236,7 @@ def test_task_without_an_oracle_grades_an_empty_submission(executable_task):
 )
 def test_ungraded_zero_reward_cannot_pass_the_empty_control(executable_task, verdict_status, expected):
     machines = ControlMachines(GradingMachines(verdict_status=verdict_status))
-    report = run_controls(without_oracle(executable_task), controls=CONTROLS, machines=machines)
+    report = run_controls(without_oracle(executable_task), runtime=ControlRuntime(CONTROLS, machines))
     assert checks(report) == {"empty": expected}
 
 
@@ -280,7 +280,7 @@ async def test_agent_machine_rejects_incompatible_command_semantics_before_start
 def test_grader_controls_reject_simulation_of_linux_processes_before_start(executable_task):
     machines = ControlMachines(factory=GradingMachines(backend=Backend.SHELLSIM))
     with pytest.raises(ValueError, match="native Linux processes"):
-        run_controls(executable_task, controls=CONTROLS, machines=machines)
+        run_controls(executable_task, runtime=ControlRuntime(CONTROLS, machines))
     assert not machines.factory.machines
 
 

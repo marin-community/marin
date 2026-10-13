@@ -14,6 +14,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -26,6 +27,7 @@ from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import (
+    ControlExecution,
     Controls,
     FilterPolicy,
     ImportFailureKind,
@@ -63,6 +65,13 @@ from .pipeline_stages import (
 from .test_pipeline import BatchService, Output
 
 REFERENCE_CONTROLS = Controls(golden=reference_reply)
+
+
+def judge_negative_reply(task: TaskSpec):
+    return answer_reply(task, "A deliberately incorrect answer.")
+
+
+JUDGE_CONTROLS = Controls(negative=judge_negative_reply, execution=ControlExecution.REMOTE_JUDGE)
 
 
 @dataclass(frozen=True)
@@ -120,7 +129,18 @@ def convert_mixed_graders(row: RawRow, context: ConversionContext) -> TaskSpec |
     if kind == "none":
         grader = NoGrader(reason="The source evaluator is unavailable")
     else:
-        grader = verifyit_package(JudgeSpec(references=(row.data["Answer"],)), environment=GRADER_ENVIRONMENT).grader
+        grader = verifyit_package(
+            JudgeSpec(
+                references=(row.data["Answer"],),
+                rubric="labels",
+                system_prompt="Grade the candidate.",
+                prompt_template="Reference: {reference}\nCandidate: {candidate}",
+                label_scores={"PASS": 1.0, "FAIL": 0.0},
+                model="fixture-judge",
+                exact_gate=False,
+            ),
+            environment=GRADER_ENVIRONMENT,
+        ).grader
     return TaskSpec.model_validate_json(task.model_copy(update={"grader": grader}).model_dump_json())
 
 
@@ -147,6 +167,7 @@ def pipeline_config(
     execution: AuditExecution | None = None,
     verification: SourceVerificationPolicy = SourceVerificationPolicy(10, 0, 1, 1),
     machines: GradingMachines | None = None,
+    judge_connection: JudgeConnection | None = None,
     normalized_shards: int = 2,
 ) -> SourcePipelineConfig:
     return SourcePipelineConfig(
@@ -158,6 +179,7 @@ def pipeline_config(
         FilterPolicy(),
         normalized_shards=normalized_shards,
         machines=machines,
+        judge_connection=judge_connection,
     )
 
 
@@ -829,15 +851,12 @@ def test_admission_admits_only_rows_with_a_ready_grader_and_names_each_output_vi
     assert sorted(int(row["source_locator"].rsplit(":", 1)[1]) for row in final) == [0, 2]
 
 
-@pytest.mark.parametrize("controls", [None, REFERENCE_CONTROLS], ids=["no_controls", "controls"])
-def test_judge_graded_source_skips_verification_and_admits_its_rows(tmp_path, controls):
-    # The campaign has no grading machines, so running declared controls on a judge task would raise;
-    # the declared-controls case shows that no judge task is sampled.
+def test_judge_graded_source_without_controls_is_admitted_unverified(tmp_path):
     source = tmp_path / "source"
     write_jsonl(source, [{**row, "grader": "judge"} for row in apple_rows(3)])
     reviewer = BatchReviewer(BatchService(), "fixture", "revision")
     result = run_pipeline(
-        fixture_recipe(convert_mixed_graders, rubric=None, controls=controls),
+        fixture_recipe(convert_mixed_graders, rubric=None, controls=None),
         source,
         tmp_path / "output",
         pipeline_config(SourceProcessingMode.FULL, reviewer),
@@ -845,12 +864,39 @@ def test_judge_graded_source_skips_verification_and_admits_its_rows(tmp_path, co
     manifest = read_json(result.manifest_path)
     verification = read_json(tmp_path / "output/verify/report.json")
     assert verification["status"] == "skipped"
-    assert verification["reason"] == "judge grader; no control path yet"
+    assert verification["reason"] == "The source declares no controls"
     assert verification["results"] == []
     assert result.status == "completed"
     assert manifest["admission"] == "admitted"
     assert manifest["admission_counts"] == {"admitted": 3}
     assert len(parquet_rows(result.final_path)) == 3
+
+
+def test_judge_graded_source_runs_controls_through_explicit_remote_connection(tmp_path, judge_server):
+    judge_server.reply = "FAIL"
+    source = tmp_path / "source"
+    write_jsonl(source, [{**row, "grader": "judge"} for row in apple_rows(3)])
+    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    result = run_pipeline(
+        fixture_recipe(convert_mixed_graders, rubric=None, controls=JUDGE_CONTROLS),
+        source,
+        tmp_path / "output",
+        pipeline_config(
+            SourceProcessingMode.FULL,
+            reviewer,
+            judge_connection=JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+        ),
+    )
+    verification = read_json(tmp_path / "output/verify/report.json")
+    assert verification["status"] == "passed"
+    assert verification["counts"]["checked"] == 3
+    assert verification["counts"]["passed"] == 3
+    assert verification["counts"]["failed"] == 0
+    assert verification["counts"]["infra_error"] == 0
+    assert result.status == "completed"
+    assert len(parquet_rows(result.final_path)) == 3
+    assert len(judge_server.requests) == 3
+    assert "secret" not in json.dumps(read_json(result.manifest_path))
 
 
 @pytest.mark.parametrize(

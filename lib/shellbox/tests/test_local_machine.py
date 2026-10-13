@@ -7,6 +7,7 @@ import asyncio
 import os
 import shutil
 import socket
+import sys
 import tarfile
 import tempfile
 import uuid
@@ -86,6 +87,12 @@ def make_factory(**options) -> LocalMachineFactory:
 @pytest.fixture
 def factory() -> LocalMachineFactory:
     return make_factory()
+
+
+def test_local_factory_reports_unsupported_host(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(SandboxUnavailable):
+        LocalMachineFactory()
 
 
 def test_recursive_download_preserves_hardlinks_as_files_and_literal_names(factory, tmp_path):
