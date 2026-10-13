@@ -17,16 +17,19 @@ the GLM author also sends it back within its structured call.
    pass also refuses a name the program reads without binding it anywhere, by an import, a
    definition, an assignment or a parameter, unless ``SAFE_BUILTINS`` holds it. A missing import
    or a misspelt name would otherwise fail in the middle of a build, after the steps before it
-   spent their model calls. The refusal names the closest bound name, if one is close. The check
-   ignores scope, so it misses a name bound in one function and read in another.
+   spent their model calls. The refusal names the closest name, if one is close, out of the
+   program's bound names and the names ``sdk_exports`` finds defined in the allowed modules; for
+   an SDK name it also gives the modules to import it from. The check ignores scope, so it misses
+   a name bound in one function and read in another.
 2. It runs the module with imports limited to ``ALLOWED_IMPORTS`` and builtins to
    ``SAFE_BUILTINS``, which keeps a program to the SDK's functions; programs are trusted model
    output in the builder's process, so this is no security boundary. The build SDK belongs to a
    later stage than this module, so the program imports it by name at run time rather than this
    module importing it. Before running the module, the pass registers the source in ``linecache``
    under the module's file name, so the step decorator's ``inspect.getsource`` reads each step's
-   text. The DAG checks of ``rl_env_build_program`` run here and refuse, among others, an input
-   named after no step.
+   text. An import of a name the module lacks gets the same suggestion from ``sdk_exports``, so
+   a name imported from the wrong module comes back with the module defining it. The DAG checks
+   of ``rl_env_build_program`` run here and refuse, among others, an input named after no step.
 3. It reads ``PROGRAM`` and requires a step named ``GRADER_STEP`` returning ``GRADER_OUTPUT``, a
    sink made by ``@rl_env_build_sink`` returning ``TaskSpec``, and every step and sink the module
    defines to be part of ``PROGRAM``.
@@ -39,7 +42,9 @@ them, and loading a source twice returns the same program. A refused source is u
 import ast
 import builtins
 import difflib
+import functools
 import importlib
+import inspect
 import linecache
 import sys
 import types
@@ -142,8 +147,7 @@ def _restricted_import(
     module = importlib.import_module(name)
     for item in fromlist or ():
         if item != "*" and not hasattr(module, item):
-            public = [attribute for attribute in vars(module) if not attribute.startswith("_")]
-            raise ImportError(f"{name!r} has no name {item!r}{_suggestion(item, public)}")
+            raise ImportError(f"{name!r} has no name {item!r}{_name_suggestion(item, ())}")
     return module
 
 
@@ -151,6 +155,59 @@ def _suggestion(name: str, candidates: Iterable[str]) -> str:
     """``"; did you mean 'x'?"`` for the closest of ``candidates`` to ``name``, or ``""`` when none is close."""
     matches = difflib.get_close_matches(name, list(candidates), n=1)
     return f"; did you mean {matches[0]!r}?" if matches else ""
+
+
+def _defined_names(module: ModuleType) -> set[str]:
+    """The public names ``module`` defines: its ``__all__``, or else its public names minus its top-level imports."""
+    declared = getattr(module, "__all__", None)
+    if declared is not None:
+        return set(declared)
+    public = {n for n, value in vars(module).items() if not n.startswith("_") and not isinstance(value, ModuleType)}
+    try:
+        tree = ast.parse(inspect.getsource(module))
+    except (OSError, TypeError):
+        # A module without Python source, such as math, has no import statements to subtract.
+        return public
+    imported = {
+        (alias.asname or alias.name).split(".")[0]
+        for node in tree.body
+        if isinstance(node, ast.Import | ast.ImportFrom)
+        for alias in node.names
+    }
+    return public - imported
+
+
+@functools.cache
+def sdk_exports() -> dict[str, tuple[str, ...]]:
+    """Each public name the ``ALLOWED_IMPORTS`` modules define, with the modules defining it.
+
+    The loader imports those modules here, when it first builds a suggestion, since the build SDK
+    belongs to a later stage. A module re-exporting an imported name does not count, so
+    ``DOCKER_IMAGE_REQUIREMENTS`` maps to ``taskforge.stage40_build.sdk`` alone, although the
+    standard template imports it as well.
+    """
+    modules: dict[str, list[str]] = {}
+    for module in sorted(ALLOWED_IMPORTS):
+        for name in _defined_names(importlib.import_module(module)):
+            modules.setdefault(name, []).append(module)
+    return {name: tuple(defining) for name, defining in modules.items()}
+
+
+def _name_suggestion(name: str, bound: Iterable[str]) -> str:
+    """``"; did you mean 'x'?"`` for the closest of ``bound`` and the SDK exports to ``name``.
+
+    An SDK export the program has not bound comes with its modules, as in ``"; did you mean
+    'research' from taskforge.stage40_build.sdk?"``. The result is ``""`` when no name is close.
+    """
+    local = set(bound)
+    exports = sdk_exports()
+    matches = difflib.get_close_matches(name, [*local, *exports], n=1)
+    if not matches:
+        return ""
+    match = matches[0]
+    if match in local:
+        return f"; did you mean {match!r}?"
+    return f"; did you mean {match!r} from {' or '.join(exports[match])}?"
 
 
 SAFE_BUILTINS: dict[str, object] = {
@@ -298,7 +355,7 @@ def _check_names(tree: ast.Module) -> None:
         raise ValueError(f"the program uses builtins that do not exist for build programs: {sorted(unsafe)}")
     if unbound:
         problems = [
-            f"`{name}` (line {line}){_suggestion(name, bound | SAFE_BUILTINS.keys())}"
+            f"`{name}` (line {line}){_name_suggestion(name, bound | SAFE_BUILTINS.keys())}"
             for name, line in sorted(unbound.items(), key=lambda item: item[1])
         ]
         raise ValueError(
