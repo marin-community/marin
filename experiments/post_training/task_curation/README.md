@@ -150,8 +150,12 @@ with a skip reason. Catalog source counts retain their full or SAMPLE scope.
 
 SAMPLE/FULL also publishes a complete inventory snapshot from these catalog
 records. It archives sampled packets, judgments and inference traces before
-changing the current snapshot pointer. A failed retry keeps a previous grade
-only when its report pipeline key matches. A changed key with a failed assessment
+changing the current snapshot pointer. Publication compacts blob descriptors, so evidence
+reads do not reopen every shard written by earlier publications. Evidence URIs
+and older read views remain valid.
+
+A failed retry keeps a previous grade only when its report pipeline key matches.
+A changed key with a failed assessment
 has no current grade. Sources without conversion pipelines remain inventory
 entries with an explicit skip reason. Authored legacy ratings are excluded.
 Repeated successful invocations with the same pipeline key reuse the canonical

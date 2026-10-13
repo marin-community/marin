@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from finestore.layout import OnConflict
+from finestore.layout import BlobTables, OnConflict
 from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore, Transaction
@@ -269,6 +269,8 @@ def publish_catalog(
                 on_conflict=OnConflict.SUPERSEDE,
             )
             document = _publication(store, store.read_view(), run_id, sources, legacy_archive_url=legacy_archive_url)
+            # Point reads otherwise reopen every small evidence shard from each publication.
+            store.compact(BlobTables.DESCRIPTORS)
             with store.transaction() as transaction:
                 uri = transaction.write_object(f"catalog/snapshots/{run_id}.json", _json(document))
                 transaction.table("catalog_snapshots").add(asdict(CatalogSnapshot(run_id, document["created_at"], uri)))
