@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
 from dataclasses import replace
 from typing import cast
@@ -16,9 +15,9 @@ from experiments.post_training.task_curation.catalog_snapshot import current_cat
 from experiments.post_training.task_curation.count_inputs import parquet_counts
 from experiments.post_training.task_curation.curation_catalog import append_curation_catalog
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
-from experiments.post_training.task_curation.export_catalog import catalog_document, source_row
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import DataSourceReview, RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source_metadata import source_row
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
@@ -49,27 +48,14 @@ def test_parquet_count_export_identifies_the_counted_input(tmp_path):
         parquet_counts(snapshot, "another-revision", "*.parquet")
 
 
-def test_catalog_export_is_deterministic_and_keeps_metadata_only_sources():
+def test_source_metadata_keeps_inventory_only_entries_without_authored_grades():
     reviewed = RlDataSource(
         info=SourceInfo(id="local:reviewed", title="Reviewed", origin="local", count=7),
         review=DataSourceReview(grade="good", evidence_url="https://example.org/review", reviewed_at="2026-10-08"),
     )
-    excluded = RlDataSource(info=SourceInfo(id="local:excluded", title="Excluded", origin="local", tags=("excluded",)))
-    document = catalog_document([reviewed, excluded])
-    assert document == catalog_document([excluded, reviewed])
-    rows = json.loads(json.dumps(document))["sources"]
-    assert [(row["id"], row["status"], row["pipeline"]) for row in rows] == [
-        ("local:excluded", "Excluded", None),
-        ("local:reviewed", "Available", None),
-    ]
-    assert rows[1]["quality"] == "good"
-    assert rows[1]["review_url"] == "https://example.org/review"
-    assert (
-        document["revision"]
-        == hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    )
-    changed = replace(reviewed, info=replace(reviewed.info, count=8))
-    assert catalog_document([changed, excluded])["revision"] != document["revision"]
+    row = source_row(reviewed)
+    assert row["id"] == "local:reviewed" and row["task_count"] == 7 and row["pipeline"] is None
+    assert "quality" not in row and "review_url" not in row
 
 
 def test_dataset_catalog_identity_is_available_without_execution(tmp_path):
@@ -154,7 +140,14 @@ def test_published_catalog_freezes_evidence_and_selects_only_matching_pipeline_g
         "grade_rule": "fixture",
         "model": {"revision": "fixture"},
         "curation": curation,
-        "assessment": {"admitted": {"grade": "good", "sample_count": 1}, "excluded": {}},
+        "assessment": {
+            "admitted": {
+                "grade": "good",
+                "sample_count": 1,
+                "examples": {"good": [{"task_id": task_id, "explanation": "Consistent reference"}]},
+            },
+            "excluded": {},
+        },
     }
     report_path = tmp_path / "report.json"
     report_path.write_text(json.dumps(report))
@@ -202,6 +195,8 @@ def test_published_catalog_freezes_evidence_and_selects_only_matching_pipeline_g
     assert "results" not in verification and "evidence" not in verification
     archived = json.loads(ReadView(root).resolve(by_id[source.info.id]["assessment"]["report_uri"]))
     assert archived["curation"]["verification"] == curation["verification"]
+    assert "examples" not in by_id[source.info.id]["assessment"]["admitted"]
+    assert archived["assessment"]["admitted"]["examples"] == report["assessment"]["admitted"]["examples"]
     native = by_id[inventory_only.info.id]
     assert native["task_count"] == 50 and native["assessment"]["status"] == "skipped"
     assert native["quality"] is None and "review_url" not in native

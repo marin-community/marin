@@ -21,23 +21,25 @@ for declaration fields and artifact outputs.
    [skyrl/math.py](skyrl/math.py) is an example. Reuse
    `taskcompendium.convert` helpers where they fit. Inventory-only sources use
    `info.dataset=SourceReference(...)` and no pipeline. Use the `excluded` tag
-   when the entry should be hidden by default.
+   when the entry is deprecated or excluded from use.
 3. If adding a module, import it and include its `sources()` results in
    [all_sources()](../sources.py). Add a behavioral conversion test in the family
    test module, and run it with [test_catalog.py](../tests/test_catalog.py).
-4. Regenerate the Atlas JSON from the repository root:
+4. Run a SAMPLE or FULL campaign for the new source to publish it in the curation
+   catalog, then export the published inventory from the repository root:
 
    ```bash
    uv run --with-editable './lib/taskcompendium[pipeline]' python \
-     -m experiments.post_training.task_curation.export_catalog \
-     --output infra/marina/applets/rl_data_catalog/dist/catalog.json
+     -m experiments.post_training.task_curation.catalog_snapshot \
+     --catalog-root /path/to/cache/campaigns/catalog \
+     --output /path/to/catalog.json
    ```
 
-The export does not download data or run converters. Inspect the new row in the
-JSON; commit the Python declarations, not the generated file. The applet build
-regenerates this JSON automatically. To update the dashboard, follow
+Exporting the published catalog does not download inputs or run converters. Inspect the new row in the
+JSON; commit the Python declarations, not the generated file. Atlas reads the
+published snapshot from object storage. To update the dashboard, follow
 [RL Data Atlas publishing](../../../../docs/references/rl-data-atlas.md).
-**Refresh sources** loads the published catalog; it does not rebuild it.
+**Refresh catalog** reads the catalog's current snapshot.
 See [offline parquet counts](../README.md#declaring-a-dataset) for count regeneration.
 
 ## Script graders

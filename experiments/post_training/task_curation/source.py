@@ -78,8 +78,8 @@ class SourceInfo:
 class DataSourceReview:
     """An authored assessment and the dataset/verifier revisions it covers.
 
-    Executed reviews and difficulty measurements remain in the Atlas database.
-    Declaring a conversion recipe does not imply a favorable quality review.
+    Retained for historical provenance. Current grades come from the curation
+    catalog's executed assessment reports.
     """
 
     grade: Literal["good", "some_issues", "bad"] | None = None

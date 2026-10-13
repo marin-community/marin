@@ -262,12 +262,14 @@ explicit truncation; binary files retain hashes. Full runs discard archive bytes
 
 Follow [Adding a dataset](datasets/README.md#adding-a-dataset). Edit declarations,
 not generated Atlas JSON; [Atlas publishing](../../../docs/references/rl-data-atlas.md)
-rebuilds and bundles the catalog. For an export-only check:
+reads the published curation catalog. Run the affected sources to publish their
+new declarations and assessments. For an export-only check:
 
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.export_catalog \
-  --output infra/marina/applets/rl_data_catalog/dist/catalog.json
+  -m experiments.post_training.task_curation.catalog_snapshot \
+  --catalog-root /path/to/cache/campaigns/catalog \
+  --output /path/to/catalog.json
 ```
 
 Recount pinned whole-file inputs offline:

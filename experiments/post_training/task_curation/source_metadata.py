@@ -1,21 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export the source registry as the RL Data Atlas build input."""
+"""Project source declarations into the curation catalog inventory."""
 
-import argparse
-import hashlib
-import json
-from collections.abc import Iterable
-from pathlib import Path
 from typing import Any
 
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.sources import all_sources
 
 
 def source_row(source: RlDataSource) -> dict[str, Any]:
-    """Project a declaration into the Atlas wire format without executing it."""
+    """Project a source declaration into catalog metadata without executing it."""
     info, pipeline = source.info, source.pipeline
     dataset = source.dataset
     invocation = None
@@ -62,37 +56,4 @@ def source_row(source: RlDataSource) -> dict[str, Any]:
         "status": "Excluded" if "excluded" in tags else "Available",
         "pipeline": invocation,
     }
-    review = source.review
-    row.update(
-        quality=review.grade,
-        review_url=review.evidence_url,
-        review_date=review.reviewed_at,
-        review_source_revision=review.dataset_revision,
-        review_verifier_revision=review.verifier_revision,
-        difficulty=None,
-        traces=None,
-    )
     return row
-
-
-def catalog_document(sources: Iterable[RlDataSource]) -> dict[str, Any]:
-    """Produce deterministic source JSON; its digest identifies the complete inventory."""
-    rows = sorted((source_row(source) for source in sources), key=lambda row: row["id"])
-    identifiers = [row["id"] for row in rows]
-    if len(set(identifiers)) != len(identifiers):
-        raise ValueError("Duplicate RL source identifiers")
-    revision = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return {"schema_version": 1, "revision": revision, "sources": rows}
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    document = catalog_document(all_sources().values())
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
-
-
-if __name__ == "__main__":
-    main()

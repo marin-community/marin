@@ -83,7 +83,8 @@ directly. Atlas reads these facts without invoking or inspecting the callable.
 | `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
 | `taskcompendium.runtime.local` | The uv environments that local graders run in on the Zephyr worker |
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()` and `runnable_sources()` |
-| `experiments/post_training/task_curation/source.py`, `export_catalog.py` | Source metadata, authored reviews and generated Atlas JSON |
+| `experiments/post_training/task_curation/source.py`, `source_metadata.py` | Source declarations and inventory metadata |
+| `experiments/post_training/task_curation/catalog_snapshot.py` | Published curation inventory, grades and archived evidence |
 | `experiments/post_training/task_curation/config.py` | Invocation options and concrete recipe settings; service binding belongs to `process_rows` |
 | `experiments/post_training/task_curation/pipeline.py` | `CurationRecipe`, `process_rows` and its `data/rl/<name>-<hash>` artifact |
 | `experiments/post_training/task_curation/pipeline.py`, `local.py` | Source-level mode dispatch and local mechanical conversion |
@@ -103,22 +104,22 @@ An `RlDataSource` has `info`, `review`, a typed `config` and an optional `pipeli
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
 search tags, notes and an optional input-row count. A `SourceReference` groups a
 name, revision and URL for the verifier or inventory dataset. Runnable sources
-expose their pinned input through `config.dataset`. `DataSourceReview` records an authored grade, evidence URL, date and
-the dataset/verifier revisions it covers. Its default is unrated. Executed
-reviews and difficulty measurements remain in the Atlas database.
+expose their pinned input through `config.dataset`. `DataSourceReview` retains
+historical annotations; current grades come from executed assessment reports.
 
-The applet build exports this registry to `dist/catalog.json`:
+Export the curation catalog's current snapshot for inspection:
 
 ```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.export_catalog \
-  --output infra/marina/applets/rl_data_catalog/dist/catalog.json
+uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.catalog_snapshot \
+  --catalog-root /path/to/cache/campaigns/catalog \
+  --output /path/to/catalog.json
 ```
 
-The exporter alone maps Python declarations to Atlas fields. Dataset links and
-**Input rows** describe the same pinned conversion input, before conversion or
-curation. Unknown counts remain unknown. A changed dataset or verifier revision
-makes reviews covering a different revision stale while preserving their history.
-See [RL Data Atlas](rl-data-atlas.md) for publishing and saved reviews, and the
+Dataset links and **Input rows** describe the same pinned conversion input,
+before curation. Unknown counts remain unknown. Assessment keys follow their
+pipeline dependencies, rubric and model configuration. A failed assessment under
+a changed key has no current grade. Earlier evidence remains archived.
+See [RL Data Atlas](rl-data-atlas.md) for publishing and historical reviews, and the
 [experiment README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
 for offline count regeneration.
 

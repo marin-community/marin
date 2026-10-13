@@ -23,18 +23,9 @@ from taskcompendium.pipeline.assessment import validate_coverage
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.curation_catalog import AssessmentStatus
-from experiments.post_training.task_curation.export_catalog import source_row
 from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source_metadata import source_row
 
-LEGACY_REVIEW_FIELDS = {
-    "quality",
-    "review_url",
-    "review_date",
-    "review_source_revision",
-    "review_verifier_revision",
-    "difficulty",
-    "traces",
-}
 VERIFICATION_SUMMARY_FIELDS = (
     "status",
     "eligible_count",
@@ -165,7 +156,7 @@ def _inventory_assessment(assessment: dict[str, Any]) -> dict[str, Any]:
         return assessment
     verification = curation.get("verification")
     if verification is not None:
-        verification = {name: verification.get(name) for name in VERIFICATION_SUMMARY_FIELDS}
+        verification = {name: verification[name] for name in VERIFICATION_SUMMARY_FIELDS if name in verification}
     summary = {**assessment, "curation": {**curation, "verification": verification}}
     for cohort in ("admitted", "excluded"):
         summary[cohort] = {name: value for name, value in assessment[cohort].items() if name != "examples"}
@@ -176,12 +167,7 @@ def _publication(
     store: DataStore, view: ReadView, run_id: str, sources: Iterable[RlDataSource], *, legacy_archive_url: str | None
 ) -> dict[str, Any]:
     # Stored JSON uses lists; normalize tuple fields before comparing declarations.
-    declarations = [
-        json.loads(
-            _json({name: value for name, value in source_row(source).items() if name not in LEGACY_REVIEW_FIELDS})
-        )
-        for source in sources
-    ]
+    declarations = [json.loads(_json(source_row(source))) for source in sources]
     identifiers = {row["id"] for row in declarations}
     if len(identifiers) != len(declarations):
         raise ValueError("Catalog source IDs must be unique")
