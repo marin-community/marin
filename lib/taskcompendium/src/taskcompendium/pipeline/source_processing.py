@@ -71,6 +71,7 @@ from taskcompendium.pipeline.sources import (
     SourceShard,
     conversion_context,
     conversion_shards,
+    raw_input_sha256,
     row_locator,
     source_files_identity,
     source_shards,
@@ -199,22 +200,9 @@ def _raw_dataset(
     return Dataset.from_list(list(shards)).flat_map(rows)
 
 
-def _binary_hash_identity(value: Any) -> dict[str, Any]:
-    if isinstance(value, bytes):
-        return {"binary_sha256": hashlib.sha256(value).hexdigest(), "size": len(value)}
-    raise TypeError(f"Unsupported raw source value: {type(value).__name__}")
-
-
-def _raw_input_sha256(data: dict[str, Any]) -> str:
-    document = json.dumps(
-        data, default=_binary_hash_identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-    )
-    return hashlib.sha256(document.encode()).hexdigest()
-
-
 def _admit_conversion(converted: ConvertedRow, *, recipe: SourceRecipe) -> dict[str, Any]:
     result = admit_converted_row(converted, recipe)
-    result["audit"]["raw"]["raw_input_sha256"] = _raw_input_sha256(converted.original_data)
+    result["audit"]["raw"]["raw_input_sha256"] = raw_input_sha256(converted.original_data)
     result["audit"]["raw"]["source_locator"] = converted.raw.source.row
     return result
 
@@ -245,7 +233,7 @@ def _locator_identity(locator: str, raw_input_sha256: str | None, recipe: Source
 
 
 def _source_identity(row: dict[str, Any], recipe: SourceRecipe) -> dict[str, Any]:
-    return _locator_identity(row["locator"], _raw_input_sha256(row["data"]), recipe)
+    return _locator_identity(row["locator"], raw_input_sha256(row["data"]), recipe)
 
 
 def _ledger_path(output: StoragePath, name: str) -> StoragePath:
@@ -469,7 +457,7 @@ def _indexed_raw_sample(run: _SourceRun, telemetry: PhaseTelemetry) -> RawSample
     ).results
     if sorted(row["locator"] for row in rows) != sorted(row_locator(file, index) for file, index in chosen):
         raise ValueError("The source parts did not produce exactly the sampled rows")
-    hashes = {row["locator"]: _raw_input_sha256(row["data"]) for row in rows}
+    hashes = {row["locator"]: raw_input_sha256(row["data"]) for row in rows}
     for file, size in sizes.items():
         write_parquet_file(
             (

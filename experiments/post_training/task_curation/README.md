@@ -95,7 +95,15 @@ bumps. Python source files do not enter assessment identity.
 Campaign evidence links point to `assessment_inputs`, `assessment_judgments`
 and `assessment_report`. Inputs contain a sample manifest, curation summary and
 packet parquet. Judgments contain grade parquet and paired request/response
-JSONL traces. A malformed or unavailable response is retried twice; remaining
+JSONL traces. Selected original rows are recovered from the recorded input paths and
+locators, checked against their curation hashes and included as bounded source
+previews. Prepared components and native Parquet read selected row groups;
+custom source readers reuse the recorded auxiliary inputs. Reports include
+original-row evidence coverage. This repeats source reading, without repeating
+conversion or controls. Pipelines without original source records declare no
+reader through `CatalogConfig.assessment_source`.
+
+A malformed or unavailable response is retried twice; remaining
 failures retain partial grades and fail the stage. Batch transport separately
 retries a failed HTTP request up to three times. Reruns reuse successful
 request-cache entries. Missing required evidence keeps the source's sampled

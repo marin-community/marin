@@ -116,6 +116,7 @@ def _completed_assessment(
         "basis": report["basis"],
         "grade_rule": report["grade_rule"],
         "model": report["model"],
+        "source_evidence": report["source_evidence"],
         "admitted": report["assessment"]["admitted"],
         "excluded": report["assessment"]["excluded"],
         "samples": samples,

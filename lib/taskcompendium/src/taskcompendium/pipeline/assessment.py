@@ -32,9 +32,12 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles
 from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.review import private_evidence_summary, review_payload
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
+from taskcompendium.pipeline.source_evidence import OriginalRow, SourceEvidenceFile, original_rows
+from taskcompendium.pipeline.sources import source_files_identity, staged_inputs
 from taskcompendium.submission import submission_compatibility, submission_instruction
 
 PACKET_SCHEMA = pa.schema(
@@ -47,7 +50,7 @@ PACKET_SCHEMA = pa.schema(
 )
 EVIDENCE_READ_BLOCK_BYTES = 1_048_576
 AUDIT_PREVIEW_CHARACTERS = 2048
-AUDIT_FIELD_OWNERS = {"task_json": "normalize", "normalization_changes": "normalize", "raw_json": "review"}
+AUDIT_FIELD_OWNERS = {"task_json": "normalize", "normalization_changes": "normalize", "raw_json": "source"}
 
 
 class Cohort(StrEnum):
@@ -256,10 +259,6 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
                 change[key], truncated = _audit_preview(change[key])
                 if truncated:
                     omissions.append(f"{view}: normalization {change['field']} {key} preview truncated")
-    if row.get("raw_json") is not None:
-        row["raw_json"], truncated = _audit_preview(row["raw_json"])
-        if truncated:
-            omissions.append(f"{view}: original source row preview truncated")
     if view == "normalize":
         task_json = row.pop("task_json")
         if task_json is None:
@@ -279,7 +278,13 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
     if len(json.dumps(evidence, ensure_ascii=False)) > sampling.max_packet_characters:
         evidence = {view: {"task_id": row["task_id"], "omitted": "section exceeds packet budget"}}
         omissions.append(f"{view}: evidence exceeds packet budget")
-    return {"task_id": row["task_id"], "evidence": evidence, "omissions": omissions}
+    return {
+        "task_id": row["task_id"],
+        "source_locator": row.get("source_locator"),
+        "raw_input_sha256": row.get("raw_input_sha256"),
+        "evidence": evidence,
+        "omissions": omissions,
+    }
 
 
 def _selected_evidence(file: SelectedFile, *, sampling: AssessmentSampling) -> Iterator[dict[str, Any]]:
@@ -323,8 +328,40 @@ def _packet(
     }
 
 
+def _original_files(records: dict[str, list[dict[str, Any]]], download: dict[str, Any]) -> list[SourceEvidenceFile]:
+    grouped: dict[str, dict[int, OriginalRow]] = {}
+    for task_id, evidence in records.items():
+        identity = next((row for row in evidence if row.get("source_locator") is not None), None)
+        if identity is None:
+            raise ValueError(f"Selected task has no original-row locator: {task_id}")
+        file, index_text = identity["source_locator"].rsplit(":", 1)
+        if file.startswith("/") or ".." in file.split("/"):
+            raise ValueError(f"Original source file must be relative: {file}")
+        if file not in download["staged_files"]:
+            raise ValueError(f"Original source file is outside the recorded inputs: {file}")
+        index = int(index_text)
+        rows = grouped.setdefault(file, {})
+        if index in rows:
+            raise ValueError(f"Selected tasks share an original-row locator: {file}:{index}")
+        rows[index] = OriginalRow(task_id, identity["source_locator"], identity["raw_input_sha256"])
+    overrides = download["source_file_overrides"]
+    return [
+        SourceEvidenceFile(
+            file,
+            overrides[file]["path"] if file in overrides else str(StoragePath(download["source_input"]) / file),
+            rows,
+        )
+        for file, rows in sorted(grouped.items())
+    ]
+
+
 def prepare_assessment(
-    context: ZephyrContext, *, curated_root: str, sampling: AssessmentSampling, output_root: str
+    context: ZephyrContext,
+    *,
+    curated_root: str,
+    sampling: AssessmentSampling,
+    raw_source: SourceFiles | None,
+    output_root: str,
 ) -> None:
     """Select admitted and excluded rows, then materialize bounded evidence on workers."""
     if sampling.admitted < 1 or sampling.excluded < 0 or sampling.max_packet_characters < 1:
@@ -397,6 +434,31 @@ def prepare_assessment(
             records: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for row in projected:
                 records[row["task_id"]].append(row)
+        source_rows = 0
+        if raw_source is not None and selected:
+            with telemetry.phase("source") as phase:
+                download = read_json(str(StoragePath(views["download"]) / "manifest.json"))
+                # Manifest JSON represents tuple fields as lists.
+                identity = json.loads(json.dumps(source_files_identity(raw_source)))
+                if identity != download["files"]:
+                    raise ValueError("Original source reader differs from the curation invocation")
+                recovered = execute_phase(
+                    context,
+                    Dataset.from_list(_original_files(records, download)).flat_map(
+                        partial(
+                            original_rows,
+                            spec=raw_source,
+                            context=ConversionContext(staged_inputs(download["inputs"]), None),
+                            preview_characters=AUDIT_PREVIEW_CHARACTERS,
+                        )
+                    ),
+                    telemetry=phase,
+                ).results
+                if {row["task_id"] for row in recovered} != task_ids or len(recovered) != len(selected):
+                    raise ValueError("Original source evidence does not cover the selected sample")
+                for row in recovered:
+                    records[row["task_id"]].append(row)
+                source_rows = len(recovered)
         with telemetry.phase("packets"):
             packet_path = str(StoragePath(output_root) / "packets/part-00000.parquet")
             write_parquet_file(
@@ -408,6 +470,7 @@ def prepare_assessment(
             str(StoragePath(output_root) / "manifest.json"),
             {
                 "schema_version": 1,
+                "source_evidence": {"reader_declared": raw_source is not None, "rows": source_rows},
                 "source": manifest["source"],
                 "curated_root": curated_root,
                 "scope": manifest["mode"],
@@ -459,6 +522,7 @@ def assessment_summary(inputs_root: str, judgments_root: str) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "source": inputs["source"],
+        "source_evidence": inputs["source_evidence"],
         "scope": inputs["scope"],
         "basis": "sampled_model_opinions",
         "grade_rule": (

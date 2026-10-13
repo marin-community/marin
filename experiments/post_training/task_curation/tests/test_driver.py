@@ -572,6 +572,7 @@ def test_campaign_assesses_tasks_and_preserves_curation_scope(
     assert result.exit_code == 0, result.output
     outcome = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
     report = json.loads(StoragePath(outcome["result"]["evidence"]["assessment_report"]).read_text())
+    assert report["source_evidence"] == {"reader_declared": True, "rows": 1}
     assert report["assessment"]["admitted"]["grade"] == "good"
     assert report["assessment"]["admitted"]["sample_count"] == 1
     assert report["assessment"]["admitted"]["population"] == admitted

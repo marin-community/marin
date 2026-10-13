@@ -139,6 +139,7 @@ def test_published_catalog_freezes_evidence_and_selects_only_matching_pipeline_g
         "basis": "sampled_model_opinions",
         "grade_rule": "fixture",
         "model": {"revision": "fixture"},
+        "source_evidence": {"reader_declared": False, "rows": 0},
         "curation": curation,
         "assessment": {
             "admitted": {

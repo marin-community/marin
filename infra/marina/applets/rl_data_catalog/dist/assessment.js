@@ -16,6 +16,8 @@ function summary(report) {
   section.append(node("p", `Admission counts: ${JSON.stringify(report.curation.admission_counts)}`));
   section.append(node("p", controls ? `Controls: ${controls.status}. Checked / eligible: ${controls.sample_count ?? "—"} / ${controls.eligible_count ?? "—"}. Counts: ${JSON.stringify(controls.counts)}` : "Controls were not measured."));
   section.append(node("p", `Model: ${report.model.model}; revision ${report.model.revision}. ${report.grade_rule}`));
+  const sourceEvidence = report.source_evidence;
+  if (sourceEvidence) section.append(node("p", sourceEvidence.reader_declared ? `Original source evidence: ${sourceEvidence.rows} selected rows recovered. Previews are bounded; read omissions in each packet.` : "This pipeline has no original-row reader."));
   target.append(section);
 }
 function samples(report) {

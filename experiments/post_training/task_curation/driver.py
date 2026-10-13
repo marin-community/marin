@@ -354,7 +354,12 @@ def main(
         if assessment is not None:
             stages = [
                 assessment_pipeline(
-                    step, source=source.name, settings=assessment, runtime=runtime, execution=recipe_settings
+                    step,
+                    source=source.name,
+                    raw_source=source.config.assessment_source if source.config is not None else None,
+                    settings=assessment,
+                    runtime=runtime,
+                    execution=recipe_settings,
                 )
                 for step, source in zip(steps, selected.values(), strict=True)
             ]

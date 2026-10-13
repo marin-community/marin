@@ -230,6 +230,10 @@ class CurationRecipe:
     def files(self) -> tuple[str, ...]:
         return self.source.files
 
+    @property
+    def assessment_source(self) -> SourceFiles:
+        return source_files(self.source)
+
 
 @dataclass(frozen=True)
 class CampaignMachines:

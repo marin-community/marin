@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 from marin.execution.lazy import ArtifactStep
+from taskcompendium.pipeline.inputs import SourceFiles
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
@@ -39,6 +40,11 @@ class CatalogConfig(Protocol):
 
     @property
     def files(self) -> tuple[str, ...]: ...
+
+    @property
+    def assessment_source(self) -> SourceFiles | None:
+        """The original-row reader, absent for pipelines without source records."""
+        ...
 
 
 @dataclass(frozen=True)

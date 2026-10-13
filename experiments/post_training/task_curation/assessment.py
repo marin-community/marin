@@ -14,6 +14,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.assessment import AssessmentSampling, assessment_summary, prepare_assessment, write_json
 from taskcompendium.pipeline.assessment_review import AssessmentModel, grade_assessment
 from taskcompendium.pipeline.chat_requests import chat_output
+from taskcompendium.pipeline.inputs import SourceFiles
 from taskcompendium.pipeline.review_requests import batch_output
 from taskcompendium.pipeline.stages import ReviewMode
 
@@ -21,7 +22,7 @@ from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_u
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import RecipeSettings
 
-INPUTS_VERSION = "2026.10.12.8"
+INPUTS_VERSION = "2026.10.13.1"
 JUDGMENTS_VERSION = "2026.10.12.5"
 REPORT_VERSION = "2026.10.12.3"
 REQUEST_TIMEOUT = 60
@@ -52,8 +53,21 @@ def assessment_evidence(stages: AssessmentStages) -> dict[str, str]:
     }
 
 
-def _prepare(runtime: CampaignRuntime, *, curated_root: str, sampling: AssessmentSampling, output_root: str) -> None:
-    prepare_assessment(runtime.context, curated_root=curated_root, sampling=sampling, output_root=output_root)
+def _prepare(
+    runtime: CampaignRuntime,
+    *,
+    curated_root: str,
+    sampling: AssessmentSampling,
+    raw_source: SourceFiles | None,
+    output_root: str,
+) -> None:
+    prepare_assessment(
+        runtime.context,
+        curated_root=curated_root,
+        sampling=sampling,
+        raw_source=raw_source,
+        output_root=output_root,
+    )
 
 
 def _judge(
@@ -122,6 +136,7 @@ def assessment_pipeline(
     curated: ArtifactStep[CampaignArtifact],
     *,
     source: str,
+    raw_source: SourceFiles | None,
     settings: AssessmentSettings,
     runtime: CampaignRuntime,
     execution: RecipeSettings,
@@ -133,6 +148,7 @@ def assessment_pipeline(
         version=INPUTS_VERSION,
         curated_root=curated,
         sampling=settings.sampling,
+        raw_source=raw_source,
         output_root=OUT,
     )
     inputs = replace(inputs, name=f"{inputs.name}-{inputs.fingerprint()[:16]}")
