@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-13T16:34:19.884770+00:00",
+  "observed_at": "2026-10-13T16:38:52.794069+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -3821,5 +3821,42 @@
     "Snowball incumbent qualification": 92.46114222222224
   },
   "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
-  "active_attempts": []
+  "active_attempts": [
+    {
+      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "f182c14d6e46b712",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791909498561",
+      "finished_at_ms": "",
+      "node_name": "g73bb8a",
+      "terminal_reason": "",
+      "stage": "Qwen transfer pilot",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "009a5386d55e732fa8bf80da2ec562502bfabab7bc1703785da879198c026b1a",
+      "allocated_h100_hours_so_far": 0.07607348654005262
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-pilot-a3-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "960c17d6c9f12f76",
+      "state": "3",
+      "exit_code": "",
+      "started_at_ms": "1791909498561",
+      "finished_at_ms": "",
+      "node_name": "g845f76",
+      "terminal_reason": "",
+      "stage": "Qwen transfer pilot",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "009a5386d55e732fa8bf80da2ec562502bfabab7bc1703785da879198c026b1a",
+      "allocated_h100_hours_so_far": 0.07607348654005262
+    }
+  ]
 }
