@@ -12,7 +12,7 @@ from pathlib import Path
 from rolloutengine.closure_scoring import ClosureFormat, score_closure_region
 from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.structure_closure.token_data import WRITE_RESULT_TOOL, TokenizedCaseRecord
+from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord, write_result_tool
 
 
 def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokenizerFast) -> list[dict]:
@@ -26,7 +26,7 @@ def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokeniz
     )
     native = "<tool_call>" + complete.rsplit("<tool_call>", 1)[1].split("</tool_call>", 1)[0]
     records = []
-    for declaration, tools in (("undeclared", None), ("declared", [WRITE_RESULT_TOOL])):
+    for declaration, tools in (("undeclared", None), ("declared", [write_result_tool()])):
         rendered = tokenizer.apply_chat_template(
             messages, tools=tools, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )

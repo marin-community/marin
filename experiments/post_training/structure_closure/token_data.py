@@ -22,18 +22,19 @@ class ToolPrompt(StrEnum):
     NATIVE_DECLARED = "native-declared"
 
 
-WRITE_RESULT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "write_result",
-        "description": "Record the result for a task.",
-        "parameters": {
-            "type": "object",
-            "properties": {"task": {"type": "string"}, "result": {"type": "array"}},
-            "required": ["task", "result"],
+def write_result_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "write_result",
+            "description": "Record the result for a task.",
+            "parameters": {
+                "type": "object",
+                "properties": {"task": {"type": "string"}, "result": {"type": "array"}},
+                "required": ["task", "result"],
+            },
         },
-    },
-}
+    }
 
 
 def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> ClosureCase:
@@ -44,7 +45,7 @@ def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> C
             {"role": "user", "content": case.instruction},
             {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": body}]},
         ],
-        tools=[WRITE_RESULT_TOOL],
+        tools=[write_result_tool()],
         tokenize=False,
         enable_thinking=False,
     )
@@ -93,7 +94,7 @@ def tokenized_case_record(
     tools = None
     if tool_prompt == ToolPrompt.NATIVE_DECLARED and case.family in (Family.TOOL, Family.REPEATED_OPENER):
         case = native_tool_case(case, tokenizer)
-        tools = [WRITE_RESULT_TOOL]
+        tools = [write_result_tool()]
     rendered = tokenizer.apply_chat_template(
         [{"role": "user", "content": case.instruction}],
         tools=tools,

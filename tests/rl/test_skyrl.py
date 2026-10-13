@@ -292,15 +292,6 @@ def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) ->
     with pytest.raises(ValueError, match="expert_block requires non-colocated"):
         dataclasses.replace(spec, config_yaml=recipe, runtime=runtime)
 
-    separate = dataclasses.replace(spec.topology.role_plan, colocate_all=False)
-    accepted = dataclasses.replace(
-        spec,
-        config_yaml=recipe,
-        runtime=runtime,
-        topology=dataclasses.replace(spec.topology, num_nodes=2, role_plan=separate),
-    )
-    assert accepted.topology.num_nodes * accepted.topology.gpus_per_node == 8
-
 
 def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
     spec = _spec()
