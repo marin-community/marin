@@ -32,6 +32,7 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     CapacityDrops,
 )
+from levanter.grug._moe.ep_common import _assignment_sources
 from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _select_local_assignments
 
 
@@ -106,13 +107,14 @@ def _moe_mlp_ep_ring_dedup_local(
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Deduplicated all-to-all dispatch, ring's grouped expert MLP, expert-side combine.
 
-    ``transport_capacity_factor`` sizes each (sender, destination) block as a multiple of the
-    distinct tokens a shard sends one destination under uniform routing,
-    ``destination_hit_fraction * Tlocal``. A token past that limit loses all its assignments to
-    the destination (sender drops). The size is an expectation for uniform routing, with no
-    worst-case guarantee: when routing concentrates on a destination, its tokens past the limit
-    drop even if the destination has expert capacity to spare, so a factor that drops nothing on
-    one workload can drop on another. ``capacity_factor`` keeps ring's meaning: each expert shard
+    ``transport_capacity_factor`` limits each (sender, destination) pair to a multiple of the
+    distinct tokens the sender would send that destination under uniform routing,
+    ``destination_hit_fraction`` times its valid tokens; the send buffer holds the limit for
+    ``Tlocal`` valid tokens. A token past the limit loses all its assignments to the destination
+    (sender drops). The limit is an expectation for uniform routing, with no worst-case
+    guarantee: when routing concentrates on a destination, its tokens past the limit drop even if
+    the destination has expert capacity to spare, so a factor that drops nothing on one workload
+    can drop on another. ``capacity_factor`` keeps ring's meaning: each expert shard
     runs at most ``capacity_factor * Tlocal * K`` assignments, allocated in local-expert order
     (receiver drops).
     """
@@ -201,12 +203,7 @@ def _moe_mlp_ep_ring_dedup_local(
         picked = jnp.where(dispatch_valid, picked, received_assignments)
         dispatch_row = jnp.where(dispatch_valid, picked // topk, send_rows)
         # position[r, j]: the dispatch row of received row r's j-th assignment, or the sentinel.
-        position = (
-            jnp.full((received_assignments,), expert_capacity, jnp.int32)
-            .at[picked]
-            .set(jnp.arange(expert_capacity, dtype=jnp.int32), mode="drop")
-            .reshape(send_rows, topk)
-        )
+        position = _assignment_sources(picked, send_size=received_assignments).reshape(send_rows, topk)
 
         x_dispatch = _dispatch_rows(received_x, jnp.minimum(dispatch_row, send_rows - 1), dispatch_valid, position)
         x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
