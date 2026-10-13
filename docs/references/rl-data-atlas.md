@@ -1,93 +1,83 @@
 # RL Data Atlas
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
-mirrors the published [curation catalog](task-curation.md#run-catalog). The catalog
-owns source declarations, executed curation outcomes and sampled grading reports.
-Atlas caches its current snapshot in Postgres and serves archived evidence.
-TaskSpec is the task format used by RL training. Zephyr prepares the evidence;
-GLM is the model that judges each sampled task against the grading rubric.
+reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
+Curation owns source declarations, admission decisions, executed controls and
+sampled GLM judgments. Atlas displays those records and their task packets.
 
 ```mermaid
 flowchart LR
-  C[Curate or adopt TaskSpec parquet] --> P[Zephyr evidence packets]
-  P --> G[One GLM judgment per sampled item]
-  G --> R[Structured report]
-  R --> K[Curation catalog and archived evidence]
-  K --> A[Atlas mirror]
+  C[Curated TaskSpec parquet and stage evidence] --> P[Zephyr: sample and prepare packets]
+  P --> G[GLM: one judgment per packet]
+  G --> K[Typed FineStore catalog and archived packets]
+  K --> L[Explicit loader: stage and check]
+  L --> D[Select Postgres load]
+  D --> A[Atlas: SQL reads]
 ```
 
 ## Reading grades
 
-Each [FULL campaign](task-curation.md#run-a-campaign) is assessed automatically.
-The default sample is 100 admitted tasks and up to 20 excluded rows. SAMPLE opts
-in with `--assess` on the same campaign command. Read admitted
-opinions separately from excluded diagnostics and executed controls. Grading
-never changes task admission. Input populations may overlap.
+FULL campaigns grade automatically; SAMPLE opts in with `--assess`.
+The default sample covers 100 admitted tasks and up to 20 excluded rows.
+Admitted opinions, excluded diagnostics and executed grader controls remain
+separate. Grading does not change admission. Input populations may overlap.
 
-A source label is conservative: missing required evidence or an empty admitted
-sample gives Unknown; otherwise the worst sampled verdict determines the label.
-A completed assessment can contain Unknown opinions. It does not prove that the
-whole source is valid. Open its report to inspect selected tasks, explanations,
-evidence citations and omissions.
+SQL computes each cohort's verdict counts and label. An empty sample, missing
+TaskSpec or unavailable judgment gives Unknown; otherwise Bad takes precedence
+over Some issues, Unknown and Good. Read the task explanations, citations and
+omissions beside the label. These are sampled opinions, not proof that an entire
+source is valid.
 
-Assessment identity follows the pipeline key, source dependencies, sample,
-rubric and model configuration. Failed retries preserve a previous grade only
-under the same key. Sources without conversion pipelines remain inventory entries
-with a skip reason. No running assessment state is published.
+Assessment keys use ordinary artifact dependencies and explicit versions.
+Changing only the rubric or grading model reuses curation. A failed new key has
+no current grade; archived evidence remains available. Inventory-only sources
+carry a skip reason. The source table shows the latest curation outcome; the
+assessment page shows the curation associated with its selected grade.
 
-## Catalog mirror
+## Updating Atlas
 
-Publishing a curation campaign archives selected packets, judgments, request
-traces and reports before selecting the current catalog snapshot. Inventory rows
-carry counts, control policies and evidence links. Detailed controls and model
-examples remain in the reports. Run catalog publication in the data's storage
-region because it archives evidence from the curation outputs.
-
-Atlas reads the published snapshot during deployment. Its authenticated Refresh catalog action
-reads `catalog_current` and atomically replaces the saved mirror. Private visits
-also refresh it on page load; public visits read the saved mirror. A failed refresh preserves
-the last saved snapshot. Atlas has no manual rating overlay or independent
-source registry. Current data lives in its `curation_catalog` Postgres table.
-
-## Historical reviews
-
-The Historical reviews page opens the earlier review collections and raw artifacts.
-Legacy source ratings, difficulty measurements and defect records remain in the
-applet's original Postgres tables. They do not contribute to current grades.
-The archive preserves storage and original IDs; it does not reproduce the old
-review or difficulty workflows.
-
-## Publishing
-
-Source code lives in `infra/marina/applets/rl_data_catalog/`. The backend reads
-the catalog from object storage using Marina's credentials; deployment never
-launches conversion or inference. To use a different catalog, change the explicit
-root in `server/catalog.py`. The reader supports GCS, S3 and local paths. A live
-catalog must be published at a storage URL that Marina can read; local cache
-paths are suitable for local previews only.
+Source code lives in `infra/marina/applets/rl_data_catalog/`. Its migration
+creates the SQL tables; it does not read object storage or run curation.
+Publish code when the schema or UI changes, then load data explicitly:
 
 ```bash
 uv run marina validate infra/marina/applets/rl_data_catalog
-uv run marina publish infra/marina/applets/rl_data_catalog --local
-```
-
-Inspect the local source table, grading report, task evidence and archive before
-updating the live applet. Stop the disposable local stack after inspection.
-
-```bash
 uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json
 uv run marina publish infra/marina/applets/rl_data_catalog \
   --update fb11c931-5861-4878-8bb5-a964d652b45f --base-version CURRENT_VERSION
+
+uv run python infra/marina/applets/rl_data_catalog/load.py \
+  --catalog-root CATALOG_ROOT \
+  --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
-Export a snapshot without publishing:
+The first code update requires the applet's publisher. Run the loader in the
+catalog's storage region. It reads through `CurationCatalog`, sends byte-bounded
+SQL batches, checks sample and packet coverage, then selects the load with one
+UPDATE. An unchanged snapshot skips loading. One operator runs updates; concurrent
+loaders are unsupported. Abandoned and obsolete staging rows are removed on the
+next update. Schema changes may require downtime.
+
+Packets are stored separately as JSON text, preserving escaped null characters.
+Inventory queries scan structured metadata and verdict rows. Atlas performs no
+cloud reads, background refresh or inference. Request/response traces remain
+archival references in the assessment record.
+
+For a local preview, start disposable Marina and Postgres, then run the same
+loader against a local curation cache using the printed applet ID and origin:
 
 ```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.catalog_snapshot \
-  --catalog-root /path/to/cache/campaigns/catalog \
-  --output /path/to/catalog.json
+uv run marina publish infra/marina/applets/rl_data_catalog --local --json
+uv run python infra/marina/applets/rl_data_catalog/load.py \
+  --catalog-root ~/.cache/marin/rl-curation/campaigns/catalog \
+  --applet-id PRINTED_ID --url PRINTED_ORIGIN
 ```
 
-Catalog declarations and assessment changes belong in curation. Catalog data
-and evidence stay outside the applet package.
+Inspect the inventory, an assessment and its task evidence. Stop the local stack
+with Ctrl-C when finished; its database is disposable.
+
+## Historical reviews
+
+Historical reviews and raw artifacts remain in their original Postgres tables.
+They do not affect current grades. Atlas retains an archive reader; the previous
+manual review, source-verification and difficulty workflows are removed.

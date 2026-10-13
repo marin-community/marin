@@ -7,13 +7,13 @@
 <body>
 <header class="masthead"><a class="brand" href="./">open athena / research tools</a><a href="archive.html">Historical reviews ↗</a></header>
 <main>
-  <section class="hero"><div><p class="eyebrow">POST-TRAINING / CURATION CATALOG</p><h1>RL Data Atlas<span>.</span></h1><p class="intro">Source inventory, sampled task grades and executed controls.</p></div><div class="hero-actions"><button id="refresh" class="primary">Refresh catalog</button><button id="export" class="secondary">Export view</button></div></section>
+  <section class="hero"><div><p class="eyebrow">POST-TRAINING / CURATION CATALOG</p><h1>RL Data Atlas<span>.</span></h1><p class="intro">Source inventory, sampled task grades and executed controls.</p></div><div class="hero-actions"><button id="export" class="secondary">Export view</button></div></section>
   <section class="metrics" aria-label="Catalog totals">
     <div><span class="metric-label">SOURCES</span><strong id="source-count">—</strong><small id="assessment-count">Loading assessments</small></div>
     <div><span class="metric-label">GRADED SAMPLE ITEMS</span><strong id="sample-count">—</strong><small>Admitted tasks and excluded diagnostics</small></div>
     <div><span class="metric-label">CATALOG SNAPSHOT</span><strong id="snapshot-date">—</strong><small id="snapshot-id">Loading</small></div>
   </section>
-  <p class="sync-banner" id="message" role="status" aria-live="polite">Loading the saved catalog…</p>
+  <p class="sync-banner" id="message" role="status" aria-live="polite">Loading the loaded catalog…</p>
   <section class="catalog">
     <div class="catalog-top"><h2>Sources</h2><label class="search"><input id="search" type="search" placeholder="Search sources, families, tags…" aria-label="Search sources"></label></div>
     <div class="filters">

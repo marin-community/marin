@@ -50,11 +50,9 @@ function render() {
 function details(row) {
   $("detail-name").textContent = row.display_name; $("detail-notes").textContent = row.notes;
   const controls = row.curation?.verification;
-  const sourceEvidence = row.assessment.source_evidence;
   const fields = [["Source ID", row.id], ["Dataset revision", row.dataset_revision], ["Pipeline", row.pipeline?.name], ["Grade", labels[grade(row)]], ["Assessment scope", row.assessment.scope], ["Model", row.assessment.model?.model], ["Admitted opinions", row.assessment.admitted?.verdict_counts], ["Excluded opinions", row.assessment.excluded?.verdict_counts], ["Curation", row.curation?.status], ["Admission counts", row.curation?.admission_counts], ["Control status", controls?.status], ["Control counts", controls?.counts], ["Control sample / eligible", controls ? `${controls.sample_count ?? "—"} / ${controls.eligible_count ?? "—"}` : undefined], ["Assessment note", row.assessment.reason || row.assessment.latest_attempt_error]];
   $("detail-fields").replaceChildren();
   for (const [title, item] of fields) {if (item === null || item === undefined) continue; const field = node("dl", undefined, "field"); field.append(node("dt", title), node("dd", typeof item === "object" ? JSON.stringify(item) : String(item))); $("detail-fields").append(field);}
-  if (sourceEvidence) {const field = node("dl", undefined, "field"); field.append(node("dt", "Original source evidence"), node("dd", sourceEvidence.reader_declared ? `${sourceEvidence.rows} selected rows recovered; ${sourceEvidence.unavailable_rows} unavailable` : "This pipeline has no original-row reader")); $("detail-fields").append(field);}
   $("detail-links").replaceChildren();
   if (row.url?.startsWith("https://")) {const anchor = node("a", "Pinned dataset ↗"); anchor.href = row.url; anchor.rel = "noopener"; anchor.target = "_blank"; $("detail-links").append(anchor);}
   if (row.assessment.status === "complete") {const anchor = node("a", "Read assessment and task evidence ↗"); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; $("detail-links").append(anchor);}
@@ -73,16 +71,9 @@ async function load() {
   for (const origin of [...new Set(data.sources.map(row => row.origin))].sort()) {const option = node("option", origin); option.value = origin; $("origin").append(option);}
   $("origin").value = [...$("origin").options].some(option => option.value === selection) ? selection : "all"; render();
 }
-async function refresh() {
-  $("refresh").disabled = true; $("message").textContent = "Reading the published curation catalog…";
-  try {const response = await fetch("api/refresh", {method: "POST"}); if (!response.ok) throw new Error(`Refresh failed (${response.status})`); const result = await response.json(); await load(); $("message").textContent = result.busy ? "Another refresh is in progress. The saved snapshot remains available." : "Published catalog loaded. Grades and controls come from curation artifacts.";}
-  catch (error) {$("message").textContent = error.message;}
-  finally {$("refresh").disabled = false;}
-}
 for (const id of ["origin", "quality", "curation", "type"]) $(id).addEventListener("change", render);
 $("search").addEventListener("input", render); $("close-details").addEventListener("click", () => $("details").close());
 $("reset").addEventListener("click", () => {for (const id of ["origin", "quality", "curation", "type"]) $(id).value = "all"; $("search").value = ""; render();});
-$("refresh").hidden = location.hostname === "public.applets.marina.oa.dev"; $("refresh").addEventListener("click", refresh);
 $("export").addEventListener("click", () => {
   const quote = item => `"${String(item ?? "").replaceAll('"', '""')}"`;
   const cell = (row, key) => key === "sample" ? `${row.assessment.admitted?.sample_count || 0} / ${row.assessment.excluded?.sample_count || 0}` : value(row, key);
@@ -90,4 +81,4 @@ $("export").addEventListener("click", () => {
   const url = URL.createObjectURL(new Blob([csv], {type: "text/csv;charset=utf-8"}));
   const anchor = node("a"); anchor.href = url; anchor.download = "rl-data-atlas.csv"; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
-load().then(() => {$("message").textContent = "Showing the saved curation catalog."; if (!$("refresh").hidden) refresh();}).catch(error => {$("message").textContent = error.message;});
+load().then(() => {$("message").textContent = "Showing the loaded curation catalog.";}).catch(error => {$("message").textContent = error.message;});

@@ -27,20 +27,10 @@ for declaration fields and artifact outputs.
    test module, and run it with [test_catalog.py](../tests/test_catalog.py).
 4. Run a SAMPLE or FULL campaign to publish the updated inventory. Any campaign
    includes all source declarations; select the new source to also curate and
-   assess it. Export the published inventory from the repository root:
+   assess it. Inspect its records through `finestore.rl.curation.CurationCatalog`.
+   Commit the Python declarations. Update the dashboard with the
+   [Atlas loader](../../../../docs/references/rl-data-atlas.md#updating-atlas).
 
-   ```bash
-   uv run --with-editable './lib/taskcompendium[pipeline]' python \
-     -m experiments.post_training.task_curation.catalog_snapshot \
-     --catalog-root /path/to/cache/campaigns/catalog \
-     --output /path/to/catalog.json
-   ```
-
-Exporting the published catalog does not download inputs or run converters. Inspect the new row in the
-JSON; commit the Python declarations, not the generated file. Atlas reads the
-published snapshot from object storage. To update the dashboard, follow
-[RL Data Atlas publishing](../../../../docs/references/rl-data-atlas.md).
-**Refresh catalog** reads the catalog's current snapshot.
 See [offline parquet counts](../README.md#declaring-a-dataset) for count regeneration.
 
 ## Script graders

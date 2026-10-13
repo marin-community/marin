@@ -134,6 +134,7 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
         curation_uri=attempt.curation_uri,
         traces=traces,
     )
+    store.flush()
     with store.transaction() as transaction:
         transaction.table(ASSESSMENTS).add(assessment.model_dump(mode="json"))
         transaction.table(POPULATIONS).extend(row.model_dump(mode="json") for row in populations)

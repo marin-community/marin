@@ -92,37 +92,17 @@ or model configuration reuses prepared packets; source changes use the ordinary
 upstream pipeline key. Implementation changes require explicit stage version
 bumps. Python source files do not enter assessment identity.
 
-Campaign evidence links point to `assessment_inputs`, `assessment_judgments`
-and `assessment_report`. Inputs contain a sample manifest, curation summary and
-packet parquet. Judgments contain grade parquet and paired request/response
-JSONL traces. Selected original rows are recovered from the recorded input paths and
-locators, checked against their curation hashes and included as bounded source
-previews. Prepared components and native Parquet read selected row groups;
-custom source readers reuse the recorded auxiliary inputs. Reports include
-original-row evidence coverage. This repeats source reading, without repeating
-conversion or controls. Pipelines without original source records declare no
-reader through `CatalogConfig.assessment_source`.
-An irreproducible generator row retains its recorded locator, hash and rejection
-reason, with an explicit original-evidence omission. Regenerated content with a
-different hash never enters the packet. File-backed identity mismatches fail the
-preparation stage.
+The grading pass has two artifact stages: Zephyr prepares bounded packets from
+selected TaskSpecs and curation sidecars, then GLM emits one structured judgment
+per packet. Publication joins these outputs by task ID, checks coverage and
+archives packets and request/response traces in FineStore. Atlas loads the typed
+records and packets into Postgres; SQL computes cohort labels and counts.
 
-A malformed or unavailable response is retried twice; remaining
-failures retain partial grades and fail the stage. Batch transport separately
-retries a failed HTTP request up to three times. Reruns reuse successful
-request-cache entries. Missing required evidence keeps the source's sampled
-quality unknown even when the model supplies a favorable opinion.
-Assessment campaigns consolidate active request-cache shards before execution,
-including inlined responses. Superseded objects stay reachable by older readers.
-Compaction runs in the driver; run it in the bucket's region for remote caches.
-Maintenance failures are warnings, preserving the cache's best-effort behavior.
-Invalid structured replies, including token truncation, use the existing curation
-review retry budget of 8,192 tokens. First attempts use 4,096; transport failures
-do not increase the current budget. Valid cached judgments keep their original
-request budget.
-Retries constrain the tool's task ID to the selected item, preventing a copied
-hash typo from misattributing a judgment. Identity validation still rejects any
-mismatch; the publisher never repairs model IDs after the fact.
+Malformed or unavailable responses use finite retries. Remaining failures retain
+partial grades and fail the stage. Repeated runs reuse successful exact requests.
+Changing the rubric or `--assessment-model-revision` reuses curation and prepared
+packets. Ordinary source changes invalidate their downstream artifacts; shared
+stage implementation changes require an explicit version bump.
 
 Chat transport allows up to 64 requests per worker process, selected with
 `--review-concurrency`. Eight concurrently grading sources at 64 requests each
@@ -139,59 +119,24 @@ prior reviews are optional context; executed control coverage is reported
 separately. Excluded counts cover processed non-admitted verification rows;
 unprocessed input rows stay in the curation summary.
 
-`--curated-inventory FILE_OR_URL` reassesses retained FULL outputs without
-repeating conversion, panel review or controls. The inventory contains `sources`
-entries with `source` and `manifest` fields. Each adopted manifest must match
-the current source, dataset pin and recipe revision. Incomplete or gated
-curation remains visible in the assessment; model opinions cannot override it.
-Run large GCS-backed inputs in their storage region.
-Remote Zephyr scratch uses the current artifact prefix, so GCS campaigns keep
-their intermediate data in GCS too.
-It lives at `ARTIFACT_PREFIX/.zephyr/rl-data-campaign` remotely and
-`CACHE_DIR/.zephyr` locally. Zephyr gives each execution its own directory and
-removes it when releasing that execution.
-Selected evidence reads decode complete Parquet row groups, including task JSON
-for unselected rows in those groups. ID scans project only the required columns.
-The bounded packet set is written as one Parquet file after evidence projection.
-Packets include the runtime submission contract: conversation answers may be
-extracted and written to grader files by the adapter. Duplicate TaskSpec JSON
-and normalization text are omitted from review/verification sidecars; oversized
-source rows and normalization changes have explicit hashed previews. Full audit
-data remains in the curation output.
+Each terminal campaign publishes the complete inventory through the typed
+`CurationCatalog` reader. Assessments, populations, items and packet references
+retain their executed pipeline key. A failed attempt under a changed key has no
+current grade; an exact-key retry can retain a previously completed grade.
+Sources without pipelines remain inventory entries with a skip reason.
+Publication archives selected evidence in the data's storage region. Atlas data
+updates use the [explicit loader](../../../docs/references/rl-data-atlas.md#updating-atlas).
 
-Each campaign appends its reports and compact evidence to the FineStore catalog
-beside the campaign report. `assessment_runs` records ordinary pipeline keys,
-complete reports, failed attempts with partial evidence, and disabled assessments
-with a skip reason. Catalog source counts retain their full or SAMPLE scope.
+### Spiral rollout
 
-SAMPLE/FULL also publishes a complete inventory snapshot from these catalog
-records. It archives sampled packets, judgments and inference traces before
-changing the current snapshot pointer. Publication compacts blob descriptors, so evidence
-reads do not reopen every shard written by earlier publications. Evidence URIs
-and older read views remain valid.
-The inventory keeps control counts and policies; detailed control evidence and
-model examples remain in the linked archived report.
-
-A failed retry keeps a previous grade only when its report pipeline key matches.
-A changed key with a failed assessment
-has no current grade. Sources without conversion pipelines remain inventory
-entries with an explicit skip reason. Authored legacy ratings are excluded.
-Repeated successful invocations with the same pipeline key reuse the canonical
-grade. Changes to the rubric, model revision, sample size or seed change that key.
-
-Read the current snapshot without rereading source parquet:
-
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.catalog_snapshot \
-  --catalog-root /path/to/cache/campaigns/catalog --output /path/to/catalog.json
-```
-
-`publish_catalog(root, run_id, sources)` publishes a retained terminal invocation
-from the same catalog. Run publication in the data's storage region: it reads
-sampled packets and traces to preserve them. SAMPLE and overridden input counts
-never replace a declaration's full-source count. Curation failures and executed
-verification coverage remain separate from assessment opinions.
+Start with AIME24 and SVAMP and a small SAMPLE panel in the local cache above.
+Inspect task packets, rejected rows, provider failures and runtime. Repeat the
+same command to check cache reuse; change only the grading rubric to check that
+curation stays cached. Fix failures before increasing either the source set or
+sample size. Move to FULL on these sources, then expand by source family and
+measure throughput, retries, packet sizes and publication time at each step.
+Run large remote campaigns in the data's storage region. Load Atlas after the
+campaign and catalog are complete.
 
 ### Harbor compatibility view
 
@@ -277,18 +222,9 @@ explicit truncation; binary files retain hashes. Full runs discard archive bytes
 ## Declaring a dataset
 
 Follow [Adding a dataset](datasets/README.md#adding-a-dataset). Edit declarations,
-not generated Atlas JSON; [Atlas publishing](../../../docs/references/rl-data-atlas.md)
+and publish the catalog; [Atlas publishing](../../../docs/references/rl-data-atlas.md)
 reads the published curation catalog. Run the affected sources to publish their
-new declarations and assessments. For an export-only check:
-
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.catalog_snapshot \
-  --catalog-root /path/to/cache/campaigns/catalog \
-  --output /path/to/catalog.json
-```
-
-Recount pinned whole-file inputs offline:
+new declarations and assessments. Recount pinned whole-file inputs offline:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.count_inputs \

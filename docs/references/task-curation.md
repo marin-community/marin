@@ -100,19 +100,22 @@ ArtifactSteps.
 
 ## Declarations
 
-An `RlDataSource` has `info`, `review`, a typed `config` and an optional `pipeline`.
+An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
 search tags, notes and an optional input-row count. A `SourceReference` groups a
-name, revision and URL for the verifier or inventory dataset. Runnable sources
-expose their pinned input through `config.dataset`. `DataSourceReview` retains
-historical annotations; current grades come from executed assessment reports.
+name, revision and URL for an inventory dataset. Runnable sources expose their
+pinned input through `config.dataset`. Current grades come from the executed
+assessment records in `finestore.rl.curation.CurationCatalog`.
 
-Export the curation catalog's current snapshot for inspection:
+```python
+from finestore.rl.curation import CurationCatalog
 
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.catalog_snapshot \
-  --catalog-root /path/to/cache/campaigns/catalog \
-  --output /path/to/catalog.json
+catalog = CurationCatalog("/path/to/cache/campaigns/catalog")
+for source in catalog.sources(catalog.current().snapshot_id):
+    if source.assessment_key:
+        assessment = catalog.assessment(source.assessment_key)
+        for item in catalog.items(source.assessment_key):
+            packet = catalog.packet(source.assessment_key, item.task_id)
 ```
 
 Dataset links and **Input rows** describe the same pinned conversion input,
@@ -397,7 +400,8 @@ when its quality or verification gate rejects the source. Repeat
 
 FULL runs append a post-curation assessment; SAMPLE can opt in with `--assess`.
 The shared stages prepare bounded evidence packets with Zephyr, request one GLM
-judgment per packet, and compute a report in Python. The default sample covers
+judgment per packet, and publish typed records in the catalog. Atlas loads these
+records into Postgres and computes cohort summaries with SQL. The default sample covers
 100 admitted tasks and up to 20 excluded diagnostic rows, grouped by primary
 reason. Their populations and verdict counts stay separate. These model
 opinions do not change curation admission or imply source-wide correctness.
@@ -407,8 +411,9 @@ configure the pass; `--skip-assessment` records a curation-only run.
 Incomplete curation produces retained artifacts and downstream assessment, then
 the campaign reports failure. `--curation-attempt N` selects a new curation key
 when controls need a retry; successful exact review requests and pinned downloads
-remain cached. `--curated-inventory FILE_OR_URL` adopts existing FULL manifests
-after checking source pins and recipe revisions, retaining their control outcomes.
+remain cached. Rerun the same campaign to reuse completed dependencies.
+`--assessment-model-revision` changes the grading model revision separately from
+the curation review revision.
 
 Use `--cache-dir PATH` to run SAMPLE/FULL locally against small pinned sources
 and retain downloads, source artifacts, assessment artifacts and GLM query
@@ -464,17 +469,12 @@ telemetry, identity and filter-count snapshots are named FineStore objects with
 SHA-256 digests. Failed sources remain visible; missing statistics are null.
 QUICK does not imply review, verification or admission.
 
-`assessment_runs` records the ordinary report-pipeline key, complete reports,
-failed attempts with partial-evidence pointers, and skip reasons. Assessment
-status is independent of the curation outcome: an incomplete curation run can
-have a complete diagnostic assessment. Job progress stays in the executor.
-
-```python
-from finestore.reader import ReadView
-
-view = ReadView("/path/to/campaign-output/catalog")
-sources = view.scan("sources", where=[("run_id", "==", "saved-run-id")])
-```
+The typed `CurationCatalog` reader exposes source declarations, assessment
+attempts, selected assessments, cohort populations, items and archived packets.
+The terminal judgment artifact's ordinary pipeline key identifies an assessment.
+An incomplete curation run can have a complete diagnostic assessment. Assessment
+attempts publish complete, failed or skipped; live progress stays in the executor.
+Atlas's explicit loader copies selected records to Postgres after publication.
 
 A cached artifact retains its original attempt timestamp and timing. The
 containing invocation has a different run ID and start time; summing those

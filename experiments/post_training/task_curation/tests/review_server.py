@@ -5,6 +5,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
+
 class ReviewHTTPServer(ThreadingHTTPServer):
     def __init__(self):
         self.requests: list[dict] = []
@@ -20,7 +21,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
         task = json.loads(body["messages"][-1]["content"])
         tool = body["tool_choice"]["function"]["name"]
         server = cast(ReviewHTTPServer, self.server)
-        if (tool == "review_task" and not server.review_available) or (tool == "assess_task" and not server.assessment_available):
+        if (tool == "review_task" and not server.review_available) or (
+            tool == "assess_task" and not server.assessment_available
+        ):
             self.send_error(503)
             return
         verdict = (
@@ -70,5 +73,3 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def log_message(self, message, *args):
         pass
-
-

@@ -4,14 +4,14 @@
 """Typed curation catalog records shared by campaign writers and Atlas readers."""
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from finestore.layout import OnConflict
+from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
@@ -276,7 +276,9 @@ class CurationCatalog:
         return [
             AssessmentPopulation.model_validate(row)
             for row in self.view.iter_rows(
-                POPULATIONS, columns=list(AssessmentPopulation.model_fields), where=[("pipeline_key", "==", pipeline_key)]
+                POPULATIONS,
+                columns=list(AssessmentPopulation.model_fields),
+                where=[("pipeline_key", "==", pipeline_key)],
             )
         ]
 
@@ -292,6 +294,18 @@ class CurationCatalog:
         if row is None:
             raise FileNotFoundError(f"Task is outside the assessment sample: {task_id}")
         return self.document(row["packet_uri"])
+
+    def packets(self, items: Sequence[AssessmentItem]) -> Iterator[tuple[AssessmentItem, dict[str, Any]]]:
+        """Read a source's archived packets in one bounded blob request."""
+        references = [parse_uri(item.packet_uri) for item in items]
+        if any(ref is None or ref.table != BlobTables.DESCRIPTORS for ref in references):
+            raise ValueError("Task packets must be archived in this catalog")
+        keys = [ref.key for ref in references if ref is not None]
+        payloads = self.view.read_blobs(keys)
+        for item, key in zip(items, keys, strict=True):
+            if key not in payloads:
+                raise FileNotFoundError(f"Catalog packet is unavailable: {item.task_id}")
+            yield item, json.loads(payloads[key])
 
     def document(self, uri: str) -> dict[str, Any]:
         data = self.view.resolve(uri)

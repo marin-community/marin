@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A catalog mirror with archived assessment and legacy evidence."""
+"""Serve the explicitly loaded curation catalog from Postgres."""
 
 import json
 from typing import Any
@@ -12,34 +12,14 @@ from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .catalog import CATALOG_ROOT, evidence_document, published_catalog, validate_catalog
+from .schema import SCHEMA_SQL
 
 
-def save_catalog(connection: Connection, document: dict[str, Any]) -> None:
-    validate_catalog(document)
-    connection.execute(
-        text(
-            """
-            INSERT INTO curation_catalog (name, document, synced_at)
-            VALUES ('latest', CAST(:document AS JSONB), NOW())
-            ON CONFLICT (name) DO UPDATE SET document = EXCLUDED.document, synced_at = NOW()
-        """
-        ),
-        {"document": json.dumps(document, ensure_ascii=False)},
-    )
-
-
-def initialize_catalog(connection: Connection) -> None:
-    connection.execute(
-        text(
-            """
-        CREATE TABLE IF NOT EXISTS curation_catalog (
-            name TEXT PRIMARY KEY, document JSONB NOT NULL, synced_at TIMESTAMPTZ NOT NULL
-        )
-    """
-        )
-    )
-    # Historical tables stay in place; their contents never enter current grades.
+def migrate(connection: Connection) -> None:
+    for statement in SCHEMA_SQL.split(";"):
+        if statement.strip():
+            connection.execute(text(statement))
+    connection.execute(text("DROP TABLE IF EXISTS curation_catalog"))
     connection.execute(
         text(
             """
@@ -62,55 +42,65 @@ def initialize_catalog(connection: Connection) -> None:
     )
 
 
-def migrate(connection: Connection) -> None:
-    document = published_catalog(CATALOG_ROOT)
-    initialize_catalog(connection)
-    save_catalog(connection, document)
-
-
-def saved_catalog(connection: Connection) -> dict[str, Any]:
-    return connection.execute(text("SELECT document FROM curation_catalog WHERE name = 'latest'")).scalar_one()
-
-
-def source_record(connection: Connection, source_id: str) -> tuple[dict[str, Any], str]:
-    record = (
+def loaded_catalog(connection: Connection) -> dict[str, Any]:
+    row = (
         connection.execute(
             text(
                 """
-            SELECT row.value AS source, c.document->>'catalog_root' AS catalog_root
-            FROM curation_catalog c, jsonb_array_elements(c.document->'sources') AS row(value)
-            WHERE c.name = 'latest' AND row.value->>'id' = :source_id
-        """
+        SELECT l.* FROM atlas_current c JOIN atlas_loads l USING (load_id)
+        WHERE c.name = 'latest'
+    """
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(503, "Load a curation catalog before opening Atlas")
+    return dict(row)
+
+
+def source_record(connection: Connection, source_id: str) -> dict[str, Any]:
+    row = (
+        connection.execute(
+            text(
+                """
+        SELECT s.* FROM atlas_sources s JOIN atlas_current c USING (load_id)
+        WHERE c.name = 'latest' AND s.id = :source_id
+    """
             ),
             {"source_id": source_id},
         )
         .mappings()
         .one_or_none()
     )
-    if record is None:
+    if row is None:
         raise HTTPException(404, "Source not found")
-    return record["source"], record["catalog_root"]
+    return dict(row)
 
 
-def refresh_catalog(connection: Connection) -> dict[str, Any]:
-    lock = connection.execute(
-        text("SELECT pg_try_advisory_xact_lock(hashtext(current_schema() || '/curation-refresh'))")
-    ).scalar_one()
-    if not lock:
-        return {"busy": True}
-    previous = saved_catalog(connection)
-    document = published_catalog(previous["catalog_root"], previous)
-    changed = document["snapshot_id"] != previous["snapshot_id"] or document["revision"] != previous["revision"]
-    if changed:
-        save_catalog(connection, document)
-    return {"busy": False, "changed": changed, "snapshot_id": document["snapshot_id"]}
-
-
-def archived_document(root: str, uri: str) -> dict[str, Any]:
-    try:
-        return evidence_document(root, uri)
-    except FileNotFoundError as error:
-        raise HTTPException(404, str(error)) from error
+def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) -> dict[str, Any]:
+    return dict(
+        connection.execute(
+            text(
+                """
+            SELECT cohort, (to_jsonb(s) - 'load_id' - 'pipeline_key' - 'cohort') ||
+                jsonb_build_object('examples', (
+                    SELECT COALESCE(jsonb_agg(to_jsonb(example)), '[]'::jsonb) FROM (
+                        SELECT task_id, verdict, explanation, evidence_ids FROM atlas_items i
+                        WHERE i.load_id = s.load_id AND i.pipeline_key = s.pipeline_key
+                            AND i.cohort = s.cohort AND i.verdict <> 'good'
+                        ORDER BY task_id LIMIT 5
+                    ) example
+                )) AS summary
+        FROM atlas_cohort_summary s WHERE load_id = :load_id AND pipeline_key = :pipeline_key
+    """
+            ),
+            {"load_id": load_id, "pipeline_key": pipeline_key},
+        )
+        .tuples()
+        .all()
+    )
 
 
 def create_api(services: AppletServices) -> FastAPI:
@@ -120,49 +110,127 @@ def create_api(services: AppletServices) -> FastAPI:
     @api.get("/sources")
     def sources() -> dict[str, Any]:
         with engine.connect() as connection:
-            document = saved_catalog(connection)
-            synced_at = connection.execute(
-                text("SELECT synced_at FROM curation_catalog WHERE name = 'latest'")
-            ).scalar_one()
-        rows = [
-            {
-                **{name: value for name, value in row.items() if name != "declaration"},
-                "assessment": {name: value for name, value in row["assessment"].items() if name != "samples"},
-            }
-            for row in document["sources"]
-        ]
+            metadata = loaded_catalog(connection)
+            rows = connection.execute(
+                text(
+                    """
+                SELECT s.*, a.scope, a.model, summary.cohorts,
+                    COALESCE((s.curation->>'raw_population_count')::bigint,
+                        (s.declaration->>'task_count')::bigint) AS task_count
+                FROM atlas_sources s
+                LEFT JOIN atlas_assessments a
+                    ON a.load_id = s.load_id AND a.pipeline_key = s.assessment_key
+                LEFT JOIN (
+                    SELECT load_id, pipeline_key,
+                        jsonb_object_agg(cohort, to_jsonb(v) - 'load_id' - 'pipeline_key' - 'cohort') AS cohorts
+                    FROM atlas_cohort_summary v GROUP BY load_id, pipeline_key
+                ) summary ON summary.load_id = s.load_id AND summary.pipeline_key = s.assessment_key
+                WHERE s.load_id = :load_id ORDER BY s.id
+            """
+                ),
+                {"load_id": metadata["load_id"]},
+            ).mappings()
+            inventory = []
+            for row in rows:
+                inventory.append(
+                    {
+                        **row["declaration"],
+                        "task_count": row["task_count"],
+                        "curation": row["curation"],
+                        "assessment": {
+                            "status": "complete" if row["assessment_key"] else row["latest_attempt_status"],
+                            "pipeline_key": row["assessment_key"],
+                            "latest_attempt_key": row["latest_attempt_key"],
+                            "latest_attempt_status": row["latest_attempt_status"],
+                            "reason": row["reason"],
+                            "scope": row["scope"],
+                            "model": row["model"],
+                            **(row["cohorts"] or {}),
+                        },
+                    }
+                )
         return {
-            "sources": rows,
-            "snapshot_id": document["snapshot_id"],
-            "revision": document["revision"],
-            "created_at": document["created_at"],
-            "synced_at": synced_at,
+            "sources": inventory,
+            "snapshot_id": metadata["snapshot_id"],
+            "created_at": metadata["created_at"],
+            "synced_at": metadata["loaded_at"],
         }
 
     @api.get("/assessment")
     def assessment(source_id: str) -> dict[str, Any]:
         with engine.connect() as connection:
-            source, catalog_root = source_record(connection, source_id)
-        data = source["assessment"]
-        if data["status"] != "complete":
-            raise HTTPException(404, data.get("reason", "Assessment unavailable"))
-        return {"source": source["display_name"], "report": archived_document(catalog_root, data["report_uri"])}
+            source = source_record(connection, source_id)
+            if source["assessment_key"] is None:
+                raise HTTPException(404, source["reason"] or "Assessment unavailable")
+            parameters = {"load_id": source["load_id"], "pipeline_key": source["assessment_key"]}
+            row = (
+                connection.execute(
+                    text(
+                        """
+                SELECT pipeline_key, source_id, scope, model, rubric, curation, curation_uri, traces
+                FROM atlas_assessments WHERE load_id = :load_id AND pipeline_key = :pipeline_key
+            """
+                    ),
+                    parameters,
+                )
+                .mappings()
+                .one()
+            )
+            summaries = cohort_summaries(connection, **parameters)
+            samples = [
+                dict(item)
+                for item in connection.execute(
+                    text(
+                        """
+                SELECT task_id, cohort, verdict, status, exclusion_reason
+                FROM atlas_items WHERE load_id = :load_id AND pipeline_key = :pipeline_key
+                ORDER BY cohort, task_id
+            """
+                    ),
+                    parameters,
+                ).mappings()
+            ]
+        return {
+            "source": source["declaration"]["display_name"],
+            "report": {
+                **row,
+                "basis": "sampled_model_opinions",
+                "assessment": summaries,
+                "evidence": {"samples": samples},
+            },
+        }
 
     @api.get("/evidence")
     def evidence(source_id: str, task_id: str) -> dict[str, Any]:
         with engine.connect() as connection:
-            source, catalog_root = source_record(connection, source_id)
-        sample = next(
-            (sample for sample in source["assessment"].get("samples", []) if sample["task_id"] == task_id), None
-        )
-        if sample is None:
+            row = (
+                connection.execute(
+                    text(
+                        """
+                SELECT i.task_id, i.cohort, i.verdict, i.status, i.explanation, i.evidence_ids,
+                    i.omissions, i.exclusion_reason, p.packet
+                FROM atlas_sources s JOIN atlas_current c USING (load_id)
+                JOIN atlas_items i ON i.load_id = s.load_id AND i.pipeline_key = s.assessment_key
+                JOIN atlas_packets p ON p.load_id = i.load_id
+                    AND p.pipeline_key = i.pipeline_key AND p.task_id = i.task_id
+                WHERE c.name = 'latest' AND s.id = :source_id AND i.task_id = :task_id
+            """
+                    ),
+                    {"source_id": source_id, "task_id": task_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
             raise HTTPException(404, "Task is outside this assessment sample")
-        return archived_document(catalog_root, sample["evidence_uri"])
-
-    @api.post("/refresh")
-    def refresh() -> dict[str, Any]:
-        with engine.begin() as connection:
-            return refresh_catalog(connection)
+        return {
+            "judgment": {
+                key: row[key] for key in ("task_id", "cohort", "verdict", "status", "explanation", "evidence_ids")
+            },
+            "packet": json.loads(row["packet"]),
+            "omissions": row["omissions"],
+            "exclusion_reason": row["exclusion_reason"],
+        }
 
     @api.get("/archive")
     def archive() -> dict[str, Any]:

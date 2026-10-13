@@ -1,47 +1,45 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
+import shutil
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
+from finestore.rl.curation import (
+    ASSESSMENTS,
+    CURRENT,
+    ITEMS,
+    POPULATIONS,
+    SNAPSHOTS,
+    SOURCES,
+    Assessment,
+    AssessmentItem,
+    AssessmentPopulation,
+    CatalogSnapshot,
+    CurationCatalog,
+    CurationSummary,
+    CurrentCatalog,
+    SnapshotSource,
+    SourceDeclaration,
+    register_catalog,
+)
 from finestore.store import DataStore
 from marina.applets import AppletServices
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 
-from infra.marina.applets.rl_data_catalog.server.app import (
-    create_api,
-    initialize_catalog,
-    save_catalog,
-    saved_catalog,
-    source_record,
-)
-
-
-def catalog_document(root: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    revision = hashlib.sha256(
-        json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    return {
-        "schema_version": 2,
-        "snapshot_id": "fixture",
-        "created_at": "2026-10-12T00:00:00Z",
-        "revision": revision,
-        "catalog_root": root,
-        "sources": rows,
-    }
+from infra.marina.applets.rl_data_catalog.load import load_catalog
+from infra.marina.applets.rl_data_catalog.server.app import create_api, migrate
 
 
 @pytest.fixture
-def catalog_database(database_url: str, tmp_path: Path) -> Iterator[tuple[Engine, Path]]:
+def catalog_database(database_url: str) -> Iterator[Engine]:
     admin = create_engine(database_url)
     schema = "catalog_test_" + uuid.uuid4().hex
     with admin.begin() as connection:
@@ -53,13 +51,10 @@ def catalog_database(database_url: str, tmp_path: Path) -> Iterator[tuple[Engine
         with connection.cursor() as cursor:
             cursor.execute(f"SET search_path TO {schema}, public")
 
-    path = tmp_path / "catalog.json"
-    path.write_text(json.dumps(catalog_document(str(tmp_path / "evidence"), [])))
     try:
         with engine.begin() as connection:
-            initialize_catalog(connection)
-            save_catalog(connection, json.loads(path.read_text()))
-        yield engine, path
+            migrate(connection)
+        yield engine
     finally:
         engine.dispose()
         with admin.begin() as connection:
@@ -67,55 +62,101 @@ def catalog_database(database_url: str, tmp_path: Path) -> Iterator[tuple[Engine
         admin.dispose()
 
 
-def test_catalog_mirror_keeps_legacy_reviews_separate(catalog_database) -> None:
-    engine, _path = catalog_database
-    source = {
-        "id": "native:math",
-        "origin": "native",
-        "display_name": "Math\u202fsource",
-        "quality": "bad",
-        "assessment": {"status": "complete", "admitted": {"grade": "bad", "sample_count": 1}},
-    }
-    with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
-            INSERT INTO catalog_reviews (id, source_id, collection, updated_at)
-            VALUES ('legacy', 'native:math', '{"quality":"good","reviews":[]}'::jsonb, NOW())
-        """
+def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False) -> None:
+    declaration = SourceDeclaration(
+        id="math",
+        name="math",
+        display_name="Math",
+        origin="native",
+        family="math",
+        tags=[],
+        task_count=3,
+        notes="",
+        dataset_id=None,
+        dataset_revision=None,
+        url=None,
+        type="RLVR",
+        turns="Single-turn",
+        is_benchmark=False,
+        kind="Dataset",
+        status="Available",
+        pipeline=None,
+    )
+    curation = CurationSummary(
+        status="completed",
+        mode="full",
+        source_revision=None,
+        recipe_revision="1",
+        raw_population_count=3,
+        raw_sample_count=3,
+        processed_rows=3,
+        unprocessed_rows=0,
+        admission_counts={"admitted": 2, "rejected": 1},
+        verification=None,
+    )
+    key = snapshot_id
+    with DataStore.open(root, writer_id=snapshot_id) as store:
+        register_catalog(store)
+        items = []
+        for task_id, cohort, verdict, has_task in (
+            ("one", "admitted", "good", True),
+            ("two", "admitted", "unknown", False),
+            ("three", "excluded", "bad", True),
+        ):
+            packet = {"task": {"id": task_id, "prompt": "Null: \u0000; Unicode: π"}} if has_task else {}
+            uri = store.write_object(f"{key}/{task_id}.json", json.dumps(packet).encode())
+            if missing_packet and task_id == "one":
+                uri = "finestore://blobs/absent.json"
+            items.append(
+                AssessmentItem(
+                    pipeline_key=key,
+                    task_id=task_id,
+                    cohort=cohort,
+                    status="reviewed",
+                    verdict=verdict,
+                    explanation="sample finding",
+                    evidence_ids=["task"] if has_task else ["curation"],
+                    packet_uri=uri,
+                    has_task=has_task,
+                    omissions=[] if has_task else ["TaskSpec unavailable"],
+                    exclusion_reason="Reference contradiction" if cohort == "excluded" else None,
+                )
             )
+        cur_uri = store.write_object(f"{key}/curation.json", curation.model_dump_json().encode())
+        store.flush()
+        assessment = Assessment(
+            pipeline_key=key,
+            source_id="math",
+            scope="full",
+            model={"model": "glm", "revision": "1", "max_tokens": 4096, "max_attempts": 3, "retry_max_tokens": 8192},
+            rubric="Check answerability",
+            curation=curation,
+            curation_uri=cur_uri,
+            traces=[],
         )
-        connection.execute(
-            text(
-                """
-            INSERT INTO review_artifacts (review_id, path, content, sha256)
-            VALUES ('legacy', 'difficulty.json', 'original evidence', 'digest')
-        """
+        snapshot = CatalogSnapshot(snapshot_id=snapshot_id, created_at="2026-10-13T00:00:00Z", source_count=1)
+        source = SnapshotSource(
+            snapshot_id=snapshot_id,
+            id="math",
+            declaration=declaration,
+            assessment_key=key,
+            latest_attempt_key=key,
+            latest_attempt_status="complete",
+            reason=None,
+            curation=curation,
+        )
+        with store.transaction() as tx:
+            tx.table(ASSESSMENTS).add(assessment.model_dump(mode="json"))
+            tx.table(ITEMS).extend(i.model_dump(mode="json") for i in items)
+            tx.table(POPULATIONS).extend(
+                AssessmentPopulation(pipeline_key=key, cohort=cohort, population=count, sample_count=count).model_dump(
+                    mode="json"
+                )
+                for cohort, count in (("admitted", 2), ("excluded", 1))
             )
-        )
-        save_catalog(connection, catalog_document("/catalog", [source]))
-        assert source_record(connection, source["id"]) == (source, "/catalog")
-        assert saved_catalog(connection)["sources"] == [source]
-        assert connection.execute(text("SELECT collection->>'quality' FROM catalog_reviews")).scalar_one() == "good"
-        assert connection.execute(text("SELECT content FROM review_artifacts")).scalar_one() == "original evidence"
-        save_catalog(connection, catalog_document("/catalog", []))
-        assert saved_catalog(connection)["sources"] == []
-        assert connection.execute(text("SELECT COUNT(*) FROM catalog_reviews")).scalar_one() == 1
-
-
-@pytest.mark.parametrize("corruption", ["duplicate", "stale_revision"])
-def test_malformed_catalog_preserves_saved_mirror(catalog_database, corruption) -> None:
-    engine, _path = catalog_database
-    original = catalog_document("/catalog", [{"id": "native:math", "origin": "native", "task_count": 7}])
-    with engine.begin() as connection:
-        save_catalog(connection, original)
-        rows = original["sources"] * 2 if corruption == "duplicate" else original["sources"]
-        damaged = catalog_document("/catalog", rows)
-        if corruption == "stale_revision":
-            damaged["sources"][0]["task_count"] = 11
-        with pytest.raises(ValueError, match=r"Duplicate catalog source|Catalog revision does not match"):
-            save_catalog(connection, damaged)
-        assert saved_catalog(connection)["revision"] == original["revision"]
+            tx.table(SOURCES).add(source.model_dump(mode="json"))
+            tx.table(SNAPSHOTS).add(snapshot.model_dump())
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id=snapshot_id).model_dump())
 
 
 @dataclass(frozen=True)
@@ -126,86 +167,66 @@ class CatalogServices:
         return self.database_engine
 
 
-def test_atlas_routes_serve_catalog_evidence_and_archive(catalog_database) -> None:
-    engine, path = catalog_database
-    root = json.loads(path.read_text())["catalog_root"]
-    packet = {
-        "judgment": {"task_id": "task:one", "verdict": "good", "status": "reviewed"},
-        "packet": {"task": {"id": "task:one"}},
-        "omissions": [],
-    }
-    report = {"scope": "full", "assessment": {"admitted": {"grade": "good", "sample_count": 1}}}
-    with DataStore.open(root, writer_id="fixture") as store, store.transaction() as transaction:
-        evidence_uri = transaction.write_object("task.json", json.dumps(packet).encode())
-        report_uri = transaction.write_object("report.json", json.dumps(report).encode())
-    source = {
-        "id": "native:math",
-        "origin": "native",
-        "display_name": "Math",
-        "quality": "good",
-        "assessment": {
-            "status": "complete",
-            "admitted": {"grade": "good", "sample_count": 1},
-            "report_uri": report_uri,
-            "samples": [{"task_id": "task:one", "evidence_uri": evidence_uri}],
-        },
-    }
-    with DataStore.open(root, writer_id="snapshot") as store:
-        store.table(
-            "catalog_current",
-            primary_key=("name",),
-            schema=pa.schema([(name, pa.string()) for name in ("name", "snapshot_id", "document_uri")]),
-        )
-        with store.transaction() as transaction:
-            document_uri = transaction.write_object(
-                "catalog.json", json.dumps(catalog_document(root, [source])).encode()
-            )
-            transaction.table("catalog_current").add(
-                {"name": "latest", "snapshot_id": "fixture", "document_uri": document_uri}
-            )
+def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(catalog_database, tmp_path: Path) -> None:
+    engine = catalog_database
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "first")
+
+    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        with engine.begin() as connection:
+            result = connection.execute(text(sql), parameters)
+            return {
+                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
+                "row_count": result.rowcount,
+            }
+
+    loaded = load_catalog(CurationCatalog(root), query)
+    assert loaded["counts"] == {"sources": 1, "assessments": 1, "populations": 2, "items": 3, "packets": 3}
+    assert load_catalog(CurationCatalog(root), query)["changed"] is False
     with engine.begin() as connection:
-        save_catalog(connection, catalog_document(root, [source]))
         connection.execute(
             text(
                 """
-            INSERT INTO catalog_reviews (id, source_id, collection, updated_at)
-            VALUES ('legacy', 'native:math', '{"reviews":[]}'::jsonb, NOW())
+            INSERT INTO catalog_reviews (id,source_id,collection,updated_at)
+            VALUES ('legacy','math','{"quality":"good","reviews":[]}'::jsonb,NOW())
         """
             )
         )
         connection.execute(
             text(
                 """
-            INSERT INTO review_artifacts (review_id, path, content, sha256)
-            VALUES ('legacy', 'nested/trace.txt', 'saved trace', 'digest')
+            INSERT INTO review_artifacts (review_id,path,content,sha256)
+            VALUES ('legacy','nested/trace.txt','saved trace','digest')
         """
             )
         )
     services = cast(AppletServices, CatalogServices(engine))
     with TestClient(create_api(services)) as client:
-        assert client.post("/refresh").json() == {"busy": False, "changed": False, "snapshot_id": "fixture"}
-        rows = client.get("/sources").json()["sources"]
-        assert rows[0]["quality"] == "good" and "samples" not in rows[0]["assessment"]
-        assert client.get("/assessment", params={"source_id": source["id"]}).json()["report"] == report
-        assert client.get("/evidence", params={"source_id": source["id"], "task_id": "task:one"}).json() == packet
-        assert client.get("/evidence", params={"source_id": source["id"], "task_id": "other"}).status_code == 404
+        inventory = client.get("/sources").json()
+        assessment = inventory["sources"][0]["assessment"]
+        assert inventory["snapshot_id"] == "first"
+        assert assessment["admitted"]["grade"] == "unknown"
+        assert assessment["admitted"]["verdict_counts"] == {"good": 1, "some_issues": 0, "bad": 0, "unknown": 1}
+        assert assessment["excluded"]["grade"] == "bad"
+        report = client.get("/assessment", params={"source_id": "math"}).json()["report"]
+        assert report["assessment"]["admitted"]["missing_evidence"] == 1
+        assert report["evidence"]["samples"][2]["exclusion_reason"] == "Reference contradiction"
+        packet = client.get("/evidence", params={"source_id": "math", "task_id": "one"}).json()
+        assert packet["packet"]["task"]["prompt"] == "Null: \u0000; Unicode: π"
+        assert client.get("/evidence", params={"source_id": "math", "task_id": "other"}).status_code == 404
         assert client.get("/assessment", params={"source_id": "absent"}).status_code == 404
+        assert client.post("/refresh").status_code == 404
         assert client.get("/archive").json()["reviews"][0]["id"] == "legacy"
-        archived = client.get("/archive/reviews/legacy").json()
-        assert archived["collection"] == {"reviews": []}
-        assert archived["artifacts"] == [{"path": "nested/trace.txt", "sha256": "digest"}]
+        assert client.get("/archive/reviews/legacy").json()["collection"]["quality"] == "good"
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
-        updated = {**catalog_document(root, [{**source, "task_count": 8}]), "snapshot_id": "next"}
-        with DataStore.open(root, writer_id="refresh") as store:
-            store.table(
-                "catalog_current",
-                primary_key=("name",),
-                schema=pa.schema([(name, pa.string()) for name in ("name", "snapshot_id", "document_uri")]),
-            )
-            with store.transaction() as transaction:
-                document_uri = transaction.write_object("next.json", json.dumps(updated).encode())
-                transaction.table("catalog_current").add(
-                    {"name": "latest", "snapshot_id": "next", "document_uri": document_uri}
-                )
-        assert client.post("/refresh").json() == {"busy": False, "changed": True, "snapshot_id": "next"}
-        assert client.get("/sources").json()["sources"][0]["task_count"] == 8
+        publish_sample(root, "broken", missing_packet=True)
+        with pytest.raises(FileNotFoundError):
+            load_catalog(CurationCatalog(root), query)
+        assert client.get("/sources").json()["snapshot_id"] == "first"
+        assert client.get("/evidence", params={"source_id": "math", "task_id": "one"}).json() == packet
+        publish_sample(root, "next")
+        assert load_catalog(CurationCatalog(root), query)["changed"] is True
+        shutil.rmtree(root)
+        assert client.get("/sources").json()["snapshot_id"] == "next"
+        assert client.get("/evidence", params={"source_id": "math", "task_id": "one"}).json() == packet
+        assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
