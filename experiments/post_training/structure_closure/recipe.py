@@ -31,6 +31,7 @@ class ClosureSupervision(StrEnum):
 
 def training_config(
     *,
+    role_plan: SkyRLRolePlan,
     max_steps: int,
     eval_batch_size: int,
     learning_rate: float,
@@ -38,7 +39,7 @@ def training_config(
     candidate_logprobs: int,
 ) -> dict:
     """Render the full-model smoke recipe; artifact inputs supply model and data paths."""
-    plan = ROLE_PLAN
+    plan = role_plan
     geometry: dict[str, object] = {
         "tensor_model_parallel_size": 1,
         "pipeline_model_parallel_size": 2,

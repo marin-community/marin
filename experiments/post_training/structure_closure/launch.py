@@ -3,6 +3,8 @@
 
 """Launch joint structure-closure training with closure and BFCL-Parity validation."""
 
+from dataclasses import replace
+
 import click
 import yaml
 from marin.execution.build_context import resolve_version
@@ -44,9 +46,11 @@ def build_run(
     learning_rate: float,
     supervision: ClosureSupervision,
     candidate_logprobs: int,
+    train_batch_size: int,
 ) -> ArtifactStep:
     """Bind immutable inputs and an explicit 40-H100 role plan to the trainer."""
     name = user_owned_name("models/structure-closure")
+    role_plan = replace(ROLE_PLAN, train_batch_size=train_batch_size, policy_mini_batch_size=train_batch_size)
     model = ArtifactStep.adopt(
         user_owned_name("models/structure-closure-initializer"),
         "2026.10.12.1",
@@ -62,6 +66,7 @@ def build_run(
             version=resolve_version(name, None),
             config_yaml=yaml.safe_dump(
                 training_config(
+                    role_plan=role_plan,
                     max_steps=max_steps,
                     eval_batch_size=64,
                     learning_rate=learning_rate,
@@ -79,7 +84,7 @@ def build_run(
                 ArtifactDataSource(data, relative_path="validation.parquet"),
                 ArtifactDataSource(parity, relative_path="validation.parquet"),
             ),
-            topology=SkyRLTopology(num_nodes=5, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
+            topology=SkyRLTopology(num_nodes=5, gpus_per_node=8, gpu_variant="H100", role_plan=role_plan),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=42,
         ),
@@ -109,6 +114,7 @@ def build_run(
 @click.option("--max-steps", type=click.IntRange(min=1), default=2, show_default=True)
 @click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), default=4e-6, show_default=True)
 @click.option("--candidate-logprobs", type=click.IntRange(min=1), default=32, show_default=True)
+@click.option("--train-batch-size", type=click.IntRange(min=1), default=64, show_default=True)
 @click.option(
     "--supervision",
     type=click.Choice([mode.value for mode in ClosureSupervision]),
@@ -123,6 +129,7 @@ def main(
     max_steps: int,
     learning_rate: float,
     candidate_logprobs: int,
+    train_batch_size: int,
     supervision: str,
 ) -> ArtifactStep:
     return build_run(
@@ -133,6 +140,7 @@ def main(
         learning_rate=learning_rate,
         supervision=ClosureSupervision(supervision),
         candidate_logprobs=candidate_logprobs,
+        train_batch_size=train_batch_size,
     )
 
 

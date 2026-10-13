@@ -34,6 +34,7 @@ DATA_URI = "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/c
 
 def evaluation_config() -> dict:
     config = training_config(
+        role_plan=EVAL_ROLE_PLAN,
         max_steps=1,
         eval_batch_size=64,
         learning_rate=4e-6,
