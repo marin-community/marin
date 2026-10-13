@@ -478,12 +478,17 @@ def test_competitive_code_rejects_constructive_problem_without_its_special_judge
 
 def test_reasoning_gym_extracts_a_reference_from_an_explicit_markdown_answer_section():
     response = "Reasoning.\n\n## Answer\n\n**The maximum area is 9.**\n\n---\n\nExtra algorithm notes."
-    assert markdown_answer(response, "9") == "9"
+    assert markdown_answer(response) == "9"
 
 
 def test_reasoning_gym_does_not_extract_a_negated_reference():
     response = "Reasoning.\n\n## Answer\n\nThe answer is not 9."
-    assert markdown_answer(response, "9") == "The answer is not 9."
+    assert markdown_answer(response) == "not 9"
+
+
+def test_reasoning_gym_does_not_replace_a_contradictory_answer_with_the_hidden_target():
+    response = "## Answer\nThe answer is 41; the provided target was 42."
+    assert markdown_answer(response) == "The answer is 41; the provided target was 42."
 
 
 def test_structured_output_repairs_repeated_required_fields():

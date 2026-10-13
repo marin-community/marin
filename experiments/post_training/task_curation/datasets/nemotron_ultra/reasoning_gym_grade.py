@@ -21,7 +21,7 @@ from reasoning_gym_answer import markdown_answer
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, last_boxed_answer
 
 
-def candidate(reply: str, expected: str | None = None) -> str:
+def candidate(reply: str) -> str:
     """Prefer explicit final-answer wrappers, then preserve the source scorer's text fallback."""
     text = final_answer_text(reply)
     blocks = re.findall(r"<answer>(.*?)</answer>", text, re.DOTALL)
@@ -30,7 +30,7 @@ def candidate(reply: str, expected: str | None = None) -> str:
     boxed = last_boxed_answer(text)
     if boxed is not None:
         return boxed
-    section = markdown_answer(text, expected)
+    section = markdown_answer(text)
     if section is not None:
         return section
     return text.strip()
@@ -40,7 +40,7 @@ def main() -> None:
     contract = json.loads(Path("/tests/config.json").read_text())["contract"]
     entry = {"question": contract["question"], "answer": contract.get("answer"), "metadata": contract["metadata"]}
     scorer = reasoning_gym.get_score_answer_fn(contract["metadata"]["source_dataset"])
-    print(float(scorer(candidate(Path("/app/answer.txt").read_text(), contract.get("answer")), entry)))
+    print(float(scorer(candidate(Path("/app/answer.txt").read_text()), entry)))
 
 
 if __name__ == "__main__":

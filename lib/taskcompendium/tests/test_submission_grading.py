@@ -10,6 +10,7 @@ from verifyit.json_comparison import NumericTypePolicy
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import (
     RUBRIC_LABELS,
+    EmptyOutputPolicy,
     ExactSpec,
     JudgeSpec,
     McqSpec,
@@ -152,6 +153,12 @@ def test_duplicate_json_answer_is_submission_failure(content):
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
 
 
+def test_plain_text_passes_blank_candidates_to_a_verifier_that_grades_them():
+    task = _task(_grader(ExactSpec(expected=("",), empty_output=EmptyOutputPolicy.GRADE)))
+    result = grade_answer(task, _attempt(task, " \n"))
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
 def test_captured_null_state_is_a_submission_but_missing_state_is_not():
     task = _task(_grader(StructuredExactSpec(expected=None)), AnswerType.STATE)
     missing = grade_answer(task, _attempt(task, "Done."))
@@ -251,6 +258,32 @@ def test_remote_judge_rejects_an_empty_candidate_without_calling_the_endpoint():
         0.0,
         {"reason": "empty_candidate"},
     )
+
+
+def test_remote_judge_grades_blank_plain_text_when_its_policy_requires_it(judge_server):
+    judge_server.reply = "C"
+    package = verifyit_package(
+        JudgeSpec(
+            references=("A reference answer.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"A": 1.0, "B": 0.0, "C": 0.5},
+            empty_output=EmptyOutputPolicy.GRADE,
+            model="fixture-judge",
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = _task(package.grader)
+
+    result = grade_remote_judge_answer(
+        task,
+        _attempt(task, " \n"),
+        JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 0.5)
+    assert len(judge_server.requests) == 1
 
 
 def test_remote_judge_provider_error_is_retryable_infrastructure_failure(judge_server):
