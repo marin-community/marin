@@ -120,7 +120,7 @@ DIFF_DRIVEN_REASON = "diff-driven"
 TEST_DIRS: dict[str, tuple[str, ...]] = {
     **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
     "deploy": ("infra/deploy/tests",),
-    "iac": ("infra/pulumi/tests", "infra/shellsim/tests"),
+    "iac": ("infra/pulumi/tests",),
     "marin": ("tests", "experiments"),
 }
 

@@ -10,7 +10,6 @@ supplies a dedicated read-only object-store key; providers use ambient credentia
 import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
 import pulumi
 import pulumi_cloudflare as cloudflare
@@ -23,8 +22,7 @@ from rigging.filesystem.storage_path import StoragePath
 NAME = "shellsim-ports"
 NAMESPACE = "iris"
 READONLY_SECRET = "shellsim-ports-readonly"
-IMAGE_TAG = "ghcr.io/marin-community/iris-task:shellsim-ports-proxy"
-WORKER_IMAGE_TAG = "ghcr.io/marin-community/iris-task:buildomatic"
+IMAGE_TAG = "ghcr.io/marin-community/iris-task:buildomatic"
 PORT = 8080
 
 
@@ -84,16 +82,7 @@ def deploy(config: ProxyConfig) -> DeploymentOutputs:
     provider = k8s.Provider("ports-k8s", kubeconfig="", context=platform.kube_context)
     options = pulumi.ResourceOptions(provider=provider)
     image = docker_build.Image(
-        "ports-proxy-image",
-        context=docker_build.BuildContextArgs(location=str(Path(__file__).parent)),
-        build_args={"SOURCE_REVISION": config.source_revision},
-        platforms=[docker_build.Platform.LINUX_AMD64],
-        tags=[IMAGE_TAG],
-        build_on_preview=False,
-        push=True,
-    )
-    worker_image = docker_build.Image(
-        "ports-worker-image",
+        "ports-image",
         context=docker_build.BuildContextArgs(
             location=f"https://github.com/rjpower/shellsim.git#{config.source_revision}"
         ),
@@ -104,7 +93,7 @@ def deploy(config: ProxyConfig) -> DeploymentOutputs:
             )
         ),
         platforms=[docker_build.Platform.LINUX_AMD64],
-        tags=[WORKER_IMAGE_TAG],
+        tags=[IMAGE_TAG],
         build_on_preview=False,
         push=True,
     )
@@ -175,7 +164,12 @@ def deploy(config: ProxyConfig) -> DeploymentOutputs:
                         {
                             "name": "proxy",
                             "image": image.ref,
-                            "args": ["--prefix", config.prefix],
+                            "command": ["python", "/opt/buildomatic/s3_proxy.py"],
+                            "args": ["--prefix", config.prefix, "--bind", "0.0.0.0", "--port", str(PORT)],
+                            "env": [
+                                {"name": "HOME", "value": "/app"},
+                                {"name": "AWS_EC2_METADATA_DISABLED", "value": "true"},
+                            ],
                             "ports": [{"name": "http", "containerPort": PORT}],
                             "envFrom": [{"secretRef": {"name": READONLY_SECRET}}],
                             "resources": {
@@ -242,4 +236,4 @@ def deploy(config: ProxyConfig) -> DeploymentOutputs:
     url = pulumi.Output.all(deployment.urn, service.urn, network_policy.urn, ingress.urn, dns.urn).apply(
         lambda _: f"https://{config.hostname}"
     )
-    return DeploymentOutputs(url, worker_image.ref)
+    return DeploymentOutputs(url, image.ref)

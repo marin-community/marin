@@ -11,8 +11,8 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin \
 
 Omit `--run` to print the plan. Use a new version when source or runtime changes.
 
-Pulumi builds both images from the configured Shellsim revision and exports the
-worker digest as `workerImage`. The proxy requires the `shellsim-ports-readonly`
+Pulumi builds one Shellsim image, runs its proxy command, and exports the same
+digest as `workerImage`. The proxy requires the `shellsim-ports-readonly`
 secret (`CW_KEY_ID`/`CW_KEY_SECRET`) and ambient provider credentials. Cilium limits
 ingress to Traefik/trusted Iris clients and egress to DNS/the bucket endpoint.
 
