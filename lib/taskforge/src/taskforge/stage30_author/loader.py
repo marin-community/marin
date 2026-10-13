@@ -116,6 +116,8 @@ ALLOWED_IMPORTS = frozenset(
 UNSAFE_BUILTINS = frozenset(
     {"open", "exec", "eval", "compile", "input", "breakpoint", "globals", "locals", "vars", "help", "exit", "quit"}
 )
+RENAMED_SDK_NAMES = {"try_grader": "grade_candidate"}
+"""Former SDK names and the names replacing them. A program using a former name is told its replacement."""
 MODULE_RULE = (
     "An authored program defines only imports, output models (classes), steps (`@rl_env_build_step async def`), "
     "the sink (`@rl_env_build_sink async def ... -> TaskSpec`) and, last, "
@@ -196,11 +198,15 @@ def sdk_exports() -> dict[str, tuple[str, ...]]:
 def _name_suggestion(name: str, bound: Iterable[str]) -> str:
     """``"; did you mean 'x'?"`` for the closest of ``bound`` and the SDK exports to ``name``.
 
-    An SDK export the program has not bound comes with its modules, as in ``"; did you mean
-    'research' from taskforge.stage40_build_with_program.sdk?"``. The result is ``""`` when no name is close.
+    A former SDK name in ``RENAMED_SDK_NAMES`` gets the name replacing it. An SDK export the
+    program has not bound comes with its modules, as in ``"; did you mean 'research' from
+    taskforge.stage40_build_with_program.sdk?"``. The result is ``""`` when no name is close.
     """
-    local = set(bound)
     exports = sdk_exports()
+    renamed = RENAMED_SDK_NAMES.get(name)
+    if renamed is not None:
+        return f"; did you mean {renamed!r} from {' or '.join(exports[renamed])}?"
+    local = set(bound)
     matches = difflib.get_close_matches(name, [*local, *exports], n=1)
     if not matches:
         return ""

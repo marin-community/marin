@@ -83,7 +83,7 @@ class Fixtures:
 
 @dataclass(frozen=True)
 class GradedCandidate:
-    """A candidate ``sandbox_effects.try_grader`` graded during the build, with its grade.
+    """A candidate ``sandbox_effects.grade_candidate`` graded during the build, with its grade.
 
     ``files`` are the workspace files the candidate left, sorted by path.
     """

@@ -74,11 +74,11 @@ the steps. Every other step must be an input of another step or of the sink.
 - Use the standard step names: `sources`, `fixtures`, `requirements`, `grader`, `instructions`, and \
 `assemble` for the sink. The program needs a step named `{grader}` returning `Grader`.
 - The grader step checks its own grader before it returns: it grades the reference answer with \
-`try_grader`, and the empty answer too, and raises `BuildFailure` (through `structured_until`, \
+`grade_candidate`, and the empty answer too, and raises `BuildFailure` (through `structured_until`, \
 which sends each problem back to the model first) when the reference is not `Outcome.GRADED` with at \
 least `FULL_CREDIT`, or when the empty answer is `Outcome.GRADED` above the rejection ceiling. The \
 empty answer usually comes back ungraded: the submission is refused before any grader runs, and \
-`try_grader` returns status `Outcome.SUBMISSION_FAILURE` with reward 0.0 and the error "Text \
+`grade_candidate` returns status `Outcome.SUBMISSION_FAILURE` with reward 0.0 and the error "Text \
 submission requires nonempty assistant content without tool calls". That counts as a rejection. Test \
 the empty answer as the template's grader step does, with `empty.status == Outcome.GRADED and \
 (empty.reward or 0.0) > REJECTION_CEILING`, and never require it to be `GRADED`. It keeps every candidate it graded in \
@@ -193,7 +193,7 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
         outputs,
         ("Sources", "ResearchFinding", "WebCall", "Fixtures", "Grader", "GradedCandidate", "Instructions"),
     ),
-    ("Sandbox effects", sandbox_effects, ("build_machine", "try_grader", "publish_image")),
+    ("Sandbox effects", sandbox_effects, ("build_machine", "grade_candidate", "publish_image")),
     ("Task types", task_models, ("TaskResource", "InlineFile", "EnvironmentRequirements")),
     ("Resource contents", resources, ("resource_bytes",)),
     (

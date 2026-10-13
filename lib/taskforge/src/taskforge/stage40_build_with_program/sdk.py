@@ -495,7 +495,7 @@ def output_paths(package: GraderPackage, reference_files: Sequence[TaskResource]
 
 
 def graded_candidate(reply: str, files: Sequence[TaskResource], grade: GradeResult) -> GradedCandidate:
-    """The ``Grader.prototyped`` entry of a candidate ``try_grader`` graded."""
+    """The ``Grader.prototyped`` entry of a candidate ``grade_candidate`` graded."""
     return GradedCandidate(
         reply=reply,
         files=tuple(sorted(files, key=lambda resource: resource.path)),

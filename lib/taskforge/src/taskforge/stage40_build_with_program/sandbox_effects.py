@@ -8,7 +8,7 @@ with ``infrastructure.host_checked_factories`` first, so a host fault raises
 ``BuildInfrastructureFailure`` and a fault of the program's own choices stays an ordinary error or a
 ``BuildFailure``.
 
-``try_grader`` grades a candidate through ``RolloutEngine.run``, the path a validation
+``grade_candidate`` grades a candidate through ``RolloutEngine.run``, the path a validation
 control takes. The candidate's workspace files are written by one shell call each and its reply
 ends the conversation (``spec.controls.candidate_turns``). The engine requires token evidence for
 every turn, and grading reads none, so the model serving those turns makes up ids that extend each
@@ -47,13 +47,13 @@ from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import SDK_VERSION
 
 MACHINE_CLEANUP_TIMEOUT = 120.0
-"""Seconds ``build_machine`` and ``try_grader`` wait for a machine to close."""
-TRY_GRADER_MACHINE = draft.machine(startup_timeout=600.0)
-"""The task and verifier machine settings ``try_grader`` uses unless the step passes its own."""
-TRY_GRADER_VERIFIER_TIMEOUT = 600.0
-"""Seconds ``try_grader`` allows one grading, verifier machine start included."""
-TRY_GRADER_SOURCE = "taskforge.try_grader"
-"""``Source.dataset`` of the provisional task ``try_grader`` grades against."""
+"""Seconds ``build_machine`` and ``grade_candidate`` wait for a machine to close."""
+GRADE_CANDIDATE_MACHINE = draft.machine(startup_timeout=600.0)
+"""The task and verifier machine settings ``grade_candidate`` uses unless the step passes its own."""
+GRADE_CANDIDATE_VERIFIER_TIMEOUT = 600.0
+"""Seconds ``grade_candidate`` allows one grading, verifier machine start included."""
+GRADE_CANDIDATE_SOURCE = "taskforge.grade_candidate"
+"""``Source.dataset`` of the provisional task ``grade_candidate`` grades against."""
 IMAGE_REPOSITORY_PREFIX = "taskforge-tasks"
 """Registry repository under which ``publish_image`` pushes an item's task image."""
 
@@ -97,7 +97,7 @@ class _CandidateModel:
         return ModelTurn(message, prompt, (len(prompt),), None, stop, text=message["content"])
 
 
-async def try_grader(
+async def grade_candidate(
     context: RLEnvBuildContext,
     requirements: EnvironmentRequirements | None,
     grader: GraderPackage,
@@ -109,7 +109,7 @@ async def try_grader(
     files: Sequence[TaskResource] = (),
     workspace: Sequence[TaskResource] = (),
     output_paths: Sequence[str] = (),
-    settings: MachineSettings = TRY_GRADER_MACHINE,
+    settings: MachineSettings = GRADE_CANDIDATE_MACHINE,
 ) -> GradeResult:
     """Grade one candidate, a final ``reply`` and the ``workspace`` files it leaves, as validation would.
 
@@ -136,23 +136,23 @@ async def try_grader(
         BuildInfrastructureFailure: the host failed to create or drive a grading machine.
     """
     if workspace and requirements is None:
-        raise BuildFailure("try_grader: workspace files need a task machine")
+        raise BuildFailure("grade_candidate: workspace files need a task machine")
     try:
         task = draft.assemble(
-            task_id=f"{context.workpiece_id}.try_grader",
+            task_id=f"{context.workpiece_id}.grade_candidate",
             instruction=instruction,
             answer_type=answer_type,
             answer_format=answer_format,
             grader=grader,
             source=Source(
-                dataset=TRY_GRADER_SOURCE, revision=SDK_VERSION, row=context.workpiece_id, importer_revision=SDK_VERSION
+                dataset=GRADE_CANDIDATE_SOURCE, revision=SDK_VERSION, row=context.workpiece_id, importer_revision=SDK_VERSION
             ),
             environment=requirements,
             files=files,
             output_paths=output_paths,
         )
     except ValueError as error:
-        raise BuildFailure(f"try_grader: {error}") from error
+        raise BuildFailure(f"grade_candidate: {error}") from error
     turns = candidate_turns(reply, sorted(workspace, key=lambda resource: resource.path))
     factories = host_checked_factories(context.services.factories, context.services.host)
     try:
@@ -168,13 +168,13 @@ async def try_grader(
                 tool_turn_timeout=None,
                 total_turn_timeout=None,
                 attempt_timeout=None,
-                verifier_timeout=TRY_GRADER_VERIFIER_TIMEOUT,
+                verifier_timeout=GRADE_CANDIDATE_VERIFIER_TIMEOUT,
                 cleanup_timeout=MACHINE_CLEANUP_TIMEOUT,
             ),
             factories=factories,
         )
     except (ValueError, NotImplementedError) as error:
-        raise BuildFailure(f"try_grader: {error}") from error
+        raise BuildFailure(f"grade_candidate: {error}") from error
     try:
         rollout = await RolloutEngine(_CandidateModel(turns), factories).run(lowered)
     except RolloutInterrupted as error:

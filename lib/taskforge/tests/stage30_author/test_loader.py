@@ -109,6 +109,21 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
             r"`research` \(line \d+\); did you mean 'research' from taskforge\.stage40_build_with_program\.sdk\?",
         ),
         (
+            lambda s: s.replace(
+                '    return Question(text="What is 6 * 7?")',
+                '    await try_grader(context)\n    return Question(text="What is 6 * 7?")',
+            ),
+            r"`try_grader` \(line \d+\); did you mean 'grade_candidate' "
+            r"from taskforge\.stage40_build_with_program\.sandbox_effects\?",
+        ),
+        (
+            lambda s: s.replace(
+                "sdk import ANSWER_FORMAT\n",
+                "sdk import ANSWER_FORMAT\nfrom taskforge.stage40_build_with_program.sandbox_effects import try_grader\n",
+            ),
+            r"has no name 'try_grader'; did you mean 'grade_candidate' from taskforge\.stage40_build_with_program\.sandbox_effects\?",
+        ),
+        (
             lambda s: s.replace("stage40_build_with_program.outputs import", "stage40_build_with_program.output import"),
             r"may not import 'taskforge.stage40_build_with_program.output'; did you mean 'taskforge.stage40_build_with_program.outputs'\?",
         ),
@@ -138,6 +153,8 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
         "misspelt-import",
         "import-from-wrong-module",
         "unimported-sdk-name",
+        "former-sdk-name",
+        "former-sdk-name-import",
         "misspelt-module",
         "no-sink-keyword",
         "step-as-sink",

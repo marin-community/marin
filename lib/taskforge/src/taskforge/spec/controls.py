@@ -260,7 +260,7 @@ def candidate_turns(final_reply: str, files: Sequence[TaskResource]) -> tuple[di
     """The assistant turns of a candidate that writes ``files`` with one shell call each, then replies.
 
     A validation control with a workspace payload replays these turns, and so does
-    ``try_grader`` when it prototypes a grader on a candidate, so both grade the state an agent
+    ``grade_candidate`` when it prototypes a grader on a candidate, so both grade the state an agent
     would leave.
     """
     turns = [wire_message(workspace_turn(index, file)) for index, file in enumerate(files)]
