@@ -71,6 +71,11 @@ class ControlFile(BaseModel):
     @field_validator("path")
     @classmethod
     def absolute(cls, path: str) -> str:
+        if not PurePosixPath(path).is_absolute():
+            raise ValueError(
+                f"the control file path {path!r} is relative; control files are the task's output paths, "
+                "spelled as absolute paths exactly as the request lists them"
+            )
         return normalized_absolute_path(path)
 
 

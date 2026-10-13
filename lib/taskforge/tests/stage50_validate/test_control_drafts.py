@@ -6,6 +6,7 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, MachineSpec, PackageSpec
@@ -190,6 +191,19 @@ async def test_a_control_writes_an_output_path_outside_the_workspace(glm_client,
     turn = payload.turns[0]
     assert isinstance(turn, AssistantToolCalls)
     assert f"> {report}" in str(turn.calls[0].object_arguments()["command"])
+
+
+def test_a_relative_control_path_is_refused_as_not_an_output_path():
+    submitted = {
+        **control("relative", "positive", "known_correct", "reference", "42", 1.0, None),
+        "files": [{"path": "snapshot/report/x.sql", "content": "select 42;\n"}],
+    }
+
+    with pytest.raises(ValidationError) as refusal:
+        ControlDraft.model_validate(submitted)
+
+    assert "the control file path 'snapshot/report/x.sql' is relative" in str(refusal.value)
+    assert "control files are the task's output paths, spelled as absolute paths" in str(refusal.value)
 
 
 async def test_control_files_with_shell_metacharacters_in_their_paths_are_written_verbatim():
