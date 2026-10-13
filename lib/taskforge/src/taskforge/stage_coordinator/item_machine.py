@@ -1,0 +1,357 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The item machine: the stages of an item, and the item's state as a fold over its events.
+
+The coordinator runs the stage in ``ItemState.stage`` and appends the stage's event to the item's
+log. ``transition`` then looks up the event's exit in a transition table to move the item to its
+next stage. ``DEFAULT_TRANSITIONS`` holds the table below, and a caller may pass its own table to
+re-target an edge::
+
+    stage     event         exit       next      bookkeeping
+    --------  ------------  ---------  --------  ------------------------------------------------
+    TRIAGE    TRIAGED       accept     AUTHOR
+    TRIAGE    TRIAGED       reject     DONE      closing rejected (task)
+    AUTHOR    AUTHORED      authored   BUILD     program_digest
+    BUILD     BUILT         built      VALIDATE  task_digest; revision none
+    BUILD     BUILD_FAILED  revise     AUTHOR    build_revisions + 1; revision build_failure
+    BUILD     BUILD_FAILED  reject     DONE      build_revisions + 1; closing rejected (budget)
+    VALIDATE  VALIDATED     validated  REVIEW
+    REVIEW    DECIDED       accept     DONE      closing accepted (labelled with the band)
+    REVIEW    DECIDED       reject     DONE      closing rejected (the decision's kind)
+    REVIEW    DECIDED       retry      VALIDATE  retries + 1
+    REVIEW    DECIDED       abandon    DONE      retries + 1; closing abandoned
+    REVIEW    DECIDED       modify     AUTHOR    round + 1; task_digest cleared; revision modify
+    DONE      TERMINAL      -          -         terminal = the closing's terminal
+    any       TERMINAL      -          (stays)   terminal failed, when ``terminal`` is ``failed``
+
+The coordinator checks the item's budget when it records the event spending it. It picks revise or
+reject for ``BUILD_FAILED`` and retry or abandon for ``DECIDED``, so ``transition`` reads no budget.
+
+``derive_state`` folds an item's events into its ``ItemState`` by calling ``transition`` on each
+event in turn. The state is computed again from the events on every read and is stored nowhere.
+The fold raises ``ValueError`` on a gap or a repeat in ``seq``, on an event recorded outside its
+stage, and on an exit the table has no edge for.
+
+An item ending ``ACCEPTED`` or ``REJECTED`` is finished, and the fold refuses any later event. An
+item ending ``ABANDONED`` or ``FAILED`` continues when it runs again, and its next event clears the
+terminal:
+
+* an abandoned item returns to ``VALIDATE`` with its retry count at zero;
+* a failed item resumes at the stage it failed in.
+"""
+
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
+from enum import StrEnum
+from types import MappingProxyType
+
+from taskforge.stage30_author.author import RevisionKind
+from taskforge.stage60_review.decision import BandOutcome, RejectKind
+
+EXIT = "exit"
+"""The attr holding a stage event's ``Exit``."""
+TERMINAL_ATTR = "terminal"
+"""The attr holding a ``TERMINAL`` event's ``Terminal``."""
+REASON_ATTR = "reason"
+UNNUMBERED = 0
+"""The ``seq`` of an event before a log appends it."""
+CALIBRATED = "calibrated"
+OUTSIDE_BAND = "accepted outside the band"
+TRIAGE_REJECTED = "triage rejected the proposal"
+
+
+class EventKind(StrEnum):
+    OPENED = "opened"
+    """digest: the proposal's. attrs: budget_digest."""
+    TRIAGED = "triaged"
+    """digest: the proposal's. attrs: exit."""
+    AUTHORED = "authored"
+    """digest: the program's. attrs: exit, revision (the ``RevisionKind`` the program answers)."""
+    BUILD_FAILED = "build_failed"
+    """digest: the program's. attrs: exit, step, failure (truncated), failure_file."""
+    BUILT = "built"
+    """digest: the task's. attrs: exit, program_digest, steps, hits."""
+    VALIDATED = "validated"
+    """digest: the task's. attrs: exit, summary_digest."""
+    DECIDED = "decided"
+    """digest: the task's. attrs: exit, retries_used; band for accept; kind and reasons for reject;
+    cause and count for retry and abandon; findings for modify."""
+    TERMINAL = "terminal"
+    """attrs: terminal (a ``Terminal``), reason, and kind (a ``RejectKind``) when rejected."""
+
+
+class Stage(StrEnum):
+    TRIAGE = "triage"
+    AUTHOR = "author"
+    BUILD = "build"
+    VALIDATE = "validate"
+    REVIEW = "review"
+    DONE = "done"
+    """A closing is recorded, and the item's ``TERMINAL`` event comes next."""
+
+
+class Exit(StrEnum):
+    """The way a stage ended, stored as ``attrs[EXIT]`` and looked up in the transition table."""
+
+    ACCEPT = "accept"
+    REJECT = "reject"
+    AUTHORED = "authored"
+    BUILT = "built"
+    REVISE = "revise"
+    VALIDATED = "validated"
+    RETRY = "retry"
+    ABANDON = "abandon"
+    MODIFY = "modify"
+
+
+EXITS: Mapping[Stage, frozenset[Exit]] = {
+    Stage.TRIAGE: frozenset({Exit.ACCEPT, Exit.REJECT}),
+    Stage.AUTHOR: frozenset({Exit.AUTHORED}),
+    Stage.BUILD: frozenset({Exit.BUILT, Exit.REVISE, Exit.REJECT}),
+    Stage.VALIDATE: frozenset({Exit.VALIDATED}),
+    Stage.REVIEW: frozenset({Exit.ACCEPT, Exit.REJECT, Exit.RETRY, Exit.ABANDON, Exit.MODIFY}),
+}
+"""The exits of each stage. ``DONE`` has none, because its ``TERMINAL`` event ends the item."""
+
+EVENT_STAGES: Mapping[EventKind, Stage] = {
+    EventKind.TRIAGED: Stage.TRIAGE,
+    EventKind.AUTHORED: Stage.AUTHOR,
+    EventKind.BUILD_FAILED: Stage.BUILD,
+    EventKind.BUILT: Stage.BUILD,
+    EventKind.VALIDATED: Stage.VALIDATE,
+    EventKind.DECIDED: Stage.REVIEW,
+}
+"""The stage recording each stage event."""
+
+type Transitions = Mapping[tuple[Stage, Exit], Stage]
+"""A transition table, from each stage and exit to the next stage."""
+
+DEFAULT_TRANSITIONS: Transitions = MappingProxyType(
+    {
+        (Stage.TRIAGE, Exit.ACCEPT): Stage.AUTHOR,
+        (Stage.TRIAGE, Exit.REJECT): Stage.DONE,
+        (Stage.AUTHOR, Exit.AUTHORED): Stage.BUILD,
+        (Stage.BUILD, Exit.BUILT): Stage.VALIDATE,
+        (Stage.BUILD, Exit.REVISE): Stage.AUTHOR,
+        (Stage.BUILD, Exit.REJECT): Stage.DONE,
+        (Stage.VALIDATE, Exit.VALIDATED): Stage.REVIEW,
+        (Stage.REVIEW, Exit.ACCEPT): Stage.DONE,
+        (Stage.REVIEW, Exit.REJECT): Stage.DONE,
+        (Stage.REVIEW, Exit.RETRY): Stage.VALIDATE,
+        (Stage.REVIEW, Exit.ABANDON): Stage.DONE,
+        (Stage.REVIEW, Exit.MODIFY): Stage.AUTHOR,
+    }
+)
+
+CLOSING_EDGES = frozenset(
+    {
+        (Stage.TRIAGE, Exit.REJECT),
+        (Stage.BUILD, Exit.REJECT),
+        (Stage.REVIEW, Exit.ACCEPT),
+        (Stage.REVIEW, Exit.REJECT),
+        (Stage.REVIEW, Exit.ABANDON),
+    }
+)
+"""The edges whose event records a ``Closing``. A table sends these edges to ``DONE``, and no others."""
+
+
+def check_transitions(table: Transitions) -> None:
+    """Raise ``ValueError`` unless ``table`` maps each stage exit to a stage, with closing edges to ``DONE``.
+
+    The event on a closing edge records the reason the item ends, so ``check_transitions`` requires
+    each closing edge to lead to ``DONE`` and every other edge to lead elsewhere.
+    """
+    expected = {(stage, way) for stage, ways in EXITS.items() for way in ways}
+    missing = sorted(f"{stage}/{way}" for stage, way in expected - table.keys())
+    unknown = sorted(f"{stage}/{way}" for stage, way in table.keys() - expected)
+    if missing or unknown:
+        raise ValueError(f"a transition table needs exactly the stage exits: missing {missing}, unknown {unknown}")
+    for (stage, way), target in table.items():
+        if not isinstance(target, Stage):
+            raise ValueError(f"transition {stage}/{way} leads to {target!r}, not a Stage")
+        if (target is Stage.DONE) != ((stage, way) in CLOSING_EDGES):
+            raise ValueError(f"transition {stage}/{way} -> {target}: only a closing edge leads to done")
+
+
+class Terminal(StrEnum):
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    ABANDONED = "abandoned"
+    """Validation retries ran out. A relaunch returns the item to ``VALIDATE``."""
+    FAILED = "failed"
+    """A stage raised. A relaunch resumes the item at that stage."""
+
+
+FINAL = frozenset({Terminal.ACCEPTED, Terminal.REJECTED})
+
+
+@dataclass(frozen=True)
+class Closing:
+    """The ``TERMINAL`` event due after a closing edge."""
+
+    terminal: Terminal
+    reason: str
+    kind: RejectKind | None
+
+
+@dataclass(frozen=True)
+class ItemEvent:
+    """An event of an item's log.
+
+    Attributes:
+        kind: The event's kind.
+        round: The round the event belongs to.
+        digest: The digest of the proposal, program or task the event refers to (see ``EventKind``).
+        attrs: Flat string fields, documented on each ``EventKind``.
+        seq: The event's position in the log, from 1. A log sets it when it appends the event.
+        at: The wall-clock time, in seconds, of the append. The fold ignores it.
+    """
+
+    kind: EventKind
+    round: int
+    digest: str | None
+    attrs: dict[str, str]
+    seq: int = UNNUMBERED
+    at: float = 0.0
+
+
+@dataclass(frozen=True)
+class ItemState:
+    """An item's status, folded from its events.
+
+    Attributes:
+        stage: The stage to run next.
+        round: The author, build and validation round. A ``modify`` exit starts the next one.
+        seq: The last event's ``seq``.
+        proposal_digest: The digest of the opened proposal.
+        program_digest: The digest of the program authored last.
+        task_digest: The digest of this round's built task, or ``None`` before the build.
+        revision: The kind of revision the next author call answers. A build asks the author again
+            with it, so only ``BUILT`` clears it.
+        build_revisions: The build failures so far.
+        retries: The review ``Retry`` decisions since the item opened or was last abandoned.
+        closing: The ``TERMINAL`` event due, while the stage is ``DONE``.
+        terminal: The item's terminal, until a later event clears it.
+    """
+
+    stage: Stage
+    round: int
+    seq: int
+    proposal_digest: str
+    program_digest: str | None
+    task_digest: str | None
+    revision: RevisionKind
+    build_revisions: int
+    retries: int
+    closing: Closing | None
+    terminal: Terminal | None
+
+
+def opened(event: ItemEvent) -> ItemState:
+    """Start an item at ``TRIAGE`` in round 0 from its ``OPENED`` event."""
+    if event.kind is not EventKind.OPENED or event.seq != 1:
+        raise ValueError(f"an item's log starts with OPENED at seq 1, not {event.kind} at seq {event.seq}")
+    assert event.digest is not None, "OPENED carries the proposal digest"
+    return ItemState(
+        stage=Stage.TRIAGE,
+        round=0,
+        seq=1,
+        proposal_digest=event.digest,
+        program_digest=None,
+        task_digest=None,
+        revision=RevisionKind.NONE,
+        build_revisions=0,
+        retries=0,
+        closing=None,
+        terminal=None,
+    )
+
+
+def transition(state: ItemState, event: ItemEvent, table: Transitions = DEFAULT_TRANSITIONS) -> ItemState:
+    """Return the state after ``event``, the item's next event.
+
+    A ``TERMINAL`` event ends the item at its closing, or marks it failed in place. Any other event
+    belongs to the stage in ``EVENT_STAGES``. Its exit picks the next stage from ``table``, and its
+    kind and exit select the bookkeeping in the module docstring's table.
+
+    Raises:
+        ValueError: the event follows a final terminal, breaks the ``seq`` order, comes from another
+            stage, has an exit its stage or kind lacks, or is a ``TERMINAL`` disagreeing with the closing.
+    """
+    kind, attrs = event.kind, event.attrs
+    if state.terminal in FINAL:
+        raise ValueError(f"event {kind} after terminal {state.terminal}")
+    if event.seq != state.seq + 1:
+        raise ValueError(f"event seq {event.seq} where {state.seq + 1} was expected")
+    state = replace(state, seq=event.seq, terminal=None)
+    if kind is EventKind.TERMINAL:
+        return _terminal(state, Terminal(attrs[TERMINAL_ATTR]))
+    stage = EVENT_STAGES.get(kind)
+    if stage is None:
+        raise ValueError(f"{kind} after the item's first event")
+    if stage is not state.stage:
+        raise ValueError(f"{kind} is recorded by stage {stage}, but the item is in stage {state.stage}")
+    way = Exit(attrs[EXIT])
+    if (state.stage, way) not in table:
+        raise ValueError(f"{kind} exits {way}, which stage {state.stage} has no edge for")
+    state = replace(state, stage=table[(state.stage, way)])
+    match (kind, way):
+        case (EventKind.TRIAGED, Exit.ACCEPT) | (EventKind.VALIDATED, Exit.VALIDATED):
+            return state
+        case (EventKind.TRIAGED, Exit.REJECT):
+            return replace(state, closing=Closing(Terminal.REJECTED, TRIAGE_REJECTED, RejectKind.TASK))
+        case (EventKind.AUTHORED, Exit.AUTHORED):
+            return replace(state, program_digest=event.digest)
+        case (EventKind.BUILT, Exit.BUILT):
+            return replace(state, task_digest=event.digest, revision=RevisionKind.NONE)
+        case (EventKind.BUILD_FAILED, Exit.REVISE):
+            return replace(state, build_revisions=state.build_revisions + 1, revision=RevisionKind.BUILD_FAILURE)
+        case (EventKind.BUILD_FAILED, Exit.REJECT):
+            failures = state.build_revisions + 1
+            reason = f"no buildable program after {failures} build failures"
+            closing = Closing(Terminal.REJECTED, reason, RejectKind.BUDGET)
+            return replace(state, build_revisions=failures, revision=RevisionKind.BUILD_FAILURE, closing=closing)
+        case (EventKind.DECIDED, Exit.ACCEPT):
+            band = BandOutcome(attrs["band"])
+            reason = CALIBRATED if band is BandOutcome.IN_BAND else f"{OUTSIDE_BAND}: {band}"
+            return replace(state, closing=Closing(Terminal.ACCEPTED, reason, None))
+        case (EventKind.DECIDED, Exit.REJECT):
+            return replace(state, closing=Closing(Terminal.REJECTED, attrs["reasons"], RejectKind(attrs["kind"])))
+        case (EventKind.DECIDED, Exit.RETRY):
+            return replace(state, retries=state.retries + 1)
+        case (EventKind.DECIDED, Exit.ABANDON):
+            return replace(state, retries=state.retries + 1, closing=Closing(Terminal.ABANDONED, attrs["cause"], None))
+        case (EventKind.DECIDED, Exit.MODIFY):
+            return replace(state, round=state.round + 1, task_digest=None, revision=RevisionKind.MODIFY)
+        case _:
+            raise ValueError(f"{kind} cannot exit {way}")
+
+
+def _terminal(state: ItemState, terminal: Terminal) -> ItemState:
+    if terminal is Terminal.FAILED:
+        return replace(state, terminal=terminal)
+    closing = state.closing
+    if state.stage is not Stage.DONE or closing is None or closing.terminal is not terminal:
+        found = None if closing is None else closing.terminal
+        raise ValueError(f"TERMINAL {terminal} in stage {state.stage} with closing {found}")
+    state = replace(state, terminal=terminal, closing=None)
+    if terminal is Terminal.ABANDONED:
+        return replace(state, stage=Stage.VALIDATE, retries=0)
+    return state
+
+
+def derive_state(events: Iterable[ItemEvent], table: Transitions = DEFAULT_TRANSITIONS) -> ItemState:
+    """Fold an item's events into its ``ItemState``: ``opened`` on the first, then ``transition`` on each.
+
+    Raises:
+        ValueError: the log is empty, does not start with ``OPENED``, or fails a ``transition`` check.
+    """
+    events = iter(events)
+    first = next(events, None)
+    if first is None:
+        raise ValueError("an item's log starts with OPENED, and this log is empty")
+    state = opened(first)
+    for event in events:
+        state = transition(state, event, table)
+    return state
