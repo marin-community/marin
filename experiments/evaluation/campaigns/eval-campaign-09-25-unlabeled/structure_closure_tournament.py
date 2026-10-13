@@ -73,7 +73,7 @@ CONCURRENCY = 32
 REQUEST_TIMEOUT = 180
 MAX_TRANSPORT_ATTEMPTS = 4
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
-CONFIG_DIR = Path(__file__).with_name("model-configs")
+CONFIG_DIR = Path(__file__).with_name("structure-closure-model-configs")
 
 # These three checkpoints use another tokenizer.json. Their prompts must be
 # re-encoded from the pinned rendered text, not sent as FTPO token IDs.
@@ -227,6 +227,7 @@ class StructureClosureExecutor:
                     "reference_tokenizer": REFERENCE_TOKENIZER,
                     "reference_tokenizer_revision": REFERENCE_TOKENIZER_REVISION,
                     "context_tokens": CONTEXT_TOKENS,
+                    "reasoning_parser": "grug",
                     "max_new_tokens": MAX_NEW_TOKENS,
                     "temperature": 0,
                     "top_p": 1,
@@ -273,6 +274,8 @@ def _mode_inventory() -> list[tuple[str, str]]:
 
 def _batch(config_path: Path, modes: list[tuple[str, str]], cluster: str) -> EvaluationBatch:
     model: ModelConfig = load_model_config(config_path)
+    if model.serve.reasoning_parser != "grug":
+        raise ValueError(f"{model.name}: tournament serving config must use the grug reasoning parser")
     if model.serve.max_model_len is None or model.serve.max_model_len < CONTEXT_TOKENS:
         raise ValueError(f"{model.name}: serve context below {CONTEXT_TOKENS}")
     accelerator = MARIN_EVAL_HARDWARE.select(model, default_platform(model), None)
@@ -305,6 +308,7 @@ def _batch(config_path: Path, modes: list[tuple[str, str]], cluster: str) -> Eva
             "prompt_encoding": "model-tokenizer-reencoded" if model.location in REENCODE_MODELS else "dataset-token-ids",
             "max_new_tokens": MAX_NEW_TOKENS,
             "context_tokens": CONTEXT_TOKENS,
+            "reasoning_parser": model.serve.reasoning_parser,
             "seed": SEED,
         }
         ref = EvalRef(
