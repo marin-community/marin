@@ -1882,8 +1882,10 @@ def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
 
 
 def _upload_memory_reports(directory: str) -> None:
-    """Copy the seed compile's XLA memory-usage reports to ``directory`` (the HLO dump's directory)."""
-    for local in glob.glob(os.path.join(SEED_XLA_DUMP_DIR, "*memory-usage-report*")):
+    """Copy the seed compile's XLA memory-usage reports and optimized HLO to ``directory`` (the HLO dump's
+    directory)."""
+    patterns = ("*memory-usage-report*", "*train_step*after_optimizations.txt")
+    for local in [path for pattern in patterns for path in glob.glob(os.path.join(SEED_XLA_DUMP_DIR, pattern))]:
         remote = prefix_join(directory, os.path.basename(local))
         with open(local, "rb") as src, fsspec.open(remote, "wb") as dst:
             dst.write(src.read())
