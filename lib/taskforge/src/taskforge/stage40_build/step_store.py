@@ -5,10 +5,12 @@
 
 The runner calls ``memoized`` for each step with the step's ``RLEnvBuildStepKey``. When the store
 holds a record under that key, ``memoized`` decodes the stored output and the step does not run.
-Otherwise ``memoized`` awaits the step and stores its output. The key hashes the step's inputs
-and its own source text, so anything else a step relies on has to change with ``SDK_VERSION``.
-When a step body reads a helper or a constant defined elsewhere, editing that helper leaves the key
-as it was. Pass the value as an input, or bump ``SDK_VERSION`` for a library change.
+Otherwise ``memoized`` awaits the step and stores its output. The key covers the step's own
+source, the source of an output type defined in the step's module, the content of each input, and
+the model, so anything else a step relies on has to change with ``SDK_VERSION``. An output type
+imported from a library, such as ``TaskSpec``, falls under ``SDK_VERSION`` too. When a step body
+reads a helper or a constant defined elsewhere, editing that helper leaves the key as it was. Pass
+the value as an input, or bump ``SDK_VERSION`` for a library change.
 
 ``RLEnvBuildStepStore`` reads and writes through rigging's ``StoragePath``, so ``root`` may be a
 local path or an object-store URL. Under it the store keeps:
@@ -73,7 +75,8 @@ class RLEnvBuildStepKey:
 
     Attributes:
         sdk_version: ``SDK_VERSION`` when the output was computed.
-        source_digest: The sha256 of the step's source text.
+        source_digest: The step's ``RLEnvBuildStep.source_digest``: the sha256 of its source text,
+            followed by the source of its output type when the step's module defines that class.
         inputs: For each declared input, the sha256 of that input's canonical JSON: the upstream
             step's output, or the proposal. An upstream step that reruns and returns identical
             content leaves this map unchanged.

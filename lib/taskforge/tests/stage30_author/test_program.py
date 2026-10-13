@@ -1,9 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+import inspect
+import linecache
+import sys
+import types
 
-from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_step
+import pytest
+from taskcompendium.models import TaskSpec
+
+from taskforge.content_hash import sha256_hex
+from taskforge.stage30_author.program import RLEnvBuildStep, rl_env_build_program, rl_env_build_step
 
 
 @rl_env_build_step
@@ -73,3 +80,66 @@ def test_a_step_named_after_the_proposal_input_is_refused():
 
     with pytest.raises(ValueError, match="may not be named 'proposal'"):
         rl_env_build_program(proposal)
+
+
+PREAMBLE = """from dataclasses import dataclass
+
+from taskforge.stage30_author.program import rl_env_build_step
+"""
+
+FIXTURE = """
+@dataclass(frozen=True)
+class Fixture:
+    path: str
+"""
+
+NOTE = """
+@dataclass(frozen=True)
+class Note:
+    text: str
+"""
+
+STEP = """
+@rl_env_build_step
+async def fixtures(context) -> Fixture:
+    return Fixture(path="workspace/numbers.txt")
+"""
+
+
+@pytest.fixture
+def load_step(monkeypatch):
+    """Exec a program's source into a fresh module, as a model-written program would be loaded."""
+    loaded = 0
+
+    def load(source: str) -> RLEnvBuildStep:
+        nonlocal loaded
+        loaded += 1
+        name = f"authored_program_{loaded}"
+        filename = f"<{name}>"
+        source = PREAMBLE + source
+        module = types.ModuleType(name)
+        module.__file__ = filename
+        monkeypatch.setitem(sys.modules, name, module)
+        monkeypatch.setitem(linecache.cache, filename, (len(source), None, source.splitlines(True), filename))
+        exec(compile(source, filename, "exec"), module.__dict__)
+        return module.fixtures
+
+    return load
+
+
+def test_an_edit_to_an_output_type_defined_beside_the_step_changes_its_source_digest(load_step):
+    step = load_step(FIXTURE + NOTE + STEP)
+    edited_output = load_step(FIXTURE + "    lines: tuple[str, ...] = ()\n" + NOTE + STEP)
+    edited_other_class = load_step(FIXTURE + NOTE + "    author: str = ''\n" + STEP)
+
+    assert step.source_digest == sha256_hex((STEP.lstrip("\n") + FIXTURE.lstrip("\n")).encode())
+    assert edited_output.source_digest != step.source_digest
+    assert edited_other_class.source_digest == step.source_digest
+
+
+def test_a_step_returning_a_library_type_digests_its_own_source_only():
+    @rl_env_build_step
+    async def task(context) -> TaskSpec:
+        raise AssertionError("never runs")
+
+    assert task.source_digest == sha256_hex(inspect.getsource(task.fn).encode())

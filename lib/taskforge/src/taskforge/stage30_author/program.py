@@ -31,9 +31,10 @@ PROPOSAL_INPUT = "proposal"
 
 @dataclass(frozen=True)
 class RLEnvBuildStep:
-    """A decorated step: ``fn`` with its inputs, its return annotation and the sha256 of its source.
+    """A decorated step: ``fn`` with its inputs, its return annotation and its source digest.
 
     ``inputs`` lists the names of ``fn``'s parameters after the context, in order.
+    ``rl_env_build_step`` computes ``source_digest``.
     """
 
     name: str
@@ -47,8 +48,13 @@ def rl_env_build_step(fn: Callable[..., Awaitable[Any]]) -> RLEnvBuildStep:
     """Turn ``async def name(context, *inputs) -> Output`` into the step ``name`` taking ``inputs``.
 
     The step's inputs are the function's parameters after the context, in declaration order. The
-    decorator hashes the function's own source text, decorator line included, into
-    ``source_digest``.
+    decorator computes ``source_digest`` as the sha256 of the function's own source text, decorator
+    line included. A model-written program defines the models its steps return at module level,
+    above the steps. When the return annotation is a class defined in the step's own module, the
+    decorator appends that class's source to the step's source before hashing, so an edit to the
+    class reruns the step. For a builtin, a generic alias, or a class imported from another module
+    such as ``TaskSpec``, the decorator hashes the step's source alone, and a change to such a
+    library type comes with an ``SDK_VERSION`` bump.
 
     Raises:
         TypeError: the function is not ``async``, takes no context parameter, or lacks a return
@@ -68,8 +74,15 @@ def rl_env_build_step(fn: Callable[..., Awaitable[Any]]) -> RLEnvBuildStep:
         fn=fn,
         inputs=parameters[1:],
         output_type=hints["return"],
-        source_digest=sha256_hex(inspect.getsource(fn).encode()),
+        source_digest=_source_digest(fn, hints["return"]),
     )
+
+
+def _source_digest(fn: Callable[..., Awaitable[Any]], output_type: Any) -> str:
+    source = inspect.getsource(fn)
+    if inspect.isclass(output_type) and output_type.__module__ == fn.__module__:
+        source += inspect.getsource(output_type)
+    return sha256_hex(source.encode())
 
 
 @dataclass(frozen=True)
