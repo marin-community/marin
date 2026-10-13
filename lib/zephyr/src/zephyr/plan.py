@@ -594,7 +594,9 @@ class FusionState:
         self.end_stage()
 
 
-def _fuse_operations(operations: list, parallelism: int = 1) -> list[PhysicalStage]:
+def _fuse_operations(
+    operations: list, *, parallelism: int, source_shards: int, source_tasks: int
+) -> list[PhysicalStage]:
     """Fuse logical operations into physical stages.
 
     Transforms logical ops into physical ops:
@@ -607,8 +609,9 @@ def _fuse_operations(operations: list, parallelism: int = 1) -> list[PhysicalSta
 
     Args:
         operations: List of logical operations
-        parallelism: Target source parallelism; values above one also enable
-            independent map execution over existing intermediate chunks.
+        parallelism: Worker limit for independent row operations.
+        source_shards: Number of original source shards.
+        source_tasks: Number of source fragments.
 
     Returns:
         List of PhysicalStages with physical operations and execution metadata
@@ -617,9 +620,14 @@ def _fuse_operations(operations: list, parallelism: int = 1) -> list[PhysicalSta
         return []
 
     state = FusionState()
+    current_shards = source_shards
+    splittable_refs = source_tasks > source_shards
+
+    def can_split() -> bool:
+        return current_shards < parallelism and splittable_refs
 
     for op in operations:
-        if parallelism > 1:
+        if can_split():
             if isinstance(op, (LoadFileOp, MapOp, FilterOp, FlatMapOp, SelectOp)):
                 state.pending_fusible.append(op)
                 continue
@@ -654,6 +662,8 @@ def _fuse_operations(operations: list, parallelism: int = 1) -> list[PhysicalSta
             )
             state.end_stage()
             state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
+            current_shards = op.num_output_shards or current_shards
+            splittable_refs = True
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -661,11 +671,15 @@ def _fuse_operations(operations: list, parallelism: int = 1) -> list[PhysicalSta
             state.add_op(Reshard(num_shards=1), output_shards=1)
             state.end_stage()
             state.add_op(Fold(fn=op.global_reducer))
+            current_shards = 1
+            splittable_refs = False
 
         elif isinstance(op, ReshardOp):
             state.end_stage()
             state.add_op(Reshard(num_shards=op.num_shards), output_shards=op.num_shards)
             state.end_stage()
+            current_shards = op.num_shards
+            splittable_refs = True
 
         elif isinstance(op, JoinOp):
             right_plan = compute_plan(op.right_dataset, parallelism=parallelism)
@@ -680,10 +694,10 @@ def _fuse_operations(operations: list, parallelism: int = 1) -> list[PhysicalSta
             # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp,
             # TakePerShardOp, WindowOp, SelectOp
             state.pending_fusible.append(op)
-            if parallelism > 1:
+            if can_split():
                 state.flush_pending()
 
-    if parallelism > 1:
+    if can_split():
         state.flush_parallel()
     return state.finalize()
 
@@ -692,6 +706,9 @@ def _fuse_operations(operations: list, parallelism: int = 1) -> list[PhysicalSta
 # Each read is a small, latency-bound GET, so a wide pool keeps planning a
 # corpus of thousands of files from serializing into thousands of round-trips.
 _FOOTER_READ_CONCURRENCY = 32
+
+# Extra source tasks let uneven row maps keep workers busy as tasks finish.
+_SOURCE_TASKS_PER_WORKER = 4
 
 # Whole-file read: a single span with no explicit row bounds.
 _WHOLE_FILE_ROW_RANGE: tuple[int | None, int | None] = (None, None)
@@ -734,15 +751,14 @@ def _compute_file_pushdown(
         files: List of FileEntry objects (path + size from bulk listing)
         load_op: The LoadFileOp specifying format and default columns
         operations: Full operations list (first op is LoadFileOp)
-        parallelism: Target number of source fragments, preserving shard identity.
+        parallelism: Worker limit used to size source fragments.
 
     Returns:
         Tuple of (source_items, remaining_operations), where filter/select have been pushed down.
     """
     # A RecordBatch is a user-visible item; changing source ranges would change
     # its boundaries and therefore the result of arbitrary batch maps.
-    if load_op.batch_mode or len(files) >= parallelism:
-        parallelism = 1
+    split_source = not load_op.batch_mode and len(files) < parallelism
     filter_expr: Expr | None = None
     select_columns = load_op.columns
     ops_to_skip: set[int] = set()
@@ -774,31 +790,47 @@ def _compute_file_pushdown(
 
     # Create InputFileSpecs with final columns/filter, one per row span.
     source_items: list[SourceItem] = []
-    shard_idx = 0
-    ranges_per_file = _row_ranges_per_file(files, load_op, parallelism)
-    shard_count = max(1, sum(len(ranges) for ranges in ranges_per_file))
-    fragments_per_shard = (parallelism + shard_count - 1) // shard_count
-    for entry, row_ranges in zip(files, ranges_per_file, strict=True):
-        for row_start, row_end in row_ranges:
-            fragments = [(row_start, row_end)]
-            if fragments_per_shard > 1 and row_start is not None and row_end is not None and row_start < row_end:
-                width = (row_end - row_start + fragments_per_shard - 1) // fragments_per_shard
-                fragments = [(start, min(start + width, row_end)) for start in range(row_start, row_end, width)]
-            for start, end in fragments:
-                source_items.append(
-                    SourceItem(
-                        shard_idx=shard_idx,
-                        data=InputFileSpec(
-                            path=entry.path,
-                            format=load_op.format,
-                            columns=select_columns,
-                            row_start=start,
-                            row_end=end,
-                            filter_expr=filter_expr,
-                        ),
-                    )
+    ranges_per_file = _row_ranges_per_file(files, load_op, parallelism if split_source else 1)
+    spans = [(entry, start, end) for entry, ranges in zip(files, ranges_per_file, strict=True) for start, end in ranges]
+    fragment_counts = [1] * len(spans)
+    if split_source and len(spans) < parallelism:
+        capacity = sum(max(0, end - start - 1) for _, start, end in spans if start is not None and end is not None)
+        target = min(parallelism * _SOURCE_TASKS_PER_WORKER, len(spans) + capacity)
+        candidates = [
+            (-(end - start), index)
+            for index, (_, start, end) in enumerate(spans)
+            if start is not None and end is not None and end - start > 1
+        ]
+        heapq.heapify(candidates)
+        for _ in range(target - len(spans)):
+            _, index = heapq.heappop(candidates)
+            fragment_counts[index] += 1
+            _, start, end = spans[index]
+            assert start is not None and end is not None
+            if fragment_counts[index] < end - start:
+                heapq.heappush(candidates, (-(end - start) / fragment_counts[index], index))
+
+    for shard_idx, ((entry, start, end), count) in enumerate(zip(spans, fragment_counts, strict=True)):
+        for fragment_idx in range(count):
+            if start is None:
+                row_start, row_end = None, None
+            else:
+                assert end is not None
+                row_start = start + (fragment_idx * (end - start)) // count
+                row_end = start + ((fragment_idx + 1) * (end - start)) // count
+            source_items.append(
+                SourceItem(
+                    shard_idx=shard_idx,
+                    data=InputFileSpec(
+                        path=entry.path,
+                        format=load_op.format,
+                        columns=select_columns,
+                        row_start=row_start,
+                        row_end=row_end,
+                        filter_expr=filter_expr,
+                    ),
                 )
-            shard_idx += 1
+            )
 
     # Build final operations list: LoadFileOp + remaining ops
     final_ops = [load_op] + [op for i, op in enumerate(operations) if i not in ops_to_skip]
@@ -811,8 +843,8 @@ def compute_plan(dataset: Dataset, *, parallelism: int = 1) -> PhysicalPlan:
 
     Args:
         dataset: Logical operations and their source.
-        parallelism: Target source task count. One retains fused execution;
-            larger values insert Split/Concat around independent row operations.
+        parallelism: Worker limit for source task sizing. One retains fused
+            execution; larger values can split independent row operations.
     """
     operations = list(dataset.operations)
     source = dataset.source
@@ -843,7 +875,10 @@ def compute_plan(dataset: Dataset, *, parallelism: int = 1) -> PhysicalPlan:
         source_list = list(source)
         source_items = [SourceItem(shard_idx=i, data=item) for i, item in enumerate(source_list)]
 
-    stages = _fuse_operations(operations, parallelism)
+    source_shards = len({item.shard_idx for item in source_items})
+    stages = _fuse_operations(
+        operations, parallelism=parallelism, source_shards=source_shards, source_tasks=len(source_items)
+    )
     return PhysicalPlan(source_items=source_items, stages=stages)
 
 

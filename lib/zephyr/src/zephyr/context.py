@@ -227,7 +227,8 @@ class ZephyrContext:
             the existing workers. Local execution is uncapped.
         intra_shard_execution: AUTO splits independent row transforms into tasks
             and concatenates results in order before shard-level operations.
-            Parquet ranges use the worker limit; overlapping row groups are reread.
+            Parquet ranges target four tasks per worker; overlapping row groups
+            are reread.
         resources: CPU, memory, and device resources for each worker.
         coordinator_resources: Resources for the coordinator actor.
         chunk_storage_prefix: Storage prefix for shared data, chunks, and results.

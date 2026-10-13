@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from itertools import pairwise
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -10,6 +11,7 @@ from fray.types import ResourceConfig
 from rigging.timing import Duration, ExponentialBackoff
 from zephyr.context import IntraShardExecution, ZephyrContext
 from zephyr.dataset import Dataset
+from zephyr.plan import StageType, compute_plan
 from zephyr.runners import SubprocessRunner
 
 
@@ -67,7 +69,7 @@ def test_parallel_parquet_map_preserves_output_shard(context, tmp_path, explicit
     assert [row["id"] for row in records] == list(range(13))
     assert [row["value"] for row in records] == [None] * 7 + list(range(7, 13))
     assert [row["nested"] for row in records] == [[{"value": str(i)}] for i in range(13)]
-    assert len({row["pid"] for row in records}) == 2
+    assert len({row["pid"] for row in records}) > 1
     assert all(row["pid"] != os.getpid() for row in records)
 
 
@@ -147,3 +149,54 @@ def test_empty_parquet_fragments_preserve_output_schema(context, tmp_path):
     table = pq.read_table(output)
     assert table.num_rows == 0
     assert table.schema == schema
+
+
+def test_source_fragments_use_row_capacity_and_preserve_shards(tmp_path):
+    paths = []
+    for index, rows in enumerate((0, 1, 23)):
+        path = tmp_path / f"input-{index}.parquet"
+        pq.write_table(pa.table({"id": pa.array(range(rows), type=pa.int64())}), path, row_group_size=23)
+        paths.append(str(path))
+
+    plan = compute_plan(Dataset.from_list(paths).load_parquet().map(lambda row: row), parallelism=4)
+    assert plan.num_shards == 3
+    assert len(plan.source_items) == 16
+
+    spans_by_shard = [[item.data for item in plan.source_items if item.shard_idx == shard] for shard in range(3)]
+    assert [len(spans) for spans in spans_by_shard] == [1, 1, 14]
+    assert [spans[0].path for spans in spans_by_shard] == paths
+    for spans, rows in zip(spans_by_shard[1:], (1, 23), strict=True):
+        assert spans[0].row_start == 0
+        assert spans[-1].row_end == rows
+        assert all(span.row_start < span.row_end for span in spans)
+        assert all(left.row_end == right.row_start for left, right in pairwise(spans))
+
+    limited_paths = paths[:2]
+    short = tmp_path / "short.parquet"
+    pq.write_table(pa.table({"id": range(2)}), short)
+    limited_paths.append(str(short))
+    limited_plan = compute_plan(Dataset.from_list(limited_paths).load_parquet(), parallelism=4)
+    assert len(limited_plan.source_items) == 4
+    assert [item.data.row_end - item.data.row_start for item in limited_plan.source_items] == [0, 1, 1, 1]
+
+
+def test_worker_bound_source_skips_extra_stages_then_splits_after_reshard(tmp_path):
+    paths = []
+    for index in range(2):
+        path = tmp_path / f"input-{index}.parquet"
+        pq.write_table(pa.table({"id": range(10)}), path)
+        paths.append(str(path))
+
+    source = Dataset.from_list(paths).load_parquet().map(lambda row: row["id"])
+    plan = compute_plan(source, parallelism=2)
+    assert len(plan.source_items) == 2
+    assert [stage.stage_type for stage in plan.stages] == [StageType.MAP_WORKER]
+
+    after_reshard = compute_plan(source.reshard(1).map(lambda row: row + 1), parallelism=2)
+    assert [stage.stage_type for stage in after_reshard.stages] == [
+        StageType.MAP_WORKER,
+        StageType.RESHARD,
+        StageType.SPLIT,
+        StageType.MAP_WORKER,
+        StageType.CONCAT,
+    ]

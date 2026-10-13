@@ -47,9 +47,12 @@ ctx = ZephyrContext(
 
 The planner inserts `Split → Map → Concat` around independent row operations.
 Use this option when row callbacks do not depend on per-shard mutable state.
-When there are fewer source shards than workers, Parquet file sources use the
-worker limit to divide existing shards into row ranges; later stages split at
-existing intermediate chunk boundaries.
+When there are fewer source shards than workers, the planner reads Parquet
+footers and divides row ranges into up to four tasks per worker, capped at one
+task per row. It gives larger row ranges more tasks. Existing shards stay
+intact when they already fill the worker pool, avoiding extra `Split` and
+`Concat` stages. A later reshard to fewer shards can still split existing
+intermediate chunks.
 `Concat` restores each original shard's row order and ID before writes, joins,
 windows, `take_per_shard`, and `map_shard`. Output filenames and shard counts
 therefore stay the same. The default is `OFF`.
