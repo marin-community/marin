@@ -20,7 +20,7 @@ from verifyit.spec import ExactSpec, McqSpec, NumericSpec, StructuredExactSpec
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 from taskforge.stage40_build.context import BuildFailure
-from taskforge.stage40_build.sandbox_effects import machine, publish_image, try_grader
+from taskforge.stage40_build.sandbox_effects import build_machine, publish_image, try_grader
 
 SHELLSIM = draft.requirements(image=None)
 MACHINE = draft.machine(startup_timeout=60)
@@ -117,7 +117,7 @@ async def test_machine_installs_the_files_and_runs_the_setup(context):
     requirements = draft.requirements(image=None, setup=("mkdir -p /workspace/out && echo ready > /workspace/out/s",))
     files = (draft.file("workspace/question.txt", "6 * 7\n"),)
 
-    async with machine(context().services, requirements, MACHINE, files) as prepared:
+    async with build_machine(context().services, requirements, MACHINE, files) as prepared:
         result = await prepared.run(Command(argv=("cat", "/workspace/question.txt", "/workspace/out/s")))
 
     assert result.stdout == b"6 * 7\nready\n"

@@ -193,7 +193,7 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
         outputs,
         ("Sources", "ResearchFinding", "WebCall", "Fixtures", "Grader", "GradedCandidate", "Instructions"),
     ),
-    ("Sandbox effects", sandbox_effects, ("machine", "try_grader", "publish_image")),
+    ("Sandbox effects", sandbox_effects, ("build_machine", "try_grader", "publish_image")),
     ("Task types", task_models, ("TaskResource", "InlineFile", "EnvironmentRequirements")),
     ("Resource contents", resources, ("resource_bytes",)),
     (

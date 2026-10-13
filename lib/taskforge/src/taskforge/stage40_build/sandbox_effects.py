@@ -16,7 +16,7 @@ request's prefix by one token. A registered task session would still need such a
 builds the task's ``TaskGrader`` inside ``run``, hands it to the session through
 ``TaskSessionContext``, and requests at least one model turn before the session grades.
 
-``machine`` prepares a machine through RolloutEngine's own ``_prepare_machine``, so files, setup
+``build_machine`` prepares a machine through RolloutEngine's own ``_prepare_machine``, so files, setup
 commands, the execution user and the startup deadline behave as in a task attempt. RolloutEngine
 exposes no public form of it.
 """
@@ -47,7 +47,7 @@ from taskforge.stage40_build.services import RLEnvBuildServices
 from taskforge.stage40_build.step_store import SDK_VERSION
 
 MACHINE_CLEANUP_TIMEOUT = 120.0
-"""Seconds ``machine`` and ``try_grader`` wait for a machine to close."""
+"""Seconds ``build_machine`` and ``try_grader`` wait for a machine to close."""
 TRY_GRADER_MACHINE = draft.machine(startup_timeout=600.0)
 """The task and verifier machine settings ``try_grader`` uses unless the step passes its own."""
 TRY_GRADER_VERIFIER_TIMEOUT = 600.0
@@ -59,13 +59,13 @@ IMAGE_REPOSITORY_PREFIX = "taskforge-tasks"
 
 
 @asynccontextmanager
-async def machine(
+async def build_machine(
     services: RLEnvBuildServices,
     requirements: EnvironmentRequirements,
     settings: MachineSettings,
     files: Sequence[TaskResource] = (),
 ) -> AsyncIterator[Machine]:
-    """``async with machine(services, requirements, settings, files) as m``: a prepared machine.
+    """``async with build_machine(services, requirements, settings, files) as m``: a prepared machine.
 
     The machine starts as a task attempt's would, with ``files`` installed relative to the root and
     the setup commands run. A step uses it to try fixtures or a grader program;

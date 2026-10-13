@@ -29,7 +29,7 @@ from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_
 from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build.infrastructure import InfrastructureCause
 from taskforge.stage40_build.run import DRAFT_DIR, ResearchRequirement, run_build
-from taskforge.stage40_build.sandbox_effects import machine, publish_image, try_grader
+from taskforge.stage40_build.sandbox_effects import build_machine, publish_image, try_grader
 from tests.stage40_build.conftest import FACTORIES, ITEM, SAMPLING
 
 SHELLSIM = draft.requirements(image=None)
@@ -121,7 +121,7 @@ class DroppingFactory:
 async def test_host_failures_in_a_machine_are_infrastructure(context, factory, cause):
     on_host = context(factories={**FACTORIES, Backend.SHELLSIM.value: factory})
     with pytest.raises(BuildInfrastructureFailure) as machine_failure:
-        async with machine(on_host.services, SHELLSIM, MACHINE) as prepared:
+        async with build_machine(on_host.services, SHELLSIM, MACHINE) as prepared:
             await prepared.run(Command(argv=("true",)))
     with pytest.raises(BuildInfrastructureFailure) as grader_failure:
         # The candidate's workspace file is a shell command in the task machine.
@@ -142,7 +142,7 @@ async def test_host_failures_in_a_machine_are_infrastructure(context, factory, c
 async def test_a_machine_backend_the_host_lacks_is_infrastructure(context):
     on_host = context(factories={Backend.SHELLSIM.value: ShellSimMachineFactory()})
     with pytest.raises(BuildInfrastructureFailure) as machine_failure:
-        async with machine(on_host.services, DOCKER, MACHINE):
+        async with build_machine(on_host.services, DOCKER, MACHINE):
             pass
     with pytest.raises(BuildInfrastructureFailure) as grader_failure:
         await try_grader(on_host, DOCKER, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
@@ -171,7 +171,7 @@ async def test_a_host_without_an_image_builder_is_infrastructure(context):
 async def test_an_image_or_spec_the_program_chose_stays_the_programs_failure(context, error):
     on_host = context(factories={**FACTORIES, Backend.SHELLSIM.value: FailingFactory(error)})
     with pytest.raises(type(error)):
-        async with machine(on_host.services, SHELLSIM, MACHINE):
+        async with build_machine(on_host.services, SHELLSIM, MACHINE):
             pass
     with pytest.raises(RolloutInterrupted) as interrupted:
         await try_grader(on_host, SHELLSIM, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
@@ -182,7 +182,7 @@ async def test_an_image_or_spec_the_program_chose_stays_the_programs_failure(con
 async def test_the_programs_own_startup_deadline_stays_the_programs_failure(context):
     on_host = context(factories={Backend.SHELLSIM.value: StalledFactory()})
     with pytest.raises(TimeoutError):
-        async with machine(on_host.services, SHELLSIM, draft.machine(startup_timeout=0.05)):
+        async with build_machine(on_host.services, SHELLSIM, draft.machine(startup_timeout=0.05)):
             pass
 
 

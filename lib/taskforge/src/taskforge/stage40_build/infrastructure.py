@@ -3,7 +3,7 @@
 
 """Host failures inside a build, told apart from failures of the builder program.
 
-A build program uses the host through machines: ``sandbox_effects.machine`` and
+A build program uses the host through machines: ``sandbox_effects.build_machine`` and
 ``sandbox_effects.try_grader`` create them from ``RLEnvBuildServices.factories``.
 ``host_checked_factories`` wraps those factories so that an error the host raises while creating or
 driving a machine becomes a ``BuildInfrastructureFailure``. ``run_program`` raises it instead of

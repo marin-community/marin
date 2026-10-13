@@ -24,7 +24,7 @@ src/taskforge/
   stage40_build/   context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
                    services.py: RLEnvBuildServices, AgentLimits;
                    outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
-                   sandbox_effects.py: `machine`, `try_grader`, `publish_image`;
+                   sandbox_effects.py: `build_machine`, `try_grader`, `publish_image`;
                    sdk.py: the functions, schemas and constants steps call;
                    infrastructure.py: host failures told apart from program failures;
                    template/standard.py: the standard six-step program;
@@ -220,7 +220,7 @@ memoizing a helper calls it the same way with a key of its own. Every step recor
 with its key digest and cache status, and its model and tool calls carry its name as `step`; a
 build without a ledger records nothing.
 
-A step uses the host through `sandbox_effects`: `machine` prepares a machine as a task attempt
+A step uses the host through `sandbox_effects`: `build_machine` prepares a machine as a task attempt
 would, `try_grader` grades a candidate reply and workspace through `RolloutEngine.run`, and
 `publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
 first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
