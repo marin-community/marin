@@ -1701,12 +1701,13 @@
       "configuration_sha256": "e964973dfde3d4044afa48f3c57c7975606f4f31a397703dc763fd7dd912dd42",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-runtime-qual-rno-sc-s0-a1-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "91be69c0c10bd8f74bb81aac86b21d408469e369b84b2947143dde69842ed53d",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/qwen_rno_qualification_v1.json.gz"
     }
   ],
-  "observed_at": "2026-10-13T22:42:29.732127+00:00"
+  "observed_at": "2026-10-13T23:23:36.484997+00:00"
 }

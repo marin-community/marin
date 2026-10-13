@@ -1,0 +1,43 @@
+{
+  "run_id": "sc-qwen-transfer-runtime-qual-rno-sc-s0-a1-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "cluster": "cw-rno2a",
+  "priority": "batch",
+  "controller_attempts": [
+    {
+      "task_id": "/romain/sc-qwen-transfer-runtime-qual-rno-sc-s0-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "dd7f2375cf6a6128",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791931172831",
+      "finished_at_ms": "1791933571724",
+      "node_name": "g86299e",
+      "terminal_reason": ""
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-runtime-qual-rno-sc-s0-a1-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "2ebf6e7cf62e5499",
+      "state": "4",
+      "exit_code": "0",
+      "started_at_ms": "1791931178416",
+      "finished_at_ms": "1791933582625",
+      "node_name": "gb99af0",
+      "terminal_reason": ""
+    }
+  ],
+  "full_native_audit": "qwen_rno_qualification_v1.json.gz",
+  "training_responses": 1024,
+  "evaluation_responses": 18072,
+  "final_checkpoint": 2,
+  "grader_file_sha256": {
+    "skyrl-gym/skyrl_gym/envs/aime/utils.py": "3053a5046d3942fea092c451d3915b5bade1483f771e3adb5605cc659cfb146b",
+    "skyrl-gym/skyrl_gym/envs/gsm8k/utils.py": "16680a223ba876ff0a51184db6863b1527c84ba87fc3cf19f92a376652394115",
+    "skyrl-gym/skyrl_gym/envs/reasoning_gym/scoring.py": "8b9f61cf4ad560dff639e8c6425a838f04d94c4eb175b547efa0d20d1c884d3c",
+    "skyrl-gym/skyrl_gym/envs/nemotron_ultra/answer_extraction.py": "1d48e25122f452147e795eb6e8e21eea217654756ece9e918fe0a8ece2ab108e"
+  },
+  "dependency_lock_sha256": "c9ff3b70074681e62f2683acd7b4b9487c9dc222d6065f61198c6e5e5d9ae891",
+  "prior_qualified_source_and_replay": "qwen0212_paired_runtime_qualification.json",
+  "scope": "Exact source0212 real launch on RNO2A: two finite applied SGD updates, aligned naturalK128 capture/TIS and full native corpus audit, checkpoint2 and terminal success. Source/dependency/transport unchanged from qualified east path. Main300 scientific endpoints remain unrun."
+}

@@ -1,0 +1,110 @@
+{
+  "attempts": [
+    {
+      "job_id": "/romain/sc-qwen-transfer-curriculum-sc-s2-main-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "controller_attempt": 0,
+      "partial_published_updates": 39,
+      "objects": 83,
+      "bytes": 79464877,
+      "manifest_sha256": "84b3f2b15f3365f9fd47062d0f18f1e4f68f1f44f943d85d67afd9a2a1c0d427",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s2-main-a2-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json",
+      "scope": "Surviving original metrics, learner captures and trajectory exports written before terminal attempt0 preemption. Conditional same-bucket copy preserves bytes and provenance. Runtime groups/logs are promoted separately. This partial attempt does not establish a final endpoint.",
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s2-main-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "a71c5bcfaababb13",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791927511386",
+          "finished_at_ms": "1791932504733",
+          "node_name": "g73bb8a",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s2-main-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "495c38cfdcb3de5f",
+          "state": "10",
+          "exit_code": "143",
+          "started_at_ms": "1791927534376",
+          "finished_at_ms": "1791932504733",
+          "node_name": "g845f76",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 16f3c38a-df70-4e4d-a6c3-8408bd3465ad, JobUID: 4828032c-c862-4280-828c-2741be303d25) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        }
+      ]
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-main-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "controller_attempt": 0,
+      "partial_published_updates": 7,
+      "objects": 18,
+      "bytes": 15939097,
+      "manifest_sha256": "ecdcb0fa17f571bf87b43d3b29e021b9301aa1077ee1e114eced465270f6ea77",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s0-main-a2-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json",
+      "scope": "Surviving original metrics, learner captures and trajectory exports written before terminal attempt0 preemption. Conditional same-bucket copy preserves bytes and provenance. Runtime groups/logs are promoted separately. This partial attempt does not establish a final endpoint.",
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-main-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "79d3ae42860fb81f",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791929061065",
+          "finished_at_ms": "1791931226691",
+          "node_name": "g83d11c",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-main-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "83cb4fd43b2b34df",
+          "state": "10",
+          "exit_code": "143",
+          "started_at_ms": "1791929061065",
+          "finished_at_ms": "1791931226691",
+          "node_name": "g845f9c",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 206cc1a4-6850-45db-8a9c-4fc70848d216, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        }
+      ]
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-curriculum-tis-s1-main-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "controller_attempt": 0,
+      "partial_published_updates": 7,
+      "objects": 17,
+      "bytes": 13933416,
+      "manifest_sha256": "7e6c5ff313a6b4c284adce9a8e95228185fdf0b8735fe42d5c5e37ac62ac86e4",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s1-main-a2-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json",
+      "scope": "Surviving original metrics, learner captures and trajectory exports written before terminal attempt0 preemption. Conditional same-bucket copy preserves bytes and provenance. Runtime groups/logs are promoted separately. This partial attempt does not establish a final endpoint.",
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s1-main-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "81a3e926757b6682",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791929658849",
+          "finished_at_ms": "1791931192271",
+          "node_name": "g853134",
+          "terminal_reason": ""
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s1-main-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "0db28d907661da54",
+          "state": "10",
+          "exit_code": "143",
+          "started_at_ms": "1791929658849",
+          "finished_at_ms": "1791931192271",
+          "node_name": "g853b4c",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 8dec97dc-c851-4b07-899c-5fcbfcdf3f00, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        }
+      ]
+    }
+  ],
+  "basis": "Partial preempted runs preserved, never pooled as complete main endpoints. All allocation intervals remain charged."
+}

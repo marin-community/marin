@@ -1,0 +1,269 @@
+{
+  "configs": [
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-sc-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v3/curriculum-sc-s0.yaml",
+      "run": "sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "167bdb214b533a6bc355b84a3f47c55239ec8471ec12a3641e2c8098ffa3f2d5",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-sc-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v3/curriculum-sc-s1.yaml",
+      "run": "sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "05bbd1505ad47c9893887d94bb00365b29a96481ed22abd34e1ba7c5d3b815f9",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-sc-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v3/curriculum-sc-s2.yaml",
+      "run": "sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "8bf54cdec21f35af8e7c84ede2065dfa66c6f313ce807854076e97e9282d82f9",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-tis-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v3/curriculum-tis-s0.yaml",
+      "run": "sc-qwen-transfer-curriculum-tis-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "6e3a67ccd7d053cbaca63a2929b64a6e626e9e65b172444edc75b3e44133db7d",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-tis-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v3/curriculum-tis-s1.yaml",
+      "run": "sc-qwen-transfer-curriculum-tis-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "40c9594f88dc7f3b4aee9c1bd237e250852e1d279634c3eec70ac5e45c16edf3",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-tis-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v3/curriculum-tis-s2.yaml",
+      "run": "sc-qwen-transfer-curriculum-tis-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "ee590c10d4029f794236ebfa10d41039a4dbb879e8bc42d7622aea1835db77e3",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/optimizer-sc-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/optimizer-sc-s0.yaml",
+      "run": "sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "0dc416140892fe59a15051f294d8b79bd9c56fb8b210d0870ee7336b0afaedde",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/optimizer-sc-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/optimizer-sc-s1.yaml",
+      "run": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "b108a16ed3ba72329052e54081e4f98acd86d6a50e972713dddcc1dd60c795f5",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/optimizer-sc-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/optimizer-sc-s2.yaml",
+      "run": "sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "ace57758debeede0a16390025a75cac7daf98155758798f4147d9eb272ee57e1",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/optimizer-tis-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/optimizer-tis-s0.yaml",
+      "run": "sc-qwen-transfer-optimizer-tis-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "4cbcba4afca7e12d0776715394da76c1f359ae0973ecfe5e866e93e04ed269ae",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/optimizer-tis-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/optimizer-tis-s1.yaml",
+      "run": "sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "ffde000e28e6ec7de3f3c05edaf9740244017225a9d5aa6f06b304da94283634",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/optimizer-tis-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_main_v5/optimizer-tis-s2.yaml",
+      "run": "sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "planned_updates": 300,
+      "sha256": "f599febd4cb7cfaeaf84d9490289151f2f180206d79835b50d426b091fa5587c",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "cluster placement",
+        "2400-second admission failure watchdog"
+      ]
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/batching-sc-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v4/batching-sc-s0.yaml",
+      "run": "sc-qwen-transfer-batching-sc-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "priority": "interactive",
+      "nodes": 2,
+      "planned_updates": 40,
+      "sha256": "43f8ce47ed842e182574a72d288f6d1a91df86c302e6d666e2742c2327d34b18",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "interactive priority",
+        "2400-second admission failure watchdog"
+      ],
+      "submission_gate": "previous separately labeled paired40 pilot full audit and cross-cluster interactive node count <=4"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/batching-tis-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v4/batching-tis-s0.yaml",
+      "run": "sc-qwen-transfer-batching-tis-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "priority": "interactive",
+      "nodes": 2,
+      "planned_updates": 40,
+      "sha256": "f2ba5bfc834ba231a5e164999c9022c112bda3e76364f5394612eb3931851122",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "interactive priority",
+        "2400-second admission failure watchdog"
+      ],
+      "submission_gate": "previous separately labeled paired40 pilot full audit and cross-cluster interactive node count <=4"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/native-window-sc-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v4/native-window-sc-s0.yaml",
+      "run": "sc-qwen-transfer-native-window-sc-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "priority": "interactive",
+      "nodes": 2,
+      "planned_updates": 40,
+      "sha256": "fcc0ee3b16d186b0bf3c19ef9fdf94320d14d9dbfee45f304dbdeb02e1082c2c",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "interactive priority",
+        "2400-second admission failure watchdog"
+      ],
+      "submission_gate": "previous separately labeled paired40 pilot full audit and cross-cluster interactive node count <=4"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/native-window-tis-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v4/native-window-tis-s0.yaml",
+      "run": "sc-qwen-transfer-native-window-tis-s0-pilot-a4-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "priority": "interactive",
+      "nodes": 2,
+      "planned_updates": 40,
+      "sha256": "c79b7a3a058be86a4d7bdccf2876ee0908ae3b927dd3926ec4b518f1ba72010b",
+      "scientific_recipe_unchanged": true,
+      "only_changes": [
+        "run-owned identities and paths",
+        "interactive priority",
+        "2400-second admission failure watchdog"
+      ],
+      "submission_gate": "previous separately labeled paired40 pilot full audit and cross-cluster interactive node count <=4"
+    }
+  ],
+  "all_preflights_passed": true,
+  "scientific_input_preservation_checked": true,
+  "submitted": false,
+  "rno_first_main_gate": "terminal qualification plus first actual300-main capture/optimizer check before matrix expansion",
+  "east_tis_seed2": "active original main continues; RNO template remains unsubmitted unless needed"
+}
