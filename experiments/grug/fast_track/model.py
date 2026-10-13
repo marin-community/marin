@@ -2768,7 +2768,7 @@ def _shared_experts_local(
     and the gate."""
     shared_in, x_flat = tokens
     w_gate_up, w_down, shared_gate = params
-    proj = jnp.einsum("td,de->te", shared_in, w_gate_up)
+    proj = _proj(cfg, shared_in, w_gate_up)
     parts = jnp.split(proj, list(itertools.accumulate(widths[:-1])), axis=1)
     num_shared = len(widths) // 2 if gated else len(widths)
     return _shared_experts_tail(cfg, parts, num_shared, gated, w_down, x_flat, shared_gate, None)
