@@ -18,7 +18,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Protocol, Self, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -313,7 +313,19 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         pass
 
 
-MConfig = TypeVar("MConfig", bound=HFCompatConfig)
+class HfSerializableConfig(Protocol):
+    """Configuration contract shared by language and vision checkpoint models."""
+
+    @property
+    def model_type(self) -> Type[Any]: ...
+
+    def to_hf_config(self, vocab_size: int, config_overrides: Optional[dict] = None) -> HfConfig: ...
+
+    @classmethod
+    def from_hf_config(cls, hf_config: HfConfig) -> Self: ...
+
+
+MConfig = TypeVar("MConfig", bound=HfSerializableConfig)
 
 
 class ModelWithHfSerializationMixin(Generic[MConfig]):
@@ -347,7 +359,7 @@ def _coerce_to_rr(s: Union[str, RepoRef]) -> RepoRef:
         return RepoRef.from_string(s)
 
 
-LevConfig = TypeVar("LevConfig", bound=HFCompatConfig)
+LevConfig = TypeVar("LevConfig", bound=HfSerializableConfig)
 
 # just for generating unique ids
 
@@ -940,7 +952,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         self,
         lm_model_cls: Type[ModelWithHfSerializationMixin],
         ref: Optional[Union[str, RepoRef]] = None,
-        config: Optional[HFCompatConfig] = None,
+        config: Optional[HfSerializableConfig] = None,
         axis_mapping: Optional[ResourceMapping] = None,
         resize_vocab_to_match_tokenizer: bool = False,
         dtype: Optional[jnp.dtype] = None,
