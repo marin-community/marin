@@ -108,9 +108,7 @@ def refresh(standard: Path, manifest: Path, output: Path) -> None:
             tournament_rows[model] = cells
     output.mkdir(parents=True, exist_ok=True)
     _write_table(output / "TRACKER.md", mode_names, ["syntax closure"] * len(modes), tournament_rows)
-    union_rows = {
-        model: standard_rows[model] + tournament_rows[model] for model in standard_rows
-    }
+    union_rows = {model: standard_rows[model] + tournament_rows[model] for model in standard_rows}
     union = output / "UNION_TRACKER.md"
     _write_table(union, standard_header + mode_names, standard_metrics + ["syntax closure"] * len(modes), union_rows)
     benchmarks, candidates, scores = pairwise.tracker_scores(union)

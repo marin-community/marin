@@ -61,9 +61,9 @@ def test_other_tokenizer_reencodes_identical_prompt_text(monkeypatch: pytest.Mon
     monkeypatch.setattr(
         tournament.AutoTokenizer,
         "from_pretrained",
-        lambda model, revision: Tokenizer([101, 102])
-        if model == tournament.REFERENCE_TOKENIZER
-        else Tokenizer([201, 202, 203]),
+        lambda model, revision: (
+            Tokenizer([101, 102]) if model == tournament.REFERENCE_TOKENIZER else Tokenizer([201, 202, 203])
+        ),
     )
     tournament._prompt_tokens.cache_clear()
     model = "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09"

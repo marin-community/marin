@@ -31,13 +31,13 @@ from huggingface_hub import hf_hub_download, snapshot_download
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from marin.evaluation.harbor.runner import canonical_served_name
-from marin.evaluation.hardware import Platform, default_platform
+from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.records import (
-    BenchmarkMetadataRef,
-    BenchmarkMetricRef,
     CW_RECORDS_PREFIX,
     EVALCHEMY_INFRASTRUCTURE_ERROR,
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
     EvalRef,
     EvalTaskRef,
     MetricKind,
@@ -166,7 +166,9 @@ class StructureClosureExecutor:
     model: str
     revision: str
 
-    def __call__(self, session: Any, output_dir: str, env_vars: Mapping[str, str], *, judge: Any = None) -> EvaluationOutcome:
+    def __call__(
+        self, session: Any, output_dir: str, env_vars: Mapping[str, str], *, judge: Any = None
+    ) -> EvaluationOutcome:
         """Score one mode and retain every case-level response in object storage."""
         del env_vars, judge
         cases = [case for case in _cases() if (case["family"], case["control"]) == (self.family, self.control)]
@@ -219,7 +221,9 @@ class StructureClosureExecutor:
                     "control": self.control,
                     "model": self.model,
                     "model_revision": self.revision,
-                    "prompt_encoding": "model-tokenizer-reencoded" if self.model in REENCODE_MODELS else "dataset-token-ids",
+                    "prompt_encoding": (
+                        "model-tokenizer-reencoded" if self.model in REENCODE_MODELS else "dataset-token-ids"
+                    ),
                     "reference_tokenizer": REFERENCE_TOKENIZER,
                     "reference_tokenizer_revision": REFERENCE_TOKENIZER_REVISION,
                     "context_tokens": CONTEXT_TOKENS,
@@ -254,7 +258,9 @@ class StructureClosureExecutor:
             n_correct=sum(bool(result["syntax_complete"]) for result in scored),
             errors=errors,
         )
-        logger.info("%s: scored=%d/%d syntax_complete=%.4f", task, len(scored), CASES_PER_MODE, metrics["syntax_complete"])
+        logger.info(
+            "%s: scored=%d/%d syntax_complete=%.4f", task, len(scored), CASES_PER_MODE, metrics["syntax_complete"]
+        )
         return EvaluationOutcome(metrics={task: metrics}, coverage={task: coverage})
 
 
@@ -279,7 +285,9 @@ def _batch(config_path: Path, modes: list[tuple[str, str]], cluster: str) -> Eva
         name = f"structure-closure-v6-{family}-{control}"
         task = f"{family}/{control}"
         run_id = f"{stamp}-{model.name}-{name}-{uuid.uuid4().hex[:4]}"
-        metric = BenchmarkMetricRef(name="syntax_complete", source_name="syntax_complete", kind=MetricKind.BINARY, higher_is_better=True)
+        metric = BenchmarkMetricRef(
+            name="syntax_complete", source_name="syntax_complete", kind=MetricKind.BINARY, higher_is_better=True
+        )
         benchmark = BenchmarkMetadataRef(
             schema_version=1,
             task=task,
@@ -348,7 +356,11 @@ def main() -> None:
     if not modes or any(mode not in inventory for mode in modes):
         raise ValueError(f"unknown mode; available: {inventory}")
     configs = sorted(CONFIG_DIR.glob("*.yaml"))
-    configs = [path for path in configs if path.stem.startswith(("open-athena-Snowball-", "open-athena-Grug-", "laion-snowball-"))]
+    configs = [
+        path
+        for path in configs
+        if path.stem.startswith(("open-athena-Snowball-", "open-athena-Grug-", "laion-snowball-"))
+    ]
     if args.model:
         configs = [CONFIG_DIR / f"{name}.yaml" for name in args.model]
     batches = [_batch(path, modes, args.cluster) for path in configs]
