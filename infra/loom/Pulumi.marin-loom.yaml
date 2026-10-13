@@ -21,6 +21,7 @@ config:
     auth.github_organizations: "Open-Athena:188075292"
     browser.allowed_origins: https://marina.oa.dev
     github.profile: github
+    github.trigger_allowed_user_ids: "306337490"
     slack.effort: agent-default
     slack.profile: slack
   marin-loom:remoteMcps:
@@ -43,6 +44,33 @@ config:
         audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
       enabled: true
   marin-loom:profiles:
+    scheduled-message:
+      agent: codex
+      description: Deliver prompt-defined scheduled messages to declared Slack channels
+      model: gpt-6-sol
+      effort: low
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      maxConcurrent: 2
+      turnBudget: 1
+      idleArchiveSeconds: 60
+      prelude: weaver
+      instructionsFile: profiles/scheduled-message/AGENTS.md
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools:
+        - loom/messaging/post@v1
+        - loom/watches/state@v1
+      mcpAccess:
+        mode: groups
+        groups:
+          - messaging
+          - watch
     default:
       agent: codex
       description: Interactive Marin work with repository-owned workflow instructions
@@ -70,6 +98,7 @@ config:
           - messaging
           - permissions
           - session
+          - watch
     marina:
       agent: codex
       description: Interactive questions over read-only Marina application APIs
@@ -376,5 +405,16 @@ config:
       profile: codehealth-refinement
       serviceTag: codehealth-refinement
       ref: refs/heads/main
+  # Disabled until an operator selects the jobs and notification destination.
+  marin-loom:watches:
+    weekday-job-check:
+      enabled: false
+      cron: "0 9 * * 1-5"
+      timezone: America/Los_Angeles
+      profile: ops
+      repo: marin-community/marin
+      promptFile: watches/weekday-job-check.md
+      slackChannels: []
+
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=

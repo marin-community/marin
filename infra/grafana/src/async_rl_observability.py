@@ -21,7 +21,6 @@ ASYNC_RL_MAX_RESULT_ROWS = 200_000
 MEGATRON_DETAIL_ROWS = 5_000
 GIB = 1073741824
 FINITE_VALUE_LIMIT_SQL = "1e308"
-M2_REFERENCE = 0.04
 MARINSKYRL_TABLE = '"telemetry_v1.marinskyrl"'
 
 # Loop events aggregated per display bucket and execution. Gauges keep their latest observation
@@ -69,7 +68,7 @@ _DRIFT_COVERAGE_METRICS = (
     "policy/mismatch/pooled/ess_fraction",
 )
 _LOG_RATIO_SQUARED_METRICS = ("policy/mismatch/pooled/log_ratio_mean_squared",)
-_TIS_SKIP_METRICS = ("tis/batch_skipped_no_logprobs", "tis/skipped_fraction")
+_CORRECTION_WEIGHT_METRICS = ("policy/correction/weight_mean",)
 _CORE_CYCLE_METRICS = (
     "async/performance/core_seconds",
     "async/performance/cycle_seconds",
@@ -132,20 +131,10 @@ _POSITION_METRICS = (
     "policy/log_ratio_pos_last256/log_ratio_abs_mean",
     "policy/log_ratio_pos_middle/log_ratio_abs_mean",
 )
-_GRADIENT_METRICS = (
-    "policy/grad_cosine",
-    "policy/grad_cosine_min",
-    "policy/grad_cosine_max",
-    "policy/grad_norm_reduced",
-    "policy/raw_grad_norm",
-)
 _CORRECTION_METRICS = (
-    "policy/offpolicy_mask/masked_fraction",
-    "policy/offpolicy_mask/vetoed_sequence_fraction",
-    "policy/m2_mask/m2_before",
-    "policy/m2_mask/masked_fraction",
+    "policy/correction/truncated_fraction",
+    "policy/correction/masked_fraction",
     "policy/ppo_clip_ratio",
-    "policy/tis/imp_ratio_capped_fraction",
 )
 _METRIC_NAMES = tuple(
     sorted(
@@ -157,7 +146,7 @@ _METRIC_NAMES = tuple(
             *_CLIP_PRESSURE_METRICS,
             *_DRIFT_COVERAGE_METRICS,
             *_LOG_RATIO_SQUARED_METRICS,
-            *_TIS_SKIP_METRICS,
+            *_CORRECTION_WEIGHT_METRICS,
             *_CORE_CYCLE_METRICS,
             *_LOSS_TOKEN_RATE_METRICS,
             *_CORE_FRACTION_METRICS,
@@ -168,7 +157,6 @@ _METRIC_NAMES = tuple(
             *_MISMATCH_BY_STALENESS_METRICS,
             *_LEARNER_DRIFT_METRICS,
             *_POSITION_METRICS,
-            *_GRADIENT_METRICS,
             *_CORRECTION_METRICS,
         }
     )
@@ -774,7 +762,7 @@ FROM processes WHERE name IN ({sql_values(_EXPORTER_NAMES)}) ORDER BY 3, 1, 2
         "clip_pressure": _train_metric_points(_CLIP_PRESSURE_METRICS),
         "drift_coverage": _train_metric_points(_DRIFT_COVERAGE_METRICS),
         "log_ratio_squared": _train_metric_points(_LOG_RATIO_SQUARED_METRICS),
-        "tis_skips": _train_metric_points(_TIS_SKIP_METRICS),
+        "correction_weights": _train_metric_points(_CORRECTION_WEIGHT_METRICS),
         "core_cycle": _train_metric_points(_CORE_CYCLE_METRICS),
         "loss_token_rates": _train_metric_points(_LOSS_TOKEN_RATE_METRICS),
         "core_fractions": _train_metric_points(_CORE_FRACTION_METRICS),
@@ -881,22 +869,7 @@ FROM windows ORDER BY start, execution
         "mismatch_by_staleness": _train_metric_points(_MISMATCH_BY_STALENESS_METRICS),
         "learner_drift": _train_metric_points(_LEARNER_DRIFT_METRICS),
         "position_dependence": _train_metric_points(_POSITION_METRICS),
-        "gradient_direction": _train_metric_points(_GRADIENT_METRICS),
-        "corrections": (
-            f"""
-WITH m AS (
-    SELECT timestamp_ms, execution_uid, metric, value FROM metrics
-    WHERE metric IN ({sql_values(_CORRECTION_METRICS)}) AND payload_kind = 'train'
-)
-SELECT timestamp_ms AS t,
-       CASE WHEN kind = 'reference' THEN 'M2 reference {M2_REFERENCE}' ELSE metric END
-            || ' · ' || execution_uid AS series,
-       CASE WHEN kind = 'reference' THEN {M2_REFERENCE} ELSE value END AS value
-FROM m CROSS JOIN (VALUES ('observation'), ('reference')) AS kinds(kind)
-WHERE kind = 'observation' OR metric = 'policy/m2_mask/m2_before'
-ORDER BY t, series
-""".strip()
-        ),
+        "corrections": _train_metric_points(_CORRECTION_METRICS),
     }
     return DashboardDataset(
         name="async RL overview",

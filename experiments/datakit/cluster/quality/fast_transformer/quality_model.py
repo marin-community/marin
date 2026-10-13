@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-CALIBRATION_FILE = "calib_bme.json"
+from experiments.datakit.cluster.quality.fast_transformer.artifact import MODEL_CALIB
+
 # The deployed ``.eqx`` is 158 MB, so the digest streams each file.
 DIGEST_CHUNK_BYTES = 8 << 20
 
@@ -31,7 +32,7 @@ class QualityPin:
 
     model_path: str
     """Model directory relative to ``MARIN_PREFIX``. It holds one ``<stem>.eqx`` with
-    its ``<stem>_remap.json`` and ``<stem>_meta.json``, plus :data:`CALIBRATION_FILE`."""
+    its ``<stem>_remap.json`` and ``<stem>_meta.json``, plus :data:`MODEL_CALIB`."""
 
     model_sha256: str
     """:func:`model_sha256` over the three scorer artifacts."""
@@ -99,7 +100,7 @@ def model_sha256(model_dir: str) -> str:
 
 def calibration_sha256(model_dir: str) -> str:
     """Digest the calibration file under ``model_dir``."""
-    return _named_digest({CALIBRATION_FILE: StoragePath(model_dir) / CALIBRATION_FILE})
+    return _named_digest({MODEL_CALIB: StoragePath(model_dir) / MODEL_CALIB})
 
 
 def require_pinned_model(pin: QualityPin, model_dir: str) -> str:
@@ -118,7 +119,7 @@ def require_pinned_calibration(pin: QualityPin, model_dir: str) -> str:
     digest = calibration_sha256(model_dir)
     if digest != pin.calibration_sha256:
         raise ValueError(
-            f"{model_dir}/{CALIBRATION_FILE} digests to {digest}, but {pin.name} pins "
+            f"{model_dir}/{MODEL_CALIB} digests to {digest}, but {pin.name} pins "
             f"{pin.calibration_sha256}; the bucketed path claims a different calibration"
         )
     return digest

@@ -9,6 +9,7 @@ from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mes
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention import (
+    xla_flash_attention,
     AttentionMask,
     attention,
     reference_attention,
@@ -158,3 +159,73 @@ def test_attention_rejects_unknown_implementation():
 
     with pytest.raises(ValueError, match="Unknown Grug attention implementation"):
         attention(q, k, v, AttentionMask.causal(), implementation="nope")  # type: ignore[arg-type]
+
+
+def _flash_inputs():
+    key = jax.random.key(3)
+    kq, kk, kv = jax.random.split(key, 3)
+    batch, seq, q_heads, kv_heads, head_dim = 2, 64, 4, 2, 8
+    q = jax.random.normal(kq, (batch, seq, q_heads, head_dim), jnp.float32)
+    k = jax.random.normal(kk, (batch, seq, kv_heads, head_dim), jnp.float32)
+    v = jax.random.normal(kv, (batch, seq, kv_heads, head_dim), jnp.float32)
+    # Two packed segments per row with different boundaries, under a causal sliding window.
+    seg = jnp.stack([jnp.where(jnp.arange(seq) < 40, 0, 1), jnp.where(jnp.arange(seq) < 24, 0, 1)])
+    mask = AttentionMask.causal(sliding_window=20).with_segment_ids(seg)
+    return q, k, v, mask
+
+
+def _assert_matches_reference(q, k, v, mask, *, block_size=None):
+    # TPU matmuls default to bf16 precision; compare both paths at full precision so only the attention
+    # computation, not accumulation order, can make them differ.
+    with jax.default_matmul_precision("highest"):
+        expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+        actual = xla_flash_attention(q, k, v, mask, block_size=block_size)
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+
+
+def test_xla_flash_attention_matches_reference_with_window_and_segments():
+    q, k, v, mask = _flash_inputs()
+    _assert_matches_reference(q, k, v, mask, block_size=16)
+
+
+def test_xla_flash_attention_gradients_match_reference():
+    q, k, v, mask = _flash_inputs()
+    cot = jax.random.normal(jax.random.key(9), q.shape, jnp.float32)
+
+    def loss(attend, q, k, v):
+        return jnp.sum(attend(q, k, v, mask) * cot)
+
+    with jax.default_matmul_precision("highest"):
+        ref_grads = jax.grad(
+            lambda q, k, v: loss(lambda *a: reference_attention(*a, logits_dtype=jnp.float32), q, k, v),
+            argnums=(0, 1, 2),
+        )(q, k, v)
+        flash_grads = jax.grad(
+            lambda q, k, v: loss(lambda *a: xla_flash_attention(*a, block_size=16), q, k, v), argnums=(0, 1, 2)
+        )(q, k, v)
+    # TPU's emulated f32 backward differs from the reference by about 1e-4 on values of order one.
+    for ref, flash in zip(ref_grads, flash_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(flash), np.asarray(ref), rtol=1e-3, atol=1e-3)
+
+
+def test_xla_flash_attention_accepts_dense_boolean_mask():
+    q, k, v, mask = _flash_inputs()
+    dense = mask.materialize_mask(q.shape[1], k.shape[1])
+    _assert_matches_reference(q, k, v, dense, block_size=16)
+
+
+@pytest.mark.parametrize("seq_len", [48, 1025])
+def test_xla_flash_attention_handles_lengths_that_do_not_divide_the_default_block(seq_len):
+    """48 blocks at 16; 1025 has no usable power-of-two block and falls back to the reference path."""
+    kq, kk, kv = jax.random.split(jax.random.key(5), 3)
+    q = jax.random.normal(kq, (1, seq_len, 2, 8), jnp.float32)
+    k = jax.random.normal(kk, (1, seq_len, 1, 8), jnp.float32)
+    v = jax.random.normal(kv, (1, seq_len, 1, 8), jnp.float32)
+    _assert_matches_reference(q, k, v, AttentionMask.causal(sliding_window=20))
+
+
+def test_xla_flash_attention_broadcasts_shared_segment_ids_across_the_batch():
+    q, k, v, _ = _flash_inputs()
+    shared = jnp.where(jnp.arange(q.shape[1]) < 40, 0, 1)[None, :]  # one row of segment ids for a batch of 2
+    mask = AttentionMask.causal(sliding_window=20).with_segment_ids(shared)
+    _assert_matches_reference(q, k, v, mask, block_size=16)

@@ -17,10 +17,13 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import SecretSpec, resolve_secret_spec
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import (
+    EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -150,6 +153,7 @@ class EvaluationBatch:
     submission_cluster: str
     judge: HostedJudge | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
+    source_model_config: ModelConfigRef | None = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +204,8 @@ def _record(
             "extra": dict(evalchemy.extra_gen_kwargs) if evalchemy is not None else {},
         }
     )
+    model_config = ModelConfigRef.model_validate(asdict(batch.model))
+    source_model_config = batch.source_model_config or model_config
     record = EvalRunRecord(
         run_id=identity.run_id,
         group_id=batch.group_id,
@@ -211,7 +217,9 @@ def _record(
             name=batch.model.name,
             location=batch.model.location,
             backend=batch.model.serve.backend.value,
-            config=ModelConfigRef.model_validate(asdict(batch.model)),
+            config=model_config,
+            source_config=source_model_config if source_model_config != model_config else None,
+            config_digest=model_config_digest(source_model_config),
         ),
         judge=(
             HostedJudgeRef(
@@ -376,6 +384,17 @@ def _run_one_evaluation(
         canonical_metrics = outcome.canonical_metrics
         tasks = outcome.tasks
         jobs |= outcome.jobs
+        low_coverage = [
+            f"{task}: {entry.n_scored}/{entry.n_attempted}"
+            for task, entry in coverage.items()
+            if entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0)
+            and entry.n_attempted is not None
+            and entry.n_attempted > 0
+            and entry.n_scored / entry.n_attempted < DEFAULT_MIN_COVERAGE
+        ]
+        if low_coverage:
+            status = RunStatus.INFRA_FAILED
+            error = f"infrastructure coverage below {DEFAULT_MIN_COVERAGE:.0%}: {', '.join(low_coverage)}"
     except Exception as exc:
         if isinstance(exc, EvaluationError):
             status = exc.status

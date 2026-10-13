@@ -6,8 +6,10 @@
 Two stages, one step per registered source each, resolved through
 :mod:`experiments.datakit.hero_data` so the steps land at the paths it registers:
 
-* ``score`` runs :func:`score_fusion.fusion_score_step` over a source's normalized
-  text and its Harrier leaf on GPU workers. It is the producer of record for
+* ``score`` runs :func:`score_fusion.fusion_score_step` over a source's Nemotron
+  tokenize leaf and its Harrier leaf on GPU workers, with the tokenize step as a
+  dependency: the leaves the registered run read are gone, so the runner tokenizes
+  a source (CPU workers) before scoring it. It is the producer of record for
   :func:`hero_data.fusion_scores`; that accessor is pinned to a completed run, so
   this stage only needs to run again to score under a new pin.
 * ``bucket`` runs :func:`bucket.quality_step` over the pinned fusion scores and
@@ -49,12 +51,19 @@ def _partition(sources: list[str], index: int, count: int) -> list[str]:
 
 
 def build_score_steps(sources: list[str]) -> list[StepSpec]:
-    """One fusion score step per source, at the identity the score stage owns."""
+    """One fusion score step per source, at the identity the score stage owns.
+
+    Each depends on the source's Nemotron tokenize step, which the runner builds
+    first when its output is missing.
+    """
     steps = []
     for source in sources:
+        tokenize = hero_data.tokenize_step_for(source, hero_data.NEMOTRON_TOKENIZER)
+        tokenize = replace(tokenize, fn=remote(tokenize.fn, resources=DRIVER_RESOURCES))
         step = fusion_score_step(
             name=f"datakit/fusion_scores/{source}",
             normalized=hero_data.normalized(source),
+            tokenized=tokenize,
             embedding=hero_data.harrier(source),
             quality_model=hero_data.NEMOTRON_88K,
         )

@@ -5,14 +5,19 @@ isolated runtime environments.
 
 The Evalchemy, Harbor, and MarinSkyRL uv projects are excluded from the root
 workspace so their dependency graphs do not have to resolve with Marin's
-training and serving dependencies. Each `pyproject.toml` follows the external
-repository's `main` branch, and its adjacent `uv.lock` records the exact commit
-Marin uses.
+training and serving dependencies. Each `pyproject.toml` selects an external
+source. Its adjacent `uv.lock` records the exact commit that Marin uses.
 
-`vllm/gpu.toml` records the promoted CUDA release, Torch backend, and
-architecture-specific wheel URLs and SHA-256 digests. It is updated from the
-release manifest only after the H100 and GB200 publication gates pass. It is
-not a uv project and the nightly update does not advance it.
+Verified evaluation cohorts select revisions from `RUNTIME_COMMITS` in
+`lib/marin/src/marin/evaluation/eval_policy.py`. The `harbor/pins/<Harbor commit>/`
+snapshots retain their full dependency locks. Preflight and workers run the
+selected lock with `uv run --frozen`; the external dependency updater advances
+only the top-level projects.
+
+`vllm/gpu.toml` records the published CUDA release, Torch backend, and exact
+wheel URL and SHA-256 for each architecture. The
+[GPU guide](https://github.com/marin-community/marin/blob/main/.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
+defines how the fork builds and tests wheels and how Marin adopts them.
 
 `vllm/tpu.toml` records an exact vLLM source from the fork's maintained `main`
 lineage and the matching `tpu-inference` SHA. The TPU stack runs from an
@@ -32,15 +37,21 @@ uv run config/update-external.py evalchemy
 ```
 
 Omit the project name to advance all three Git projects. The command updates
-the selected lockfiles and regenerates the packaged requirements. Regenerate
-only the promoted vLLM release after editing `vllm/gpu.toml` with:
+the selected lockfiles and regenerates the packaged requirements.
 
-```bash
-uv run config/update-external.py vllm
+Update a GPU release from its published manifest with:
+
+```sh
+uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
 ```
 
-The generated module also carries the isolated TPU-vLLM requirements from
-`vllm/tpu.toml`; those forks are not part of the nightly upgrade set.
+The command updates `vllm/gpu.toml` and regenerates the packaged pins. It
+validates and renders both outputs before replacing the descriptor, so a
+rendering failure leaves the existing pins in place. Follow the GPU guide's
+Snowball test and adoption steps before merging those pins.
+
+Update TPU source pins in `vllm/tpu.toml`; those forks are not part of the
+nightly upgrade set.
 Verify that all generated state is current without contacting the repositories:
 
 ```bash
@@ -74,6 +85,12 @@ The external configurations intentionally model only what Marin needs:
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
+  The lock overrides Rigging's source because a pinned Marin Git workspace
+  advertises its development version while the launcher needs published Marin
+  wheels. After each MarinSkyRL update, the updater installs the frozen base
+  lock in a temporary environment and runs `uv pip check`. This catches
+  requirements hidden by the override, including exact Rigging versions
+  required by published Iris and Finestore wheels.
 - `vllm` records the promoted GPU wheels (`gpu.toml`) and a main-line source
   paired with tpu-inference for TPU (`tpu.toml`). The GPU and TPU wheels have
   independent build and promotion paths. Neither is a workspace dependency.

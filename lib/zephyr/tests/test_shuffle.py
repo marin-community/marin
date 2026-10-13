@@ -99,6 +99,29 @@ def test_scatter_roundtrip(tmp_path):
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
+def test_scatter_streams_wide_items_before_consuming_input(tmp_path):
+    """Batched records must reach the memory-aware writer before 1,000 accumulate."""
+    data_path = tmp_path / "wide-scatter"
+
+    def rows():
+        for index in range(64):
+            if index == 32:
+                assert list(data_path.glob("*.parquet")), "Wide records accumulated without flushing"
+            yield {"k": index % 4, "v": index, "payload": b"x" * 1024**2}
+
+    ctx = _InProcessWorkerContext(
+        chunk_prefix="test", execution_id="test", stage_name="test", task_memory_bytes=64 * 1024**2
+    )
+    token = _worker_ctx_var.set(ctx)
+    try:
+        paths = list(_write_scatter(rows(), 0, str(data_path), _key, 4))
+    finally:
+        _worker_ctx_var.reset(token)
+    recovered = [row for shard in range(4) for row in _read_shard(ScatterReader.from_sidecars(paths, shard))]
+    assert sorted(row["v"] for row in recovered) == list(range(64))
+    assert all(row["payload"] == b"x" * 1024**2 for row in recovered)
+
+
 def test_scatter_each_shard_gets_correct_items(tmp_path):
     """Items are routed to shards by deterministic_hash(key) % num_shards."""
     num_shards = 4
@@ -408,6 +431,24 @@ def test_scatter_empty_input(tmp_path):
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
     assert _read_shard(shard) == []
     assert list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path))) == []
+
+
+def test_scatter_items_the_stdlib_pickler_cannot_reference_round_trip():
+    """Items holding a lambda or a class defined inside a function fall back to cloudpickle."""
+
+    class _Local:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return type(other) is _Local and other.value == self.value
+
+    items = [{"v": 1, "fn": lambda x: x + 1}, _Local(7), {"v": 2}]
+    frame = _items_to_dataframe(items, key_fn=lambda _: 0, sort_fn=None, num_output_shards=1)
+    restored = list(_dataframe_to_items(frame))
+    assert restored[0]["fn"](41) == 42
+    assert restored[1] == _Local(7)
+    assert restored[2] == {"v": 2}
 
 
 def test_scatter_key_fn_must_be_serializable(tmp_path):

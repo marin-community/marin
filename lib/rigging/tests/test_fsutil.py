@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 import rigging.filesystem.bulk_deletion as bulk_deletion
+import rigging.filesystem.transfer as transfer_module
 import rigging.fsutil.cli as cli_module
-import rigging.fsutil.transfer as transfer_module
 import rigging.fsutil.verified_copy as verified_copy_module
 import rigging.timing as timing
 from botocore.exceptions import EndpointConnectionError
@@ -25,6 +25,7 @@ from click.testing import CliRunner
 from rigging.filesystem.buckets import S3UploadPolicy
 from rigging.filesystem.cross_region import CrossRegionGuardedFS
 from rigging.filesystem.paged_listing import with_listing
+from rigging.filesystem.transfer import copy
 from rigging.fsutil import deletion, listing
 from rigging.fsutil.cli import cli
 from rigging.fsutil.listing import MAX_PREVIEW_BYTES, read_decompressed_preview
@@ -46,6 +47,31 @@ def tree(tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "c.txt").write_text("nested")
     return tmp_path
+
+
+@pytest.mark.parametrize("no_clobber", [False, True])
+def test_copy_directory_preserves_tree_and_handles_existing_files(tree, tmp_path, no_clobber):
+    source = tree / "source"
+    source.mkdir()
+    (source / "nested").mkdir()
+    (source / "nested" / "file.txt").write_text("new")
+    (source / "other.txt").write_text("other")
+    destination = tmp_path / "output"
+    (destination / "source" / "nested").mkdir(parents=True)
+    (destination / "source" / "nested" / "file.txt").write_text("old")
+
+    copy(str(source), f"{destination}/", recursive=True, no_clobber=no_clobber)
+
+    assert (destination / "source" / "nested" / "file.txt").read_text() == ("old" if no_clobber else "new")
+    assert (destination / "source" / "other.txt").read_text() == "other"
+
+
+def test_copy_file_uses_exact_destination(tree, tmp_path):
+    destination = tmp_path / "renamed.txt"
+
+    copy(str(tree / "b.txt"), str(destination))
+
+    assert destination.read_text() == "hello"
 
 
 def test_cp_handles_the_awkward_destination_shapes(tree, tmp_path, monkeypatch):

@@ -4,32 +4,35 @@
 """Score normalized documents with the fusion quality scorer.
 
 The fusion scorer reads a document two ways: its first ``max_tokens`` ids under the
-corpus tokenizer, and its int8[1024] Harrier embedding. Both inputs are leaves of one
-normalized source that share shard count and basenames, so one Zephyr task scores one
-shard pair and writes one output shard under the same basename, one row per
-normalized document in the normalized shard's row order. That order is what the
-store walks positionally against decon and tokenize.
+corpus tokenizer, and its int8[1024] Harrier embedding. Both come from leaves of one
+normalized source that share its shard count, basenames and row order: the tokenize
+stage's attribute shards hold the ids and the Harrier leaf the embeddings. One Zephyr
+task walks one normalized shard's ids, takes the token and embedding rows of the two
+side shards in step with them, and writes one output shard under the same basename,
+one row per normalized document in the normalized shard's row order. That order is
+what the store walks positionally against decon and tokenize.
 
-Tokenization runs inside the task through the tokenize stage's own core
-(:func:`marin.processing.tokenize._core.tokenize_batches_with_id` with the text
-format), so the ids equal those a tokenize leaf of this source would hold under the
-same tokenizer. Text is capped at :data:`TEXT_CHAR_CAP` characters first: the scorer
-reads ``max_tokens`` tokens, and the cap changes them only for a document whose first
-65,536 characters tokenize to fewer.
+No tokenizer runs on the worker. The ids are the tokenize leaf's stored
+``input_ids`` (:func:`marin.processing.tokenize.attributes.iter_tokenized_documents`
+regroups a document's chunk rows into one array), of which the scorer reads the
+first ``max_tokens``. A tokenize artifact built from another normalize output or
+under another tokenizer repository is refused before anything is listed; the
+tokenizer commit enters the output identity through the tokenize step the score
+step depends on, and the pin names it a second time in the hash.
 
-The embedding side is read positionally: every leaf of a source holds the normalized
-shard's documents in its row order. :class:`AlignedColumn` checks each batch's ids
-against the embedding shard's as it takes them, so an embedding leaf from a different
-normalize run fails the shard instead of pairing documents with the wrong vectors.
+Both sides are read positionally. :class:`AlignedColumn` and
+:class:`AlignedDocuments` check each batch's ids against the rows they hand back,
+and a side with rows left over fails the shard, so a leaf from a different
+normalize run fails the shard instead of pairing documents with the wrong vectors
+or tokens.
 
 Every worker holds one scorer per process (``InlineRunner``) and runs
-:data:`TASK_RESOURCES`-sized tasks concurrently in threads. Tokenization and parquet
-decode release the GIL, so the concurrent tasks are what keep a worker's cores and its
-accelerator busy; the forward is a small fraction of a task's time.
+:data:`TASK_RESOURCES`-sized tasks concurrently in threads. Parquet decode releases
+the GIL, so the concurrent tasks are what keep a worker's cores and its accelerator
+busy.
 """
 
 import functools
-import itertools
 import logging
 import os
 import threading
@@ -41,13 +44,11 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 from fray.types import ResourceConfig
-from levanter.data.text.formats import TextLmDatasetFormat
-from levanter.tokenizers import TokenizerBackend
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from marin.processing.tokenize._core import CHUNK_INDEX_FIELD, INPUT_IDS_FIELD, tokenize_batches_with_id
+from marin.processing.tokenize.attributes import TokenizedAttrData, iter_tokenized_documents
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
@@ -55,7 +56,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.runners import InlineRunner
 
-from experiments.datakit.cluster.quality.fast_transformer.data import NUM_RESERVED, PAD_ID, UNK_ID
+from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     QualityPin,
@@ -66,18 +67,16 @@ from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledSc
 
 logger = logging.getLogger(__name__)
 
-FUSION_SCORES_VERSION = 1
-# Documents per tokenize call and per forward. Padded to a constant shape so the
-# forward compiles once; the largest shard holds 2.68M documents, so a batch
-# bounds the resident tokens and embeddings at ~6 KB a document. The batch shape
-# moves the scores (up to 1.6e-3 between 4,096 and 32,768), so it is hashed into
-# the step identity rather than exposed as a knob.
+FUSION_SCORES_VERSION = 2
+# Documents per forward. Padded to a constant shape so the forward compiles once;
+# the largest shard holds 2.68M documents, so a batch bounds the resident tokens
+# and embeddings at ~6 KB a document. The batch shape moves the scores (up to
+# 1.6e-3 between 4,096 and 32,768), so it is hashed into the step identity rather
+# than exposed as a knob.
 BATCH_DOCS = 4096
-# 128 characters per token over the scorer's 512-token window.
-TEXT_CHAR_CAP = 65_536
-TEXT_FORMAT = TextLmDatasetFormat()
 # One H100 node has 8 GPUs and 128 vCPUs. Sixteen concurrent tasks per worker keep
-# its cores tokenizing while the forwards share one device.
+# its cores decoding parquet while the forwards share one device. Sized when the
+# task also tokenized the text; the decode-only task leaves the cores lighter.
 WORKER_RESOURCES = ResourceConfig.with_gpu("H100", count=1, cpu=16, ram="96g", disk="64g")
 TASK_RESOURCES = ResourceConfig.with_gpu("H100", count=1, cpu=1, ram="6g", disk="64g")
 COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="8g", preemptible=False)
@@ -91,12 +90,14 @@ class FusionScores(BaseModel):
 
     ``output_dir`` holds one parquet shard per normalized shard, same basename, with
     ``id`` and ``score`` -- the scorer's sigmoid, uncalibrated -- one row per
-    normalized document in the normalized shard's row order.
+    normalized document in the normalized shard's row order. ``tokenize_dir`` and
+    ``embedding_dir`` are the two side leaves the scores were computed from.
     """
 
     version: str = f"v{FUSION_SCORES_VERSION}"
     output_dir: DatakitArtifactPath
     source_key: str
+    tokenize_dir: DatakitArtifactPath
     embedding_dir: DatakitArtifactPath
     model: str
     model_sha256: str
@@ -105,12 +106,15 @@ class FusionScores(BaseModel):
 
 
 def fusion_hash_attrs(pin: QualityPin) -> dict[str, str | int]:
-    """The identity of a fusion score step, shared by its producer and its consumers."""
+    """The identity of a fusion score step, shared by its producer and its consumers.
+
+    The ids and embeddings it reads enter through the step's dependencies; what is
+    hashed here is the scorer applied to them and the batch shape it runs at.
+    """
     return {
         "model": pin.name,
         "model_sha256": pin.model_sha256,
         "tokenizer": pin.tokenizer,
-        "text_char_cap": TEXT_CHAR_CAP,
         "batch_docs": BATCH_DOCS,
         "v": FUSION_SCORES_VERSION,
     }
@@ -182,22 +186,49 @@ def read_aligned_column(path: str, column: str, where: str) -> AlignedColumn:
     return AlignedColumn(frame.get_column("id").to_numpy(), frame.get_column(column).to_numpy(), where)
 
 
-def verify_remap(remap: dict[int, int]) -> int:
-    """Assert the remap is the full-vocab identity offset and return the vocab size.
+@dataclass
+class AlignedDocuments:
+    """One tokenize shard's documents, taken in step with the normalized shard's rows.
 
-    The fusion checkpoint maps every raw tokenizer id to ``id + NUM_RESERVED``, and
-    scoring exploits that: the remap becomes an add rather than a per-token dict
-    lookup. A checkpoint shipping a compacted remap fails here instead of silently
-    scoring scrambled ids.
+    The tokenize leaf is streamed rather than read whole: :meth:`take` pulls the next
+    ``len(doc_ids)`` documents and checks each one's id against the normalized row it
+    is paired with, returning each document's first ``max_tokens`` ids. A document
+    the tokenize side lacks (the stage drops zero-token documents), one it holds in
+    another order, or one left over after the normalized rows fails the shard.
     """
-    size = len(remap)
-    wrong = [t for t in range(size) if remap.get(t) != t + NUM_RESERVED]
-    if wrong:
-        raise ValueError(
-            f"remap is not the full-vocab identity offset ({len(wrong)} of {size} entries differ, "
-            f"e.g. {wrong[:5]}); the fusion scorer assumes raw_id + {NUM_RESERVED}"
-        )
-    return size
+
+    documents: Iterator[tuple[str, np.ndarray]]
+    max_tokens: int
+    where: str
+    consumed: int = 0
+
+    def take(self, doc_ids: np.ndarray) -> list[np.ndarray]:
+        """Return the first ``max_tokens`` ids of the next ``len(doc_ids)`` documents, which must carry ``doc_ids``."""
+        rows: list[np.ndarray] = []
+        for position, expected in enumerate(doc_ids, start=self.consumed):
+            document = next(self.documents, None)
+            if document is None or document[0] != expected:
+                found = None if document is None else document[0]
+                raise ValueError(
+                    f"{self.where}: row {position}: normalized id {expected!r} but tokenize document {found!r}; "
+                    f"the two sides did not come from one normalize run"
+                )
+            rows.append(document[1][: self.max_tokens])
+        self.consumed += len(doc_ids)
+        return rows
+
+    def require_consumed(self) -> None:
+        document = next(self.documents, None)
+        if document is not None:
+            raise ValueError(
+                f"{self.where}: tokenize document {document[0]!r} left over after {self.consumed} normalized rows; "
+                f"the two sides did not come from one normalize run"
+            )
+
+
+def read_aligned_documents(path: str, max_tokens: int, where: str) -> AlignedDocuments:
+    """Stream the documents of one tokenize shard, chunk rows regrouped, as an :class:`AlignedDocuments`."""
+    return AlignedDocuments(iter_tokenized_documents(path), max_tokens, where)
 
 
 _SCORER_LOCK = threading.Lock()
@@ -207,7 +238,6 @@ _SCORER_LOCK = threading.Lock()
 def _load_pinned_scorer(model_dir: str, pin: QualityPin) -> PooledScorer:
     require_pinned_model(pin, model_dir)
     scorer = load_pooled_scorer(model_dir)
-    verify_remap(scorer.remap)
     logger.info("loaded %s (%s): max_tokens=%d", pin.name, model_dir, scorer.max_tokens)
     return scorer
 
@@ -220,21 +250,19 @@ def pinned_scorer(model_dir: str, pin: QualityPin) -> PooledScorer:
         return _load_pinned_scorer(model_dir, pin)
 
 
-def pad_ids(rows: list[list[int]], max_tokens: int, vocab_size: int) -> np.ndarray:
-    """Dense ``[n, max_tokens]`` compact ids: the first ``max_tokens`` of each row, remapped.
+def pad_ids(rows: list[np.ndarray], max_tokens: int, remap_table: np.ndarray) -> np.ndarray:
+    """Dense ``[n, max_tokens]`` compact ids: the first ``max_tokens`` of each row through ``remap_table``.
 
-    The remap is ``raw + NUM_RESERVED`` (see :func:`verify_remap`). An id at or above
-    the vocab becomes ``UNK_ID``: a jax gather clamps out-of-range indices rather than
-    raising, which would score the row against an unrelated embedding row.
+    The table is the scorer's (:func:`data.remap_table`): a raw id above its largest
+    known one lands on the ``UNK_ID`` sentinel in its last row. That clamp matters
+    because a jax gather clamps out-of-range indices rather than raising, which would
+    score the row against an unrelated embedding row.
     """
-    n = len(rows)
-    lengths = np.fromiter((min(len(row), max_tokens) for row in rows), dtype=np.int64, count=n)
-    flat = np.fromiter(
-        itertools.chain.from_iterable(row[:max_tokens] for row in rows), dtype=np.int64, count=int(lengths.sum())
-    )
-    compact = np.where(flat < vocab_size - NUM_RESERVED, flat + NUM_RESERVED, UNK_ID).astype(np.int32)
-    out = np.full((n, max_tokens), PAD_ID, dtype=np.int32)
-    out[np.arange(max_tokens)[None, :] < lengths[:, None]] = compact
+    out = np.full((len(rows), max_tokens), PAD_ID, dtype=np.int32)
+    last = len(remap_table) - 1
+    for i, row in enumerate(rows):
+        window = np.asarray(row[:max_tokens])
+        out[i, : len(window)] = remap_table[np.minimum(window, last)]
     return out
 
 
@@ -253,19 +281,6 @@ def shard_output_pattern(output_path: str, basenames: tuple[str, ...]):
         return prefix_join(output_path, basenames[shard_idx])
 
     return _output_path
-
-
-def first_chunk_ids(ids: np.ndarray, texts: list[str]) -> list[list[int]]:
-    """Tokenize documents through the tokenize stage's core; return each one's first chunk."""
-    records = [{"id": doc_id, "text": text[:TEXT_CHAR_CAP]} for doc_id, text in zip(ids, texts, strict=True)]
-    rows = [
-        row[INPUT_IDS_FIELD]
-        for row in tokenize_batches_with_id(data_format=TEXT_FORMAT, batches=iter([records]))
-        if row[CHUNK_INDEX_FIELD] == 0
-    ]
-    if len(rows) != len(records):
-        raise ValueError(f"tokenizer returned {len(rows)} documents for {len(records)}")
-    return rows
 
 
 def rebatch(batches: Iterator[pa.RecordBatch], rows_per_batch: int) -> Iterator[pa.RecordBatch]:
@@ -287,61 +302,99 @@ def rebatch(batches: Iterator[pa.RecordBatch], rows_per_batch: int) -> Iterator[
         yield pa.concat_batches(pa.Table.from_batches(pending).to_batches())
 
 
+def validated_tokenize_dir(pin: QualityPin, normalized: NormalizedData, tokenized: TokenizedAttrData, split: str) -> str:
+    """The shard directory of ``tokenized``'s ``split``, once it is checked to be
+    ``normalized``'s tokenize output under the tokenizer repository ``pin`` reads.
+
+    The artifact records the repository, not the commit; the commit is pinned by the
+    tokenize step's own identity, which the score step depends on.
+    """
+    repo, _, _ = pin.tokenizer.partition("@")
+    if tokenized.tokenizer != repo:
+        raise ValueError(
+            f"{pin.name} reads {repo!r} ids but the tokenize stage wrote {tokenized.tokenizer!r} ids; "
+            f"score from a tokenize step under {repo!r}"
+        )
+    source_key = datakit_source_key(normalized.main_output_dir)
+    if tokenized.source_keys.get(split) != source_key:
+        raise ValueError(
+            f"tokenize artifact's {split!r} split was built from {tokenized.source_keys.get(split)!r}, "
+            f"not from this source's normalize output {source_key!r}"
+        )
+    return tokenized.output_dirs[split]
+
+
 def _score_shard(
     batches: Iterator[pa.RecordBatch],
     shard: ShardInfo,
     *,
+    tokenize_paths: tuple[str, ...],
     embedding_paths: tuple[str, ...],
     model_dir: str,
     pin: QualityPin,
 ) -> Iterator[pa.RecordBatch]:
-    """Score one normalized shard against its embedding shard, in the normalized order."""
+    """Score one normalized shard from its tokenize and embedding shards, in the normalized order."""
     scorer = pinned_scorer(model_dir, pin)
-    vocab_size = scorer.model.config.vocab_size
+    tokenize_path = tokenize_paths[shard.shard_idx]
     embedding_path = embedding_paths[shard.shard_idx]
-    where = f"shard {shard.shard_idx} ({embedding_path})"
-    embeddings = read_aligned_column(embedding_path, "embedding", where)
-    documents = 0
+    documents = read_aligned_documents(tokenize_path, scorer.max_tokens, f"shard {shard.shard_idx} ({tokenize_path})")
+    embeddings = read_aligned_column(embedding_path, "embedding", f"shard {shard.shard_idx} ({embedding_path})")
+    scored = 0
     for batch in rebatch(batches, BATCH_DOCS):
         ids = batch.column("id").to_numpy(zero_copy_only=False)
-        tokens = pad_ids(first_chunk_ids(ids, batch.column("text").to_pylist()), scorer.max_tokens, vocab_size)
+        tokens = pad_ids(documents.take(ids), scorer.max_tokens, scorer.remap_table)
         embedding = normalize_embeddings(embeddings.take(ids))
         scores = predict(scorer.model, tokens, batch_size=BATCH_DOCS, doc_embed=embedding)
-        documents += len(ids)
+        scored += len(ids)
         yield pa.RecordBatch.from_arrays([batch.column("id"), pa.array(scores, type=pa.float32())], schema=SCORE_SCHEMA)
+    documents.require_consumed()
     embeddings.require_consumed()
-    counters.pipeline.update_counter("fusion/docs_scored", documents)
+    counters.pipeline.update_counter("fusion/docs_scored", scored)
     counters.pipeline.update_counter("fusion/shards", 1)
-    logger.info("shard %d/%d: %d documents scored", shard.shard_idx, shard.total_shards, documents)
+    logger.info("shard %d/%d: %d documents scored", shard.shard_idx, shard.total_shards, scored)
 
 
 def score_fusion(
     output_path: str,
     *,
     normalized: NormalizedData,
+    tokenized: TokenizedAttrData,
     embedding_dir: str,
     quality_model: QualityPin,
+    split: str = "train",
     worker_resources: ResourceConfig = WORKER_RESOURCES,
     task_resources: ResourceConfig = TASK_RESOURCES,
     max_workers: int = MAX_WORKERS,
     zephyr_context: ZephyrContext | None = None,
 ) -> FusionScores:
-    """Score every shard of one normalized source; one Zephyr task per shard pair.
+    """Score every shard of one normalized source; one Zephyr task per shard.
 
-    Output shards that already exist are skipped, so a rerun after a partial failure
-    scores only the remainder.
+    ``tokenized`` must be the tokenize output of ``normalized`` (its ``split``
+    source key names that normalize dir) under the tokenizer ``quality_model``
+    reads; both are checked before anything is listed. Output shards that already
+    exist are skipped, so a rerun after a partial failure scores only the remainder.
     """
     model_dir = quality_model_dir(quality_model)
     text_dir = normalized.main_output_dir
-    basenames = tuple(paired_basenames(text_dir, embedding_dir))
+    tokenize_dir = validated_tokenize_dir(quality_model, normalized, tokenized, split)
+    basenames = tuple(paired_basenames(text_dir, tokenize_dir, embedding_dir))
+    tokenize_paths = tuple(prefix_join(tokenize_dir, name) for name in basenames)
     embedding_paths = tuple(prefix_join(embedding_dir, name) for name in basenames)
-    logger.info("scoring %d shards of %s against %s -> %s", len(basenames), text_dir, embedding_dir, output_path)
+    logger.info(
+        "scoring %d shards of %s from %s and %s -> %s",
+        len(basenames),
+        text_dir,
+        tokenize_dir,
+        embedding_dir,
+        output_path,
+    )
     pipeline = (
         Dataset.from_list([prefix_join(text_dir, name) for name in basenames])
-        .load_parquet(columns=["id", "text"], batch_mode=True)
+        .load_parquet(columns=["id"], batch_mode=True)
         .map_shard(
             partial(
                 _score_shard,
+                tokenize_paths=tokenize_paths,
                 embedding_paths=embedding_paths,
                 model_dir=model_dir,
                 pin=quality_model,
@@ -356,12 +409,11 @@ def score_fusion(
         max_workers=min(max_workers, len(basenames)),
         stage_runner_factory=InlineRunner,
     )
-    ctx.put("tokenizer_name", quality_model.tokenizer)
-    ctx.put("tokenizer_backend", TokenizerBackend.HF)
     outcome = ctx.execute(pipeline, verbose=True, map_task_resources=task_resources)
     return FusionScores(
         output_dir=output_path,
         source_key=datakit_source_key(text_dir),
+        tokenize_dir=tokenize_dir,
         embedding_dir=embedding_dir,
         model=quality_model.name,
         model_sha256=quality_model.model_sha256,
@@ -374,28 +426,34 @@ def fusion_score_step(
     *,
     name: str,
     normalized: StepSpec,
+    tokenized: StepSpec,
     embedding: StepSpec,
     quality_model: QualityPin,
+    split: str = "train",
     worker_resources: ResourceConfig = WORKER_RESOURCES,
     task_resources: ResourceConfig = TASK_RESOURCES,
     max_workers: int = MAX_WORKERS,
     zephyr_context: ZephyrContext | None = None,
 ) -> StepSpec:
-    """A step that scores ``normalized`` against ``embedding`` with ``quality_model``.
+    """A step that scores ``normalized`` from ``tokenized`` and ``embedding`` with ``quality_model``.
 
-    ``embedding`` is the Harrier leaf of the same source; its ``output_path`` is the
-    shard directory. The model bytes enter the identity through the pin's digest
-    and are checked again by every worker before it writes.
+    ``tokenized`` is the source's tokenize step under the tokenizer the pin reads
+    (its artifact is a :class:`TokenizedAttrData`), and ``embedding`` the Harrier
+    leaf of the same source, whose ``output_path`` is the shard directory. The model
+    bytes enter the identity through the pin's digest and are checked again by
+    every worker before it writes.
     """
     return StepSpec(
         name=name,
-        deps=[normalized, embedding],
+        deps=[normalized, tokenized, embedding],
         hash_attrs=fusion_hash_attrs(quality_model),
         fn=lambda output_path: score_fusion(
             output_path,
             normalized=read_artifact(normalized.output_path, NormalizedData),
+            tokenized=read_artifact(tokenized.output_path, TokenizedAttrData),
             embedding_dir=embedding.output_path,
             quality_model=quality_model,
+            split=split,
             worker_resources=worker_resources,
             task_resources=task_resources,
             max_workers=max_workers,

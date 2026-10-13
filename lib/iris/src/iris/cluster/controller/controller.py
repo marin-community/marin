@@ -120,6 +120,7 @@ from iris.cluster.federation.manager import (
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
+from iris.cluster.runtime.sandbox import task_isolation
 from iris.cluster.types import (
     JobName,
     PendingTask,
@@ -206,6 +207,27 @@ class _SchedulingInputs:
     context: SchedulingContext | None
     queued_federation: list[QueuedCandidate]
     expired_queued_federation: list[JobName]
+
+
+def with_task_token(
+    request: job_pb2.RunTaskRequest,
+    job_id: JobName,
+    auth: ControllerAuth | None,
+) -> job_pb2.RunTaskRequest:
+    """Return a copy of ``request`` carrying a task token for ``job_id``'s owner.
+
+    Only an enforcing controller mints one: under null auth every caller is
+    already admitted, and a token would only lower the task's role. A profile
+    that withholds the token (SANDBOX) gets ``request`` back unchanged.
+    """
+    if auth is None or not auth.provider or auth.jwt_manager is None:
+        return request
+    if not task_isolation(request.container_profile, request.egress_policy).include_task_token:
+        return request
+    stamped = job_pb2.RunTaskRequest()
+    stamped.CopyFrom(request)
+    stamped.task_token = auth.jwt_manager.create_task_token(job_id)
+    return stamped
 
 
 def backend_observation_request(
@@ -1109,7 +1131,11 @@ class Controller:
 
     def _direct_reconcile_request(self) -> DirectReconcileRequest:
         drain = self._drain_dispatch_snapshot()
-        return DirectReconcileRequest(tasks_to_run=drain.tasks_to_run, running_tasks=drain.running_tasks)
+        tasks_to_run = [
+            with_task_token(request, JobName.from_wire(request.task_id).require_task()[0], self._config.auth)
+            for request in drain.tasks_to_run
+        ]
+        return DirectReconcileRequest(tasks_to_run=tasks_to_run, running_tasks=drain.running_tasks)
 
     def _scheduling_inputs(self, snap: Tx, now: Timestamp) -> _SchedulingInputs:
         context = build_scheduling_context(
@@ -1136,7 +1162,10 @@ class Controller:
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
             if row.job_id not in templates:
-                templates[row.job_id] = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
+                template = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
+                templates[row.job_id] = (
+                    with_task_token(template, row.job_id, self._config.auth) if template is not None else None
+                )
         worker_snapshot = reads.ControlSnapshot(
             worker_addresses=control.worker_addresses,
             reconcile_rows=control.reconcile_rows,

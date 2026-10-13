@@ -166,11 +166,27 @@ def test_the_bucket_driver_resolves_to_the_registered_quality_path():
 
 
 def test_score_step_identity_moves_with_the_tokenizer_revision(monkeypatch):
-    # The score step tokenizes the text itself, so a different tokenizer commit is a
-    # different dataset and must not share a path the skip-existing rerun would reuse.
+    # A different tokenizer commit is a different dataset and must not share a path
+    # the skip-existing rerun would reuse, whether it moves through the pin or
+    # through the tokenize step the score step reads.
     (before,) = quality_run.build_score_steps(["stack-v3"])
     repo = hero_data.NEMOTRON_TOKENIZER.name
     monkeypatch.setattr(hero_data, "NEMOTRON_88K", replace(hero_data.NEMOTRON_88K, tokenizer=f"{repo}@ffffffff"))
-    (after,) = quality_run.build_score_steps(["stack-v3"])
+    (after_pin,) = quality_run.build_score_steps(["stack-v3"])
+    monkeypatch.setattr(hero_data, "NEMOTRON_TOKENIZER", replace(hero_data.NEMOTRON_TOKENIZER, revision="ffffffff"))
+    (after_both,) = quality_run.build_score_steps(["stack-v3"])
 
-    assert before.output_path != after.output_path
+    assert len({before.output_path, after_pin.output_path, after_both.output_path}) == 3
+
+
+def test_score_step_reads_the_runnable_nemotron_tokenize_step():
+    # The registered Nemotron leaves were deleted, so the score stage must depend on
+    # a tokenize step that can run (current artifact version), not on the frozen
+    # accessor that points at the old run.
+    (step,) = quality_run.build_score_steps(["stack-v3"])
+    tokenize = hero_data.tokenize_step_for("stack-v3", hero_data.NEMOTRON_TOKENIZER)
+    deps = {dep.name_with_hash: dep for dep in step.deps}
+
+    assert tokenize.name_with_hash in deps
+    assert tokenize.output_path != hero_data.tokenized("stack-v3", hero_data.NEMOTRON_TOKENIZER).output_path
+    assert deps[tokenize.name_with_hash].fn is not hero_data._refuse_to_run

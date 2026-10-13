@@ -134,19 +134,22 @@ DOMAIN_ASSIGN_BATCH_SIZE = 4096
 # also hash the run id into their own steps.
 EXACT_DUPS_ID = "global_exact_dedup_af4c6c3e"
 FUZZY_DUPS_ID = "dedup_709f5997"
-VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_c757e4f0"
+# Verification against materialized clusters at 0.75 containment on word 3-grams.
+# The artifact has the current normalized source keys for all 292 sources.
+VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_v11_c075"
 
 
-# The fusion quality scorer: Nemotron-tokenized text plus the Harrier document
-# embedding. ``model_path`` holds the folded checkpoint, its remap and meta, and
-# the per-type calibration; the digests are what a step checks before it writes
+# The fusion quality scorer: the Nemotron tokenize leaf's ids plus the Harrier
+# document embedding. ``model_path`` holds the folded checkpoint, its remap and meta,
+# and the per-type calibration; the digests are what a step checks before it writes
 # under a path naming this pin. The tokenizer is the corpus tokenizer whose ids the
 # scorer reads -- its vocabulary is shared with the Nemotron-Flash-1B tokenizer the
 # checkpoint was trained on.
-# TODO: train the next quality scorer on the Marin (Llama 3) tokenizer. Nemotron was
-# chosen so the scorer could read the corpus's pretokenized ids, and score_fusion now
-# tokenizes the text itself, so nothing ties the scorer to it. This pin stays on
-# Nemotron because it identifies the model behind the registered hero scores.
+# TODO: train the next quality scorer on the Marin (Llama 3) tokenizer. The hero
+# corpus is tokenized under it for training anyway, so a scorer that reads those ids
+# would score from the tokenize leaves that already exist instead of needing a
+# second tokenization of the corpus. This pin stays on Nemotron because it
+# identifies the model behind the registered hero scores.
 NEMOTRON_88K = QualityPin(
     name="nemotron88k_v1",
     model_path="datakit/models/quality/nemotron_88k",
@@ -197,15 +200,26 @@ def normalized(source: str) -> StepSpec:
     return _read_only(_normalize_step(source))
 
 
-def tokenized(source: str, tokenizer: TokenizerPin = NEMOTRON_TOKENIZER) -> StepSpec:
-    """Return the tokenized attributes for ``source`` under ``tokenizer``."""
-    step = tokenize_attributes_step(
+def tokenize_step_for(source: str, tokenizer: TokenizerPin) -> StepSpec:
+    """Return the runnable tokenize step for ``source`` under ``tokenizer``.
+
+    This is the step as current code builds it, at the current artifact version;
+    :func:`tokenized` registers the leaves the fleet runs wrote, which sit at the
+    version of their run. The score stage depends on this one, so a source whose
+    leaf under ``tokenizer`` is gone is tokenized again before it is scored.
+    """
+    return tokenize_attributes_step(
         name=f"datakit/tokenize/{source}",
         train_normalize=_normalize_step(source),
         tokenizer=tokenizer.name,
         tokenizer_backend=TokenizerBackend.HF,
         tokenizer_revision=tokenizer.revision,
     )
+
+
+def tokenized(source: str, tokenizer: TokenizerPin = NEMOTRON_TOKENIZER) -> StepSpec:
+    """Return the tokenized attributes for ``source`` under ``tokenizer``."""
+    step = tokenize_step_for(source, tokenizer)
     version = _ARTIFACT_VERSION_OVERRIDES.get(source, tokenizer.artifact_version)
     return _read_only(replace(step, hash_attrs={**step.hash_attrs, "artifact_version": version}))
 
@@ -222,8 +236,9 @@ def fusion_scores(source: str, quality_model: QualityPin = NEMOTRON_88K) -> Step
     Written by the :data:`NEMOTRON_88K` run of August 14, 2026 over all 292 sources
     from the Nemotron tokenization and the Harrier embeddings; the tokenization it
     read has since been deleted, so the leaves are pinned by path. The producer of
-    record is :func:`score_fusion.fusion_score_step`, which tokenizes the normalized
-    text itself; a rerun lands at that step's own identity and repoints this map.
+    record is :func:`score_fusion.fusion_score_step` over
+    :func:`tokenize_step_for` under :data:`NEMOTRON_TOKENIZER`; a rerun tokenizes
+    the source again, lands at that step's own identity and repoints this map.
     """
     if quality_model.model_sha256 != NEMOTRON_88K.model_sha256:
         raise ValueError(

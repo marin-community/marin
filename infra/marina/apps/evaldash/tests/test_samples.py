@@ -121,6 +121,37 @@ def test_sample_export_uses_the_declared_metric():
     assert sample.grading.metric == "f1,none"
 
 
+def test_mrcr_sample_scores_survive_export_and_repair_existing_rows(tmp_path) -> None:
+    raw = {
+        "doc_id": 0,
+        "arguments": [["Prepend nonce to the requested answer"]],
+        "resps": [["nonce wrong answer"]],
+        "target": "nonce right answer",
+        "accuracy": 0.25,
+        "prefix_hit": 1.0,
+    }
+    exported = sample_from_lm_eval("mrcr", raw, "mrcr_accuracy")
+    assert exported.grading is not None
+    assert exported.grading.metric == "accuracy"
+    assert exported.grading.score == 0.25
+    assert exported.correct is False
+
+    fs, root = url_to_fs(str(tmp_path))
+    old_row = exported.model_copy(update={"grading": None, "correct": None})
+    perfect = old_row.model_copy(update={"doc_id": "1", "metrics": {"accuracy": 1.0, "prefix_hit": 1.0}})
+    write_sample_parquet(fs, f"{root}/samples_mrcr_20260927.parquet", [old_row, perfect])
+
+    page = fetch_samples(
+        str(tmp_path), "mrcr", offset=0, limit=10, correct="incorrect", primary_metric_name="mrcr_accuracy"
+    )
+    assert page.primary_metric == "accuracy"
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0}
+    assert [row.doc_id for row in page.rows] == ["0"]
+    assert page.rows[0].grading is not None
+    assert page.rows[0].grading.score == 0.25
+    assert page.rows[0].correct is False
+
+
 def test_artifact_fetch_returns_run_local_object(tmp_path) -> None:
     results = tmp_path / "results"
     trajectory = results / "trajectories" / "aime_68.json"

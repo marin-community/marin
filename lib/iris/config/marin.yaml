@@ -7,6 +7,9 @@ name: marin
 finelog:
   config: marin
 dashboard_url: https://iris.oa.dev
+endpoints:
+  /system/zephyr-history:
+    uri: https://marina.oa.dev/zephyr/
 
 # Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque dict;
 # iac.config owns the typed schema. The GCP arm's first resources are the reserved

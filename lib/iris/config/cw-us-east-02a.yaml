@@ -39,6 +39,9 @@ finelog:
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-02a.oa.dev
 federation_public_parent: https://iris.oa.dev
+endpoints:
+  /system/zephyr-history:
+    uri: https://marina.oa.dev/zephyr/
 
 # Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
 provisioning:
@@ -115,6 +118,11 @@ auth:
 
 kubernetes_provider:
   namespace: iris
+  node_health:
+    storage:
+      scratch: s3://marin-us-east-02a/tmp/ttl=1d/iris-node-health/cw-us-east-02a
+      minimum_healthy_nodes: 2
+    max_cordoned_nodes: 1
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   cache_max_age:

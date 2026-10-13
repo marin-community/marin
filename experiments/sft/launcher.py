@@ -220,11 +220,9 @@ def _levanter_train_config(
         initialize_from_hf=initialize_from_hf,
         initialize_model_from_checkpoint_path=initialize_model_from_checkpoint_path,
         use_hf_model_config=use_hf_model_config,
-        # Qwen (and others) pad the embedding vocab past the tokenizer's for TPU efficiency
-        # (Qwen3: model 151936 vs tokenizer 151669). Without this the Vocab axis is built from
-        # len(tokenizer) while the checkpoint embedding is larger -> a pytree Vocab-size mismatch
-        # at train_step trace. No-op when they already match (e.g. the Delphi prepared tokenizer).
-        pad_tokenizer_to_match_model=True,
+        # A converted checkpoint emits a tokenizer already padded to its model vocab. Native init
+        # has no HF reference from which the generic padding helper could re-derive that vocab.
+        pad_tokenizer_to_match_model=initialize_model_from_checkpoint_path is None,
         hf_save_steps=num_train_steps,  # one HF export at the end
         hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
         hf_generation_eos_token_ids=list(eos_token_ids),

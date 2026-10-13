@@ -30,15 +30,19 @@ _REPORT_URL = (
 )
 _TOTAL_TOKENS_KEY = "throughput/total_tokens"
 _SAMPLES = 800
+EVAL_LOSS_METRIC = "eval_dropless/paloma/macro_loss"
 
 WANDB_CHARTS = {
     "train-loss": ("Train cross-entropy loss", "train/cross_entropy_loss"),
-    "paloma-macro-loss": ("Paloma macro loss (dropless)", "eval_dropless/paloma/macro_loss"),
+    "paloma-macro-loss": ("Paloma macro loss (dropless)", EVAL_LOSS_METRIC),
     "mfu": ("MFU (%)", "throughput/mfu"),
 }
 
 _RUN_URL = "https://wandb.ai/{entity}/{project}/runs/{run}"
 _RUN_HISTORY_SAMPLES = 2000
+# More than a run's evaluation count. Below it W&B samples the points down and can
+# drop the newest; at or above it W&B returns every one.
+_EVAL_SAMPLES = 1000
 # W&B's own step counter. Levanter logs every training metric through
 # `wandb.log(..., step=<training step>)`, so this column is the Levanter step.
 _STEP_KEY = "_step"
@@ -100,6 +104,14 @@ query RunActivity($entity: String!, $project: String!, $run: String!) {
 def _epoch_seconds(stamp: str) -> float:
     """Epoch seconds for a W&B RFC-3339 stamp, whose zone is always `Z`."""
     return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+
+
+class LoggedPoint(NamedTuple):
+    """One logged value of a metric, with its W&B step and epoch-seconds stamp."""
+
+    step: float
+    value: float
+    timestamp: float
 
 
 class _HistorySpec(NamedTuple):
@@ -362,6 +374,24 @@ class WandbSource:
             ]
 
         return self._search_projects(run, project, read)
+
+    def recent_points(self, run: str, *, metric: str, count: int) -> list[LoggedPoint]:
+        """Return the last `count` logged points of `metric`, in step order, oldest first.
+
+        A forked run's history includes its parent's points up to the branch. For a
+        sparse metric such as an evaluation loss this is every logged point. A run
+        W&B does not hold, such as a smoke test that never logged, returns no points.
+        """
+        for candidate in RUN_HISTORY_PROJECTS:
+            points = self._sampled_plot_points(
+                project=candidate, run=run, keys=(_STEP_KEY, _TIMESTAMP_KEY, metric), samples=_EVAL_SAMPLES
+            )
+            if points is not None:
+                return [
+                    LoggedPoint(step=point[_STEP_KEY], value=point[metric], timestamp=point[_TIMESTAMP_KEY])
+                    for point in points[-count:]
+                ]
+        return []
 
     def run_activity(self, run: str, *, project: str | None = None) -> list[dict]:
         """Return one row of active time, wall-clock time, and progress efficiency for `run`.

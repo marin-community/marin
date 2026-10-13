@@ -219,6 +219,23 @@ def test_preflight_resolves_hugging_face_datasets_in_harbor(tmp_path):
     assert result["benchmark_metadata"]["n_benchmark"] == 100
 
 
+def test_preflight_accepts_pinned_harbor_acp_registry_agent(tmp_path):
+    policy_path = tmp_path / "acp.yaml"
+    policy_path.write_text(
+        """
+environment:
+  type: daytona
+agents:
+  - name: acp:pi-acp@0.0.33
+datasets:
+  - name: aime
+"""
+    )
+
+    (result,) = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)
+    assert json.loads(result["stable_policy_json"])["agents"][0]["name"] == "acp:pi-acp@0.0.33"
+
+
 def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
     policy_path = tmp_path / "external-judge.yaml"
     policy_path.write_text(
@@ -526,6 +543,89 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
         "OPENAI_BASE_URL": "https://judge.example/capability/v1",
         "MODEL_NAME": "judge-model",
     }
+
+
+@pytest.mark.parametrize(
+    ("model_kwargs", "policy_kwargs", "expected_format"),
+    [
+        ({"thinking_format": "chat-template"}, {}, "chat-template"),
+        ({"thinking_format": "qwen-chat-template"}, {}, "qwen-chat-template"),
+        ({"thinking_format": "qwen-chat-template"}, {"thinking_format": "chat-template"}, "chat-template"),
+    ],
+)
+def test_hosted_pi_accepts_effective_thinking_format(tmp_path, model_kwargs, policy_kwargs, expected_format):
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [{"name": "pi", "kwargs": policy_kwargs}],
+                "datasets": [{"name": "terminal-bench", "version": "2.0"}],
+            }
+        )
+    )
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "runtime-job",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": None,
+                "endpoint_url": "https://iris.example/capability/v1",
+                "served_model": "served-qwen",
+                "task_limit": 1,
+                "model_agent_kwargs": {
+                    **model_kwargs,
+                    "model_info": {"max_input_tokens": 65536, "max_output_tokens": 32768},
+                },
+                "verifier_env": {},
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "terminal-bench",
+            }
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        from pathlib import Path
+        from harbor.agents.factory import AgentFactory
+        from harbor_config.models.agent.name import AgentName
+        from marin.evaluation.harbor.trial_driver import effective_job_config
+
+        config = effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r}))
+        agent = config.agents[0]
+        AgentFactory.create_agent_from_name(
+            AgentName.PI,
+            logs_dir=Path({str(tmp_path / "logs")!r}),
+            model_name=agent.model_name,
+            **agent.kwargs,
+        )
+        print(config.model_dump_json())
+        """
+    )
+
+    effective = json.loads(_external_python("-c", script).stdout)
+
+    assert effective["agents"][0]["kwargs"]["thinking_format"] == expected_format
+
+
+@pytest.mark.parametrize("thinking_format", [None, "unsupported"])
+def test_pi_preflight_rejects_missing_or_invalid_thinking_format_before_dataset_access(tmp_path, thinking_format):
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        yaml.safe_dump(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [{"name": "pi"}],
+                "datasets": [{"name": "hf://unavailable/dataset"}],
+            }
+        )
+    )
+    kwargs = {} if thinking_format is None else {"thinking_format": thinking_format}
+
+    result = _preflight(tmp_path, [(policy_path, kwargs)], check=False)
+
+    assert result.returncode != 0
+    assert "thinking_format" in result.stderr
 
 
 @pytest.mark.parametrize(("policy_max_tokens", "expected_max_tokens"), [(None, 32768), (16384, 16384)])

@@ -41,7 +41,73 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
 
+## Inference export
+
+Choose a permanent checkpoint and fresh destination in the same region.
+Copy `model` from the training run's recorded `config.yaml` artifact or resolved
+launch configuration into `export.yaml`:
+
+```yaml
+checkpoint: s3://marin-us-east-02a/marin/<run>/checkpoints/step-144000
+metadata_digest: <digest from the command below>
+model: <complete GrugModelConfig mapping>
+destination: s3://marin-us-east-02a/marin/<new-export-root>
+source_revision: <40-character lowercase hexadecimal Marin exporter commit>
+expert_axis_size: 32
+replica_axis_size: 1
+```
+
+Compute `metadata_digest`; replace `<checkpoint>` with the YAML's checkpoint URL:
+
+```bash
+uv run --package marin-levanter --extra gpu python - <<'PYTHON'
+import json
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
+configure_coreweave_s3()
+print(digest(json.loads(StoragePath("<checkpoint>/metadata.json").read_text())))
+PYTHON
+```
+
+Launch the checkout or bundle pinned by `source_revision` on every JAX process
+with the same YAML. Use [Iris launch procedures](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md):
+
+```bash
+TMPDIR=/cache uv run --package marin-levanter --extra gpu python -m \
+  experiments.grug.moe_hero_ep.ops.export_vllm --config_path export.yaml
+```
+
+For remote output, use writable disk-backed scratch (`/cache` in Iris containers)
+with space for the largest serialized shard. Iris Docker's `/tmp` uses RAM.
+Local output is written directly to the destination.
+
+Keep the checkpoint immutable. Run one exporting gang per destination. The
+global device count must be divisible by `expert_axis_size * replica_axis_size`;
+both axes default to one. Every device must fit the largest expert bank in full.
+Files use Levanter's 5 GB shard target; a larger expert bank stays in one file.
+Process zero needs host RAM for one shard plus serialization buffers.
+
+Load the BF16 output with [Marin vLLM's split-expert loader](https://github.com/marin-community/vllm/pull/77).
+Tokenizer files are not copied. Set vLLM's `--tokenizer` and
+`--tokenizer-revision` to the training run's tokenizer ID and pinned revision.
+
+### Resume and completion
+
+After interruption, rerun the same YAML. Resume preserves shards only after
+checking their identity, names, size and freshly computed SHA-256. Uncommitted
+uploads may be rewritten. If corruption is reported, inspect the object;
+restore its original bytes or choose a fresh destination. Changed inputs also
+require a fresh destination.
+
+Use the output only when `export-manifest.json` exists. It is written after
+all shards, `config.json` and `model.safetensors.index.json`. Completed
+destinations are refused on subsequent runs.
+
 ## Hero cutovers and W&B lineage
+
+Hero launchers disable W&B source capture (`save_code=False`). The git commit remains
+run metadata; startup does not scan the bundled working directory for source files.
 
 ```python
 from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
@@ -254,6 +320,30 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
 
 Batch 1024 keeps the production local batch of 16 sequences per GPU. The trace does not include
 the 11-rack `replica_dcn` collectives or their global histogram reduction.
+
+### Profile-guided scheduling
+
+With collective overlap limited to 1, where XLA's latency-hiding scheduler places each collective
+decides how much communication hides under compute. Its default estimator gives every collective
+the same small latency, so it hides a multi-millisecond transport under a single GEMM. A PGLE profile
+gives it measured costs instead. On one rack restored from `step-180000`, a profile built from the
+program's own trace shortened the step from 12.61 to 12.52 s.
+
+Trace the program once, build its profile, then rerun with it:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.pgle_profile \
+  s3://hero-checkpoints/tmp/ttl=30d/xprof/<run-id>/plugins/profile/<steps>/<host>.xplane.pb \
+  experiments/grug/moe_hero_ep/pgle/<run-id>.pbtxt
+# then submit the same program with
+#   -e XLA_FLAGS "--xla_gpu_pgle_profile_file_or_directory_path=/app/experiments/grug/moe_hero_ep/pgle/<run-id>.pbtxt"
+```
+
+The profile matches instructions by name, so it applies only to the program it was traced from:
+rebuild it after any change to the model, mesh, or XLA flags, and build the production profile from
+a trace of the production mesh. The job bundle carries the file from the working tree, and `/app` is
+the task's working directory. The launcher keeps its other XLA defaults when `XLA_FLAGS` names only
+the profile. Automatic PGLE (`JAX_ENABLE_PGLE`) stays off: with one process per GPU it cannot profile.
 
 ### Long-context diagnostics
 

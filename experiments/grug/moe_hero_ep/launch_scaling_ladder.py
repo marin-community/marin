@@ -263,6 +263,7 @@ def build_ladder_run(
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False),
             tracker=WandbConfig(
+                save_code=False,
                 entity="marin-community",
                 project=wandb_project,
                 tags=[

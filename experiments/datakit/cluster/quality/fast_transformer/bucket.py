@@ -40,10 +40,9 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 
-from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, MODEL_CALIB, QualityScores
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import Calibration, load_calibration
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
-    CALIBRATION_FILE,
     QualityPin,
     quality_model_dir,
     require_pinned_calibration,
@@ -190,7 +189,7 @@ def bucket_quality_scores(
     return QualityScores(
         main_output_dir=output_path,
         model_dir=model_dir,
-        calib_file=CALIBRATION_FILE,
+        calib_file=MODEL_CALIB,
         bucket_edges=list(BUCKET_EDGES),
         counters=dict(outcome.counters),
     )

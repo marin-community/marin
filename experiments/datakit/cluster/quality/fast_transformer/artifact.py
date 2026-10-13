@@ -15,6 +15,7 @@ from pydantic import BaseModel
 # 0.2-wide buckets are quality-coherent across content types; `score.py` buckets
 # with np.digitize against these edges, giving quality_bucket 0..len(BUCKET_EDGES).
 BUCKET_EDGES = (0.2, 0.4, 0.6, 0.8)
+MODEL_CALIB = "calib_bme.json"  # calibration json name in the model dir
 
 
 class QualityScores(BaseModel):
@@ -27,15 +28,16 @@ class QualityScores(BaseModel):
 
     Attributes:
         main_output_dir: Directory of lean scored parquet, one file per input
-            shard, co-partitioned with the source ``NormalizedData`` by basename
-            and row order. Every producer writes ``id``, the calibrated ``score``
-            and ``quality_bucket``; :func:`score.score_normalized` adds
-            ``source``, and :func:`bucket.bucket_quality_scores` adds ``source``,
-            ``raw_score`` and ``content_type``.
+            shard, co-partitioned with the source ``NormalizedData`` and its
+            tokenize shards by basename and row order. Every producer writes
+            ``id``, the calibrated ``score`` and ``quality_bucket``;
+            :func:`score.score_normalized` adds ``source``, and
+            :func:`bucket.bucket_quality_scores` adds ``source``, ``raw_score``
+            and ``content_type``.
         model_dir: Scorer artifacts + calibration json used. The bucket step's
             hash covers the calibration's digest through its ``QualityPin``;
-            ``score_normalized``'s covers only the path, so a retrained model
-            for it must land in a new dir.
+            ``score_normalized``'s covers only a version tag, so a retrained
+            model for it must land in a new dir under a new tag.
         calib_file: Calibration json name inside ``model_dir``.
         bucket_edges: Score cutpoints behind ``quality_bucket``; the store joins
             on the bucket column and records these in its own artifact.

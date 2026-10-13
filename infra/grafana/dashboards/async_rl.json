@@ -109,7 +109,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT run_id AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND name IN ('lifecycle','policy_step','rollout_call') AND json_get(resource_attributes_json,'training_loop')='async') GROUP BY run_id HAVING run_id IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
+                  "value": "SELECT run_id AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND name IN ('lifecycle','policy_step','rollout_call') AND json_get(resource_attributes_json,'training_type')='async') GROUP BY run_id HAVING run_id IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
                 },
                 {
                   "key": "from",
@@ -3137,8 +3137,8 @@
     {
       "id": 46,
       "type": "timeseries",
-      "title": "TIS correction skips",
-      "description": "training_metric_value for tis/batch_skipped_no_logprobs and tis/skipped_fraction: whether a batch's TIS correction fell back to the standard policy loss because rollout_logprobs were missing. Logged by the trainer when trainer.algorithm.use_tis is on. Empty without trainer.training_metrics.",
+      "title": "Mean correction weight",
+      "description": "Mean off-policy correction weight over eligible tokens, including zero weights for masked tokens. The driver computes policy/correction/weight_mean after the old-policy forward and teacher-valid masking. Exported when trainer.training_metrics is enabled; absent when no correction is configured.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3164,8 +3164,7 @@
               "group": "A"
             }
           },
-          "min": 0,
-          "max": 1
+          "min": 0
         },
         "overrides": []
       },
@@ -3218,7 +3217,7 @@
               },
               {
                 "key": "view",
-                "value": "tis_skips"
+                "value": "correction_weights"
               }
             ]
           },
@@ -5352,7 +5351,7 @@
       "id": 57,
       "type": "timeseries",
       "title": "Position dependence of |log ρ|",
-      "description": "training_metric_value for policy/mismatch/pooled/pos_* and policy/log_ratio_pos_*: mean absolute log-ratio by response position (first/last 256 tokens, middle) for the rollout-mismatch and within-update-drift families. Computed by mismatch_ratio_metrics and LogRatioMonitor using trainer.algorithm.ratio_diagnostics.position_window. Empty without trainer.training_metrics.",
+      "description": "training_metric_value for policy/mismatch/pooled/pos_* and policy/log_ratio_pos_*: mean absolute log-ratio by response position (first/last 256 tokens, middle) for the rollout-mismatch and within-update-drift families. Computed by mismatch_ratio_metrics and LogRatioMonitor. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -5456,10 +5455,10 @@
       "interval": "1m"
     },
     {
-      "id": 58,
+      "id": 59,
       "type": "timeseries",
-      "title": "Gradient direction persistence",
-      "description": "training_metric_value for policy/grad_cosine, grad_cosine_min/max and grad_norm_reduced/raw_grad_norm: cosine similarity between successive gradients and their norms. Logged by the policy worker after each optimizer step. Empty without trainer.training_metrics; the cosine series also need trainer.algorithm.grad_cosine.enabled.",
+      "title": "Correction activity",
+      "description": "Fractions of eligible tokens masked or truncated by the configured off-policy correction, and the policy loss clipping fraction. The driver emits policy/correction/{masked_fraction,truncated_fraction}; policy/ppo_clip_ratio comes from the learner. Exported when trainer.training_metrics is enabled. Correction series are absent when no correction is configured.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -5467,130 +5466,6 @@
       "gridPos": {
         "x": 18,
         "y": 136,
-        "w": 6,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No matching records in this window.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*grad_norm.*"
-            },
-            "properties": [
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "Gradient norm"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/async-rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "gradient_direction"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 59,
-      "type": "timeseries",
-      "title": "Correction activity",
-      "description": "training_metric_value for policy/offpolicy_mask/*, policy/m2_mask/*, policy/ppo_clip_ratio and policy/tis/imp_ratio_capped_fraction: token-masking and clipping activity from the off-policy, M2 and TIS corrections. Logged by the policy worker after each optimizer step. Empty without trainer.training_metrics.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 144,
         "w": 6,
         "h": 8
       },

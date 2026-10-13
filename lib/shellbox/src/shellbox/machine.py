@@ -19,6 +19,15 @@ class NetworkPolicy(StrEnum):
     ALLOW = "allow"
 
 
+class Backend(StrEnum):
+    DOCKER = "docker"
+    GVISOR = "gvisor"
+    QEMU = "qemu"
+    SHELLSIM = "shellsim"
+    DAYTONA = "daytona"
+    LOCAL = "local"
+
+
 class ExitReason(StrEnum):
     EXITED = "exited"
     TIMED_OUT = "timed_out"
@@ -82,12 +91,36 @@ class ShellSimBuiltins:
 
 
 @dataclass(frozen=True)
+class HostImage:
+    """The host's programs, with optional per-machine read-only mounts and program paths."""
+
+    read_only: tuple[Path, ...] = ()
+    bin_dirs: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True)
 class MachineSpec:
-    source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | ShellSimBuiltins
+    """Machine inputs, with a provider startup timeout for Daytona.
+
+    Other factories do not apply startup_timeout. Callers enforce their own
+    deadline for the complete create operation.
+    """
+
+    source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | ShellSimBuiltins | HostImage
     workdir: str = "/workspace"
     env: dict[str, str] = field(default_factory=dict)
     network: NetworkPolicy = NetworkPolicy.DENY
     memory_mb: int | None = None
+    cpus: int | None = None
+    storage_mb: int | None = None
+    gpus: int = 0
+    startup_timeout: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.cpus is not None and self.cpus <= 0:
+            raise ValueError("cpus must be positive")
+        if self.storage_mb is not None and self.storage_mb <= 0:
+            raise ValueError("storage_mb must be positive")
 
 
 @dataclass(frozen=True)
@@ -98,6 +131,7 @@ class Command:
     stdin: bytes = b""
     timeout: float | None = None
     output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    user: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +148,10 @@ class UnsupportedMachineSpec(ValueError):
     """The selected backend cannot create the requested machine."""
 
 
+class MachineTerminated(RuntimeError):
+    """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 
@@ -128,5 +166,8 @@ class Machine(Protocol):
 
 class MachineFactory(Protocol):
     """Create a fresh machine from an image source."""
+
+    @property
+    def backend(self) -> Backend: ...
 
     async def create(self, spec: MachineSpec) -> Machine: ...

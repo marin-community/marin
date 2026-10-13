@@ -13,13 +13,14 @@ import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 import fsspec
 import yaml
 from iris.cluster.client.job_info import get_job_info
 from pydantic import BaseModel
+from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -32,7 +33,6 @@ from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_r
 from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
-_LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
@@ -312,11 +312,11 @@ class ArtifactDataSource:
 
 @dataclass(frozen=True)
 class TaskTroveDataSource:
-    """A metadata-selected cohort from the compatibility RL view of a TaskTrove release."""
+    """A metadata-selected cohort from an explicitly named packed Harbor file."""
 
     step: ArtifactStep[Artifact]
     selection: TaskTroveSelection
-    relative_path: str = "tasks/part-00000.parquet"
+    relative_path: str
     manifest_path: str = "manifest.json"
 
     def __post_init__(self) -> None:
@@ -382,10 +382,13 @@ class IrisSkyRLExecution:
     parent_cluster_config: str | None
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
+    job_timeout_seconds: int = 0
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
             raise ValueError("SkyRL coordinator_timeout_hours must be positive")
+        if self.job_timeout_seconds < 0:
+            raise ValueError("SkyRL job_timeout_seconds cannot be negative")
         if (self.target_cluster is None) != (self.parent_cluster_config is None):
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
@@ -542,6 +545,10 @@ def _validate_skyrl_backend_constraints(
     if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
 
+    for key in ("use_conversation_multi_turn", "require_exact_chat_transport"):
+        if _declared_config_value(config, f"generator.{key}") is not _MISSING_CONFIG_VALUE:
+            raise ValueError(f"SkyRL task sessions do not support generator.{key}. Remove this setting.")
+
     use_kl_loss = _declared_config_value(config, "trainer.algorithm.use_kl_loss")
     if use_kl_loss is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")
@@ -585,7 +592,6 @@ class SkyRLRunConfig:
     output: SkyRLOutputPaths
     export_hf: bool
     draft_checkpoint_root: str | None
-    launcher_requirement: str
 
 
 class SkyRLRun(Artifact):
@@ -617,17 +623,17 @@ class _SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-def _launcher_command(requirement: str, config_path: str) -> list[str]:
+def _launcher_command(config_path: str) -> list[str]:
+    workspace_root = find_project_root(Path(__file__))
+    if workspace_root is None:
+        raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
     return [
         "uv",
         "run",
         "--isolated",
-        "--no-project",
-        "--prerelease=allow",
-        "--python",
-        _LAUNCHER_PYTHON,
-        "--with",
-        requirement,
+        "--project",
+        str(workspace_root / "config/external" / MARIN_SKYRL.config_name),
+        "--frozen",
         "marinskyrl",
         "iris",
         "launch",
@@ -664,7 +670,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
             launch_file.write(config.launch_config_yaml)
             launch_file.flush()
-            completed = _run_launcher(_launcher_command(config.launcher_requirement, launch_file.name))
+            completed = _run_launcher(_launcher_command(launch_file.name))
         if not completed.stdout.strip():
             raise RuntimeError(
                 f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
@@ -719,6 +725,13 @@ def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunc
     )
 
 
+def _launch_data_source(source: ResolvedDataSource) -> dict:
+    value = asdict(source)
+    if isinstance(source, ResolvedTaskTroveDataSource):
+        value["selection"]["tag_match"] = source.selection.tag_match.value
+    return value
+
+
 def _launch_config_yaml(
     spec: SkyRLSpec,
     execution: IrisSkyRLExecution,
@@ -736,10 +749,6 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
-    terminal_bench = recipe.get("terminal_bench", {})
-    harbor = terminal_bench.get("harbor", {}) if isinstance(terminal_bench, dict) else {}
-    agent_name = harbor.get("name") if isinstance(harbor, dict) else None
-    controller_ingress = agent_name == "opencode"
     submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
     target_cluster = None if submit_through_ambient_controller else execution.target_cluster
     parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
@@ -775,15 +784,9 @@ def _launch_config_yaml(
             },
             "priority": execution.priority,
             "max_retries": execution.max_retries,
-            "timeout": 0,
+            "timeout": execution.job_timeout_seconds,
             "target_cluster": target_cluster,
             "parent_cluster_config": parent_cluster_config,
-        },
-        "ingress": {
-            "mode": "controller" if controller_ingress else "direct",
-            "host": "iris.oa.dev" if controller_ingress and execution.cluster.startswith("cw-") else "",
-            "record_literal": controller_ingress,
-            "vllm_http_port": 8000,
         },
         "ray": {
             "port": 6379,
@@ -806,8 +809,8 @@ def _launch_config_yaml(
                 if _declared_config_value(recipe, "data.kind") is not _MISSING_CONFIG_VALUE
                 else "tasks"
             ),
-            "train_data": [asdict(source) for source in train_data],
-            "validation_data": [asdict(source) for source in validation_data],
+            "train_data": [_launch_data_source(source) for source in train_data],
+            "validation_data": [_launch_data_source(source) for source in validation_data],
         },
         "skyrl": recipe,
     }
@@ -882,7 +885,6 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
-            launcher_requirement=MARIN_SKYRL.requirement(),
         )
 
     return ArtifactStep(

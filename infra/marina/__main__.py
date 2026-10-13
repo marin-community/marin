@@ -25,6 +25,7 @@ exposes only dynamic applet routes on that host.
 """
 
 from pathlib import Path
+from uuid import UUID
 
 import pulumi
 import pulumi_cloudflare as cloudflare
@@ -32,6 +33,7 @@ import pulumi_command as command
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.marina import PUBLIC_APPLET_SERVICE
+from marina.database_setup import LOOM_DATABASE_USER
 from marina.manifest import JobRunner, discover_apps, job_runners
 
 PROJECT = "hai-gcp-models"
@@ -47,7 +49,6 @@ SERVICE_ACCOUNT = f"{SERVICE}@{PROJECT}.iam.gserviceaccount.com"
 DATABASE_USER = SERVICE_ACCOUNT.removesuffix(".gserviceaccount.com")
 # The codehealth workbench's database and its writer (infra/codehealth/review_store.py).
 CODEHEALTH_DATABASE = "context"
-LOOM_DATABASE_USER = "loom-vm@hai-gcp-models.iam"
 # Cloud SQL group login for people: members read any app's schema under their own Google
 # identity, without a database user each. ``marina migrate`` grants it.
 READER_GROUP = "eng-all@openathena.ai"
@@ -59,7 +60,6 @@ HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
 MARINA_HOST = "marina.oa.dev"
 APPLET_HOST = "applets.marina.oa.dev"
 PUBLIC_APPLET_HOST = "public.applets.marina.oa.dev"
-APPLET_HOSTS = {"zephyr.marina.oa.dev": "6c2b0dc9-9a31-4777-82d4-e759c0292aa3"}
 GRANTS_SCRIPT = Path(__file__).parent / "database_grants.py"
 APPS_DIR = Path(__file__).parent / "apps"
 DATABASE_SETUP_SCRIPT = Path(__file__).parent / "src" / "marina" / "database_setup.py"
@@ -126,6 +126,13 @@ def main() -> None:
     applet_operators = config.get_object("applet_operators") or []
     if not isinstance(applet_operators, list) or not all(isinstance(item, str) for item in applet_operators):
         raise ValueError("marin-marina:applet_operators must be a list of user IDs")
+    applet_hosts = config.get_object("applet_hosts") or {}
+    if not isinstance(applet_hosts, dict):
+        raise ValueError("marin-marina:applet_hosts must map host names to applet UUIDs")
+    for host, applet_id in applet_hosts.items():
+        if not isinstance(host, str) or host != host.lower() or any(c in host for c in "/:=, "):
+            raise ValueError("applet host names must be lowercase DNS names")
+        UUID(applet_id)
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
 
@@ -259,8 +266,8 @@ def main() -> None:
                 "MARINA_CANONICAL_ORIGIN": f"https://{MARINA_HOST}",
                 "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
                 "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
-                "MARINA_APPLET_HOSTS": ",".join(f"{host}={applet_id}" for host, applet_id in APPLET_HOSTS.items()),
                 "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
+                "MARINA_APPLET_HOSTS": ",".join(f"{host}={applet_id}" for host, applet_id in applet_hosts.items()),
                 "MARINA_AGENT_ORIGIN": "https://loom.oa.dev",
                 **DATABASE_ENV,
                 **runner_env,
@@ -289,7 +296,8 @@ def main() -> None:
         ingress="INGRESS_TRAFFIC_ALL",
         iap_enabled=False,
         deletion_protection=False,
-        scaling=gcp.cloudrunv2.ServiceScalingArgs(min_instance_count=0, max_instance_count=4),
+        # Public applet navigation otherwise waits for the whole Marina image to cold start.
+        scaling=gcp.cloudrunv2.ServiceScalingArgs(min_instance_count=1, max_instance_count=4),
         template=gcp.cloudrunv2.ServiceTemplateArgs(
             service_account=SERVICE_ACCOUNT,
             timeout="60s",
@@ -366,7 +374,7 @@ def main() -> None:
             APPLET_HOST: (SERVICE, service),
             PUBLIC_APPLET_HOST: (PUBLIC_APPLET_SERVICE, public_applet_service),
             **{host: (SERVICE, service) for host in HOST_APPS},
-            **{host: (SERVICE, service) for host in APPLET_HOSTS},
+            **{host: (SERVICE, service) for host in applet_hosts},
         }
         for host, (route_name, route_service) in hosts.items():
             slug = host.split(".")[0]

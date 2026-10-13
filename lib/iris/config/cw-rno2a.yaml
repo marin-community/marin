@@ -29,6 +29,9 @@ name: cw-rno2a
 # reach serving endpoints through the federation parent.
 dashboard_url: https://iris-cw-rno2a.oa.dev
 federation_public_parent: https://iris.oa.dev
+endpoints:
+  /system/zephyr-history:
+    uri: https://marina.oa.dev/zephyr/
 
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
 # Resolves to k8s://finelog-cw-rno2a.iris; see lib/finelog/config/cw-rno2a.yaml.
@@ -117,6 +120,11 @@ auth:
 
 kubernetes_provider:
   namespace: iris
+  node_health:
+    storage:
+      scratch: s3://marin-us-east-02a/tmp/ttl=1d/iris-node-health/cw-rno2a
+      minimum_healthy_nodes: 2
+    max_cordoned_nodes: 1
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   cache_max_age:

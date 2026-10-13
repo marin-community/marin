@@ -4,7 +4,7 @@
 
 This alert watches whether a run is stepping. [`TrainingLossSpike`](training-loss-spike-alert.md) watches what those steps produce, over the same enrollment.
 
-The rule evaluates once a minute and waits five minutes before notification. An eligible root has a current `iris.task_state` row. The row is at most 90 seconds old and reports one or more running tasks. The root name matches `%/hero-%-coord` or `%/hero-%-coord-%`. The namespace before the run name is unrestricted.
+The rule evaluates once a minute and waits five minutes before notification. An eligible root has a current `iris.task_state` row. The row is at most 90 seconds old and reports one or more running tasks. The root name matches `/marin/hero-%-coord` or `/marin/hero-%-coord-%`. The production hero launcher submits with `IRIS_USER=marin`; similarly named jobs under other users do not enroll.
 
 Hero alert enrollment is a launch naming contract. The last root component is `<run-id>-coord` or `<run-id>-coord-<retry>`. The `<run-id>` value begins with `hero-`. The Levanter trainer `id` is the same `<run-id>`. A retry suffix changes the Iris job identity only. It does not change the logical run identity.
 
@@ -21,7 +21,7 @@ The bridge derives `hero-20260819` from the root job, then queries the structure
 
 Initialization and missing-progress grace start at the later of the current contiguous Iris running interval and the selected telemetry execution. A coordinator restart or trainer retry therefore receives a new initialization window. A hard hang retains its training execution anchor for a day, and after ten minutes of silence this rule reports `telemetry_gone` rather than a stall. All states remain instances of `TrainingProgressStalled`, and notification grouping excludes phase and reason, so later reclassification cannot open a second Slack group.
 
-`iris.task_state.root_job_id` names the coordinator root, while `levanter.metrics.job_id` names the descendant trainer. For example, the root `/rav/hero-20260819-coord` owns metrics from `/rav/hero-20260819-coord/grug-train-hero-20260819`. The bridge joins on origin cluster, exact `run_id`, and this descendant relationship. Alert labels use the coordinator root. No task-to-node mapping or GPU-utilization condition is required.
+`iris.task_state.root_job_id` names the coordinator root, while `levanter.metrics.job_id` names the descendant trainer. For example, the root `/marin/hero-20260819-coord` owns metrics from `/marin/hero-20260819-coord/grug-train-hero-20260819`. The bridge joins on origin cluster, exact `run_id`, and this descendant relationship. Alert labels use the coordinator root. No task-to-node mapping or GPU-utilization condition is required.
 
 The required Levanter metric records are `progress_time_seconds` and numeric `phase` (`initializing=0`, `training=1`, `finished=2`). Each row carries `step` as a typed column; there is no separate step record. `TelemetryTracker` initializes phase and progress, records wall time after its completed-step `train/loss` callback, and marks a finished run. The hero launchers already pass their trainer ID into telemetry as `run_id`; W&B retains its separate `hero` tag.
 
@@ -45,7 +45,11 @@ ORDER BY timestamp_ms DESC, seq DESC
 LIMIT 20;
 ```
 
-For an unsuffixed root, remove `-coord` to get `<hero-run-id>`. For a suffixed root, also remove the retry suffix. An empty result identifies missing Levanter telemetry. The root becomes `initializing_stale` after 45 minutes.
+For an unsuffixed root, remove `-coord` to get `<hero-run-id>`. For a suffixed root, also remove
+the retry suffix. An empty result in this 30-minute window does not show whether the run published
+older telemetry. Extend the phase query to 24 hours for an older active run. A root with no telemetry
+reaches `initializing_stale` after 45 minutes; a root whose last training heartbeat went stale is
+handled by `TrainingTelemetryGone`.
 
 Levanter republishes phase every minute. A current phase row binds progress to one execution. [`TrainingTelemetryGone`](hero-run-health-alerts.md) covers loss of the telemetry path for an enrolled run, and the Finelog health alerts cover the durable path itself. Launcher-specific process watchdogs provide additional coverage where configured.
 
@@ -114,4 +118,7 @@ The NVIDIA probe follows the same sparse convention. Every poll emits `nvidia_he
 
 GPU utilization, power, and power-limit metrics remain diagnostic evidence available in finelog and the capture bundle; they do not gate or classify this alert. This avoids hiding a stalled job when node attribution is unavailable.
 
-The rule currently covers CoreWeave controllers whose active root-job state is forwarded into the `marin` finelog hub. GCE controllers do not emit `iris.task_state`, so their jobs are not evaluated by this rule.
+The rule currently covers CoreWeave controllers whose active root-job state is forwarded into the
+`marin` finelog hub. GCE controllers do not emit `iris.task_state`, so their jobs are not evaluated
+by this rule. [GCE hero-run alert coverage](https://github.com/marin-community/marin/issues/9731)
+is tracked separately.

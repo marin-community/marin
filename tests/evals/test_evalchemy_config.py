@@ -10,6 +10,7 @@ completions and chat APIs included), and the empty-results guard. Everything els
 serving, the eval itself) is exercised by the cluster smoke.
 """
 
+import base64
 import json
 import os
 from types import SimpleNamespace
@@ -96,6 +97,25 @@ def test_file_config_fields_reach_the_evalchemy_command():
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
     assert model_args["max_length"] == "32768"
+
+
+def test_explicit_thinking_mode_is_serialized_for_chat_endpoint():
+    template_kwargs = {"enable_thinking": True, "add_generation_prompt": False}
+    config = _payload(
+        _config(
+            tasks=(EvalTaskConfig("MATH500", 0, generation=True),),
+            apply_chat_template=True,
+            chat_template_kwargs=template_kwargs,
+        )
+    )
+
+    command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 32768)
+    assert command[command.index("--model") + 1] == "local-chat-completions"
+    model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
+    assert (
+        json.loads(base64.urlsafe_b64decode(model_args["chat_template_kwargs"].removeprefix("base64:")))
+        == template_kwargs
+    )
 
 
 def test_parent_rejects_endpoint_model_arg_overrides():

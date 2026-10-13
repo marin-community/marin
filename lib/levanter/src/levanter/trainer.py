@@ -463,28 +463,10 @@ class Trainer:
             TrainerState: the initial state,
         """
         model_init = _unify_model_and_model_init(model, model_init)
-
-        del model
         assert model_init is not None
 
         # first try to load a full trainer state checkpoint
-        checkpoint_search_paths = self.checkpoint_search_paths
-
-        load_checkpoint = self.config.load_checkpoint
-        # we don't save the full trainer state, so we need to filter out the non-trainable parameters
-        if load_checkpoint is True and not any(StoragePath(path).exists() for path in checkpoint_search_paths):
-            raise FileNotFoundError(f"Checkpoint search paths do not exist: {checkpoint_search_paths}")
-        elif load_checkpoint is None:
-            load_checkpoint = any(levanter.checkpoint.is_checkpoint_path(path) for path in checkpoint_search_paths)
-
-        if load_checkpoint is False and self.config.initialize_from is not None:
-            # we're not going to load a checkpoint from this run, so instead we can initialize from a different run
-            logger.info(f"Initializing from {self.config.initialize_from}")
-            load_checkpoint = True
-            checkpoint_path = self.config.initialize_from
-            checkpoint_search_paths = [checkpoint_path]
-            if not is_checkpoint_path(checkpoint_path):
-                raise ValueError(f"initialize_from must be a checkpoint path, got {checkpoint_path}")
+        checkpoint_search_paths, load_checkpoint = self.checkpoint_load_plan()
 
         def init_state_and_model(model_init, training_key):
             model = model_init()
@@ -500,6 +482,11 @@ class Trainer:
             )
             return state
 
+        if model is not None and not load_checkpoint:
+            # The concrete model is on its target mesh. Avoid a compiled init/merge with
+            # another live copy of its parameters.
+            return init_state_and_model(model_init, training_key)
+
         trainer_state_shape = eqx.filter_eval_shape(init_state_and_model, model_init, training_key)
         saveable_train_state = saveable_training_mask(trainer_state_shape, is_trainable)
 
@@ -514,6 +501,26 @@ class Trainer:
         )(model_init, training_key)
 
         return state
+
+    def checkpoint_load_plan(self) -> tuple[list[str], bool]:
+        """Resolve whether to restore a trainer checkpoint and where to find it."""
+        checkpoint_search_paths = self.checkpoint_search_paths
+        load_checkpoint = self.config.load_checkpoint
+        if load_checkpoint is True and not any(StoragePath(path).exists() for path in checkpoint_search_paths):
+            raise FileNotFoundError(f"Checkpoint search paths do not exist: {checkpoint_search_paths}")
+        elif load_checkpoint is None:
+            load_checkpoint = any(levanter.checkpoint.is_checkpoint_path(path) for path in checkpoint_search_paths)
+
+        if load_checkpoint is False and self.config.initialize_from is not None:
+            # we're not going to load a checkpoint from this run, so instead we can initialize from a different run
+            logger.info(f"Initializing from {self.config.initialize_from}")
+            load_checkpoint = True
+            checkpoint_path = self.config.initialize_from
+            checkpoint_search_paths = [checkpoint_path]
+            if not is_checkpoint_path(checkpoint_path):
+                raise ValueError(f"initialize_from must be a checkpoint path, got {checkpoint_path}")
+
+        return checkpoint_search_paths, load_checkpoint
 
     @property
     def checkpoint_search_paths(self) -> list[str]:

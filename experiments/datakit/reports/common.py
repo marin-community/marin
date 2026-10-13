@@ -12,9 +12,11 @@ placeholder, so a report works offline and can be hosted anywhere.
 
 import html
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.datakit.source_key import DatakitArtifactPath
 from pydantic import BaseModel
@@ -57,6 +59,13 @@ def parquet_files(directory: str) -> list[str]:
     the prefix, which the CW object store rejects.
     """
     return sorted(str(m) for m in (StoragePath(directory) / "*.parquet").glob())
+
+
+def iter_batches(directory: str, columns: list[str], batch_size: int) -> Iterator[pa.RecordBatch]:
+    """Stream ``columns`` from the parquet files under ``directory`` in sorted file order."""
+    for f in parquet_files(directory):
+        with StoragePath(f).open("rb") as fh:
+            yield from pq.ParquetFile(fh).iter_batches(batch_size=batch_size, columns=columns)
 
 
 def head_rows(path: str, columns: list[str], limit: int) -> list[dict]:

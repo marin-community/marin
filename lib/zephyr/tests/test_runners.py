@@ -3,10 +3,11 @@
 
 """Tests for the pluggable StageRunner strategies (zephyr.runners)."""
 
+import json
 import os
 import time
 import uuid
-from contextlib import suppress
+from contextlib import closing, suppress
 from threading import Lock
 
 import polars as pl
@@ -15,19 +16,29 @@ from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
 from fsspec.implementations.local import LocalFileSystem
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.types import JobName
+from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 from zephyr import counters, runners, worker
 from zephyr.context import ZephyrContext
+from zephyr.coordinator import ZEPHYR_HISTORY_ENDPOINT_NAME
 from zephyr.dataset import Dataset
+from zephyr.plan import compute_plan
 from zephyr.runners import InlineRunner, SubprocessRunner
 from zephyr.stage_io import ZephyrWorkerError
 from zephyr.stats import (
+    ZEPHYR_EXECUTION_STATS_NAMESPACE,
     ZEPHYR_STAGE_STATS_NAMESPACE,
     ZEPHYR_WORKER_STATS_NAMESPACE,
     StatsConfig,
     StatsWriter,
 )
+from zephyr.testing.coordinator import TEST_EXECUTION_ID, TEST_TASK_COST, make_test_coordinator, start_test_stage
+from zephyr.worker_context import CounterEntry, CounterSnapshot
 
 
 def _ctx(local_client, tmp_path, *, stage_runner_factory) -> ZephyrContext:
@@ -202,6 +213,77 @@ def finelog_server(tmp_path):
     server.stop()
 
 
+@pytest.mark.parametrize("explicit_config", [False, True])
+def test_iris_coordinator_exports_live_counters(actor_context, tmp_path, finelog_server, explicit_config):
+    class EndpointRegistry:
+        def resolve_endpoint(self, name):
+            if name == ZEPHYR_HISTORY_ENDPOINT_NAME:
+                raise ConnectionError("optional history endpoint unavailable")
+            assert name == LOG_SERVER_ENDPOINT_NAME
+            return "http://127.0.0.1:1" if explicit_config else finelog_server
+
+    info = JobInfo(task_id=JobName.from_wire("/test/review/coordinator/0"), attempt_id=2)
+    client = IrisClient(EndpointRegistry())
+    telemetry.shutdown()
+    set_job_info(info)
+    try:
+        with iris_ctx_scope(IrisContext.from_job_info(info, client=client)):
+            config = StatsConfig(finelog_server) if explicit_config else None
+            coordinator = make_test_coordinator(tmp_path, stats_config=config)
+            try:
+                start_test_stage(coordinator, [], stage_name="review")
+                coordinator.heartbeat(
+                    "worker-0",
+                    {TEST_EXECUTION_ID: CounterSnapshot({"review/completed": CounterEntry(7)}, generation=1)},
+                )
+                coordinator._publish_telemetry()
+                assert telemetry.flush()
+                with closing(LogClient.connect(finelog_server)) as query:
+                    rows = []
+
+                    def exported():
+                        rows[:] = query.query(
+                            'SELECT service, name, value, resource_attributes_json FROM "telemetry_v1.zephyr" '
+                            "WHERE name = 'review_completed'"
+                        ).to_pylist()
+                        return bool(rows)
+
+                    assert ExponentialBackoff().wait_until(exported, timeout=Duration.from_seconds(10))
+                assert rows and all(row["value"] == 7 for row in rows)
+                assert rows[0]["service"] == "zephyr"
+                attributes = json.loads(rows[0]["resource_attributes_json"])
+                assert attributes["task_id"] == "/test/review/coordinator/0"
+                assert attributes["attempt"] == "2"
+            finally:
+                coordinator.shutdown()
+    finally:
+        set_job_info(None)
+        telemetry.shutdown()
+
+
+def test_coordinator_runs_when_finelog_discovery_fails(actor_context, tmp_path):
+    class EndpointRegistry:
+        def resolve_endpoint(self, name):
+            if name == ZEPHYR_HISTORY_ENDPOINT_NAME:
+                raise ConnectionError("optional history endpoint unavailable")
+            assert name == LOG_SERVER_ENDPOINT_NAME
+            raise OSError("endpoint registry unavailable")
+
+    info = JobInfo(task_id=JobName.from_wire("/test/review/coordinator/0"), attempt_id=2)
+    set_job_info(info)
+    try:
+        with iris_ctx_scope(IrisContext.from_job_info(info, client=IrisClient(EndpointRegistry()))):
+            coordinator = make_test_coordinator(tmp_path)
+            try:
+                coordinator.run_pipeline(
+                    compute_plan(Dataset.from_list([])), TEST_EXECUTION_ID, "review", TEST_TASK_COST, TEST_TASK_COST
+                )
+            finally:
+                coordinator.shutdown()
+    finally:
+        set_job_info(None)
+
+
 def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypatch):
     """Pipeline emits rows to both zephyr.stage and zephyr.worker finelog tables."""
     num_items = 2
@@ -237,11 +319,16 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     try:
         stage_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_STAGE_STATS_NAMESPACE}"')
         worker_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}"')
+        executions = query_client.query(f'SELECT * FROM "{ZEPHYR_EXECUTION_STATS_NAMESPACE}"').to_pylist()
         assert "zephyr.shuffle" not in {info.namespace for info in query_client.list_namespaces()}
     finally:
         query_client.close()
 
     assert stage_rows.num_rows >= 1, "Expected stage stat rows, got none"
+    assert len(executions) == 1
+    assert {stage["stage_name"] for stage in json.loads(executions[0]["stages_json"])} == {
+        stage["stage_name"] for stage in stage_rows.to_pylist()
+    }
     assert worker_rows.num_rows >= 1, "Expected worker stat rows, got none"
 
     stage_names = stage_rows.column("stage_name").to_pylist()
@@ -381,9 +468,21 @@ def test_shuffle_diagnostics_persist_target_sizes(local_client, tmp_path, finelo
         stage_rows = query_client.query('SELECT * FROM "zephyr.stage"').to_pylist()
         assert len({row["execution_id"] for row in stage_rows}) == 2
         reports = query_client.query('SELECT * FROM "zephyr.shuffle"').to_pylist()
+        executions = query_client.query(f'SELECT * FROM "{ZEPHYR_EXECUTION_STATS_NAMESPACE}"').to_pylist()
     finally:
         query_client.close()
     assert len(reports) == 32
+    assert {execution["execution_id"] for execution in executions} == {first.execution_id, second.execution_id}
+    assert len(executions) == 2
+    for execution in executions:
+        graph = json.loads(execution["stages_json"])
+        assert {stage["stage_name"] for stage in graph if stage["stage_type"] != "reshard"} == {
+            stage["stage_name"] for stage in stage_rows if stage["execution_id"] == execution["execution_id"]
+        }
+        assert [stage["dependencies"] for stage in graph] == [[]] + [[stage["stage_name"]] for stage in graph[:-1]]
+        assert {stage["stage_name"] for stage in graph if stage["has_reduce"]} == {
+            report["stage_name"] for report in reports if report["execution_id"] == execution["execution_id"]
+        }
     assert {row["execution_id"] for row in reports} == {first.execution_id, second.execution_id}
     for execution_id in {row["execution_id"] for row in reports}:
         placeholders = [row for row in reports if row["execution_id"] == execution_id and row["input_rows"] is None]
@@ -403,6 +502,50 @@ def test_shuffle_diagnostics_persist_target_sizes(local_client, tmp_path, finelo
         assert {row["stage_name"] for row in targets} == {
             row["stage_name"] for row in stage_rows if "Reduce" in row["stage_name"]
         }
+
+
+def test_execution_plan_preserves_join_dependencies(local_client, tmp_path, finelog_server):
+    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
+        key=lambda row: row["id"], reducer=lambda _key, rows: next(rows), num_output_shards=2
+    )
+    right = Dataset.from_list([{"id": 1, "score": 7}]).group_by(
+        key=lambda row: row["id"], reducer=lambda _key, rows: next(rows), num_output_shards=2
+    )
+    joined = left.sorted_merge_join(right, left_key=lambda row: row["id"], right_key=lambda row: row["id"])
+    with ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        stats_config=StatsConfig(finelog_server),
+        stage_runner_factory=lambda: InlineRunner(),
+    ) as context:
+        result = context.execute(joined)
+
+    assert result.results == [{"id": 1, "text": "hello", "score": 7}]
+    with closing(LogClient.connect(finelog_server)) as client:
+        executions = client.query(f'SELECT * FROM "{ZEPHYR_EXECUTION_STATS_NAMESPACE}"').to_pylist()
+        reported = client.query(f'SELECT stage_name FROM "{ZEPHYR_STAGE_STATS_NAMESPACE}"').to_pylist()
+    assert len(executions) == 1
+    execution = next(row for row in executions if row["execution_id"] == result.execution_id)
+    graph = json.loads(execution["stages_json"])
+    stage_positions = {stage["stage_name"]: index for index, stage in enumerate(graph)}
+    assert all(
+        stage_positions[dependency] < stage_positions[stage["stage_name"]]
+        for stage in graph
+        for dependency in stage["dependencies"]
+    )
+    assert {stage["stage_name"] for stage in graph if stage["stage_type"] != "reshard"} == {
+        row["stage_name"] for row in reported
+    }
+    joins = [stage for stage in graph if len(stage["dependencies"]) == 2]
+    assert len(joins) == 1
+    left_input, right_input = joins[0]["dependencies"]
+    assert not left_input.startswith("join-right-")
+    assert right_input.startswith("join-right-")
+    right_sources = [stage for stage in graph if stage["stage_name"].startswith("join-right-")]
+    assert right_sources[0]["dependencies"] == []
+    assert right_sources[-1]["stage_name"] == right_input
 
 
 def test_shuffle_diagnostics_do_not_add_storage_reads(local_client, tmp_path, monkeypatch):

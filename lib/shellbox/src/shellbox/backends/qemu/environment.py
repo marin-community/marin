@@ -39,7 +39,6 @@ class QemuEnvironment(BaseEnvironment):
         *args,
         guest_bundle: str | None = None,
         image_cache: str | None = None,
-        skopeo: str | None = None,
         qemu_assets: dict[str, str | int] | None = None,
         registry_authfile: str | None = None,
         signature_policy: str | None = None,
@@ -50,7 +49,6 @@ class QemuEnvironment(BaseEnvironment):
     ):
         self.guest_bundle = Path(guest_bundle).resolve() if guest_bundle is not None else None
         self.image_cache = Path(image_cache).resolve() if image_cache is not None else None
-        self.skopeo = Path(skopeo).resolve() if skopeo is not None else None
         self.qemu_assets = qemu_assets
         self.registry_authfile = Path(registry_authfile).resolve() if registry_authfile is not None else None
         self.signature_policy = Path(signature_policy).resolve() if signature_policy is not None else None
@@ -89,8 +87,8 @@ class QemuEnvironment(BaseEnvironment):
                 self._source = RegistryImage(image_reference)
             else:
                 raise ValueError("QEMU task needs a Dockerfile, docker_image, or guest_bundle")
-            if self.image_cache is None or self.skopeo is None or self.qemu_assets is None:
-                raise ValueError("QEMU image preparation requires image_cache, skopeo, and qemu_assets")
+            if self.image_cache is None or self.qemu_assets is None:
+                raise ValueError("QEMU image preparation requires image_cache and qemu_assets")
             return
         self._validate_image_metadata(self._image_metadata)
 
@@ -138,7 +136,6 @@ class QemuEnvironment(BaseEnvironment):
             assets=assets,
             image_cache=self.image_cache / "oci" if self.image_cache is not None else None,
             bundle_cache=self.image_cache / "bundles" if self.image_cache is not None else None,
-            skopeo=self.skopeo,
             authfile=self.registry_authfile,
             policy=self.signature_policy,
         )

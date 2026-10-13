@@ -8,7 +8,7 @@ from iris.cluster.types import JobName
 
 GLM_BULK_TOKEN_ENV = "GLM_BULK_TOKEN"
 GLM_MODEL = "glm-5.3"
-DEFAULT_GLM_RELAY_JOB = "/muchanem/glm53-relay-08a"
+DEFAULT_GLM_RELAY_JOB = "/muchanem/glm53-relay"
 
 
 def resolve_glm_base_url(relay_job: str) -> str:

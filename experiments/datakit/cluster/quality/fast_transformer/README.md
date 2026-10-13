@@ -14,37 +14,51 @@ quality-coherent: a bucket means the same quality level across content types.
 ```
 rubric.py    type-aware oracle rubric — how docs are scored 1..5 (labeling itself is offline)
    │  labels: gs → merged parquet (5,578 oracle labels: consensus + junk-gate)
-train.py     train the pooled FastTransformer on the labels → model.eqx + remap + meta
-calibrate.py fit the monotonic bme calibration on the labels → calib_bme.json
+train.py     train the pooled FastTransformer on the labels → model.eqx + remap + meta,
+             then fit the bme calibration → calib_bme.json (one command, four files)
+calibrate.py recalibrate an existing model dir → calib_bme.json
 score.py     score_normalized — the reference pipeline's per-source quality step
-             (datakit/quality/<source>) → source/id/score/quality_bucket
+             (datakit/quality/<source>): reads the tokenize stage's input_ids
+             (BOS/EOS kept, chunk rows regrouped) in lockstep with the normalize
+             shard's ids → source/id/score/quality_bucket
 ```
+
+Label text is encoded through the tokenize stage's own encoder
+(`marin.processing.tokenize._core.text_preprocessor`), so the ids the trainer and
+calibrator see are byte-identical to the ids the stage scores. No tokenizer runs
+in the scoring workers; the stage refuses a model whose meta tokenizer differs from
+the tokenize artifact's.
 
 The stage report (single HTML page over all sources) lives in
 `experiments/datakit/reports/quality.py` and runs as the pipeline's
 `datakit/report/quality` step.
 
-Retrain + recalibrate the deployed model:
+Retrain the deployed model (calibration included). A retrained model goes in a
+new dir *and* gets a new `--quality-model-version` tag together: the tag, not the
+path and not the bytes, is what the quality step hashes, so overwriting a dir
+that an existing tag names would leave cached outputs under that tag describing
+different bytes.
 
 ```bash
 python -m experiments.datakit.cluster.quality.fast_transformer.train \
     --labels s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet \
-    --out-dir s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2
-python -m experiments.datakit.cluster.quality.fast_transformer.calibrate \
-    --model-dir s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2 \
-    --out       s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2/calib_bme.json
+    --out-dir s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2_marin
 ```
+
+Then run the pipeline with `--quality-model-version pooled-junkgate2-marin`; the
+default `--quality-model` already points at that dir.
 
 ## Hero data: the fusion scorer
 
 The hero corpus is scored by a fusion variant of the model (`doc_embed_dim=1024`)
-that reads a document's first 512 Nemotron tokens and its Harrier embedding. Two
+that reads a document's first 512 Nemotron token ids and its Harrier embedding. Two
 steps produce the registered data, both resolved through
 `experiments/datakit/hero_data.py` and driven by [`run.py`](run.py):
 
 ```
-score_fusion.py  fusion_score_step — normalized text + Harrier leaf → id/score (raw sigmoid),
-                 one Zephyr task per shard pair on GPU workers, tokenizing in the task
+score_fusion.py  fusion_score_step — Nemotron tokenize leaf + Harrier leaf → id/score (raw sigmoid),
+                 one Zephyr task per shard on GPU workers, reading the stored input_ids
+                 (no tokenizer on the worker) and checking ids against the normalized shard
 bucket.py        quality_step — fusion scores + content types + per-type calibration →
                  source/id/content_type/raw_score/score/quality_bucket, the QualityScores
                  dataset the store reads, in the normalized row order
@@ -64,13 +78,23 @@ uv run iris --cluster=marin job run --target-cluster cw-us-east-02a --job-name h
     --no-wait -- python -m experiments.datakit.cluster.quality.fast_transformer.run --stage bucket
 ```
 
+The score stage depends on the Nemotron tokenize step of each source
+(`hero_data.tokenize_step_for(source, NEMOTRON_TOKENIZER)`); the leaves the
+registered run read have since been deleted, so `run.py --stage score` tokenizes a
+source again before scoring it.
+
 ## Scoring
 
 `score.py` scores **whole-doc (bme)**: the score is the mean over begin/middle/end
-~512-token windows, so a source whose docs share a long boilerplate prefix
-(agent/tool trajectories) is not scored blind by the first 512 tokens. Sources that
-are genuinely uniform in quality stay near-constant — the report flags those as
-`uninformative` (a variance gate) versus `homogeneous` (real spread, one bucket).
+512-token windows of the stored ids (one window when the document fits), so a
+source whose docs share a long boilerplate prefix (agent/tool trajectories) is not
+scored blind by the first 512 tokens. Sources that are genuinely uniform in quality
+stay near-constant — the report flags those as `uninformative` (a variance gate)
+versus `homogeneous` (real spread, one bucket).
+
+The stage is forward-bound, not I/O-bound: about 30 CPU-s per 35k documents on a
+laptop CPU at the default batch of 64 windows, against a read+write floor of
+~0.2 s. One tokenize shard is one zephyr shard and one output file.
 
 Calibration is a monotonic remap, so it does not change document ranking; it only
 warps the bell-shaped raw score so the fixed cutpoints `[0.2, 0.4, 0.6, 0.8]` land
@@ -85,7 +109,9 @@ layers over the super-tokens → pool → scalar quality head`. Pooling at the w
 boundary amortizes the transformer cost by ~64×, keeping inference under a
 <1M FLOPs/token budget while still running real self-attention. Deployed config:
 `meanmaxmin` pooling, `pool_window=64`, `embed_dim=256`, `hidden_dim=256`,
-`num_layers=2`, `num_heads=4`, `max_tokens=512`, tokenizer `intfloat/multilingual-e5-small`.
+`num_layers=2`, `num_heads=4`, `max_tokens=512`, tokenizer
+`marin-community/marin-tokenizer` (the reference pipeline's tokenize tokenizer;
+windows are 512 of its tokens at begin/middle/end).
 
 The fusion scorer projects and layer-norms the document embedding to `hidden_dim`,
 appends it as a gated super-token the real tokens attend to, and adds it to the head
@@ -102,20 +128,21 @@ Core:
 
 - [`rubric.py`](rubric.py) — the type-aware, source-blind oracle rubric (system prompt + content types).
 - [`model.py`](model.py) — the pooled `FastTransformer` regressor, with the optional document-embedding fusion.
-- [`data.py`](data.py) — tokenize the oracle-scored text and pack dense padded arrays + a compact vocab.
-- [`train.py`](train.py) — `train_from_labels`: train the deployed scorer from the label parquet, plus `fit`/`train_regressor` and the holdout metrics.
-- [`calibrate.py`](calibrate.py) — fit the monotonic bme calibration (`calib_bme.json`) and apply it, globally or per content type.
-- [`scorer.py`](scorer.py) — `PooledScorer`: load a trained model + vocab remap and score arbitrary text.
+- [`data.py`](data.py) — encode the oracle-scored text through the tokenize stage's encoder, slice bme token windows, and pack dense padded arrays + a compact vocab.
+- [`train.py`](train.py) — `train_from_labels`: train the deployed scorer from the label parquet, plus `fit`/`train_regressor` and the holdout metrics; `main` also fits the calibration.
+- [`calibrate.py`](calibrate.py) — `calibrate_model`: fit the monotonic bme calibration (`calib_bme.json`); `Calibration` applies it, globally or per content type.
+- [`scorer.py`](scorer.py) — `PooledScorer`: load a trained model + vocab remap and score documents given as token ids.
 - [`score.py`](score.py) — `score_normalized`: the per-source quality step (bme + calibration → buckets).
-- [`score_fusion.py`](score_fusion.py) — `fusion_score_step`: raw fusion scores from normalized text and Harrier embeddings.
+- [`score_fusion.py`](score_fusion.py) — `fusion_score_step`: raw fusion scores from the Nemotron tokenize ids and Harrier embeddings.
 - [`bucket.py`](bucket.py) — `quality_step`: the store-ready `QualityScores` dataset from fusion scores and content types.
 - [`quality_model.py`](quality_model.py) — `QualityPin` and the model and calibration digests a step checks before writing.
 - [`run.py`](run.py) — the hero fleet driver for the score and bucket stages.
 - [`metrics.py`](metrics.py) — rank-based AUC / Spearman used by the training holdout.
-- [`artifact.py`](artifact.py) — `QualityScores` step artifact + the fixed `BUCKET_EDGES`.
+- [`artifact.py`](artifact.py) — `QualityScores` step artifact + the fixed `BUCKET_EDGES` and the `MODEL_CALIB` file name.
 
 ## Artifacts
 
 - Labels: `s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet` (5,578 oracle labels; `label_batch` marks `consensus_v3` / `junkgate_web_wiki` / `junkgate_code_math`).
-- Model: `s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2/` (`.eqx` + `_remap.json` + `_meta.json` + `calib_bme.json`).
+- Model: `s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2_marin/` (`.eqx` + `_remap.json` + `_meta.json` + `calib_bme.json`; tag `pooled-junkgate2-marin`).
+- Previous model: `s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2/`, trained on `intfloat/multilingual-e5-small` ids over text; the stage refuses it with a tokenizer mismatch.
 - Fusion model: `s3://marin-us-east-02a/marin/datakit/models/quality/nemotron_88k/` (same layout; `calib_bme.json` holds the per-type curves). Pinned as `hero_data.NEMOTRON_88K`.

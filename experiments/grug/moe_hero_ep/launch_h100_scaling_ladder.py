@@ -202,6 +202,7 @@ def build_h100_ladder_run(
             profiler=ProfilerConfig(enabled=False),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
+                save_code=False,
                 entity="marin-community",
                 project=wandb_project,
                 tags=[

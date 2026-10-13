@@ -59,12 +59,12 @@ def _row(
     node_name: str | None = None,
     execution_uid: str = "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0",
     role: str = "",
-    training_loop: str | None = "sync",
+    training_type: str | None = "sync",
     attributes: dict[str, str] | None = None,
 ) -> tuple:
     resource = {"role": role} if role else {}
-    if training_loop is not None:
-        resource["training_loop"] = training_loop
+    if training_type is not None:
+        resource["training_type"] = training_type
     return (
         CLUSTER,
         service,
@@ -677,12 +677,12 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
                     job_id=JOB_ID,
                     node_name=NODES[0],
                     role="trainer",
-                    training_loop="async",
+                    training_type="async",
                 )
             ),
         )
 
-    # A run logged before the trainer stamped its loop carries no training_loop attribute.
+    # A run logged before the trainer stamped its training type carries no training_type attribute.
     store.execute(
         f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
         list(
@@ -696,7 +696,7 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
                 job_id=JOB_ID,
                 node_name=NODES[0],
                 role="trainer",
-                training_loop=None,
+                training_type=None,
             )
         ),
     )

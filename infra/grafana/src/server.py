@@ -89,6 +89,7 @@ from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from http import HTTPStatus
 
 import pyarrow as pa
 import uvicorn
@@ -108,7 +109,7 @@ from config import (
 )
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from dashboard_dataset import DashboardDataset, project_dataset, validate_table_budget
+from dashboard_dataset import DashboardDataset, SourceQuery, project_dataset, validate_table_budget
 from errors import FinelogUnavailableError, UpstreamError
 from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
 from finelog_health import FinelogHealth
@@ -116,8 +117,11 @@ from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
 from hero_health import (
+    EVAL_HISTORY_LENGTH,
+    EvalHistory,
     Signals,
     WatchedRun,
+    eval_history,
     health_alert_rows,
     optimizer_alert_rows,
     retry_event_query,
@@ -125,6 +129,7 @@ from hero_health import (
     signal_query,
     signals_by_run,
     telemetry_alert_rows,
+    training_runs,
     watched_runs,
 )
 from hero_runs import (
@@ -171,7 +176,7 @@ from vllm_observability import (
     vllm_run_summary_samples_query,
     vllm_run_summary_table,
 )
-from wandb_source import WandbSource
+from wandb_source import EVAL_LOSS_METRIC, WandbSource
 from zephyr_observability import zephyr_overview_dataset
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
@@ -210,6 +215,8 @@ _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
 _K8S_ARCH_MISMATCH_CACHE_KEY = "arch_mismatch"
 _K8S_EVENTS_CACHE_KEY = "events"
 _K8S_FINELOG_CACHE_KEY = "finelog"
+_DATASET_SOURCE_CACHE_BYTES = 128 * 1024 * 1024
+_DATASET_CONCURRENCY = 2
 _FINELOG_FILTER_TOKEN = "finelog"
 _FINELOG_HUB_CLUSTER = "marin"
 
@@ -544,6 +551,38 @@ def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
     return sources[name]
 
 
+def _dataset_source(
+    source: MetricSource,
+    cluster: str,
+    query: SourceQuery,
+    max_rows: int,
+    cache: TtlCache[pa.Table],
+) -> pa.Table:
+    max_rows = min(query.max_rows, max_rows)
+
+    def run() -> pa.Table:
+        started = time.monotonic()
+        table = source.query(query.sql, max_rows=max_rows)
+        validate_table_budget(
+            query.name,
+            table,
+            max_rows=query.max_rows,
+            max_samples=query.max_samples,
+        )
+        logger.info(
+            "dashboard source query source=%s cluster=%s rows=%d elapsed_ms=%d",
+            query.name,
+            cluster,
+            table.num_rows,
+            round((time.monotonic() - started) * 1000),
+        )
+        return table
+
+    # A source such as current task state does not depend on panel resolution.
+    # Share its Arrow result across datasets without retaining duplicate copies.
+    return cache.get_or_compute((cluster, query), run)
+
+
 def create_app(
     config: BridgeConfig,
     finelog_sources: Mapping[str, MetricSource],
@@ -556,13 +595,20 @@ def create_app(
 ) -> Starlette:
     """Build the ASGI app serving Grafana's data sources and alert webhooks."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
+    dataset_source_cache: TtlCache[pa.Table] = TtlCache(
+        config.cache_ttl,
+        max_size=_DATASET_SOURCE_CACHE_BYTES,
+        get_size=lambda table: table.get_total_buffer_size(),
+    )
     finelog_health_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
-    # Grafana and the bridge share one CPU and 2 GiB. Serialize these bounded
-    # local projections within one app; the cache coalesces identical panels.
+    # Limit source loading as well as projection: queued requests must not hold
+    # Arrow inputs outside the source cache budget.
+    dataset_execution_slots = threading.BoundedSemaphore(_DATASET_CONCURRENCY)
+    # DuckDB projections share one CPU.
     dashboard_projection_lock = threading.Lock()
     finelog_queries = _FinelogQueries(config, finelog_sources, finelog_cache)
 
@@ -570,43 +616,40 @@ def create_app(
         key = (target.name, dataset.name, *dataset.cache_key)
 
         def run() -> list[dict[str, object]]:
-            source = finelog_sources[target.name]
-            source_tables: dict[str, pa.Table] = {}
-            started = time.monotonic()
-            for source_query in dataset.sources:
-                query_started = time.monotonic()
-                table = source.query(source_query.sql, max_rows=min(source_query.max_rows, config.max_rows))
-                validate_table_budget(
-                    source_query.name,
-                    table,
-                    max_rows=source_query.max_rows,
-                    max_samples=source_query.max_samples,
+            with dataset_execution_slots:
+                source_tables: dict[str, pa.Table] = {}
+                started = time.monotonic()
+                for source_query in dataset.sources:
+                    query_started = time.monotonic()
+                    table = _dataset_source(
+                        finelog_sources[target.name], target.name, source_query, config.max_rows, dataset_source_cache
+                    )
+                    source_tables[source_query.name] = table
+                    logger.info(
+                        "dashboard dataset source dataset=%s source=%s cluster=%s rows=%d elapsed_ms=%d",
+                        dataset.name,
+                        source_query.name,
+                        target.name,
+                        table.num_rows,
+                        round((time.monotonic() - query_started) * 1000),
+                    )
+                rows = project_dataset(
+                    dataset,
+                    source_tables,
+                    dashboard_projection_lock,
+                    rows_to_json,
+                    min(dataset.max_result_rows, config.max_rows),
                 )
-                source_tables[source_query.name] = table
                 logger.info(
-                    "dashboard dataset source dataset=%s source=%s cluster=%s rows=%d elapsed_ms=%d",
+                    "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d cache_key=%s",
                     dataset.name,
-                    source_query.name,
                     target.name,
-                    table.num_rows,
-                    round((time.monotonic() - query_started) * 1000),
+                    len(dataset.sources),
+                    len(rows),
+                    round((time.monotonic() - started) * 1000),
+                    dataset.cache_key,
                 )
-            rows = project_dataset(
-                dataset,
-                source_tables,
-                dashboard_projection_lock,
-                rows_to_json,
-                min(dataset.max_result_rows, config.max_rows),
-            )
-            logger.info(
-                "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d",
-                dataset.name,
-                target.name,
-                len(dataset.sources),
-                len(rows),
-                round((time.monotonic() - started) * 1000),
-            )
-            return rows
+                return rows
 
         return finelog_cache.get_or_compute(key, run)
 
@@ -661,7 +704,11 @@ def create_app(
             request,
             "Training overview",
             lambda params, start_ms, end_ms: training_overview_dataset(
-                _require(params, "run"), start_ms, end_ms, int(_require(params, "bucket_ms"))
+                _require(params, "run"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -838,7 +885,8 @@ def create_app(
                 # Cache the classified status itself. Cached exceptions lose their
                 # cause, which otherwise turns a timeout into a generic error.
                 try:
-                    return run()
+                    with dataset_execution_slots:
+                        return run()
                 except QueryResultTooLargeError as err:
                     return [
                         _vllm_status_row("sample_limit", f"{err}; zoom to a shorter range"),
@@ -998,6 +1046,31 @@ def create_app(
             lambda: source.query(loss_window_query(now, runs, executions), max_rows=config.max_rows),
         )
 
+    def hero_evaluations(runs: tuple[WatchedRun, ...]) -> dict[str, EvalHistory]:
+        """Each watched run's recent evaluation history from W&B, keyed by run ID.
+
+        Run-specific failures skip that run. Transport failures stop further
+        lookups so a W&B outage does not cost one timeout per run.
+        """
+        evaluations = {}
+        for run_id in sorted({run.run_id for run in runs}):
+            try:
+                points = wandb_cache.get_or_compute(
+                    ("hero_evaluations", run_id),
+                    lambda run_id=run_id: wandb_source.recent_points(
+                        run_id, metric=EVAL_LOSS_METRIC, count=EVAL_HISTORY_LENGTH
+                    ),
+                )
+            except UpstreamError as err:
+                logger.warning("W&B evaluation history for %s unavailable: %s", run_id, err)
+                if err.status_code == HTTPStatus.GATEWAY_TIMEOUT:
+                    break
+                continue
+            history = eval_history(points)
+            if history is not None:
+                evaluations[run_id] = history
+        return evaluations
+
     def finelog_alert_endpoint(name: str, project, unavailable_rows) -> JSONResponse:
         """Serve one finelog-backed alert projection under the hub's cache and error contract."""
         now = datetime.now(UTC)
@@ -1072,12 +1145,14 @@ def create_app(
             retry_events = (
                 hero_query("hero_retry_events", now, target, lambda: retry_event_query(now)) if runs else pa.table({})
             )
-            return health_alert_rows(runs, hero_signals(target, now, runs), retry_events, now)
+            signals = hero_signals(target, now, runs)
+            evaluations = hero_evaluations(training_runs(runs, signals, now))
+            return health_alert_rows(runs, signals, retry_events, evaluations, now)
 
         return finelog_alert_endpoint(
             "training_health",
             project,
-            lambda now: health_alert_rows((), {}, pa.table({}), now),
+            lambda now: health_alert_rows((), {}, pa.table({}), {}, now),
         )
 
     def finelog_alerts_zephyr_stalls(_: Request) -> JSONResponse:
@@ -1254,10 +1329,10 @@ def create_app(
         return k8s_endpoint("alerts_unreachable", k8s_fleet.alert_unreachable)
 
     def k8s_alerts_crashloops(request: Request) -> JSONResponse:
-        # The paging rule asks for scope=control-plane; workload backoffs stay
-        # observe-only. Filtering after the cache keeps one scan per TTL.
-        response = k8s_cache.get_or_compute("alerts_crashloops", k8s_fleet.alert_crashloops)
         scope = request.query_params.get("scope")
+        if scope == "control-plane":
+            return k8s_endpoint("alerts_control_plane_crashloops", k8s_fleet.alert_control_plane_crashloops)
+        response = k8s_cache.get_or_compute("alerts_crashloops", k8s_fleet.alert_crashloops)
         if scope:
             response = [row for row in response if row["scope"] == scope]
         return JSONResponse(response)

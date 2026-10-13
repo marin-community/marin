@@ -113,6 +113,11 @@ permanently latches this database into shared-deployment mode. Clearing the
 setting, removing users, or completing workloads never restores implicit
 loopback or machine-token administration.
 
+`github.trigger_allowed_user_ids` grants signed GitHub issue and PR triggers
+to the listed numeric GitHub identities. It does not bind those identities to
+Loom users or grant browser sign-in, so existing account roles are unchanged.
+Remove an ID from the setting to revoke this trigger grant.
+
 The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. The profile names `marin-community/marin` in
@@ -260,3 +265,15 @@ update. The separately managed root disk is protected, retained if removed from
 Pulumi, and not auto-deleted with the VM. A replacement root disk must use an
 explicit `bootDiskSnapshot`; keep that source snapshot until a newer rollback
 point has been verified.
+
+## Scheduled watches
+
+Declare scheduled agent or script watches under `marin-loom:watches` in
+[Pulumi.marin-loom.yaml](Pulumi.marin-loom.yaml). The disabled
+`weekday-job-check` entry shows agent configuration. Use `promptFile` for prompts
+stored under `infra/loom`; Pulumi includes their contents in the manifest.
+
+Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
+before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
+for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
+the IaC fields. Custom script files must already exist on the Loom server.

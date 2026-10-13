@@ -144,7 +144,18 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
         target_cluster=None,
         parent_cluster_config=None,
         coordinator_timeout_hours=12,
+        job_timeout_seconds=1800,
     )
+
+
+@pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
+@pytest.mark.parametrize("value", [False, True])
+def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["generator"][key] = value
+
+    with pytest.raises(ValueError, match=f"generator.{key}"):
+        dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe))
 
 
 def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
@@ -387,6 +398,7 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert model.global_step == 8
     assert model.iris_job_id == "01KTEST"
     launch = launch_configs[0]
+    assert launch["iris"]["timeout"] == 1800
     assert launch["schema_version"] == 1
     assert launch["run"]["export_hf"] is True
     assert launch["runtime"]["launcher_commit"] == MARIN_SKYRL.commit
@@ -459,7 +471,7 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
     release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
-    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "tasktrove-verify@abc123"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit@abc123"}))
     source = TaskTroveDataSource(
         release,
         TaskTroveSelection(
@@ -470,6 +482,7 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
             limit=160,
             seed=17,
         ),
+        relative_path="tasks.parquet",
     )
     context = StepContext.for_run(
         output_path=str(tmp_path / "output"),
@@ -480,9 +493,9 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
 
     resolved = source.resolve(context)
 
-    assert resolved.uri == str(tmp_path / "tasks/part-00000.parquet")
-    assert resolved.relative_path == "part-00000.parquet"
-    assert resolved.verifier_ref == "tasktrove-verify@abc123"
+    assert resolved.uri == str(tmp_path / "tasks.parquet")
+    assert resolved.relative_path == "tasks.parquet"
+    assert resolved.verifier_ref == "verifyit@abc123"
     assert resolved.selection.sources == ("source-a", "source-b")
     assert resolved.selection.tags == ("bash", "terminal")
     assert resolved.kind == "tasktrove_parquet"

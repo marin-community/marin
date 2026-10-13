@@ -12,14 +12,10 @@ import pyarrow.parquet as pq
 import pytest
 from marin.datakit.normalize import NormalizedData
 
-from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
+from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, MODEL_CALIB
 from experiments.datakit.cluster.quality.fast_transformer.bucket import bucket_quality_scores
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import Calibration
-from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
-    CALIBRATION_FILE,
-    QualityPin,
-    calibration_sha256,
-)
+from experiments.datakit.cluster.quality.fast_transformer.quality_model import QualityPin, calibration_sha256
 
 KNOTS = {
     "default": {"xk": [0.0, 0.2, 0.4, 0.6, 0.8, 1.0], "yk": [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]},
@@ -66,7 +62,7 @@ def make_pin(root: Path, knots: dict = KNOTS) -> QualityPin:
     (model_dir / "m.eqx").write_bytes(b"weights")
     (model_dir / "m_remap.json").write_bytes(b"{}")
     (model_dir / "m_meta.json").write_bytes(b"{}")
-    (model_dir / CALIBRATION_FILE).write_text(json.dumps(knots))
+    (model_dir / MODEL_CALIB).write_text(json.dumps(knots))
     return QualityPin(
         name="pin",
         model_path="models/pin",
@@ -150,7 +146,7 @@ def test_a_calibration_that_is_not_the_pinned_one_is_refused(tmp_path):
     types = tmp_path / "types"
     write_shard(types, BASENAMES[0], {"id": ["a"], "content_type": ["prose"]})
     pin = make_pin(tmp_path)
-    (tmp_path / "models" / "pin" / CALIBRATION_FILE).write_text(json.dumps(KNOTS["default"]))
+    (tmp_path / "models" / "pin" / MODEL_CALIB).write_text(json.dumps(KNOTS["default"]))
 
     with pytest.raises(Exception, match="different calibration"):
         run_bucket(tmp_path, normalized, pin, max_workers=1)

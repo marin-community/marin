@@ -18,7 +18,7 @@ RUN set -e; \
 
 FROM python:3.12-slim AS runtime
 ENV PYTHONUNBUFFERED=1
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /bin/uv
 # The workspace lives at /app: rigging resolves the repo-root config/ directory by walking up
 # from the working directory to the workspace pyproject, so the process runs from here.
 WORKDIR /app
@@ -63,8 +63,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --package marin-marina
 COPY --from=web /build/apps /app/apps
 ENV MARINA_APPS_DIR=/app/apps
-# Each app package is importable by its own name, the way the kernel imports it, so a
-# manifest-declared command can run an app module.
+# App packages that declare jobs are importable by name for their commands.
+# A backend/ package is loaded by the kernel under a private name when its URL
+# name conflicts with an installed package.
 ENV PYTHONPATH=/app/apps
 # Echo's two ONNX models are baked in rather than fetched on demand: Cloud Run keeps no
 # disk between instances, so every cold start would otherwise download them before it

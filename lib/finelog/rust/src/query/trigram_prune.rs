@@ -52,43 +52,23 @@ pub struct StringRange {
     pub hi: Option<Vec<u8>>,
 }
 
-/// Inject access plans for already-extracted per-column `needles` (from
-/// [`substring_needles_by_column`]). Does the blocking bundle + footer reads
-/// (routed through the registry's parsed-section cache), so the provider runs it under
-/// `spawn_blocking`. `key_ranges` (from [`string_column_ranges`]) scopes which
-/// segments are consulted by key band. Returns `plan` unchanged when `needles`
-/// is empty or nothing prunes.
-pub fn apply_with_needles(
-    plan: Arc<dyn ExecutionPlan>,
-    segment_paths: &[String],
-    needles: &HashMap<String, Vec<String>>,
-    key_ranges: &HashMap<String, StringRange>,
-    indices: &IndexRegistry,
-    artifacts: &SegmentArtifacts,
-) -> Arc<dyn ExecutionPlan> {
-    if needles.is_empty() {
-        return plan;
-    }
-    let access_plans = build_access_plans(segment_paths, needles, key_ranges, indices, artifacts);
-    if access_plans.is_empty() {
-        return plan;
-    }
-    rewrite_file_groups(plan, &access_plans)
-}
-
 /// Eliminate whole segments whose advertised trigram bundle proves that no row
 /// can satisfy the required string predicates. Missing or uncached artifacts
 /// keep the segment, so this remains a fail-open optimization.
-pub fn prune_segment_paths(
+pub fn plan_segments(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
     indices: &IndexRegistry,
     artifacts: &SegmentArtifacts,
-) -> Vec<String> {
+) -> SegmentPruning {
+    let mut masks = HashMap::new();
     let columns = ordered_trigram_needles(needles, key_ranges);
     if columns.is_empty() {
-        return segment_paths.to_vec();
+        return SegmentPruning {
+            paths: segment_paths.to_vec(),
+            masks,
+        };
     }
 
     let mut pruned = 0usize;
@@ -134,6 +114,17 @@ pub fn prune_segment_paths(
                     return false;
                 }
             }
+            if let (Some(keep), Some(span_rows)) = (combined, span_rows) {
+                if keep.iter().any(|&keep| !keep) {
+                    masks.insert(
+                        path.to_string(),
+                        SpanMask {
+                            keep,
+                            span_rows: span_rows as usize,
+                        },
+                    );
+                }
+            }
             true
         })
         .cloned()
@@ -141,7 +132,43 @@ pub fn prune_segment_paths(
     if pruned > 0 {
         tracing::debug!(segments_pruned = pruned, "trigram segment prune");
     }
-    retained
+    SegmentPruning {
+        paths: retained,
+        masks,
+    }
+}
+
+/// Selected segments and their query-owned masks. Retaining masks avoids a
+/// second sweep through an index working set larger than the shared cache.
+pub struct SegmentPruning {
+    pub paths: Vec<String>,
+    masks: HashMap<String, SpanMask>,
+}
+
+struct SpanMask {
+    keep: Vec<bool>,
+    span_rows: usize,
+}
+
+/// Attach the masks already computed before source planning.
+pub fn apply_pruning(
+    plan: Arc<dyn ExecutionPlan>,
+    pruning: &SegmentPruning,
+) -> Arc<dyn ExecutionPlan> {
+    rewrite_file_groups(plan, &access_plans(pruning))
+}
+
+fn access_plans(pruning: &SegmentPruning) -> HashMap<String, ParquetAccessPlan> {
+    pruning
+        .masks
+        .iter()
+        .filter_map(|(path, mask)| {
+            let rows = crate::store::segment::segment_row_group_rows(Path::new(path))?;
+            let access = span_access_plan(&mask.keep, mask.span_rows, &rows)?;
+            let basename = Path::new(path).file_name()?.to_str()?.to_string();
+            Some((basename, access))
+        })
+        .collect()
 }
 
 fn ordered_trigram_needles<'a>(
@@ -428,6 +455,7 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
 /// Bundle reads go through the registry's shared parsed-section cache, so a repeated
 /// query reuses parsed blooms and resident bytes stay within the configured
 /// budget.
+#[cfg(test)]
 fn build_access_plans(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
@@ -435,116 +463,13 @@ fn build_access_plans(
     indices: &IndexRegistry,
     artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ParquetAccessPlan> {
-    let columns = ordered_trigram_needles(needles, key_ranges);
-    if columns.is_empty() {
-        return HashMap::new();
-    }
-
-    let mut out = HashMap::new();
-    let mut total_row_groups = 0usize;
-    let mut skipped_row_groups = 0usize;
-    let mut total_spans = 0usize;
-    let mut skipped_spans = 0usize;
-    let mut scoped_out = 0usize;
-    'segments: for path in segment_paths {
-        let p = Path::new(path);
-        let Some(basename) = p.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        let Some(segment) = indices.open_segment(p, artifacts) else {
-            // No valid bundle: expected for L0 or an unindexed namespace.
-            // segments. The file just scans unpruned — correct, never a false
-            // negative.
-            tracing::debug!(
-                segment = basename,
-                "no usable trigram section; scanning unpruned"
-            );
-            continue;
-        };
-        // A span survives only if it survives EVERY constrained column's needles.
-        // A column this segment's bundle does not index can't prune, so it
-        // simply contributes no constraint here. The mask is sized from the
-        // section's own span count; the Parquet footer is consulted below for a
-        // segment whose blooms actually pruned something.
-        let mut keep: Option<Vec<bool>> = None;
-        let mut span_rows = None;
-        let mut applied_any = false;
-        for (col, needle_trigrams) in &columns {
-            let Some((coverage, index)) = indices.trigram(&segment, col) else {
-                continue;
-            };
-            if !coverage.key_column.is_empty() {
-                if let Some(range) = key_ranges.get(&coverage.key_column) {
-                    if !coverage.key_band_overlaps(range.lo.as_deref(), range.hi.as_deref()) {
-                        scoped_out += 1;
-                        continue 'segments;
-                    }
-                }
-            }
-            let keep = keep.get_or_insert_with(|| vec![true; coverage.span_count as usize]);
-            if keep.len() != coverage.span_count as usize
-                || span_rows.is_some_and(|rows| rows != coverage.span_rows as usize)
-            {
-                tracing::warn!(
-                    segment = basename,
-                    column = col,
-                    "inconsistent trigram sections; ignoring section"
-                );
-                continue;
-            }
-            span_rows = Some(coverage.span_rows as usize);
-            applied_any = true;
-            for trigrams in needle_trigrams {
-                for (k, m) in keep.iter_mut().zip(index.keep_mask_for(trigrams)) {
-                    *k &= m;
-                }
-            }
-            if keep.iter().all(|&k| !k) {
-                break;
-            }
-        }
-        let Some(keep) = keep else {
-            continue;
-        };
-        if !applied_any || keep.iter().all(|&k| k) {
-            continue;
-        }
-        // Map the span mask onto the segment's row groups. This parses the whole
-        // footer, so it runs last — after the cheap header and key-band checks,
-        // and only for a segment an access plan would be attached to.
-        let Some(access) = span_access_plan(
-            &keep,
-            span_rows.unwrap_or_default(),
-            &segment.row_group_rows,
-        ) else {
-            tracing::warn!(
-                segment = basename,
-                index_spans = keep.len(),
-                index_span_rows = span_rows,
-                parquet_rows = segment.row_group_rows.iter().sum::<usize>(),
-                "stale trigram section (spans do not cover the segment); scanning unpruned"
-            );
-            continue;
-        };
-        total_row_groups += segment.row_group_rows.len();
-        skipped_row_groups += segment.row_group_rows.len() - access.row_group_indexes().len();
-        total_spans += keep.len();
-        skipped_spans += keep.iter().filter(|&&k| !k).count();
-        out.insert(basename.to_string(), access);
-    }
-    if !out.is_empty() || scoped_out > 0 {
-        tracing::debug!(
-            indexed_columns = columns.len(),
-            segments_pruned = out.len(),
-            segments_scoped_out = scoped_out,
-            row_groups_skipped = skipped_row_groups,
-            row_groups_total = total_row_groups,
-            spans_skipped = skipped_spans,
-            spans_total = total_spans,
-            "trigram prune"
-        );
-    }
-    out
+    access_plans(&plan_segments(
+        segment_paths,
+        needles,
+        key_ranges,
+        indices,
+        artifacts,
+    ))
 }
 
 /// Turn a per-span keep mask into a row-group access plan.
@@ -983,11 +908,13 @@ mod tests {
         // expose a data-first plan that reads the corrupted section.
         for _ in 0..16 {
             assert!(
-                prune_segment_paths(&paths, &needles, &ranges, &indices, &artifacts).is_empty()
+                plan_segments(&paths, &needles, &ranges, &indices, &artifacts)
+                    .paths
+                    .is_empty()
             );
             assert_eq!(
                 build_access_plans(&paths, &needles, &ranges, &indices, &artifacts).len(),
-                1
+                0
             );
         }
         assert_eq!(indices.cache().corruption_counts().sections, 0);

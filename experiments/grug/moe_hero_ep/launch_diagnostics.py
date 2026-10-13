@@ -270,6 +270,7 @@ def build_diagnostic_run(
             load_checkpoint_path=restore_from,
             load_checkpoint=True if restore_from else None,
             tracker=WandbConfig(
+                save_code=False,
                 entity="marin-community",
                 project=wandb_project,
                 tags=[
