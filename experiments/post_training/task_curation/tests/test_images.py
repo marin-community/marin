@@ -6,6 +6,7 @@
 import hashlib
 import json
 import re
+import shlex
 from dataclasses import replace
 
 import pytest
@@ -15,6 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images import __main__ as images
+from experiments.post_training.task_curation.images import build
 from experiments.post_training.task_curation.images.build import (
     IDENTITY_CHARS,
     EnvironmentBuild,
@@ -54,6 +56,24 @@ def test_apt_packages_beyond_the_worker_image_push_an_image_and_record_its_diges
     assert StoragePath(built.lock_url).read_text() == COMPILED
     assert built.lock_sha256 == hashlib.sha256(COMPILED.encode()).hexdigest()
     assert built_environment(environment) == built
+    commands = [shlex.split(line) for line in docker_log.read_text().splitlines()]
+    export = next(command for command in commands if command[:2] == ["buildx", "build"])
+    parameters = dict(
+        option.split("=", 1)
+        for option in next(arg for arg in export if arg.startswith("--output=")).removeprefix("--output=").split(",")
+    )
+    assert parameters["compression"] == "gzip"
+    assert parameters["force-compression"] == "true"
+
+
+def test_image_serialization_changes_invalidate_built_images_but_preserve_worker_environments(lock, monkeypatch):
+    worker = Environment(lock=lock)
+    image = replace(worker, apt=("jq",))
+    worker_identity = environment_artifact(worker).name
+    image_identity = environment_artifact(image).name
+    monkeypatch.setattr(build, "IMAGE_COMPRESSION", "zstd")
+    assert environment_artifact(worker).name == worker_identity
+    assert environment_artifact(image).name != image_identity
 
 
 @pytest.mark.parametrize(

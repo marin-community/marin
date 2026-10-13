@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the June Snowball Grug trainer on synthetic tokens from one node, without Fray or Iris.
+"""Run the June Snowball Grug trainer on synthetic tokens on one or more Slurm nodes, without Fray or Iris.
 
 This is the Grug-code counterpart of ``experiments/grug/snowball_synthetic``: the June 67B-A2B recipe's own
 model (``experiments/june_tpu_67b_a2b/moe/model.py``) and training loop, on the same shape, batch and portable
@@ -14,6 +14,11 @@ Example, 8 GPUs, full 67B shape, expert parallelism over all 8, profile of steps
 
     RAGGED_DOT_IMPL=xla python experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py \\
         --size full --steps 20 --expert-axis 8 --profile-steps 3
+
+Across nodes, launch one process per node with ``srun`` and pass ``--gpus-per-node``. Devices are ordered by
+process, so the mesh's inner axes stay within a node: on two 8-GPU nodes, ``--expert-axis 8 --replica-axis 2``
+replicates the model per node and all-reduces gradients across nodes, ``--expert-axis 8`` alone shards the
+parameters over a cross-node ``data`` axis (FSDP), and ``--expert-axis 16`` spreads the experts over both nodes.
 """
 
 import argparse
@@ -38,6 +43,7 @@ from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.jax_utils import multihost_broadcast_sync
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
@@ -101,6 +107,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--mp", help="jmp policy override, e.g. 'p=f32,c=float16' (default: preset).")
     parser.add_argument("--expert-axis", type=int, default=1, help="Expert-parallel mesh axis size (1 = FSDP only).")
+    parser.add_argument(
+        "--replica-axis",
+        type=int,
+        default=1,
+        help="Replica mesh axis size: full parameter copies that all-reduce their gradients (1 = no replicas).",
+    )
+    parser.add_argument(
+        "--gpus-per-node",
+        type=int,
+        help="Initialize jax.distributed from Slurm with one srun process per node owning this many GPUs "
+        "(default: one process, no jax.distributed).",
+    )
     parser.add_argument("--attention", choices=get_args(GrugAttentionImplementation), default="reference")
     parser.add_argument("--moe-impl", default="ring", help="MoE dispatch backend (default: ring).")
     parser.add_argument(
@@ -147,7 +165,7 @@ def synthetic_examples(count: int, seq_len: int, vocab_size: int, seed: int = 0)
 
 
 def report_memory() -> None:
-    for device in jax.devices():
+    for device in jax.local_devices():
         stats = device.memory_stats()
         if stats is None:
             return
@@ -158,6 +176,10 @@ def report_memory() -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.gpus_per_node is not None:
+        # Before any JAX call that starts the backend, including jax.device_count() below. Without explicit device
+        # ids, JAX gives each Slurm process the single GPU numbered by its local rank.
+        DistributedConfig(local_device_ids=list(range(args.gpus_per_node))).initialize()
     model, default_mp = preset(args.size, args.seq_len)
     model = dataclasses.replace(
         model,
@@ -186,7 +208,9 @@ def main() -> None:
         # jnp.roll in the next-token loss slices the (1, seq_len) token grid to (1, 1), and under an explicit mesh JAX
         # drops the sharding of that slice, then rejects concatenating it with the (1, seq_len - 1) remainder.
         raise ValueError("a global batch of 1 fails in the loss under explicit mesh axes; pass --batch-size 2 or more")
-    run_id = args.run_id or f"june-{args.size}-{time.strftime('%Y%m%d-%H%M%S')}"
+    # Every process takes rank 0's id: each one's clock can give a different timestamp, which would split the run's
+    # logs and profiles across several ids.
+    run_id = multihost_broadcast_sync(args.run_id or f"june-{args.size}-{time.strftime('%Y%m%d-%H%M%S')}")
 
     trainer = TrainerConfig(
         id=run_id,
@@ -227,7 +251,7 @@ def main() -> None:
         trainer=GrugTrainerConfig(
             trainer=trainer,
             expert_axis_size=args.expert_axis,
-            replica_axis_size=1,
+            replica_axis_size=args.replica_axis,
             save_checkpoints=False,
             step_timeout=args.step_timeout or None,
         ),
@@ -236,8 +260,8 @@ def main() -> None:
     flops_per_example, _ = _compute_flops(model_config=model)
     logger.info(
         "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d seq_len=%d window=%d mp=%s "
-        "expert_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d remat=%s watch_interval=%d "
-        "flops_per_example=%.4e",
+        "expert_axis=%d replica_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d remat=%s "
+        "watch_interval=%d flops_per_example=%.4e",
         args.size,
         model.num_layers,
         model.hidden_dim,
@@ -250,6 +274,7 @@ def main() -> None:
         model.sliding_window,
         trainer.mp,
         args.expert_axis,
+        args.replica_axis,
         args.attention,
         args.moe_impl,
         model.capacity_factor,

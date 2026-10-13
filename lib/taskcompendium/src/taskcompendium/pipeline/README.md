@@ -149,10 +149,11 @@ defects survive successful retries.
 
 ## Review execution
 
-Full preparation assigns each row to a normalization shard by locator hash, then
-deduplicates and packs model requests into batches before distributing review
-work; the driver prepares the panel the same way without a shuffle. Prepared
-review batches are saved before inference. Batches respect both
+Full preparation uses one deduplication partition per 1,000 selected raw rows,
+capped at 64, using the population count from raw sampling. Rows with the same
+deduplication key stay together, and source locator order determines the
+duplicate survivor. The driver prepares the panel the same way without a
+shuffle. Prepared review batches are saved before inference. Batches respect both
 `review_batch_size` and `review_input_bytes` (64 MiB by default); an oversized
 audit is preserved alone. Review execution uses `review_task_resources`, so
 several model requests can wait on one worker. Completed review shards are

@@ -18,6 +18,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from functools import partial
+from pathlib import Path
 from typing import Any, cast
 
 import click
@@ -69,7 +70,7 @@ from taskcompendium.pipeline.source_processing import (
 )
 from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION, SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION, SourceVerificationPolicy
-from taskcompendium.pipeline.sources import conversion_shards, source_files_identity
+from taskcompendium.pipeline.sources import conversion_shards, source_files_identity, staged_files
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
 from taskcompendium.runtime.local import LocalGraderMachines
 from zephyr.context import ZephyrContext
@@ -78,7 +79,7 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
-from experiments.post_training.task_curation.config import PipelineOptions, RecipeSettings
+from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
@@ -93,6 +94,7 @@ URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 REVIEW_REQUEST_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4
+INPUT_OVERRIDES_REVISION = "2"
 
 type RowSelector = Callable[[dict[str, Any], ConversionContext], bool]
 type RowDecoder = Callable[[dict[str, Any], ConversionContext], dict[str, Any]]
@@ -108,6 +110,9 @@ class HfSource:
     the format reader for files that need a custom parser; ``parts`` replaces it for a file several
     workers read in parts, such as a slow generator. Each receives the ``ConversionContext``: the
     staged auxiliary inputs and the grader's environment.
+
+    ``prepare`` normalizes each downloaded file once in the shared acquisition artifact;
+    ``prepared_component`` selects its component-homogeneous Parquet row groups.
     """
 
     repo: str
@@ -118,6 +123,8 @@ class HfSource:
     decode: RowDecoder | None = None
     read: FileReader | None = None
     parts: FileParts | None = None
+    prepare: Callable[[str, ZephyrContext], Any] | None = None
+    prepared_component: str | None = None
 
     @property
     def name(self) -> str:
@@ -441,6 +448,7 @@ def source_files(source: HfSource | UrlSource) -> SourceFiles:
             source.decode,
             source.read,
             source.parts,
+            source.prepared_component,
         )
     return SourceFiles(
         source.url,
@@ -519,9 +527,18 @@ def _run_curation(
 
 
 def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
-    """The pinned bytes a source download stages; reader callables do not change them."""
+    """The pinned bytes and shared preparation staged by a source download."""
     if isinstance(source, HfSource):
-        return {"repo": source.repo, "revision": source.revision, "files": sorted(source.files)}
+        return {
+            "repo": source.repo,
+            "revision": source.revision,
+            "files": sorted(source.files),
+            **(
+                {"prepare": callable_identity(source.prepare), "preparation_revision": "2"}
+                if source.prepare is not None
+                else {}
+            ),
+        }
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
 
 
@@ -587,6 +604,9 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
             .write_jsonl(plan.metrics_path, skip_existing=True)
         )
         finish_download(plan)
+        if source.prepare is not None:
+            for task in plan.tasks:
+                source.prepare(task.destination_path, campaign.context)
         return
     digest = hashlib.sha256()
     destination = StoragePath(request.output_path) / source.filename
@@ -618,12 +638,59 @@ def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> Ar
 
 
 def source_downloads(
-    pipeline: CurationRecipe, campaign: CampaignRuntime
-) -> tuple[ArtifactStep[Artifact], dict[str, ArtifactStep[Artifact]]]:
-    """Pinned primary and auxiliary downloads shared by local and reviewed runs."""
-    return download_step(pipeline.source, campaign), {
-        name: download_step(source, campaign) for name, source in sorted(pipeline.inputs.items())
+    pipeline: CurationRecipe, options: PipelineOptions
+) -> tuple[ArtifactStep[Artifact] | None, dict[str, ArtifactStep[Artifact]]]:
+    """Download pinned inputs unless the invocation supplies their local replacements."""
+    primary = None
+    if options.inputs.root is None and not options.inputs.files:
+        primary = download_step(pipeline.source, options.runtime)
+    return primary, {
+        name: download_step(source, options.runtime)
+        for name, source in sorted(pipeline.inputs.items())
+        if name not in options.inputs.auxiliary
     }
+
+
+def _file_overrides(files: Mapping[str, Path]) -> dict[str, SourceFileOverride]:
+    overrides = {}
+    for logical, file in sorted(files.items()):
+        with file.open("rb") as stream:
+            checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+        overrides[logical] = SourceFileOverride(str(file.resolve()), checksum)
+    return overrides
+
+
+def _staged_file_overrides(root: str, hashes: Mapping[str, str]) -> dict[str, SourceFileOverride]:
+    return {name: SourceFileOverride(str(StoragePath(root) / name), checksum) for name, checksum in hashes.items()}
+
+
+def _staged_input_identity(path: str, source: HfSource | UrlSource) -> dict[str, Any]:
+    files = {}
+    for logical in staged_files(path, source_files(source)):
+        with (StoragePath(path) / logical).open("rb") as stream:
+            files[logical] = hashlib.file_digest(stream, "sha256").hexdigest()
+    return {"path": path, "files": files}
+
+
+def _input_overrides_identity(pipeline: CurationRecipe, overrides: InputOverrides) -> dict[str, Any]:
+    root = {"path": overrides.root} if overrides.root is not None else None
+    if overrides.root is not None and not overrides.files:
+        root = _staged_input_identity(overrides.root, pipeline.source)
+    return {
+        "revision": INPUT_OVERRIDES_REVISION,
+        "root": root,
+        "files": {name: asdict(file) for name, file in _file_overrides(overrides.files).items()},
+        "auxiliary": {
+            name: _staged_input_identity(path, pipeline.inputs[name])
+            for name, path in sorted(overrides.auxiliary.items())
+        },
+    }
+
+
+def _validate_input_identity(pipeline: CurationRecipe, overrides: InputOverrides, identity: dict[str, Any]) -> None:
+    recorded = identity.get("input_overrides")
+    if recorded is not None and _input_overrides_identity(pipeline, overrides) != recorded:
+        raise ValueError(f"Input overrides changed after planning: {pipeline.name}")
 
 
 @dataclass(frozen=True)
@@ -637,15 +704,16 @@ class SourceRun:
 
 def _source_run(
     identity: dict[str, Any],
-    downloaded: ArtifactStep[Artifact],
+    overrides: InputOverrides,
+    downloaded: ArtifactStep[Artifact] | None,
     inputs: Mapping[str, ArtifactStep[Artifact]],
     grader: ArtifactStep[EnvironmentArtifact] | None,
     ctx: StepContext,
 ) -> SourceRun:
     return SourceRun(
         identity=identity,
-        source_input=ctx.artifact_path(downloaded),
-        inputs={name: ctx.artifact_path(step) for name, step in inputs.items()},
+        source_input=ctx.artifact_path(downloaded) if downloaded is not None else overrides.root or ctx.output_path,
+        inputs={**overrides.auxiliary, **{name: ctx.artifact_path(step) for name, step in inputs.items()}},
         output_path=ctx.output_path,
         grader_artifact=ctx.artifact_path(grader) if grader is not None else None,
     )
@@ -657,12 +725,21 @@ def _run_source(
     options: PipelineOptions,
     run: SourceRun,
 ) -> RlDataArtifact:
+    (StoragePath(run.output_path) / "identity.json").write_text(canonical_json(run.identity))
     grader_environment = None
     if pipeline.grader is not None:
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
     assert options.recipe_settings is not None
     config = _execution_config(options.recipe_settings, config, pipeline.rubric)
+    _validate_input_identity(pipeline, options.inputs, run.identity)
+    file_overrides = (
+        {name: SourceFileOverride(**file) for name, file in run.identity["input_overrides"]["files"].items()}
+        if options.inputs.files
+        else {}
+    )
+    if options.inputs.root is not None and not options.inputs.files:
+        file_overrides = _staged_file_overrides(run.source_input, run.identity["input_overrides"]["root"]["files"])
     result = _run_curation(
         pipeline,
         mode=options.mode,
@@ -672,7 +749,9 @@ def _run_source(
         inputs=run.inputs,
         config=config,
         grader_environment=grader_environment,
+        source_overrides=file_overrides,
     )
+    _validate_input_identity(pipeline, options.inputs, run.identity)
     envelope = _pipeline_result(result)
     return RlDataArtifact(path=run.output_path, status=envelope.status, manifest=asdict(result), result=envelope)
 
@@ -682,21 +761,28 @@ def _reviewed_step(
     config: SourcePipelineConfig,
     options: PipelineOptions,
 ) -> ArtifactStep[RlDataArtifact]:
-    downloaded, inputs = source_downloads(pipeline, options.runtime)
+    downloaded, inputs = source_downloads(pipeline, options)
     grader_step = None
     grader_built = None
     if pipeline.grader is not None and placement(pipeline.grader) != Placement.IMAGE:
         grader_built = built_environment(pipeline.grader)
         grader_step = environment_artifact(pipeline.grader)
     identity = pipeline_identity(pipeline, config, grader_built)
+    overrides = options.inputs
+    if overrides.root is not None or overrides.files or overrides.auxiliary:
+        identity["input_overrides"] = _input_overrides_identity(pipeline, overrides)
     digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:16]
     return ArtifactStep(
         name=f"data/rl/{pipeline.name}-{digest}",
         version=PIPELINE_VERSION,
         artifact_type=RlDataArtifact,
         run=partial(_run_source, pipeline, config, options),
-        build_config=partial(_source_run, identity, downloaded, inputs, grader_step),
-        deps=(downloaded, *inputs.values(), *((grader_step,) if grader_step is not None else ())),
+        build_config=partial(_source_run, identity, overrides, downloaded, inputs, grader_step),
+        deps=(
+            *((downloaded,) if downloaded is not None else ()),
+            *inputs.values(),
+            *((grader_step,) if grader_step is not None else ()),
+        ),
     )
 
 
@@ -740,11 +826,11 @@ def _conversion_context(context: ZephyrContext, pipeline: CurationRecipe, run: Q
 
 
 def _run_quick_source(pipeline: CurationRecipe, options: PipelineOptions, run: QuickRun) -> CampaignArtifact:
-    overrides = {}
-    for logical, file in options.inputs.files.items():
-        with file.open("rb") as stream:
-            checksum = hashlib.file_digest(stream, "sha256").hexdigest()
-        overrides[logical] = SourceFileOverride(str(file.resolve()), checksum)
+    overrides = _file_overrides(options.inputs.files)
+    if options.inputs.root is not None and not options.inputs.files:
+        overrides = _staged_file_overrides(
+            run.source_input, _staged_input_identity(run.source_input, pipeline.source)["files"]
+        )
     with _conversion_context(options.runtime.context, pipeline, run, overrides) as context:
         result = _run_curation(
             pipeline,
@@ -760,14 +846,7 @@ def _run_quick_source(pipeline: CurationRecipe, options: PipelineOptions, run: Q
 
 
 def _quick_step(pipeline: CurationRecipe, options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
-    primary = None
-    if options.inputs.root is None and not options.inputs.files:
-        primary = download_step(pipeline.source, options.runtime)
-    auxiliary = {
-        name: download_step(upstream, options.runtime)
-        for name, upstream in sorted(pipeline.inputs.items())
-        if name not in options.inputs.auxiliary
-    }
+    primary, auxiliary = source_downloads(pipeline, options)
     return ArtifactStep(
         name=pipeline.name,
         version=QUICK_VERSION,

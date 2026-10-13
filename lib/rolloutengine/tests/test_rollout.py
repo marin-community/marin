@@ -19,7 +19,6 @@ from shellbox.machine import (
     DockerImage,
     ExitReason,
     Machine,
-    NetworkPolicy,
     Result,
     ShellSimBuiltins,
     UnsupportedMachineSpec,
@@ -40,14 +39,12 @@ from taskcompendium.models import (
     FunctionDefinition,
     JsonValueAnswer,
     NoGrader,
-    PlainText,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
     ScriptGrader,
     SessionGrader,
     ShellToolBinding,
-    Source,
     TaskSpec,
     TextMessage,
     VerifierArtifact,
@@ -55,12 +52,11 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
-from verifyit.spec import FunctionCall, NumericSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
+from verifyit.spec import FunctionCall, PredictedActionSpec, StructuredExactSpec, parse_spec
 
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     GenerationLimitReached,
-    ModelRequest,
     ModelTurn,
     RolloutContractError,
     RolloutInterrupted,
@@ -70,14 +66,21 @@ from rolloutengine.contracts import (
 )
 from rolloutengine.engine import ShellboxRolloutEngine
 from rolloutengine.lowering import lower_task
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from rolloutengine.spec import LoweredTaskSpec
 from rolloutengine.task_session import WORKSPACE_INSTRUCTION
+from rolloutengine.test_support import (
+    TWELVE,
+    ReplayModel,
+    arithmetic_task,
+    engine,
+    lowered,
+    machine_runtime,
+)
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(
     command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=FIXTURE_IMAGE
 )
-TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
 
 
 @pytest.mark.docker
@@ -183,18 +186,6 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         assert (await docker("inspect", machine.name)).exit_code != 0
 
 
-@dataclass
-class ReplayModel:
-    messages: list[dict]
-    requests: list[ModelRequest] = field(default_factory=list)
-
-    async def complete(self, request: ModelRequest) -> ModelTurn:
-        self.requests.append(request)
-        index = len(self.requests) - 1
-        prompt = (*request.prefix_token_ids, 90, 91) if request.prefix_token_ids else (10, 11)
-        return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), "stop")
-
-
 class FixtureImageFactory:
     """Execute fixture image commands on the built-in filesystem."""
 
@@ -216,21 +207,6 @@ class RecordingShellSimFactory:
         machine = await FixtureImageFactory().create(spec)
         self.machines.append(machine)
         return machine
-
-
-def arithmetic_task(**update) -> TaskSpec:
-    return TaskSpec.model_validate(
-        {
-            "id": "arithmetic",
-            "context": ConversationInput(events=(TextMessage(role="user", content="What is six plus six?"),)),
-            "environment_requirements": EnvironmentRequirements(),
-            "answer_type": AnswerType.NUMBER,
-            "answer_format": PlainText(),
-            "grader": verifyit_package(TWELVE).grader,
-            "source": Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
-            **update,
-        }
-    )
 
 
 def workspace_grader(**fields) -> ScriptGrader:
@@ -277,48 +253,6 @@ def shell_call(command: str, *, call_id: str = "write") -> dict:
             }
         ],
     }
-
-
-def machine_runtime(**overrides) -> MachineRuntimeSpec:
-    return MachineRuntimeSpec(
-        **{
-            "backend": "local",
-            "network": NetworkPolicy.DENY,
-            "cpus": None,
-            "memory_mb": None,
-            "storage_mb": None,
-            "gpus": 0,
-            "user": None,
-            "startup_timeout": None,
-            "cleanup_timeout": None,
-            **overrides,
-        }
-    )
-
-
-def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) -> LoweredTaskSpec:
-    return LoweredTaskSpec(
-        task=task,
-        runtime=TaskRuntimeSpec(task_machine=machine, verifier_machine=verifier_machine),
-        session=TaskSessionSpec(
-            **{
-                "task_session": "shellbox",
-                "max_turns": 3,
-                "model_turn_timeout": None,
-                "command_timeout": None,
-                "tool_turn_timeout": None,
-                "total_turn_timeout": None,
-                "attempt_timeout": None,
-                "verifier_timeout": 5,
-                "cleanup_timeout": 5,
-                **limits,
-            }
-        ),
-    )
-
-
-def engine(model, factories=None, *, sessions=None) -> ShellboxRolloutEngine:
-    return ShellboxRolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions)
 
 
 @pytest.mark.parametrize("stop_reason", ["stop", "length"])

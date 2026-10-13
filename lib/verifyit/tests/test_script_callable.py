@@ -4,7 +4,7 @@
 import pytest
 from verifyit.grade import Status
 from verifyit.modes.grade_script import grade_script_callable
-from verifyit_test_support.bounded_grading import trusted_script
+from verifyit.test_support import trusted_script
 
 
 @pytest.mark.parametrize(
