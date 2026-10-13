@@ -4,23 +4,31 @@
 """A toy item run through the stage functions directly, then through ``run_item``.
 
 The program has two steps: ``numbers`` writes ``/workspace/numbers.txt``, and the sink ``task``
-assembles the ``TaskSpec`` from that file and the proposal. Validation returns a fixed summary and
+assembles the ``TaskSpec`` from that file and the proposal. ``SOURCE`` holds the same program as
+module text, as an author writing Python would return it. Validation returns a fixed summary and
 review accepts it, unless a test passes other functions. Reading top to bottom:
 
 1. the stage functions run on their own: triage accepts, the author returns the program, the
    build writes the draft;
 2. ``run_item`` records an event per stage, and a relaunch of the finished item changes no byte;
-3. a relaunch with another proposal or budget is refused, as is a program other than the authored one;
-4. a build failure costs a revision, and the failure after the last revision rejects the item;
-5. an unavailable model fails the item at validation, and a relaunch resumes there;
-6. a ``Modify`` decision sends the item back to the author in round 1 with the findings.
+   a retry after a failed save of the finished log writes it;
+3. an author returning source runs once, and the build loads the program from
+   ``authored/<k>/program.py``;
+4. a relaunch with another proposal, budget or model digest is refused, as is a program other than
+   the authored one, from the author or from ``program.py``;
+5. a build failure costs a revision, and the failure after the last revision rejects the item;
+6. a failed build host or a missing file fails the item at build without spending a revision, and
+   a relaunch resumes there, even after a killed process re-authored the item;
+7. an unavailable model fails the item at validation, and a relaunch resumes there;
+8. a ``Modify`` decision sends the item back to the author in round 1 with the findings.
 """
 
 import base64
+import inspect
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import pytest
 from pydantic import BaseModel
@@ -43,13 +51,20 @@ from verifyit.spec import NumericSpec
 from taskforge.llm.client import Completion, ModelUnavailable, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage20_triage.verdict import TriageDecision, accept
-from taskforge.stage30_author.author import Revision, RevisionKind, static_author
-from taskforge.stage30_author.program import RLEnvBuildProgram, rl_env_build_program, rl_env_build_sink, rl_env_build_step
-from taskforge.stage40_build.context import BuildFailure, RLEnvBuildContext
+from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
+from taskforge.stage30_author.loader import load_program_source
+from taskforge.stage30_author.program import (
+    RLEnvBuildProgram,
+    rl_env_build_program,
+    rl_env_build_sink,
+    rl_env_build_step,
+)
+from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build.run import DRAFT_DIR, TASK_FILE, TaskDraft, load_draft, run_build
 from taskforge.stage40_build.step_store import model_digest
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify
 from taskforge.stage_coordinator.coordinator import (
+    AUTHORED_DIR,
     DECISION_FILE,
     STORE_DIR,
     VALIDATION_FILE,
@@ -58,7 +73,7 @@ from taskforge.stage_coordinator.coordinator import (
     run_item,
 )
 from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore
-from taskforge.stage_coordinator.item_machine import EXIT, Stage, Terminal, derive_state
+from taskforge.stage_coordinator.item_machine import EXIT, ItemEvent, Stage, Terminal, derive_state
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 
 ITEM = "toy-0"
@@ -115,6 +130,37 @@ async def broken(context: RLEnvBuildContext, proposal: dict[str, str]) -> TaskSp
 
 PROGRAM = rl_env_build_program(numbers, sink=task)
 FAILING = rl_env_build_program(sink=broken)
+SOURCE_IMPORTS = """\
+import base64
+
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    ConversationInput,
+    EnvironmentRequirements,
+    InlineFile,
+    PlainText,
+    ResourceGroups,
+    Source,
+    TaskResource,
+    TaskSpec,
+    TextMessage,
+)
+from verifyit.spec import NumericSpec
+
+from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
+from taskforge.stage40_build.context import RLEnvBuildContext
+"""
+SOURCE = "\n\n".join(
+    [
+        SOURCE_IMPORTS,
+        inspect.getsource(numbers.fn),
+        inspect.getsource(task.fn),
+        "PROGRAM = rl_env_build_program(numbers, sink=task)\n",
+    ]
+)
+"""``PROGRAM`` as module text. The steps keep their text, so the loaded program has ``PROGRAM``'s digest."""
 
 
 async def validate(draft: TaskDraft) -> dict[str, int]:
@@ -129,7 +175,15 @@ def no_call(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("this stage does not run")
 
 
-STAGES = StageFunctions(triage=accept, author=static_author(PROGRAM), build=run_build, validate=validate, review=review)
+STAGES = StageFunctions(
+    triage=accept,
+    author=static_author(PROGRAM),
+    load_program=load_program_source,
+    build=run_build,
+    validate=validate,
+    review=review,
+)
+UNUSED_MODEL_DIGEST = model_digest(UnusedModel(), SAMPLING)
 
 
 class RecordingAuthor:
@@ -139,14 +193,58 @@ class RecordingAuthor:
         self.programs = list(programs)
         self.revisions: list[Revision | None] = []
 
-    def __call__(self, proposal: object, revision: Revision | None) -> RLEnvBuildProgram:
+    def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
-        return self.programs.pop(0) if len(self.programs) > 1 else self.programs[0]
+        return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
 
 
-def coordinator(root: Path, stages: StageFunctions = STAGES, budget: ItemBudget = BUDGET) -> StageCoordinator:
-    model = UnusedModel()
-    return StageCoordinator(stages, budget, root, JsonEventStore(root), model, SAMPLING, model_digest(model, SAMPLING))
+class SourceAuthor:
+    """Returns ``source`` with the program loaded from it, and counts its calls."""
+
+    def __init__(self, source: str = SOURCE) -> None:
+        self.source = source
+        self.calls = 0
+
+    def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+        self.calls += 1
+        return AuthoredProgram(load_program_source(self.source), self.source)
+
+
+HOST_FAILURE = BuildInfrastructureFailure("image_pull", "the sandbox image did not pull")
+
+
+class FailsOnce:
+    """A build function raising ``error`` on its first call and running ``run_build`` after."""
+
+    def __init__(self, error: Exception = HOST_FAILURE) -> None:
+        self.error = error
+        self.calls = 0
+
+    async def __call__(self, *args: Any) -> TaskDraft:
+        self.calls += 1
+        if self.calls == 1:
+            raise self.error
+        return await run_build(*args)
+
+
+class SaveFailsOnce(JsonEventStore):
+    """A JSON event store whose first save finds the storage unreachable."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.saves = 0
+
+    def save(self, item_id: str, events: tuple[ItemEvent, ...]) -> None:
+        self.saves += 1
+        if self.saves == 1:
+            raise OSError("the event store is unreachable")
+        super().save(item_id, events)
+
+
+def coordinator(
+    root: Path, stages: StageFunctions = STAGES, budget: ItemBudget = BUDGET, digest: str = UNUSED_MODEL_DIGEST
+) -> StageCoordinator:
+    return StageCoordinator(stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, digest)
 
 
 def exits(log: InMemoryEventLog) -> list[tuple[str, str | None]]:
@@ -172,7 +270,7 @@ ACCEPTED_EXITS = [
 async def test_the_stage_functions_carry_the_proposal_to_an_accepted_draft_when_called_directly(tmp_path):
     # 1. Each stage function runs without a coordinator.
     assert accept(PROPOSAL) is TriageDecision.ACCEPT
-    program = static_author(PROGRAM)(PROPOSAL, None)
+    program = static_author(PROGRAM)(PROPOSAL, None).program
     assert (program.order, program.sink.name) == (("numbers", "task"), "task")
     model = UnusedModel()
     draft = await run_build(
@@ -191,37 +289,74 @@ async def test_run_item_records_an_event_per_stage_and_a_relaunch_changes_nothin
     assert exits(log) == ACCEPTED_EXITS
     assert JsonEventStore(tmp_path).load(ITEM) == log.events()
     round_dir = tmp_path / "items" / ITEM / "rounds" / "0"
-    for name in ("program.json", f"{DRAFT_DIR}/{TASK_FILE}", VALIDATION_FILE, DECISION_FILE):
+    for name in (f"{AUTHORED_DIR}/0/program.json", f"{DRAFT_DIR}/{TASK_FILE}", VALIDATION_FILE, DECISION_FILE):
         assert (round_dir / name).is_file(), name
     assert (tmp_path / STORE_DIR / "items" / ITEM / "steps" / "task").is_dir()
 
     before = tree_bytes(tmp_path)
-    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call)
+    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call)
     relaunch = await run_item(coordinator(tmp_path, untouched), ITEM, PROPOSAL, InMemoryEventLog())
     assert relaunch is Terminal.ACCEPTED
     assert tree_bytes(tmp_path) == before
 
 
+async def test_a_retry_after_a_failed_save_of_a_finished_item_writes_its_events(tmp_path):
+    # 2. The finished log survives in the caller's log, and the retry saves it without running a stage.
+    store = SaveFailsOnce(tmp_path)
+    log = InMemoryEventLog()
+    with pytest.raises(OSError, match="unreachable"):
+        await run_item(replace(coordinator(tmp_path), event_store=store), ITEM, PROPOSAL, log)
+    assert store.load(ITEM) is None
+
+    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call)
+    retried = replace(coordinator(tmp_path, untouched), event_store=store)
+    assert await run_item(retried, ITEM, PROPOSAL, log) is Terminal.ACCEPTED
+    assert store.load(ITEM) == log.events()
+    assert exits(log) == ACCEPTED_EXITS
+
+
+async def test_an_author_returning_source_runs_once_and_the_build_loads_its_program_file(tmp_path):
+    # 3. The author stage writes the source to authored/0/program.py, and the build loads the program from it.
+    author = SourceAuthor()
+    loaded: list[str] = []
+
+    def load_program(source: str) -> RLEnvBuildProgram:
+        loaded.append(source)
+        return load_program_source(source)
+
+    log = InMemoryEventLog()
+    stages = replace(STAGES, author=author, load_program=load_program)
+    assert await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, log) is Terminal.ACCEPTED
+
+    assert exits(log) == ACCEPTED_EXITS
+    assert (author.calls, loaded) == (1, [SOURCE])
+    assert (tmp_path / "items" / ITEM / "rounds" / "0" / AUTHORED_DIR / "0" / PROGRAM_FILE).read_text() == SOURCE
+    assert log.events()[2].digest == PROGRAM.digest
+
+
 @pytest.mark.parametrize(
-    ("proposal", "budget", "refusal"),
+    ("proposal", "budget", "digest", "refusal"),
     [
-        ({**PROPOSAL, "task": "Add the two numbers."}, BUDGET, "opened for proposal"),
-        (PROPOSAL, replace(BUDGET, max_build_revisions=2), "opened under budget"),
+        ({**PROPOSAL, "task": "Add the two numbers."}, BUDGET, UNUSED_MODEL_DIGEST, "opened for proposal"),
+        (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, "opened under budget"),
+        (PROPOSAL, BUDGET, "another-model", "opened with model digest"),
     ],
-    ids=["proposal", "budget"],
+    ids=["proposal", "budget", "model digest"],
 )
-async def test_a_relaunch_with_another_proposal_or_budget_is_refused(tmp_path, proposal, budget, refusal):
-    # 3. The OPENED event holds the digests of the proposal and the budget.
+async def test_a_relaunch_with_another_proposal_budget_or_model_digest_is_refused(
+    tmp_path, proposal, budget, digest, refusal
+):
+    # 4. The OPENED event holds the digests of the proposal, the budget and the model.
     await run_item(coordinator(tmp_path), ITEM, PROPOSAL, InMemoryEventLog())
     before = tree_bytes(tmp_path)
 
-    with pytest.raises(ValueError, match=refusal):
-        await run_item(coordinator(tmp_path, budget=budget), ITEM, proposal, InMemoryEventLog())
+    with pytest.raises(ValueError, match=f"{ITEM} was {refusal}"):
+        await run_item(coordinator(tmp_path, budget=budget, digest=digest), ITEM, proposal, InMemoryEventLog())
     assert tree_bytes(tmp_path) == before
 
 
 async def test_a_program_other_than_the_authored_one_fails_the_item_at_build(tmp_path):
-    # 3. The build asks the author again and refuses a program with another digest.
+    # 4. Without source, the build asks the author again and refuses a program with another digest.
     stages = replace(STAGES, author=RecordingAuthor(PROGRAM, FAILING))
     with pytest.raises(ValueError, match="now returns program"):
         await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, InMemoryEventLog())
@@ -230,8 +365,22 @@ async def test_a_program_other_than_the_authored_one_fails_the_item_at_build(tmp
     assert (state.stage, state.terminal) == (Stage.BUILD, Terminal.FAILED)
 
 
+async def test_a_program_file_changed_on_disk_fails_the_item_at_build(tmp_path):
+    # 4. With source, the build refuses a program.py holding another program than the authored one.
+    stages = replace(STAGES, author=SourceAuthor(), build=FailsOnce())
+    with pytest.raises(BuildInfrastructureFailure):
+        await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, InMemoryEventLog())
+    program_file = tmp_path / "items" / ITEM / "rounds" / "0" / AUTHORED_DIR / "0" / PROGRAM_FILE
+    program_file.write_text(SOURCE.replace("6 7", "6 8"))
+
+    with pytest.raises(ValueError, match="holds program"):
+        await run_item(coordinator(tmp_path, replace(stages, author=no_call)), ITEM, PROPOSAL, InMemoryEventLog())
+    state = derive_state(JsonEventStore(tmp_path).load(ITEM) or ())
+    assert (state.stage, state.terminal) == (Stage.BUILD, Terminal.FAILED)
+
+
 async def test_a_build_failure_costs_a_revision_and_the_next_one_rejects_the_item(tmp_path):
-    # 4. With one revision in the budget, the second build failure closes the item on its budget.
+    # 5. With one revision in the budget, the second build failure closes the item on its budget.
     author = RecordingAuthor(FAILING)
     log = InMemoryEventLog()
     terminal = await run_item(coordinator(tmp_path, replace(STAGES, author=author)), ITEM, PROPOSAL, log)
@@ -253,6 +402,49 @@ async def test_a_build_failure_costs_a_revision_and_the_next_one_rejects_the_ite
     assert revision is not None and "the numbers do not multiply to the answer" in revision.detail
 
 
+@pytest.mark.parametrize(
+    "error",
+    [HOST_FAILURE, FileNotFoundError("blobs/ab/abcdef is missing")],
+    ids=["build host", "missing file"],
+)
+async def test_a_failure_outside_the_program_fails_the_item_at_build_and_a_relaunch_resumes_there(tmp_path, error):
+    # 6. BuildInfrastructureFailure or an OSError saves the item as failed in place with its revisions unspent.
+    stages = replace(STAGES, author=SourceAuthor(), build=FailsOnce(error))
+    with pytest.raises(type(error), match=str(error)):
+        await run_item(coordinator(tmp_path, stages), ITEM, PROPOSAL, InMemoryEventLog())
+    state = derive_state(JsonEventStore(tmp_path).load(ITEM) or ())
+    assert (state.stage, state.terminal, state.build_revisions) == (Stage.BUILD, Terminal.FAILED, 0)
+
+    log = InMemoryEventLog()
+    resumed = replace(stages, author=no_call)
+    assert await run_item(coordinator(tmp_path, resumed), ITEM, PROPOSAL, log) is Terminal.ACCEPTED
+    assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "failed"), *ACCEPTED_EXITS[3:]]
+
+
+async def fails_in_the_program(*args: Any) -> TaskDraft:
+    raise BuildFailure("the numbers do not multiply to the answer", "task")
+
+
+async def test_a_relaunch_after_a_killed_re_author_builds_the_program_its_authored_event_records(tmp_path):
+    # 6. A re-author killed before the save leaves authored/1/, and the relaunch loads authored/0/.
+    first = replace(STAGES, author=SourceAuthor(), build=FailsOnce())
+    with pytest.raises(BuildInfrastructureFailure):
+        await run_item(coordinator(tmp_path, first), ITEM, PROPOSAL, InMemoryEventLog())
+
+    other = SOURCE.replace("6 7", "6 8")
+    killed = coordinator(tmp_path, replace(STAGES, author=SourceAuthor(other), build=fails_in_the_program))
+    with pytest.raises(OSError, match="unreachable"):
+        await run_item(replace(killed, event_store=SaveFailsOnce(tmp_path)), ITEM, PROPOSAL, InMemoryEventLog())
+    authored = tmp_path / "items" / ITEM / "rounds" / "0" / AUTHORED_DIR
+    assert (authored / "1" / PROGRAM_FILE).read_text() == other
+
+    log = InMemoryEventLog()
+    resumed = replace(STAGES, author=no_call)
+    assert await run_item(coordinator(tmp_path, resumed), ITEM, PROPOSAL, log) is Terminal.ACCEPTED
+    assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "failed"), *ACCEPTED_EXITS[3:]]
+    assert (authored / "0" / PROGRAM_FILE).read_text() == SOURCE
+
+
 class UnavailableOnce:
     """A validate function whose first call finds the model unavailable."""
 
@@ -267,7 +459,7 @@ class UnavailableOnce:
 
 
 async def test_an_unavailable_model_fails_the_item_at_validation_and_a_relaunch_resumes_there(tmp_path):
-    # 5. ModelUnavailable saves the item as failed in place, and the next run_item re-enters validation.
+    # 7. ModelUnavailable saves the item as failed in place, and the next run_item re-enters validation.
     validate_once = UnavailableOnce()
     with pytest.raises(ModelUnavailable):
         await run_item(
@@ -283,7 +475,7 @@ async def test_an_unavailable_model_fails_the_item_at_validation_and_a_relaunch_
 
 
 async def test_a_modify_decision_re_authors_the_item_in_round_one_with_the_findings(tmp_path):
-    # 6. The author of the next round receives review's findings.
+    # 8. The author of the next round receives review's findings.
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
     stages = replace(STAGES, author=author, review=lambda summary: decisions.pop(0))

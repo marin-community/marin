@@ -63,7 +63,7 @@ TRIAGE_REJECTED = "triage rejected the proposal"
 
 class EventKind(StrEnum):
     OPENED = "opened"
-    """digest: the proposal's. attrs: budget_digest."""
+    """digest: the proposal's. attrs: budget_digest, model_digest (the coordinator's, part of every step key)."""
     TRIAGED = "triaged"
     """digest: the proposal's. attrs: exit."""
     AUTHORED = "authored"
@@ -227,8 +227,8 @@ class ItemState:
         proposal_digest: The digest of the opened proposal.
         program_digest: The digest of the program authored last.
         task_digest: The digest of this round's built task, or ``None`` before the build.
-        revision: The kind of revision the next author call answers. A build asks the author again
-            with it, so only ``BUILT`` clears it.
+        revision: The kind of revision the next author call answers. A build of a program without
+            source asks the author again with it, so only ``BUILT`` clears it.
         build_revisions: The build failures so far.
         retries: The review ``Retry`` decisions since the item opened or was last abandoned.
         closing: The ``TERMINAL`` event due, while the stage is ``DONE``.

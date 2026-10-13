@@ -4,9 +4,11 @@
 """Authors of build programs, the revisions they receive, and the program manifest.
 
 A caller asks an author for a program in round 0 with the proposal and ``None``. In each later
-round the caller passes the ``Revision`` describing what went wrong in the previous one, and the
-author returns the ``RLEnvBuildProgram`` to build next. ``static_author`` turns a program written
-by hand into an author.
+round the caller passes the ``Revision`` describing what went wrong in the previous one. The
+author returns an ``AuthoredProgram``: the ``RLEnvBuildProgram`` to build next, with the Python
+source it loaded the program from. The coordinator writes that source to ``PROGRAM_FILE`` in a
+directory of the author call, and the build stage loads the program back from the file.
+``static_author`` turns a program written by hand into an author returning no source.
 """
 
 from dataclasses import dataclass
@@ -16,6 +18,7 @@ from typing import Protocol
 from taskforge.stage30_author.program import RLEnvBuildProgram
 
 PROGRAM_MANIFEST_FILE = "program.json"
+PROGRAM_FILE = "program.py"
 
 
 class RevisionKind(StrEnum):
@@ -34,8 +37,20 @@ class Revision:
     detail: str
 
 
+@dataclass(frozen=True)
+class AuthoredProgram:
+    """A program from an author, with ``source`` holding the Python text defining it.
+
+    ``source`` is ``None`` for a program defined in Python, as ``static_author`` hands back,
+    because the coordinator then has no text to write.
+    """
+
+    program: RLEnvBuildProgram
+    source: str | None
+
+
 class Author(Protocol):
-    def __call__(self, proposal: object, revision: Revision | None) -> RLEnvBuildProgram: ...
+    def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram: ...
 
 
 def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
@@ -56,9 +71,10 @@ def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
 
 
 def static_author(program: RLEnvBuildProgram) -> Author:
-    """Return an author that hands back ``program`` for every proposal and revision."""
+    """Return an author that hands back ``program``, with no source, for every proposal and revision."""
+    authored = AuthoredProgram(program, None)
 
-    def author(proposal: object, revision: Revision | None) -> RLEnvBuildProgram:
-        return program
+    def author(proposal: object, revision: Revision | None) -> AuthoredProgram:
+        return authored
 
     return author

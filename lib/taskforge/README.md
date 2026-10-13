@@ -15,8 +15,10 @@ src/taskforge/
   llm/                the ModelClient protocol, the GLM client, sampling policy, structured output
   stage20_triage/     verdict.py: TriageDecision and `accept`
   stage30_author/     program.py: build steps and the DAG they form;
-                      author.py: Revision, the Author protocol, `static_author`, the program manifest
-  stage40_build/      context.py: RLEnvBuildContext, BuildFailure;
+                      author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
+                      the program manifest;
+                      loader.py: `load_program_source`, the plain loader of a program's source
+  stage40_build/      context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
                       step_store.py: step keys, memos, the memo store and `memoized`;
                       run.py: `run_program`, `run_build`, the draft and `ItemBuildProvenance`
   stage60_review/     decision.py: the Decision types (Accept, Reject, Retry, Modify)
@@ -102,33 +104,54 @@ From `done`, a `TERMINAL` event closes the item as accepted, rejected or abandon
 raising an exception closes it as failed. `ItemBudget` bounds the build failures an item may revise
 after and the review retries it may follow. The coordinator spends the budget when it records the
 event, choosing revise or reject, retry or abandon. A build error costs a revision, except
-`ModelUnavailable`, which fails the item at the build stage.
+`BuildInfrastructureFailure`, `ModelUnavailable` and `OSError`, which fail the item at the build
+stage.
 
-The `OPENED` event records the digests of the proposal and the budget. A relaunch of the item with
-another proposal or budget raises `ValueError`, and so does a build whose program has another
-digest than the `AUTHORED` event.
+The author returns an `AuthoredProgram`, the program with the Python source it came from. The
+coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
+item's build failures so far, and the build stage loads the program from that file with
+`StageFunctions.load_program`, so the author runs once per revision. Each author call writes a new
+`authored/<k>/`, so a relaunch resuming at build finds the program its `AUTHORED` event records
+even when a killed process re-authored the item after the last save. A program defined in
+Python, as `static_author` returns, has no source, and the build stage asks the author for it
+again.
+
+The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
+digest. A relaunch of the item with another proposal, budget or model digest raises `ValueError`,
+and so does a build whose program has another digest than the `AUTHORED` event.
 
 A run root holds:
 
 ```
 items/<item_id>/events.json
-items/<item_id>/rounds/<n>/program.json
-items/<item_id>/rounds/<n>/draft/                 task.json, provenance.json
-items/<item_id>/rounds/<n>/build-failures/<k>.txt
-items/<item_id>/rounds/<n>/validation.json        the summary returned by validate
-items/<item_id>/rounds/<n>/decision.json          the decision returned by review
-store/                                            the step store: blobs/, items/<item_id>/steps/
+items/<item_id>/rounds/<n>/
+    authored/<k>/program.json      the manifest of the program authored after k build failures
+    authored/<k>/program.py        its source, when the author returned it
+    draft/                         task.json, provenance.json
+    build-failures/<k>.txt         the traceback of the k-th build failure
+    validation.json                the summary returned by validate
+    decision.json                  the decision returned by review
+store/                             the step store: blobs/, items/<item_id>/steps/
 ```
 
 While an item runs, its events stay in the caller's `ItemEventLog`, and `run_item` writes
 `events.json` once, as the last file, when the item reaches a terminal. On the next `run_item` with
 an empty log, the coordinator loads `events.json` back into the log and folds it. An accepted or
-rejected item then returns its terminal without calling a stage or writing a byte. An abandoned
+rejected item then returns its terminal without calling a stage or writing a byte. A retry with
+the caller's own log after a failed save of `events.json` writes the file and returns. An abandoned
 item goes back to validation with its retries reset, and a failed one resumes at the stage that
-raised, with the step store serving the build steps already run. A process killed mid-item leaves
-`events.json` as the item's last terminal wrote it, or leaves none, so the next run starts again
-from that terminal or from triage, and the step store serves the build steps already run. A
-file-backed `ItemEventLog` saving each event on append is planned with the ledger.
+raised, with the step store serving the build steps already run. A build failure in the program's
+own code spends a revision and sends the item back to the author. The item fails in place instead,
+and the relaunch builds the same program again with its revisions unspent, when:
+
+- the build host fails (`BuildInfrastructureFailure`);
+- the model is unavailable (`ModelUnavailable`);
+- storage fails, or a blob or memo is missing (`OSError`).
+
+A process killed mid-item leaves `events.json` as the item's last terminal wrote it, or leaves
+none, so the next run starts again from that terminal or from triage, and the step store serves the
+build steps already run. A file-backed `ItemEventLog` saving each event on append is planned with
+the ledger.
 
 ## Testing
 

@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The context a build step receives, and the exception a step raises when the task cannot be built."""
+"""The context a build step receives, and the exceptions a build raises when it stops.
+
+A step raises ``BuildFailure`` when the task cannot be built as written. The code driving the build
+host raises ``BuildInfrastructureFailure`` when the host fails while it runs the program.
+"""
 
 from dataclasses import dataclass
 
@@ -20,6 +24,20 @@ class BuildFailure(Exception):
         super().__init__(message if step is None else f"{step}: {message}")
         self.message = message
         self.step = step
+
+
+class BuildInfrastructureFailure(Exception):
+    """The build host failed (a sandbox did not start, an image did not pull, a pod died), not the program.
+
+    Attributes:
+        cause: A short label for the failure, such as ``image_pull``.
+        message: The host's account of the failure.
+    """
+
+    def __init__(self, cause: str, message: str):
+        super().__init__(f"{cause}: {message}")
+        self.cause = cause
+        self.message = message
 
 
 @dataclass(frozen=True)

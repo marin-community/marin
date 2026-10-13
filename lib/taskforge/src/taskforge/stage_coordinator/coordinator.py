@@ -9,8 +9,8 @@ item to a terminal:
 
 1. When the caller's log is empty and the event store holds the item's events, ``run_item``
    restores the log from the store.
-2. It opens the item with an ``OPENED`` event, or checks the proposal and the budget against the
-   digests in the existing ``OPENED`` event.
+2. It opens the item with an ``OPENED`` event, or checks the proposal, the budget and the model
+   digest against the existing ``OPENED`` event.
 3. It folds the log with ``derive_state``. An accepted or rejected item returns its terminal here,
    before any stage runs or any file is written.
 4. It runs the stage in the state, appends the stage's event and folds the event in, until the
@@ -19,15 +19,25 @@ item to a terminal:
 
 Each stage runs through an adapter in this module. The adapter calls the caller's function, writes
 the round's files, and returns the stage's event. A build raising ``BuildFailure`` or any other
-error except ``ModelUnavailable`` costs a revision, recorded as ``BUILD_FAILED``. Any other
-exception from a stage, ``ModelUnavailable`` included, ends the run with ``TERMINAL`` failed. The
-coordinator then saves the log and re-raises, and the next ``run_item`` on the item resumes at that
-stage, with the step store serving the steps already built.
+error costs a revision, recorded as ``BUILD_FAILED``, unless the error is a
+``BuildInfrastructureFailure``, ``ModelUnavailable`` or ``OSError``. Those errors, like an
+exception from any other stage, end the run with ``TERMINAL`` failed. The coordinator then saves the log and
+re-raises, and the next ``run_item`` on the item resumes at that stage, with the step store serving
+the steps already built.
 
-The coordinator writes a program's manifest to the round directory but cannot read the program
-back from it, because a program is code. The build stage therefore asks the author again, with the
-revision kept in the state, and refuses a program whose digest differs from the ``AUTHORED`` event.
-An author has to return the same program for the same proposal and revision.
+The author stage writes each author call's files to ``authored/<k>/`` in the round directory,
+with ``k`` set to the item's build failures so far (``ItemState.build_revisions``):
+
+* ``program.json``, the program's manifest;
+* ``program.py``, the program's source, when the author returned one.
+
+The build stage reads ``k`` from the same state and loads the program from
+``authored/<k>/program.py`` with ``StageFunctions.load_program``. A later author call writes to a
+new directory, so a relaunch resuming at build after a process was killed mid-revision still finds
+the program its ``AUTHORED`` event records. For a program without source, as ``static_author``
+returns, the build stage asks the author again with the revision kept in the state. Such an author
+has to return the same program for the same proposal and revision. Either way, the build stage
+refuses a program whose digest differs from the ``AUTHORED`` event.
 
 The layout of the run root is in ``lib/taskforge/README.md``.
 """
@@ -45,8 +55,15 @@ from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage20_triage.verdict import TriageDecision
-from taskforge.stage30_author.author import PROGRAM_MANIFEST_FILE, Revision, RevisionKind, program_manifest
-from taskforge.stage40_build.context import BuildFailure
+from taskforge.stage30_author.author import (
+    PROGRAM_FILE,
+    PROGRAM_MANIFEST_FILE,
+    Revision,
+    RevisionKind,
+    program_manifest,
+)
+from taskforge.stage30_author.program import RLEnvBuildProgram
+from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure
 from taskforge.stage40_build.run import DRAFT_DIR, load_draft
 from taskforge.stage40_build.step_store import CacheStatus, check_item_id
 from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, Retry
@@ -72,10 +89,12 @@ from taskforge.stage_coordinator.stage_functions import StageFunctions
 
 STORE_DIR = "store"
 ROUNDS_DIR = "rounds"
+AUTHORED_DIR = "authored"
 FAILURES_DIR = "build-failures"
 VALIDATION_FILE = "validation.json"
 DECISION_FILE = "decision.json"
 BUDGET_DIGEST = "budget_digest"
+MODEL_DIGEST = "model_digest"
 TRIAGE_EXITS: Mapping[TriageDecision, Exit] = {TriageDecision.ACCEPT: Exit.ACCEPT, TriageDecision.REJECT: Exit.REJECT}
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build failure for the author's revision."""
@@ -108,6 +127,7 @@ class StageCoordinator:
         model: The model build steps call.
         sampling: The sampling policy build steps pass to ``model``.
         model_digest: The model part of every step key, usually ``step_store.model_digest(model, sampling)``.
+            ``OPENED`` records it.
         transitions: The next stage for each stage and exit, checked by ``check_transitions``.
     """
 
@@ -138,28 +158,40 @@ class _Item:
     def round_dir(self, round: int) -> Path:  # noqa: A002 - the item's round
         return self.directory / ROUNDS_DIR / str(round)
 
+    def authored_dir(self, state: ItemState) -> Path:
+        """The directory of the author call made at ``state``, keyed by the build failures so far."""
+        return self.round_dir(state.round) / AUTHORED_DIR / str(state.build_revisions)
+
 
 async def run_item(coordinator: StageCoordinator, item_id: str, proposal: object, log: ItemEventLog) -> Terminal:
     """Run ``proposal`` as item ``item_id`` to a terminal, resuming from ``log`` or the event store.
 
-    An item already ``ACCEPTED`` or ``REJECTED`` returns at once. An ``ABANDONED`` item re-enters
-    validation with its retries reset, and a ``FAILED`` one resumes at the stage that raised.
+    An item already ``ACCEPTED`` or ``REJECTED`` returns at once. When the event store lacks that
+    final log, as after a failed save and a retry with the same ``log``, ``run_item`` saves it first.
+    Otherwise it writes nothing. An ``ABANDONED`` item re-enters validation with its retries reset,
+    and a ``FAILED`` one resumes at the stage that raised.
+
+    A build failure spends one of the item's build revisions and sends the item back to the author.
+    When the build raises ``BuildInfrastructureFailure``, ``ModelUnavailable`` or an ``OSError``,
+    the item fails in place with its revisions unspent, and the next ``run_item`` builds the same
+    program again.
 
     Raises:
         ValueError: ``item_id`` is unsafe as a directory name, the item was opened for another
-            proposal or budget, the author returned a program other than the authored one, or the
-            log is inconsistent.
+            proposal, budget or model digest, the build found a program other than the authored
+            one, or the log is inconsistent.
         Exception: whatever a stage raised, after the item is saved as failed.
     """
     check_item_id(item_id)
-    if not log.events():
-        stored = coordinator.event_store.load(item_id)
-        if stored is not None:
-            log.restore(stored)
+    stored = coordinator.event_store.load(item_id)
+    if not log.events() and stored is not None:
+        log.restore(stored)
     item = _Item(coordinator, item_id, proposal, log)
     _open(item)
     state = derive_state(log.events(), coordinator.transitions)
     if state.terminal is not None and state.terminal in FINAL:
+        if stored != log.events():
+            coordinator.event_store.save(item_id, log.events())
         return state.terminal
     try:
         state = await _advance(item, state)
@@ -183,16 +215,22 @@ async def _advance(item: _Item, state: ItemState) -> ItemState:
 
 def _open(item: _Item) -> None:
     proposal_digest = digest(item.proposal)
-    budget_digest = digest(item.coordinator.budget)
+    attrs = {BUDGET_DIGEST: digest(item.coordinator.budget), MODEL_DIGEST: item.coordinator.model_digest}
     events = item.log.events()
     if not events:
-        item.log.append(ItemEvent(EventKind.OPENED, 0, proposal_digest, {BUDGET_DIGEST: budget_digest}))
+        item.log.append(ItemEvent(EventKind.OPENED, 0, proposal_digest, attrs))
         return
     first = events[0]
     if first.digest != proposal_digest:
         raise ValueError(f"{item.item_id} was opened for proposal {first.digest}, not {proposal_digest}")
-    if first.attrs[BUDGET_DIGEST] != budget_digest:
-        raise ValueError(f"{item.item_id} was opened under budget {first.attrs[BUDGET_DIGEST]}, not {budget_digest}")
+    if first.attrs[BUDGET_DIGEST] != attrs[BUDGET_DIGEST]:
+        raise ValueError(
+            f"{item.item_id} was opened under budget {first.attrs[BUDGET_DIGEST]}, not {attrs[BUDGET_DIGEST]}"
+        )
+    if first.attrs[MODEL_DIGEST] != attrs[MODEL_DIGEST]:
+        raise ValueError(
+            f"{item.item_id} was opened with model digest {first.attrs[MODEL_DIGEST]}, not {attrs[MODEL_DIGEST]}"
+        )
 
 
 def _write(path: Path, content: bytes) -> None:
@@ -222,21 +260,47 @@ def _revision(item: _Item, state: ItemState) -> Revision | None:
 
 
 async def _author(item: _Item, state: ItemState) -> ItemEvent:
-    """Ask the author for the round's program and write its manifest to ``program.json``."""
-    program = item.coordinator.stages.author(item.proposal, _revision(item, state))
-    _write(item.round_dir(state.round) / PROGRAM_MANIFEST_FILE, pretty_json(program_manifest(program)).encode())
+    """Ask the author for the program and write its manifest and any source to ``authored/<k>/``."""
+    authored = item.coordinator.stages.author(item.proposal, _revision(item, state))
+    directory = item.authored_dir(state)
+    _write(directory / PROGRAM_MANIFEST_FILE, pretty_json(program_manifest(authored.program)).encode())
+    if authored.source is not None:
+        _write(directory / PROGRAM_FILE, authored.source.encode())
     attrs: dict[str, str] = {EXIT: Exit.AUTHORED, "revision": state.revision}
-    return ItemEvent(EventKind.AUTHORED, state.round, program.digest, attrs)
+    return ItemEvent(EventKind.AUTHORED, state.round, authored.program.digest, attrs)
+
+
+def _authored_program(item: _Item, state: ItemState) -> RLEnvBuildProgram:
+    """Load the program from ``authored/<k>/program.py``, or ask the author again when it wrote no source.
+
+    Raises:
+        ValueError: the program's digest differs from the ``AUTHORED`` event's.
+    """
+    source = item.authored_dir(state) / PROGRAM_FILE
+    if source.exists():
+        program = item.coordinator.stages.load_program(source.read_text())
+        found = f"{source} holds program {program.digest}"
+    else:
+        program = item.coordinator.stages.author(item.proposal, _revision(item, state)).program
+        found = f"the author now returns program {program.digest}"
+    if program.digest != state.program_digest:
+        raise ValueError(f"{item.item_id}: {found}, not the authored {state.program_digest}")
+    return program
 
 
 async def _build(item: _Item, state: ItemState) -> ItemEvent:
-    """Build the authored program, recording a failure other than ``ModelUnavailable`` as a spent revision."""
+    """Build the authored program, spending a revision only on a failure the author can fix.
+
+    A ``BuildFailure`` or any other exception from the program's own code becomes ``BUILD_FAILED``,
+    and the next author call receives its traceback. These errors pass through unchanged, so
+    ``run_item`` fails the item in place and spends no revision:
+
+    * ``BuildInfrastructureFailure``, raised when the build host fails;
+    * ``ModelUnavailable``, raised when the model stays unreachable;
+    * ``OSError`` and its subclasses, raised on a storage fault or a missing blob or memo.
+    """
     coordinator = item.coordinator
-    program = coordinator.stages.author(item.proposal, _revision(item, state))
-    if program.digest != state.program_digest:
-        raise ValueError(
-            f"{item.item_id}: the author now returns program {program.digest}, not the authored {state.program_digest}"
-        )
+    program = _authored_program(item, state)
     try:
         draft = await coordinator.stages.build(
             program,
@@ -249,7 +313,7 @@ async def _build(item: _Item, state: ItemState) -> ItemEvent:
             coordinator.model_digest,
             state.round,
         )
-    except ModelUnavailable:
+    except (BuildInfrastructureFailure, ModelUnavailable, OSError):
         raise
     except Exception as error:
         failures = state.build_revisions + 1

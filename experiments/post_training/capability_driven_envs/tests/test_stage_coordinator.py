@@ -16,6 +16,7 @@ from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage20_triage.verdict import accept
 from taskforge.stage30_author.author import static_author
+from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build.context import RLEnvBuildContext
 from taskforge.stage40_build.run import DRAFT_DIR, TaskDraft, load_draft, run_build
@@ -65,7 +66,12 @@ def review(summary: object) -> Decision:
 async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_item_id(tmp_path):
     proposal = capability_idea_record(load_capability_ideas(example_catalog_path())[CAPABILITY])
     stages = StageFunctions(
-        triage=accept, author=static_author(rl_env_build_program(sink=task)), build=run_build, validate=validate, review=review
+        triage=accept,
+        author=static_author(rl_env_build_program(sink=task)),
+        load_program=load_program_source,
+        build=run_build,
+        validate=validate,
+        review=review,
     )
     model = UnusedModel()
     sampling = LLMPolicy()
