@@ -92,7 +92,7 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
         "lock_sha256": hashlib.sha256(environment.lock.read_bytes()).hexdigest() if environment.lock else None,
         "apt": sorted(environment.apt),
         "data": sorted(environment.data),
-        "dockerfile_sha256": _dockerfile_sha256(environment),
+        "dockerfile_sha256": _fragment_sha256(environment),
         "python": PYTHON_VERSION,
         "platform": PLATFORM,
         "base_image": BASE_IMAGE,
@@ -104,7 +104,7 @@ def environment_identity(environment: Environment) -> dict[str, Any]:
     return identity
 
 
-def _dockerfile_sha256(environment: Environment) -> str | None:
+def _fragment_sha256(environment: Environment) -> str | None:
     return hashlib.sha256(environment.dockerfile.read_bytes()).hexdigest() if environment.dockerfile else None
 
 
@@ -164,9 +164,7 @@ def compile_lock(requirements: tuple[str, ...], output: Path) -> None:
 def dockerfile(environment: Environment) -> str:
     """A Dockerfile that installs ``environment`` on the base image from a context holding its lock.
 
-    A Dockerfile fragment's lines follow the apt step and precede the lock sync, so its toolchain layers
-    stay cached across lock changes. The runtime packages arrive as named build contexts,
-    ``--build-context <name>=<directory>``.
+    The runtime packages arrive as named build contexts, ``--build-context <name>=<directory>``.
     """
     lines = [f"FROM {BASE_IMAGE}"]
     if environment.apt:
@@ -176,6 +174,7 @@ def dockerfile(environment: Environment) -> str:
             " && rm -rf /var/lib/apt/lists/*"
         )
     if environment.dockerfile is not None:
+        # Before the lock sync, so toolchain layers stay cached across lock changes.
         lines.append(environment.dockerfile.read_text().strip())
     lines.append(f"COPY {LOCK_FILE} /opt/task-curation/{LOCK_FILE}")
     lines.append(f"RUN uv pip sync --system --no-cache --require-hashes /opt/task-curation/{LOCK_FILE}")
@@ -307,7 +306,7 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
         data=list(environment.data),
         python=PYTHON_VERSION,
         base_image=BASE_IMAGE,
-        dockerfile_sha256=_dockerfile_sha256(environment),
+        dockerfile_sha256=_fragment_sha256(environment),
         image=image,
         tag=tag,
     )

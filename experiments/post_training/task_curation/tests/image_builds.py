@@ -74,7 +74,6 @@ def tracked_lock(root: Path) -> Path:
 
 
 def tracked_fragment(lock: Path) -> Path:
-    """A Dockerfile fragment tracked beside ``lock``."""
     fragment = lock.parent / "toolchain.Dockerfile"
     fragment.write_text(TOOLCHAIN_FRAGMENT)
     track_all(lock.parent)
