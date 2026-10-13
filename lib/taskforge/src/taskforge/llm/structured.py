@@ -3,10 +3,10 @@
 
 """Typed structured output through a JSON-schema ``response_format``, with a repair loop.
 
-``complete_structured`` sends the request with ``response_format(output_type)``, the pydantic
-model's JSON schema. vLLM decodes the reply under that schema, so its content is a single JSON
-object matching it. The loop validates the content with the pydantic model, running its validators
-too. For an invalid reply it sends a repair request, with the prior output as the assistant turn and
+``complete_structured`` sends the request with ``response_format(output_type)``, the JSON schema
+of the pydantic output type. vLLM decodes the reply under that schema, so its content is a single
+JSON object matching it. The loop validates the content against the output type, running its
+validators too. For an invalid reply it sends a repair request, with the prior output as the assistant turn and
 the validation error in a user turn, up to ``max_repairs`` times. A reply cut off by the output
 limit (``FinishReason.LENGTH``) counts as invalid even when it parses, since a cut reply can be a
 valid object missing optional fields.

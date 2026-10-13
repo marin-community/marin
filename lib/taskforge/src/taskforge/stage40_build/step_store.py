@@ -4,7 +4,7 @@
 """Memoized step outputs, keyed by the step's source, its inputs' content, and the model.
 
 The runner calls ``memoized`` for each step with the step's ``RLEnvBuildStepKey``. When the store
-holds a record under that key, ``memoized`` decodes the stored output and the step does not run.
+holds a memo under that key, ``memoized`` decodes the stored output and the step does not run.
 Otherwise ``memoized`` awaits the step and stores its output. The key covers the step's own
 source, the source of an output type defined in the step's module, the content of each input, and
 the model, so anything else a step relies on has to change with ``SDK_VERSION``. An output type
@@ -16,15 +16,18 @@ the value as an input, or bump ``SDK_VERSION`` for a library change.
 local path or an object-store URL. Under it the store keeps:
 
 * ``blobs/<sha256>``: each output as canonical JSON, written once and shared by all items;
-* ``items/<item_id>/steps/<name>/<key digest>.json``: the record of each key an item stored.
+* ``items/<item_id>/steps/<name>/<key digest>.json``: the memo of each key an item stored.
 
-The store writes the blob before the record, so every record points at a complete blob, and it
+A memo holds a step's stored output under one key. The ledger in a later PR calls its own rows
+entries.
+
+The store writes the blob before the memo, so every memo points at a complete blob, and it
 writes each file to a temporary sibling before renaming it into place. On an object store the
-rename is a copy and a delete, so a record costs three requests and appears whole or not at all;
+rename is a copy and a delete, so a memo costs three requests and appears whole or not at all;
 CI exercises a ``file://`` root, and ``tests/stage40_build/test_step_store_live.py`` (marker
 ``manual``) runs the same round trip against a bucket. A step's output has to come
 back intact from ``canonical_json`` followed by a pydantic ``TypeAdapter`` of its output type.
-Dataclasses, pydantic models, tuples, strings and numbers come back intact. Raw ``bytes`` come back
+Dataclasses, pydantic output types, tuples, strings and numbers come back intact. Raw ``bytes`` come back
 garbled, because canonical JSON encodes them as base64 and pydantic decodes a JSON string as UTF-8.
 """
 
@@ -95,13 +98,13 @@ class RLEnvBuildStepKey:
 
 
 @dataclass(frozen=True)
-class RLEnvBuildStepRecord:
-    """The entry ``RLEnvBuildStepStore.store`` writes for a step's output, and ``load`` reads back.
+class RLEnvBuildStepMemo:
+    """The stored memo of a step's output under a key, written by ``RLEnvBuildStepStore.store``.
 
-    The record repeats the key's fields except ``model_digest``. That digest, defined by
-    ``model_digest``, enters every key, and ``Provenance.model_digest`` keeps a copy for the build.
-    A build pairs each record with the ``CacheStatus`` it observed in an ``RLEnvBuildStepOutcome``,
-    defined in ``run.py``.
+    ``RLEnvBuildStepStore.load`` reads it back. The memo repeats the key's fields except
+    ``model_digest``. That digest, defined by ``model_digest``, enters every key, and
+    ``ItemBuildProvenance.model_digest`` keeps a copy for the build. A build pairs each memo with
+    the ``CacheStatus`` it observed in an ``RLEnvBuildStepOutcome``, defined in ``run.py``.
 
     Attributes:
         name: The step name.
@@ -125,16 +128,16 @@ class RLEnvBuildStepRecord:
 class RLEnvBuildStepStore:
     """Step outputs for the item ``item_id``, under ``root``.
 
-    Records are per item: ``load`` looks only under this item, so two items that compute the same
+    Memos are per item: ``load`` looks only under this item, so two items that compute the same
     key each run the step once, while the blob they write is shared. A hit therefore says that this
     item stored that key in an earlier build.
 
     A driver can also memoize a helper that a step body calls. It builds an ``RLEnvBuildStepKey``
     from the helper's source digest and its arguments' digests, then calls ``memoized`` with a name
     of the form ``<step>.<helper>``, the same call ``run_program`` makes for each step. The dot
-    keeps helper records apart from program steps, which appear in ``Provenance.steps``, when a
-    reader lists ``items/<item_id>/steps/``. A step receives no store, so a program written by a
-    model cannot memoize its own helpers.
+    keeps helper memos apart from program steps, which appear in ``ItemBuildProvenance.steps``,
+    when a reader lists ``items/<item_id>/steps/``. A step receives no store, so a program written by the
+    language model cannot memoize its own helpers.
     """
 
     def __init__(self, root: str, item_id: str):
@@ -142,32 +145,32 @@ class RLEnvBuildStepStore:
         self.root = StoragePath(root)
         self.item_id = item_id
 
-    def load[T](self, key: RLEnvBuildStepKey, name: str, output_type: type[T]) -> tuple[RLEnvBuildStepRecord, T] | None:
-        """Read the record stored for ``name`` under ``key`` and decode its blob as ``output_type``.
+    def load[T](self, key: RLEnvBuildStepKey, name: str, output_type: type[T]) -> tuple[RLEnvBuildStepMemo, T] | None:
+        """Read the memo stored for ``name`` under ``key`` and decode its blob as ``output_type``.
 
         Returns:
-            The record and the decoded output, or ``None`` when no record exists.
+            The memo and the decoded output, or ``None`` when no memo exists.
 
         Raises:
-            ValueError: the blob's content does not match the digest in the record.
+            ValueError: the blob's content does not match the digest in the memo.
         """
-        path = self._record_path(key, name)
+        path = self._memo_path(key, name)
         if not path.exists():
             return None
-        record = _RECORD.validate_json(path.read_bytes())
-        content = (self.root / "blobs" / record.output_digest).read_bytes()
-        if sha256_hex(content) != record.output_digest:
-            raise ValueError(f"Blob {record.output_digest} of step {name} does not match its digest")
-        return record, TypeAdapter(output_type).validate_json(content)
+        memo = _MEMO.validate_json(path.read_bytes())
+        content = (self.root / "blobs" / memo.output_digest).read_bytes()
+        if sha256_hex(content) != memo.output_digest:
+            raise ValueError(f"Blob {memo.output_digest} of step {name} does not match its digest")
+        return memo, TypeAdapter(output_type).validate_json(content)
 
-    def store(self, key: RLEnvBuildStepKey, name: str, output: object) -> RLEnvBuildStepRecord:
-        """Write ``output``'s blob unless it exists, then the record for ``name`` under ``key``."""
+    def store(self, key: RLEnvBuildStepKey, name: str, output: object) -> RLEnvBuildStepMemo:
+        """Write ``output``'s blob unless it exists, then the memo for ``name`` under ``key``."""
         content = canonical_json(output).encode()
         output_digest = sha256_hex(content)
         blob = self.root / "blobs" / output_digest
         if not blob.exists():
             _write(blob, content)
-        record = RLEnvBuildStepRecord(
+        memo = RLEnvBuildStepMemo(
             name=name,
             key=key.digest,
             inputs=dict(key.inputs),
@@ -176,10 +179,10 @@ class RLEnvBuildStepStore:
             sdk_version=key.sdk_version,
             source_digest=key.source_digest,
         )
-        _write(self._record_path(key, name), _RECORD.dump_json(record, indent=2))
-        return record
+        _write(self._memo_path(key, name), _MEMO.dump_json(memo, indent=2))
+        return memo
 
-    def _record_path(self, key: RLEnvBuildStepKey, name: str) -> StoragePath:
+    def _memo_path(self, key: RLEnvBuildStepKey, name: str) -> StoragePath:
         if not FILE_SAFE.fullmatch(name):
             raise ValueError(f"Step name {name!r} must match {FILE_SAFE.pattern}")
         return self.root / "items" / self.item_id / "steps" / name / f"{key.digest}.json"
@@ -191,21 +194,21 @@ async def memoized[T](
     key: RLEnvBuildStepKey,
     output_type: type[T],
     compute: Callable[[], Awaitable[T]],
-) -> tuple[CacheStatus, RLEnvBuildStepRecord, T]:
+) -> tuple[CacheStatus, RLEnvBuildStepMemo, T]:
     """Load ``name``'s output under ``key`` from ``store``, or compute and store it on a miss.
 
-    ``memoized`` calls ``store.load`` first. When a record exists, it returns ``HIT`` with the
-    record and the decoded output, leaving ``compute`` uncalled. Otherwise it awaits ``compute()``,
-    stores the result, and returns ``MISS`` with the new record and the result decoded from its
+    ``memoized`` calls ``store.load`` first. When a memo exists, it returns ``HIT`` with the
+    memo and the decoded output, leaving ``compute`` uncalled. Otherwise it awaits ``compute()``,
+    stores the result, and returns ``MISS`` with the new memo and the result decoded from its
     stored form, so a consumer receives the same value on a miss as on a later hit.
     """
     loaded = store.load(key, name, output_type)
     if loaded is not None:
-        record, output = loaded
-        return CacheStatus.HIT, record, output
+        memo, output = loaded
+        return CacheStatus.HIT, memo, output
     computed = await compute()
-    record = store.store(key, name, computed)
-    return CacheStatus.MISS, record, TypeAdapter(output_type).validate_json(canonical_json(computed))
+    memo = store.store(key, name, computed)
+    return CacheStatus.MISS, memo, TypeAdapter(output_type).validate_json(canonical_json(computed))
 
 
 def _write(path: StoragePath, content: bytes) -> None:
@@ -214,4 +217,4 @@ def _write(path: StoragePath, content: bytes) -> None:
         StoragePath(temp).write_bytes(content)
 
 
-_RECORD: TypeAdapter[RLEnvBuildStepRecord] = TypeAdapter(RLEnvBuildStepRecord)
+_MEMO: TypeAdapter[RLEnvBuildStepMemo] = TypeAdapter(RLEnvBuildStepMemo)

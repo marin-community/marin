@@ -5,8 +5,8 @@
 
 A caller asks an author for a program in round 0 with the proposal and ``None``. In each later
 round the caller passes the ``Revision`` describing what went wrong in the previous one, and the
-author returns the ``RLEnvBuildProgram`` to build next. ``adopt`` turns a program written by hand
-into an author.
+author returns the ``RLEnvBuildProgram`` to build next. ``static_author`` turns a program written
+by hand into an author.
 """
 
 from dataclasses import dataclass
@@ -39,23 +39,23 @@ class Author(Protocol):
 
 
 def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
-    """Lay out ``program`` as JSON for the item's round directory.
+    """Lay out ``program`` as the JSON manifest a caller writes beside the program's source, once per
+    author call: the digest, the sink, the run order, and each step's inputs and source digest.
 
-    The manifest lists the program digest, the sink, the run order, and each step's inputs and
-    source digest.
+    The ``"steps"`` mapping lists the sink after the other steps.
     """
     return {
         "digest": program.digest,
-        "sink": program.sink,
+        "sink": program.sink.name,
         "order": list(program.order),
         "steps": {
-            name: {"inputs": list(step.inputs), "source_digest": step.source_digest}
-            for name, step in program.steps.items()
+            step.name: {"inputs": list(step.inputs), "source_digest": step.source_digest}
+            for step in (*program.steps.values(), program.sink)
         },
     }
 
 
-def adopt(program: RLEnvBuildProgram) -> Author:
+def static_author(program: RLEnvBuildProgram) -> Author:
     """Return an author that hands back ``program`` for every proposal and revision."""
 
     def author(proposal: object, revision: Revision | None) -> RLEnvBuildProgram:

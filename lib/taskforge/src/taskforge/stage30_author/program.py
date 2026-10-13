@@ -1,19 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build steps and the DAG they form.
+"""Build steps, the sink, and the DAG they form.
 
 An author writes each step as ``async def name(context, ...) -> Output`` and decorates it with
 ``@rl_env_build_step``. The decorator reads the step's inputs off its signature, taking every
 parameter after the context in order. When the program runs, the step receives the build context
 first, then one keyword argument per input:
 
-* for an input named after another step, the output of that step;
-* for ``PROPOSAL_INPUT``, the proposal the caller passed to the runner.
+* for a parameter whose name is another step's name, that step's output;
+* for the parameter named ``proposal``, the proposal the caller passed to the runner.
 
-``rl_env_build_program`` checks the inputs, orders the steps so each one follows its inputs, and
-picks the sink, the single step no other step takes as an input. The sink's output becomes the
-program's output.
+The author writes the final step the same way, annotates it as returning a ``TaskSpec``, and
+decorates it with ``@rl_env_build_sink``. ``rl_env_build_program`` receives the steps and, as
+``sink``, this final step. It checks every input, orders the steps so each one follows its inputs,
+and runs the sink last. The sink's ``TaskSpec`` becomes the program's output.
 """
 
 import bisect
@@ -22,6 +23,8 @@ import typing
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from taskcompendium.models import TaskSpec
 
 from taskforge.content_hash import digest, sha256_hex
 
@@ -44,22 +47,57 @@ class RLEnvBuildStep:
     source_digest: str
 
 
+@dataclass(frozen=True)
+class RLEnvBuildSink:
+    """The decorated final step of a program, returning the ``TaskSpec``.
+
+    ``rl_env_build_sink`` fills the fields as ``rl_env_build_step`` does for a step, with
+    ``output_type`` always ``TaskSpec``.
+    """
+
+    name: str
+    fn: Callable[..., Awaitable[Any]]
+    inputs: tuple[str, ...]
+    output_type: Any
+    source_digest: str
+
+
 def rl_env_build_step(fn: Callable[..., Awaitable[Any]]) -> RLEnvBuildStep:
     """Turn ``async def name(context, *inputs) -> Output`` into the step ``name`` taking ``inputs``.
 
     The step's inputs are the function's parameters after the context, in declaration order. The
     decorator computes ``source_digest`` as the sha256 of the function's own source text, decorator
-    line included. A model-written program defines the models its steps return at module level,
-    above the steps. When the return annotation is a class defined in the step's own module, the
-    decorator appends that class's source to the step's source before hashing, so an edit to the
-    class reruns the step. For a builtin, a generic alias, or a class imported from another module
-    such as ``TaskSpec``, the decorator hashes the step's source alone, and a change to such a
-    library type comes with an ``SDK_VERSION`` bump.
+    line included. A program written by the language model defines the output types its steps
+    return at module level, above the steps. When the return annotation is a class defined in the
+    step's own module, the decorator appends that class's source to the step's source before
+    hashing, so an edit to the class reruns the step. For a builtin, a generic alias, or a class
+    imported from another module such as ``TaskSpec``, the decorator hashes the step's source
+    alone, and a change to such a library type comes with an ``SDK_VERSION`` bump.
 
     Raises:
         TypeError: the function is not ``async``, takes no context parameter, or lacks a return
             annotation.
     """
+    return _decorated(fn, RLEnvBuildStep)
+
+
+def rl_env_build_sink(fn: Callable[..., Awaitable[TaskSpec]]) -> RLEnvBuildSink:
+    """Turn ``async def name(context, *inputs) -> TaskSpec`` into the sink ``name``.
+
+    The decorator reads the inputs and computes the source digest as ``rl_env_build_step`` does,
+    then checks the return annotation.
+
+    Raises:
+        TypeError: ``rl_env_build_step`` would refuse the function, or its return annotation is not
+            ``taskcompendium.models.TaskSpec``.
+    """
+    sink = _decorated(fn, RLEnvBuildSink)
+    if sink.output_type is not TaskSpec:
+        raise TypeError(f"Sink {sink.name} must return TaskSpec, not {sink.output_type!r}")
+    return sink
+
+
+def _decorated[S: (RLEnvBuildStep, RLEnvBuildSink)](fn: Callable[..., Awaitable[Any]], kind: type[S]) -> S:
     name = fn.__name__
     if not inspect.iscoroutinefunction(fn):
         raise TypeError(f"Step {name} must be an async function")
@@ -69,7 +107,7 @@ def rl_env_build_step(fn: Callable[..., Awaitable[Any]]) -> RLEnvBuildStep:
     hints = typing.get_type_hints(fn)
     if "return" not in hints:
         raise TypeError(f"Step {name} needs a return annotation to decode its stored output")
-    return RLEnvBuildStep(
+    return kind(
         name=name,
         fn=fn,
         inputs=parameters[1:],
@@ -90,45 +128,57 @@ class RLEnvBuildProgram:
     """A checked step DAG.
 
     Attributes:
-        steps: Every step by name, in declaration order.
-        order: The run order, with each step after all of its inputs.
-        sink: The step whose output the program returns.
-        digest: The sha256 over each step's name, inputs and source digest.
+        steps: Every step except the sink, by name, in declaration order.
+        sink: The final step. The program returns its ``TaskSpec``.
+        order: The run order by name, with each step after all of its inputs and the sink last.
+        digest: The sha256 over the name, inputs and source digest of each step and of the sink.
     """
 
     steps: Mapping[str, RLEnvBuildStep]
+    sink: RLEnvBuildSink
     order: tuple[str, ...]
-    sink: str
     digest: str
 
 
-def rl_env_build_program(*steps: RLEnvBuildStep) -> RLEnvBuildProgram:
-    """Check ``steps`` and order each one after its inputs.
+def rl_env_build_program(*steps: RLEnvBuildStep, sink: RLEnvBuildSink) -> RLEnvBuildProgram:
+    """Check ``steps`` and ``sink``, and order each step after its inputs.
+
+    The sink's inputs resolve like a step's. Every step has to feed another step or the sink. A
+    step feeding neither would spend model calls on an output the build then discards, and in a
+    program written by the language model it usually means a step was left out of the wiring, so
+    the call refuses it.
 
     The order comes from Kahn's algorithm. When several steps have all their inputs ready, the one
-    declared first runs first, so the order depends only on the declarations.
+    declared first runs first, so the order depends only on the declarations. Because every step
+    leads to the sink, the sink comes last.
 
     Raises:
         ValueError: two steps share a name, a step uses the name ``PROPOSAL_INPUT``, a step declares
-            an input with no step of that name, the inputs form a cycle, or the program has zero
-            sinks or several.
+            an input with no step of that name, a step takes the sink as an input, a step feeds
+            neither another step nor the sink, or the inputs form a cycle.
     """
-    by_name: dict[str, RLEnvBuildStep] = {}
-    for step in steps:
-        if step.name == PROPOSAL_INPUT:
+    nodes = (*steps, sink)
+    by_name: dict[str, RLEnvBuildStep | RLEnvBuildSink] = {}
+    for node in nodes:
+        if node.name == PROPOSAL_INPUT:
             raise ValueError(f"A step may not be named {PROPOSAL_INPUT!r}: steps use it to receive the proposal")
-        if step.name in by_name:
-            raise ValueError(f"Two steps are named {step.name!r}")
-        by_name[step.name] = step
+        if node.name in by_name:
+            raise ValueError(f"Two steps are named {node.name!r}")
+        by_name[node.name] = node
     consumers: dict[str, list[str]] = {name: [] for name in by_name}
     waiting: dict[str, set[str]] = {}
-    for step in steps:
-        unknown = [name for name in step.inputs if name not in by_name and name != PROPOSAL_INPUT]
+    for node in nodes:
+        if sink.name in node.inputs:
+            raise ValueError(f"Step {node.name} takes the sink {sink.name} as an input")
+        unknown = [name for name in node.inputs if name not in by_name and name != PROPOSAL_INPUT]
         if unknown:
-            raise ValueError(f"Step {step.name} declares inputs {unknown} with no step of that name")
-        waiting[step.name] = {name for name in step.inputs if name != PROPOSAL_INPUT}
-        for name in waiting[step.name]:
-            consumers[name].append(step.name)
+            raise ValueError(f"Step {node.name} declares inputs {unknown} with no step of that name")
+        waiting[node.name] = {name for name in node.inputs if name != PROPOSAL_INPUT}
+        for name in waiting[node.name]:
+            consumers[name].append(node.name)
+    dead = [step.name for step in steps if not consumers[step.name]]
+    if dead:
+        raise ValueError(f"Steps {dead} feed neither another step nor the sink")
     position = {name: index for index, name in enumerate(by_name)}
     ready = [name for name in by_name if not waiting[name]]
     order: list[str] = []
@@ -141,8 +191,7 @@ def rl_env_build_program(*steps: RLEnvBuildStep) -> RLEnvBuildProgram:
                 bisect.insort(ready, consumer, key=position.__getitem__)
     if len(order) != len(by_name):
         raise ValueError(f"Steps {sorted(set(by_name) - set(order))} form a cycle")
-    sinks = [name for name in by_name if not consumers[name]]
-    if len(sinks) != 1:
-        raise ValueError(f"A program needs exactly one sink, a step no other step takes as an input; found {sinks}")
-    declarations = sorted((step.name, step.inputs, step.source_digest) for step in steps)
-    return RLEnvBuildProgram(steps=by_name, order=tuple(order), sink=sinks[0], digest=digest(declarations))
+    declarations = sorted((node.name, node.inputs, node.source_digest) for node in nodes)
+    return RLEnvBuildProgram(
+        steps={step.name: step for step in steps}, sink=sink, order=tuple(order), digest=digest(declarations)
+    )

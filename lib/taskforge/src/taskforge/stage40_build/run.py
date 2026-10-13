@@ -3,11 +3,11 @@
 
 """Run a build program to a ``TaskDraft``.
 
-``run_program`` walks the program's run order. For each step it builds the step's key and calls
-``memoized``, which loads a stored output when one exists and otherwise calls the step and stores
-what it returns.
-``run_build`` checks that the program's sink returns a ``TaskSpec``, runs the program for one
-proposal, and writes the task with its build record to ``<round_dir>/draft/``.
+``run_program`` walks the program's run order, ending with the sink. For each step it builds the
+step's key and calls ``memoized``, which loads a stored output when one exists and otherwise calls
+the step and stores what it returns.
+``run_build`` runs the program for one proposal and writes the sink's ``TaskSpec`` with the
+build's ``ItemBuildProvenance`` to ``<round_dir>/draft/``.
 """
 
 from dataclasses import dataclass
@@ -22,13 +22,13 @@ from taskcompendium.models import TaskSpec
 from taskforge.content_hash import digest
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
-from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram
+from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
 from taskforge.stage40_build.context import BuildFailure, RLEnvBuildContext
 from taskforge.stage40_build.step_store import (
     SDK_VERSION,
     CacheStatus,
     RLEnvBuildStepKey,
-    RLEnvBuildStepRecord,
+    RLEnvBuildStepMemo,
     RLEnvBuildStepStore,
     memoized,
 )
@@ -45,18 +45,19 @@ class RLEnvBuildStepOutcome:
     Attributes:
         status: ``HIT`` when this build loaded the step's stored output, ``MISS`` when it ran the
             step and stored the output.
-        record: The record the build loaded or wrote.
+        memo: The memo the build loaded or wrote.
     """
 
     status: CacheStatus
-    record: RLEnvBuildStepRecord
+    memo: RLEnvBuildStepMemo
 
 
 @dataclass(frozen=True)
-class Provenance:
-    """The inputs of a build, by digest, and what the build did with each step.
+class ItemBuildProvenance:
+    """The provenance of an attempt to build an item.
 
-    ``run_build`` writes it to ``provenance.json`` beside the task.
+    It holds the build's inputs by digest and the outcome of each step. ``run_build`` writes it to
+    ``provenance.json`` beside the task.
 
     Attributes:
         item_id: The item the caller built.
@@ -69,9 +70,9 @@ class Provenance:
             ``LLMPolicy`` hashed field by field. It enters every step's key, so a change of
             sampling reruns every step.
         round: The build round.
-        steps: One outcome per step in run order. Each pairs the stored record of the step's
-            output with this build's ``HIT`` or ``MISS`` status for it. A driver reads cache reuse
-            from this list.
+        steps: One outcome per step in run order, the sink last. Each pairs the stored memo of
+            the step's output with this build's ``HIT`` or ``MISS`` status for it. A driver reads
+            cache reuse from this list.
     """
 
     item_id: str
@@ -87,7 +88,7 @@ class Provenance:
 @dataclass(frozen=True)
 class TaskDraft:
     task: TaskSpec
-    provenance: Provenance
+    provenance: ItemBuildProvenance
 
 
 async def run_program(
@@ -96,14 +97,14 @@ async def run_program(
     proposal: object,
     store: RLEnvBuildStepStore,
     model_digest: str,
-) -> tuple[Any, tuple[RLEnvBuildStepOutcome, ...]]:
-    """Run ``program`` in order and return the sink's output with one outcome per step.
+) -> tuple[TaskSpec, tuple[RLEnvBuildStepOutcome, ...]]:
+    """Run ``program`` in order and return the sink's ``TaskSpec`` with one outcome per step.
 
     A step's key holds the output digest of each input, with ``content_hash.digest`` of
     ``proposal`` for ``PROPOSAL_INPUT``. The runner passes the key to ``memoized``. When ``store``
-    holds a record under it, the step is a ``HIT`` and the runner passes the decoded output on.
+    holds a memo under it, the step is a ``HIT`` and the runner passes the decoded output on.
     Otherwise ``memoized`` calls the step with ``context`` and its inputs and stores the output,
-    and the step is a ``MISS``.
+    and the step is a ``MISS``. The sink runs last, the same way.
 
     Raises:
         BuildFailure: a step raised one. When the step left ``step`` unset, the runner sets it to
@@ -113,22 +114,28 @@ async def run_program(
     outputs: dict[str, Any] = {PROPOSAL_INPUT: proposal}
     digests: dict[str, str] = {PROPOSAL_INPUT: digest(proposal)}
     outcomes: list[RLEnvBuildStepOutcome] = []
-    for name in program.order:
-        step = program.steps[name]
+
+    async def run[T](step: RLEnvBuildStep | RLEnvBuildSink, output_type: type[T]) -> T:
         key = RLEnvBuildStepKey(
             SDK_VERSION, step.source_digest, {dep: digests[dep] for dep in step.inputs}, model_digest
         )
         compute = partial(step.fn, context, **{dep: outputs[dep] for dep in step.inputs})
         try:
-            status, record, output = await memoized(store, name, key, step.output_type, compute)
+            status, memo, output = await memoized(store, step.name, key, output_type, compute)
         except BuildFailure as failure:
             if failure.step is not None:
                 raise
-            raise BuildFailure(failure.message, name) from failure
-        outputs[name] = output
-        digests[name] = record.output_digest
-        outcomes.append(RLEnvBuildStepOutcome(status, record))
-    return outputs[program.sink], tuple(outcomes)
+            raise BuildFailure(failure.message, step.name) from failure
+        outputs[step.name] = output
+        digests[step.name] = memo.output_digest
+        outcomes.append(RLEnvBuildStepOutcome(status, memo))
+        return output
+
+    for name in program.order[:-1]:
+        step = program.steps[name]
+        await run(step, step.output_type)
+    task = await run(program.sink, TaskSpec)
+    return task, tuple(outcomes)
 
 
 async def run_build(
@@ -145,7 +152,7 @@ async def run_build(
     """Run ``program`` for ``proposal`` and write the draft to ``<round_dir>/draft/``.
 
     Args:
-        program: The build program. Its sink returns the ``TaskSpec``.
+        program: The build program.
         proposal: A JSON-serialisable value, passed to steps taking ``PROPOSAL_INPUT``.
         item_id: The caller's id for the item; ``check_item_id`` must accept it.
         round_dir: The item's directory for this round.
@@ -153,21 +160,18 @@ async def run_build(
         model: The model steps call.
         sampling: The sampling policy steps pass to ``model``.
         model_digest: The model part of every step key, usually ``model_digest(model, sampling)``.
-        round: The build round, copied into ``Provenance``.
+        round: The build round, copied into ``ItemBuildProvenance``.
 
     Raises:
-        BuildFailure: the sink's return annotation is not ``TaskSpec``, or a step failed.
+        BuildFailure: a step failed.
         ValueError: ``check_item_id`` refused ``item_id``.
     """
-    sink = program.steps[program.sink]
-    if sink.output_type is not TaskSpec:
-        raise BuildFailure(f"the sink returns {sink.output_type!r}, not TaskSpec", program.sink)
     store = RLEnvBuildStepStore(store_root, item_id)
     context = RLEnvBuildContext(item_id=item_id, model=model, sampling=sampling)
     task, outcomes = await run_program(program, context, proposal, store, model_digest)
     draft = TaskDraft(
         task=task,
-        provenance=Provenance(
+        provenance=ItemBuildProvenance(
             item_id=item_id,
             proposal_digest=digest(proposal),
             program_digest=program.digest,
@@ -201,4 +205,4 @@ def load_draft(directory: Path) -> TaskDraft:
     )
 
 
-_PROVENANCE: TypeAdapter[Provenance] = TypeAdapter(Provenance)
+_PROVENANCE: TypeAdapter[ItemBuildProvenance] = TypeAdapter(ItemBuildProvenance)
