@@ -1,0 +1,35 @@
+{
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-curriculum-sc-s2-main-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 5562,
+      "bytes": 6733694160,
+      "manifest_sha256": "e3e7f48513ffe9d5cf9b9bf3f97105db7b91acc59fbac65249fc368f104e7cb5",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-sc-s2-main-a2-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s0-main-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 3514,
+      "bytes": 1467609658,
+      "manifest_sha256": "fb92976e8b27628f16e8001ede45028fe4dce988706b54c6e13f6e68d7a130bd",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s0-main-a2-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-curriculum-tis-s1-main-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "objects": 3458,
+      "bytes": 1272943873,
+      "manifest_sha256": "49a9a3f7084ca13cff3c14e61203c9058b4bd7a9eb5becf1eb94fd613838622d",
+      "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s1-main-a2-01a126ce/retained-runtime/promotion-manifest-01a126ce.json",
+      "basis": "Same-bucket conditional server copy with captured source ETag and verified destination length/provenance; ETags are not full weight SHA256s.",
+      "complete": true
+    }
+  ],
+  "scope": "Original preempted attempt0 groups/logs/debug promoted before retry allocation. Partial metrics/captures preserved separately; no final300 endpoint claimed."
+}
