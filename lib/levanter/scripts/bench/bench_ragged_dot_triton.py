@@ -13,7 +13,7 @@ local experts and an expert weight ``[G, K, N]``:
 Each case is timed for both Triton kernel families (``tile_map``, used on AMD Instinct and NVIDIA
 GPUs, and ``group_grid``, used on any other GPU), for XLA's ``ragged_dot_general`` (in ``--xla-dtype``,
 since hipBLASLt's grouped GEMM rejects bf16 on gfx950), and for a dense ``jnp.matmul`` with the
-same FLOPs. Tile-map blocks follow this device's entry in ``_TILE_MAP_CONFIGS``.
+same FLOPs. Tile-map blocks are the ones ``ragged_dot`` picks on this device.
 Each timing warms up for ``--warmup-seconds``, then reports the median of ``--repeats`` windows of
 back-to-back calls.
 
