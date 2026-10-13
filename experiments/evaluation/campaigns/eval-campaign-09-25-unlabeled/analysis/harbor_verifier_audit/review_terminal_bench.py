@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 from marin.evaluation.harbor.driver_config import HarborErrorTaxonomy
-from marin.evaluation.harbor.runner import _aggregate, _job_benchmark, _read_trial, _read_trials
+from marin.evaluation.harbor.runner import HarborTrial, _aggregate, _job_benchmark, _read_trial, _read_trials
 from marin.external_dependencies import HARBOR
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -25,6 +25,7 @@ BENCHMARK = "tb2-recovery"
 BENCHMARK_TRIALS = 267
 MINIMUM_COVERAGE = 0.9
 CELL = re.compile(r"([0-9.]+) \((s3://[^)]+)\)")
+NONZERO_EXIT_ERROR = "NonZeroAgentExitCodeError"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -32,6 +33,13 @@ class Aggregate:
     count: int
     mean: float
     sem: float
+
+
+def policy_trial(trial: HarborTrial, verifier_reward: float | None) -> HarborTrial:
+    """Apply the campaign's verifier requirement for nonzero agent exits."""
+    if trial.scored and trial.error and trial.error["type"] == NONZERO_EXIT_ERROR and verifier_reward is None:
+        return dataclasses.replace(trial, scored=False)
+    return trial
 
 
 def remove_rewards(original: Aggregate, rewards: list[float]) -> Aggregate:

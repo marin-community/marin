@@ -9,10 +9,12 @@ import fsspec
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor.driver_config import HarborErrorTaxonomy
+from marin.evaluation.harbor.runner import HarborTrial, _aggregate
+from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind
 from rigging.filesystem import factory
 
 from . import review_terminal_bench as reviewer
-from .review_terminal_bench import Aggregate, failed_verifier_setup, remove_rewards
+from .review_terminal_bench import Aggregate, failed_verifier_setup, policy_trial, remove_rewards
 
 
 def test_verifier_failures_are_removed_from_reward_mean_and_sem():
@@ -142,3 +144,29 @@ def test_review_refuses_completion_when_a_qemu_repetition_has_no_result(qemu_buc
     write_qemu_results(fs, uri, ["bootstrap", "bootstrap", "pending"])
     with pytest.raises(ValueError, match="all three QEMU repetitions"):
         reviewer.review("model", uri, {}, taxonomy)
+
+
+@pytest.mark.parametrize("reward,count,mean", [(None, 2, 0.5), (0.0, 3, 1 / 3), (1.0, 3, 2 / 3)])
+def test_nonzero_exit_without_verifier_is_excluded_instead_of_scored_zero(reward, count, mean):
+    benchmark = BenchmarkMetadataRef(
+        schema_version=1,
+        task="fixture",
+        primary_metric="reward",
+        metric_kind=MetricKind.BINARY,
+        metrics=(
+            BenchmarkMetricRef(name="reward", source_name="reward", kind=MetricKind.BINARY, higher_is_better=True),
+        ),
+        n_benchmark=3,
+        n_attempted=3,
+    )
+    exited = HarborTrial(
+        reward=reward or 0.0, scored=True, error={"type": "NonZeroAgentExitCodeError", "message": "exit 1"}
+    )
+    result = _aggregate(
+        [HarborTrial(1.0, True, None), HarborTrial(0.0, True, None), policy_trial(exited, reward)],
+        "fixture",
+        benchmark,
+        1,
+    )
+    assert result.scored_trials == count
+    assert result.mean_reward == pytest.approx(mean, abs=1e-12)
