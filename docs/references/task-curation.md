@@ -397,8 +397,9 @@ the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unle
 `--base-url` overrides it. `--mode sample` is a test run that
 converts and gates only each source's panel. `--mode full` runs each source on
 its own: it makes its own panel quality decision, converts every row of an
-accepted source, draws its control sample from all kept rows, and ends `gated`
-when its quality or verification gate rejects the source. Repeat
+accepted source, draws its control sample from all kept rows, and validates every
+kept task when the control sample does not permit skipping validation. A quality
+rejection ends the source `gated`; control failures reject individual tasks. Repeat
 `--source NAME` to run a subset.
 
 FULL runs append a post-curation assessment; SAMPLE can opt in with `--assess`.

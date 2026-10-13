@@ -5,6 +5,11 @@ reads a Postgres copy of the published [curation catalog](task-curation.md#run-c
 Curation owns source declarations, admission decisions, executed controls and
 sampled GLM judgments. Atlas displays those records and their task packets.
 
+The 95% control pass threshold permits curation to skip validation of unsampled
+tasks. Below that threshold, curation validates each task and retains individual
+passes. The 80% Good threshold below grades a sample of the retained output.
+Curation supplies the tasks and evidence; the grade does not change admission.
+
 ```mermaid
 flowchart LR
   C[Curated TaskSpec parquet and stage evidence] --> P[Zephyr: sample and prepare packets]
