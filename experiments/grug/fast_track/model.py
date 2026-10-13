@@ -693,6 +693,9 @@ class GrugModelConfig:
     moe_dynamic_position: int = 512
     moe_dynamic_frac: float = 0.5
     moe_relu_l1: float = 0.0
+    moe_relu_offset: float = 0.0
+    """RELU mode keeps the slots with ``logit + moe_relu_offset > 0`` (and the L1 acts on that shifted logit), so a
+    positive offset starts training with every routed slot on."""
     moe_eps: float = 0.0
     moe_null_layers: tuple[int, ...] = ()
     """Null routing on these layers: the router also scores ``num_experts`` zero-computation experts and each
@@ -2581,7 +2584,7 @@ class MoEMLP(eqx.Module):
             router_logits = router_logits + reshard(seed_bias, _partition_spec_of(router_logits))
         relu_layer = moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.RELU
         if relu_layer and self.cfg.moe_relu_l1:
-            router_logits = _relu_l1_grad(router_logits, self.cfg.moe_relu_l1)
+            router_logits = _relu_l1_grad(router_logits, self.cfg.moe_relu_l1, self.cfg.moe_relu_offset)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         k = self.cfg.num_experts_per_token
         banks = _expert_banks(self.cfg)
@@ -2631,7 +2634,7 @@ class MoEMLP(eqx.Module):
         if moe_k_keep is not None:
             eps_layer = moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.EPS
             if relu_layer:
-                keep = unbiased_topk > 0
+                keep = unbiased_topk + self.cfg.moe_relu_offset > 0
             elif moe_dynamic_layer and self.cfg.moe_dynamic == MoeDynamicK.THRESHOLD:
                 flat = reshard(jax.lax.stop_gradient(unbiased_topk), P(None, None))
                 keep = unbiased_topk >= jnp.quantile(flat, 1.0 - self.cfg.moe_dynamic_frac)
@@ -4461,17 +4464,17 @@ def _moe_k_keep(
     return jnp.where(high, k_high, k_low).astype(jnp.int32)
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
-def _relu_l1_grad(logits: jax.Array, coef: float) -> jax.Array:
-    """Identity whose backward adds the gradient of ``coef * mean_t sum_e relu(logits)``."""
+@functools.partial(jax.custom_vjp, nondiff_argnums=(1, 2))
+def _relu_l1_grad(logits: jax.Array, coef: float, offset: float) -> jax.Array:
+    """Identity whose backward adds the gradient of ``coef * mean_t sum_e relu(logits + offset)``."""
     return logits
 
 
-def _relu_l1_grad_fwd(logits, coef):
-    return logits, logits > 0
+def _relu_l1_grad_fwd(logits, coef, offset):
+    return logits, logits + offset > 0
 
 
-def _relu_l1_grad_bwd(coef, positive, g):
+def _relu_l1_grad_bwd(coef, offset, positive, g):
     return (g + (coef / positive.shape[0]) * positive.astype(g.dtype),)
 
 
