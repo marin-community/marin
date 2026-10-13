@@ -35,7 +35,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutContractError
@@ -94,6 +94,10 @@ class ScriptedModel:
     turns: tuple[dict[str, Any], ...]
     context_assistant_turns: int
     tokenize: Tokenize
+
+    def for_step(self, step: str) -> Self:
+        """This model: a scripted turn makes no server call, so the attempt's step changes nothing."""
+        return self
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         served = sum(message["role"] == "assistant" for message in request.messages) - self.context_assistant_turns

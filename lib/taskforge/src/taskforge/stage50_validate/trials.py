@@ -13,7 +13,10 @@ machine shows in summaries; it is ``None`` when the engine kept no rollout.
 A trial is attempted again while its outcome is ``Ungraded`` with a retryable cause, up to
 ``max_retries`` times, waiting ``plan.retry_backoff`` between attempts. Attempts are numbered from
 ``TrialPlan.first_attempt``: a trial re-entered after earlier attempts passes the count already on
-disk, so no attempt file is overwritten and each ledger step stays unique.
+disk, so no attempt file is overwritten and each ledger step stays unique. Each attempt runs on
+its own model, ``model.for_step(<kind>/<trial>/<attempt>)``: a ``GlmRolloutModel`` records its
+``LLM_CALL`` spans under the attempt's step and routes on it, so the k trials of an item do not
+share one prefix-cache key.
 
 A sampled rollout breaks the exact-token contract when the model samples a token sequence the
 server does not reproduce when it re-renders the conversation (``llm.rollout_model``). That is
@@ -59,7 +62,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
@@ -77,6 +80,13 @@ from taskforge.stage50_validate.classify import trial_outcome
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
 
 type RolloutModel = Callable[[ModelRequest], Awaitable[ModelTurn]]
+
+
+class TrialModel(Protocol):
+    """A RolloutEngine model that each attempt binds to its ledger step, as ``GlmRolloutModel`` is."""
+
+    def for_step(self, step: str) -> RolloutModel: ...
+
 
 ATTEMPT_PREFIX = "attempt-"
 """Each attempt file is ``<evidence_dir>/<kind>/<trial>/attempt-<n>.json``."""
@@ -215,7 +225,7 @@ class TrialPlan:
 
 
 async def run_trials(
-    lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: RolloutModel
+    lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: TrialModel
 ) -> list[Outcome]:
     """Run ``plan.k`` trials of ``lowered`` under ``plan.deadlines`` and ``settings`` concurrently;
     return one final outcome per trial, in order."""
@@ -225,7 +235,7 @@ async def run_trials(
 
 
 async def run_trial(
-    lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: RolloutModel, trial: str
+    lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: TrialModel, trial: str
 ) -> Outcome:
     """Run one trial of ``lowered`` under ``plan.deadlines`` and ``settings``, attempting it again
     after a backoff while it fails for a retryable cause or, within ``plan.token_contract_retries``,
@@ -237,11 +247,11 @@ async def run_trial(
     refusals = task_refusals(lowered, settings.capabilities)
     if refusals:
         return _refuse(lowered, plan, trial, Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None, None))
-    engine = settings.engine(model)
     backoff = copy.copy(plan.retry_backoff)
     retries = contract_retries = 0
     attempt = plan.first_attempt
     while True:
+        engine = settings.engine(model.for_step(attempt_step(plan, trial, attempt)))
         outcome = await _attempt(engine, lowered, plan, trial, attempt)
         if isinstance(outcome, Graded):
             return outcome
@@ -281,6 +291,11 @@ def _refuse(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, outcome: Ungr
     return outcome
 
 
+def attempt_step(plan: TrialPlan, trial: str, attempt: int) -> str:
+    """The ledger step of one attempt, ``<kind>/<trial>/<attempt>``."""
+    return f"{plan.kind}/{trial}/{attempt}"
+
+
 @contextmanager
 def attempt_span(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, attempt: int) -> Iterator[SpanFields]:
     """The ``TRIAL`` ledger span of one attempt: step ``<kind>/<trial>/<attempt>``, ``input_hash`` the task digest."""
@@ -289,7 +304,7 @@ def attempt_span(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, attempt:
         EntryKind.TRIAL,
         item_id=plan.item_id,
         round=plan.round,
-        step=f"{plan.kind}/{trial}/{attempt}",
+        step=attempt_step(plan, trial, attempt),
         input_hash=task_digest(lowered),
     ) as fields:
         yield fields

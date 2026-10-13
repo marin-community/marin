@@ -3,7 +3,8 @@
 
 """GlmRolloutModel against a scripted GLM server through RolloutEngine, and live on GLM-5.3.
 
-The live check writes ``<evidence_root>/validate/rollout_model/<utc>.json``: every rollout
+The live checks run on both transports and write
+``<evidence_root>/validate/rollout_model/[reasoning-]<transport>-<utc>.json``: every rollout
 (messages, token ids, logprobs, per-turn usage) plus, per turn, whether the next prompt preserved
 the served prefix and how many prompt tokens the server reported cached. ``evidence_root`` is the
 fixture in ``tests/conftest.py``.
@@ -66,6 +67,8 @@ PUZZLE_2 = (
     "from left to right and sum to 20.\n"
 )
 PUZZLE_1_ANSWER = "5 11 17 41 101 107 191 227 311 347 461 641 821 857 881".split()
+LONG_REASONING_TOKENS = 1000
+TRANSPORTS = pytest.mark.parametrize("transport", list(RolloutTransport))
 
 
 @pytest.fixture
@@ -344,10 +347,16 @@ def turn_record(rollout: RolloutData) -> list[dict[str, Any]]:
 
 
 def write_live_evidence(
-    evidence_dir: Path, name: str, purpose: str, wall_time: float, rollouts: list[RolloutData]
+    evidence_dir: Path,
+    name: str,
+    purpose: str,
+    transport: RolloutTransport,
+    wall_time: float,
+    rollouts: list[RolloutData],
 ) -> Path:
     record = {
         "purpose": purpose,
+        "transport": str(transport),
         "policy": repr(POLICY),
         "wall_time": wall_time,
         "turns": [turn_record(rollout) for rollout in rollouts],
@@ -355,37 +364,50 @@ def write_live_evidence(
         "rollouts": [asdict(rollout) for rollout in rollouts],
     }
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    path = evidence_dir / f"{name}{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+    path = evidence_dir / f"{name}{transport}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps(record, indent=1, default=str))
     return path
 
 
 async def live_rollouts(
-    glm_source, live_provider, task: TaskSpec, count: int, max_turns: int
+    glm_source, live_provider, task: TaskSpec, transport: RolloutTransport, count: int, max_turns: int
 ) -> tuple[list[RolloutData], float]:
-    """``count`` rollouts of ``task``; also asserts that the ledger holds one ``LLM_CALL`` per turn."""
+    """``count`` concurrent rollouts of ``task`` on ``transport``, each under its own step, as trials run.
+
+    Also asserts that the ledger holds one ``LLM_CALL`` per turn, plus on the token route one
+    ``purpose=render`` span per turn after the first.
+    """
     ledger = ListLedger()
     started = time.monotonic()
     async with GlmClient(glm_source, live_provider) as client:
-        engine = rollout_engine(GlmRolloutModel(client, POLICY, RolloutTransport.CHAT_COMPLETIONS, call_ledger(ledger)))
+        model = GlmRolloutModel(client, POLICY, transport, call_ledger(ledger))
         lowered = shellsim(task, max_turns)
-        rollouts = await asyncio.gather(*(engine.run(lowered) for _ in range(count)))
+        rollouts = await asyncio.gather(
+            *(rollout_engine(model.for_step(f"solver/{index}/0")).run(lowered) for index in range(count))
+        )
     calls = [entry for entry in ledger.entries if entry.kind == EntryKind.LLM_CALL]
-    assert len(calls) == sum(len(rollout.steps) for rollout in rollouts)
+    turns = [entry for entry in calls if entry.attrs.get("purpose") != "render"]
+    steps = sum(len(rollout.steps) for rollout in rollouts)
+    assert len(turns) == steps
+    assert len(calls) - len(turns) == (steps - count if transport is RolloutTransport.TOKEN_ROUTE else 0)
     assert all(entry.cause is None and entry.tokens_out for entry in calls)
     return list(rollouts), time.monotonic() - started
 
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(1800)
-async def test_live_multi_turn_shellsim_rollout_preserves_served_prefix(glm_source, live_provider, evidence_dir):
-    rollouts, wall_time = await live_rollouts(glm_source, live_provider, live_task(), count=3, max_turns=10)
+@TRANSPORTS
+async def test_live_multi_turn_shellsim_rollout_preserves_served_prefix(
+    glm_source, live_provider, evidence_dir, transport
+):
+    rollouts, wall_time = await live_rollouts(glm_source, live_provider, live_task(), transport, count=3, max_turns=10)
     path = write_live_evidence(
         evidence_dir,
         "",
         "multi-turn ShellSim rollouts through RolloutEngine: the engine's served-prefix check "
         "passes on every turn (it raises RolloutContractError otherwise), with reasoning replayed and "
         "prefix caching on",
+        transport,
         wall_time,
         rollouts,
     )
@@ -422,13 +444,17 @@ def reasoning_task():
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(3600)
-async def test_live_reasoning_heavy_rollout_preserves_served_prefix(glm_source, live_provider, evidence_dir):
-    rollouts, wall_time = await live_rollouts(glm_source, live_provider, reasoning_task(), count=3, max_turns=12)
+@TRANSPORTS
+async def test_live_reasoning_heavy_rollout_preserves_served_prefix(glm_source, live_provider, evidence_dir, transport):
+    rollouts, wall_time = await live_rollouts(
+        glm_source, live_provider, reasoning_task(), transport, count=3, max_turns=12
+    )
     path = write_live_evidence(
         evidence_dir,
         "reasoning-",
-        "reasoning-heavy multi-turn ShellSim rollouts: long reasoning_content replayed on every turn and "
+        "reasoning-heavy multi-turn ShellSim rollouts: long reasoning_content replayed on later turns and "
         "multi-line heredoc tool arguments; the engine's served-prefix check passes on every turn",
+        transport,
         wall_time,
         rollouts,
     )
@@ -436,5 +462,8 @@ async def test_live_reasoning_heavy_rollout_preserves_served_prefix(glm_source, 
     turns = [turn for rollout in rollouts for turn in turn_record(rollout)]
     assert all(turn["prefix_preserved"] and turn["logprobs"] == turn["response_ids"] for turn in turns), path
     assert all(len(rollout.steps) >= 3 for rollout in rollouts), path
-    assert sum(turn["usage"]["reasoning_tokens"] >= 1000 for turn in turns) >= 3, path
+    # The prefix contract is exercised by long reasoning only once a later turn replays it, so some
+    # turn before a rollout's last must reason at length; how many do depends on the puzzles' luck.
+    replayed = [turn for rollout in rollouts for turn in turn_record(rollout)[:-1]]
+    assert any(turn["usage"]["reasoning_tokens"] >= LONG_REASONING_TOKENS for turn in replayed), path
     assert sum("\\n" in arguments for turn in turns for arguments in turn["tool_calls"]) >= 3, path

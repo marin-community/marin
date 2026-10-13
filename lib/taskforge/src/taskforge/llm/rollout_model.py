@@ -42,7 +42,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
-from typing import Any
+from typing import Any, Self
 
 from rolloutengine.contracts import (
     LENGTH_STOP_REASON,
@@ -203,7 +203,12 @@ def replayed_stop_texts(messages: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def routing_key(record: CallLedger) -> str:
-    """The rollout's identity for cache affinity: one item, round and step (a trial)."""
+    """The rollout's identity for prefix-cache affinity: ``<item>:<round>:<step>``.
+
+    A validation trial's model is bound to its attempt's step, ``<kind>/<trial>/<attempt>``
+    (``GlmRolloutModel.for_step``), so each trial has its own key and the k trials of an item can
+    land on different nodes.
+    """
     return f"{record.item_id}:{record.round}:{record.step}"
 
 
@@ -329,11 +334,13 @@ class GlmRolloutModel:
     """The RolloutEngine model callable over a shared ``TokenGenerator`` such as ``GlmClient``.
 
     ``request.options`` (tools, ``tool_choice``, ``parallel_tool_calls``) are sent as request fields
-    after the token fields, so a task's options win. Each turn is one ``LLM_CALL`` span under
-    ``record`` tagged with ``turn`` (the number of assistant turns already in the conversation) and
-    ``transport``; a token-route turn adds a ``purpose=render`` span for its render probe and tags
-    its own span with ``alignment`` and ``routing_key``. The model is shared across rollouts only
-    within one item, round and step; derive one per step with ``dataclasses.replace(model, record=...)``.
+    after the token fields, so a task's options win. Every request of a rollout carries its
+    ``routing_key``: chat-completions calls and render probes as ``prompt_cache_key``, token-route
+    calls as ``ROUTING_KEY_HEADER``. Each turn is one ``LLM_CALL`` span under ``record`` tagged with
+    ``turn`` (the number of assistant turns already in the conversation) and ``transport``; a
+    token-route turn adds a ``purpose=render`` span for its render probe and tags its own span with
+    ``alignment`` and ``routing_key``. Rollouts that share a model share its routing key, so derive
+    one per rollout with ``for_step``.
     """
 
     client: TokenGenerator
@@ -344,6 +351,10 @@ class GlmRolloutModel:
     def __post_init__(self) -> None:
         if self.policy.max_continuations != 0:
             raise ValueError("A rollout model cannot continue on length; set LLMPolicy.max_continuations=0")
+
+    def for_step(self, step: str) -> Self:
+        """This model recording, and routing, under ``step`` of the same item and round."""
+        return replace(self, record=replace(self.record, step=step))
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         turn = sum(message.get("role") == "assistant" for message in request.messages)
@@ -363,11 +374,10 @@ class GlmRolloutModel:
 
     async def _chat_turn(self, request: ModelRequest, turn: int) -> ModelTurn:
         attrs = {"turn": str(turn), "transport": str(RolloutTransport.CHAT_COMPLETIONS)}
+        request_fields = {**TOKEN_FIELDS, **request.options, PROMPT_CACHE_KEY: routing_key(self.record)}
         try:
             with llm_call_span(self.record, self.client.model, attrs) as fields:
-                completion = await complete_into(
-                    fields, self.client, request.messages, self.policy, {**TOKEN_FIELDS, **request.options}
-                )
+                completion = await complete_into(fields, self.client, request.messages, self.policy, request_fields)
                 try:
                     served = model_turn(completion)
                     check_served_prefix(request.prefix_token_ids, served.prompt_token_ids)

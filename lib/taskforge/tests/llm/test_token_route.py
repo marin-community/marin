@@ -65,7 +65,7 @@ async def client(fake_glm, fast_provider):
 
 
 def token_model(client, ledger) -> GlmRolloutModel:
-    record = CallLedger(ledger=ledger, item_id="item", round=0, step="solver/0")
+    record = CallLedger(ledger=ledger, item_id="item", round=0, step="solver/0/0")
     return GlmRolloutModel(client, POLICY, RolloutTransport.TOKEN_ROUTE, record)
 
 
@@ -187,8 +187,11 @@ async def test_later_turn_sends_prefix_plus_rendered_suffix_by_token_ids(fake_gl
     assert body["token_ids"] == list(PREFIX + SUFFIX)
     assert body["sampling_params"] == {"max_tokens": POLICY.max_tokens, "temperature": 0.6, "top_p": 0.95, "logprobs": 0}
     assert body["return_token_bytes"] is True
-    assert fake_glm.request_headers[-1][ROUTING_KEY_HEADER] == "item:0:solver/0"
-    assert fake_glm.requests[1]["prompt_cache_key"] == "item:0:solver/0"
+    # The turn-0 chat call, the render probe and the token-route call carry the same key.
+    assert [fake_glm.requests[0]["prompt_cache_key"], fake_glm.requests[1]["prompt_cache_key"]] == [
+        "item:0:solver/0/0"
+    ] * 2
+    assert fake_glm.request_headers[-1][ROUTING_KEY_HEADER] == "item:0:solver/0/0"
     assert first.metadata["transport"] == "chat_completions"
     assert second.prompt_token_ids == PREFIX + SUFFIX
     assert second.response_token_ids == (30, 31, USER)
@@ -341,7 +344,7 @@ async def test_chat_transport_records_a_retokenized_prefix_as_a_contract_break(f
         prompt_token_ids=(1, 2, 3, 45, OBSERVATION, *SUFFIX),
         token_ids=(30, USER),
     )
-    record = CallLedger(ledger=ledger, item_id="item", round=0, step="solver/0")
+    record = CallLedger(ledger=ledger, item_id="item", round=0, step="solver/0/0")
     model = GlmRolloutModel(client, POLICY, RolloutTransport.CHAT_COMPLETIONS, record)
 
     with pytest.raises(TokenContractBreak) as error:

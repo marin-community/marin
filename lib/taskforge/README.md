@@ -142,7 +142,9 @@ callable. On `RolloutTransport.CHAT_COMPLETIONS` each turn is one streamed call 
 every turn after the first renders the conversation once on the server (a one-token probe, its own
 `purpose=render` span), keeps the ids the template rendered after the previous assistant turn, and
 samples from the rollout's exact prefix plus those ids through `GlmClient.generate`, with header
-`x-routing-key: <item>:<round>:<step>`. The route returns each sampled id's bytes
+`x-routing-key: <item>:<round>:<step>`; the chat-completions calls and render probes carry the same
+key as `prompt_cache_key`, so every request of a rollout shares one node's prefix cache.
+`GlmRolloutModel.for_step(step)` derives the model of one rollout. The route returns each sampled id's bytes
 (`return_token_bytes`), and `llm.glm_format.parse_turn` joins them and splits the text into
 reasoning, answer and tool calls. A turn that cannot keep the exact prefix raises
 `TokenContractBreak` inside its span, which records `cause == "token_contract"`. A response whose
@@ -200,7 +202,9 @@ consumers cached.
 ## Validation
 
 `stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
-`LoweredTaskSpec` through `RolloutEngine`. `TrialPlan.deadlines` and `EngineSettings`
+`LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on
+`model.for_step("<kind>/<trial>/<attempt>")`, so a `GlmRolloutModel` records and routes every trial
+attempt under its own step. `TrialPlan.deadlines` and `EngineSettings`
 replace the builder's session limits, and `task_digest(lowered)` hashes what runs, answer format
 included. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
 `stage50_validate.classify.classify` is the only failure classifier. A trial is attempted again for
