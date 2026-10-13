@@ -17,8 +17,10 @@ from shellbox.machine import (
     Backend,
     Command,
     DockerImage,
+    ExecutionRequirements,
     ExitReason,
     Machine,
+    MachineSpec,
     PackageSpec,
     Result,
     UnsupportedMachineSpec,
@@ -122,7 +124,7 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         async def close(self):
             await self.machine.close()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -186,7 +188,7 @@ async def test_artifact_collection_cannot_read_root_files_through_candidate_path
         assert (await docker("inspect", machine.name)).exit_code != 0
 
 
-class FixtureImageFactory:
+class FixtureImageFactory(DockerMachineFactory):
     """Execute fixture image commands on the built-in filesystem."""
 
     backend = Backend.DOCKER
@@ -198,10 +200,14 @@ class FixtureImageFactory:
 
 
 @dataclass
-class RecordingShellSimFactory:
+class RecordingShellSimFactory(DockerMachineFactory):
     backend: Backend = Backend.DOCKER
 
     machines: list[Machine] = field(default_factory=list)
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        factory = ShellSimMachineFactory() if self.backend == Backend.SHELLSIM else DockerMachineFactory()
+        factory.check_environment(requirements, spec)
 
     async def create(self, spec):
         machine = await FixtureImageFactory().create(spec)
@@ -394,7 +400,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
         async def close(self):
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -530,7 +536,7 @@ async def test_command_timeouts_return_observations_and_allow_the_model_to_finis
         async def close(self):
             await self.machine.close()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1028,7 +1034,7 @@ async def test_late_creation_remains_owned_and_closes_after_cancellation(interru
         async def close(self):
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1076,7 +1082,7 @@ async def test_cleanup_outside_attempt_is_bounded_despite_repeated_cancellation(
                 await release.wait()
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1123,7 +1129,7 @@ async def test_startup_failure_cleanup_retains_primary_error_without_private_mes
             closed.set()
             raise OSError("private-cleanup-detail")
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1218,7 +1224,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
         async def close(self):
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1275,7 +1281,7 @@ async def test_execution_user_preflight_fails_during_start_before_model_inferenc
         async def close(self):
             closed.set()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1333,7 +1339,7 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
         async def close(self):
             await self.machine.close()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -1442,7 +1448,7 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
         async def close(self):
             await self.machine.close()
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):

@@ -97,7 +97,7 @@ def _save_state(state: Path, output_path: str) -> None:
         (StoragePath(output_path) / name).upload_from(str(state / name))
 
 
-def _ports(config: StageConfig, state: Path, operation: str, *arguments: str) -> None:
+def _run_ports(config: StageConfig, state: Path, operation: str, *arguments: str) -> None:
     release = config.release
     subprocess.run(
         [
@@ -131,21 +131,21 @@ def _ports(config: StageConfig, state: Path, operation: str, *arguments: str) ->
 def build_ports(config: StageConfig) -> None:
     """Build every guest recipe with BATCH workers and the existing sccache store."""
     state = _state(config, "build")
-    _ports(config, state, "build", "--all")
+    _run_ports(config, state, "build", "--all")
     _save_state(state, config.output_path)
 
 
 def check_ports(config: StageConfig) -> None:
     """Run the recipe graph's guest checks before any catalog becomes public."""
     state = _state(config, "check")
-    _ports(config, state, "check")
+    _run_ports(config, state, "check")
     _save_state(state, config.output_path)
 
 
 def publish_ports(config: StageConfig) -> None:
     """Publish snapshots before promoting the newest version to the stable catalog."""
     state = _state(config, "export")
-    _ports(
+    _run_ports(
         config,
         state,
         "export",
@@ -164,7 +164,7 @@ def publish_ports(config: StageConfig) -> None:
         if current.exists() and Version(current.read_text()) > Version(config.release.version):
             return
         current.write_text(config.release.version)
-        _ports(
+        _run_ports(
             config,
             state,
             "export",

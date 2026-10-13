@@ -20,6 +20,8 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 ## Machine API
 
+`factory.check_environment(requirements, spec)` checks task semantics, capabilities and software support before acquisition. Factories retain the requested `MachineSpec`; prepared images and bundles are backend inputs. The check does not promise available capacity or installed executables.
+
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. QEMU and ShellSim have Harbor environment adapters. Docker, gVisor, Daytona, Iris, and local expose the machine API without a Harbor adapter or persistent Bash support.
@@ -81,10 +83,11 @@ Other factories do not apply `MachineSpec.startup_timeout`. Callers enforce the
 deadline for the complete create operation.
 
 ```python
-from shellbox.machine import Command, MachineSpec, QemuBundle
+from shellbox.backends.qemu.image import load_qemu_bundle
+from shellbox.machine import Command, MachineSpec
 from shellbox.backends.qemu.machine import QemuMachineFactory
 
-machine = await QemuMachineFactory().create(MachineSpec(source=QemuBundle(bundle_path)))
+machine = await QemuMachineFactory().create(MachineSpec(source=load_qemu_bundle(bundle_path)))
 try:
     result = await machine.run(Command(("/bin/sh", "-c", "echo hello")))
 finally:

@@ -23,6 +23,7 @@ from typing import Annotated, ClassVar, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
+from shellbox.machine import CommandSemantics as CommandSemantics
 from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
@@ -332,18 +333,6 @@ def validate_workspace_path(path: str) -> PurePosixPath:
     return workspace
 
 
-class CommandSemantics(StrEnum):
-    """The execution behavior a task's commands require."""
-
-    LINUX_PROCESS = "linux_process"
-    """Real Linux processes, installed executables, and a native filesystem."""
-    SHELL_SIMULATOR = "shell_simulator"
-    """A simulated shell and virtual filesystem with optional WASI software and no guest networking."""
-
-
-SHELL_SIMULATOR_CAPABILITIES = frozenset({"shell", "filesystem", "python"})
-
-
 class EnvironmentRequirements(BaseModel):
     """Operations, initial workspace or unresolved recipe, and tool-provider contracts."""
 
@@ -375,11 +364,6 @@ class EnvironmentRequirements(BaseModel):
                 raise ValueError("Native environment dependencies require Linux process semantics")
         if self.package_spec is not None and self.command_semantics is None:
             raise ValueError("Package requirements need explicit command semantics")
-        if (
-            self.command_semantics == CommandSemantics.SHELL_SIMULATOR
-            and set(self.capabilities) - SHELL_SIMULATOR_CAPABILITIES
-        ):
-            raise ValueError("The shell simulator provides shell, filesystem, and Python capabilities")
         if any(not capability for capability in self.capabilities):
             raise ValueError("Capabilities must be nonempty names")
         if len(set(self.capabilities)) != len(self.capabilities):

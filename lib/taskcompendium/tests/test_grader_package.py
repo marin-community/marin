@@ -7,6 +7,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineSpec, PackageSpec, RegistryImage
 from verifyit.spec import JsonSchemaSpec, NumericSpec, ScriptSpec
@@ -44,7 +45,7 @@ GRADING_ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, command_semant
 GRADING_MACHINE = MachineSpec(RegistryImage(IMAGE))
 
 
-class FixtureImageFactory:
+class FixtureImageFactory(DockerMachineFactory):
     """Run the pinned fixture image's commands on the ShellSim built-ins."""
 
     backend = Backend.DOCKER

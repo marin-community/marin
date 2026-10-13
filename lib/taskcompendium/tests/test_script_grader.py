@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -107,7 +108,7 @@ class VerifyitImageMachine:
         await self.machine.close()
 
 
-class FixtureImageFactory:
+class FixtureImageFactory(DockerMachineFactory):
     """Start the pinned fixture image as ShellSim built-ins."""
 
     backend = Backend.DOCKER
@@ -217,7 +218,7 @@ def local_artifact_factory(tmp_path):
         async def close(self):
             self.closed = True
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         def __init__(self, prepare_artifacts, *, archive_members=(), archive_failure=None):
             self.machines = []
             self.prepare_artifacts = prepare_artifacts

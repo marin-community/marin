@@ -15,6 +15,7 @@ from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
     Command,
+    ExecutionRequirements,
     ExitReason,
     HostImage,
     Machine,
@@ -183,6 +184,9 @@ class _AttemptMachineFactory:
     @property
     def backend(self) -> Backend:
         return self.factories[self.runtime.backend].backend
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self.factories[self.runtime.backend].check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:
         async with asyncio.timeout(self.runtime.startup_timeout):
