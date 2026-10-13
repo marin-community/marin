@@ -472,6 +472,7 @@ def moe_mlp(
     overlap: MoeOverlapWork | None = None,
     ragged_expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     ragged_overlap_weight_grads: bool = False,
+    ragged_expert_mxfp8: bool = False,
     expert_serial_pair: bool = False,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
@@ -506,6 +507,8 @@ def moe_mlp(
     fixed pooled-wave implementation. `fp8_dispatch` sends that implementation's
     dispatched activations as block-scaled FP8 (combine and backward stay bf16). `expert_mxfp8_sim` runs
     that implementation's expert GEMMs on simulated MXFP8 operands (`levanter.grug.mxfp8`).
+    `ragged_expert_mxfp8` (``ragged_all_to_all``, ungated ReLU^2 on SM100) dispatches rows as MXFP8 and runs the
+    expert MLP's activation-path GEMMs block-scaled on QuACK; the weight gradients stay bf16.
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
     `ragged_overlap_weight_grads` (``ragged_all_to_all``) pins each round's expert weight gradients under its
@@ -529,6 +532,8 @@ def moe_mlp(
         raise ValueError("report_assignment_keep does not support chunked (capacity-dropping) local experts")
     if fp8_dispatch and resolved_implementation != "fixed_pooled_wave_all_to_all":
         raise ValueError(f"fp8_dispatch requires fixed_pooled_wave_all_to_all, got {resolved_implementation!r}")
+    if ragged_expert_mxfp8 and resolved_implementation != "ragged_all_to_all":
+        raise ValueError(f"ragged_expert_mxfp8 requires ragged_all_to_all, got {resolved_implementation!r}")
     if expert_mxfp8_sim and resolved_implementation != "fixed_pooled_wave_all_to_all":
         raise ValueError(f"expert_mxfp8_sim requires fixed_pooled_wave_all_to_all, got {resolved_implementation!r}")
 
@@ -687,6 +692,7 @@ def moe_mlp(
                 expert_chunks=ragged_expert_chunks,
                 serial_pair=expert_serial_pair,
                 overlap_weight_grads=ragged_overlap_weight_grads,
+                mxfp8=ragged_expert_mxfp8,
             )
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local

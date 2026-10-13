@@ -53,6 +53,7 @@ from levanter.grug._moe.ep_common import (
     _expert_granular_a2a_params,
     _sort_activations,
 )
+from levanter.grug.mxfp8 import mx_pack_rows
 from levanter.kernels.pallas.relu2_mlp import fused_relu2
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.kernels.pallas.relu2_ragged_mlp import (
@@ -310,6 +311,37 @@ class _CuteRelu2ExpertMlp:
         return dx, output_dot, wgrad_args, _relu2_expert_mlp_quack_wgrads
 
 
+@dataclasses.dataclass(frozen=True)
+class _CuteRelu2Mxfp8ExpertMlp:
+    """``_CuteRelu2ExpertMlp`` with MXFP8 operands in the four activation-path GEMMs (QuACK block-scaled SM100).
+
+    The rows arrive as ``mx_pack_rows`` bytes (``_ExpertLayout.mxfp8`` dispatches them so); ``relu(pre)^2`` and
+    ``d pre`` are quantized in their GEMMs' epilogues, ``dy`` and the weights in XLA. The weight gradients stay bf16
+    and read the dequantized rows, the values the forward multiplied.
+    """
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_fwd  # noqa: PLC0415
+
+        cumulative_group_sizes = jnp.concatenate(
+            [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
+        )
+        return relu2_expert_mlp_mxfp8_fwd(x_dispatch, moe_w13_local, moe_w2_local, cumulative_group_sizes)
+
+    def backward(self, residuals, cotangent):
+        dx, output_dot, wgrad_args, wgrad = self.backward_parts(residuals, cotangent)
+        dw_up, dw_down = wgrad(*wgrad_args)
+        return dx, dw_up, dw_down, output_dot
+
+    def backward_parts(self, residuals, cotangent):
+        from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_backward_input  # noqa: PLC0415
+        from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_wgrads  # noqa: PLC0415
+
+        dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_input(residuals, cotangent)
+        return dx, output_dot, wgrad_args, _relu2_expert_mlp_quack_wgrads
+
+
 @functools.cache
 def _quack_grouped_gemm_available() -> bool:
     if jax.default_backend() != "gpu":
@@ -515,6 +547,9 @@ class _ExpertLayout:
     expert_mlp: _ExpertMlp
     # Pin each chunk's expert weight gradients under its input cotangent's return all-to-all.
     overlap_weight_grads: bool = False
+    # Dispatch the rows as MXFP8 bytes (``mx_pack_rows``) for an expert MLP that takes them so; the backward's
+    # transports stay in the rows' dtype (quantization is straight-through).
+    mxfp8: bool = False
 
     @property
     def chunks(self) -> int:
@@ -605,9 +640,10 @@ def _routed_experts_forward(
         site=_TransportBufferSite.RETURN_OUTPUT,
     )  # [TK, O]
     chunk_residuals = []
+    send = mx_pack_rows(sorted_x) if layout.mxfp8 else sorted_x  # [TK, H] or [TK, H + H / 32] bytes
     for chunk_index, plan in enumerate(plans):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
-            source = sorted_x
+            source = send
             if chunk_residuals:
                 # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
                 # of every chunk at the same time, and the chunk buffers are all live at once,
@@ -616,7 +652,7 @@ def _routed_experts_forward(
                 # need the return, so a recompute for the backward drops it and must not be held
                 # to it. (Dispatching chunk c+1 during chunk c's MLP measured 3 ms per layer
                 # slower in a rematted four-GPU layer scan.)
-                source, _ = jax.lax.optimization_barrier((sorted_x, chunk_residuals[-1].expert_mlp))
+                source, _ = jax.lax.optimization_barrier((send, chunk_residuals[-1].expert_mlp))
             if overlap is not None and chunk_index == 0:
                 # Optimization barriers tie the overlap's inputs to the dispatch source and its output to the
                 # dispatched rows, so it runs while the dispatch all-to-all is in flight (as the pooled-wave path).
@@ -862,6 +898,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     token_sharding_axes: tuple[str, ...],
     expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     overlap_weight_grads: bool = False,
+    mxfp8: bool = False,
     serial_pair: bool = False,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
@@ -943,6 +980,10 @@ def _moe_mlp_ep_ragged_a2a_local(
         if moe_w2_local.shape[-1] != x_local.shape[1]:
             raise ValueError("serial_pair needs experts that write the width they read (x + y1)")
         expert_mlp = _SerialPairExpertMlp(expert_mlp)
+    if mxfp8:
+        if type(expert_mlp) is not _CuteRelu2ExpertMlp:
+            raise ValueError(f"mxfp8 experts need ungated ReLU^2 on QuACK's SM100 kernels, got {expert_mlp}")
+        expert_mlp = _CuteRelu2Mxfp8ExpertMlp()
     layout = _ExpertLayout(
         tokens_per_shard=tokens_per_shard,
         topk=topk,
@@ -953,6 +994,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         input_dim=x_local.shape[1],
         expert_mlp=expert_mlp,
         overlap_weight_grads=overlap_weight_grads,
+        mxfp8=mxfp8,
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.

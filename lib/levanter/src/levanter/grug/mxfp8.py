@@ -39,13 +39,64 @@ def mx_quantize_dequantize(x: jax.Array, axis: int) -> jax.Array:
     return jnp.moveaxis(out, -1, axis).astype(x.dtype)
 
 
-def _e8m0_scale(amax: jax.Array) -> jax.Array:
-    """``2^ceil(log2(amax / 448))`` from the f32 bits, so it is an exact power of two on every backend (GPU
-    ``exp2``/``log2`` are approximate); 1 for all-zero blocks."""
+def _e8m0_exponent(amax: jax.Array) -> jax.Array:
+    """The biased e8m0 exponent of ``2^ceil(log2(amax / 448))``, read from the f32 bits so the scale is an exact
+    power of two on every backend (GPU ``exp2``/``log2`` are approximate); 127 (a scale of 1) for all-zero blocks."""
     bits = jax.lax.bitcast_convert_type(amax / _E4M3_MAX, jnp.int32)
     exponent = ((bits >> 23) & 0xFF) + ((bits & 0x7FFFFF) != 0).astype(jnp.int32)
-    exponent = jnp.where(amax > 0, jnp.clip(exponent, 1, 254), 127)
-    return jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
+    return jnp.where(amax > 0, jnp.clip(exponent, 1, 254), 127)
+
+
+def _e8m0_scale(amax: jax.Array) -> jax.Array:
+    return jax.lax.bitcast_convert_type(_e8m0_exponent(amax) << 23, jnp.float32)
+
+
+def mx_quantize_rows(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """MXFP8 ``x[..., K]`` along its last axis: e4m3 values ``[..., K]`` and biased e8m0 exponents as uint8
+    ``[..., K / 32]``, the operand format of block-scaled tensor cores."""
+    *lead, k = x.shape
+    if k % MX_BLOCK:
+        raise ValueError(f"last dim {k} must divide {MX_BLOCK}")
+    blocks = x.astype(jnp.float32).reshape(*lead, k // MX_BLOCK, MX_BLOCK)
+    exponent = _e8m0_exponent(jnp.max(jnp.abs(blocks), axis=-1))
+    scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
+    values = (blocks / scale[..., None]).astype(_E4M3).reshape(*lead, k)
+    return values, exponent.astype(jnp.uint8)
+
+
+def mx_quantize_cols(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """MXFP8 ``x[T, K]`` along ``T`` (32-row blocks): e4m3 ``[T, K]`` and biased e8m0 exponents ``[T / 32, K]``."""
+    t, k = x.shape
+    if t % MX_BLOCK:
+        raise ValueError(f"row count {t} must divide {MX_BLOCK}")
+    blocks = x.astype(jnp.float32).reshape(t // MX_BLOCK, MX_BLOCK, k)
+    exponent = _e8m0_exponent(jnp.max(jnp.abs(blocks), axis=1))
+    scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
+    values = (blocks / scale[:, None, :]).astype(_E4M3).reshape(t, k)
+    return values, exponent.astype(jnp.uint8)
+
+
+def mx_dequantize_rows(values: jax.Array, exponents: jax.Array, dtype: jnp.dtype) -> jax.Array:
+    *lead, k = values.shape
+    scale = jax.lax.bitcast_convert_type(exponents.astype(jnp.int32) << 23, jnp.float32)
+    blocks = values.astype(jnp.float32).reshape(*lead, k // MX_BLOCK, MX_BLOCK) * scale[..., None]
+    return blocks.reshape(*lead, k).astype(dtype)
+
+
+def mx_packed_row_bytes(k: int) -> int:
+    return k + k // MX_BLOCK
+
+
+def mx_pack_rows(x: jax.Array) -> jax.Array:
+    """``mx_quantize_rows`` as one uint8 row ``[..., K + K / 32]`` (values, then exponents), for byte transports."""
+    values, exponents = mx_quantize_rows(x)
+    return jnp.concatenate([jax.lax.bitcast_convert_type(values, jnp.uint8), exponents], axis=-1)
+
+
+def mx_unpack_rows(packed: jax.Array, k: int) -> tuple[jax.Array, jax.Array]:
+    if packed.shape[-1] != mx_packed_row_bytes(k):
+        raise ValueError(f"packed rows of width {packed.shape[-1]} do not hold {k} MXFP8 values")
+    return jax.lax.bitcast_convert_type(packed[..., :k], _E4M3), packed[..., k:]
 
 
 def _spec(x: jax.Array) -> P:

@@ -292,6 +292,20 @@ class Fp8Recipe(StrEnum):
     MXFP8_SIM_DENSE = "mxfp8_sim_dense"
     """``MXFP8_SIM`` on the dense projection GEMMs only; the routed experts stay bf16 (the ragged EP backend has no
     simulated-MXFP8 expert path)."""
+    MXFP8_EXPERTS = "mxfp8_experts"
+    """Real MXFP8 routed experts on the ``ragged_all_to_all`` backend (QuACK block-scaled GEMMs, SM100): rows are
+    dispatched as e4m3 with e8m0 scales and the four activation-path expert GEMMs run block-scaled; the expert weight
+    gradients and every dense projection stay bf16."""
+    MXFP8_DENSE = "mxfp8_dense"
+    """Real MXFP8 dense projections (every ``_proj``: attention/KDA, the fused router-latent-shared projection with
+    router columns excluded, the latent and shared-expert down projections) on QuACK block-scaled GEMMs, all three
+    GEMMs of each; routed experts stay bf16."""
+    MXFP8 = "mxfp8"
+    """``MXFP8_EXPERTS`` and ``MXFP8_DENSE`` together."""
+
+
+_DENSE_FP8_SIM = (Fp8Recipe.MXFP8_SIM, Fp8Recipe.MXFP8_SIM_DENSE)
+_DENSE_FP8_REAL = (Fp8Recipe.MXFP8_DENSE, Fp8Recipe.MXFP8)
 
 
 class NormGainFn(StrEnum):
@@ -925,7 +939,7 @@ class GrugModelConfig:
     def __post_init__(self) -> None:
         if self.scan_save_routed_output and not self.scan_layers:
             raise ValueError("scan_save_routed_output saves the routed output across the scan_layers backward")
-        if self.moe_shared_placement != SharedExpertPlacement.FUSED and self.fp8_recipe != Fp8Recipe.NONE:
+        if self.moe_shared_placement != SharedExpertPlacement.FUSED and self.fp8_recipe in _DENSE_FP8_SIM:
             raise ValueError("fp8_recipe covers only moe_shared_placement=fused shared experts")
         if unknown := set(()) - set(LATENT_MIX_SITES):
             raise ValueError(f"latent_mix_sites: unknown sites {sorted(unknown)}")
@@ -1111,8 +1125,13 @@ class GrugModelConfig:
 
 def _proj(cfg: "GrugModelConfig", x: jax.Array, w: jax.Array, out_sharding: P | None = None) -> jax.Array:
     """``x[..., k] @ w[k, n]`` under ``cfg.fp8_recipe``."""
-    if cfg.fp8_recipe in (Fp8Recipe.MXFP8_SIM, Fp8Recipe.MXFP8_SIM_DENSE):
+    if cfg.fp8_recipe in _DENSE_FP8_SIM:
         return mx_dense(x, w, out_sharding)
+    if cfg.fp8_recipe in _DENSE_FP8_REAL:
+        # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+        from levanter.grug._moe.quack_mxfp8 import mx_linear  # noqa: PLC0415
+
+        return mx_linear(x, w, out_sharding)
     return jnp.einsum("...k,kn->...n", x, w, out_sharding=out_sharding)
 
 
@@ -2778,7 +2797,7 @@ def moe_and_shared_fused(
     unfused = placement == SharedExpertPlacement.UNFUSED and not part_inputs
     weights = moe_weights if unfused or overlap is not None else moe_weights + shared_weights
     router_in_fused = bool(moe_weights)
-    if not part_inputs and mlp.cfg.fp8_recipe != Fp8Recipe.NONE:
+    if not part_inputs and mlp.cfg.fp8_recipe in _DENSE_FP8_SIM + _DENSE_FP8_REAL:
         # The router stays in high precision; the rest of the fused projection takes the low-precision recipe.
         low = weights[1:] if router_in_fused else weights
         fused = _proj(mlp.cfg, x_flat, jnp.concatenate(low, axis=1), out_sharding=_batch_spec())
@@ -3538,6 +3557,7 @@ def _run_expert_bank(
             num_expert_waves=em.num_expert_waves,
             fp8_dispatch=em.fp8_dispatch,
             expert_mxfp8_sim=cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM,
+            ragged_expert_mxfp8=cfg.fp8_recipe in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8),
             expert_remat=em.expert_remat,
             overlap=overlap,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
@@ -5942,7 +5962,8 @@ class Transformer(eqx.Module):
     ) -> dict[str, Float[Array, "B S"]]:
         """Per position: the probes' ``probe_kept`` (aware, not skipping), ``probe_skipped`` (aware, skipping) and
         ``probe_blind`` predictions (probabilities, or losses for ``SkipProbeTarget.LOSS``), and the final head's
-        ``correct_kept`` / ``correct_skipped`` with every token keeping / skipping ``skip_layers``."""
+        ``correct_*``, ``top_prob_*`` and ``entropy_*`` with every token keeping (``kept``) / skipping (``skipped``)
+        ``skip_layers``."""
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         out = {}
         for name, keep in (("kept", True), ("skipped", False)):
@@ -5951,6 +5972,9 @@ class Transformer(eqx.Module):
             head_in, lm_head = self._lm_head_operands(hidden, token_ids)
             final = _vocab_stats(head_in, lm_head, _logit_cap(self.config), labels)
             out[f"correct_{name}"] = (final.top_id == labels).astype(jnp.float32)
+            # The label-free confidence of each path, what an exit rule at the midpoint can read.
+            out[f"top_prob_{name}"] = jnp.exp(final.top_logit - final.logsumexp)
+            out[f"entropy_{name}"] = final.entropy
             if keep:
                 logits = stats[_SKIP_PROBE_LOGITS]
                 if self.config.skip_probe_target == SkipProbeTarget.CORRECT:
