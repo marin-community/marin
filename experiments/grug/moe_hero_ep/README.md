@@ -171,15 +171,16 @@ The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack he
 at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
 decay. Canonical eval stays at 4K packing, so the inherited `eval_dropless/*` series stay comparable.
 
-A switch is set in `trigger_hero.sh` with `SEQ_LEN`, `QK_MULT` (all attention layers),
-`CAPACITY_FACTOR`, `CONTEXT_SWITCH_STEP` (the step N at which the lineage left 4K), and
-`FLOPS_BASELINE_TOTAL` (the parent's `throughput/total_gflops` × 1e9 at W&B `_step` N−1, which
-counts N updates). Later handoffs keep the last two. `QK_MULT_LONG_SCALE` multiplies `QK_MULT` on
-the global layers only, so a global-only arm keeps `QK_MULT=1.3`. Each Harrier bucket then skips the unread rest of
-the shuffle window it was reading at the switch, about 52B tokens at a 216000 handoff, so no data
-repeats. Keep the data seed, component order, and token store unchanged. The QK and capacity values
-need measured evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed
-trial thresholds; see the
+A switch's deploy PR sets `SEQ_LEN`, `QK_MULT`, `QK_MULT_LONG_SCALE`, and `CAPACITY_FACTOR` in
+`trigger_hero.sh`. It also appends the context the run is leaving, with the step N it ended at, to
+`HERO_CONTEXT_PHASES` in `launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the
+parent's `throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later
+handoffs keep both. `QK_MULT` applies to all attention layers; `QK_MULT_LONG_SCALE` multiplies it on
+the global layers only, so a global-only arm keeps `QK_MULT=1.3`. Each Harrier bucket skips the unread rest of the shuffle window it was
+reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the data
+seed, component order, and token store unchanged. The QK and capacity values need measured
+evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
+thresholds; see the
 [context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
 
 ## Coordinated garbage collection

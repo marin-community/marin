@@ -34,7 +34,9 @@ Changelog:
 """
 
 import dataclasses
+import itertools
 import os
+from collections.abc import Sequence
 from datetime import timedelta
 
 import click
@@ -107,6 +109,30 @@ HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 
 HERO_REFERENCE_SEQ_LEN = HERO_MODEL_CONFIG.max_seq_len
 HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_REFERENCE_SEQ_LEN
+# The context lengths the d6144 hero trained at before its current one, oldest first, each with the
+# step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
+HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = ()
+# The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
+HERO_FLOPS_BASELINE_TOTAL: float | None = None
+
+
+def _hero_flops_baseline(
+    context_phases: Sequence[HarrierContextPhase], flops_baseline_total: float | None, seq_len: int
+) -> FlopsBaseline | None:
+    """Check the hero's context history against ``seq_len`` and return its FLOPs baseline.
+
+    The history starts at 4K and changes context length at every entry, including the current one.
+    ``LmDataConfig`` checks that the end steps increase.
+    """
+    seq_lens = [phase.seq_len for phase in context_phases] + [seq_len]
+    if seq_lens[0] != HERO_REFERENCE_SEQ_LEN or any(a == b for a, b in itertools.pairwise(seq_lens)):
+        raise ValueError(f"The hero's context lengths must start at 4K and change at every phase, got {seq_lens}")
+    if not context_phases or flops_baseline_total is None:
+        if context_phases or flops_baseline_total is not None:
+            raise ValueError("The FLOPs baseline total must be set exactly when the context history is non-empty")
+        return None
+    return FlopsBaseline(context_phases[-1].end_step, flops_baseline_total)
+
 
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 # Each rung uses the rack count that holds its batch. d6144 uses the shared hero recipe. Narrower
@@ -168,7 +194,7 @@ def build_ladder_run(
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
-    context_switch_step: int | None = None,
+    context_phases: Sequence[HarrierContextPhase] = (),
     flops_baseline_total: float | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
@@ -187,10 +213,10 @@ def build_ladder_run(
     attn_gate and router weights, and because the decay reads the Adam step count it also applies at
     the right point when a run resumes an existing checkpoint. Pass 0 to opt out.
 
-    ``context_switch_step`` is the step at which the run left 4K context, and ``flops_baseline_total``
-    is the cumulative training FLOPs through that step. A resumed run at another ``seq_len`` requires
-    both; each data bucket then resumes at its next shuffle window (see
-    ``LmDataConfig.prior_context_phases``).
+    ``context_phases`` is the d6144 hero's context history (``HERO_CONTEXT_PHASES`` from the CLI), and
+    ``flops_baseline_total`` its cumulative training FLOPs at the last switch. Each data bucket resumes at
+    its next shuffle window (see ``LmDataConfig.prior_context_phases``). The narrow rungs take no history
+    and train at ``seq_len`` from their start.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -199,12 +225,7 @@ def build_ladder_run(
 
     if seq_len != HERO_REFERENCE_SEQ_LEN and qk_mult is None:
         raise ValueError("A changed context length requires an explicit qk_mult (--qk-mult)")
-    if (context_switch_step is None) != (flops_baseline_total is None):
-        raise ValueError("context_switch_step and flops_baseline_total must be set together")
-    if initialize_from_checkpoint is not None and seq_len != HERO_REFERENCE_SEQ_LEN and context_switch_step is None:
-        raise ValueError("A resumed context switch requires context_switch_step and flops_baseline_total")
-    if context_switch_step is not None and seq_len == HERO_REFERENCE_SEQ_LEN:
-        raise ValueError("context_switch_step applies only to a context length other than 4K")
+    flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len) if size == "d6144" else None
 
     dp_racks = LADDER_RACKS[size]
     # Weak scaling holds per-rack token load constant; eval is one sequence per device.
@@ -226,17 +247,6 @@ def build_ladder_run(
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
-    prior_context_phases: tuple[HarrierContextPhase, ...] = ()
-    flops_baseline = None
-    if context_switch_step is not None and flops_baseline_total is not None:
-        prior_context_phases = (
-            HarrierContextPhase(
-                end_step=context_switch_step,
-                seq_len=HERO_REFERENCE_SEQ_LEN,
-                batch_size=global_tokens_per_step // HERO_REFERENCE_SEQ_LEN,
-            ),
-        )
-        flops_baseline = FlopsBaseline(context_switch_step, flops_baseline_total)
     flops_per_example, _ = _compute_flops(model_config=model)
     run_flops = flops_per_example * batch_size * num_steps
 
@@ -356,7 +366,7 @@ def build_ladder_run(
                 max_seq_len=model.max_seq_len,
                 experiment_flops=run_flops,
                 validation=validation,
-                prior_context_phases=prior_context_phases,
+                prior_context_phases=context_phases,
             ),
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
@@ -463,18 +473,6 @@ def build_ladder_run(
     help="Checkpoint directory of another run to resume from under a new --run-id; this run writes only "
     "to its own tree and later restarts prefer its own, newer checkpoints.",
 )
-@click.option(
-    "--context-switch-step",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Step at which the run left 4K context. Required to resume at another --seq-len.",
-)
-@click.option(
-    "--flops-baseline-total",
-    type=click.FloatRange(min=0, min_open=True),
-    default=None,
-    help="Cumulative training FLOPs through --context-switch-step. Required with it.",
-)
 @build_options
 def main(
     run_id: str,
@@ -489,9 +487,8 @@ def main(
     eval_seq_len: int,
     gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
-    context_switch_step: int | None,
-    flops_baseline_total: float | None,
 ) -> ArtifactStep[HeroThroughputResult]:
+    hero = size == "d6144"
     return build_ladder_run(
         run_id=run_id,
         size=size,
@@ -505,8 +502,8 @@ def main(
         eval_seq_len=eval_seq_len,
         gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
-        context_switch_step=context_switch_step,
-        flops_baseline_total=flops_baseline_total,
+        context_phases=HERO_CONTEXT_PHASES if hero else (),
+        flops_baseline_total=HERO_FLOPS_BASELINE_TOTAL if hero else None,
     )
 
 

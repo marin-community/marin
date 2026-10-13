@@ -10,6 +10,7 @@ import optax
 import pytest
 from marin.execution.lazy import StepContext
 
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HarrierContextPhase
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
 from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
@@ -184,7 +185,15 @@ def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
 @pytest.mark.parametrize("seq_len", [8192, 16384])
 def test_context_switch_preserves_optimizer(seq_len):
     parent_step = build_ladder_run(run_id="context-parent", size="d6144", seq_len=4096, version="dev")
-    child_step = build_ladder_run(run_id="context-child", size="d6144", seq_len=seq_len, qk_mult=1.48, version="dev")
+    child_step = build_ladder_run(
+        run_id="context-child",
+        size="d6144",
+        seq_len=seq_len,
+        qk_mult=1.48,
+        version="dev",
+        context_phases=(HarrierContextPhase(end_step=231_600, seq_len=4096),),
+        flops_baseline_total=1e24,
+    )
     parent = parent_step.build_config(StepContext.for_fingerprint(parent_step.runtime_args, parent_step.deps))
     child = child_step.build_config(StepContext.for_fingerprint(child_step.runtime_args, child_step.deps))
     # The child resumes the parent's optimizer state, so its schedule and hyperparameters must not move.

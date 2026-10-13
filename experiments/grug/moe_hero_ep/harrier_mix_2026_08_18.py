@@ -104,11 +104,10 @@ _validate_spec(_SPEC)
 
 @dataclass(frozen=True)
 class HarrierContextPhase:
-    """A context length the run trained at, with its batch size, until ``end_step``."""
+    """A context length the run trained at until ``end_step``, at the run's tokens per step."""
 
     end_step: int
     seq_len: int
-    batch_size: int
 
 
 def _shuffle_config(seq_len: int) -> BlockShuffleConfig:
@@ -151,8 +150,9 @@ def harrier_mix_2026_08_18_data_config(
     training-FLOP budget) exceeds ``SIMULATED_EPOCHING_MAX_FLOPS``, so an expensive run trains on the
     raw mixture rather than a simulated larger budget.
 
-    ``prior_context_phases`` lists earlier context lengths of a resumed run, oldest first. Each Harrier bucket
-    then skips the unread rest of its current shuffle window instead of repeating data.
+    ``prior_context_phases`` lists earlier context lengths of a resumed run, oldest first. Each phase trained at
+    ``batch_size * max_seq_len`` tokens per step. Each Harrier bucket then skips the unread rest of its current
+    shuffle window instead of repeating data.
     """
     available_tokens = dict(_SPEC.available_tokens)
     components = {
@@ -184,16 +184,21 @@ def harrier_mix_2026_08_18_data_config(
     )
 
     val_zero_weights = {name: 0.0 for name in val_components}
-    context_phase_configs = [
-        ContextPhaseConfig(
-            end_step=prior.end_step,
-            seq_len=prior.seq_len,
-            batch_size=prior.batch_size,
-            train_weights=_stage_weights(total_steps, prior.batch_size, val_zero_weights),
-            shuffle=_shuffle_config(prior.seq_len),
+    tokens_per_step = batch_size * max_seq_len
+    context_phase_configs = []
+    for prior in prior_context_phases:
+        if tokens_per_step % prior.seq_len:
+            raise ValueError(f"Context length {prior.seq_len} must divide {tokens_per_step} tokens per step")
+        prior_batch_size = tokens_per_step // prior.seq_len
+        context_phase_configs.append(
+            ContextPhaseConfig(
+                end_step=prior.end_step,
+                seq_len=prior.seq_len,
+                batch_size=prior_batch_size,
+                train_weights=_stage_weights(total_steps, prior_batch_size, val_zero_weights),
+                shuffle=_shuffle_config(prior.seq_len),
+            )
         )
-        for prior in prior_context_phases
-    ]
     return LmDataConfig(
         tokenizer=marin_tokenizer,
         cache_dir=None,

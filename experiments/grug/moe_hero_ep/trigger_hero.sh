@@ -20,10 +20,6 @@ SEQ_LEN=4096
 QK_MULT=1.3
 QK_MULT_LONG_SCALE=1.0
 CAPACITY_FACTOR=1.15
-# Step at which the lineage left 4K context and the parent's cumulative training FLOPs through it;
-# 0 while the run still trains at 4K. Later handoffs keep both.
-CONTEXT_SWITCH_STEP=0
-FLOPS_BASELINE_TOTAL=0
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
@@ -147,11 +143,6 @@ printf 'Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinator 
 gh issue comment "$HERO_ISSUE" --body-file "$launch_record_file"
 echo "Launching hero from commit ${launch_commit}"
 
-context_args=()
-if [[ "$CONTEXT_SWITCH_STEP" != 0 ]]; then
-  context_args+=(--context-switch-step "$CONTEXT_SWITCH_STEP" --flops-baseline-total "$FLOPS_BASELINE_TOTAL")
-fi
-
 IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-extra-resources \
   --target-cluster "$TARGET_CLUSTER" \
   --priority system \
@@ -171,6 +162,5 @@ IRIS_USER=marin uv run iris --config "$IRIS_CONFIG" job run --no-wait --enable-e
     --qk-mult "$QK_MULT" \
     --qk-mult-long-scale "$QK_MULT_LONG_SCALE" \
     --capacity-factor "$CAPACITY_FACTOR" \
-    "${context_args[@]}" \
     --version 2026.08.19.2 \
     --run
