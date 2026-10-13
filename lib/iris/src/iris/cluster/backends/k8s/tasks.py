@@ -2916,12 +2916,12 @@ class K8sTaskProvider:
             created = meta.get("creationTimestamp", "")
             if not created:
                 continue
-            finished_at = (
+            finish_times = (
                 status.get("state", {}).get("terminated", {}).get("finishedAt")
                 for status in pod.get("status", {}).get("containerStatuses", [])
             )
             ts = max(
-                (parse_k8s_timestamp(finished).timestamp() for finished in finished_at if finished),
+                (parse_k8s_timestamp(finished).timestamp() for finished in finish_times if finished),
                 default=parse_k8s_timestamp(created).timestamp(),
             )
             pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
