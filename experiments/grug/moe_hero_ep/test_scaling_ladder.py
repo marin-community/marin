@@ -8,12 +8,14 @@ import jax.numpy as jnp
 import jax.tree_util as jtu
 import optax
 import pytest
+from levanter.data.text.datasets import BlockShuffleConfig
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HarrierContextPhase
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
 from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
+from experiments.grug.moe_hero_ep.train import FlopsBaseline
 
 # A miniature stacked-hero parameter tree: the two decay targets plus leaves that must be left alone.
 _MOCK_PARAMS = {
@@ -199,3 +201,43 @@ def test_context_switch_preserves_optimizer(seq_len):
     # The child resumes the parent's optimizer state, so its schedule and hyperparameters must not move.
     assert child.trainer.trainer.num_train_steps == parent.trainer.trainer.num_train_steps
     assert child.optimizer == parent.optimizer
+
+
+def test_hero_context_history_rebuilds_the_prior_phases_it_trained_with():
+    # Each launch re-derives the earlier phases' stages and shuffle from the current code, so a change to
+    # them would silently move the data offsets of a run that has already switched context.
+    step = build_ladder_run(
+        run_id="context-history",
+        size="d6144",
+        seq_len=65536,
+        qk_mult=1.6,
+        version="dev",
+        context_phases=(
+            HarrierContextPhase(end_step=231_600, seq_len=4096),
+            HarrierContextPhase(end_step=350_400, seq_len=16384),
+        ),
+        flops_baseline_total=2e24,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    phases = [
+        (phase.end_step, phase.seq_len, phase.batch_size, [stage for stage, _ in phase.train_weights], phase.shuffle)
+        for phase in config.data.prior_context_phases
+    ]
+    assert phases == [
+        (
+            231_600,
+            4096,
+            11264,
+            [0, 108_000, 312_192],
+            BlockShuffleConfig(io_block_size=256, window_blocks=512, perm_type="feistel"),
+        ),
+        (
+            350_400,
+            16384,
+            2816,
+            [0, 108_096, 312_192],
+            BlockShuffleConfig(io_block_size=64, window_blocks=512, perm_type="feistel"),
+        ),
+    ]
+    assert config.flops_baseline == FlopsBaseline(completed_steps=350_400, total_flops=2e24)
