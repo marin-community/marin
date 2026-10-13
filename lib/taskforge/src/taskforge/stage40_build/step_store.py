@@ -17,7 +17,10 @@ local path or an object-store URL. Under it the store keeps:
 * ``items/<item_id>/steps/<name>/<key digest>.json``: the record of each key an item stored.
 
 The store writes the blob before the record, so every record points at a complete blob, and it
-writes each file to a temporary sibling before renaming it into place. A step's output has to come
+writes each file to a temporary sibling before renaming it into place. On an object store the
+rename is a copy and a delete, so a record costs three requests and appears whole or not at all;
+CI exercises a ``file://`` root, and ``tests/stage40_build/test_step_store_live.py`` (marker
+``manual``) runs the same round trip against a bucket. A step's output has to come
 back intact from ``canonical_json`` followed by a pydantic ``TypeAdapter`` of its output type.
 Dataclasses, pydantic models, tuples, strings and numbers come back intact. Raw ``bytes`` come back
 garbled, because canonical JSON encodes them as base64 and pydantic decodes a JSON string as UTF-8.
@@ -118,8 +121,15 @@ class RLEnvBuildStepRecord:
 class RLEnvBuildStepStore:
     """Step outputs for the item ``item_id``, under ``root``.
 
-    A driver can also memoize a helper inside a step body: it builds an ``RLEnvBuildStepKey`` for
-    the helper's own inputs and calls ``load`` and ``store`` with a name of its choosing.
+    Records are per item: ``load`` looks only under this item, so two items that compute the same
+    key each run the step once, while the blob they write is shared. A hit therefore says that this
+    item stored that key in an earlier build.
+
+    A driver can also memoize a helper that a step body calls: it builds an ``RLEnvBuildStepKey``
+    from the helper's source digest and its arguments' digests and calls ``load`` and ``store`` with
+    a name of the form ``<step>.<helper>``. The dot keeps helper records apart from program steps,
+    which appear in ``Provenance.steps``, when a reader lists ``items/<item_id>/steps/``. A step
+    receives no store, so a program written by a model cannot memoize its own helpers.
     """
 
     def __init__(self, root: str, item_id: str):
