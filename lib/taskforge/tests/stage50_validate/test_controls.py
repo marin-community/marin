@@ -14,7 +14,6 @@ from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.rollout_model import ServerRenderer
-from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.spec.controls import ControlCategory, ControlKind, Expectation
 from taskforge.stage50_validate.controls import ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.outcome import Cause, Graded, Ungraded
@@ -34,7 +33,6 @@ class ReorderingTokenizer(TemplateTokenizer):
 def settings(factory, max_turns: int = 6) -> EngineSettings:
     return EngineSettings(
         factories={Backend.SHELLSIM.value: factory, Backend.DOCKER.value: FixtureImageFactory()},
-        capabilities={Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: LOCAL_DOCKER},
         max_turns=max_turns,
         command_timeout=10,
         tool_turn_timeout=20,

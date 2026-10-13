@@ -48,10 +48,10 @@ with the rest of the lowered spec. A task whose format cannot carry its answer f
 (TaskCompendium ``submission_compatibility``) is not started: each of its trials is one
 ``SUBMISSION_UNSUPPORTED`` attempt naming the reasons.
 
-``EngineSettings.factories`` and ``EngineSettings.capabilities`` come from
-``taskforge.sandbox.factories.machine_factories`` and ``factory_capabilities`` for the same host. A
-task those factories cannot run (``task_refusals``) is not started: each of its trials is one
-``MACHINE_UNSUPPORTED`` attempt naming the refusals.
+``EngineSettings.factories`` come from ``taskforge.sandbox.factories.machine_factories``. Before a
+trial starts, ``task_refusals`` passes each of the task's machines to its factory's
+``check_environment``. When a factory is missing or rejects a machine, the task is not started: each
+of its trials is one ``MACHINE_UNSUPPORTED`` attempt carrying the refusals.
 """
 
 import asyncio
@@ -75,7 +75,7 @@ from taskcompendium.submission import submission_compatibility
 from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
 from taskforge.llm.rollout_model import RolloutTransport
-from taskforge.sandbox.factories import FactoryCapabilities, Refusal, task_refusals
+from taskforge.sandbox.factories import Refusal, task_refusals
 from taskforge.stage50_validate.classify import trial_outcome
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
 
@@ -99,19 +99,17 @@ transport, the token-id route broke the exact-token contract in 0 trials and cha
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """The machine factories ``RolloutEngine`` runs on, what they can run, and the session
-    limits validation imposes on every trial.
+    """The machine factories ``RolloutEngine`` runs on, and the session limits validation
+    imposes on every trial.
 
-    ``factories`` and ``capabilities`` are keyed by shellbox ``Backend`` value, as
-    ``machine_factories`` and ``factory_capabilities`` return them. ``command_timeout`` bounds one
-    shell command and ``tool_turn_timeout`` one tool turn, so the first must be shorter.
-    ``model_turn_timeout`` bounds one model call. ``cleanup_timeout`` bounds each cleanup action
-    (closing a session or machine); the engine records a cleanup that fails or overruns in
-    ``grade.diagnostics``.
+    ``factories`` is keyed by shellbox ``Backend`` value, as ``machine_factories`` returns it.
+    ``command_timeout`` bounds one shell command and ``tool_turn_timeout`` one tool turn, so the first
+    must be shorter. ``model_turn_timeout`` bounds one model call. ``cleanup_timeout`` bounds each
+    cleanup action (closing a session or machine); the engine records a cleanup that fails or overruns
+    in ``grade.diagnostics``.
     """
 
     factories: Mapping[str, MachineFactory]
-    capabilities: Mapping[str, FactoryCapabilities]
     max_turns: int
     command_timeout: float
     tool_turn_timeout: float
@@ -244,7 +242,7 @@ async def run_trial(
     unsupported = submission_refusal(lowered.task)
     if unsupported is not None:
         return _refuse(lowered, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None, None))
-    refusals = task_refusals(lowered, settings.capabilities)
+    refusals = task_refusals(lowered, settings.factories)
     if refusals:
         return _refuse(lowered, plan, trial, Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None, None))
     backoff = copy.copy(plan.retry_backoff)

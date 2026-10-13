@@ -21,7 +21,6 @@ from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel, RolloutTransport, TokenContractBreak
-from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.stage50_validate.trials import (
     Deadlines,
@@ -40,13 +39,10 @@ SHELLSIM_BACKEND = Backend.SHELLSIM.value
 DOCKER_BACKEND = Backend.DOCKER.value
 
 
-def settings(factory, capabilities=None) -> EngineSettings:
+def settings(factory) -> EngineSettings:
     """Task machines from ``factory``; verifier machines from the fixture image factory."""
     return EngineSettings(
         factories={SHELLSIM_BACKEND: factory, DOCKER_BACKEND: FixtureImageFactory()},
-        capabilities=(
-            {SHELLSIM_BACKEND: SHELLSIM, DOCKER_BACKEND: LOCAL_DOCKER} if capabilities is None else capabilities
-        ),
         max_turns=4,
         command_timeout=10,
         tool_turn_timeout=20,
@@ -159,11 +155,15 @@ async def test_a_failing_setup_command_is_a_task_defect_and_is_not_retried(tmp_p
 
 async def test_a_task_the_factories_refuse_never_starts_a_machine(tmp_path, file_task, fakes):
     factory = fakes.flaky_factory(failures=0, error=RuntimeError)
+    task_machine = file_task.runtime.task_machine.model_copy(update={"cpus": 2})
+    refused = file_task.model_copy(
+        update={"runtime": file_task.runtime.model_copy(update={"task_machine": task_machine})}
+    )
 
-    outcomes = await run_trials(file_task, plan(tmp_path), settings(factory, capabilities={}), fakes.script_model([]))
+    outcomes = await run_trials(refused, plan(tmp_path), settings(factory), fakes.script_model([]))
 
     assert all(isinstance(o, Ungraded) and o.cause is Cause.MACHINE_UNSUPPORTED for o in outcomes)
-    assert all(isinstance(o, Ungraded) and "no_factory" in o.detail for o in outcomes)
+    assert all(isinstance(o, Ungraded) and "ShellSim does not provide host CPU" in o.detail for o in outcomes)
     assert factory.creates == 0
     assert [e.cause for e in ledger(tmp_path)] == [Cause.MACHINE_UNSUPPORTED] * 3
 

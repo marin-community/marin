@@ -27,7 +27,6 @@ from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel, ServerRenderer
-from taskforge.sandbox.factories import LOCAL_DOCKER, SHELLSIM
 from taskforge.spec.controls import Control
 from taskforge.stage50_validate.controls import ControlOutcome, ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.evidence import Complete, Evidence, Incomplete
@@ -59,7 +58,6 @@ def settings(factories: dict[str, MachineFactory]) -> EngineSettings:
     """``factories`` for task machines; verifier machines on the ShellSim-backed fixture image factory."""
     return EngineSettings(
         factories={DOCKER_BACKEND: FixtureImageFactory(), **factories},
-        capabilities={SHELLSIM_BACKEND: SHELLSIM, DOCKER_BACKEND: LOCAL_DOCKER},
         max_turns=12,
         command_timeout=60,
         tool_turn_timeout=120,
