@@ -23,6 +23,8 @@ from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.sampling import seeded_order
 
+from experiments.post_training.smartie.deployment import ImageDeployment, LockImage
+
 
 @dataclass(frozen=True)
 class ConversionFailure:
@@ -50,6 +52,7 @@ def convert_admitted_source(
     machine: MachineRuntimeSpec,
     session: TaskSessionSpec,
     factories: Mapping[str, MachineFactory],
+    deployment: ImageDeployment | None = None,
 ) -> ConvertedSource:
     """Check a FULL source and collect all row failures before publication.
 
@@ -74,6 +77,8 @@ def convert_admitted_source(
             seen.add(task_id)
             if task.source.dataset != manifest["source_dataset"] or task.source.revision != manifest["source_revision"]:
                 raise ValueError("Task source does not match its admission manifest")
+            if deployment is not None:
+                task = deployment.task(task)
             grader = task.grader
             verifier_environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) else None
             runtime = TaskRuntimeSpec(
@@ -81,7 +86,7 @@ def convert_admitted_source(
                 verifier_machine=None if verifier_environment is None else machine,
             )
             tasks.append(lower_task(task, runtime, session, factories=factories, sessions={}))
-        except (ValueError, NotImplementedError, KeyError, TypeError) as error:
+        except (ValueError, NotImplementedError, KeyError, TypeError, OSError) as error:
             # Preserve every conversion failure; never publish a partial passing subset.
             failures.append(ConversionFailure(task_id, str(error)))
     expected = manifest["admission_counts"]["admitted"]
@@ -111,6 +116,7 @@ def build_real_dataset(
     machine: MachineRuntimeSpec,
     session: TaskSessionSpec,
     factories: Mapping[str, MachineFactory],
+    images: tuple[LockImage, ...] = (),
 ) -> dict[str, Any]:
     """Audit every source, then publish native tasks only if the entire batch passes."""
     if output.exists():
@@ -121,6 +127,7 @@ def build_real_dataset(
     evidence = []
     failures = []
     identities = set()
+    deployment = ImageDeployment(images)
     for source in sources:
         root = StoragePath(source.root)
         try:
@@ -138,7 +145,9 @@ def build_real_dataset(
                     hashes[str(path)] = hashlib.file_digest(stream, "sha256").hexdigest()
                     stream.seek(0)
                     rows.extend(pq.read_table(stream).to_pylist())
-            converted = convert_admitted_source(manifest, rows, machine=machine, session=session, factories=factories)
+            converted = convert_admitted_source(
+                manifest, rows, machine=machine, session=session, factories=factories, deployment=deployment
+            )
             failures.extend({"source": source.root, **asdict(failure)} for failure in converted.failures)
             if converted.failures:
                 continue
@@ -159,7 +168,12 @@ def build_real_dataset(
         except (ValueError, KeyError, TypeError, OSError, NotImplementedError) as error:
             # Source failures are reported together; successful sources are not published alone.
             failures.append({"source": source.root, "task_id": "<source>", "reason": str(error)})
-    report = {"sources": evidence, "failures": failures, "seed": seed}
+    report = {
+        "sources": evidence,
+        "failures": failures,
+        "seed": seed,
+        "image_deployments": {lock: asdict(image) for lock, image in deployment.evidence.items()},
+    }
     (output / "conversion-report.json").write_text(json.dumps(report, indent=2))
     if failures:
         summary = Counter(failure["reason"].splitlines()[0] for failure in failures)
@@ -189,6 +203,7 @@ def main(config_path: Path, output: str) -> None:
         machine=MachineRuntimeSpec.model_validate(config["machine"]),
         session=TaskSessionSpec.model_validate(config["session"]),
         factories={"daytona": DaytonaMachineFactory()},
+        images=tuple(LockImage(**image) for image in config.get("images", [])),
     )
     click.echo(json.dumps({"train": len(report["train_ids"]), "validation": len(report["validation_ids"])}))
 

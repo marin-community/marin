@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 
 import pyarrow as pa
@@ -9,6 +10,8 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.spec import LoweredTaskSpec
 from rolloutengine.test_support import arithmetic_task, lowered, machine_runtime
+from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ScriptGrader
 
 from experiments.post_training.smartie.data import (
     AdmittedInput,
@@ -16,6 +19,56 @@ from experiments.post_training.smartie.data import (
     convert_admitted_source,
     split_real_tasks,
 )
+from experiments.post_training.smartie.deployment import ImageDeployment, LockImage
+
+
+def test_lock_image_deployment_preserves_task_contract_and_rejects_changed_lock(tmp_path):
+    lock = tmp_path / "requirements.lock"
+    lock.write_text("example==1.0\n")
+    lock_hash = hashlib.sha256(lock.read_bytes()).hexdigest()
+    (tmp_path / ".artifact.json").write_text(
+        json.dumps({"result": {"lock_sha256": lock_hash, "data": ["nltk:wordnet"]}})
+    )
+    environment = EnvironmentRequirements(
+        capabilities=("shell", "filesystem"),
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        packages_lock=str(lock),
+        working_directory="/app",
+        setup_commands=("mkdir -p /app/output",),
+        environment_variables={"LANG": "C.UTF-8"},
+    )
+    task = arithmetic_task(grader=ScriptGrader(argv=("python3", "/tests/grade.py"), environment=environment))
+    image = LockImage(lock_hash, ("nltk:wordnet",), "registry.example/grader@sha256:" + "a" * 64)
+    deployment = ImageDeployment((image,))
+    deployed = deployment.task(task)
+    expected = task.model_dump()
+    expected["grader"]["environment"].update(packages_lock=None, docker_image=image.image)
+    assert deployed.model_dump() == expected
+    assert task.grader.environment.packages_lock == str(lock)
+    assert deployment.evidence == {str(lock): image}
+    converted = convert_admitted_source(
+        {
+            "mode": "full",
+            "status": "completed",
+            "intended_use": "train",
+            "unprocessed_rows": 0,
+            "source_dataset": "fixture",
+            "source_revision": "1",
+            "admission_counts": {"admitted": 1},
+        },
+        [{"task_id": task.id, "task_json": task.model_dump_json()}],
+        machine=machine_runtime(backend="daytona"),
+        session=lowered(task).session,
+        factories={"daytona": DaytonaMachineFactory()},
+        deployment=deployment,
+    )
+    assert not converted.failures
+    assert converted.tasks[0].task == deployed
+    with pytest.raises(ValueError, match="Expected one image deployment"):
+        ImageDeployment(()).task(task)
+    lock.write_text("example==2.0\n")
+    with pytest.raises(ValueError, match="differs from its artifact record"):
+        ImageDeployment((image,)).task(task)
 
 
 def test_admitted_tasks_roundtrip_and_split_without_order_leakage():
