@@ -23,6 +23,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, HostImage, MachineSpec
 from taskcompendium.grading_result import Outcome
@@ -55,7 +56,7 @@ IMAGE = "fixture/prepared-python@sha256:" + "0" * 64
 
 
 @dataclass
-class PreparedImageFactory:
+class PreparedImageFactory(DockerMachineFactory):
     """Use real bubblewrap machines with the already installed test dependencies."""
 
     local: LocalMachineFactory

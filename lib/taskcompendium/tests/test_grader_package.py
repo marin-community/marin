@@ -7,8 +7,9 @@ import json
 from dataclasses import replace
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, MachineSpec, RegistryImage, ShellSimBuiltins
+from shellbox.machine import Backend, MachineSpec, PackageSpec, RegistryImage
 from verifyit.spec import JsonSchemaSpec, NumericSpec, ScriptSpec
 
 from taskcompendium.grader import GraderPackage, verifyit_package
@@ -44,13 +45,13 @@ GRADING_ENVIRONMENT = EnvironmentRequirements(docker_image=IMAGE, command_semant
 GRADING_MACHINE = MachineSpec(RegistryImage(IMAGE))
 
 
-class FixtureImageFactory:
+class FixtureImageFactory(DockerMachineFactory):
     """Run the pinned fixture image's commands on the ShellSim built-ins."""
 
     backend = Backend.DOCKER
 
     async def create(self, spec):
-        return await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins()))
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
 
 
 def _task(package, answer_type=AnswerType.TEXT, answer_format=PlainText(), final_tools=()):

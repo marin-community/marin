@@ -229,7 +229,7 @@ def _invoke_tool(request: PythonToolRequest) -> bytes:
         raise ValueError(f"Unknown Python tool {request.name!r}")
     validated = tool.validate_arguments(request.arguments)
 
-    environment = shellsim.Environment(
+    environment = shellsim.Context().Environment(
         cpu=_SHELLSIM_CPU_LIMIT,
         memory=_SHELLSIM_MEMORY_LIMIT,
         disk=_SHELLSIM_DISK_LIMIT,

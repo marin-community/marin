@@ -11,8 +11,9 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, DockerImage, Machine, MachineFactory, MachineSpec, ShellSimBuiltins
+from shellbox.machine import Backend, DockerImage, Machine, MachineFactory, MachineSpec, PackageSpec
 
 from taskcompendium.convert.answers import numeric_answer_task, source_defect
 from taskcompendium.models import (
@@ -163,16 +164,16 @@ def stage_table(output_path: Path, view: str = "audit") -> pa.Table:
     return pa.Table.from_pylist(rows, schema=table.schema)
 
 
-class ShellSimImages:
+class ShellSimImages(DockerMachineFactory):
     """Stand in for a grader image with a fresh in-memory ShellSim machine and its shell builtins."""
 
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> Machine:
-        return await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins()))
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
 
 
-class UnavailableImages:
+class UnavailableImages(DockerMachineFactory):
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> Machine:
