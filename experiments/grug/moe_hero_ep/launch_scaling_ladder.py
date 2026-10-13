@@ -56,7 +56,6 @@ from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
-    SIMULATED_EPOCHING_MAX_FLOPS,
     HarrierContextPhase,
     harrier_mix_2026_08_18_data_config,
 )
@@ -236,12 +235,6 @@ def build_ladder_run(
         flops_baseline = FlopsBaseline(context_switch_step, flops_baseline_total)
     flops_per_example, _ = _compute_flops(model_config=model)
     run_flops = flops_per_example * batch_size * num_steps
-    # Skip-to-window offsets assume every source reads its whole cache, which simulated epoching does not.
-    if context_switch_step is not None and run_flops <= SIMULATED_EPOCHING_MAX_FLOPS:
-        raise ValueError(
-            f"A context switch needs a run above {SIMULATED_EPOCHING_MAX_FLOPS:g} FLOPs, which trains without "
-            f"simulated epoching; this run is {run_flops:.3g} FLOPs"
-        )
 
     # The narrow rungs are short: eval every 5% of the run and keep only the forced final checkpoint.
     # The d6144 hero is long: eval every 3000 steps and keep a permanent checkpoint every 6000.
