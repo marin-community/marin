@@ -2,55 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""
-Image data processing module for vision-language models like LLaVA OneVision.
-
-This module provides utilities for:
-- Loading and preprocessing images from various sources (URLs, HuggingFace datasets)
-- Processing conversation-format data with interleaved images and text
-- Converting images to model-ready tensors with proper axes
-- Batching and caching processed image-text pairs
-
-Conversation Format Example:
-{
-    "messages": [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": "What is in this image?"}
-            ]
-        },
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "text", "text": "This image shows..."}
-            ]
-        }
-    ],
-    "images": ["path/to/image.jpg"]  # or PIL Images, or URLs
-}
-"""
+"""Image and conversation sources, preprocessing, batching, and caching."""
 
 import pyarrow.parquet as pq
-from transformers import AutoTokenizer, AutoConfig, AutoImageProcessor, AutoProcessor
 
 import abc
 import asyncio
 import dataclasses
 import json
 import logging
-import math
 import os
 import threading
 import weakref
 from collections import OrderedDict
-from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, Union, cast
 
-import braceexpand
 import datasets
 import equinox as eqx
 import fsspec
@@ -83,18 +51,15 @@ from transformers import (  # noqa: E402
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
-from transformers.image_processing_utils import select_best_resolution  # noqa: E402
-from transformers.image_utils import ImageInput, get_image_size, to_numpy_array  # noqa: E402
-from transformers.processing_utils import MultiModalData, ProcessingKwargs  # noqa: E402
-from transformers.tokenization_utils_base import PreTokenizedInput, TextInput  # noqa: E402
 from transformers.utils import logging as transformers_logging  # noqa: E402
-from transformers.video_utils import VideoInput  # noqa: E402
 
 # Image loading dependencies - imported at module level for performance
 from io import BytesIO  # noqa: E402
 
 import requests  # noqa: E402
 from PIL import Image  # noqa: E402
+from rigging.filesystem.storage_path import StoragePath  # noqa: E402
+from rigging.filesystem.factory import url_to_fs  # noqa: E402
 
 logger = logging.getLogger("levanter.data.image")
 
@@ -113,7 +78,7 @@ class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
     - Direct path string or URL
     """
 
-    def __init__(self, urls, image_key="image", text_key="text"):
+    def __init__(self, urls: Sequence[str], image_key: str = "image", text_key: str = "text") -> None:
         super().__init__(urls)
         self.image_key = image_key
         self.text_key = text_key
@@ -173,7 +138,7 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
     }
     """
 
-    def __init__(self, urls, messages_key="messages", images_key="images"):
+    def __init__(self, urls: Sequence[str], messages_key: str = "messages", images_key: str = "images") -> None:
         super().__init__(urls)
         self.messages_key = messages_key
         self.images_key = images_key
@@ -192,7 +157,9 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
                 for idx in range(row, num_rows):
                     yield {
                         "messages": data[self.messages_key][idx],
-                        "images": data.get(self.images_key, [[]])[idx],
+                        "images": data[self.images_key][idx] if self.images_key in data else [],
+                        "audio": data["audio"][idx] if "audio" in data else [],
+                        "videos": data["videos"][idx] if "videos" in data else [],
                     }
         else:
             with fsspec.open(url, "r", compression="infer") as f:
@@ -204,6 +171,8 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
                                 yield {
                                     "messages": data[self.messages_key],
                                     "images": data.get(self.images_key, []),
+                                    "audio": data.get("audio", []),
+                                    "videos": data.get("videos", []),
                                 }
                             i += 1
                     case ".json":
@@ -212,6 +181,8 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
                             yield {
                                 "messages": doc[self.messages_key],
                                 "images": doc.get(self.images_key, []),
+                                "audio": doc.get("audio", []),
+                                "videos": doc.get("videos", []),
                             }
                     case _:
                         raise ValueError(f"Unknown format {format}")
@@ -238,17 +209,17 @@ class CustomVLMProcessor(ProcessorMixin):
 
     def __init__(
         self,
-        image_processor,
-        tokenizer,
-        video_processor=None,
+        image_processor: Any,
+        tokenizer: PreTrainedTokenizerBase,
+        video_processor: Any = None,
         *,
-        chat_template=None,
-        image_token="<image>",
-        video_token="<video>",
-        num_image_tokens=None,
-        vision_feature_select_strategy=None,
-        **kwargs,
-    ):
+        chat_template: str | None = None,
+        image_token: str = "<image>",
+        video_token: str = "<video>",
+        num_image_tokens: int | None = None,
+        vision_feature_select_strategy: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         """
         Initialize the custom processor with combined components.
 
@@ -276,6 +247,9 @@ class CustomVLMProcessor(ProcessorMixin):
         cls,
         original_processor: ProcessorMixin,
         new_tokenizer: PreTrainedTokenizerBase,
+        *,
+        image_token: str,
+        video_token: str,
     ) -> "CustomVLMProcessor":
         """
         Create a CustomVLMProcessor by combining original processor components with a new tokenizer.
@@ -324,18 +298,10 @@ class CustomVLMProcessor(ProcessorMixin):
             f"new tokenizer has {new_tokenizer.eos_token_id}"
         )
 
-        # Detect Qwen3 tokenizer and use appropriate image/video tokens
-        # Qwen3 has <|image_pad|>, <|video_pad|>, <think>, </think> tokens
-        qwen3_image_token = "<|image_pad|>"
-        qwen3_image_token_id = new_tokenizer.convert_tokens_to_ids(qwen3_image_token)
-        is_qwen3 = qwen3_image_token_id != new_tokenizer.unk_token_id
-
-        if is_qwen3:
-            image_token = "<|image_pad|>"
-            video_token = "<|video_pad|>"
-            logger.info(f"Using Qwen3 tokens: image={image_token}, video={video_token}")
-        else:
-            raise NotImplementedError(f"Tokenizer {type(new_tokenizer).__name__} is not supported")
+        # Placeholder tokens belong to the processor contract, not an LM family.
+        for token in (image_token, video_token):
+            if token not in new_tokenizer.get_vocab():
+                raise ValueError(f"Tokenizer does not contain the configured modality token {token!r}")
 
         result = cls(
             image_processor=original_processor.image_processor,
@@ -356,63 +322,17 @@ class CustomVLMProcessor(ProcessorMixin):
         return result
 
 
-def expand_urls_with_folder_support(urls: List[str]) -> List[str]:
-    """Expand URLs/paths to a list of file paths.
-
-    Supports:
-    - Single file paths: /path/to/file.parquet
-    - Glob patterns: /path/to/*.parquet
-    - Directories: /path/to/folder/ (will find all *.parquet files recursively)
-    - file:// prefixed paths: file:///path/to/folder/
-    - Brace expansion: /path/to/{train,val}*.parquet
-
-    Args:
-        urls: List of URLs/paths that may include directories, globs, or brace patterns
-
-    Returns:
-        List of expanded file paths
-    """
-
-    def expand_single_path(url: str) -> List[str]:
-        """Expand a single path/url to a list of file paths."""
-        # Handle file:// prefix
-        if url.startswith("file://"):
-            local_path = url[7:]  # Remove file:// prefix
-            prefix = "file://"
-        else:
-            local_path = url
-            prefix = ""
-
-        # Check if it's a directory (without glob pattern)
-        if os.path.isdir(local_path):
-            # Find all parquet files in the directory (recursively)
-            parquet_files = []
-            for root, dirs, files in os.walk(local_path):
-                for f in files:
-                    if f.endswith(".parquet"):
-                        full_path = os.path.join(root, f)
-                        parquet_files.append(f"{prefix}{full_path}")
-            parquet_files.sort()  # Sort for deterministic ordering
-            if parquet_files:
-                logger.info(f"Found {len(parquet_files)} parquet files in directory: {local_path}")
+def image_source_urls(urls: Sequence[str]) -> list[str]:
+    """Expand shard patterns and recursively discover parquet files in directories."""
+    result: list[str] = []
+    for specification in urls:
+        for path in StoragePath(specification).expand_glob():
+            fs, key = url_to_fs(str(path))
+            if fs.isdir(key):
+                result.extend(str(match) for match in (path / "**/*.parquet").glob())
             else:
-                logger.warning(f"No parquet files found in directory: {local_path}")
-            return parquet_files
-        elif "*" in local_path:
-            # Use fsspec for glob expansion
-            fs = fsspec.core.url_to_fs(url)[0]
-            globbed = fs.glob(url)
-            return globbed if globbed else [url]
-        else:
-            # Single file
-            return [url]
-
-    result = []
-    for pat in urls:
-        for url in braceexpand.braceexpand(pat):
-            result.extend(expand_single_path(url))
-
-    return result
+                result.append(str(path))
+    return sorted(result)
 
 
 # Type definitions for conversation data
@@ -428,7 +348,9 @@ ConversationDict = TypedDict(
     "ConversationDict",
     {
         "messages": List[ConversationMessage],
-        "images": List[Any],  # List of images (PIL, paths, URLs, or bytes)
+        "images": list[Any],
+        "audio": list[Any],
+        "videos": list[Any],
     },
     total=False,
 )
@@ -437,23 +359,29 @@ ConversationDict = TypedDict(
 # Type definitions for processed image-text data
 # pixel_values and image_sizes are optional to support text-only examples
 class ImageTextDict(TypedDict, total=False):
-    """Processed image-text data for VLM training.
+    """Processed arrays consumed by the cache and image dataset.
 
-    For text-only examples, pixel_values and image_sizes will be None.
+    Attributes:
+        pixel_values: Padded image tiles, shaped (tiles, channels, height, width).
+        input_ids: Integer text tokens, shaped (sequence,).
+        attention_mask: Valid text positions, shaped (sequence,).
+        image_sizes: Original (height, width) for each image, or None.
+        loss_mask: Positions contributing to the language loss, shaped (sequence,).
+        grid_mask: Valid image tiles, shaped (tiles,), or None.
+        unpad_indices: Feature indices in processor order, or None.
     """
 
-    pixel_values: Optional[np.ndarray]  # (TOTAL_PATCHES, channels, height, width) - FIXED shape, padded
-    input_ids: np.ndarray  # (seq_len,)
-    attention_mask: np.ndarray  # (seq_len,)
-    image_sizes: Optional[np.ndarray]  # (num_images, 2) or None - original image sizes (H, W)
-    loss_mask: np.ndarray  # (seq_len,) float32 - 1.0 for compute loss, 0.0 for ignore
-    # Grid mask for fixed-shape processing - indicates which patches are valid (not padding)
-    grid_mask: Optional[np.ndarray]  # (TOTAL_PATCHES,) boolean - True for valid patches
-    # Unpad indices for anyres processing
-    unpad_indices: Optional[np.ndarray]  # (num_image_tokens,) - indices for unpadding image features
+    pixel_values: np.ndarray | None
+    input_ids: np.ndarray
+    attention_mask: np.ndarray
+    image_sizes: np.ndarray | None
+    loss_mask: np.ndarray
+    grid_mask: np.ndarray | None
+    unpad_indices: np.ndarray | None
 
 
-ImageTextDict_exemplar: ImageTextDict = {
+# TreeCache uses this exemplar to infer array dtypes and field structure; it is not a training example.
+IMAGE_TEXT_CACHE_EXEMPLAR: ImageTextDict = {
     "pixel_values": np.zeros((1, 3, 384, 384), dtype=np.float32),
     "input_ids": np.zeros((1,), dtype=np.int32),
     "attention_mask": np.zeros((1,), dtype=np.int32),
@@ -496,22 +424,20 @@ def load_image(image_data: Any) -> Image.Image:
     Returns:
         PIL Image in RGB format
     """
-    if isinstance(image_data, Image.Image):
-        return image_data.convert("RGB")
-    elif isinstance(image_data, str):
-        return load_image_from_path_or_url(image_data)
-    elif isinstance(image_data, np.ndarray):
-        return Image.fromarray(image_data).convert("RGB")
-    elif isinstance(image_data, dict):
-        if "bytes" in image_data:
-            # HuggingFace dataset format
-            return Image.open(BytesIO(image_data["bytes"])).convert("RGB")
-        elif "path" in image_data:
-            return load_image_from_path_or_url(image_data["path"])
-        else:
-            raise ValueError(f"Unknown image dict format: {image_data.keys()}")
-    else:
-        raise ValueError(f"Unsupported image type: {type(image_data)}")
+    match image_data:
+        case Image.Image():
+            return image_data.convert("RGB")
+        case str():
+            return load_image_from_path_or_url(image_data)
+        case np.ndarray():
+            return Image.fromarray(image_data).convert("RGB")
+        case {"bytes": bytes() as encoded}:
+            with Image.open(BytesIO(encoded)) as image:
+                return image.convert("RGB")
+        case {"path": str() as path}:
+            return load_image_from_path_or_url(path)
+        case _:
+            raise ValueError(f"Unsupported image data: {type(image_data)}")
 
 
 def _extract_anyres_params(
@@ -618,6 +544,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         processor: ProcessorMixin,
         *,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        image_token: str | None = None,
+        video_token: str | None = None,
         max_length: int = 2048,
         padding: bool = True,
         messages_key: str = "messages",
@@ -630,7 +558,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         grid_pinpoints: Optional[List[List[int]]] = None,
         patch_size: int = 384,
         vision_feature_height: Optional[int] = None,
-    ):
+    ) -> None:
         """
         Initialize the BatchImageProcessor.
 
@@ -668,9 +596,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         # Pre-compute grid_pinpoints arrays for vectorized _compute_grid_shape
         if grid_pinpoints is not None:
-            self._grid_h: Optional[np.ndarray] = np.array([p[0] for p in grid_pinpoints], dtype=np.float64)
-            self._grid_w: Optional[np.ndarray] = np.array([p[1] for p in grid_pinpoints], dtype=np.float64)
-            self._grid_area: Optional[np.ndarray] = self._grid_h * self._grid_w
+            self._grid_h: np.ndarray | None = np.array([p[0] for p in grid_pinpoints], dtype=np.float64)
+            self._grid_w: np.ndarray | None = np.array([p[1] for p in grid_pinpoints], dtype=np.float64)
+            self._grid_area: np.ndarray | None = self._grid_h * self._grid_w
         else:
             self._grid_h = None
             self._grid_w = None
@@ -678,7 +606,12 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         # Create a custom processor with the new tokenizer if specified
         if tokenizer is not None:
-            self.processor = CustomVLMProcessor.from_processor_and_tokenizer(processor, tokenizer)
+            self.processor = CustomVLMProcessor.from_processor_and_tokenizer(
+                processor,
+                tokenizer,
+                image_token=image_token or processor.image_token,
+                video_token=video_token or processor.video_token,
+            )
 
         # Cache padding mode for __call__
         self._padding_mode = "max_length" if self.padding else False
@@ -969,6 +902,10 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         # Collect all images and texts - avoid repeated dict.get calls
         for item in batch:
+            if item.get("audio") or item.get("videos"):
+                raise ValueError(
+                    "BatchImageProcessor accepts images and text; use an audio/video processor for other modalities"
+                )
             messages = item.get(self.messages_key, [])
             images_data = item.get(self.images_key, [])
 
@@ -1108,8 +1045,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         }
 
     @property
-    def output_exemplar(self):
-        exemplar = dict(ImageTextDict_exemplar)
+    def output_exemplar(self) -> ImageTextDict:
+        exemplar: ImageTextDict = {**IMAGE_TEXT_CACHE_EXEMPLAR}
         # Override with sized arrays when max_num_patches is configured
         if self.max_num_patches is not None:
             total_patches = self.max_num_patches + 1
@@ -1163,7 +1100,7 @@ class ImageDatasetSourceConfig:
             if len(ds.shard_names) == 0:
                 return None
 
-            def extract_fields(x):
+            def extract_fields(x: dict[str, Any]) -> dict[str, Any]:
                 return {
                     "image": x[self.image_key],
                     "text": x[self.text_key],
@@ -1207,7 +1144,7 @@ class ImageDatasetSourceConfig:
         else:
             raise ValueError(f"Unknown split: {split}")
 
-        return expand_urls_with_folder_support(list(urls))
+        return image_source_urls(list(urls))
 
 
 @dataclass
@@ -1280,10 +1217,12 @@ class ConversationDatasetSourceConfig:
             if len(ds.shard_names) == 0:
                 return None
 
-            def extract_fields(x):
+            def extract_fields(x: dict[str, Any]) -> ConversationDict:
                 return {
                     "messages": x[self.messages_key],
                     "images": x.get(self.images_key, []),
+                    "audio": x.get("audio", []),
+                    "videos": x.get("videos", []),
                 }
 
             return ds.map(extract_fields)
@@ -1305,6 +1244,8 @@ class ConversationDatasetSourceConfig:
                 yield {
                     "messages": doc[self.messages_key],
                     "images": doc.get(self.images_key, []),
+                    "audio": doc.get("audio", []),
+                    "videos": doc.get("videos", []),
                 }
         else:
             urls = self.urls_for_split(split)
@@ -1330,14 +1271,14 @@ class ConversationDatasetSourceConfig:
         else:
             raise ValueError(f"Unknown split: {split}")
 
-        return expand_urls_with_folder_support(list(urls))
+        return image_source_urls(list(urls))
 
 
 @dataclass
 class ImageTaskConfig(abc.ABC):
     """Base configuration for image-text tasks."""
 
-    processor: str = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
+    processor: str
     max_length: int = 2048
     padding: bool = True
 
@@ -1367,22 +1308,11 @@ class ImageTaskConfig(abc.ABC):
         pass
 
 
-class StreamingImageDataset(AsyncDataset[ImageTextDict]):
-    """
-    Streaming dataset that processes images on-the-fly without caching to disk.
+class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
+    """Indexed dataset that keeps raw records in memory and processes images on demand.
 
-    This avoids the disk space overhead of caching preprocessed pixel_values,
-    at the cost of reprocessing images each epoch.
-
-    Key design:
-    - Loads ALL raw data into memory at startup (raw data is small - just text/metadata)
-    - Background thread prefetches data sequentially ahead of consumption
-    - Prefetch cache: items are removed when accessed, freeing space for more prefetch
-    - Uses per-processor locks for HF tokenizer thread-safety
-
-    Flow:
-        Prefetch thread: [process 0-31] -> [process 32-63] -> [process 64-95] -> ...
-        Main thread:     [access 0-31, pop from cache] -> [access 32-63, pop] -> ...
+    HF source iteration can stream, but random access materializes those records.
+    Use the raw source's doc_iterator for bounded, sequential HF streaming.
     """
 
     # How many processed examples to cache in memory
@@ -1395,14 +1325,14 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
     _processor_locks_lock: Optional[threading.Lock] = None  # Lazy init
 
     @classmethod
-    def _init_class_locks(cls):
+    def _init_class_locks(cls) -> None:
         """Initialize class-level locks lazily."""
         if cls._processor_locks is None:
             cls._processor_locks = weakref.WeakKeyDictionary()
             cls._processor_locks_lock = threading.Lock()
 
     @classmethod
-    def _get_processor_lock(cls, processor) -> threading.Lock:
+    def _get_processor_lock(cls, processor: ProcessorMixin) -> threading.Lock:
         """Get or create a lock for a specific processor instance."""
         cls._init_class_locks()
         assert cls._processor_locks_lock is not None
@@ -1422,7 +1352,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         images_key: str = "images",
         cache_size: int = DEFAULT_CACHE_SIZE,
         max_num_patches: Optional[int] = None,
-    ):
+    ) -> None:
         super().__init__()
         self.source = source
         self.processor = processor
@@ -1477,7 +1407,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         self._prefetch_thread: Optional[threading.Thread] = None
         self._stop_prefetch = threading.Event()
 
-    def _ensure_data_loaded(self):
+    def _ensure_data_loaded(self) -> None:
         """Load all raw data into memory (synchronous)."""
         if self._raw_data is not None:
             return
@@ -1503,12 +1433,12 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
             # Start background prefetch thread
             self._start_prefetch_thread()
 
-    def _start_prefetch_thread(self):
+    def _start_prefetch_thread(self) -> None:
         """Start background thread to prefetch data sequentially."""
         if self._prefetch_thread is not None:
             return
 
-        def prefetch_worker():
+        def prefetch_worker() -> None:
             """Background worker that prefetches data sequentially.
 
             Simple sequential prefetch - processes data from index 0 to end,
@@ -1622,7 +1552,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Clean up background thread."""
         self._stop_prefetch.set()
         if self._prefetch_thread is not None:
@@ -1638,9 +1568,9 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         images_key: str = "images",
         cache_size: int = DEFAULT_CACHE_SIZE,
         max_num_patches: Optional[int] = None,
-    ) -> "StreamingImageDataset":
+    ) -> "OnDemandImageDataset":
         """Build a streaming dataset from a source."""
-        return StreamingImageDataset(
+        return OnDemandImageDataset(
             source=source,
             processor=processor,
             max_length=max_length,
@@ -1657,7 +1587,7 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
     Cache for preprocessed image-text data.
     """
 
-    def __init__(self, cache: TreeCache[ImageTextDict]):
+    def __init__(self, cache: TreeCache[ImageTextDict]) -> None:
         super().__init__()
         self.cache = cache
 
@@ -1709,7 +1639,7 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
     def load(cache_dir: str) -> "ProcessedImageCache":
         """Load a ProcessedImageCache from a directory."""
         try:
-            cache = TreeCache.load(cache_dir, ImageTextDict_exemplar, options=None)
+            cache = TreeCache.load(cache_dir, IMAGE_TEXT_CACHE_EXEMPLAR, options=None)
             return ProcessedImageCache(cache)
         except FileNotFoundError:
             raise FileNotFoundError(f"{cache_dir} is not a complete cache")
@@ -1867,36 +1797,29 @@ class ConversationIODatasetConfig(ConversationDatasetSourceConfig, ImageTaskConf
 
 
 class ImageTextExample(eqx.Module):
-    """Example for vision-language model training/inference.
+    """Named-array PyTree consumed by the trainer and its batch loader.
 
-    Supports both image+text and text-only examples.
-    For text-only, pixel_values are zero-padded and grid_mask is all-False.
-
-    Uses fixed-shape processing for JIT compatibility:
-    - pixel_values are padded to TOTAL_PATCHES = max_patches + 1
-    - grid_mask indicates which patches are valid (True) vs padding (False)
-
-    Note: pixel_values and grid_mask are always present (non-None) to ensure
-    consistent pytree structure across examples for base DataLoader compatibility.
+    The loss mask selects text targets. Grid masks and unpadding indices describe
+    the processor's image tiles. These fields remain separate from attention masks.
     """
 
-    pixel_values: Optional[NamedArray]  # (TOTAL_PATCHES, channels, height, width) - FIXED shape, padded
+    pixel_values: NamedArray | None  # (TOTAL_PATCHES, channels, height, width) - FIXED shape, padded
     input_ids: NamedArray  # (position,)
-    loss_mask: Optional[NamedArray] = None  # (position,) - mask for loss computation (1.0 for valid, 0.0 for masked)
+    loss_mask: NamedArray | None = None  # (position,) - mask for loss computation (1.0 for valid, 0.0 for masked)
     # Boolean mask indicating valid patches (True for actual, False for padding)
     # Shape: (TOTAL_PATCHES,) where TOTAL_PATCHES = max_patches + 1
-    grid_mask: Optional[NamedArray] = None
+    grid_mask: NamedArray | None = None
     # Pre-computed indices to reorder features to HF's unpadded order
     # Shape: (num_image_tokens,) - maps HF position to Levanter index
-    unpad_indices: Optional[NamedArray] = None
+    unpad_indices: NamedArray | None = None
 
     @staticmethod
     def init(
-        pixel_values: Optional[NamedArray],
+        pixel_values: NamedArray | None,
         input_ids: NamedArray,
-        loss_mask: Optional[NamedArray] = None,
-        grid_mask: Optional[NamedArray] = None,
-        unpad_indices: Optional[NamedArray] = None,
+        loss_mask: NamedArray | None = None,
+        grid_mask: NamedArray | None = None,
+        unpad_indices: NamedArray | None = None,
     ) -> "ImageTextExample":
         """Initialize an ImageTextExample with optional loss masking.
 
@@ -1909,11 +1832,7 @@ class ImageTextExample(eqx.Module):
         """
         result_loss_mask = None
         if loss_mask is not None:
-            # Ensure float32 dtype for loss computation
-            mask_array = loss_mask.array if hasattr(loss_mask, "array") else loss_mask
-            if mask_array.dtype != np.float32:
-                mask_array = mask_array.astype(np.float32)
-            result_loss_mask = NamedArray(mask_array, loss_mask.axes)
+            result_loss_mask = loss_mask.astype(np.float32)
 
         return ImageTextExample(
             pixel_values=pixel_values,
@@ -1927,7 +1846,7 @@ class ImageTextExample(eqx.Module):
 class RepeatedImageDataset(AsyncDataset[ImageTextDict]):
     """Repeat a finite image dataset for a specified number of epochs."""
 
-    def __init__(self, dataset: AsyncDataset[ImageTextDict], epochs: int):
+    def __init__(self, dataset: AsyncDataset[ImageTextDict], epochs: int) -> None:
         if not dataset.is_finite() or epochs <= 0:
             raise ValueError("Repetition requires a finite dataset and positive epochs.")
         self.dataset = dataset
@@ -1964,7 +1883,7 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
         grid_pinpoints: Optional[List[List[int]]] = None,
         patch_size: int = 384,
         NumImageTokens: Optional[Axis] = None,
-    ):
+    ) -> None:
         """
         Args:
             dataset: Source dataset providing ImageTextDict
@@ -2117,7 +2036,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     use_cache: bool = True
     """Whether to cache preprocessed data. Set to False for streaming mode (saves disk space)."""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if len(self.configs) == 0:
             raise ValueError("At least one dataset must be provided")
 
@@ -2143,7 +2062,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
         mix_key, shuffle_key = jax.random.split(key)
 
         # Shuffle components, not the overall mixture, to preserve "stable batch" property
-        def shuffle_ds(ds, key):
+        def shuffle_ds(ds: AsyncDataset[ImageTextDict], key: PRNGKeyArray) -> AsyncDataset[ImageTextDict]:
             if self.shuffle is True:
                 ds = ds.shuffle(key)
             elif isinstance(self.shuffle, int):
@@ -2190,7 +2109,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
     def build_streaming_datasets(
         self, split: str, max_num_patches: Optional[int] = None
-    ) -> Dict[str, StreamingImageDataset]:
+    ) -> Dict[str, OnDemandImageDataset]:
         """Build streaming datasets that process images on-the-fly without caching."""
         datasets_dict = {}
 
@@ -2226,7 +2145,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
                 images_key = "images"
 
             # Build streaming dataset
-            streaming_ds = StreamingImageDataset.build(
+            streaming_ds = OnDemandImageDataset.build(
                 source=source,
                 processor=self.the_processor,
                 max_length=self.max_length,
@@ -2326,531 +2245,3 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
 # Get a transformers logger for the processor
 _processor_logger = transformers_logging.get_logger(__name__)
-
-
-class LlavaOnevisionProcessorKwargs(ProcessingKwargs, total=False):
-    # see processing_utils.ProcessingKwargs documentation for usage.
-    pass
-
-
-LlavaOnevisionProcessorKwargs._defaults = {
-    "text_kwargs": {
-        "padding": False,
-        "return_mm_token_type_ids": False,
-    },
-    "image_kwargs": {},
-}
-
-
-class LlavaOnevisionProcessor(ProcessorMixin):
-    r"""
-    Constructs a LLaVa-Onevision processor which wraps a LLaVa-Onevision video processor, LLaVa-NeXT image processor and a LLaMa tokenizer into a single processor.
-
-    [`LlavaNextProcessor`] offers all the functionalities of [`LlavaOnevisionVideoProcessor`], [`LlavaOnevisionImageProcessor`] and [`LlamaTokenizerFast`]. See the
-    [`~LlavaOnevisionVideoProcessor.__call__`], [`~LlavaNextProcessor.__call__`] and [`~LlavaNextProcessor.decode`] for more information.
-
-    Args:
-        image_processor ([`LlavaOnevisionImageProcessor`], *optional*):
-            The image processor is a required input.
-        tokenizer ([`LlamaTokenizerFast`], *optional*):
-            The tokenizer is a required input.
-        video_processor ([`LlavaOnevisionVideoProcessor`], *optional*):
-            The video processor is a required input.
-        num_image_tokens (`int`, *optional*):
-            Number of image tokens for one imagethat will be returned by vision tower.
-        vision_feature_select_strategy (`str`, *optional*):
-            The feature selection strategy used to select the vision feature from the vision backbone.
-            Should be same as in model's config
-        chat_template (`str`, *optional*): A Jinja template which will be used to convert lists of messages
-            in a chat into a tokenizable string.
-        image_token (`str`, *optional*, defaults to `"<image>"`):
-            Special token used to denote image location.
-        video_token (`str`, *optional*, defaults to `"<video>"`):
-            Special token used to denote video location.
-        vision_aspect_ratio (`str`, *optional*, defaults to `"anyres_max_9"`):
-            Aspect ratio used when processong image features. The default value is "anyres_max_9".
-    """
-
-    attributes = ["image_processor", "tokenizer"]
-    image_processor_class = "LlavaOnevisionImageProcessor"
-    tokenizer_class = ("Qwen2Tokenizer", "Qwen2TokenizerFast")
-    video_processor_class = "LlavaOnevisionVideoProcessor"
-    optional_attributes = ["video_processor", "chat_template"]
-
-    def __init__(
-        self,
-        image_processor=None,
-        tokenizer=None,
-        video_processor=None,
-        num_image_tokens=None,
-        vision_feature_select_strategy=None,
-        chat_template=None,
-        image_token="<image>",
-        video_token="<video>",
-        vision_aspect_ratio="anyres_max_9",
-        max_image_tiles: Optional[int] = None,
-        **kwargs,
-    ):
-        self.num_image_tokens = num_image_tokens
-        self.vision_feature_select_strategy = vision_feature_select_strategy
-        self.image_token = tokenizer.image_token if hasattr(tokenizer, "image_token") else image_token
-        self.video_token = tokenizer.video_token if hasattr(tokenizer, "video_token") else video_token
-        self.image_token_id = (
-            tokenizer.image_token_id
-            if getattr(tokenizer, "image_token_id", None)
-            else tokenizer.convert_tokens_to_ids(self.image_token)
-        )
-        self.video_token_id = (
-            tokenizer.video_token_id
-            if getattr(tokenizer, "video_token_id", None)
-            else tokenizer.convert_tokens_to_ids(self.video_token)
-        )
-        self.vision_aspect_ratio = vision_aspect_ratio
-
-        # For padding mode: max_image_tiles is the total number of tiles (including base)
-        # e.g., for anyres_max_9, max_image_tiles = 9 + 1 = 10
-        self.max_image_tiles = max_image_tiles
-        if max_image_tiles is not None and num_image_tokens is not None:
-            self.max_image_tokens = max_image_tiles * num_image_tokens
-        else:
-            self.max_image_tokens = None
-
-        super().__init__(image_processor, tokenizer, video_processor=video_processor, chat_template=chat_template)
-
-    def __call__(
-        self,
-        images: Optional[ImageInput] = None,
-        text: Optional[Union[TextInput, PreTokenizedInput, list[TextInput], list[PreTokenizedInput]]] = None,
-        videos: Optional[VideoInput] = None,
-        padding_mode: bool = False,
-        **kwargs: Any,
-    ) -> BatchFeature:
-        """
-        Main method to prepare for the model one or several sequences(s) and image(s). This method forwards the `text`
-        and `kwargs` arguments to LlamaTokenizerFast's [`~LlamaTokenizerFast.__call__`] if `text` is not `None` to encode
-        the text. To prepare the image(s), this method forwards the `images` and `kwargs` arguments to
-        LlavaNextImageProcessor's [`~LlavaNextImageProcessor.__call__`] if `images` is not `None`. Please refer to the docstring
-        of the above two methods for more information.
-
-        Args:
-            images (`PIL.Image.Image`, `np.ndarray`, `torch.Tensor`, `list[PIL.Image.Image]`, `list[np.ndarray]`, `list[torch.Tensor]`):
-                The image or batch of images to be prepared. Each image can be a PIL image, NumPy array or PyTorch
-                tensor. Both channels-first and channels-last formats are supported.
-            text (`str`, `list[str]`, `list[list[str]]`):
-                The sequence or batch of sequences to be encoded. Each sequence can be a string or a list of strings
-                (pretokenized string). If the sequences are provided as list of strings (pretokenized), you must set
-                `is_split_into_words=True` (to lift the ambiguity with a batch of sequences).
-            videos (`np.ndarray`, `torch.Tensor`, `list[np.ndarray]`, `list[torch.Tensor]`):
-                The image or batch of videos to be prepared. Each video can be a 4D NumPy array or PyTorch
-
-        Returns:
-            [`BatchFeature`]: A [`BatchFeature`] with the following fields:
-
-            - **input_ids** -- List of token ids to be fed to a model. Returned when `text` is not `None`.
-            - **attention_mask** -- List of indices specifying which tokens should be attended to by the model (when
-              `return_attention_mask=True` or if *"attention_mask"* is in `self.model_input_names` and if `text` is not
-              `None`).
-            - **pixel_values** -- Pixel values to be fed to a model. Returned when `images` is not `None`.
-            - **pixel_values_videos** -- Pixel values of a video input to be fed to a model. Returned when `videos` is not `None`.
-            - **image_sizes** -- Size of each image that will be used to unpad an image. Returned when `images` is not `None`.
-        """
-
-        output_kwargs = self._merge_kwargs(
-            LlavaOnevisionProcessorKwargs,
-            tokenizer_init_kwargs=self.tokenizer.init_kwargs,
-            **kwargs,
-        )
-
-        if text is None:
-            raise ValueError("Text is required for multimodal sequence processing.")
-        if isinstance(text, str):
-            text = [text]
-        elif not isinstance(text, list) or not all(isinstance(item, str) for item in text):
-            raise TypeError("Invalid input text. Please provide a string, or a list of strings")
-
-        image_inputs = video_inputs = {}
-
-        if images is not None:
-            image_inputs = self.image_processor(images, **output_kwargs["images_kwargs"])
-
-            batch_num_images = iter(image_inputs["batch_num_images"])
-            image_sizes = iter(image_inputs["image_sizes"])
-            height, width = get_image_size(
-                to_numpy_array(image_inputs["pixel_values"][0][0]),
-                channel_dim=output_kwargs["images_kwargs"].get("data_format"),
-            )
-            text, num_image_tokens = self._expand_image_tokens(
-                text,
-                image_sizes,
-                height,
-                width,
-                self.image_token,
-                batch_num_images,
-                padding_mode=padding_mode,
-            )
-
-        if videos is not None:
-            video_inputs = self.video_processor(videos, **output_kwargs["videos_kwargs"])
-
-            one_video = video_inputs.get("pixel_values_videos")[0]
-            if isinstance(video_inputs.get("pixel_values_videos")[0], (list, tuple)):
-                one_video = np.array(one_video)
-            else:
-                one_video = to_numpy_array(one_video)
-            height, width = get_image_size(one_video[0], channel_dim=output_kwargs["images_kwargs"].get("data_format"))
-            num_frames = one_video.shape[0]  # frame dim is always after batch dim
-            patches_height_width = int(math.sqrt(self.num_image_tokens))
-            pooled_height_width = math.ceil(patches_height_width / 2)
-            num_video_tokens = num_frames * pooled_height_width * pooled_height_width
-            text = [sample.replace(self.video_token, self.video_token * num_video_tokens) for sample in text]
-
-        return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
-        return_mm_token_type_ids = output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", None)
-        text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
-        self._check_special_mm_tokens(text, text_inputs, modalities=["image"])
-
-        if return_mm_token_type_ids:
-            array_ids = np.array(text_inputs["input_ids"])
-            mm_token_type_ids = np.zeros_like(text_inputs["input_ids"])
-            mm_token_type_ids[array_ids == self.image_token_id] = 1
-            text_inputs["mm_token_type_ids"] = mm_token_type_ids.tolist()
-
-        return BatchFeature(data={**text_inputs, **image_inputs, **video_inputs}, tensor_type=return_tensors)
-
-    def _expand_image_tokens(
-        self,
-        text: list[TextInput],
-        image_sizes: Iterable[Union[list[int], int]],
-        height: int,
-        width: int,
-        special_token: str,
-        batch_num_images: Iterable[int],
-        padding_mode: bool = False,
-    ):
-        prompt_strings = []
-        max_num_vision_tokens = 0
-        for sample in text:
-            if special_token in sample:
-                # Count actual number of image tokens in the sample
-                # batch_num_images may not be reliable for multi-image
-                num_images = sample.count(special_token)
-                _ = next(batch_num_images)  # consume iterator to stay in sync
-                is_multi_image = num_images != 1
-            else:
-                is_multi_image = False
-                num_images = 0
-            while special_token in sample:
-                original_size = next(image_sizes)  # should consume iterable
-
-                # In padding mode:
-                # - Multi-image: use base tokens only (729) - no anyres for multi-image
-                # - Single image: use max tokens (7290) for JIT compatibility
-                if padding_mode and self.max_image_tokens is not None:
-                    if is_multi_image:
-                        num_image_tokens = self.num_image_tokens  # Base patch only
-                    else:
-                        num_image_tokens = self.max_image_tokens  # Full anyres
-                elif is_multi_image:
-                    num_image_tokens = self.num_image_tokens
-                else:
-                    if not isinstance(original_size, (list, tuple)):
-                        # cast to list to avoid numerical precision errors when calculating unpadding
-                        original_size = original_size.tolist()
-                    orig_height, orig_width = original_size
-                    num_image_tokens = self._get_number_of_features(orig_height, orig_width, height, width)
-
-                assert num_image_tokens is not None  # Always assigned in branches above
-                max_num_vision_tokens = max(max_num_vision_tokens, num_image_tokens)
-                if self.vision_feature_select_strategy == "default":
-                    num_image_tokens -= 1
-
-                sample = sample.replace(special_token, "<placeholder>" * num_image_tokens, 1)
-            prompt_strings.append(sample)
-        text = [sample.replace("<placeholder>", special_token) for sample in prompt_strings]
-        return text, max_num_vision_tokens
-
-    def _get_number_of_features(self, orig_height: int, orig_width: int, height: int, width: int) -> int:
-        image_grid_pinpoints = self.image_processor.image_grid_pinpoints
-
-        height_best_resolution, width_best_resolution = select_best_resolution(
-            [orig_height, orig_width], image_grid_pinpoints
-        )
-        scale_height, scale_width = height_best_resolution // height, width_best_resolution // width
-
-        patches_height = patches_width = int(math.sqrt(self.num_image_tokens))
-        unpadded_features, newline_features = self._get_unpadded_features(
-            orig_height, orig_width, patches_height, patches_width, scale_height, scale_width
-        )
-
-        # The base patch covers the entire image (no CLS for SigLIP)
-        base_features = self.num_image_tokens
-        num_image_tokens = unpadded_features + base_features
-        return num_image_tokens
-
-    # Adapted from transformers.models.llava_next.processing_llava_next.LlavaNextProcessor._get_unpadded_features
-    def _get_unpadded_features(self, height, width, patches_height, patches_width, scale_height, scale_width):
-        """
-        Get number of features for a given image with height/width. LLaVA-NeXT is different from LLaVA
-        because it divided each image into patches depending on its resolution. Therefore we need to calculate how many
-        patches an image is divided into and get the number of features from that.
-        """
-        current_height = patches_height * scale_height
-        current_width = patches_width * scale_width
-
-        original_aspect_ratio = width / height
-        current_aspect_ratio = current_width / current_height
-        if original_aspect_ratio > current_aspect_ratio:
-            new_height = int(round(height * (current_width / width), 7))
-            padding = (current_height - new_height) // 2
-            current_height -= padding * 2
-        else:
-            new_width = int(round(width * (current_height / height), 7))
-            padding = (current_width - new_width) // 2
-            current_width -= padding * 2
-
-        unpadded_features = current_height * current_width
-        newline_features = current_height
-
-        max_num_patches = int(self.vision_aspect_ratio.strip("anyres_max_"))
-        ratio = math.sqrt(current_height * current_width / (max_num_patches * patches_height**2))
-        if ratio > 1.1:
-            unpadded_features = int(current_height // ratio) * int(current_width // ratio)
-            newline_features = int(current_height // ratio)
-
-        return (unpadded_features, newline_features)
-
-    def _compute_unpad_indices(
-        self,
-        orig_height: int,
-        orig_width: int,
-        patches_height: int,
-        patches_width: int,
-        scale_height: int,
-        scale_width: int,
-        features_per_patch: int,
-    ) -> np.ndarray:
-        """
-        Compute indices to reorder Levanter's padded features to HF's unpadded order.
-
-        HF's pack_image_features applies spatial unpadding based on original image aspect ratio.
-        This function computes the mapping from HF's feature positions to Levanter's sequential
-        feature layout.
-
-        Args:
-            orig_height: Original image height
-            orig_width: Original image width
-            patches_height: Number of patches per tile in height (e.g., 27)
-            patches_width: Number of patches per tile in width (e.g., 27)
-            scale_height: Number of tiles in height (e.g., 3 for 3x3 grid)
-            scale_width: Number of tiles in width (e.g., 3 for 3x3 grid)
-            features_per_patch: Features per patch/tile (e.g., 729)
-
-        Returns:
-            unpad_indices: Array of shape (num_unpadded_features,) where
-                          unpad_indices[i] = Levanter index for HF position i
-        """
-        # Base features are identity mapping (base patch is always first)
-        base_indices = np.arange(features_per_patch)
-
-        # Grid spatial dimensions after combining all tiles
-        curr_height = patches_height * scale_height  # e.g., 81 for 3x3 grid of 27x27 patches
-        curr_width = patches_width * scale_width
-
-        # Compute unpadding bounds based on original aspect ratio
-        # This matches HF's unpad_image logic
-        original_aspect_ratio = orig_width / orig_height
-        current_aspect_ratio = curr_width / curr_height
-
-        if original_aspect_ratio > current_aspect_ratio:
-            # Wider image - remove top/bottom padding
-            scale_factor = curr_width / orig_width
-            new_height = int(round(orig_height * scale_factor, 7))
-            padding = (curr_height - new_height) // 2
-            row_start = padding
-            row_end = curr_height - padding  # Symmetric padding like HF
-            col_start = 0
-            col_end = curr_width
-        else:
-            # Taller image - remove left/right padding
-            scale_factor = curr_height / orig_height
-            new_width = int(round(orig_width * scale_factor, 7))
-            padding = (curr_width - new_width) // 2
-            row_start = 0
-            row_end = curr_height
-            col_start = padding
-            col_end = curr_width - padding  # Symmetric padding like HF
-
-        # Build mapping from HF grid position to Levanter grid index
-        # HF order: row-major through unpadded region
-        # Levanter order: patch-by-patch (tile-by-tile), then row-major within each patch
-        grid_indices = []
-        for row in range(row_start, row_end):
-            for col in range(col_start, col_end):
-                # Convert global (row, col) to Levanter's patch-based index
-                # Which tile (patch) does this position belong to?
-                tile_row = row // patches_height
-                tile_col = col // patches_width
-                # Local position within the tile
-                local_row = row % patches_height
-                local_col = col % patches_width
-
-                # Tile index in row-major order (0-indexed grid patch, excluding base)
-                tile_idx = tile_row * scale_width + tile_col
-                # Local feature index within the tile
-                local_idx = local_row * patches_width + local_col
-
-                # Levanter index: base_features + tile_idx * features_per_patch + local_idx
-                # +1 because tile_idx=0 is the first grid tile, but Levanter's patch 0 is the base
-                lev_idx = features_per_patch + tile_idx * features_per_patch + local_idx
-                grid_indices.append(lev_idx)
-
-        return np.concatenate([base_indices, np.array(grid_indices, dtype=np.int32)])
-
-    def compute_unpad_indices(
-        self,
-        image_sizes: list,
-        height: int,
-        width: int,
-        max_num_features: int,
-    ) -> np.ndarray:
-        """
-        Compute unpad indices for a batch of images.
-
-        Args:
-            image_sizes: List of (orig_height, orig_width) tuples for each image
-            height: Processed tile height (e.g., 384)
-            width: Processed tile width (e.g., 384)
-            max_num_features: Maximum number of features to pad to
-
-        Returns:
-            unpad_indices: Array of shape (batch, max_num_features) padded with zeros
-        """
-        image_grid_pinpoints = self.image_processor.image_grid_pinpoints
-        patches_height = patches_width = int(math.sqrt(self.num_image_tokens))
-
-        batch_indices = []
-        for orig_height, orig_width in image_sizes:
-            # Find best resolution for this image
-            height_best_resolution, width_best_resolution = select_best_resolution(
-                [orig_height, orig_width], image_grid_pinpoints
-            )
-            scale_height = height_best_resolution // height
-            scale_width = width_best_resolution // width
-
-            # Compute unpad indices for this image
-            indices = self._compute_unpad_indices(
-                orig_height,
-                orig_width,
-                patches_height,
-                patches_width,
-                scale_height,
-                scale_width,
-                self.num_image_tokens,
-            )
-            batch_indices.append(indices)
-
-        # Pad all indices to max_num_features
-        padded_indices = np.zeros((len(batch_indices), max_num_features), dtype=np.int32)
-        for i, indices in enumerate(batch_indices):
-            padded_indices[i, : len(indices)] = indices
-
-        return padded_indices
-
-    def _get_num_multimodal_tokens(self, image_sizes=None, video_sizes=None, **kwargs):
-        """
-        Computes the number of placeholder tokens needed for image inputs with the given sizes.
-        Args:
-            image_sizes (list[list[str]], *optional*):
-                The input sizes formatted as (height, width) per each image.
-        Returns:
-            MultiModalData with num_image_tokens and num_image_patches.
-        """
-        vision_data = {}
-        if image_sizes is not None:
-            images_kwargs = LlavaOnevisionProcessorKwargs._defaults.get("images_kwargs", {})
-            images_kwargs.update(kwargs)
-
-            size = images_kwargs.get("size", None) or self.image_processor.size
-            assert isinstance(size, dict)  # size should be a dict with height/width or shortest_edge
-            size = (
-                (size["shortest_edge"], size["shortest_edge"])
-                if "shortest_edge" in size
-                else (min(size["height"], size["width"]), min(size["height"], size["width"]))
-            )
-            processed_height, processed_width = size
-
-            batch_num_image_tokens = []
-            num_image_patches = [1] * len(image_sizes)  # llava-ov doesn't batch pixels as Idefics, thus `1` patch`
-            for image_size in image_sizes:
-                orig_height, orig_width = image_size
-                num_image_tokens = self._get_number_of_features(
-                    orig_height, orig_width, processed_height, processed_width
-                )
-                if self.vision_feature_select_strategy == "default":
-                    num_image_tokens -= 1
-                batch_num_image_tokens.append(num_image_tokens)
-            vision_data.update({"num_image_tokens": batch_num_image_tokens, "num_image_patches": num_image_patches})
-
-        return MultiModalData(**vision_data)
-
-
-DEFAULT_IMAGE_GRID_PINPOINTS = [
-    [384, 384],
-    [384, 768],
-    [384, 1152],
-    [768, 384],
-    [768, 768],
-    [768, 1152],
-    [1152, 384],
-    [1152, 768],
-    [1152, 1152],
-]
-
-
-def create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=None, max_image_tiles=None):
-    """
-    Create a LlavaOnevisionProcessor with custom do_pad setting.
-
-    Args:
-        model_name: HuggingFace model name
-        do_pad: Whether to pad image patches (True for Levanter, False for HF reference)
-        image_grid_pinpoints: Optional custom grid pinpoints. If None, uses DEFAULT_IMAGE_GRID_PINPOINTS.
-        max_image_tiles: Maximum number of image tiles (including base) for padding mode.
-                         For anyres_max_9, this would be 10 (9 + 1 base).
-                         Required when using padding_mode=True when calling the processor.
-    """
-
-    if image_grid_pinpoints is None:
-        image_grid_pinpoints = DEFAULT_IMAGE_GRID_PINPOINTS
-
-    # Load config
-    config = AutoConfig.from_pretrained(model_name)
-
-    # Load the HF processor to get the chat template
-    hf_processor = AutoProcessor.from_pretrained(model_name)
-    chat_template = hf_processor.chat_template
-
-    # Load tokenizer from HF
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    # Load image processor from HF and configure do_pad
-    image_processor = AutoImageProcessor.from_pretrained(model_name)
-    image_processor.do_pad = do_pad
-    image_processor.image_grid_pinpoints = image_grid_pinpoints
-
-    # Calculate num_image_tokens (patches per image = (image_size / patch_size)^2)
-    image_size = config.vision_config.image_size  # e.g., 384
-    patch_size = config.vision_config.patch_size  # e.g., 14
-    num_image_tokens = (image_size // patch_size) ** 2  # e.g., 729
-
-    # Create the custom processor with required parameters
-    processor = LlavaOnevisionProcessor(
-        image_processor=image_processor,
-        tokenizer=tokenizer,
-        num_image_tokens=num_image_tokens,
-        vision_feature_select_strategy=config.vision_feature_select_strategy,
-        vision_aspect_ratio=config.vision_aspect_ratio,
-        chat_template=chat_template,
-        max_image_tiles=max_image_tiles,
-    )
-    return processor
