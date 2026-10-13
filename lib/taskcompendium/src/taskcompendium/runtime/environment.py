@@ -69,7 +69,7 @@ def validate_machine_spec(requirements: EnvironmentRequirements, factory: Machin
     require_resolved_environment(requirements)
     if requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
         if factory.backend != Backend.SHELLSIM or not isinstance(spec.source, ShellSimBuiltins):
-            raise UnsupportedMachineSpec("Shell simulator semantics require ShellSim built-ins")
+            raise UnsupportedMachineSpec("Shell simulator semantics require a portable ShellSim source")
         if spec.network != NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("The shell simulator has no guest network")
         return
@@ -107,6 +107,9 @@ def prepare_machine_spec(
     if requirements.docker_image is not None:
         require_image(spec, requirements.docker_image)
     variables = {}
+    if requirements.portable_software is not None:
+        software = requirements.portable_software
+        spec = replace(spec, source=ShellSimBuiltins(software.pypi_packages, software.tools))
     if requirements.packages_lock is not None:
         runtime = local_runtime(requirements.packages_lock)
         runtime.ensure_built()

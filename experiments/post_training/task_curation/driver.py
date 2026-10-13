@@ -95,6 +95,10 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
     "--controller-url",
     help="Controller for --image-backend gvisor; defaults to the current Iris job's controller.",
 )
+@click.option(
+    "--simulator-catalog",
+    help="Portable software catalog URL or path; use an immutable snapshot for cached campaign results.",
+)
 @click.option("--seed", type=int, default=0)
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
 @click.option("--report-path", help="Required for SAMPLE/FULL; QUICK writes campaign.json under --output-root.")
@@ -142,6 +146,7 @@ def main(
     container_profile: str,
     image_backend: str | None,
     controller_url: str | None,
+    simulator_catalog: str | None,
     seed: int,
     verification_sample_size: int,
     report_path: str | None,
@@ -224,7 +229,8 @@ def main(
         review_concurrency=review_concurrency,
         normalized_shards=normalized_shards,
         machines=CampaignMachines(
-            image_factory=_image_factory(Backend(image_backend) if image_backend is not None else None, controller_url)
+            image_factory=_image_factory(Backend(image_backend) if image_backend is not None else None, controller_url),
+            simulator_catalog=simulator_catalog,
         ),
         seed=seed,
         verification_sample_size=verification_sample_size,

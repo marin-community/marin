@@ -338,7 +338,19 @@ class CommandSemantics(StrEnum):
     LINUX_PROCESS = "linux_process"
     """Real Linux processes, installed executables, and a native filesystem."""
     SHELL_SIMULATOR = "shell_simulator"
-    """A built-in shell language and virtual filesystem, without native executables or guest networking."""
+    """A simulated shell and virtual filesystem with optional WASI software and no guest networking."""
+
+
+SHELL_SIMULATOR_CAPABILITIES = frozenset({"shell", "filesystem", "python"})
+
+
+class PortableSoftware(BaseModel):
+    """Explicit WASI catalog selection, independent of native Linux package locks."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pypi_packages: tuple[str, ...] | None = None
+    tools: tuple[str, ...] = ()
 
 
 class EnvironmentRequirements(BaseModel):
@@ -355,6 +367,7 @@ class EnvironmentRequirements(BaseModel):
     environment_variables: dict[str, str] = Field(default_factory=dict)
     tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
     packages_lock: str | None = Field(default=None, min_length=1)
+    portable_software: PortableSoftware | None = None
 
     @model_validator(mode="after")
     def validate_environment(self) -> "EnvironmentRequirements":
@@ -363,11 +376,13 @@ class EnvironmentRequirements(BaseModel):
         if any(value is not None for value in (self.docker_image, self.docker_build, self.packages_lock)):
             if self.command_semantics != CommandSemantics.LINUX_PROCESS:
                 raise ValueError("Native environment dependencies require Linux process semantics")
-        if self.command_semantics == CommandSemantics.SHELL_SIMULATOR and set(self.capabilities) - {
-            "shell",
-            "filesystem",
-        }:
-            raise ValueError("The shell simulator provides only shell and filesystem capabilities")
+        if self.portable_software is not None and self.command_semantics != CommandSemantics.SHELL_SIMULATOR:
+            raise ValueError("Portable software requires shell simulator semantics")
+        if (
+            self.command_semantics == CommandSemantics.SHELL_SIMULATOR
+            and set(self.capabilities) - SHELL_SIMULATOR_CAPABILITIES
+        ):
+            raise ValueError("The shell simulator provides shell, filesystem, and Python capabilities")
         if any(not capability for capability in self.capabilities):
             raise ValueError("Capabilities must be nonempty names")
         if len(set(self.capabilities)) != len(self.capabilities):
@@ -503,9 +518,17 @@ class FileReward(BaseModel):
 
 
 def _require_grader_environment(environment: EnvironmentRequirements) -> None:
-    if environment.docker_image is None and environment.packages_lock is None and environment.docker_build is None:
+    if all(
+        selection is None
+        for selection in (
+            environment.docker_image,
+            environment.packages_lock,
+            environment.docker_build,
+            environment.portable_software,
+        )
+    ):
         raise ValueError(
-            "A grading environment requires a digest-pinned image, packages lock, or unresolved build context"
+            "A grading environment requires a pinned image, package lock, portable software, or unresolved build context"
         )
     if environment.tool_providers:
         raise ValueError("A grading environment cannot declare tool providers")

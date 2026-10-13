@@ -451,13 +451,15 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
     task = shell_task.model_copy(
         update={
             "environment_requirements": EnvironmentRequirements(
-                command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem")
+                command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem", "python")
             )
         }
     )
     factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins()), {}, 1, 1024)
     env = await factory.create(task)
     try:
+        python = await env.machine.run(Command(("python3", "-c", "print(6 * 7)")))
+        assert (python.exit_code, python.stdout) == (0, b"42\n")
         public = await env.machine.run(Command(("cat", "/workspace/people.csv")))
         assert b"person-0-0" in public.stdout
         oracle = await env.machine.run(Command(("test", "-e", CONTROL_PATH)))

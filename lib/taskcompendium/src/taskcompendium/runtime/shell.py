@@ -27,6 +27,7 @@ from shellbox.machine import (
 from taskcompendium.models import (
     ANSWER_CALL_NAME,
     DEFAULT_WORKSPACE,
+    SHELL_SIMULATOR_CAPABILITIES,
     AnswerCall,
     FunctionCall,
     FunctionDefinition,
@@ -242,7 +243,7 @@ class ShellFactory:
         validate_output_paths(task.output_paths)
         requirements = task.environment_requirements
         if (
-            set(requirements.capabilities) - {"shell", "filesystem"}
+            set(requirements.capabilities) - SHELL_SIMULATOR_CAPABILITIES
             or requirements.tool_providers
             or any(tool is None or definition.name != tool.definition.name for definition in task.interaction_tools)
         ):

@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.models import (
+    SHELL_SIMULATOR_CAPABILITIES,
     AnswerType,
     CommandSemantics,
     EnvironmentRequirements,
@@ -97,8 +98,8 @@ def validate_lowered_task(
         shell_tool is None or tool.name != shell_tool.definition.name for tool in task.interaction_tools
     ):
         raise NotImplementedError("Native tool providers require a registered task session")
-    if set(task.environment_requirements.capabilities) - {"shell", "filesystem"}:
-        raise NotImplementedError("The Shellbox session supports only shell and filesystem capabilities")
+    if set(task.environment_requirements.capabilities) - SHELL_SIMULATOR_CAPABILITIES:
+        raise NotImplementedError("The Shellbox session supports only shell, filesystem, and Python capabilities")
     if lowered.runtime.task_machine is None and (
         task.resources.all
         or task.resources.worker

@@ -14,8 +14,8 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, ExitReason, MachineSpec, ShellSimBuiltins, ShellStatus
 from shellbox.transfer import download_files
 
-PANIC_COMMAND = "cat /workspace/numbers.txt | python3 -c 'import sys; print(sum(int(line) for line in sys.stdin))'"
-PANIC_OUTPUT_LIMIT_BYTES = 64
+UNSUPPORTED_COMMAND = "cat /workspace/numbers.txt | python3 -c 'import sys; print(sum(int(line) for line in sys.stdin))'"
+UNSUPPORTED_OUTPUT_LIMIT_BYTES = 64
 
 
 @pytest.mark.parametrize(
@@ -42,7 +42,7 @@ def test_download_rejects_file_and_byte_overflow(limits):
 
 def test_shell_state_and_one_shot_command() -> None:
     async def check() -> None:
-        machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
+        machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins(), env={"INITIAL": "base"}))
         try:
             shell = await machine.open_shell()
             first = await shell.execute(
@@ -52,8 +52,8 @@ def test_shell_state_and_one_shot_command() -> None:
             second = await shell.execute("pwd; answer")
             assert second.output == b"/tmp\nhello\n"
 
-            verifier = await machine.run(Command(("sh", "-c", "pwd; cat /workspace/result")))
-            assert verifier.stdout == b"/workspace\nfile\n"
+            verifier = await machine.run(Command(("sh", "-c", 'pwd; cat /workspace/result; echo "$INITIAL:$ANSWER"')))
+            assert verifier.stdout == b"/workspace\nfile\nbase:\n"
             after = await shell.execute("pwd; answer")
             assert after.output == b"/tmp\nhello\n"
         finally:
@@ -85,7 +85,7 @@ def test_file_transfer_and_bounded_output(tmp_path: Path) -> None:
     asyncio.run(check())
 
 
-def test_run_simulator_panic_returns_failed_result(tmp_path: Path) -> None:
+def test_run_unsupported_command_returns_failed_result(tmp_path: Path) -> None:
     async def check() -> None:
         machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
         try:
@@ -93,12 +93,13 @@ def test_run_simulator_panic_returns_failed_result(tmp_path: Path) -> None:
             source.write_text("1\n2\n")
             await machine.upload(source, "/workspace/numbers.txt")
 
-            result = await machine.run(Command(("sh", "-c", PANIC_COMMAND), output_limit_bytes=PANIC_OUTPUT_LIMIT_BYTES))
+            result = await machine.run(
+                Command(("sh", "-c", UNSUPPORTED_COMMAND), output_limit_bytes=UNSUPPORTED_OUTPUT_LIMIT_BYTES)
+            )
             assert result.reason is ExitReason.EXITED
-            assert result.exit_code == 1
+            assert result.exit_code == 2
             assert result.stdout == b""
-            assert result.stderr.startswith(b"shellsim operation panicked")
-            assert len(result.stderr) == PANIC_OUTPUT_LIMIT_BYTES
+            assert len(result.stderr) == UNSUPPORTED_OUTPUT_LIMIT_BYTES
             assert result.stderr_truncated
 
             followup = await machine.run(Command(("cat", "/workspace/numbers.txt")))
@@ -109,7 +110,7 @@ def test_run_simulator_panic_returns_failed_result(tmp_path: Path) -> None:
     asyncio.run(check())
 
 
-def test_shell_session_simulator_panic_returns_failed_update(tmp_path: Path) -> None:
+def test_shell_session_unsupported_command_returns_failed_update(tmp_path: Path) -> None:
     async def check() -> None:
         machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
         try:
@@ -118,11 +119,10 @@ def test_shell_session_simulator_panic_returns_failed_update(tmp_path: Path) -> 
             await machine.upload(source, "/workspace/numbers.txt")
             shell = await machine.open_shell()
 
-            update = await shell.execute(PANIC_COMMAND, output_limit_bytes=PANIC_OUTPUT_LIMIT_BYTES)
+            update = await shell.execute(UNSUPPORTED_COMMAND, output_limit_bytes=UNSUPPORTED_OUTPUT_LIMIT_BYTES)
             assert update.status is ShellStatus.COMPLETED
-            assert update.exit_code == 1
-            assert update.output.startswith(b"shellsim operation panicked")
-            assert len(update.output) == PANIC_OUTPUT_LIMIT_BYTES
+            assert update.exit_code == 2
+            assert len(update.output) == UNSUPPORTED_OUTPUT_LIMIT_BYTES
             assert update.truncated
 
             followup = await shell.execute("cat /workspace/numbers.txt")
