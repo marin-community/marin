@@ -353,6 +353,8 @@ class GrugEvalConfig:
     eval_batch_size: int = 512
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
+    # Keep packing fixed when comparing checkpoints trained at different context lengths.
+    max_seq_len: int | None = None
     prefix: str = "eval"
     # Evaluate with the training MoE backend (capacity-limited, with drops): `eval_current` scores
     # the live parameters and `eval_ema` the EMA parameters; either one schedules the
@@ -372,6 +374,24 @@ class GrugEvalConfig:
 
 
 @dataclass(frozen=True)
+class FlopsBaseline:
+    """Cumulative training FLOPs through a completed handoff step."""
+
+    completed_steps: int
+    total_flops: float
+
+    def offset(self, batch_schedule: BatchSchedule, flops_per_example: float, restored_step: int) -> float:
+        """Return the FLOPs to add to ``flops_per_example`` times the examples seen so far.
+
+        The correction replaces the current shape's cost for the first ``completed_steps`` with the
+        parent's recorded total. It is negative when the current shape costs more per example.
+        """
+        if self.completed_steps > restored_step:
+            raise ValueError("FLOPs baseline must precede or equal the restored checkpoint step")
+        return self.total_flops - flops_per_example * batch_schedule.global_data_offset_by_step(self.completed_steps)
+
+
+@dataclass(frozen=True)
 class GrugRunConfig:
     """Top-level config for grug training."""
 
@@ -386,6 +406,7 @@ class GrugRunConfig:
     # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
+    flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
@@ -546,7 +567,7 @@ def build_tagged_evaluator(
     mp: jmp.Policy,
     model_transform: Callable[[Transformer], Transformer] | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
-    pos = Axis("position", max_seq_len)
+    pos = Axis("position", max_seq_len if eval_cfg.max_seq_len is None else eval_cfg.max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
     if len(tagged_eval_sets) == 0:
         logger.warning("No evaluation datasets provided.")
@@ -1049,6 +1070,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
+        flops_offset = (
+            config.flops_baseline.offset(batch_schedule, flops_per_example, int(state.step))
+            if config.flops_baseline is not None
+            else 0.0
+        )
 
         eval_cfg = config.eval
         evaluator = None
@@ -1127,7 +1153,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if progress_watchdog is not None:
             state_callbacks.add_hook(progress_watchdog, every=1)
         state_callbacks.add_hook(
-            callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
+            callbacks.log_performance_stats(
+                config.model.max_seq_len, batch_schedule, flops_per_example, flops_offset=flops_offset
+            ),
             every=log_every,
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=stop_step), every=log_every)
@@ -1174,16 +1202,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    last_dropless_eval_step = step_count
                     # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
                     # the expert axis lands replicated, and the copy is much larger than the
                     # train-mesh params. The train step needs almost the whole device budget for
                     # its temporary buffer, thus this copy must die before the next step.
-                    with set_mesh(_mesh):
+                    with (
+                        callbacks.progress_event_scope(
+                            step.emit_event,
+                            callbacks.ProgressEvent.EVALUATION_STARTED,
+                            callbacks.ProgressEvent.EVALUATION_FINISHED,
+                        ),
+                        set_mesh(_mesh),
+                    ):
                         model = _reshard_tree_to_mesh(step.model, _mesh)
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
+                    last_dropless_eval_step = step_count
 
                 eval_hooks.append(dropless_eval_hook)
 
