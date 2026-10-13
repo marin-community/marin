@@ -47,6 +47,21 @@ def _model_step() -> ArtifactStep[LevanterCheckpoint]:
     )
 
 
+@pytest.mark.parametrize("relative_path", [".", "hf/.", "hf/../policy"])
+def test_artifact_hf_model_rejects_literal_object_store_dot_segments(relative_path: str) -> None:
+    # A trailing '/.' caused a real export to appear empty during GPU startup.
+    with pytest.raises(ValueError, match="dot segments"):
+        ArtifactHfModel(_model_step(), "test/model", "revision", relative_path=relative_path)
+
+
+def test_artifact_hf_model_root_preserves_the_artifact_locator() -> None:
+    spec = dataclasses.replace(_spec(), model=dataclasses.replace(_spec().model, relative_path=""))
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["inputs"]["model"]["uri"] == "tests/iceball-sft@2026.08.01"
+
+
 def _data_step() -> ArtifactStep[Artifact]:
     return ArtifactStep.adopt(
         "tests/iceball-gsm8k",
@@ -266,6 +281,16 @@ def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
             config_yaml=f"entrypoint: fully_async\n{_config_yaml()}",
             topology=dataclasses.replace(spec.topology, role_plan=plan),
         )
+
+
+@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
+def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
+    # Evaluation previously passed preflight, then failed in the GPU engine factory.
+    spec = _spec()
+    recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
+    runtime = SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON)
+    with pytest.raises(ValueError, match="expert_block requires non-colocated"):
+        dataclasses.replace(spec, config_yaml=recipe, runtime=runtime)
 
 
 def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:

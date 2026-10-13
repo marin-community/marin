@@ -54,6 +54,7 @@ from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
 from verifyit.spec import FunctionCall, PredictedActionSpec, StructuredExactSpec, parse_spec
 
+from rolloutengine.agent_session import ExternalAgentSession
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     GenerationLimitReached,
@@ -81,6 +82,222 @@ FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(
     command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=FIXTURE_IMAGE
 )
+
+
+@pytest.mark.parametrize("compact", [False, True])
+async def test_external_agent_receives_engine_turns_and_controls_next_history(compact):
+    first = ({"role": "user", "content": "Return 12."},)
+    observation = {"role": "tool", "tool_call_id": "write", "content": "Written."}
+    received = []
+    finished = asyncio.Event()
+
+    async def agent(complete):
+        turn = await complete(SessionStart(first, {"tool_choice": "auto"}))
+        received.append(turn)
+        history = (
+            ({"role": "user", "content": "File written. Finish."},) if compact else (*first, turn.message, observation)
+        )
+        options = {} if compact else {"tool_choice": "auto"}
+        received.append(await complete(SessionStart(history, options)))
+        finished.set()
+
+    async def grade(messages, *, stop_reason):
+        assert finished.is_set()
+        return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
+
+    model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
+    result = await engine(model, sessions={"agent": lambda _task, _machine: ExternalAgentSession(agent, grade)}).run(
+        lowered(arithmetic_task(), task_session="agent")
+    )
+
+    assert result.grade.reward == 1.0
+    assert [turn.response_token_ids for turn in received] == [(20,), (21,)]
+    assert [turn.logprobs for turn in received] == [(-0.5,), (-0.5,)]
+    assert result.loss_mask == ((1,) if compact else (1, 0, 0, 1))
+    assert model.requests[1].options == ({} if compact else {"tool_choice": "auto"})
+    assert model.requests[1].messages == (
+        ({"role": "user", "content": "File written. Finish."},)
+        if compact
+        else (*first, received[0].message, observation)
+    )
+
+
+async def test_external_agent_is_cancelled_when_engine_generation_is_cancelled():
+    model_entered = asyncio.Event()
+    agent_closed = asyncio.Event()
+
+    async def agent(complete):
+        try:
+            await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
+        finally:
+            agent_closed.set()
+
+    async def model(_request):
+        model_entered.set()
+        await asyncio.Future()
+
+    async def grade(messages, *, stop_reason):
+        del messages, stop_reason
+        raise AssertionError("Cancellation must not grade an unfinished model call")
+
+    runner = ShellboxRolloutEngine(
+        model, {}, sessions={"agent": lambda _task, _machine: ExternalAgentSession(agent, grade)}
+    )
+    pending = asyncio.create_task(runner.run(lowered(arithmetic_task(), task_session="agent")))
+    await asyncio.wait_for(model_entered.wait(), timeout=5)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert agent_closed.is_set()
+
+
+async def test_external_agent_failure_retains_the_generated_turn():
+    async def agent(complete):
+        await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
+        raise RuntimeError("Installed agent failed after receiving its response")
+
+    async def grade(messages, *, stop_reason):
+        del messages, stop_reason
+        raise AssertionError("The agent failure must be reported before grading")
+
+    runner = engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]),
+        sessions={"agent": lambda _task, _machine: ExternalAgentSession(agent, grade)},
+    )
+    with pytest.raises(RolloutInterrupted) as caught:
+        await runner.run(lowered(arithmetic_task(), task_session="agent"))
+    assert caught.value.operation == RolloutOperation.ADVANCE
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert caught.value.rollout.response_token_ids == (20,)
+    assert caught.value.rollout.loss_mask == (1,)
+
+
+async def test_external_agent_cleanup_preserves_prior_cancellation():
+    agent_task = None
+
+    async def agent(complete):
+        nonlocal agent_task
+        agent_task = asyncio.current_task()
+        await complete(SessionStart(({"role": "user", "content": "Return 12."},), {}))
+
+    async def grade(messages, *, stop_reason):
+        del messages, stop_reason
+        raise AssertionError("An interrupted agent must not be graded")
+
+    session = ExternalAgentSession(agent, grade)
+    await session.prepare()
+    assert agent_task is not None
+    agent_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await agent_task
+    with pytest.raises(asyncio.CancelledError):
+        await session.close()
+
+
+@pytest.mark.parametrize("next_options", [{}, {"tool_choice": "none"}])
+async def test_session_replaces_model_options_after_conversation_reset(next_options):
+    initial_options = {"tool_choice": "required", "parallel_tool_calls": False}
+    revised_messages = ({"role": "user", "content": "Return 12 without tools."},)
+
+    class Session:
+        def __init__(self):
+            self.turns = 0
+
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Use a tool."},), initial_options)
+
+        async def advance(self, turn):
+            del turn
+            self.turns += 1
+            if self.turns == 1:
+                return Transition(done=False, reset_conversation=revised_messages, next_options=next_options)
+            return Transition(done=self.turns == 3)
+
+        async def grade(self, messages, *, stop_reason):
+            return GradeResult(Outcome.GRADED, float(messages[-1]["content"] == "12"))
+
+        async def close(self):
+            pass
+
+    model = ReplayModel([{"role": "assistant", "content": "12"}] * 3)
+    result = await engine(model, sessions={"fixture": lambda _task, _machine: Session()}).run(
+        lowered(arithmetic_task(), task_session="fixture")
+    )
+
+    assert [request.options for request in model.requests] == [initial_options, next_options, next_options]
+    assert model.requests[1].messages == revised_messages
+    assert result.grade.reward == 1.0
+    assert result.loss_mask == (1, 0, 0, 1)
+
+
+@pytest.mark.parametrize("alter_prefix", [False, True])
+async def test_external_agent_preserves_exact_tokens_after_history_reset(alter_prefix):
+    requests = []
+    prefixes = [(10, 11), (90, 91, 92)]
+
+    async def agent(complete):
+        for index, prefix in enumerate(prefixes):
+            await complete(SessionStart(({"role": "user", "content": f"turn {index}"},), {}, prefix))
+
+    async def model(request):
+        index = len(requests)
+        requests.append(request)
+        served = prefixes[index]
+        if index == 1 and alter_prefix:
+            served = (90, 91, 99)
+        return ModelTurn({"role": "assistant", "content": "done"}, served, (5,), (-0.1,), "stop")
+
+    async def grade(_messages, *, stop_reason):
+        return GradeResult(Outcome.GRADED, 1.0)
+
+    runner = ShellboxRolloutEngine(
+        model, {}, sessions={"agent": lambda _task, _machine: ExternalAgentSession(agent, grade)}
+    )
+    task = lowered(arithmetic_task(), task_session="agent")
+    if alter_prefix:
+        with pytest.raises(RolloutContractError, match="replay token prefix"):
+            await runner.run(task)
+    else:
+        result = await runner.run(task)
+        assert result.prompt_token_ids == prefixes[1]
+        assert result.response_token_ids == (5,)
+        assert result.loss_mask == (1,)
+    assert [request.prompt_token_ids for request in requests] == prefixes
+
+
+@pytest.mark.parametrize("alter_prefix", [False, True])
+async def test_session_replays_exact_initial_tokens_and_rejects_transport_changes(alter_prefix):
+    prefix = (128000, 42, 128005)
+
+    class Session:
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Replay case"},), {}, prompt_token_ids=prefix)
+
+        async def advance(self, _turn):
+            return Transition(done=True)
+
+        async def grade(self, _messages, *, stop_reason):
+            return GradeResult(Outcome.GRADED, 1.0)
+
+        async def close(self):
+            pass
+
+    async def model(request):
+        assert request.prompt_token_ids == prefix
+        served = (*prefix[:-1], 99) if alter_prefix else prefix
+        return ModelTurn({"role": "assistant", "content": "done"}, served, (5, 6), (-0.1, -0.2), "stop")
+
+    runner = ShellboxRolloutEngine(model, {}, sessions={"fixture": lambda _task, _machine: Session()})
+    task = lowered(arithmetic_task(), task_session="fixture")
+    if alter_prefix:
+        with pytest.raises(RolloutContractError):
+            await runner.run(task)
+        return
+    result = await runner.run(task)
+    assert result.prompt_token_ids == prefix
+    assert result.response_token_ids == (5, 6)
+    assert result.loss_mask == (1, 1)
+    assert result.logprobs == (-0.1, -0.2)
 
 
 @pytest.mark.docker
