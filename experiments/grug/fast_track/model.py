@@ -883,6 +883,9 @@ class GrugModelConfig:
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
+    moe_mxfp8_dispatch: bool = False
+    """With MXFP8 experts (``fp8_recipe``), send the dispatched rows as MXFP8 bytes instead of bf16 rows quantized on
+    arrival. Off by default: the extra uint8 transport buffer OOMs NCCL's symmetric memory on the GB200 recipe."""
     moe_serial_pair: bool = False  # ragged experts: neuron halves in series, y1 + mlp_b(x + y1)
     """Sequential local-expert chunks of the ``ragged_all_to_all`` backend (each a dispatch, expert MLP and
     return); fewer chunks mean fewer, larger collectives at more transport-buffer memory."""
@@ -3558,6 +3561,7 @@ def _run_expert_bank(
             fp8_dispatch=em.fp8_dispatch,
             expert_mxfp8_sim=cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM,
             ragged_expert_mxfp8=cfg.fp8_recipe in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8),
+            ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
             expert_remat=em.expert_remat,
             overlap=overlap,
             ragged_expert_chunks=cfg.moe_ragged_chunks,

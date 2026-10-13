@@ -315,7 +315,7 @@ class _CuteRelu2ExpertMlp:
 class _CuteRelu2Mxfp8ExpertMlp:
     """``_CuteRelu2ExpertMlp`` with MXFP8 operands in the four activation-path GEMMs (QuACK block-scaled SM100).
 
-    The rows arrive as ``mx_pack_rows`` bytes (``_ExpertLayout.mxfp8`` dispatches them so); ``relu(pre)^2`` and
+    The rows arrive as ``mx_pack_rows`` bytes (``_ExpertLayout.mxfp8_dispatch``) or are packed on arrival; ``relu(pre)^2`` and
     ``d pre`` are quantized in their GEMMs' epilogues, ``dy`` and the weights in XLA. The weight gradients stay bf16
     and read the dequantized rows, the values the forward multiplied.
     """
@@ -327,6 +327,8 @@ class _CuteRelu2Mxfp8ExpertMlp:
         cumulative_group_sizes = jnp.concatenate(
             [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
         )
+        if x_dispatch.dtype != jnp.uint8:
+            x_dispatch = mx_pack_rows(x_dispatch)
         return relu2_expert_mlp_mxfp8_fwd(x_dispatch, moe_w13_local, moe_w2_local, cumulative_group_sizes)
 
     def backward(self, residuals, cotangent):
@@ -549,7 +551,7 @@ class _ExpertLayout:
     overlap_weight_grads: bool = False
     # Dispatch the rows as MXFP8 bytes (``mx_pack_rows``) for an expert MLP that takes them so; the backward's
     # transports stay in the rows' dtype (quantization is straight-through).
-    mxfp8: bool = False
+    mxfp8_dispatch: bool = False
 
     @property
     def chunks(self) -> int:
@@ -640,7 +642,7 @@ def _routed_experts_forward(
         site=_TransportBufferSite.RETURN_OUTPUT,
     )  # [TK, O]
     chunk_residuals = []
-    send = mx_pack_rows(sorted_x) if layout.mxfp8 else sorted_x  # [TK, H] or [TK, H + H / 32] bytes
+    send = mx_pack_rows(sorted_x) if layout.mxfp8_dispatch else sorted_x  # [TK, H] or [TK, H + H / 32] bytes
     for chunk_index, plan in enumerate(plans):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             source = send
@@ -899,6 +901,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     overlap_weight_grads: bool = False,
     mxfp8: bool = False,
+    mxfp8_dispatch: bool = False,
     serial_pair: bool = False,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
@@ -994,7 +997,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         input_dim=x_local.shape[1],
         expert_mlp=expert_mlp,
         overlap_weight_grads=overlap_weight_grads,
-        mxfp8=mxfp8,
+        mxfp8_dispatch=mxfp8_dispatch,
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.
