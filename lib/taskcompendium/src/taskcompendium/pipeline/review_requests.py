@@ -134,10 +134,11 @@ def batch_tool_arguments(output: str, task_ids: Sequence[str], *, tool_name: str
                 or message.calls[0].name != tool_name
             ):
                 raise ValueError(f"Expected exactly one {tool_name} call")
+            arguments = message.calls[0].object_arguments()
         except (KeyError, TypeError, ValueError) as error:
             records.append(BatchToolArguments(task_id, ReviewStatus.INVALID, None, str(error)))
             continue
-        records.append(BatchToolArguments(task_id, ReviewStatus.REVIEWED, message.calls[0].arguments, ""))
+        records.append(BatchToolArguments(task_id, ReviewStatus.REVIEWED, arguments, ""))
     return records
 
 
