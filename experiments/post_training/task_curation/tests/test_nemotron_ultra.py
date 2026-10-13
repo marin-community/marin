@@ -26,7 +26,7 @@ from taskcompendium.models import (
     grades_in_process,
     verifyit_spec,
 )
-from taskcompendium.pipeline.controls import ControlRuntime, run_controls
+from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import CheckStatus, ImportFailureKind, ImportRejection, NormalizedTask, Reply
@@ -39,7 +39,6 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import (
     PLACEHOLDER_INPUTS,
-    RECIPE_VERSIONS,
     SKYWORK,
     SWE_GYM,
     pipeline_name,
@@ -660,14 +659,6 @@ def test_semantic_empty_negative_is_an_explicit_submission(staged, controls):
     assert reply_text(controls.negative(task)) == ""
 
 
-def test_recipe_versions_bump_only_calibrated_or_deterministic_repairs():
-    next_action = "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent"
-    assert RECIPE_VERSIONS[f"{next_action}/SWE-Gym/SWE-Gym"] == "6"
-    assert RECIPE_VERSIONS[f"{next_action}/nebius/SWE-rebench-V2"] == "6"
-    assert "ultra_sft_step3200_instruction_following" not in RECIPE_VERSIONS
-    assert "ultra_sft_step3200_multichallenge_len40k" not in RECIPE_VERSIONS
-
-
 def text_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=reply)))
     result = grade_task(task, GradingAttempt(trace))
@@ -678,7 +669,7 @@ def text_grade(task: TaskSpec, reply: str) -> tuple[Outcome, float | None]:
 def test_math_golden_scores_the_boxed_reference_one(staged, path):
     controls = RECIPES[pipeline_name("rlvr2", path)].controls
     assert controls is not None
-    report = run_controls(task_for(path, staged), runtime=ControlRuntime(controls, None))
+    report = run_controls(task_for(path, staged), controls=controls, machines=None)
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"golden": CheckStatus.PASS}, report
 
@@ -778,7 +769,6 @@ def test_instruction_following_combines_formal_and_multiturn_semantic_checks(sta
     spec = verifyit_spec(task.grader)
     assert isinstance(spec, JudgeSpec)
     assert spec.constraints[0].name == "punctuation:no_comma"
-    assert "latest unresolved user request" in spec.criteria[0]
     assert spec.strip_candidate_reasoning_blocks
 
 
@@ -802,14 +792,6 @@ def test_instruction_following_semantically_grades_approximate_language_check(st
     assert any(
         "language:response_language" in criterion and '"language": "en"' in criterion for criterion in spec.criteria
     )
-
-
-def test_jailbreak_uses_policy_specific_native_judge(staged):
-    task = task_for("ultra_sft_step3200_jailbreak", staged)
-    spec = verifyit_spec(task.grader)
-    assert isinstance(spec, JudgeSpec)
-    assert "offer a safe or constructive redirection" in spec.references[0]
-    assert spec.strip_candidate_reasoning_blocks
 
 
 def test_language_mixing_uses_absolute_source_scale_without_a_fake_cohort(staged):

@@ -12,7 +12,7 @@ from typing import cast
 import pytest
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import ScriptGrader, TaskSpec
-from taskcompendium.pipeline.controls import ControlRuntime, answer_reply, run_controls
+from taskcompendium.pipeline.controls import answer_reply, run_controls
 from taskcompendium.pipeline.models import CheckStatus, WorkspaceFiles
 from taskcompendium.runtime.resources import inline_resource
 
@@ -81,7 +81,7 @@ def without_module(task: TaskSpec, module: str) -> TaskSpec:
 def test_archive_grader_passes_its_golden(machines, name, fixture):
     controls = RECIPES[name].controls
     assert controls is not None
-    report = run_controls(fixture_task(name, fixture), runtime=ControlRuntime(controls, machines))
+    report = run_controls(fixture_task(name, fixture), controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"golden": CheckStatus.PASS}, report
 

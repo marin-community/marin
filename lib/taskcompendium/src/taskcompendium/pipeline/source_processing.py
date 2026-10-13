@@ -34,7 +34,7 @@ from taskcompendium.pipeline.audit_schema import (
     RAW_SCHEMA,
     TASK_SCHEMA,
 )
-from taskcompendium.pipeline.controls import ControlRuntime, GradingMachines, control_suite
+from taskcompendium.pipeline.controls import GradingMachines, control_suite
 from taskcompendium.pipeline.conversion import (
     ConvertedRow,
     convert_source_row,
@@ -628,7 +628,7 @@ def _verify(run: _SourceRun) -> tuple[dict[str, Any], StoragePath]:
             str(filtered),
             str(verified),
             run.config.verification_policy,
-            control_suite(ControlRuntime(run.recipe.controls, run.config.machines, run.config.judge_connection)),
+            control_suite(run.recipe.controls, run.config.machines, run.config.judge_connection),
             run.config.execution.max_workers,
             run.config.execution.worker_resources,
             context=run.context,

@@ -118,10 +118,7 @@ def _gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spe
     """Whether a blank final text is a candidate under the verifier's explicit policy."""
     if not isinstance(task.answer_format, PlainText):
         return False
-    try:
-        policy = empty_output_policy(verifier)
-    except InvalidTask:
-        return False
+    policy = empty_output_policy(verifier)
     if policy is not EmptyOutputPolicy.GRADE:
         return False
     final = attempt.conversation.events[-1]

@@ -101,30 +101,32 @@ def controls_identity(controls: Controls) -> dict[str, Any]:
     }
 
 
-@dataclass(frozen=True)
-class ControlRuntime:
-    controls: Controls
-    machines: GradingMachines | None
-    judge_connection: JudgeConnection | None = None
-
-
-def control_suite(runtime: ControlRuntime) -> CheckSuite:
+def control_suite(
+    controls: Controls,
+    machines: GradingMachines | None,
+    judge_connection: JudgeConnection | None = None,
+) -> CheckSuite:
     """Check each sampled task with a declared positive or negative submission, falling back to empty."""
-    controls = runtime.controls
     return CheckSuite(
         id="controls",
         revision=CONTROLS_REVISION,
         parameters={
-            **(runtime.machines.identity() if runtime.machines is not None else {}),
+            **(machines.identity() if machines is not None else {}),
             **controls_identity(controls),
-            **({"judge_base_url": runtime.judge_connection.base_url} if runtime.judge_connection is not None else {}),
+            **({"judge_base_url": judge_connection.base_url} if judge_connection is not None else {}),
         },
-        run=partial(run_controls, runtime=runtime),
+        run=partial(run_controls, controls=controls, machines=machines, judge_connection=judge_connection),
     )
 
 
-def run_controls(task: TaskSpec, *, runtime: ControlRuntime) -> VerificationReport:
-    return asyncio.run(_control_checks(task, runtime))
+def run_controls(
+    task: TaskSpec,
+    *,
+    controls: Controls,
+    machines: GradingMachines | None,
+    judge_connection: JudgeConnection | None = None,
+) -> VerificationReport:
+    return asyncio.run(_control_checks(task, controls, machines, judge_connection))
 
 
 def _empty_submission(task: TaskSpec) -> ControlSubmission:
@@ -140,9 +142,10 @@ def _is_judge_task(task: TaskSpec) -> bool:
 
 async def _control_checks(
     task: TaskSpec,
-    runtime: ControlRuntime,
+    controls: Controls,
+    machines: GradingMachines | None,
+    judge_connection: JudgeConnection | None,
 ) -> VerificationReport:
-    controls = runtime.controls
     require_resolved_environment(task.environment_requirements)
     grader = task.grader
     if isinstance(grader, NoGrader | SessionGrader):
@@ -154,29 +157,29 @@ async def _control_checks(
             ]
         )
     judge_task = _is_judge_task(task)
-    if judge_task and runtime.judge_connection is None:
+    if judge_task and judge_connection is None:
         raise ValueError("Judge controls require an explicit remote connection")
     sandbox = None
     if not grades_in_process(grader) and not judge_task:
         environment = grader.environment
         assert environment is not None
         require_resolved_environment(environment)
-        if runtime.machines is None:
+        if machines is None:
             raise ValueError("Sandbox controls require grading machines")
         sandbox = _Sandbox(
-            runtime.machines,
+            machines,
             controls.memory_mb,
-            _selected_machine(runtime.machines, environment, controls.memory_mb),
+            _selected_machine(machines, environment, controls.memory_mb),
         )
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is not None:
-        check = await _control(task, "golden", golden, 1.0, sandbox, runtime.judge_connection)
+        check = await _control(task, "golden", golden, 1.0, sandbox, judge_connection)
     elif controls.negative is not None and (negative := controls.negative(task)) is not None:
-        check = await _control(task, "negative", negative, 0.0, sandbox, runtime.judge_connection)
+        check = await _control(task, "negative", negative, 0.0, sandbox, judge_connection)
     elif sandbox is not None:
         check = await _empty_sandbox_control(task, sandbox)
     else:
-        check = await _control(task, "empty", _empty_submission(task), 0.0, None, runtime.judge_connection)
+        check = await _control(task, "empty", _empty_submission(task), 0.0, None, judge_connection)
     return VerificationReport([check])
 
 

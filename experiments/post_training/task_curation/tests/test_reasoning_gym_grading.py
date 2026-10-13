@@ -13,7 +13,7 @@ import pytest
 import reasoning_gym
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.controls import ControlRuntime, run_controls
+from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.models import CheckStatus, Reply
 from taskcompendium.runtime.resources import inline_resource
 
@@ -81,7 +81,7 @@ def test_tasktrove_archive_grader_scores_with_the_images_reasoning_gym(machines)
     row = {"path": "reasoning-gym-d9f956ecd029.tar.gz", "task_binary": TASKTROVE_ARCHIVE.read_bytes()}
     task = converted_task(pipeline, row)
     assert pipeline.controls is not None
-    report = run_controls(task, runtime=ControlRuntime(pipeline.controls, machines))
+    report = run_controls(task, controls=pipeline.controls, machines=machines)
     assert {check.check: check.status for check in report.checks} == {
         "empty": CheckStatus.PASS,
         "golden": CheckStatus.PASS,
