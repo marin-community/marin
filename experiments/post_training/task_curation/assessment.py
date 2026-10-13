@@ -6,6 +6,7 @@
 import os
 from dataclasses import dataclass, replace
 from functools import partial
+from typing import Any
 
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.inference.openai_batch import OpenAIBatchClient
@@ -16,13 +17,14 @@ from taskcompendium.pipeline.assessment_review import AssessmentModel, grade_ass
 from taskcompendium.pipeline.chat_requests import chat_output
 from taskcompendium.pipeline.inputs import SourceFiles
 from taskcompendium.pipeline.review_requests import batch_output
+from taskcompendium.pipeline.sources import source_files_identity
 from taskcompendium.pipeline.stages import ReviewMode
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import RecipeSettings
 
-INPUTS_VERSION = "2026.10.13.1"
+INPUTS_VERSION = "2026.10.13.2"
 JUDGMENTS_VERSION = "2026.10.12.5"
 REPORT_VERSION = "2026.10.12.3"
 REQUEST_TIMEOUT = 60
@@ -59,6 +61,7 @@ def _prepare(
     curated_root: str,
     sampling: AssessmentSampling,
     raw_source: SourceFiles | None,
+    raw_source_identity: dict[str, Any] | None,
     output_root: str,
 ) -> None:
     prepare_assessment(
@@ -66,6 +69,7 @@ def _prepare(
         curated_root=curated_root,
         sampling=sampling,
         raw_source=raw_source,
+        raw_source_identity=raw_source_identity,
         output_root=output_root,
     )
 
@@ -144,11 +148,11 @@ def assessment_pipeline(
     """Return the evidence preparation, judgment and report stages for a source."""
     inputs = apply(
         f"rl-assessment/{source}/inputs",
-        partial(_prepare, runtime),
+        partial(_prepare, runtime, raw_source=raw_source),
         version=INPUTS_VERSION,
         curated_root=curated,
         sampling=settings.sampling,
-        raw_source=raw_source,
+        raw_source_identity=source_files_identity(raw_source) if raw_source is not None else None,
         output_root=OUT,
     )
     inputs = replace(inputs, name=f"{inputs.name}-{inputs.fingerprint()[:16]}")

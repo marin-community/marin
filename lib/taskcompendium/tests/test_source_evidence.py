@@ -13,14 +13,15 @@ from taskcompendium.pipeline.source_evidence import OriginalRow, SourceEvidenceF
 from taskcompendium.pipeline.sources import prepared_component_path, raw_input_sha256
 
 
-@pytest.mark.parametrize("representation", ["parquet", "prepared", "jsonl"])
+@pytest.mark.parametrize("representation", ["parquet", "prepared", "jsonl", "prepared_override"])
 def test_original_evidence_recovers_source_ordinals_and_bounds_previews(tmp_path, representation):
     data = [{"text": f"row {index}\u2028" + "x" * 100} for index in range(6)]
     logical = "source.parquet" if representation == "parquet" else "source.jsonl"
     path = tmp_path / logical
-    component = "component" if representation == "prepared" else None
+    component = "component" if representation in ("prepared", "prepared_override") else None
     source_format = SourceFormat.PARQUET if representation == "parquet" else SourceFormat.JSONL
     spec = SourceFiles("fixture", "pin", (logical,), source_format, prepared_component=component)
+    prepared_path = None
     if representation == "parquet":
         table = pa.Table.from_pylist(data)
         with pq.ParquetWriter(path, table.schema) as writer:
@@ -29,6 +30,7 @@ def test_original_evidence_recovers_source_ordinals_and_bounds_previews(tmp_path
             writer.write_table(table.slice(3))
     elif representation == "prepared":
         prepared = prepared_component_path(StoragePath(str(path)), component)
+        prepared_path = str(prepared)
         prepared.parent.mkdirs()
         table = pa.Table.from_pylist(
             [
@@ -46,7 +48,7 @@ def test_original_evidence_recovers_source_ordinals_and_bounds_previews(tmp_path
     rows = {index: OriginalRow(f"task-{index}", f"{logical}:{index}", raw_input_sha256(data[index])) for index in (2, 5)}
     recovered = list(
         original_rows(
-            SourceEvidenceFile(logical, str(path), rows),
+            SourceEvidenceFile(logical, str(path), rows, prepared_path=prepared_path),
             spec=spec,
             context=ConversionContext({}, None),
             preview_characters=40,

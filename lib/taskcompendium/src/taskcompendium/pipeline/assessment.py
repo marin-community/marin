@@ -33,11 +33,11 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.execution_telemetry import SourceTelemetry, execute_phase
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles
-from taskcompendium.pipeline.models import ReviewStatus
+from taskcompendium.pipeline.models import Admission, ReviewStatus
 from taskcompendium.pipeline.review import private_evidence_summary, review_payload
 from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
-from taskcompendium.pipeline.source_evidence import OriginalRow, SourceEvidenceFile, original_rows
-from taskcompendium.pipeline.sources import source_files_identity, staged_inputs
+from taskcompendium.pipeline.source_evidence import READ_BLOCK_BYTES, OriginalRow, SourceEvidenceFile, original_rows
+from taskcompendium.pipeline.sources import prepared_component_path, staged_inputs
 from taskcompendium.submission import submission_compatibility, submission_instruction
 
 PACKET_SCHEMA = pa.schema(
@@ -48,9 +48,8 @@ PACKET_SCHEMA = pa.schema(
         ("omissions", pa.list_(pa.string())),
     ]
 )
-EVIDENCE_READ_BLOCK_BYTES = 1_048_576
 AUDIT_PREVIEW_CHARACTERS = 2048
-AUDIT_FIELD_OWNERS = {"task_json": "normalize", "normalization_changes": "normalize", "raw_json": "source"}
+AUDIT_FIELD_OWNERS = {"task_json": "normalize", "normalization_changes": "normalize"}
 
 
 class Cohort(StrEnum):
@@ -175,7 +174,7 @@ def _indexed_rows(path: str, *, cohort: Cohort) -> Iterator[dict[str, Any]]:
     for row in load_parquet(InputFileSpec(path, columns=columns)):
         reason = None
         if cohort == Cohort.EXCLUDED:
-            if row["admission"] == "admitted":
+            if row["admission"] == Admission.ADMITTED:
                 continue
             reason = (row["filter_reasons"] or [row["admission"]])[0]
         yield {"task_id": row["task_id"], "reason": reason}
@@ -238,7 +237,7 @@ def _diagnostic_sample(groups: dict[str, tuple[int, list[dict]]], size: int, see
 
 def _selected_locations(path: str, *, task_ids: frozenset[str]) -> Iterator[tuple[str, RowLocation]]:
     values = pa.array(sorted(task_ids), type=pa.string())
-    with open_file(path, block_size=EVIDENCE_READ_BLOCK_BYTES) as stream:
+    with open_file(path, block_size=READ_BLOCK_BYTES) as stream:
         parquet = pq.ParquetFile(stream)
         for group in range(parquet.num_row_groups):
             if parquet.metadata.row_group(group).num_rows == 0:
@@ -289,9 +288,13 @@ def _project_evidence(view: str, row: dict[str, Any], sampling: AssessmentSampli
 
 def _selected_evidence(file: SelectedFile, *, sampling: AssessmentSampling) -> Iterator[dict[str, Any]]:
     """Yield bounded evidence for selected records from a Parquet file."""
-    with open_file(file.path, block_size=EVIDENCE_READ_BLOCK_BYTES) as stream:
+    with open_file(file.path, block_size=READ_BLOCK_BYTES) as stream:
         parquet = pq.ParquetFile(stream)
-        columns = [name for name in parquet.schema_arrow.names if AUDIT_FIELD_OWNERS.get(name, file.view) == file.view]
+        columns = [
+            name
+            for name in parquet.schema_arrow.names
+            if name != "raw_json" and AUDIT_FIELD_OWNERS.get(name, file.view) == file.view
+        ]
         # Selected rows from the same group share one decode.
         for group, selected in file.groups.items():
             table = parquet.read_row_group(group, columns=columns)
@@ -345,11 +348,17 @@ def _original_files(records: dict[str, list[dict[str, Any]]], download: dict[str
             raise ValueError(f"Selected tasks share an original-row locator: {file}:{index}")
         rows[index] = OriginalRow(task_id, identity["source_locator"], identity["raw_input_sha256"])
     overrides = download["source_file_overrides"]
+    component = download["files"].get("prepared_component")
     return [
         SourceEvidenceFile(
             file,
             overrides[file]["path"] if file in overrides else str(StoragePath(download["source_input"]) / file),
             rows,
+            prepared_path=(
+                str(prepared_component_path(StoragePath(download["source_input"]) / file, component))
+                if component is not None and file not in overrides
+                else None
+            ),
         )
         for file, rows in sorted(grouped.items())
     ]
@@ -361,12 +370,19 @@ def prepare_assessment(
     curated_root: str,
     sampling: AssessmentSampling,
     raw_source: SourceFiles | None,
+    raw_source_identity: dict[str, Any] | None,
     output_root: str,
 ) -> None:
     """Select admitted and excluded rows, then materialize bounded evidence on workers."""
     if sampling.admitted < 1 or sampling.excluded < 0 or sampling.max_packet_characters < 1:
         raise ValueError("Assessment sampling and packet budgets must be positive")
     manifest = read_json(str(StoragePath(curated_root) / "manifest.json"))
+    download = None
+    if raw_source is not None:
+        download = read_json(str(StoragePath(manifest["datasets"]["download"]) / "manifest.json"))
+        # Manifest JSON represents tuple fields as lists.
+        if json.loads(json.dumps(raw_source_identity)) != download["files"]:
+            raise ValueError("Original source reader differs from the curation invocation")
     views = manifest["datasets"]
     telemetry = SourceTelemetry(manifest["source"], output_root)
     with telemetry.record():
@@ -437,11 +453,7 @@ def prepare_assessment(
         source_rows = 0
         if raw_source is not None and selected:
             with telemetry.phase("source") as phase:
-                download = read_json(str(StoragePath(views["download"]) / "manifest.json"))
-                # Manifest JSON represents tuple fields as lists.
-                identity = json.loads(json.dumps(source_files_identity(raw_source)))
-                if identity != download["files"]:
-                    raise ValueError("Original source reader differs from the curation invocation")
+                assert download is not None
                 recovered = execute_phase(
                     context,
                     Dataset.from_list(_original_files(records, download)).flat_map(

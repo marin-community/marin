@@ -19,7 +19,6 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, Sourc
 from taskcompendium.pipeline.sources import (
     SourceShard,
     canonical_source_json,
-    prepared_component_path,
     staged_raw_file_rows,
 )
 
@@ -38,6 +37,7 @@ class SourceEvidenceFile:
     file: str
     path: str
     rows: dict[int, OriginalRow]
+    prepared_path: str | None = None
 
 
 def _native_rows(path: str, selected: frozenset[int]) -> Iterator[tuple[int, dict[str, Any]]]:
@@ -75,10 +75,8 @@ def _source_rows(
     file: SourceEvidenceFile, spec: SourceFiles, context: ConversionContext
 ) -> Iterator[tuple[int, dict[str, Any]]]:
     selected = frozenset(file.rows)
-    if spec.prepared_component is not None:
-        yield from _prepared_rows(
-            str(prepared_component_path(StoragePath(file.path), spec.prepared_component)), selected
-        )
+    if file.prepared_path is not None:
+        yield from _prepared_rows(file.prepared_path, selected)
         return
     if spec.format == SourceFormat.PARQUET and spec.read is None and spec.parts is None:
         yield from _native_rows(file.path, selected)

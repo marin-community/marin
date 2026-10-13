@@ -168,6 +168,7 @@ def test_assessment_recovers_identity_mismatch_without_misattributing_grade(cont
         sampling=AssessmentSampling(admitted=2),
         output_root=str(inputs),
         raw_source=None,
+        raw_source_identity=None,
     )
     judgments = tmp_path / "judgments"
     grade_assessment(
@@ -207,6 +208,7 @@ def test_assessment_recovers_truncated_judgment_with_larger_retry_budget(context
         sampling=AssessmentSampling(admitted=1),
         output_root=str(inputs),
         raw_source=None,
+        raw_source_identity=None,
     )
     judgments = tmp_path / "judgments"
     grade_assessment(
@@ -238,7 +240,14 @@ def test_assessment_retains_curation_evidence_and_retries_only_uncached_requests
     )
     inputs = tmp_path / "inputs"
     sampling = AssessmentSampling(admitted=2, excluded=1)
-    prepare_assessment(context, curated_root=str(curated), sampling=sampling, output_root=str(inputs), raw_source=None)
+    prepare_assessment(
+        context,
+        curated_root=str(curated),
+        sampling=sampling,
+        output_root=str(inputs),
+        raw_source=None,
+        raw_source_identity=None,
+    )
     manifest = read_json(str(inputs / "manifest.json"))
     assert manifest["admitted_population"] == 4
     assert manifest["excluded_population"] == 1
@@ -279,7 +288,14 @@ def test_assessment_retains_curation_evidence_and_retries_only_uncached_requests
     assert (judgments / "responses/attempt-01.jsonl").is_file()
 
     repeated = tmp_path / "repeated"
-    prepare_assessment(context, curated_root=str(curated), sampling=sampling, output_root=str(repeated), raw_source=None)
+    prepare_assessment(
+        context,
+        curated_root=str(curated),
+        sampling=sampling,
+        output_root=str(repeated),
+        raw_source=None,
+        raw_source_identity=None,
+    )
     assert read_json(str(repeated / "manifest.json"))["sample"] == manifest["sample"]
 
 
@@ -301,6 +317,7 @@ def test_assessment_rejects_duplicate_ids_before_small_sampling(context, tmp_pat
             sampling=AssessmentSampling(admitted=1),
             output_root=str(tmp_path / "inputs"),
             raw_source=None,
+            raw_source_identity=None,
         )
 
 
@@ -308,7 +325,12 @@ def test_empty_release_keeps_excluded_diagnosis(context, tmp_path):
     curated = curated_source(context, tmp_path, [{"Answer": "0"}])
     inputs, judgments = tmp_path / "inputs", tmp_path / "judgments"
     prepare_assessment(
-        context, curated_root=str(curated), sampling=AssessmentSampling(), output_root=str(inputs), raw_source=None
+        context,
+        curated_root=str(curated),
+        sampling=AssessmentSampling(),
+        output_root=str(inputs),
+        raw_source=None,
+        raw_source_identity=None,
     )
     grade_assessment(
         context,
@@ -347,6 +369,7 @@ def test_assessment_locates_evidence_after_empty_physical_row_groups(context, tm
         sampling=AssessmentSampling(admitted=2),
         output_root=str(inputs),
         raw_source=None,
+        raw_source_identity=None,
     )
     manifest = read_json(str(inputs / "manifest.json"))
     packets = [row for path in manifest["packet_paths"] for row in load_parquet(path)]
@@ -382,7 +405,14 @@ def test_assessment_keeps_task_context_when_audit_views_repeat_large_payloads(co
         replacement.replace(path)
     inputs = tmp_path / "inputs"
     sampling = AssessmentSampling(admitted=1)
-    prepare_assessment(context, curated_root=str(curated), sampling=sampling, output_root=str(inputs), raw_source=None)
+    prepare_assessment(
+        context,
+        curated_root=str(curated),
+        sampling=sampling,
+        output_root=str(inputs),
+        raw_source=None,
+        raw_source_identity=None,
+    )
     manifest = read_json(str(inputs / "manifest.json"))
     (packet,) = [row for path in manifest["packet_paths"] for row in load_parquet(path)]
     evidence = json.loads(packet["packet_json"])
