@@ -177,9 +177,9 @@ context the run is leaving, with the step N it ended at, to `HERO_CONTEXT_PHASES
 `launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the parent's
 `throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later handoffs keep
 both. Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
-only `--qk-mult` and `--qk-mult-long-scale` on the command line. `qk_mult_long_scale` multiplies `qk_mult` on the global layers only. Each Harrier bucket skips the unread rest of the
-shuffle window it was reading at each switch, about 52B tokens at a 216000 handoff, so no data
-repeats. Keep the data seed, component order, and token store unchanged. The QK and capacity values
+only `--qk-mult` and `--qk-mult-long-scale` on the command line. `qk_mult_long_scale` multiplies
+`qk_mult` on the global layers only. Each Harrier bucket skips the unread rest of the shuffle window
+it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the data seed, component order, and token store unchanged. The QK and capacity values
 need measured evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed
 trial thresholds; see the
 [context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
