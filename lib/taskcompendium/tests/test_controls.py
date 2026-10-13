@@ -4,22 +4,32 @@
 """Control submissions check a grader through the grading path that rollouts use."""
 
 import json
+import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, Machine, MachineSpec, Result
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import (
+    Backend,
+    Command,
+    DockerImage,
+    Machine,
+    MachineSpec,
+    Result,
+    ShellSimBuiltins,
+    UnsupportedMachineSpec,
+)
 from verifyit.spec import SchemaFormat
 
 from taskcompendium.convert.answers import (
-    exact_answer_task,
     json_schema_task,
-    math_answer_task,
-    mcq_task,
     numeric_answer_task,
 )
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
+    DockerBuildContext,
     EnvironmentRequirements,
     NoGrader,
     ResourceGroups,
@@ -29,6 +39,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.controls import answer_reply, control_suite, reference_reply
 from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand, RawRow, Reply, WorkspaceFiles
+from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.resources import inline_resource
 
 from .pipeline_stages import GRADER_IMAGE, FixtureGradingMachines, ShellSimImages, UnavailableImages, script_graded
@@ -51,7 +62,11 @@ class ImageMachine:
         return await self.machine.run(command)
 
     async def upload(self, source: Path, target: str) -> None:
-        self.uploads.append(target)
+        if source.suffix == ".tar":
+            with tarfile.open(source) as archive:
+                self.uploads.extend("/" + member.name for member in archive if member.isfile())
+        else:
+            self.uploads.append(target)
         await self.machine.upload(source, target)
 
     async def download(self, source: str, target: Path) -> None:
@@ -80,14 +95,8 @@ def checks(task: TaskSpec, controls: Controls, machines: FixtureGradingMachines 
 
 
 def in_process_task(kind: str) -> TaskSpec:
-    if kind == "math":
-        task = math_answer_task(ROW, prompt="What is half of one?", answer=r"\boxed{\frac{1}{2}}")
-    elif kind == "numeric":
+    if kind == "numeric":
         task = numeric_answer_task(ROW, prompt="What is 3 + 4?", answer="7", tolerance_abs=0, tolerance_rel=0)
-    elif kind == "mcq":
-        task = mcq_task(ROW, prompt="Which is blue? A. grass B. snow C. sky D. coal", answer="c", options=4)
-    elif kind == "exact":
-        task = exact_answer_task(ROW, prompt="Name the capital of France.", answers=("Paris",), ignore_case=True)
     else:
         task = json_schema_task(
             ROW, prompt="Return a JSON object.", schema=json.dumps({"type": "object"}), schema_format=SchemaFormat.JSON
@@ -112,7 +121,9 @@ def file_task() -> TaskSpec:
             "output_paths": ("/app/solution.txt",),
             "resources": ResourceGroups(
                 worker=(inline_resource("data/expected.txt", b"7"),),
-                oracle=(inline_resource("solution/solve.sh", b"cp /data/expected.txt solution.txt\n"),),
+                oracle=(
+                    inline_resource("solution/solve.sh", b"mkdir -p /app; cp /data/expected.txt /app/solution.txt\n"),
+                ),
             ),
         }
     )
@@ -123,14 +134,12 @@ def wrong_reply(task: TaskSpec) -> Reply:
     return answer_reply(task, "__incorrect_answer__")
 
 
-@pytest.mark.parametrize("kind", ["math", "numeric", "mcq", "exact"])
-def test_reference_golden_passes_for_in_process_graders(kind):
-    assert checks(in_process_task(kind), REFERENCE_CONTROLS) == {"golden": PASS}
+def test_reference_golden_passes_for_in_process_graders():
+    assert checks(in_process_task("numeric"), REFERENCE_CONTROLS) == {"golden": PASS}
 
 
-@pytest.mark.parametrize("kind", ["math", "numeric", "mcq", "exact"])
-def test_golden_fails_when_the_grader_rejects_it(kind):
-    assert checks(in_process_task(kind), Controls(golden=wrong_reply)) == {"golden": FAIL}
+def test_golden_fails_when_the_grader_rejects_it():
+    assert checks(in_process_task("numeric"), Controls(golden=wrong_reply)) == {"golden": FAIL}
 
 
 @pytest.mark.parametrize("controls", [Controls(), REFERENCE_CONTROLS], ids=["none", "no_reference"])
@@ -144,6 +153,24 @@ def test_graders_without_offline_grading_have_unsupported_controls(grader):
     task = in_process_task("numeric").model_copy(update={"grader": grader})
     report = control_suite(REFERENCE_CONTROLS, FixtureGradingMachines()).run(task)
     assert [check.status for check in report.checks] == [CheckStatus.UNSUPPORTED]
+
+
+@pytest.mark.parametrize("role", ["actor", "grader"])
+def test_controls_reject_unresolved_build_before_machine_selection_or_oracle_fallback(role):
+    task = file_task()
+    build = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM mutable:latest"),)),
+    )
+    if role == "actor":
+        task = task.model_copy(update={"environment_requirements": build})
+    else:
+        task = task.model_copy(update={"grader": task.grader.model_copy(update={"environment": build})})
+    # No machine provider is supplied: unresolved recipes must be rejected before
+    # providers are required, and must never use the grader image for an oracle.
+    suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), None)
+    with pytest.raises(UnsupportedMachineSpec):
+        suite.run(task)
 
 
 @pytest.mark.parametrize(
@@ -214,7 +241,9 @@ def test_unavailable_grading_machines_are_infrastructure_errors(golden, check):
 def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_image, oracle_image):
     task = file_task()
     if agent_image is not None:
-        requirements = EnvironmentRequirements(docker_image=agent_image, compatible_backends=(Backend.DOCKER,))
+        requirements = EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=agent_image
+        )
         task = TaskSpec.model_validate(task.model_copy(update={"environment_requirements": requirements}).model_dump())
     images = RecordingImages()
     controls = Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh"))
@@ -222,3 +251,69 @@ def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_
     oracles = [machine for machine in images.created if "/solution/solve.sh" in machine.uploads]
     assert [machine.image for machine in oracles] == [oracle_image]
     assert {machine.image for machine in images.created if machine not in oracles} == {GRADER_IMAGE}
+
+
+class OracleMachines(FixtureGradingMachines):
+    """Provide image machines and a simulator, leaving lock preparation unsupported."""
+
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int):
+        if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
+            return ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins(), memory_mb=memory_mb)
+        return self.factory, MachineSpec(DockerImage(environment.docker_image or GRADER_IMAGE), memory_mb=memory_mb)
+
+
+def test_oracle_uses_simulator_directory_and_setup_before_native_grading(monkeypatch):
+    monkeypatch.setenv("ORACLE_READY_NAME", "ready.txt")
+    task = answer_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.SHELL_SIMULATOR,
+                working_directory="/agent",
+                setup_commands=('cp /data/expected.txt "$ANSWER_FILE"',),
+                environment_variables={"ANSWER_FILE": "${ORACLE_READY_NAME}"},
+            )
+        }
+    )
+    controls = Controls(
+        golden=lambda _: OracleCommand('test "$PWD" = /agent && cat ready.txt > answer.out', answer_file="answer.out")
+    )
+    assert checks(task, controls, OracleMachines()) == {"golden": PASS}
+
+
+def test_local_oracle_and_grader_setup_run_without_changing_host_user(local_machine_environment):
+    environment, _factory = local_machine_environment
+    task = answer_task()
+    task = task.model_copy(
+        update={
+            "environment_requirements": environment.model_copy(
+                update={"working_directory": "/agent", "setup_commands": ("cp /data/expected.txt ready.txt",)}
+            ),
+            "grader": task.grader.model_copy(
+                update={
+                    "environment": environment.model_copy(
+                        update={"working_directory": "/app", "setup_commands": ("test -f /data/expected.txt",)}
+                    )
+                }
+            ),
+        }
+    )
+    controls = Controls(golden=lambda _: OracleCommand("cat ready.txt > answer.out", answer_file="answer.out"))
+
+    report = control_suite(controls, LocalGraderMachines()).run(task)
+
+    assert {check.check: check.status for check in report.checks} == {"golden": PASS}
+
+
+def test_lock_backed_oracle_rejects_image_only_provider_before_acquisition():
+    task = file_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="unbuilt/requirements.lock"
+            )
+        }
+    )
+    images = RecordingImages()
+    suite = control_suite(Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh")), OracleMachines(images))
+    with pytest.raises(UnsupportedMachineSpec):
+        suite.run(task)
+    assert images.created == []

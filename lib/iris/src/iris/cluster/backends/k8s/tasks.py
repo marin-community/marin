@@ -2089,7 +2089,7 @@ class PeriodicProfiler:
         """
         dispatch = _K8sProfileDispatch(self._kubectl, target.pod_name)
         try:
-            data = capture_threads(dispatch, pid="1")
+            data = capture_threads(dispatch, pid="1", nonblocking=True)
         except Exception as e:
             logger.debug("PeriodicProfiler: thread dump failed for pod %s: %s", target.pod_name, e)
             return None

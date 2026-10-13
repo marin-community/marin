@@ -20,13 +20,13 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 ## Machine API
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`, and `LocalMachineFactory` only `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`, and `LocalMachineFactory` only `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. QEMU and ShellSim have Harbor environment adapters. Docker, gVisor, Daytona, Iris, and local expose the machine API without a Harbor adapter or persistent Bash support.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |
-| Local gVisor | Docker image, registry image, Dockerfile, prepared OCI image | allow or deny | Docker daemon with `runsc` registered; Skopeo for image preparation |
+| Local gVisor | Docker image, registry image, Dockerfile | allow or deny | Docker daemon with `runsc` registered |
 | Daytona | Registry image reference or Docker build context | allow or deny | Daytona credentials and service access |
 | Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: no network. Neither reaches the cluster | Iris controller and workers with sandbox profile support; `ALLOW` needs a Kubernetes cluster |
 | Local | `HostImage()`: the host's own programs and files, in a bubblewrap sandbox | allow or deny | Trusted commands only; `bwrap` able to create namespaces (as root, `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, no AppArmor confinement); a root process to run commands as other users |
@@ -53,10 +53,14 @@ and injects them into the Iris job environment. Keep credentials out of
 `MachineSpec.env`, serialized task data, and command arguments. A factory with
 secrets must never be used for actor jobs; ordinary factories inject none.
 
-Docker stops the command's process group on a timeout or caller cancellation.
-A successful stop preserves the machine. A failed stop raises an infrastructure error and closes the machine.
+Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
+A failed stop without confirmed completion raises an infrastructure error and closes the machine.
+Docker also stops the process group on caller cancellation. Daytona closes the machine on caller cancellation.
+
 Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
-Before machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
+Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
+Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
+Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
 Model commands that run as root can stop other root-owned processes.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
@@ -100,12 +104,19 @@ memory settings. Backends reject resource overrides that they cannot apply.
 username or UID string. An omitted user retains the image's user. ShellSim and
 QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
 control process as root and uses `su` for other execution users. Numeric UIDs
-require `getent` and a matching guest account. The local backend runs other users only from a root process.
+require `getent` and a matching guest account.
+The local backend runs other users only from a root process.
+Daytona framework commands use `/usr/sbin:/usr/bin:/sbin:/bin` for `PATH`.
+Agent commands retain the image's `PATH` and explicit task or command overrides.
+The command deadline includes account and `su` capability probes.
+Failed command-file cleanup closes the sandbox and preserves a primary command error.
 An empty Docker `MachineSpec.workdir` retains the image's working directory.
 Docker, gVisor, Iris and local machines create a nonempty `workdir` when the machine starts, so
 commands can run there even when the image lacks it.
 
-To prepare a registry image, use a standard image reference without `https://`:
+Docker and gVisor use the Docker daemon directly. `RegistryImage` pulls an image only when it is missing from Docker's cache. `DockerfileSource` builds with Docker's layer cache. `DockerImage` requires an image already present in the daemon. Private registry credentials come from Docker's login configuration.
+
+QEMU needs image layers as files to construct its guest filesystem. It uses Skopeo to copy registry images into an OCI directory, then `umoci` to unpack them. Skopeo must be on `PATH`. To prepare a QEMU registry image, use a standard image reference without `https://`:
 
 ```python
 from pathlib import Path
@@ -128,13 +139,12 @@ machine = await QemuMachineFactory(
     ),
     image_cache=Path("/var/cache/marin-shellbox/oci"),
     bundle_cache=Path("/var/cache/marin-shellbox/bundles"),
-    skopeo=Path("/usr/bin/skopeo"),
 ).create(spec)
 ```
 
-The factory uses a process-local `ImageCache` to call `prepare_image` once per source. Preparation selects `linux/amd64`, copies it to a local OCI layout, records its selected manifest digest, and caches the layout by that digest. It accepts Docker Hub references such as `docker.io/library/ubuntu:24.04` and GHCR references. A registry reference is resolved once per Python process; a later process resolves it again. Use `@sha256:...` to fix the source version across processes. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; pass `policy` to require a signature policy. Credentials are used only during preparation.
+The QEMU factory uses `ImageCache` to prepare each source once per process. Preparation selects `linux/amd64`, copies it to a local OCI layout and caches the layout by its selected manifest digest. Registry references remain snapshots within one process. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; pass a Skopeo policy file path as `policy` for signature verification.
 
-`DockerfileSource(context=..., dockerfile=...)` is the other source type. It requires a local Docker builder, builds for `linux/amd64`, and copies the result into the OCI cache. The cache fingerprints the Dockerfile and every path in its build context on each call. An unchanged context builds once per Python process; a changed context triggers a new build. A base image referenced by a mutable tag can change without a context edit, so pin `FROM` by digest for repeatable builds. `DockerMachineFactory` loads a prepared layout under a digest-derived local tag when needed. `QemuMachineFactory` needs `QemuAssets` and a `bundle_cache` to stage the same prepared layout into a guest bundle on first use. `tests/manual/check_prepared_image.py` checks both backends against one public GHCR image. The QEMU bundle cache key includes the prepared image digest, disk size, and caller-supplied `runtime_id`; change `runtime_id` when QEMU, kernel, BusyBox, firmware, or libraries change.
+For QEMU, `DockerfileSource(context=..., dockerfile=...)` builds with a local Docker daemon and exports the result through Skopeo into the OCI cache. The cache fingerprints the Dockerfile and every path in its build context on each call. An unchanged context builds once per Python process; a changed context triggers a new build. Pin `FROM` by digest for repeatable builds. `QemuMachineFactory` accepts `PreparedImage` and needs `QemuAssets` and a `bundle_cache` to construct a guest bundle. `tests/manual/check_prepared_image.py` compares command output in Docker and QEMU for one registry image. The QEMU bundle cache key includes the prepared image digest, disk size, and caller-supplied `runtime_id`; change `runtime_id` when QEMU, kernel, BusyBox, firmware, or libraries change.
 
 `run` remains noninteractive for setup and verification. It starts a new process for each call, while files persist until `close`. Its serial protocol buffers command output in the guest and streams it to the host in bounded chunks; a timeout destroys the machine. `QemuMachine.open_shell()` opens a separate PTY-backed Bash session for agent commands. `tests/manual/check_machine.py` checks one-shot command results, persistent files, and file transfer. `tests/manual/check_shell.py` checks shell state, input, interruption, jobs, bounded output, and reset.
 
@@ -265,7 +275,6 @@ environment:
   import_path: shellbox.backends.qemu.environment:QemuEnvironment
   kwargs:
     image_cache: /var/cache/marin-shellbox
-    skopeo: /usr/bin/skopeo
     qemu_assets:
       qemu: /opt/qemu/qemu-system-x86_64
       kernel: /opt/qemu/vmlinuz
@@ -282,7 +291,7 @@ agents:
       base_url: http://127.0.0.1:8000/v1
 ```
 
-The task must specify exactly one source: `docker_image` or `environment/Dockerfile`. The first trial in a Harbor process prepares the image. Later trials with the same source reuse it; concurrent trials wait for the same preparation. A new Harbor process resolves registry references and builds Dockerfiles again, while the OCI and QEMU bundle caches on disk reuse matching digests. For fully offline trials, prepare the image ahead of time and use a prebuilt guest bundle. Image preparation requires Skopeo, `umoci`, `mkfs.ext4`, and `cpio` on the host. Dockerfile preparation also requires a working Docker builder. `registry_authfile` and `signature_policy` are optional environment kwargs for private registries and signed images; private registry authentication has not been tested end to end.
+The task must specify exactly one source: `docker_image` or `environment/Dockerfile`. The first trial in a Harbor process prepares the image. Later trials with the same source reuse it; concurrent trials wait for the same preparation. Each new process resolves registry references and rebuilds Dockerfile contexts; the OCI and QEMU bundle caches on disk reuse matching digests. For fully offline trials, prepare the image ahead of time and use a prebuilt guest bundle. Image preparation requires `skopeo` on `PATH`, `umoci`, `mkfs.ext4`, and `cpio` on the host. Dockerfile preparation also requires a working Docker builder. `registry_authfile` and `signature_policy` are optional environment kwargs for private registries and signed images; private registry authentication has not been tested end to end.
 
 The 0.1 QEMU extra supplies the emulator but does not supply the guest kernel, BusyBox, firmware, or OCI staging tools, so task-image preparation needs the explicit paths above. A prebuilt `guest_bundle` needs no staging tools on the trial host. Skopeo is available through Linux distribution packages; its upstream project does not publish a portable standalone release binary and recommends distribution packages or its container image. We therefore leave Skopeo outside the wheel for now.
 
@@ -311,7 +320,6 @@ uv run --no-project --python config/external/harbor/.venv/bin/python \
   lib/shellbox/tests/harbor_smoke.py task-image /tmp/qemu-image-smoke-jobs \
   --task-path /path/to/task \
   --image-cache /var/cache/marin-shellbox \
-  --skopeo /usr/bin/skopeo \
   --qemu-assets-json /path/to/qemu-assets.json
 ```
 

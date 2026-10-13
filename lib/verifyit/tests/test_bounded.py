@@ -13,7 +13,7 @@ import pytest
 from verifyit.execution.command import run_command
 from verifyit.execution.worker import call_bounded
 from verifyit.grade import InvalidTask
-from verifyit_test_support.bounded_grading import grading_with_child, grading_with_large_result
+from verifyit.test_support import grading_with_child, grading_with_large_result
 
 
 @pytest.fixture

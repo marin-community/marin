@@ -31,13 +31,13 @@ requests==2.33.1
 pytest
 pytest-json-report
 hypothesis
-tomlkit
-harbor-config @ https://github.com/marin-community/harbor/archive/6b2e76e1dae5c084eed05edefefffcec8c0c1ad9.tar.gz#subdirectory=packages/harbor-config
+tomli-w>=1.2
 
 # The Stack Overflow Python-test tasks (tasktrove-stack_pytest): their hidden tests import mock, typer,
-# freezegun, fastapi, flask, scikit-learn and others. These are the packages, at the versions, of the agent
-# image those tasks are solved in, so a submission that runs there imports here too; flask keeps the pin
-# the grader image was validated with (the agent image has 3.1.3).
+# freezegun, fastapi, flask, scikit-learn and others. These are the packages, at the versions, of the
+# agent image those tasks are solved in, so a submission that runs there imports here too. Starlette's
+# TestClient now requires httpx2. Flask keeps the pin the grader image was validated with (the agent
+# image has 3.1.3).
 aiohttp==3.14.4
 beautifulsoup4==4.15.0
 botocore==1.43.108
@@ -46,6 +46,7 @@ dask==2026.8.0
 django==6.1.1
 faker==40.41.0
 fastapi==0.142.2
+httpx2==2.13.0
 flask==3.1.2
 freezegun==1.5.5
 importlib-metadata==9.0.1

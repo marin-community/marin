@@ -6,8 +6,9 @@
 import contextvars
 import json
 import logging
+import uuid
 from collections import Counter
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -20,9 +21,22 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.pipeline.models import SourceStatus
 from zephyr.context import ZephyrContext
 
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, append_curation_catalog
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PipelineResult:
+    """An execution outcome and the stages that actually ran."""
+
+    status: SourceStatus
+    outputs: dict[str, str]
+    evidence: dict[str, str]
+    stages: tuple[str, ...]
 
 
 class CampaignStatus(StrEnum):
@@ -77,6 +91,7 @@ class SourceOutcome:
     path: str
     status: str
     error: str | None = None
+    result: PipelineResult | None = None
 
 
 class CampaignFailed(RuntimeError):
@@ -87,6 +102,7 @@ class CampaignArtifact(Artifact):
     """A source artifact that records the terminal status the campaign reports for it."""
 
     status: str
+    result: PipelineResult | None = None
 
 
 def campaign_plan(steps: Sequence[ArtifactStep[Artifact]], pool: CampaignPool) -> dict[str, object]:
@@ -113,7 +129,7 @@ def _build_source(
 ) -> SourceOutcome:
     started(step)
     result = run(step, max_concurrent=1)[0]
-    return SourceOutcome(step.name, result.path, result.status)
+    return SourceOutcome(step.name, result.path, result.status, result=result.result)
 
 
 def error_chain(error: BaseException) -> str:
@@ -126,15 +142,47 @@ def error_chain(error: BaseException) -> str:
     return " <- ".join(causes)
 
 
-def campaign_report(status: CampaignStatus, *, mode: str, outcomes: Sequence[SourceOutcome]) -> dict[str, object]:
+def campaign_report(
+    status: CampaignStatus, *, mode: str, outcomes: Sequence[SourceOutcome], run_id: str, started_at: str
+) -> dict[str, object]:
     """The campaign's status with each source outcome and their counts."""
     return {
         "status": status,
+        "run_id": run_id,
+        "started_at": started_at,
         "updated_at": datetime.now(UTC).isoformat(),
         "mode": mode,
         "counts": dict(Counter(outcome.status for outcome in outcomes)),
         "sources": [asdict(outcome) for outcome in outcomes],
     }
+
+
+def write_campaign_report(
+    report_path: str,
+    status: CampaignStatus,
+    *,
+    mode: str,
+    outcomes: Sequence[SourceOutcome],
+    run_id: str,
+    started_at: str,
+    source_ids: Mapping[str, str],
+    execution: Mapping[str, object],
+) -> None:
+    """Persist source outcomes and catalog terminal reports for local or reviewed runs."""
+    report = campaign_report(status, mode=mode, outcomes=outcomes, run_id=run_id, started_at=started_at)
+    report_bytes = json.dumps(report, indent=2).encode()
+    path = StoragePath(report_path)
+    path.write_bytes(report_bytes)
+    if status != CampaignStatus.RUNNING:
+        append_curation_catalog(
+            str(path.parent / CATALOG_DIRECTORY),
+            report_bytes,
+            run_id=run_id,
+            report_path=report_path,
+            source_ids=source_ids,
+            started_at=started_at,
+            execution=execution,
+        )
 
 
 def run_campaign(
@@ -143,6 +191,7 @@ def run_campaign(
     pool: CampaignPool,
     runtime: CampaignRuntime,
     report_path: str,
+    source_ids: Mapping[str, str],
     mode: str = "sample",
 ) -> tuple[SourceOutcome, ...]:
     """Queue source builds, preserve peer outputs on failure, and write the campaign report.
@@ -155,11 +204,21 @@ def run_campaign(
     if len({step.name for step in steps}) != len(steps):
         raise ValueError("Campaign source artifact names must be unique")
     outcomes = {step.name: SourceOutcome(step.name, step.path(), OutcomeStatus.QUEUED) for step in steps}
+    run_id = uuid.uuid4().hex
+    started_at = datetime.now(UTC).isoformat()
     report_lock = Lock()
 
     def write_report(status: CampaignStatus) -> None:
-        report = campaign_report(status, mode=mode, outcomes=[outcomes[step.name] for step in steps])
-        StoragePath(report_path).write_text(json.dumps(report, indent=2))
+        write_campaign_report(
+            report_path,
+            status,
+            mode=mode,
+            outcomes=list(outcomes.values()),
+            run_id=run_id,
+            started_at=started_at,
+            source_ids=source_ids,
+            execution=asdict(pool),
+        )
 
     def started(step: ArtifactStep[CampaignArtifact]) -> None:
         with report_lock:
@@ -198,7 +257,7 @@ def run_campaign(
                     with report_lock:
                         outcomes[step.name] = outcome
                         write_report(CampaignStatus.RUNNING)
-    except Exception:
+    except BaseException:
         write_report(CampaignStatus.FAILED)
         raise
     ordered = tuple(outcomes[step.name] for step in steps)

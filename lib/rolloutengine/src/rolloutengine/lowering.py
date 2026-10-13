@@ -5,18 +5,23 @@
 
 from collections.abc import Callable, Mapping
 
-from shellbox.machine import Backend, Machine, MachineFactory
+from shellbox.machine import Machine, MachineFactory
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     EnvironmentRequirements,
     NoGrader,
     ScriptGrader,
     SessionGrader,
     TaskSpec,
     VerifyitGrader,
+    require_resolved_environment,
 )
+from taskcompendium.runtime.environment import validate_machine_spec
+from taskcompendium.runtime.shell import resolve_shell_tool
 
 from rolloutengine.contracts import TaskSession
+from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec, TaskSessionSpec
 
 SHELLBOX_SESSION = "shellbox"
@@ -47,6 +52,9 @@ def validate_lowered_task(
     grader = task.grader
     verifier_machine = lowered.runtime.verifier_machine
     grader_environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) else None
+    require_resolved_environment(task.environment_requirements)
+    if grader_environment is not None:
+        require_resolved_environment(grader_environment)
     if grader_environment is not None and verifier_machine is None:
         raise ValueError("A grader with an environment requires a verifier machine")
     if grader_environment is None and verifier_machine is not None:
@@ -62,15 +70,18 @@ def validate_lowered_task(
             continue
         if selection.backend not in factories:
             raise ValueError(f"Unknown Shellbox factory: {selection.backend!r}")
-        if requirements.packages_lock is not None and requirements.docker_image is None:
-            if factories[selection.backend].backend != Backend.LOCAL:
-                raise ValueError("Lock-only graders require a local machine factory")
-        if requirements.docker_image is None and any(resource.mtime_ns is not None for resource in resources):
+        validate_machine_spec(requirements, factories[selection.backend], _machine_spec(requirements, selection))
+        if requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR and any(
+            resource.mtime_ns is not None for resource in resources
+        ):
             raise NotImplementedError("The built-in filesystem cannot preserve resource timestamps")
     if lowered.session.task_session != SHELLBOX_SESSION:
         if lowered.session.task_session not in sessions:
             raise ValueError(f"Unknown task session: {lowered.session.task_session!r}")
         return
+    shell_tool = resolve_shell_tool(task, lowered.session.shell_tool)
+    if shell_tool is not None and lowered.runtime.task_machine is None:
+        raise ValueError("Shell tools require a task machine")
     limits = lowered.session
     if (
         limits.command_timeout is not None
@@ -82,7 +93,9 @@ def validate_lowered_task(
         raise ValueError("Session grading requires a registered task session")
     if task.answer_type == AnswerType.STATE:
         raise NotImplementedError("The Shellbox session does not capture state answers")
-    if task.interaction_tools or task.environment_requirements.tool_providers:
+    if task.environment_requirements.tool_providers or any(
+        shell_tool is None or tool.name != shell_tool.definition.name for tool in task.interaction_tools
+    ):
         raise NotImplementedError("Native tool providers require a registered task session")
     if set(task.environment_requirements.capabilities) - {"shell", "filesystem"}:
         raise NotImplementedError("The Shellbox session supports only shell and filesystem capabilities")

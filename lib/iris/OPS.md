@@ -659,6 +659,34 @@ revoke — the role is resolved per request). The only fleet-wide credential kil
 is rotating the cluster signing key (`iris cluster init-keys` + redeploy), which
 re-auths every worker.
 
+### Worker credential renewal
+
+Workers renew their controller JWT through `RenewWorkerToken` one day before
+its 30-day expiry. A background check runs every 30 seconds, including while
+idle. The RPC admits authenticated workers and admins and always issues a
+worker-role credential; expired credentials cannot renew themselves.
+
+Rigging serializes concurrent renewal requests and keeps a still-valid token
+usable during a transient issuer outage, retrying after 30 seconds. Renewed
+credentials are atomically stored with mode `0600` in
+`<worker cache_dir>/credentials/worker.jwt`. Worker and node-agent restarts use
+the cached credential when it expires later than the bootstrap token. The controller
+renews its own provisioning credential before using it for new workers.
+
+If task state advances but logs are absent, inspect worker-local Docker logs.
+`Table(log) ... UNAUTHENTICATED` can come from controller endpoint discovery,
+before any request reaches Finelog. Compare a direct Finelog RPC with
+`ListEndpoints` using the worker credential. Decode only expiry metadata when
+diagnosing; never print the bearer token. A timeout can invalidate a working
+cached endpoint and expose a credential that expired earlier.
+
+A worker whose bootstrap and cached credentials have both expired needs a fresh
+worker credential from an operator. Update `/etc/iris/worker_config.json`, then
+restart the worker and node-agent processes.
+Preserve running task containers and verify their adoption, unchanged attempts,
+and fresh Finelog rows. Restarting shared Finelog does not repair this condition.
+Deploy the controller's renewal RPC before deploying workers that call it.
+
 ### Calling the IAP endpoint with `curl`
 
 The built-in Marin desktop OAuth client is configured as an IAP programmatic

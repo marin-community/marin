@@ -22,26 +22,24 @@ class ChatService:
         return response(body["task_id"])["response"]["body"]
 
 
-def test_direct_oversized_request_isolated_with_utf8_bytes_and_evidence(tmp_path):
+def test_direct_oversized_request_isolated_with_utf8_bytes_and_evidence():
     service = ChatService()
     requests = [
         {"custom_id": "oversized", "body": {"task_id": "oversized", "prompt": "é" * 50}},
         {"custom_id": "small", "body": {"task_id": "small"}},
     ]
     oversized_bytes = len(json.dumps(requests[0], ensure_ascii=False, separators=(",", ":")).encode()) + 1
-    output = chat_output(service, requests, tmp_path, max_concurrent=2, max_batch_bytes=oversized_bytes - 1)
-    assert [record.status for record in review_records(output, ["oversized", "small"])] == [
+    output = chat_output(service, requests, max_concurrent=2, max_batch_bytes=oversized_bytes - 1)
+    assert [record.status for record in review_records(output.output, ["oversized", "small"])] == [
         ReviewStatus.UNAVAILABLE,
         ReviewStatus.REVIEWED,
     ]
     assert service.requests == [requests[1]["body"]]
-    assert [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()] == requests
-    assert json.loads((tmp_path / "direct/0/request.json").read_text()) == requests[1]
-    assert json.loads((tmp_path / "direct/0/response.json").read_text()) == response("small")["response"]["body"]
-    assert (tmp_path / "raw-output.jsonl").read_text() == output
+    assert output.requests == tuple(requests)
+    assert json.loads(output.observations[1].output)["response"]["body"] == response("small")["response"]["body"]
 
 
-def test_concurrent_direct_invocations_share_process_admission_limit(tmp_path):
+def test_concurrent_direct_invocations_share_process_admission_limit():
     lock = threading.Lock()
     saturated = threading.Event()
     release = threading.Event()
@@ -67,10 +65,8 @@ def test_concurrent_direct_invocations_share_process_admission_limit(tmp_path):
     requests = [{"custom_id": str(index), "body": {"task_id": str(index)}} for index in range(16)]
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
-            executor.submit(
-                chat_output, service, requests, tmp_path / str(index), max_concurrent=MAX_DIRECT_CONCURRENT_REQUESTS
-            )
-            for index in range(2)
+            executor.submit(chat_output, service, requests, max_concurrent=MAX_DIRECT_CONCURRENT_REQUESTS)
+            for _ in range(2)
         ]
         try:
             assert saturated.wait(timeout=10)
@@ -82,5 +78,5 @@ def test_concurrent_direct_invocations_share_process_admission_limit(tmp_path):
     assert all(
         record.status == ReviewStatus.REVIEWED
         for output in outputs
-        for record in review_records(output, [str(index) for index in range(16)])
+        for record in review_records(output.output, [str(index) for index in range(16)])
     )
