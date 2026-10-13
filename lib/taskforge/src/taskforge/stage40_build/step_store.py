@@ -193,14 +193,16 @@ async def memoized[T](
 
     ``memoized`` calls ``store.load`` first. When a record exists, it returns ``HIT`` with the
     record and the decoded output, leaving ``compute`` uncalled. Otherwise it awaits ``compute()``,
-    stores the result, and returns ``MISS`` with the new record.
+    stores the result, and returns ``MISS`` with the new record and the result decoded from its
+    stored form, so a consumer receives the same value on a miss as on a later hit.
     """
     loaded = store.load(key, name, output_type)
     if loaded is not None:
         record, output = loaded
         return CacheStatus.HIT, record, output
-    output = await compute()
-    return CacheStatus.MISS, store.store(key, name, output), output
+    computed = await compute()
+    record = store.store(key, name, computed)
+    return CacheStatus.MISS, record, TypeAdapter(output_type).validate_json(canonical_json(computed))
 
 
 def _write(path: StoragePath, content: bytes) -> None:

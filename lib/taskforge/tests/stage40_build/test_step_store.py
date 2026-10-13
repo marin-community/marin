@@ -63,6 +63,26 @@ async def test_a_memoized_helper_computes_once_and_hits_on_the_second_call(tmp_p
     assert len(calls) == 1
 
 
+@dataclass(frozen=True)
+class Readings:
+    values: tuple[int, ...]
+
+
+async def test_a_miss_returns_the_stored_form_of_the_output(tmp_path):
+    """A consumer sees the same value on a miss as on a hit, whatever the step returned."""
+    store = RLEnvBuildStepStore(str(tmp_path), "item-a")
+    key = RLEnvBuildStepKey(SDK_VERSION, "readings source", {}, "model")
+
+    async def compute() -> Readings:
+        return Readings(values=[3, 1, 2])  # type: ignore[arg-type]  # a list where the type says tuple
+
+    _, _, missed = await memoized(store, "readings", key, Readings, compute)
+    _, _, hit = await memoized(store, "readings", key, Readings, compute)
+
+    assert missed == hit == Readings(values=(3, 1, 2))
+    assert isinstance(missed.values, tuple)
+
+
 def test_a_blob_altered_on_disk_is_refused(tmp_path):
     store = RLEnvBuildStepStore(str(tmp_path), "item-a")
     record = store.store(KEY, "fixtures", OUTPUT)
