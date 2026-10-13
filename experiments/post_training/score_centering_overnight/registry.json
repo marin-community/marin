@@ -1350,11 +1350,12 @@
       "configuration_sha256": "04da5a1c59cbf62481a6e110cf3aea95ead487f162b398b557995c67f246770b",
       "configuration_sha256_basis": "published launcher-input bytes",
       "artifacts": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-skyrl-countdown-main-noise005-sc-s1-a3-01a126ce",
-      "controller_state": 3,
-      "status": "running",
+      "controller_state": 4,
+      "status": "terminal",
       "priority_band": 3,
       "bundle_id": "8bf9f9ed519990c52be3f451866ceeea03fbc5d33cc60150ecd58a3aac2c7425",
-      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
+      "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8",
+      "retained_audit": "experiments/post_training/score_centering_overnight/results/sc-skyrl-countdown-main-noise005-sc-s1-a3-01a126ce.json"
     },
     {
       "job_id": "/romain/sc-skyrl-countdown-main-noise005-sc-s2-a3-01a126ce",
@@ -1425,5 +1426,5 @@
       "task_image": "ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8"
     }
   ],
-  "observed_at": "2026-10-13T01:30:34.644243+00:00"
+  "observed_at": "2026-10-13T03:12:58.950050+00:00"
 }
