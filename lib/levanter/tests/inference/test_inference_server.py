@@ -337,12 +337,18 @@ class _DeterministicCompletionScoringModel(eqx.Module):
         return hax.named(logits, (Pos, self.Vocab))
 
 
+def _sse_chunks(text: str) -> list[dict]:
+    return [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: ") and line != "data: [DONE]"]
+
+
 class _FakeCompletionContext:
     def __init__(self, max_seq_len: int = 4096):
         self.config = InferenceServerConfig(service=InferenceEngineConfig(max_seq_len=max_seq_len))
         self.model = _DeterministicCompletionScoringModel()
         self.tokenizer = _OpenAITestTokenizer()
         self.submitted_requests = 0
+        self.admission_lock = threading.Lock()
+        self.active_requests: dict[str, threading.Event] = {}
 
     def submit_request(
         self,
@@ -355,6 +361,7 @@ class _FakeCompletionContext:
         future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> str:
         if (
             prompt_tokens != [0, 1]
@@ -793,7 +800,7 @@ def test_chat_exact_token_continuation_matches_uninterrupted_decode(exact_token_
     assert prefix["logprobs"]["content"] + suffix["logprobs"]["content"] == expected["logprobs"]["content"]
     assert suffix["finish_reason"] == expected["finish_reason"] == "length"
     streamed = exact_token_client.post("/v1/chat/completions", json={**body, "stream": True})
-    chunks = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+    chunks = _sse_chunks(streamed.text)
     assert chunks[0]["prompt_token_ids"] == full["prompt_token_ids"]
     assert chunks[0]["choices"][0]["token_ids"] == expected["token_ids"]
     assert chunks[-1]["choices"][0]["finish_reason"] == "length"
@@ -898,11 +905,7 @@ def test_http_pause_preserves_partial_tokens_and_logprobs(stream):
             response = pending.result(timeout=30)
             assert response.status_code == 200, response.text
             if stream:
-                chunks = [
-                    json.loads(line[6:])
-                    for line in response.text.splitlines()
-                    if line.startswith("data: ") and line != "data: [DONE]"
-                ]
+                chunks = _sse_chunks(response.text)
                 content = chunks[0]
                 finish_reason = chunks[-1]["choices"][0]["finish_reason"]
             else:
@@ -1027,11 +1030,134 @@ def test_weight_publication_stages_before_install_and_preserves_failed_version()
             }
             assert client.post("/v1/chat/completions", json=chat_request).json()["model_version"] == 2
             streamed = client.post("/v1/chat/completions", json={**chat_request, "stream": True})
-            chunks = [
-                json.loads(line[6:])
-                for line in streamed.text.splitlines()
-                if line.startswith("data: ") and line != "data: [DONE]"
-            ]
+            chunks = _sse_chunks(streamed.text)
             assert all(chunk["model_version"] == 2 for chunk in chunks)
     finally:
+        server.inference_context.shutdown()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_individual_http_abort_preserves_peer_and_exact_continuation(stream):
+    entered, release = threading.Event(), threading.Event()
+    config = _exact_token_config()
+    model = _BlockingTokenModel(entered, release)
+    tokenizer = _AliasingChatTokenizer()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        engine = InferenceEngine.from_model_with_config(model, tokenizer, config.service)
+    context = InferenceContext(model, tokenizer, engine, config)
+    server = InferenceServer(config, context, InferenceServer._create_app(context))
+    request = {
+        "model": "gpt2",
+        "messages": [{"role": "user", "content": "A"}],
+        "max_completion_tokens": 3,
+        "temperature": 0,
+        "logprobs": True,
+        "return_token_ids": True,
+    }
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+            try:
+                cancelled = pool.submit(
+                    client.post,
+                    "/v1/chat/completions",
+                    json={**request, "stream": stream},
+                    headers={"x-request-id": "cancel-me"},
+                )
+                survivor = pool.submit(
+                    client.post, "/v1/chat/completions", json=request, headers={"x-request-id": "keep-me"}
+                )
+                # Start the actual batching threads after both HTTP requests have reached admission.
+                collected = []
+                try:
+                    collected.append(context.request_queue.get(timeout=30))
+                    collected.append(context.request_queue.get(timeout=30))
+                finally:
+                    for queued in collected:
+                        context.request_queue.put(queued)
+                    context.start()
+                assert entered.wait(30)
+                server.abort(["cancel-me"])
+                release.set()
+                cancelled_response = cancelled.result(timeout=30)
+                survivor_response = survivor.result(timeout=30)
+                assert cancelled_response.status_code == survivor_response.status_code == 200
+                if stream:
+                    chunks = _sse_chunks(cancelled_response.text)
+                    partial = chunks[0]["choices"][0]
+                    assert chunks[-1]["choices"][0]["finish_reason"] == "abort"
+                else:
+                    partial = cancelled_response.json()["choices"][0]
+                    assert partial["finish_reason"] == "abort"
+                complete = survivor_response.json()["choices"][0]
+                assert partial["token_ids"] == [3]
+                assert complete["token_ids"] == [3, 1, 3]
+                assert complete["finish_reason"] == "length"
+                retry = client.post(
+                    "/v1/chat/completions",
+                    json={**request, "max_completion_tokens": 2, "_skyrl_exact_prompt_token_ids": [0, 1, 3]},
+                    headers={"x-request-id": "cancel-me"},
+                ).json()["choices"][0]
+                assert partial["token_ids"] + retry["token_ids"] == complete["token_ids"]
+                assert partial["logprobs"]["content"] + retry["logprobs"]["content"] == complete["logprobs"]["content"]
+            finally:
+                release.set()
+    finally:
+        release.set()
+        context.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_http_disconnect_cancels_generation_without_poisoning_next_request():
+    entered, release = threading.Event(), threading.Event()
+    config = _exact_token_config()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _BlockingTokenModel(entered, release), _AliasingChatTokenizer())
+    messages = asyncio.Queue()
+
+    async def send(message):
+        pass
+
+    body = {
+        "model": "gpt2",
+        "messages": [{"role": "user", "content": "A"}],
+        "max_completion_tokens": 3,
+        "temperature": 0,
+        "return_token_ids": True,
+    }
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/chat/completions",
+        "raw_path": b"/v1/chat/completions",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"content-type", b"application/json"), (b"x-request-id", b"disconnected")],
+        "server": ("testserver", 80),
+        "client": ("client", 1),
+    }
+    await messages.put({"type": "http.request", "body": json.dumps(body).encode(), "more_body": False})
+    task = asyncio.create_task(server.app(scope, messages.get, send))
+    try:
+        assert await asyncio.to_thread(entered.wait, 30)
+        event = server.inference_context.active_requests["disconnected"]
+        await messages.put({"type": "http.disconnect"})
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert event.is_set()
+        assert "disconnected" not in server.inference_context.active_requests
+        release.set()
+        with TestClient(server.app) as client:
+            response = await asyncio.to_thread(
+                client.post, "/v1/chat/completions", json=body, headers={"x-request-id": "disconnected"}
+            )
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["token_ids"] == [3, 1, 3]
+        assert response.json()["choices"][0]["finish_reason"] == "length"
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         server.inference_context.shutdown()

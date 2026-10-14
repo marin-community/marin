@@ -211,7 +211,7 @@ def test_abort_returns_exact_partial_results_and_releases_slots(abort_before_pre
     abort = threading.Event()
     if abort_before_prefill:
         abort.set()
-    partial = service.generate([request], step_callback=lambda _: abort.set(), should_abort=abort.is_set)
+    partial = service.generate([request], step_callback=lambda _: abort.set(), should_abort=lambda _: abort.is_set())
     assert partial.finish_reasons == [FinishReason.ABORT, FinishReason.ABORT]
     expected_count = 0 if abort_before_prefill else 1
     assert [len(tokens) for tokens in partial.tokens] == [expected_count, expected_count]
@@ -242,6 +242,28 @@ def test_abort_keeps_already_finished_stop_reasons():
         Request(prompt_tokens=[1, 2], request_id=1, decode_params=params, n_generations=1),
     ]
     abort = threading.Event()
-    result = service.generate(requests, step_callback=lambda _: abort.set(), should_abort=abort.is_set)
+    result = service.generate(requests, step_callback=lambda _: abort.set(), should_abort=lambda _: abort.is_set())
     assert result.tokens == [[3], [3]]
     assert result.finish_reasons == [FinishReason.STOP, FinishReason.ABORT]
+
+
+@pytest.mark.parametrize("before_prefill", [False, True])
+def test_request_abort_isolates_clones_and_leaves_peer_generation_unchanged(before_prefill):
+    service = _build_service()
+    params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(7))
+    requests = [
+        Request(prompt_tokens=[1, 2], request_id=i, decode_params=params, n_generations=n)
+        for i, n in [(10, 2), (11, 1)]
+    ]
+    full = service.generate(requests)
+    abort = threading.Event()
+    if before_prefill:
+        abort.set()
+    result = service.generate(
+        requests, step_callback=lambda _: abort.set(), should_abort=lambda rid: rid == 10 and abort.is_set()
+    )
+    assert result.finish_reasons == [FinishReason.ABORT, FinishReason.ABORT, FinishReason.LENGTH]
+    assert result.tokens[-1] == full.tokens[-1]
+    assert result.logprobs[-1] == pytest.approx(full.logprobs[-1])
+    assert [len(tokens) for tokens in result.tokens[:2]] == ([0, 0] if before_prefill else [1, 1])
+    assert service.generate(requests).tokens == full.tokens

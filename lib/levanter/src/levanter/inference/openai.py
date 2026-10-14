@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional, Union, cast
+from typing import Any, List, Optional, Union, cast
 
 import equinox as eqx
 import haliax as hax
@@ -27,7 +27,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request as HttpRequest
 from fastapi.responses import StreamingResponse
 from openai.types import Completion, CompletionUsage, Model
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -106,6 +106,7 @@ class InferenceRequest:
     stop_tokens: List[List[int]] | None
     seed: int | None
     future: asyncio.Future
+    cancel_event: threading.Event | None = None
     admission_epoch: int = 0
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
@@ -125,6 +126,15 @@ class InferenceResponse:
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
+
+
+def _complete_future(future: asyncio.Future, outcome: list[InferenceResponse] | Exception) -> None:
+    if future.cancelled():
+        return
+    if isinstance(outcome, Exception):
+        future.set_exception(outcome)
+    else:
+        future.set_result(outcome)
 
 
 class InferenceBatch(list):
@@ -182,6 +192,7 @@ class InferenceContext:
         self.lifecycle_lock = threading.RLock()
         self.pause_event = threading.Event()
         self.admission_epoch = 0
+        self.active_requests: dict[str, threading.Event] = {}
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
@@ -266,6 +277,14 @@ class InferenceContext:
                     self.resume_generation()
         return installed_version
 
+    def abort(self, request_ids: collections.abc.Sequence[str]) -> None:
+        """Cancel only the named HTTP request groups at the next host decode boundary."""
+        with self.admission_lock:
+            for request_id in request_ids:
+                event = self.active_requests.get(request_id)
+                if event is not None:
+                    event.set()
+
     def submit_request(
         self,
         prompt_tokens: List[int],
@@ -277,6 +296,7 @@ class InferenceContext:
         future: asyncio.Future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -294,6 +314,7 @@ class InferenceContext:
             future=future,
             n_generations=n_generations,
             echo_logprobs_top_k=echo_logprobs_top_k,
+            cancel_event=cancel_event,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -319,7 +340,7 @@ class InferenceContext:
             )
             for _ in range(request.n_generations)
         ]
-        request.future.get_loop().call_soon_threadsafe(request.future.set_result, responses)
+        request.future.get_loop().call_soon_threadsafe(_complete_future, request.future, responses)
 
     def _inference_loop(self) -> None:
         """Collect requests from the serving and batch them into batches of appropriate size for inference."""
@@ -338,7 +359,7 @@ class InferenceContext:
             for r in requests:
                 if len(r.prompt_tokens) > max_tokens_per_seq:
                     r.future.get_loop().call_soon_threadsafe(
-                        r.future.set_exception, ValueError("Prompt exceeds the serving context limit")
+                        _complete_future, r.future, ValueError("Prompt exceeds the serving context limit")
                     )
                     continue
 
@@ -349,7 +370,7 @@ class InferenceContext:
                         f"the maximum allowed {self.engine.config.max_seqs}"
                     )
                     logger.error(error_msg)
-                    r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
+                    r.future.get_loop().call_soon_threadsafe(_complete_future, r.future, ValueError(error_msg))
                     continue
 
                 if (
@@ -387,7 +408,7 @@ class InferenceContext:
                 # Set exceptions on all futures in the batch
                 for req in batch:
                     try:
-                        req.future.get_loop().call_soon_threadsafe(req.future.set_exception, e)
+                        req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, e)
                     except Exception:
                         pass
 
@@ -397,7 +418,11 @@ class InferenceContext:
         """Execute a batch of inference requests"""
         admitted = InferenceBatch()
         for request in requests:
-            if self.pause_event.is_set() or request.admission_epoch != self.admission_epoch:
+            if (
+                self.pause_event.is_set()
+                or request.admission_epoch != self.admission_epoch
+                or (request.cancel_event is not None and request.cancel_event.is_set())
+            ):
                 self._abort_request(request)
             else:
                 admitted.append(request)
@@ -441,7 +466,12 @@ class InferenceContext:
 
         # Generate responses
         start_time = time.time()
-        result = self.engine.generate(service_requests, should_abort=self.pause_event.is_set)
+
+        def should_abort(index: int) -> bool:
+            event = requests[index].cancel_event
+            return self.pause_event.is_set() or (event is not None and event.is_set())
+
+        result = self.engine.generate(service_requests, should_abort=should_abort)
         duration = time.time() - start_time
         logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
 
@@ -484,10 +514,10 @@ class InferenceContext:
                         raise RuntimeError(f"Missing output for request {req.request_id}")
 
                 # Set the future result
-                req.future.get_loop().call_soon_threadsafe(req.future.set_result, req_outputs)
+                req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, req_outputs)
             except Exception as e:
                 logger.error(f"Error processing result for {req.request_id}: {e}")
-                req.future.get_loop().call_soon_threadsafe(req.future.set_exception, e)
+                req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, e)
 
 
 def _health_check() -> dict:
@@ -633,7 +663,9 @@ def _validate_prompt_ids(ctx: InferenceContext, tokens: list[int]) -> None:
         raise HTTPException(status_code=400, detail="Prompt contains a token ID outside the model vocabulary")
 
 
-async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
+async def _create_completion(
+    ctx: InferenceContext, request: CompletionRequest, cancel_event: threading.Event | None = None
+) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
         if request.echo and request.logprobs == 0:
@@ -680,6 +712,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 future=future,
                 n_generations=request.n or 1,
                 echo_logprobs_top_k=echo_logprobs_top_k,
+                cancel_event=cancel_event,
             )
 
         # Wait for all results
@@ -843,7 +876,9 @@ async def _fetch_tokens(ctx: InferenceContext, request: TokensRequest) -> Tokens
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletionRequest) -> ChatCompletion:
+async def _create_chat_completion(
+    ctx: InferenceContext, request: ChatCompletionRequest, cancel_event: threading.Event | None = None
+) -> ChatCompletion:
     """Create a chat completion using OpenAI API format."""
     try:
         # Convert Pydantic models to dicts for tokenizer
@@ -876,6 +911,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             seed=request.seed,
             future=future,
             n_generations=request.n or 1,
+            cancel_event=cancel_event,
         )
 
         # Wait for result
@@ -949,6 +985,44 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _http_generation[RequestT, ResponseT](
+    ctx: InferenceContext,
+    raw_request: HttpRequest,
+    create_completion: collections.abc.Callable[
+        [InferenceContext, RequestT, threading.Event | None], collections.abc.Coroutine[Any, Any, ResponseT]
+    ],
+    request: RequestT,
+) -> ResponseT:
+    request_id = raw_request.headers.get("x-request-id") or uuid.uuid4().hex
+    event = threading.Event()
+    with ctx.admission_lock:
+        if request_id in ctx.active_requests:
+            raise HTTPException(status_code=409, detail="Request ID is already active")
+        ctx.active_requests[request_id] = event
+
+    async def wait_for_disconnect() -> None:
+        while (await raw_request.receive())["type"] != "http.disconnect":
+            pass
+        event.set()
+
+    generation = asyncio.create_task(create_completion(ctx, request, event))
+    disconnect = asyncio.create_task(wait_for_disconnect())
+    try:
+        done, _ = await asyncio.wait((generation, disconnect), return_when=asyncio.FIRST_COMPLETED)
+        if generation not in done:
+            await disconnect
+            generation.cancel()
+            raise asyncio.CancelledError
+        return await generation
+    finally:
+        event.set()
+        disconnect.cancel()
+        generation.cancel()
+        await asyncio.gather(generation, disconnect, return_exceptions=True)
+        with ctx.admission_lock:
+            del ctx.active_requests[request_id]
+
+
 class InferenceServer:
     """Wraps a FastAPI server around the inference context.
 
@@ -1011,15 +1085,15 @@ class InferenceServer:
         # A streaming request returns a StreamingResponse, which FastAPI passes through
         # untouched; `response_model` still describes the non-streaming body.
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
-        async def create_chat_completion(request: ChatCompletionRequest):
-            completion = await _create_chat_completion(inference_context, request)
+        async def create_chat_completion(request: ChatCompletionRequest, raw_request: HttpRequest):
+            completion = await _http_generation(inference_context, raw_request, _create_chat_completion, request)
             if not request.stream:
                 return completion
             return StreamingResponse(_chat_completion_events(completion), media_type="text/event-stream")
 
         @app.post("/v1/completions", response_model=Completion)
-        async def create_completion(request: CompletionRequest):
-            completion = await _create_completion(inference_context, request)
+        async def create_completion(request: CompletionRequest, raw_request: HttpRequest):
+            completion = await _http_generation(inference_context, raw_request, _create_completion, request)
             if not request.stream:
                 return completion
             return StreamingResponse(_completion_events(completion), media_type="text/event-stream")
@@ -1043,6 +1117,10 @@ class InferenceServer:
             return await _fetch_tokens(inference_context, request)
 
         return app
+
+    def abort(self, request_ids: collections.abc.Sequence[str]) -> None:
+        """Cancel named requests while allowing unrelated requests to finish."""
+        self.inference_context.abort(request_ids)
 
     def pause_generation(self) -> None:
         """Abort current requests and clear cache state before weight replacement."""
