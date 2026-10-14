@@ -1,0 +1,16 @@
+{
+  "run_id": "sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scope": "Actual first update admission only; not final scientific endpoint.",
+  "configured_updates": 1200,
+  "applied_updates": 1,
+  "gradient_norm": 0.7308862209320068,
+  "logical_batch_rows": 32,
+  "retained_rows": 2,
+  "loss_tokens_checked": 314,
+  "natural_head_width": 128,
+  "group_admission_seconds": 11.74986977595836,
+  "policy_training_seconds": 4.407662988640368,
+  "metric_sha256": "3ca8f09bc72adc9a08d651c2059145e07a1e3fcde42a386879ca89a9f45fabc0",
+  "early_path_passed": true
+}
