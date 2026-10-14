@@ -163,7 +163,6 @@ def test_siglip2_vision_roundtrip() -> None:
 
         np.testing.assert_allclose(torch_output, jax_output_array, rtol=1e-4, atol=1e-4)
 
-        # Test roundtrip: save Levanter model and load back as HF
         converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
         torch_model2 = HfSiglip2VisionModel.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
@@ -239,7 +238,6 @@ def test_siglip2_vision_pretrained_random_pixels() -> None:
 
     np.testing.assert_allclose(torch_output, jax_output_array, rtol=1e-4, atol=1e-4)
 
-    # Test Levanter -> HF conversion
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = f"{tmpdir}/converted_model"
         converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
@@ -257,7 +255,3 @@ def test_siglip2_vision_pretrained_random_pixels() -> None:
 
         assert not np.any(np.isnan(converted_output_np))
         np.testing.assert_allclose(jax_output_array, converted_output_np, rtol=1e-4, atol=1e-4)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
