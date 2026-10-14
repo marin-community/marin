@@ -4,12 +4,12 @@
 """Checked package-lock to container-image deployment for admitted Smartie tasks."""
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader
-from taskcompendium.runtime.local import local_runtime
 
 
 @dataclass(frozen=True)
@@ -35,15 +35,16 @@ class ImageDeployment:
         if lock is None:
             return original
         if lock not in self.evidence:
-            runtime = local_runtime(lock)
+            # Admitted sources retain the artifact schema used to build their pinned images.
+            record = json.loads((StoragePath(lock).parent / ".artifact.json").read_text())["result"]
             with StoragePath(lock).open("rb") as stream:
                 actual_hash = hashlib.file_digest(stream, "sha256").hexdigest()
-            if actual_hash != runtime.lock_sha256:
+            if actual_hash != record["lock_sha256"]:
                 raise ValueError(f"Source lock differs from its artifact record: {lock}")
             matches = [
                 image
                 for image in self.images
-                if image.lock_sha256 == actual_hash and sorted(image.data) == sorted(runtime.data)
+                if image.lock_sha256 == actual_hash and sorted(image.data) == sorted(record["data"])
             ]
             if len(matches) != 1:
                 raise ValueError(f"Expected one image deployment for lock {lock}, found {len(matches)}")

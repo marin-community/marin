@@ -45,9 +45,9 @@ packages every grade script in the catalog imports, and use
 `required_grader_environment(context)` as its environment. A script that
 needs more declares its own `Environment` (see
 [environment.py](../environment.py)), such as `COMPILER_GRADER_PACKAGES`,
-which adds a C++ toolchain. The packages live in [grader.in](grader.in) and
-its compiled lock [grader.lock](grader.lock); regenerate the lock after
-changing `grader.in`. For a new buildable environment, follow the
+which adds a C++ toolchain. The pinned requirements live in
+[environments.py](environments.py), grouped by the scorers that need them; the
+build compiles them to a hash lock. For a new buildable environment, follow the
 [registration instruction](../images/README.md#building).
 
 A rubric and controls can come later: without a rubric rows are kept
