@@ -16,8 +16,9 @@ choose runs with ``--experiment``, and add ``--run`` to build them.
 import importlib
 import json
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any, Protocol
 
 import click
@@ -65,7 +66,9 @@ from experiments.sft.launcher import (
     sft_step,
 )
 
-EXAMPLES_FILENAME = "train.jsonl.gz"
+EXAMPLES_GLOB = "train-*.jsonl.gz"
+EXAMPLE_SHARDS = 64
+"""Files per example set: Levanter builds a chat cache with one worker per file."""
 QWEN3_EOS_TOKEN_IDS = (151645, 151643)  # <|im_end|> and <|endoftext|>
 GRUG_TRAIN_NODES = 4
 GRUG_CONVERSION_VERSION = "2026.10.09"
@@ -114,12 +117,15 @@ def band_mask(counts: pa.Table, band: PassBand) -> pa.ChunkedArray:
     return pc.and_(pc.greater(total, 0), in_band)
 
 
-def band_rows(pass_rates_path: str, band: PassBand) -> Iterator[dict[str, Any]]:
-    """Stream the rows of a pass-rate artifact in ``band``, a few at a time: prompts can be long."""
-    path = StoragePath(pass_rates_path) / PASS_RATES_FILENAME
-    with path.open("rb") as source:
-        mask = band_mask(pq.read_table(source, columns=["passed", "total"]), band)
-    with path.open("rb") as source:
+def read_band_mask(pass_rates_path: str, band: PassBand) -> pa.ChunkedArray:
+    """:func:`band_mask` over a pass-rate artifact, reading only its count columns."""
+    with (StoragePath(pass_rates_path) / PASS_RATES_FILENAME).open("rb") as source:
+        return band_mask(pq.read_table(source, columns=["passed", "total"]), band)
+
+
+def band_rows(pass_rates_path: str, mask: pa.ChunkedArray) -> Iterator[dict[str, Any]]:
+    """Stream the rows of a pass-rate artifact selected by ``mask``, a few at a time: prompts can be long."""
+    with (StoragePath(pass_rates_path) / PASS_RATES_FILENAME).open("rb") as source:
         offset = 0
         for batch in pq.ParquetFile(source).iter_batches(batch_size=ROWS_PER_BATCH):
             yield from batch.filter(mask.slice(offset, batch.num_rows).combine_chunks()).to_pylist()
@@ -137,6 +143,24 @@ def prompt_tokens(samples_path: str) -> dict[str, int]:
 def example_tokens_bound(prompt_tokens: int, action: dict[str, Any]) -> int:
     """An upper bound on an example's length: a byte-level BPE token covers at least one byte."""
     return prompt_tokens + len(json.dumps(action, ensure_ascii=False).encode()) + TURN_TOKENS
+
+
+def write_example_shards(
+    rows: Iterator[dict[str, Any]],
+    row_count: int,
+    examples: Callable[[Iterator[dict[str, Any]]], Iterable[dict[str, Any]]],
+    output: StoragePath,
+) -> None:
+    """Write the examples of ``row_count`` streamed rows as up to :data:`EXAMPLE_SHARDS` files of consecutive rows.
+
+    ``examples`` maps an iterator of rows to the examples written for them. Levanter shuffles the whole
+    chat cache, so consecutive rows sharing a file does not order training.
+    """
+    shards = max(1, min(EXAMPLE_SHARDS, row_count))
+    rows_per_shard = math.ceil(row_count / shards)
+    for index in range(shards):
+        path = output / f"train-{index:05d}-of-{shards:05d}.jsonl.gz"
+        write_jsonl_file(examples(islice(rows, rows_per_shard)), str(path))
 
 
 def chat_example(reader: ReferenceTask, row: dict[str, Any], enable_thinking: bool) -> dict[str, Any]:
@@ -163,13 +187,14 @@ def write_sft_examples(
 
     Rows that may not fit in ``max_tokens`` are dropped, since truncation would cut the supervised
     action; ``manifest.json`` counts them. Lengths come from the served prompt lengths recorded with
-    the samples, bounded above by the action's bytes, so no tokenizer is needed.
+    the samples, bounded above by the action's bytes, so no tokenizer is needed. Examples are split
+    into files so the chat cache builds in parallel.
 
     Args:
         pass_rates_path: A pass-rate artifact: candidate rows with their pass counts.
         samples_path: A pass-rate artifact whose samples cover the same rows, for their prompt lengths.
         band: Which candidates to train on, by pass count.
-        output_path: Where ``train.jsonl.gz`` and ``manifest.json`` go.
+        output_path: Where the ``train-*.jsonl.gz`` files and ``manifest.json`` go.
         task: Import path of the :class:`ReferenceTask` that reads these rows.
         enable_thinking: The thinking mode pass rates sample with, so prompts render as they were served.
         max_tokens: The training sequence length.
@@ -180,9 +205,9 @@ def write_sft_examples(
     bounds: list[int] = []
     too_long = 0
 
-    def examples() -> Iterator[dict[str, Any]]:
+    def examples(rows: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
         nonlocal too_long
-        for row in band_rows(pass_rates_path, band):
+        for row in rows:
             example = chat_example(reader, row, enable_thinking)
             bound = example_tokens_bound(served[reader.row_id(row)], example["messages"][-1])
             if bound > max_tokens:
@@ -191,8 +216,9 @@ def write_sft_examples(
             bounds.append(bound)
             yield example
 
+    mask = read_band_mask(pass_rates_path, band)
     output = StoragePath(output_path)
-    write_jsonl_file(examples(), str(output / EXAMPLES_FILENAME))
+    write_example_shards(band_rows(pass_rates_path, mask), pc.sum(mask).as_py() or 0, examples, output)
     if not bounds:
         raise ValueError(f"no example fits in {max_tokens} tokens")
     manifest = {
@@ -224,7 +250,7 @@ def write_validation_examples(
 
     Args:
         rows_path: A candidate artifact holding ``validation.parquet``.
-        output_path: Where ``train.jsonl.gz`` and ``manifest.json`` go.
+        output_path: Where the ``train-*.jsonl.gz`` files and ``manifest.json`` go.
         task: Import path of the :class:`ReferenceTask` that reads these rows.
         tokenizer: The policy's tokenizer, by an ``hf://`` reference.
         chat_template: The SFT chat template, which renders the measured example.
@@ -248,7 +274,7 @@ def write_validation_examples(
         raise ValueError(f"no validation example fits in {max_tokens} tokens")
 
     output = StoragePath(output_path)
-    write_jsonl_file(examples, str(output / EXAMPLES_FILENAME))
+    write_example_shards(iter(examples), len(examples), list, output)
     manifest = {"rows": len(rows), "examples": len(examples), "too_long": len(rows) - len(examples)}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
@@ -422,7 +448,7 @@ def pivot_sft_step(run: PivotSFTRun) -> ArtifactStep[LevanterCheckpoint]:
         chat_template=run.policy.chat_template,
         datasets=[
             ArtifactDatasetSpec(
-                slug=run.pivots.candidates.label, artifact=examples, train_glob=EXAMPLES_FILENAME, weight=1.0
+                slug=run.pivots.candidates.label, artifact=examples, train_glob=EXAMPLES_GLOB, weight=1.0
             )
         ],
         optimizer=AdamConfig(
@@ -448,7 +474,7 @@ def pivot_sft_step(run: PivotSFTRun) -> ArtifactStep[LevanterCheckpoint]:
             ArtifactValidationSpec(
                 slug=f"{run.pivots.candidates.dataset}-validation",
                 artifact=validation_examples_step(run),
-                glob=EXAMPLES_FILENAME,
+                glob=EXAMPLES_GLOB,
             )
         ],
         steps_per_eval=budget.steps_per_eval,

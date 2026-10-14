@@ -11,7 +11,6 @@ from marin.rl.nemotron_pivot import VALIDATION_FILENAME
 from marin.rl.pass_rates import PASS_RATES_FILENAME
 
 from experiments.post_training.pivotrl.sft import (
-    EXAMPLES_FILENAME,
     ROWS_PER_BATCH,
     PassBand,
     band_mask,
@@ -78,6 +77,14 @@ def _write_pass_rates(directory, rows: list[dict], prompt_tokens: list[int]) -> 
     pq.write_table(pa.Table.from_pylist(samples), directory / "samples" / "chunk-000000.parquet")
 
 
+def _read_examples(output) -> list[dict]:
+    examples = []
+    for path in sorted(output.glob("train-*.jsonl.gz")):
+        with gzip.open(path, "rt") as stream:
+            examples.extend(json.loads(line) for line in stream)
+    return examples
+
+
 def _write_examples(directory, band: PassBand, max_tokens: int = 1024) -> list[dict]:
     output = directory / "out"
     write_sft_examples(
@@ -89,8 +96,7 @@ def _write_examples(directory, band: PassBand, max_tokens: int = 1024) -> list[d
         enable_thinking=False,
         max_tokens=max_tokens,
     )
-    with gzip.open(output / EXAMPLES_FILENAME, "rt") as stream:
-        return [json.loads(line) for line in stream]
+    return _read_examples(output)
 
 
 def test_write_sft_examples_appends_the_expert_action_and_drops_rows_that_may_not_fit(tmp_path):
@@ -179,7 +185,6 @@ def test_write_validation_examples_measures_rows_and_drops_long_ones(tmp_path, g
         max_tokens=1024,
     )
 
-    with gzip.open(output / EXAMPLES_FILENAME, "rt") as stream:
-        (example,) = [json.loads(line) for line in stream]
+    (example,) = _read_examples(output)
     assert example["messages"][:-1] == short
     assert json.loads((output / "manifest.json").read_text())["too_long"] == 1
