@@ -101,11 +101,11 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
 
    | Admission | Meaning |
    | --- | --- |
-   | `admitted` | Kept, and the grader runs in process, is a verifyit judge, or passed source verification. |
+   | `admitted` | Kept, and the grader runs in process, is a verifyit judge, passed its controls, or is covered by a passing control sample. |
    | `rejected` | Rejected by conversion, checks, review or verification. |
    | `deferred` | Held back for unavailable review or inconclusive verification. |
    | `no_grader` | The converter found no runnable grader (`NoGrader`). |
-   | `unverified` | A sandbox grader, other than a judge, without passing source verification. |
+   | `unverified` | A sandbox grader, other than a judge, without controls or a passing control sample. |
 
 Output layout of one source:
 
@@ -132,12 +132,20 @@ whose control hits an infrastructure error runs again, up to two more times,
 before it is recorded. A task passes when its control passes or records a defect
 on every attempt and no earlier trial failed; a task with both a pass and a
 definite failure counts as inconsistent. The report's `counts.defective` records
-the sampled tasks with a defect. The source passes when the pass fraction meets
-`minimum_pass_fraction` (the driver uses 95%). Unsupported runtimes,
-infrastructure errors and an empty sample make the source inconclusive, which
-defers its eligible rows. Failed and defective controls reject the affected tasks
-even when the source passes. Unsampled rows of a passing source get
-`source_sampled` readiness.
+the sampled tasks with a defect. When the pass fraction meets
+`minimum_pass_fraction` (the driver uses 95%) and the sample is conclusive,
+unsampled rows get `source_sampled` readiness. Otherwise controls run on every
+remaining kept task; already sampled tasks are not rerun. The report records
+`validated`, with counts and evidence covering all eligible tasks. Passed tasks
+remain usable, failed and defective tasks are rejected, and unavailable controls
+defer only their own task. An empty sample skips controls. The 95% threshold
+controls this execution shortcut; it does not set the GLM quality grade.
+
+Completed validation shards checkpoint their trial evidence before returning.
+Reruns retain known individual failures even when a recovered sample permits the
+shortcut. A source with no completed controls remains incomplete for retry.
+The source manifest and `verify/report.json` contain counts and a `trial_report`
+reference; full results are retained once in that report and in shard checkpoints.
 
 A rerun of the same source artifact reuses the complete trials that its earlier
 attempt saved. Trial identity covers the whole task, the controls code, the
