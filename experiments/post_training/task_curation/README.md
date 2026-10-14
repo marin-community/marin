@@ -255,7 +255,14 @@ read task files, source labels, private verifier resources or solutions. Tasks
 with the same public input share one description. Missing information about the
 requested operation produces `insufficient_context`.
 
-Tasks and curriculum anchors share projection instructions and the full Harrier
+The description names the required knowledge or tool environment and the core
+operation in roughly 15–40 words. Routine setup, output capture and submission
+details are omitted unless they are the main problem. Each ready task produces
+one vector. Full instructions go to the describer; `--max-tokens` limits the
+rendered embedding input, including its instruction prefix. It does not limit
+task instruction length. Overlong embedding inputs fail without truncation.
+
+Tasks and curriculum anchors share one embedding instruction and the full Harrier
 embedding specification. FineStore stores vectors by rendered-text/specification
 hash, with batched reads and writes. A curriculum-only change reuses task
 descriptions and vectors. Keep the vector archive under a persistent retention
@@ -273,13 +280,14 @@ inside a GPU-equipped Iris job. This runs local Zephyr workers in that job and
 keeps Harrier resident on its GPU. Compare against CPU using identical inputs and
 precision in separate cache roots before sharing vectors across backends.
 
-Alignment uses the code constant `MAX_DISTANCE` in
-`taskcompendium.pipeline.curriculum_alignment` for subject and capability cosine
-distance. Changing the cutoff invalidates alignment without recomputing task or
-curriculum embeddings. Top-three alternatives and score margins remain available
-for inspecting placements. Out-of-scope tasks and subject matches with weak
-capability matches remain explicit outcomes. This pass does not change curation
-admission or train/eval use.
+Alignment selects the nearest subject within each declared curriculum routing
+facet. `MAX_SUBJECT_DISTANCE` and `MAX_CAPABILITY_DISTANCE` in
+`taskcompendium.pipeline.curriculum_alignment` control accepted cosine distance
+at each level. Changing either constant invalidates alignment without recomputing
+task or curriculum embeddings. The three highest-ranked subject and capability candidates, including the nearest
+match, and capability score margins remain available for inspection. Out-of-scope tasks and
+subject matches with weak capability matches remain explicit outcomes. This pass
+does not change curation admission or train/eval use.
 
 ## Declaring a dataset
 

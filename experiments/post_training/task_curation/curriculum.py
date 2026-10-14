@@ -4,8 +4,7 @@
 """Render the reviewed curriculum into semantic anchors and navigation metadata."""
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.curriculum_alignment import AnchorKind, CurriculumAnchor
-from taskcompendium.pipeline.semantics import SemanticProjection
+from taskcompendium.pipeline.curriculum_alignment import AnchorKind, CurriculumAnchor, CurriculumFacet
 
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
@@ -14,8 +13,8 @@ def curriculum_anchors(catalog: CurriculumCatalog) -> list[CurriculumAnchor]:
     anchors = []
     for entry in catalog.curricula:
         curriculum = entry.curriculum
-        projection = SemanticProjection(entry.routing_facet.value)
-        label = "Subject domain" if projection == SemanticProjection.SUBJECT_DOMAIN else "Task mechanic"
+        facet = CurriculumFacet(entry.routing_facet.value)
+        label = "Subject domain" if facet == CurriculumFacet.SUBJECT_DOMAIN else "Task mechanic"
         for root in curriculum.sections:
             if root.parent_id is not None:
                 continue
@@ -27,7 +26,7 @@ def curriculum_anchors(catalog: CurriculumCatalog) -> list[CurriculumAnchor]:
                 "kind": AnchorKind.SUBJECT,
                 "subject_id": curriculum.subject_id,
                 "capability_id": None,
-                "projection": projection,
+                "facet": facet,
                 "text": text,
             }
             anchors.append(CurriculumAnchor(anchor_id=canonical_sha256(value), **value))
@@ -38,7 +37,7 @@ def curriculum_anchors(catalog: CurriculumCatalog) -> list[CurriculumAnchor]:
                     "kind": AnchorKind.CAPABILITY,
                     "subject_id": curriculum.subject_id,
                     "capability_id": capability.id,
-                    "projection": SemanticProjection.OPERATIONS,
+                    "facet": facet,
                     "text": text,
                 }
                 anchors.append(CurriculumAnchor(anchor_id=canonical_sha256(value), **value))

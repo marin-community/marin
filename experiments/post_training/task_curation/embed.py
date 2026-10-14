@@ -16,7 +16,7 @@ from marin.processing.embeddings.harrier import HARRIER_DIMENSIONS, HARRIER_MODE
 from marin.processing.embeddings.tei import TeiEmbeddingClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.curriculum_alignment import MAX_DISTANCE
+from taskcompendium.pipeline.curriculum_alignment import MAX_CAPABILITY_DISTANCE, MAX_SUBJECT_DISTANCE
 from taskcompendium.pipeline.semantics import DescriptionModel
 from taskcompendium.pipeline.task_embeddings import EmbeddingSpec
 from zephyr.context import ZephyrContext
@@ -47,7 +47,13 @@ from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURR
 @click.option("--embedding-backend", type=click.Choice(["cpu", "gpu", "tei"]), required=True)
 @click.option("--tei-endpoint", help="Iris-registered TEI pool using the selected Harrier revision and token limit.")
 @click.option("--compute-dtype", type=click.Choice(["float32", "bfloat16", "float16"]), required=True)
-@click.option("--max-tokens", type=click.IntRange(min=1), default=512, show_default=True)
+@click.option(
+    "--max-tokens",
+    type=click.IntRange(min=1),
+    default=512,
+    show_default=True,
+    help="Embedding input limit, including the instruction prefix. Full task instructions go to the describer.",
+)
 @click.option("--max-workers", type=click.IntRange(min=1), default=2)
 @click.option("--worker-memory", default="8g")
 @click.option(
@@ -143,7 +149,8 @@ def main(
                 {
                     "stages": plan,
                     "spec": spec.model_dump(mode="json"),
-                    "max_distance": MAX_DISTANCE,
+                    "max_subject_distance": MAX_SUBJECT_DISTANCE,
+                    "max_capability_distance": MAX_CAPABILITY_DISTANCE,
                     "sample_size": sample_size,
                     "population": population,
                     "stage": stage,

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exact, faceted curriculum retrieval with a shared cosine-distance cutoff."""
+"""Exact curriculum retrieval with one primary subject per routing facet."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -10,12 +10,17 @@ from functools import cached_property
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
-from taskcompendium.pipeline.semantics import SemanticProjection
 from taskcompendium.pipeline.task_embeddings import normalized_vectors
 
-MAX_DISTANCE = 0.2
+# Root scopes and precise capabilities occupy different similarity ranges in the sample fit.
+MAX_SUBJECT_DISTANCE = 0.45
+MAX_CAPABILITY_DISTANCE = 0.25
 TOP_K = 3
-CANDIDATE_SUBJECTS_PER_FACET = 3
+
+
+class CurriculumFacet(StrEnum):
+    SUBJECT_DOMAIN = "subject_domain"
+    TASK_MECHANIC = "task_mechanic"
 
 
 class AnchorKind(StrEnum):
@@ -30,7 +35,7 @@ class CurriculumAnchor(BaseModel):
     kind: AnchorKind
     subject_id: str
     capability_id: str | None
-    projection: SemanticProjection
+    facet: CurriculumFacet
     text: str
 
 
@@ -46,15 +51,22 @@ class CapabilityCandidate(BaseModel):
     anchor_id: str
 
 
+class SubjectCandidate(BaseModel):
+    subject_id: str
+    similarity: float
+    anchor_id: str
+
+
 class SubjectAssignment(BaseModel):
     subject_id: str
-    projection: SemanticProjection
+    facet: CurriculumFacet
     status: AssignmentStatus
     membership_similarity: float
     membership_anchor_id: str
     capability_id: str | None
     margin: float
     candidates: list[CapabilityCandidate]
+    subject_candidates: list[SubjectCandidate]
 
 
 def _top_positions(scores: np.ndarray, count: int) -> np.ndarray:
@@ -79,7 +91,7 @@ class _CapabilityReference:
 @dataclass(frozen=True)
 class _SubjectReference:
     subject_id: str
-    projection: SemanticProjection
+    facet: CurriculumFacet
     anchor_positions: tuple[int, ...]
     capability_positions: tuple[int, ...]
 
@@ -114,19 +126,24 @@ class CurriculumVectors:
         capabilities = []
         for subject_id in sorted({anchor.subject_id for anchor in self.anchors}):
             membership = tuple(
-                index
-                for index, anchor in enumerate(self.anchors)
-                if anchor.subject_id == subject_id and anchor.kind == AnchorKind.SUBJECT
+                sorted(
+                    (
+                        index
+                        for index, anchor in enumerate(self.anchors)
+                        if anchor.subject_id == subject_id and anchor.kind == AnchorKind.SUBJECT
+                    ),
+                    key=lambda index: self.anchors[index].anchor_id,
+                )
             )
-            projections = {self.anchors[index].projection for index in membership}
-            if len(projections) != 1 or SemanticProjection.OPERATIONS in projections:
-                raise ValueError(f"Subject {subject_id} must declare one membership projection")
+            facets = {self.anchors[index].facet for index in membership}
+            if len(facets) != 1:
+                raise ValueError(f"Subject {subject_id} must declare one routing facet")
             by_capability: dict[str, list[int]] = {}
             for index, anchor in enumerate(self.anchors):
                 if anchor.subject_id != subject_id or anchor.kind != AnchorKind.CAPABILITY:
                     continue
-                if anchor.capability_id is None or anchor.projection != SemanticProjection.OPERATIONS:
-                    raise ValueError("Capability anchors require an ID and the operations projection")
+                if anchor.capability_id is None or anchor.facet not in facets:
+                    raise ValueError("Capability anchors require an ID and their subject's routing facet")
                 by_capability.setdefault(anchor.capability_id, []).append(index)
             if not by_capability:
                 raise ValueError(f"Subject {subject_id} has no capability anchors")
@@ -135,7 +152,7 @@ class CurriculumVectors:
                 positions.append(len(capabilities))
                 anchors = tuple(sorted(by_capability[capability_id], key=lambda index: self.anchors[index].anchor_id))
                 capabilities.append(_CapabilityReference(capability_id, anchors))
-            subjects.append(_SubjectReference(subject_id, next(iter(projections)), membership, tuple(positions)))
+            subjects.append(_SubjectReference(subject_id, next(iter(facets)), membership, tuple(positions)))
         operation_positions = np.asarray(
             [position for capability in capabilities for position in capability.anchor_positions]
         )
@@ -151,38 +168,47 @@ class CurriculumVectors:
 
 def rank_task_batch(
     curriculum: CurriculumVectors,
-    task_vectors: dict[SemanticProjection, np.ndarray],
+    task_vectors: np.ndarray,
+    *,
+    max_subject_distance: float,
+    max_capability_distance: float,
 ) -> list[list[SubjectAssignment]]:
-    """Rank all anchors exactly and accept subjects and capabilities within MAX_DISTANCE."""
-    row_count = len(task_vectors[SemanticProjection.OPERATIONS])
+    """Select a primary subject per facet and optionally its nearest capability."""
+    row_count = len(task_vectors)
     dimensions = curriculum.vectors.shape[1]
-    tasks = {
-        projection: normalized_vectors(task_vectors[projection], row_count, dimensions)
-        for projection in SemanticProjection
-    }
+    tasks = normalized_vectors(task_vectors, row_count, dimensions)
     index = curriculum.index
     subjects = [subject.subject_id for subject in index.subjects]
-    # Contiguous anchor groups reduce once per batch; membership never scores capability anchors.
-    operation_scores = tasks[SemanticProjection.OPERATIONS] @ index.references[index.operation_positions].T
+    anchor_scores = tasks @ index.references.T
+    # Membership scores only root scopes. Capability anchors reduce within each capability.
+    operation_scores = anchor_scores[:, index.operation_positions]
     capability_scores = np.maximum.reduceat(operation_scores, index.capability_starts, axis=1)
-    membership_scores = [
-        tasks[subject.projection] @ index.references[list(subject.anchor_positions)].T for subject in index.subjects
-    ]
+    membership_scores = [anchor_scores[:, list(subject.anchor_positions)] for subject in index.subjects]
     graph_scores = np.stack([scores.max(axis=1) for scores in membership_scores], axis=1)
     operation_columns = {int(position): column for column, position in enumerate(index.operation_positions)}
+    by_facet = {
+        facet: [position for position, subject in enumerate(index.subjects) if subject.facet == facet]
+        for facet in CurriculumFacet
+    }
     rows = []
     for row in range(row_count):
-        selected = set()
-        for projection in (SemanticProjection.SUBJECT_DOMAIN, SemanticProjection.TASK_MECHANIC):
-            indices = [position for position, subject in enumerate(index.subjects) if subject.projection == projection]
-            if indices:
-                selected.update(
-                    indices[position]
-                    for position in _top_positions(graph_scores[row, indices], CANDIDATE_SUBJECTS_PER_FACET)
-                )
-        selected.update(index for index, subject in enumerate(subjects) if 1 - graph_scores[row, index] <= MAX_DISTANCE)
         assignments = []
-        for subject_index in sorted(selected):
+        for indices in by_facet.values():
+            if not indices:
+                continue
+            nearest_subjects = [indices[position] for position in _top_positions(graph_scores[row, indices], TOP_K)]
+            subject_candidates = []
+            for position in nearest_subjects:
+                reference = index.subjects[position]
+                anchor = reference.anchor_positions[int(np.argmax(membership_scores[position][row]))]
+                subject_candidates.append(
+                    SubjectCandidate(
+                        subject_id=reference.subject_id,
+                        similarity=_cosine(graph_scores[row, position]),
+                        anchor_id=curriculum.anchors[anchor].anchor_id,
+                    )
+                )
+            subject_index = nearest_subjects[0]
             subject = subjects[subject_index]
             reference = index.subjects[subject_index]
             positions = reference.capability_positions
@@ -203,9 +229,9 @@ def rank_task_batch(
                     )
                 )
             member = _cosine(graph_scores[row, subject_index])
-            if 1 - member > MAX_DISTANCE:
+            if 1 - member > max_subject_distance:
                 status = AssignmentStatus.OUT_OF_SCOPE
-            elif 1 - candidates[0].similarity > MAX_DISTANCE:
+            elif 1 - candidates[0].similarity > max_capability_distance:
                 status = AssignmentStatus.SUBJECT_ONLY
             else:
                 status = AssignmentStatus.ASSIGNED
@@ -214,13 +240,14 @@ def rank_task_batch(
             assignments.append(
                 SubjectAssignment(
                     subject_id=subject,
-                    projection=reference.projection,
+                    facet=reference.facet,
                     status=status,
                     membership_similarity=member,
                     membership_anchor_id=curriculum.anchors[best_anchor].anchor_id,
                     capability_id=candidates[0].capability_id if status == AssignmentStatus.ASSIGNED else None,
                     margin=margin,
                     candidates=candidates,
+                    subject_candidates=subject_candidates,
                 )
             )
         rows.append(assignments)

@@ -21,6 +21,7 @@ from taskcompendium.pipeline.curriculum_alignment import (
     AnchorKind,
     AssignmentStatus,
     CurriculumAnchor,
+    CurriculumFacet,
     CurriculumVectors,
     rank_task_batch,
 )
@@ -28,7 +29,6 @@ from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 from taskcompendium.pipeline.semantics import (
     DescriptionModel,
-    SemanticProjection,
     TaskInputFile,
     describe_tasks,
     prepare_semantic_inputs,
@@ -87,12 +87,7 @@ class DescriptionTransport:
             description = {
                 "status": "insufficient_context" if missing else "ready",
                 "reason": "The requested operation is absent" if missing else "",
-                "subject_domain": "" if missing else "arithmetic",
-                "task_mechanic": "" if missing else "counting",
-                "summary": "" if missing else "Count apples",
-                "hardest_operation": "" if missing else "count",
-                "required_operations": [] if missing else ["count"],
-                "answer_form": "" if missing else "number",
+                "description": "" if missing else "Elementary arithmetic: count apples.",
             }
             if not missing and len(request["body"]["messages"]) == 2:
                 description.pop("status")
@@ -160,7 +155,8 @@ def test_instruction_projection_excludes_private_contract_and_ignores_source_ide
 
 def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reuse_cache(context, tmp_path, spec):
     raw = tmp_path / "tasks.parquet"
-    tasks = [task("a"), task("b"), task("c", prompt="UNSPECIFIED_OPERATION")]
+    long_prompt = "Public context details. " * 600 + "Count two apples."
+    tasks = [task("a", prompt=long_prompt), task("b", prompt=long_prompt), task("c", prompt="UNSPECIFIED_OPERATION")]
     pq.write_table(
         pa.Table.from_pylist([{"task_json": item.model_dump_json()} for item in tasks] + [{"task_json": None}]), raw
     )
@@ -185,6 +181,8 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     assert len(rows(descriptions)) == 2
     requests = [json.loads(line) for line in Path(transport.calls).read_text().splitlines()]
     assert len(requests) == 3
+    public_inputs = [json.loads(request["body"]["messages"][1]["content"]) for request in requests]
+    assert any(item["context"]["events"][0]["content"] == long_prompt for item in public_inputs)
     assert any("failed schema validation" in request["body"]["messages"][-1]["content"] for request in requests)
     replay = describe_tasks(
         context,
@@ -210,7 +208,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         cache_root=vector_cache,
         output_root=str(tmp_path / "vectors"),
     )
-    assert len(rows(vectors)) == 3
+    assert len(rows(vectors)) == 1
     for vector in rows(vectors):
         assert np.linalg.norm(vector["embedding"]) == pytest.approx(1.0)
 
@@ -220,19 +218,19 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
             kind=AnchorKind.SUBJECT,
             subject_id="math",
             capability_id=None,
-            projection=SemanticProjection.SUBJECT_DOMAIN,
-            text="Subject domain: arithmetic.",
+            facet=CurriculumFacet.SUBJECT_DOMAIN,
+            text="Elementary arithmetic: count apples.",
         ),
         CurriculumAnchor(
             anchor_id="count",
             kind=AnchorKind.CAPABILITY,
             subject_id="math",
             capability_id="math.count",
-            projection=SemanticProjection.OPERATIONS,
+            facet=CurriculumFacet.SUBJECT_DOMAIN,
             text="Count items",
         ),
     )
-    anchor_texts = [text_record(anchor.text, anchor.projection, spec) for anchor in anchors]
+    anchor_texts = [text_record(anchor.text, spec) for anchor in anchors]
     anchor_paths = embed_texts(
         context,
         texts=Dataset.from_list(anchor_texts),
@@ -241,7 +239,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         cache_root=vector_cache,
         output_root=str(tmp_path / "anchors"),
     )
-    assert len(Path(provider.calls).read_text().splitlines()) == 4
+    assert len(Path(provider.calls).read_text().splitlines()) == 2
     anchor_by_key = {row["embedding_key"]: row["embedding"] for row in rows(anchor_paths)}
     reference = CurriculumVectors(
         anchors, np.asarray([anchor_by_key[row["embedding_key"]] for row in anchor_texts], dtype=np.float32)
@@ -252,18 +250,21 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         description_paths=descriptions,
         curriculum=reference,
         curriculum_key="fixture",
+        max_subject_distance=0.5,
+        max_capability_distance=0.3,
         cache_root=vector_cache,
         spec=spec,
         output_root=str(tmp_path / "aligned"),
     )
     output = {row["task_id"]: row for row in rows(assigned)}
     assert set(output) == {"a", "b", "c"}
+    assert output["a"]["description"] == "Elementary arithmetic: count apples."
     assert output["a"]["assignments"] == output["b"]["assignments"]
     assert output["a"]["assignments"][0]["membership_similarity"] == pytest.approx(1.0)
     assert output["c"]["description_status"] == "insufficient_context"
     assert output["c"]["assignments"] == []
 
-    changed_anchor = text_record("Count and compare items", SemanticProjection.OPERATIONS, spec)
+    changed_anchor = text_record("Count and compare items", spec)
     embed_texts(
         context,
         texts=Dataset.from_list([*texts, *anchor_texts, changed_anchor]),
@@ -272,27 +273,27 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         cache_root=vector_cache,
         output_root=str(tmp_path / "curriculum-edit"),
     )
-    assert len(Path(provider.calls).read_text().splitlines()) == 5
+    assert len(Path(provider.calls).read_text().splitlines()) == 3
     changed_spec = spec.model_copy(update={"max_tokens": 256})
     embed_texts(
         context,
-        texts=Dataset.from_list([text_record("Count items", SemanticProjection.OPERATIONS, changed_spec)]),
+        texts=Dataset.from_list([text_record("Count items", changed_spec)]),
         spec=changed_spec,
         embedder=provider,
         cache_root=vector_cache,
         output_root=str(tmp_path / "spec-edit"),
     )
-    assert len(Path(provider.calls).read_text().splitlines()) == 6
+    assert len(Path(provider.calls).read_text().splitlines()) == 4
 
 
-def test_exact_alignment_keeps_multiple_subjects_and_rejects_weak_capabilities():
+def test_exact_alignment_selects_one_subject_per_facet_and_rejects_weak_capabilities():
     anchors = (
         CurriculumAnchor(
             anchor_id="domain",
             kind="subject",
             subject_id="math",
             capability_id=None,
-            projection="subject_domain",
+            facet="subject_domain",
             text="Math",
         ),
         CurriculumAnchor(
@@ -300,7 +301,7 @@ def test_exact_alignment_keeps_multiple_subjects_and_rejects_weak_capabilities()
             kind="capability",
             subject_id="math",
             capability_id="count",
-            projection="operations",
+            facet="subject_domain",
             text="Count",
         ),
         CurriculumAnchor(
@@ -308,7 +309,7 @@ def test_exact_alignment_keeps_multiple_subjects_and_rejects_weak_capabilities()
             kind="capability",
             subject_id="math",
             capability_id="compare",
-            projection="operations",
+            facet="subject_domain",
             text="Compare",
         ),
         CurriculumAnchor(
@@ -316,7 +317,7 @@ def test_exact_alignment_keeps_multiple_subjects_and_rejects_weak_capabilities()
             kind="subject",
             subject_id="practice",
             capability_id=None,
-            projection="task_mechanic",
+            facet="task_mechanic",
             text="Calculation",
         ),
         CurriculumAnchor(
@@ -324,23 +325,33 @@ def test_exact_alignment_keeps_multiple_subjects_and_rejects_weak_capabilities()
             kind="capability",
             subject_id="practice",
             capability_id="calculate",
-            projection="operations",
+            facet="task_mechanic",
             text="Calculate",
         ),
     )
-    references = np.asarray([[1, 0, 0], [1, 0, 0], [0, 1, 0], [1, 0, 0], [1, 0, 0]], dtype=np.float32)
-    membership = np.asarray([[1, 0, 0], [1, 0, 0], [1, 0, 0], [-1, 0, 0]], dtype=np.float32)
-    operations = np.asarray([[1, 0, 0], [1, 1, 0], [0, 0, 1], [1, 0, 0]], dtype=np.float32)
+    references = np.asarray([[0, 0, 1], [0.6, 0, 0.8], [0, 0.6, 0.8], [0, 0, 1], [0.6, 0, 0.8]], dtype=np.float32)
+    tasks = np.asarray([[0.6, 0, 0.8], [0.6, 0.6, 0.8], [0, 0, 1], [0, 0, -1]], dtype=np.float32)
+    neighbor = tuple(
+        CurriculumAnchor(
+            anchor_id=f"neighbor-{kind}",
+            kind=kind,
+            subject_id="neighbor",
+            capability_id="neighbor.work" if kind == "capability" else None,
+            facet="subject_domain",
+            text="Adjacent domain",
+        )
+        for kind in ("subject", "capability")
+    )
     output = rank_task_batch(
-        CurriculumVectors(anchors, references),
-        {
-            SemanticProjection.SUBJECT_DOMAIN: membership,
-            SemanticProjection.TASK_MECHANIC: membership,
-            SemanticProjection.OPERATIONS: operations,
-        },
+        CurriculumVectors((*anchors, *neighbor), np.concatenate([references, [[0, 0, 1], [0, 0, 1]]])),
+        tasks,
+        max_subject_distance=0.5,
+        max_capability_distance=0.1,
     )
     assert {row.subject_id for row in output[0] if row.status == AssignmentStatus.ASSIGNED} == {"math", "practice"}
-    assert next(row for row in output[0] if row.subject_id == "math").capability_id == "count"
+    math = next(row for row in output[0] if row.subject_id == "math")
+    assert math.capability_id == "count"
+    assert [candidate.subject_id for candidate in math.subject_candidates] == ["math", "neighbor"]
     tied = next(row for row in output[1] if row.subject_id == "math")
     assert tied.status == AssignmentStatus.SUBJECT_ONLY
     assert tied.capability_id is None
@@ -356,7 +367,7 @@ class ZeroEmbeddingProvider:
 
 
 def test_invalid_provider_vectors_never_enter_persistent_cache(context, tmp_path, spec):
-    row = text_record("Count items", SemanticProjection.OPERATIONS, spec)
+    row = text_record("Count items", spec)
     cache = str(tmp_path / "cache")
     with pytest.raises(ZephyrWorkerError, match="zero vector"):
         embed_texts(

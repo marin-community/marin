@@ -130,20 +130,18 @@ boundary and difficulty evidence; this workflow does not run model-training expe
 
 ## Task mapping
 
-Task mapping uses a curriculum-independent semantic key and two routing stages:
+Task mapping uses a curriculum-independent description and two routing stages:
 
 ```text
-model-visible TaskSpec -> semantic key -> cached domain, mechanic, and operation embeddings
-curriculum graph       -> declared membership facet -> zero or more graph candidates
-selected graph         -> operation embedding       -> capability candidates within that graph
+task instructions and public contract -> short core-work description -> one cached Harrier vector
+curriculum root scopes               -> cached anchor vectors       -> primary subject per facet
+curriculum capabilities              -> cached anchor vectors       -> optional capability in that subject
 ```
 
-The key records `subject_domain`, `task_mechanic`, requested result, hardest operation, required operations, and
-answer form. `subject_domain` is the broad knowledge or tool environment required by the decisive operation.
-Narrative content and output format do not belong in it. `task_mechanic` is a domain-neutral operation family such as
-implementation, repair, supplied-context extraction, calculation, explanation, recall, or tool-state mutation. The
-hardest and required operations rank capabilities after graph selection. Groups never receive assignment anchors or
-task mappings.
+The description names the required knowledge or tool environment, then the decisive operation and object type in
+roughly 15–40 words. It preserves essential constraints and omits incidental story and submission details. Full task
+instructions reach the describer; the embedding token limit applies to the rendered short description. Groups never
+receive assignment anchors or task mappings.
 
 The [curation embedding pipeline](../task_curation/README.md#task-and-curriculum-embeddings) owns task descriptions,
 task embeddings, curriculum anchor embeddings and assignment. The curriculum experiment supplies the immutable
@@ -151,17 +149,19 @@ catalog; it has no separate embedding CLI or database.
 
 The pipeline describes instructions and public answer/tool contracts without opening task files or exposing private
 grading resources. It retains task identity separately from public-content identity, so repeated content shares
-inference across source populations. Task and curriculum texts use the same Harrier checkpoint, tokenizer, projection
-instructions, last-token pooling and L2 normalization. Curriculum outcomes and includes provide capability anchors;
+inference across source populations. Task and curriculum texts use the same Harrier checkpoint, tokenizer, embedding
+instruction, last-token pooling and L2 normalization. Curriculum outcomes and includes provide capability anchors;
 root scopes provide subject membership anchors. Groups receive navigation rollups, not task assignments.
 
 FineStore caches validated description requests and content-addressed vectors. A curriculum edit renders and embeds
-changed anchors, then realigns cached task vectors. Changing the description prompt/model can regenerate semantic
-keys; changing the embedding specification requires new vectors. Outputs remain outside the curriculum JSON.
+changed anchors, then realigns cached task vectors. Changing the description prompt/model regenerates descriptions;
+changing the embedding specification requires new vectors. Outputs remain outside the curriculum JSON.
 
-Exact cosine scoring ranks subjects and capabilities in bounded task batches. One code constant, `MAX_DISTANCE`,
-controls accepted cosine distance for both levels. Subject matches with weak capability matches do not become
-accepted capability assignments. Top-three alternatives and score margins support inspection. Mapping remains a
+Exact cosine scoring ranks subjects and capabilities in bounded task batches. The nearest subject per routing facet
+is the primary placement. Two code constants, `MAX_SUBJECT_DISTANCE` and `MAX_CAPABILITY_DISTANCE`, control accepted
+cosine distance at each level. Subject matches with weak capability matches remain subject-only placements.
+The three highest-ranked subject and capability candidates include the nearest match. Capability score margins
+support inspection. Mapping remains a
 diagnostic signal and is excluded from the curriculum promotion gate.
 
 ## Experiment history

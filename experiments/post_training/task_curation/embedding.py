@@ -16,7 +16,12 @@ from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.chat_requests import chat_output
-from taskcompendium.pipeline.curriculum_alignment import MAX_DISTANCE, CurriculumAnchor, CurriculumVectors
+from taskcompendium.pipeline.curriculum_alignment import (
+    MAX_CAPABILITY_DISTANCE,
+    MAX_SUBJECT_DISTANCE,
+    CurriculumAnchor,
+    CurriculumVectors,
+)
 from taskcompendium.pipeline.semantics import (
     DESCRIPTION_PROMPT_VERSION,
     DescriptionModel,
@@ -41,9 +46,9 @@ from experiments.post_training.task_curation.curriculum import curriculum_anchor
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 INPUTS_VERSION = "2026.10.14.1"
-DESCRIPTIONS_VERSION = "2026.10.14.4"
-EMBEDDINGS_VERSION = "2026.10.14.3"
-ALIGNMENT_VERSION = "2026.10.14.1"
+DESCRIPTIONS_VERSION = "2026.10.14.5"
+EMBEDDINGS_VERSION = "2026.10.14.4"
+ALIGNMENT_VERSION = "2026.10.14.2"
 
 
 class SemanticArtifact(Artifact):
@@ -160,9 +165,7 @@ def _embed_curriculum(
     )
     # The catalog fits in memory. One input shard keeps inference batches full;
     # a shard per anchor would force singleton model and cache requests.
-    texts = Dataset.from_list([anchors]).flat_map(
-        lambda batch: [text_record(anchor.text, anchor.projection, spec) for anchor in batch]
-    )
+    texts = Dataset.from_list([anchors]).flat_map(lambda batch: [text_record(anchor.text, spec) for anchor in batch])
     paths = embed_texts(
         runtime.context, texts=texts, spec=spec, embedder=embedder, cache_root=cache_root, output_root=output_root
     )
@@ -180,7 +183,8 @@ def _align(
     task_vectors_root: str,
     curriculum_vectors_root: str,
     spec: EmbeddingSpec,
-    max_distance: float,
+    max_subject_distance: float,
+    max_capability_distance: float,
     cache_root: str,
     output_root: str,
 ) -> SemanticArtifact:
@@ -200,7 +204,7 @@ def _align(
     curriculum = CurriculumVectors(
         anchors,
         np.asarray(
-            [vectors[text_record(anchor.text, anchor.projection, spec)["embedding_key"]] for anchor in anchors],
+            [vectors[text_record(anchor.text, spec)["embedding_key"]] for anchor in anchors],
             dtype=np.float32,
         ),
     )
@@ -214,6 +218,8 @@ def _align(
         ),
         cache_root=cache_root,
         spec=spec,
+        max_subject_distance=max_subject_distance,
+        max_capability_distance=max_capability_distance,
         output_root=output_root,
     )
     (StoragePath(output_root) / "alignment.json").write_text(
@@ -223,7 +229,8 @@ def _align(
                 "descriptions_root": descriptions_root,
                 "task_vectors_root": task_vectors_root,
                 "curriculum_vectors_root": curriculum_vectors_root,
-                "max_distance": max_distance,
+                "max_subject_distance": max_subject_distance,
+                "max_capability_distance": max_capability_distance,
                 "spec": spec.model_dump(mode="json"),
                 "paths": paths,
             },
@@ -313,7 +320,8 @@ def curation_embedding_pipeline(
             task_vectors_root=vectors,
             curriculum_vectors_root=anchors,
             spec=spec,
-            max_distance=MAX_DISTANCE,
+            max_subject_distance=MAX_SUBJECT_DISTANCE,
+            max_capability_distance=MAX_CAPABILITY_DISTANCE,
             cache_root=str(StoragePath(cache_root) / "vectors"),
             output_root=OUT,
         )

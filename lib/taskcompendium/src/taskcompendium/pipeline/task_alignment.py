@@ -24,7 +24,7 @@ from taskcompendium.pipeline.curriculum_alignment import (
     SubjectAssignment,
     rank_task_batch,
 )
-from taskcompendium.pipeline.semantics import DescriptionStatus, SemanticKey, SemanticProjection
+from taskcompendium.pipeline.semantics import DescriptionStatus
 from taskcompendium.pipeline.task_embeddings import EmbeddingSpec, text_record
 
 
@@ -38,7 +38,7 @@ class TaskAlignment(BaseModel):
     population: str
     description_status: DescriptionStatus
     reason: str
-    semantic_key: str | None
+    description: str
     task_preview: str
     assignments: list[SubjectAssignment]
 
@@ -75,33 +75,28 @@ def _align_batches(
     shared_key: str,
     cache_root: str,
     spec: EmbeddingSpec,
+    max_subject_distance: float,
+    max_capability_distance: float,
 ) -> Iterator[dict]:
     curriculum: CurriculumVectors = zephyr_worker_ctx().get_shared(shared_key)
     view = ReadView(cache_root)
     for batch in batches:
         ready = [row for row in batch if row["status"] == DescriptionStatus.READY]
-        requests = []
-        for row in ready:
-            key = SemanticKey.model_validate(row["key"])
-            requests.append(
-                {
-                    projection: text_record(key.text(projection), projection, spec)["embedding_key"]
-                    for projection in SemanticProjection
-                }
-            )
-        cached = view.read_blobs([key for request in requests for key in request.values()])
-        missing = {key for request in requests for key in request.values()} - set(cached)
+        requests = [text_record(row["description"], spec)["embedding_key"] for row in ready]
+        cached = view.read_blobs(requests)
+        missing = set(requests) - set(cached)
         if missing:
             raise ValueError(f"Alignment is missing {len(missing)} cached task vectors")
-        vectors = (
-            {
-                projection: np.stack([np.frombuffer(cached[request[projection]], dtype="<f4") for request in requests])
-                for projection in SemanticProjection
-            }
+        rankings = iter(
+            rank_task_batch(
+                curriculum,
+                np.stack([np.frombuffer(cached[key], dtype="<f4") for key in requests]),
+                max_subject_distance=max_subject_distance,
+                max_capability_distance=max_capability_distance,
+            )
             if ready
-            else {}
+            else []
         )
-        rankings = iter(rank_task_batch(curriculum, vectors) if ready else [])
         for row in batch:
             assigned = next(rankings) if row["status"] == DescriptionStatus.READY else []
             result = TaskAlignment(
@@ -119,7 +114,7 @@ def _align_batches(
                     )
                 },
                 description_status=row["status"],
-                semantic_key=json.dumps(row["key"], ensure_ascii=False) if row["key"] is not None else None,
+                description=row["description"],
                 task_preview=row["public_input"][:4096],
                 assignments=assigned,
             )
@@ -138,6 +133,8 @@ def align_tasks(
     curriculum_key: str,
     cache_root: str,
     spec: EmbeddingSpec,
+    max_subject_distance: float,
+    max_capability_distance: float,
     output_root: str,
     batch_size: int = 256,
 ) -> list[str]:
@@ -153,7 +150,16 @@ def align_tasks(
         .flat_map(_join_records)
         .group_by(key=lambda row: row["content_hash"], sort_by=lambda row: row["kind"], reducer=_described_tasks)
         .window(batch_size)
-        .map_shard(partial(_align_batches, shared_key=shared_key, cache_root=cache_root, spec=spec))
+        .map_shard(
+            partial(
+                _align_batches,
+                shared_key=shared_key,
+                cache_root=cache_root,
+                spec=spec,
+                max_subject_distance=max_subject_distance,
+                max_capability_distance=max_capability_distance,
+            )
+        )
         .write_parquet(
             str(StoragePath(output_root) / "assignments/part-{shard:05d}.parquet"), schema=arrow_schema(TaskAlignment)
         ),

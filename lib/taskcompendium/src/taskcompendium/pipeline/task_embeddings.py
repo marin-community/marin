@@ -20,15 +20,12 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.semantics import DescriptionStatus, SemanticKey, SemanticProjection
+from taskcompendium.pipeline.semantics import DescriptionStatus
 
-PROJECTION_INSTRUCTIONS = {
-    SemanticProjection.SUBJECT_DOMAIN: "Represent the operational knowledge domain required to perform this work.",
-    SemanticProjection.TASK_MECHANIC: (
-        "Represent the domain-independent transformation or reasoning action required by this work."
-    ),
-    SemanticProjection.OPERATIONS: "Represent the operations and requested result of this work for capability matching.",
-}
+EMBEDDING_INSTRUCTION = (
+    "Represent the core knowledge and decisive operation required by this work, ignoring story details "
+    "and routine setup, capture, formatting or submission unless they are the main problem."
+)
 
 
 class EmbeddingSpec(BaseModel):
@@ -51,16 +48,15 @@ class TextEmbedder(Protocol):
     def embed(self, texts: list[str]) -> np.ndarray: ...
 
 
-def embedding_text(text: str, projection: SemanticProjection) -> str:
+def embedding_text(text: str) -> str:
     """Use the same instruction and rendering for both sides of each comparison."""
-    return f"Instruct: {PROJECTION_INSTRUCTIONS[projection]}\nQuery: {text}"
+    return f"Instruct: {EMBEDDING_INSTRUCTION}\nQuery: {text}"
 
 
-def text_record(text: str, projection: SemanticProjection, spec: EmbeddingSpec) -> dict:
-    rendered = embedding_text(text, projection)
+def text_record(text: str, spec: EmbeddingSpec) -> dict:
+    rendered = embedding_text(text)
     return {
         "embedding_key": canonical_sha256({"spec": spec.model_dump(mode="json"), "text": rendered}),
-        "projection": projection.value,
         "text": rendered,
     }
 
@@ -68,9 +64,7 @@ def text_record(text: str, projection: SemanticProjection, spec: EmbeddingSpec) 
 def task_text_records(row: dict, spec: EmbeddingSpec) -> Iterator[dict]:
     if row["status"] != DescriptionStatus.READY:
         return
-    key = SemanticKey.model_validate(row["key"])
-    for projection in SemanticProjection:
-        yield {"content_hash": row["content_hash"], **text_record(key.text(projection), projection, spec)}
+    yield {"content_hash": row["content_hash"], **text_record(row["description"], spec)}
 
 
 def normalized_vectors(values: np.ndarray, rows: int, dimensions: int) -> np.ndarray:

@@ -42,12 +42,7 @@ class DescriptionHandler(BaseHTTPRequestHandler):
             "task_id": identifier,
             "status": "ready",
             "reason": "",
-            "subject_domain": "arithmetic",
-            "task_mechanic": "calculation",
-            "summary": "Add numbers",
-            "hardest_operation": "addition",
-            "required_operations": ["addition"],
-            "answer_form": "number",
+            "description": "Elementary arithmetic: add two integers.",
         }
         body = json.dumps(
             {
@@ -212,9 +207,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
         assert {row["task_id"] for row in rows} == {"a", "b"}
         assert all(row["assignments"][0]["capability_id"] == "math.addition" for row in rows)
         batches = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
-        expected = {
-            text_record(anchor.text, anchor.projection, spec)["text"] for anchor in curriculum_anchors(first_catalog)
-        }
+        expected = {text_record(anchor.text, spec)["text"] for anchor in curriculum_anchors(first_catalog)}
         assert any(set(batch) == expected for batch in batches)
         texts_before = sum(map(len, batches))
         rebuilt = run(second.assignments, max_concurrent=1)[0]
