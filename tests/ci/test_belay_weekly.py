@@ -49,7 +49,9 @@ def _summary(since: datetime.date, until: datetime.date) -> str:
 
 def test_rollover_opens_locks_and_links_the_new_week_and_closes_the_old():
     github = _FakeGitHub({9451: "Marin Belay v1: hill-climb the scaling ladder"})
-    new = roll_over(github, today=MONDAY + datetime.timedelta(days=2), summary_for=_summary, dry_run=False)
+    new = roll_over(
+        github, today=MONDAY + datetime.timedelta(days=2), intake_issue=9514, summary_for=_summary, dry_run=False
+    )
     assert github.titles[new] == "Marin Belay v1 · week of 2026-10-19"
     assert new in github.locked and github.open == {new}
     assert "Previous week: #9451" in github.comments[new][0]
@@ -59,20 +61,25 @@ def test_rollover_opens_locks_and_links_the_new_week_and_closes_the_old():
 
 def test_rollover_does_nothing_within_the_same_week():
     github = _FakeGitHub({200: week_title(MONDAY)})
-    assert roll_over(github, today=MONDAY + datetime.timedelta(days=6), summary_for=_summary, dry_run=False) == 200
+    assert (
+        roll_over(
+            github, today=MONDAY + datetime.timedelta(days=6), intake_issue=9514, summary_for=_summary, dry_run=False
+        )
+        == 200
+    )
     assert github.open == {200} and github.comments == {}
 
 
 def test_first_rollover_without_a_previous_issue():
     github = _FakeGitHub({})
-    new = roll_over(github, today=MONDAY, summary_for=_summary, dry_run=False)
+    new = roll_over(github, today=MONDAY, intake_issue=9514, summary_for=_summary, dry_run=False)
     assert github.open == {new} and "Previous week" not in github.comments[new][0]
 
 
 def test_rollover_refuses_two_open_weekly_issues():
     github = _FakeGitHub({200: "a", 201: "b"})
     with pytest.raises(RuntimeError):
-        roll_over(github, today=MONDAY, summary_for=_summary, dry_run=False)
+        roll_over(github, today=MONDAY, intake_issue=9514, summary_for=_summary, dry_run=False)
 
 
 def test_week_start_is_monday():

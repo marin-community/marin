@@ -33,4 +33,4 @@ jobs:
       - name: Roll over the weekly Belay issue
         env:
           GITHUB_TOKEN: ${{ secrets.BELAY_INTAKE_TOKEN }}
-        run: python3 -m scripts.ci.belay_weekly --registry-checkout registry
+        run: python3 -m scripts.ci.belay_weekly --registry-checkout registry --intake-issue 9514

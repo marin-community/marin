@@ -200,7 +200,7 @@ def reply_body(comment_id: int, experiment_id: str, target_issue: int, repo: str
 
 
 def transfer_body(comment: IntakeComment, approver: str, experiment_id: str) -> str:
-    """The main-issue comment for an approved intake comment: id, attribution, the quoted text, and the marker."""
+    """The weekly-issue copy of an approved intake comment: id, attribution, the quoted text, and the marker."""
     text = _MENTION_RE.sub("@" + _ZERO_WIDTH_SPACE, comment.body).replace("<!--", "<" + _ZERO_WIDTH_SPACE + "!--")
     quoted = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
     return (
@@ -331,21 +331,36 @@ def current_weekly_issue(github: GitHub) -> int:
     return issues[0]
 
 
+def _transferred(github: GitHub, intake_raw: list[dict], target_issue: int) -> tuple[set[int], set[int]]:
+    """Intake comment ids with a reply on the intake issue, and ids with a copy in this week's or the legacy issue."""
+    replied = transferred_ids_in(intake_raw, _REPLY_MARKER_RE)
+    copied = transferred_ids_in(github.issue_comments(target_issue))
+    if target_issue != LEGACY_TARGET_ISSUE:
+        copied |= transferred_ids_in(github.issue_comments(LEGACY_TARGET_ISSUE))
+    return replied, copied
+
+
+def _post_missing_replies(github: GitHub, ids: set[int], intake_issue: int, target_issue: int, dry_run: bool) -> None:
+    """Reply for copies whose reply is missing (a run stopped between the two). Copies from before the registry have
+    no id and get none."""
+    index_file = github.get_file(INTAKE_INDEX, REGISTRY_BRANCH) if ids else None
+    index = json.loads(index_file[0]) if index_file else {}
+    for comment_id in sorted(i for i in ids if str(i) in index):
+        print(f"post the missing reply for intake comment {comment_id}")
+        if not dry_run:
+            github.post_comment(intake_issue, reply_body(comment_id, index[str(comment_id)], target_issue, github.repo))
+
+
 def run(github: GitHub, *, intake_issue: int, approvers: frozenset[int], dry_run: bool) -> int:
     """Register, copy and reply to every approved, not-yet-transferred intake comment, and mark it with a rocket;
     also post a missing reply or rocket for comments already copied. With ``dry_run`` only report. Returns the
     number of comments that were (or, with ``dry_run``, would be) copied."""
     target_issue = current_weekly_issue(github)
     intake_raw = github.issue_comments(intake_issue)
-    replied = transferred_ids_in(intake_raw, _REPLY_MARKER_RE)
-    copied = transferred_ids_in(github.issue_comments(target_issue))
-    if target_issue != LEGACY_TARGET_ISSUE:
-        copied |= transferred_ids_in(github.issue_comments(LEGACY_TARGET_ISSUE))
+    replied, copied = _transferred(github, intake_raw, target_issue)
     transferred = replied | copied
     candidates, unmarked = [], []
-    for raw in intake_raw:
-        if raw["user"]["login"] == TRANSFER_BOT:
-            continue
+    for raw in (r for r in intake_raw if r["user"]["login"] != TRANSFER_BOT):
         summary = raw.get("reactions", {})
         if raw["id"] in transferred:
             if summary.get(TRANSFERRED_REACTION, 0) == 0:
@@ -363,16 +378,7 @@ def run(github: GitHub, *, intake_issue: int, approvers: frozenset[int], dry_run
             github.post_comment(target_issue, transfer_body(comment, approver, experiment_id))
             github.post_comment(intake_issue, reply_body(comment.comment_id, experiment_id, target_issue, github.repo))
             github.react(comment.comment_id, TRANSFERRED_REACTION)
-    # Copies without a reply: a run stopped between the two. Copies from before the registry have no id; skip them.
-    unreplied = copied - replied
-    index_file = github.get_file(INTAKE_INDEX, REGISTRY_BRANCH) if unreplied else None
-    index = json.loads(index_file[0]) if index_file else {}
-    for comment_id in sorted(unreplied):
-        if str(comment_id) not in index:
-            continue
-        print(f"post the missing reply for intake comment {comment_id}")
-        if not dry_run:
-            github.post_comment(intake_issue, reply_body(comment_id, index[str(comment_id)], target_issue, github.repo))
+    _post_missing_replies(github, copied - replied, intake_issue, target_issue, dry_run)
     for comment_id in unmarked:
         print(f"add the missing rocket to already-copied intake comment {comment_id}")
         if not dry_run:

@@ -17,13 +17,12 @@ import subprocess
 import sys
 import urllib.error
 
-from scripts.ci.belay_intake import WEEKLY_LABEL, GitHub
+from scripts.ci.belay_intake import REGISTRY_BRANCH, WEEKLY_LABEL, GitHub
 
 BELAY_LABEL = "belay"
 AGENT_LABEL = "agent-generated"
 TITLE_PREFIX = "Marin Belay v1 · week of "
 PAGE_URL = "https://claude.ai/artifact/2ZfzxTKZBMF3HJ77xeSQb5"
-INTAKE_ISSUE = 9514
 
 
 def week_start(day: datetime.date) -> datetime.date:
@@ -34,14 +33,14 @@ def week_title(monday: datetime.date) -> str:
     return f"{TITLE_PREFIX}{monday.isoformat()}"
 
 
-def week_body(monday: datetime.date, previous: int | None, repo: str) -> str:
+def week_body(monday: datetime.date, previous: int | None, repo: str, intake_issue: int) -> str:
     tree = f"https://github.com/{repo}/tree"
     lines = [
         f"🤖 Marin Belay agent log for the week of {monday.isoformat()}: batch plans and results, and the intake "
-        f"suggestions approved this week. Locked; propose ideas on the intake issue, #{INTAKE_ISSUE}.",
+        f"suggestions approved this week. Locked; propose ideas on the intake issue, #{intake_issue}.",
         "",
         f"- Page: {PAGE_URL}",
-        f"- Experiment registry: {tree}/marin_belay_v1_registry/experiments/belay",
+        f"- Experiment registry: {tree}/{REGISTRY_BRANCH}/experiments/belay",
         f"- Current checkpoint: {tree}/marin_belay_v1_ckpt1",
     ]
     if previous is not None:
@@ -64,7 +63,7 @@ def registry_summary(registry_checkout: str, since: datetime.date, until: dateti
     ).stdout
 
 
-def roll_over(github: GitHub, *, today: datetime.date, summary_for, dry_run: bool) -> int | None:
+def roll_over(github: GitHub, *, today: datetime.date, intake_issue: int, summary_for, dry_run: bool) -> int | None:
     """Open this week's issue unless it exists; return its number (None in a dry run that would create it).
     ``summary_for(since, until)`` gives the closing summary of the previous week."""
     monday = week_start(today)
@@ -79,7 +78,7 @@ def roll_over(github: GitHub, *, today: datetime.date, summary_for, dry_run: boo
     if dry_run:
         return None
     labels = [BELAY_LABEL, WEEKLY_LABEL, AGENT_LABEL]
-    new = github.create_issue(week_title(monday), week_body(monday, previous, github.repo), labels)
+    new = github.create_issue(week_title(monday), week_body(monday, previous, github.repo, intake_issue), labels)
     github.lock(new)
     if previous is not None:
         since = monday - datetime.timedelta(days=7)
@@ -90,7 +89,8 @@ def roll_over(github: GitHub, *, today: datetime.date, summary_for, dry_run: boo
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--registry-checkout", required=True, help="a checkout of the marin_belay_v1_registry branch")
+    parser.add_argument("--registry-checkout", required=True, help=f"a checkout of the {REGISTRY_BRANCH} branch")
+    parser.add_argument("--intake-issue", type=int, required=True)
     parser.add_argument("--today", type=datetime.date.fromisoformat, default=datetime.datetime.now(datetime.UTC).date())
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -99,6 +99,7 @@ def main() -> None:
         issue = roll_over(
             github,
             today=args.today,
+            intake_issue=args.intake_issue,
             summary_for=lambda since, until: registry_summary(args.registry_checkout, since, until),
             dry_run=args.dry_run,
         )
