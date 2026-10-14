@@ -50,29 +50,6 @@ def test_accelerator_implementation_value_and_gradients_match_xla():
     assert jnp.allclose(actual_gradients[1], expected_gradients[1], rtol=1e-5, atol=1e-5)
 
 
-def test_triton_kernel_traces_with_jax_0_9_pallas_memory_api_on_cpu_interpreter():
-    if not ragged_dot_module._has_pallas_triton:
-        pytest.skip("Pallas Triton backend is not available")
-
-    lhs, grouped_rhs, _ = _inputs()
-    lhs = lhs[:2]
-    rhs = grouped_rhs[0]
-    lo = jnp.array(0, dtype=jnp.int32)
-    hi = jnp.array(lhs.shape[0], dtype=jnp.int32)
-    pallas_call = ragged_dot_module.pl.pallas_call(
-        lambda a, b, lo, hi, out: ragged_dot_module._triton_ragged_dot_kernel(
-            a, b, lo, hi, out, block_m=lhs.shape[0], block_k=lhs.shape[1], n=rhs.shape[1]
-        ),
-        out_shape=jax.ShapeDtypeStruct((lhs.shape[0], rhs.shape[1]), lhs.dtype),
-        in_specs=[ragged_dot_module.pl.no_block_spec] * 4,
-        out_specs=ragged_dot_module.pl.no_block_spec,
-        grid=(1, 1),
-        interpret=True,
-    )
-
-    assert jnp.allclose(pallas_call(lhs, rhs, lo, hi), lhs @ rhs, rtol=1e-5, atol=1e-5)
-
-
 def test_gpu_auto_selects_triton_instead_of_xla(monkeypatch):
     lhs, rhs, group_sizes = _inputs()
     expected = jnp.full((lhs.shape[0], rhs.shape[2]), 17.0, dtype=lhs.dtype)
@@ -91,18 +68,6 @@ def test_gpu_auto_selects_triton_instead_of_xla(monkeypatch):
     auto_out = ragged_dot(lhs, rhs, group_sizes, implementation="auto")
 
     assert jnp.array_equal(auto_out, expected)
-
-
-def test_triton_default_block_sizes_use_blackwell_n_tile(monkeypatch):
-    monkeypatch.setattr(ragged_dot_module, "_is_blackwell_gpu_backend", lambda: True)
-
-    assert ragged_dot_module._triton_default_block_sizes(32768, 5120, 5120) == (128, 256, 32)
-
-
-def test_triton_default_block_sizes_keep_non_blackwell_n_tile(monkeypatch):
-    monkeypatch.setattr(ragged_dot_module, "_is_blackwell_gpu_backend", lambda: False)
-
-    assert ragged_dot_module._triton_default_block_sizes(32768, 5120, 5120) == (128, 128, 32)
 
 
 def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
@@ -166,9 +131,8 @@ def _require_triton_gpu():
         pytest.skip("requires the Pallas Triton GPU backend")
 
 
-def _require_kernel_family(family: str):
-    """Both families run on a GPU; the tile-map kernels also run on CPU through the Pallas interpreter."""
-    if family == "tile_map" and jax.default_backend() == "cpu" and ragged_dot_module._has_pallas_triton:
+def _require_triton_gpu_or_interpreter():
+    if jax.default_backend() == "cpu" and ragged_dot_module._has_pallas_triton:
         return
     _require_triton_gpu()
 
@@ -216,10 +180,8 @@ def _triton_f32_dots_use_tf32() -> bool:
     return device.platform == "gpu" and ("NVIDIA" in device.device_kind or device.compute_capability == "gfx942")
 
 
-def _run_kernel_family(family: str, lhs, rhs, sizes, layout: str):
+def _run_tile_map(lhs, rhs, sizes, layout: str):
     layout = ragged_dot_module.RaggedLayout(layout)
-    if family == "group_grid":
-        return jax.jit(lambda a, b, g: ragged_dot_module._group_grid_pallas_call(a, b, g, layout))(lhs, rhs, sizes)
     # Small blocks put several row and column tiles in each group and leave partial edge tiles. With
     # num_xcds=8 the launch grid is padded and renumbered, so padding programs must not write, and
     # group_m=3 leaves a partial band of tile rows.
@@ -232,22 +194,18 @@ def _run_kernel_family(family: str, lhs, rhs, sizes, layout: str):
 @pytest.mark.parametrize("dtype, rtol", [(jnp.float32, 1e-4), (jnp.bfloat16, 1e-2)], ids=["f32", "bf16"])
 @pytest.mark.parametrize("group_sizes", list(_GROUP_SIZE_CASES.values()), ids=list(_GROUP_SIZE_CASES))
 @pytest.mark.parametrize("layout", _LAYOUTS)
-@pytest.mark.parametrize("family", ["group_grid", "tile_map"])
-def test_triton_kernel_families_match_ragged_dot_general(family, layout, group_sizes, dtype, rtol):
-    _require_kernel_family(family)
+def test_triton_kernels_match_ragged_dot_general(layout, group_sizes, dtype, rtol):
+    _require_triton_gpu_or_interpreter()
     if dtype == jnp.float32 and _triton_f32_dots_use_tf32():
         # About 3e-4 off here on NVIDIA and 7e-4 on MI300X; XLA's own ragged dot on NVIDIA is off by as much.
         pytest.skip("f32 Triton dots use TF32 on NVIDIA and gfx942")
     lhs, rhs, sizes = _layout_operands(layout, dtype, group_sizes)
 
-    actual = _run_kernel_family(family, lhs, rhs, sizes, layout)
+    actual = _run_tile_map(lhs, rhs, sizes, layout)
     expected = _cpu_f32_reference(
         lhs, rhs, sizes, ragged_dot_module._LAYOUT_DIM_NUMS[ragged_dot_module.RaggedLayout(layout)]
     )
 
-    if family == "group_grid" and layout != "drhs":
-        # The group-grid kernels leave rows past sum(group_sizes) unwritten; the tile-map kernels zero them.
-        actual, expected = actual[: sum(group_sizes)], expected[: sum(group_sizes)]
     _assert_close_to_reference(actual, expected, rtol)
 
 
