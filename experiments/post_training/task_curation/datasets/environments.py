@@ -26,7 +26,13 @@ MATH_SCORERS = (
     "math-verify==0.9.0",
     "sympy==1.13.3",
     "antlr4-python3-runtime==4.11.0",
+)
+CHEMISTRY_SCORERS = (
+    # The Nemotron Ultra RDKit scorer canonicalizes molecules.
     "rdkit==2025.9.3",
+)
+REASONING_GYM_SCORERS = (
+    # The Reasoning Gym grader regenerates each entry with the version that produced it.
     "reasoning-gym==0.1.25",
 )
 STRUCTURED_OUTPUT_SCORERS = (
@@ -95,6 +101,8 @@ GRADER_PACKAGES = Environment(
     requirements=(
         *SCIENTIFIC_STACK,
         *MATH_SCORERS,
+        *CHEMISTRY_SCORERS,
+        *REASONING_GYM_SCORERS,
         *STRUCTURED_OUTPUT_SCORERS,
         *NVARC_SANDBOX_CLIENT,
         *PYTHON_TEST_GRADERS,

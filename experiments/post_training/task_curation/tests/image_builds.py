@@ -79,9 +79,9 @@ def zip_bytes(files: Mapping[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
-def install_fake_archive(monkeypatch, files: Mapping[str, bytes] = DATA_FILES, member: str = "english") -> Archive:
-    """Serve a zip of ``files`` at ``ARCHIVE_URL`` instead of downloading, and declare its ``member``."""
-    data = zip_bytes(files)
+def install_fake_archive(monkeypatch) -> Archive:
+    """Serve a zip of ``DATA_FILES`` at ``ARCHIVE_URL`` instead of downloading, and declare its ``english`` member."""
+    data = zip_bytes(DATA_FILES)
 
     def serve(url: str) -> bytes:
         if url != ARCHIVE_URL:
@@ -89,7 +89,7 @@ def install_fake_archive(monkeypatch, files: Mapping[str, bytes] = DATA_FILES, m
         return data
 
     monkeypatch.setattr(build, "download", serve)
-    return Archive(ARCHIVE_URL, hashlib.sha256(data).hexdigest(), member)
+    return Archive(ARCHIVE_URL, hashlib.sha256(data).hexdigest(), "english")
 
 
 def track_all(repository: Path) -> None:

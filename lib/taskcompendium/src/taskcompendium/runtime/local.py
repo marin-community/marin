@@ -40,11 +40,28 @@ LOCK_FILE = "requirements.lock"
 FILES_ARCHIVE = "files.tar"
 """The environment's placed files, stored beside the lock as a tar of paths relative to ``/``."""
 ENVIRONMENT_MANIFEST = "environment.json"
-"""The sorted absolute paths of the placed files and the environment variables, stored beside the lock."""
+"""An ``EnvironmentManifest`` as JSON, stored beside the lock when the environment places files or sets variables."""
 RUNTIME_PTH = "task-curation-runtime.pth"
 IDENTITY_CHARS = 16
 REGULAR_MODE = "100644"
 EXECUTABLE_MODE = "100755"
+
+
+@dataclass(frozen=True)
+class EnvironmentManifest:
+    """What a worker needs beyond the lock: the absolute paths the environment places files at and its variables."""
+
+    files: tuple[str, ...] = ()
+    env: Mapping[str, str] = field(default_factory=dict)
+
+
+def dump_manifest(manifest: EnvironmentManifest) -> str:
+    return json.dumps({"files": sorted(manifest.files), "env": dict(sorted(manifest.env.items()))})
+
+
+def load_manifest(text: str) -> EnvironmentManifest:
+    declared = json.loads(text)
+    return EnvironmentManifest(tuple(declared["files"]), declared["env"])
 
 
 class ContextFile(BaseModel):
@@ -196,11 +213,9 @@ class LocalRuntime:
 def local_runtime(lock_url: str) -> LocalRuntime:
     """The runtime for a built lock and the environment manifest beside it, if any."""
     lock = StoragePath(lock_url)
-    manifest = lock.parent / ENVIRONMENT_MANIFEST
-    declared = json.loads(manifest.read_text()) if manifest.exists() else {"files": [], "env": {}}
-    return LocalRuntime(
-        lock_url, hashlib.sha256(lock.read_bytes()).hexdigest(), tuple(declared["files"]), declared["env"]
-    )
+    stored = lock.parent / ENVIRONMENT_MANIFEST
+    manifest = load_manifest(stored.read_text()) if stored.exists() else EnvironmentManifest()
+    return LocalRuntime(lock_url, hashlib.sha256(lock.read_bytes()).hexdigest(), manifest.files, manifest.env)
 
 
 @cache

@@ -191,12 +191,6 @@ def test_a_worker_environment_without_files_or_env_stores_no_manifest(docker_log
     assert not (StoragePath(built.path) / "environment.json").exists()
 
 
-def test_files_cannot_be_placed_under_the_worker_system_directories(monkeypatch):
-    archive = install_fake_archive(monkeypatch)
-    with pytest.raises(ValueError, match="system directories"):
-        Environment(requirements=REQUIREMENTS, files={"/usr/local/share/fixture/english": archive})
-
-
 def test_an_archive_whose_bytes_differ_from_the_declared_digest_is_not_built(docker_log, monkeypatch, tmp_path):
     archive = replace(install_fake_archive(monkeypatch), sha256="0" * 64)
     environment = Environment(requirements=REQUIREMENTS, files={DATA_PATH: archive})

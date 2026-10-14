@@ -42,7 +42,9 @@ from taskcompendium.runtime.local import (
     LOCK_FILE,
     RUNTIME_PACKAGES,
     RUNTIME_PTH,
+    EnvironmentManifest,
     context_files,
+    dump_manifest,
     runtime_files,
 )
 
@@ -364,8 +366,8 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
     if files is not None:
         (output / FILES_ARCHIVE).write_bytes(files)
     if environment.files or environment.env:
-        manifest = {"files": sorted(environment.files), "env": dict(sorted(environment.env.items()))}
-        (output / ENVIRONMENT_MANIFEST).write_text(json.dumps(manifest))
+        manifest = EnvironmentManifest(tuple(environment.files), environment.env)
+        (output / ENVIRONMENT_MANIFEST).write_text(dump_manifest(manifest))
     return EnvironmentArtifact(path=build.output_path, identity=build.identity, image=image)
 
 

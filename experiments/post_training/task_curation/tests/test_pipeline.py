@@ -180,6 +180,10 @@ PINNED_ARCHIVE = Archive("https://archives.invalid/data.zip", "0" * 64, "english
         pytest.param(lambda: Environment(image="ghcr.io/marin-community/iris-task:latest"), id="unpinned-image"),
         pytest.param(lambda: Environment(image=AGENT_IMAGE, requirements=REQUIREMENTS), id="image-with-packages"),
         pytest.param(lambda: Environment(files={"share/data/english": PINNED_ARCHIVE}), id="relative-file-path"),
+        pytest.param(
+            lambda: Environment(files={"/usr/local/share/data/english": PINNED_ARCHIVE}),
+            id="file-under-system-directory",
+        ),
         pytest.param(lambda: Environment(files={DATA_PATH: replace(PINNED_ARCHIVE, sha256="abc")}), id="bad-sha256"),
         pytest.param(
             lambda: Environment(files={DATA_PATH: replace(PINNED_ARCHIVE, member="../etc")}), id="escaping-member"
