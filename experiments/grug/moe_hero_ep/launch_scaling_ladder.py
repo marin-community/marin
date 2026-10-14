@@ -16,9 +16,10 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
     d6144   11    11264   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
-Train batch is 1024 x racks (constant per-rack load); eval batch is 64 x racks (one sequence per
-device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
-analytic estimate (forward+backward, including attention and the latent-MoE correction).
+At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step. Eval
+batch is 64 x racks (one sequence per device). Tokens/steps hold 791 tokens per active parameter
+(18T at d6144); FLOPs are the levanter analytic estimate (forward+backward, including attention and
+the latent-MoE correction).
 
 Changelog:
     2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
@@ -33,7 +34,9 @@ Changelog:
 """
 
 import dataclasses
+import itertools
 import os
+from collections.abc import Sequence
 from datetime import timedelta
 
 import click
@@ -55,6 +58,7 @@ from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
+    HarrierContextPhase,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
@@ -77,7 +81,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     validation_datasets,
     with_transport_remat_mode,
 )
-from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
     SEQ_LEN,
@@ -86,6 +90,7 @@ from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _small_model,
 )
 from experiments.grug.moe_hero_ep.train import (
+    FlopsBaseline,
     GrugEvalConfig,
     GrugRunConfig,
     TrainingDataMode,
@@ -102,6 +107,33 @@ HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 # Twice the restore barrier, which keeps a barrier expiry ahead of this deadline: the barrier
 # names the ranks that never arrived, while this one only reports that nothing progressed.
 HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
+
+# The hero started at 4K context, and every context keeps its 4K tokens per rack per update.
+HERO_INITIAL_SEQ_LEN = 4096
+HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_INITIAL_SEQ_LEN
+# The context lengths the d6144 hero trained at before its current one, oldest first, each with the
+# step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
+HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = ()
+# The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
+HERO_FLOPS_BASELINE_TOTAL: float | None = None
+
+
+def _hero_flops_baseline(
+    context_phases: Sequence[HarrierContextPhase], flops_baseline_total: float | None, seq_len: int
+) -> FlopsBaseline | None:
+    """Check the hero's context history against ``seq_len`` and return its FLOPs baseline.
+
+    The history must start at 4K and change context length at every entry, including the current one.
+    """
+    seq_lens = [phase.seq_len for phase in context_phases] + [seq_len]
+    if seq_lens[0] != HERO_INITIAL_SEQ_LEN or any(a == b for a, b in itertools.pairwise(seq_lens)):
+        raise ValueError(f"The hero's context lengths must start at 4K and change at every phase, got {seq_lens}")
+    if not context_phases or flops_baseline_total is None:
+        if context_phases or flops_baseline_total is not None:
+            raise ValueError("The FLOPs baseline total must be set exactly when the context history is non-empty")
+        return None
+    return FlopsBaseline(context_phases[-1].end_step, flops_baseline_total)
+
 
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 # Each rung uses the rack count that holds its batch. d6144 uses the shared hero recipe. Narrower
@@ -152,11 +184,16 @@ def build_ladder_run(
     *,
     run_id: str,
     size: str,
+    qk_mult: float | None = None,
+    qk_mult_long_scale: float | None = None,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
+    eval_every: int | None = None,
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
+    context_phases: Sequence[HarrierContextPhase] = (),
+    flops_baseline_total: float | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
@@ -164,7 +201,7 @@ def build_ladder_run(
     parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set dropless. The
     narrow rungs eval every 5% of the run and keep only the forced final
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
-    ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
+    ``checkpoint_every`` and ``eval_every`` override those cadences for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
     resumes from the newest checkpoint it finds. ``initialize_from_checkpoint`` is another run's
     checkpoint directory, added as the resume fallback so a relaunch under a new run id continues
@@ -173,19 +210,36 @@ def build_ladder_run(
     ``gate_router_weight_decay`` is on by default (see ``GrugMoeMuonHConfig``): the recipe decays the
     attn_gate and router weights, and because the decay reads the Adam step count it also applies at
     the right point when a run resumes an existing checkpoint. Pass 0 to opt out.
+
+    ``qk_mult`` and ``qk_mult_long_scale`` override the rung's model config when set; the hero's own
+    values, including its context length and capacity factor, live in ``HERO_MODEL``.
+
+    ``context_phases`` is the d6144 hero's context history (``HERO_CONTEXT_PHASES`` from the CLI), and
+    ``flops_baseline_total`` its cumulative training FLOPs at the last switch. Each data bucket resumes at
+    its next shuffle window (see ``LmDataConfig.prior_context_phases``). The narrow rungs take no history
+    and train at their context length from their start.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in LADDER_RACKS:
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
+    model = _ladder_model(size)
+    if qk_mult is not None:
+        model = dataclasses.replace(model, qk_mult=qk_mult)
+    if qk_mult_long_scale is not None:
+        model = dataclasses.replace(model, qk_mult_long_scale=qk_mult_long_scale)
+    seq_len = model.max_seq_len
+    flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len)
+
     dp_racks = LADDER_RACKS[size]
     # Weak scaling holds per-rack token load constant; eval is one sequence per device.
-    batch_size = HERO_EP_BATCH_SIZE * dp_racks
+    global_tokens_per_step = HERO_TOKENS_PER_RACK * dp_racks
+    if global_tokens_per_step % seq_len:
+        raise ValueError(f"seq_len={seq_len} must divide {global_tokens_per_step} tokens per step")
+    batch_size = global_tokens_per_step // seq_len
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
-    global_tokens_per_step = batch_size * SEQ_LEN
 
-    model = _ladder_model(size)
     if num_steps is None:
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
@@ -211,21 +265,16 @@ def build_ladder_run(
         keep_permanent = None
     if checkpoint_every is not None:
         keep_permanent = [{"every": checkpoint_every}]
+    if eval_every is not None:
+        steps_per_eval = eval_every
 
-    # The optimizer's LR/epsilon are compute-scaled from the token budget and width; the hero builder
-    # already does this at d6144, so reuse it there and the shared MoeHeuristic at the narrow rungs.
-    if size == "d6144":
-        _, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
-    else:
-        optimizer = dataclasses.replace(
-            MoeHeuristic().build_optimizer_config(
-                num_train_steps=num_steps,
-                batch_size=batch_size,
-                hidden_dim=model.hidden_dim,
-                seq_len=SEQ_LEN,
-            ),
-            use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
-        )
+    # The optimizer's LR/epsilon are compute-scaled from the tokens per step, token budget, and width.
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=num_steps,
+        batch_size=batch_size,
+        hidden_dim=model.hidden_dim,
+        seq_len=seq_len,
+    )
     optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
 
     # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
@@ -306,6 +355,7 @@ def build_ladder_run(
         )
         return GrugRunConfig(
             model=model,
+            flops_baseline=flops_baseline,
             data=harrier_mix_2026_08_18_data_config(
                 ctx=ctx,
                 total_steps=num_steps,
@@ -313,6 +363,7 @@ def build_ladder_run(
                 max_seq_len=model.max_seq_len,
                 experiment_flops=run_flops,
                 validation=validation,
+                prior_context_phases=context_phases,
             ),
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
@@ -350,6 +401,18 @@ def build_ladder_run(
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
+@click.option(
+    "--qk-mult",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Override the query/key attention multiplier on all layers.",
+)
+@click.option(
+    "--qk-mult-long-scale",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Override the extra query/key multiplier on the global (full-causal) layers only.",
+)
 @click.option("--size", required=True, type=click.Choice(sorted(LADDER_RACKS)), help="Ladder rung width.")
 @click.option(
     "--num-steps",
@@ -364,6 +427,12 @@ def build_ladder_run(
     help="Keep a permanent checkpoint every N steps on the durable output root. Default follows "
     "the rung (6000 at d6144, final only elsewhere). Resume uses the rolling temporary checkpoint "
     "and is not affected by this option.",
+)
+@click.option(
+    "--eval-every",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Eval every N steps. Default follows the rung (3000 at d6144, every 5% elsewhere).",
 )
 @click.option(
     "--gate-router-weight-decay",
@@ -383,18 +452,27 @@ def build_ladder_run(
 def main(
     run_id: str,
     size: str,
+    qk_mult: float | None,
+    qk_mult_long_scale: float | None,
     num_steps: int | None,
     checkpoint_every: int | None,
+    eval_every: int | None,
     gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
+    hero = size == "d6144"
     return build_ladder_run(
         run_id=run_id,
         size=size,
+        qk_mult=qk_mult,
+        qk_mult_long_scale=qk_mult_long_scale,
         num_steps=num_steps,
         checkpoint_every=checkpoint_every,
+        eval_every=eval_every,
         gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
+        context_phases=HERO_CONTEXT_PHASES if hero else (),
+        flops_baseline_total=HERO_FLOPS_BASELINE_TOTAL if hero else None,
     )
 
 

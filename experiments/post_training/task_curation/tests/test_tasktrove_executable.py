@@ -12,7 +12,19 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from shellbox.machine import Backend, Command, DockerImage, ExitReason, MachineFactory, MachineSpec, Result
+from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import (
+    Backend,
+    Command,
+    DockerImage,
+    ExecutionRequirements,
+    ExitReason,
+    MachineFactory,
+    MachineSpec,
+    Result,
+    UnsupportedMachineSpec,
+)
 from taskcompendium.models import (
     CommandSemantics,
     ConversationTrace,
@@ -164,10 +176,14 @@ class GradingMachine:
 
 
 @dataclass
-class GradingMachines:
+class GradingMachines(DockerMachineFactory):
     backend: Backend = Backend.DOCKER
     machines: list[GradingMachine] = field(default_factory=list)
     verdict_status: str = "scored"
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        factory = ShellSimMachineFactory() if self.backend == Backend.SHELLSIM else DockerMachineFactory()
+        factory.check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> GradingMachine:
         machine = GradingMachine(verdict_status=self.verdict_status)
@@ -272,14 +288,14 @@ def simulator_task(task: TaskSpec) -> TaskSpec:
 async def test_agent_machine_rejects_incompatible_command_semantics_before_start(executable_task):
     machines = GradingMachines()
     factory = ShellFactory(machines, MachineSpec(DockerImage(IMAGE)), {}, 1, 1024)
-    with pytest.raises(ValueError, match="semantics"):
+    with pytest.raises(UnsupportedMachineSpec):
         await factory.create(simulator_task(executable_task))
     assert not machines.machines
 
 
 def test_grader_controls_reject_simulation_of_linux_processes_before_start(executable_task):
     machines = ControlMachines(factory=GradingMachines(backend=Backend.SHELLSIM))
-    with pytest.raises(ValueError, match="native Linux processes"):
+    with pytest.raises(UnsupportedMachineSpec):
         run_controls(executable_task, runtime=ControlRuntime(CONTROLS, machines))
     assert not machines.factory.machines
 

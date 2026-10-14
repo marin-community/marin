@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from levanter.data.text.datasets import BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.data.text.datasets import BlockShuffleConfig, ContextPhaseConfig, DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -102,11 +102,34 @@ def _validate_spec(spec: _HarrierMixSpec) -> None:
 _validate_spec(_SPEC)
 
 
+@dataclass(frozen=True)
+class HarrierContextPhase:
+    """A context length the run trained at until ``end_step``, at the run's tokens per step."""
+
+    end_step: int
+    seq_len: int
+
+
 def _shuffle_config(seq_len: int) -> BlockShuffleConfig:
     """Shuffle fixed-token blocks, so the block permutation is the same at every context length."""
     if _SHUFFLE_BLOCK_TOKENS % seq_len:
         raise ValueError(f"Sequence length {seq_len} must divide {_SHUFFLE_BLOCK_TOKENS} shuffle-block tokens")
     return BlockShuffleConfig(io_block_size=_SHUFFLE_BLOCK_TOKENS // seq_len, window_blocks=512, perm_type="feistel")
+
+
+def _stage_weights(
+    total_steps: int, batch_size: int, extra_weights: dict[str, float]
+) -> list[tuple[int, dict[str, float]]]:
+    step_multiple = _MIXTURE_BLOCK_SIZE // math.gcd(_MIXTURE_BLOCK_SIZE, batch_size)
+    switch_step = math.ceil(total_steps * _MIXTURE_SWITCH_FRACTION / step_multiple) * step_multiple
+    cooldown_step = _phase_1_start_step(total_steps, batch_size)
+    phase_weights = tuple(dict(weights) for weights in _SPEC.phase_weights)
+    # A short diagnostic can round both transitions to the same block; cooldown wins there.
+    stages = {
+        step: {**weights, **extra_weights}
+        for step, weights in zip((0, switch_step, cooldown_step), phase_weights, strict=True)
+    }
+    return sorted(stages.items())
 
 
 def harrier_mix_2026_08_18_data_config(
@@ -117,6 +140,7 @@ def harrier_mix_2026_08_18_data_config(
     max_seq_len: int,
     experiment_flops: float,
     validation: Sequence[ArtifactStep[TokenizedCache]],
+    prior_context_phases: Sequence[HarrierContextPhase] = (),
 ) -> LmDataConfig:
     """Start on Harrier, switch to the selected September mixture at 108000/390251 of training.
 
@@ -125,9 +149,12 @@ def harrier_mix_2026_08_18_data_config(
     Simulated epoching is on by default; it is dropped once ``experiment_flops`` (the run's analytic
     training-FLOP budget) exceeds ``SIMULATED_EPOCHING_MAX_FLOPS``, so an expensive run trains on the
     raw mixture rather than a simulated larger budget.
+
+    ``prior_context_phases`` lists earlier context lengths of a resumed run, oldest first. Each phase trained at
+    ``batch_size * max_seq_len`` tokens per step. Each Harrier bucket then skips the unread rest of its current
+    shuffle window instead of repeating data.
     """
     available_tokens = dict(_SPEC.available_tokens)
-    phase_weights = tuple(dict(weights) for weights in _SPEC.phase_weights)
     components = {
         cell: DatasetComponent(
             source=None,
@@ -156,22 +183,32 @@ def harrier_mix_2026_08_18_data_config(
         enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
     )
 
-    step_multiple = _MIXTURE_BLOCK_SIZE // math.gcd(_MIXTURE_BLOCK_SIZE, batch_size)
-    switch_step = math.ceil(total_steps * _MIXTURE_SWITCH_FRACTION / step_multiple) * step_multiple
-    cooldown_step = _phase_1_start_step(total_steps, batch_size)
     val_zero_weights = {name: 0.0 for name in val_components}
-    # A short diagnostic can round both transitions to the same block; cooldown wins there.
-    stages = {
-        step: {**weights, **val_zero_weights}
-        for step, weights in zip((0, switch_step, cooldown_step), phase_weights, strict=True)
-    }
+    tokens_per_step = batch_size * max_seq_len
+    context_phase_configs = []
+    for prior in prior_context_phases:
+        if tokens_per_step % prior.seq_len:
+            raise ValueError(f"Context length {prior.seq_len} must divide {tokens_per_step} tokens per step")
+        prior_batch_size = tokens_per_step // prior.seq_len
+        context_phase_configs.append(
+            ContextPhaseConfig(
+                end_step=prior.end_step,
+                seq_len=prior.seq_len,
+                batch_size=prior_batch_size,
+                train_weights=_stage_weights(total_steps, prior_batch_size, val_zero_weights),
+                shuffle=_shuffle_config(prior.seq_len),
+            )
+        )
     return LmDataConfig(
         tokenizer=marin_tokenizer,
         cache_dir=None,
         components={**components, **val_components},
-        train_weights=sorted(stages.items()),
+        train_weights=_stage_weights(total_steps, batch_size, val_zero_weights),
         auto_build_caches=False,
         shuffle=_shuffle_config(max_seq_len),
+        prior_context_phases=context_phase_configs,
+        # Keep the per-cell rounding of mixture weights unchanged. Rescaling this block with
+        # context length changes realized weights; prior_context_phases absorb the shifted stage boundaries.
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
         target_budget=target_budget,
         experiment_budget=experiment_budget,

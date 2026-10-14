@@ -24,15 +24,21 @@ from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
 from shellbox.backends.local import launch
+from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandSemantics,
+    ExecutionRequirements,
     ExitReason,
     HostImage,
     MachineSpec,
     NetworkPolicy,
+    PackageSpec,
     Result,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
 
 logger = logging.getLogger(__name__)
@@ -348,6 +354,24 @@ class LocalMachine:
         await asyncio.to_thread(shutil.rmtree, self.root)
 
 
+def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec:
+    if not isinstance(spec.source, (HostImage, PackageSpec)):
+        raise UnsupportedMachineSpec(
+            f"The local backend requires HostImage or PackageSpec, not {type(spec.source).__name__}"
+        )
+    if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
+        raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
+    return spec.source
+
+
+def check_local_environment(requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    """Check local execution support without acquiring a bubblewrap sandbox."""
+    _check_spec(spec)
+    check_execution_requirements(
+        requirements, spec, semantics=CommandSemantics.LINUX_PROCESS, capabilities=LINUX_PROCESS_CAPABILITIES
+    )
+
+
 class LocalMachineFactory:
     """Run trusted commands on this host in bubblewrap sandboxes, any number of machines at a time.
 
@@ -377,6 +401,8 @@ class LocalMachineFactory:
         bin_dirs: tuple[Path, ...] = (),
         bwrap: Path | None = None,
         hash_seed: str | None = None,
+        package_cache: Path | None = None,
+        python_version: str = DEFAULT_PYTHON_VERSION,
     ):
         self.read_only = tuple(directory.absolute() for directory in read_only)
         missing = [str(directory) for directory in self.read_only if not directory.is_dir()]
@@ -384,15 +410,23 @@ class LocalMachineFactory:
             raise ValueError(f"Read-only directories do not exist: {', '.join(missing)}")
         self.bin_dirs = tuple(directory.absolute() for directory in bin_dirs)
         self.hash_seed = hash_seed
+        self.package_cache = package_cache if package_cache is not None else Path.home() / ".cache/shellbox/python"
+        self.python_version = python_version
         self.bwrap = _working_bwrap(_bwrap_candidates(bwrap))
         logger.info("Local backend sandboxes commands with %s", self.bwrap)
 
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        check_local_environment(requirements, spec)
+
     async def create(self, spec: MachineSpec) -> LocalMachine:
-        if not isinstance(spec.source, HostImage):
-            raise UnsupportedMachineSpec(f"The local backend requires HostImage, not {type(spec.source).__name__}")
-        if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
-            raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
-        read_only = (*self.read_only, *(directory.absolute() for directory in spec.source.read_only))
+        source = _check_spec(spec)
+        host = source if isinstance(source, HostImage) else HostImage()
+        if isinstance(source, PackageSpec) and source.pypi_packages is not None:
+            installed = await asyncio.to_thread(
+                resolve_python_environment, self.package_cache, source.pypi_packages, self.python_version
+            )
+            host = HostImage(read_only=(installed.root,), bin_dirs=(installed.bin_dir,))
+        read_only = (*self.read_only, *(directory.absolute() for directory in host.read_only))
         missing = [str(directory) for directory in read_only if not directory.is_dir()]
         if missing:
             raise ValueError(f"Read-only directories do not exist: {', '.join(missing)}")
@@ -400,16 +434,16 @@ class LocalMachineFactory:
         workdir = _absolute_path(spec.workdir or "/")
         if _within(workdir, (*SYSTEM_DIRECTORIES, *read_only_paths)):
             raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host directory")
-        root = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="shellbox-local-"))
+        root = Path(tempfile.mkdtemp(prefix="shellbox-local-"))
         try:
-            await asyncio.to_thread(_prepare_root, root, workdir)
+            _prepare_root(root, workdir)
         except BaseException:
             shutil.rmtree(root)
             raise
         environment = {
             "PATH": os.pathsep.join(
                 [
-                    *(str(directory.absolute()) for directory in spec.source.bin_dirs),
+                    *(str(directory.absolute()) for directory in host.bin_dirs),
                     *map(str, self.bin_dirs),
                     DEFAULT_PATH,
                 ]
@@ -419,4 +453,24 @@ class LocalMachineFactory:
         }
         if self.hash_seed is not None:
             environment["PYTHONHASHSEED"] = self.hash_seed
-        return LocalMachine(spec, bwrap=self.bwrap, root=root, read_only=read_only_paths, environment=environment)
+        machine = LocalMachine(spec, bwrap=self.bwrap, root=root, read_only=read_only_paths, environment=environment)
+        if not isinstance(source, PackageSpec) or not source.tools:
+            return machine
+        try:
+            result = await machine.run(
+                Command(
+                    (
+                        "/bin/sh",
+                        "-c",
+                        'for tool do path=$(command -v "$tool") && test -x "$path" || exit; done',
+                        "sh",
+                        *source.tools,
+                    )
+                )
+            )
+            if result.exit_code != 0:
+                raise UnsupportedMachineSpec("Requested tools must be executable in the sandbox PATH")
+        except BaseException:
+            await machine.close()
+            raise
+        return machine

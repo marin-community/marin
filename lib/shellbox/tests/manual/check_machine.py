@@ -10,8 +10,9 @@ import tempfile
 from pathlib import Path
 
 from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.qemu.image import load_qemu_bundle
 from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory
-from shellbox.machine import Command, DockerImage, ExitReason, MachineFactory, MachineSpec, QemuBundle
+from shellbox.machine import Command, DockerImage, ExitReason, MachineFactory, MachineSpec
 
 
 async def check(factory: MachineFactory, spec: MachineSpec) -> None:
@@ -44,7 +45,7 @@ async def check(factory: MachineFactory, spec: MachineSpec) -> None:
 async def main(bundle: Path, image: str) -> None:
     await check(DockerMachineFactory(), MachineSpec(DockerImage(image), workdir="/tmp"))
     print("Docker machine passed")
-    await check(QemuMachineFactory(Acceleration.TCG), MachineSpec(QemuBundle(bundle), workdir="/tmp"))
+    await check(QemuMachineFactory(Acceleration.TCG), MachineSpec(load_qemu_bundle(bundle), workdir="/tmp"))
     print("QEMU machine passed")
 
 

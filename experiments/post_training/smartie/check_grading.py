@@ -14,7 +14,7 @@ import click
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.contracts import ModelRequest, ModelTurn
-from rolloutengine.engine import ShellboxRolloutEngine
+from rolloutengine.engine import RolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from taskcompendium.models import VerifyitGrader
@@ -66,7 +66,7 @@ async def check_grading(data: StoragePath, output: StoragePath, connection: Judg
             ],
         }
 
-        record = await ShellboxRolloutEngine(
+        record = await RolloutEngine(
             partial(replay, message), {"daytona": DaytonaMachineFactory()}, judge_connection=connection
         ).run(task)
         result = {
