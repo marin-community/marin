@@ -2,22 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import MagicMock, Mock
+from dataclasses import replace
+from unittest.mock import Mock
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
-from google.cloud.sql.connector import Connector
 from marina.applets import AppletServices
 from marina.db import UrlDatabase, engine_for
-from pg8000.dbapi import connect
 from rigging.server_auth import VerifiedIdentity, identity_scope
-from sqlalchemy import create_engine, make_url, text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy import create_engine, text
 from starlette.testclient import TestClient
 
-from experiments.evaluation.snowball_probes.database import DatabaseConfig, WorkerDatabase, cloud_database
+from experiments.evaluation.snowball_probes.client import SessionConfig, WorkerApi
 from infra.marina.applets.snowball_probes.server.app import create_api, migrate
-from infra.marina.applets.snowball_probes.server.worker_sql import grant_worker_functions
+from infra.marina.applets.snowball_probes.server.sessions import SESSION_HEADER, key_hash
 
 
 def test_case_metadata_preserves_nul_evidence_and_searchable_review(database_url):
@@ -90,22 +89,15 @@ def test_case_metadata_preserves_nul_evidence_and_searchable_review(database_url
         engine.dispose()
 
 
-def test_database_worker_round_trip_queue_permissions_and_revocation(database_url, monkeypatch):
+def test_session_worker_preserves_traces_scopes_reads_and_claims_and_revokes_access(database_url, monkeypatch):
     applet = uuid4()
-    schema = "applet_" + applet.hex
-    login = "lab_driver_" + applet.hex[:12]
-    other_login = "other_driver_" + applet.hex[:12]
-    password = "disposable-postgres-test-password"
-    engine = engine_for(UrlDatabase(database_url), schema)
-    worker_engine = create_engine(make_url(database_url).set(username=login, password=password))
-    other_engine = create_engine(make_url(database_url).set(username=other_login, password=password))
-    database = WorkerDatabase(worker_engine, str(applet))
-    other_database = WorkerDatabase(other_engine, str(applet))
+    engine = engine_for(UrlDatabase(database_url), "applet_" + applet.hex)
     services = Mock(spec=AppletServices)
     services.engine.return_value = engine
-    owner = VerifiedIdentity(user_id="database-test-owner", role="user")
+    owner = VerifiedIdentity(user_id="session-owner", role="user")
+    worker = VerifiedIdentity(user_id="session-worker@test.iam.gserviceaccount.com", role="user")
     run = {
-        "run_id": "database-owned",
+        "run_id": "session-owned",
         "config": {"candidates": [{"key": "small", "revision": "fixed"}]},
         "token_cap": 1000,
         "concurrency": 2,
@@ -115,7 +107,7 @@ def test_database_worker_round_trip_queue_permissions_and_revocation(database_ur
         "active_chats": 0,
     }
     case = {
-        "case_id": "database-case",
+        "case_id": "session-case",
         "run_id": run["run_id"],
         "title": "Escape handling",
         "category": "formatting",
@@ -127,7 +119,7 @@ def test_database_worker_round_trip_queue_permissions_and_revocation(database_ur
         "review": {"summary": "Answer contains \x00"},
     }
     trace = {
-        "message_id": "database-trace",
+        "message_id": "session-trace",
         "case_id": case["case_id"],
         "model": "small",
         "role": "assistant",
@@ -139,35 +131,89 @@ def test_database_worker_round_trip_queue_permissions_and_revocation(database_ur
     try:
         with engine.begin() as connection:
             migrate(connection)
-            for name in (login, other_login):
-                connection.execute(text(f"CREATE ROLE \"{name}\" LOGIN PASSWORD '{password}'"))
-                grant_worker_functions(connection, applet, name)
-            connection.execute(text("CREATE SCHEMA another_applet"))
-            connection.execute(text("CREATE TABLE another_applet.private_data(secret text)"))
         with identity_scope(owner), TestClient(create_api(services)) as client:
+
+            def http_request(method, url, **kwargs):
+                path = urlparse(url).path.removeprefix(f"/a/{applet}/api")
+                return client.request(
+                    method, path, json=kwargs["json"], params=kwargs["params"], headers=kwargs["headers"]
+                )
+
+            monkeypatch.setattr("marina.client.requests.request", http_request)
             assert client.post("/runs", json=run).status_code == 200
-            assert client.post("/runs", json={**run, "run_id": "database-unassigned"}).status_code == 200
-            assert client.post(f"/runs/{run['run_id']}/database-worker", json={"role": login}).status_code == 200
-            snapshot = {**run, "generated_tokens": 21, "owner": "forged", "desired_state": "stopped"}
-            assert database.save("/runs", [snapshot]) == {"desired_state": "running"}
-            saved = database.run(run["run_id"])
-            assert saved["generated_tokens"] == 21
-            assert saved["owner"] == owner.user_id and saved["desired_state"] == "running"
-            address = make_url(database_url)
-            connector = MagicMock(spec=Connector)
-            connector.__enter__.return_value = connector
-            connector.connect.side_effect = lambda *args, **kwargs: connect(
-                user=login,
-                password=password,
-                host=address.host,
-                port=address.port,
-                database=address.database,
-            )
-            monkeypatch.setattr("experiments.evaluation.snowball_probes.database.Connector", lambda **kwargs: connector)
-            with cloud_database(DatabaseConfig("test-instance", address.database, login), str(applet)) as connected:
-                assert connected.run(run["run_id"])["generated_tokens"] == 21
-            database.save("/cases", [case])
-            database.save("/traces", [trace])
+            assert client.post("/runs", json={**run, "run_id": "session-unassigned"}).status_code == 200
+            other_case = {**case, "case_id": "session-other-case", "run_id": "session-unassigned"}
+            assert client.post("/cases", json=other_case).status_code == 200
+            key = client.post(f"/runs/{run['run_id']}/create-session-key").json()["session_key"]
+            session = SessionConfig("http://localhost", str(applet), run["run_id"], key)
+            api = WorkerApi(session)
+            with engine.connect() as connection:
+                stored = connection.execute(
+                    text("SELECT worker_session_hash FROM runs WHERE run_id=:run"), {"run": run["run_id"]}
+                ).scalar_one()
+                assert stored == key_hash(key) and stored != key
+            for path in (
+                f"/runs/{run['run_id']}/control",
+                f"/runs/{run['run_id']}/create-session-key",
+                f"/runs/{run['run_id']}/revoke-session-key",
+            ):
+                assert client.post(path, json={"state": "stopped"}, headers={SESSION_HEADER: key}).status_code == 403
+            assert client.get(f"/runs/{run['run_id']}", headers={SESSION_HEADER: "invalid"}).status_code == 401
+            idea = client.post(
+                f"/runs/{run['run_id']}/ideas",
+                json={"text": "Check JSON schemas", "kind": "topic", "chats": 4, "mode": "chat"},
+            ).json()
+            with identity_scope(worker):
+                assert client.get(f"/runs/{run['run_id']}").status_code == 403
+                assert api.save(
+                    "/runs", [{**run, "generated_tokens": 21, "owner": "forged", "desired_state": "stopped"}]
+                ) == {"desired_state": "running"}
+                saved = api.run(run["run_id"])
+                assert saved["owner"] == owner.user_id and saved["generated_tokens"] == 21
+                assert "worker_session_hash" not in saved
+                api.save("/cases", [case])
+                api.save("/traces", [trace])
+                detail = api.case(case["case_id"], "streaming")
+                assert detail["seed"] == case["seed"] and detail["review"] == case["review"]
+                assert detail["traces"][0]["payload"] == trace["payload"]
+                assert api.cases(run["run_id"], "complete")["total"] == 1
+                listed = client.get("/runs", headers={SESSION_HEADER: key}).json()
+                assert [row["run_id"] for row in listed] == [run["run_id"]]
+                for path, params in (
+                    ("/runs/session-unassigned", None),
+                    ("/cases/session-other-case", None),
+                    ("/cases", {"run_id": "session-unassigned"}),
+                    ("/summary", {"run_id": "session-unassigned"}),
+                    ("/runs/session-unassigned/ideas", None),
+                ):
+                    assert client.get(path, params=params, headers={SESSION_HEADER: key}).status_code == 403
+                assert (
+                    client.post(
+                        "/runs", json={**run, "run_id": "session-created"}, headers={SESSION_HEADER: key}
+                    ).status_code
+                    == 403
+                )
+                assert (
+                    client.post(
+                        "/cases", json={**case, "run_id": "session-unassigned"}, headers={SESSION_HEADER: key}
+                    ).status_code
+                    == 403
+                )
+                trace["state"] = "complete"
+                api.save("/traces", [trace])
+                assert api.case(case["case_id"], "streaming")["traces"] == []
+
+            def claim(number):
+                with identity_scope(worker):
+                    return api.claim(run["run_id"], f"session-claim-{number}")
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                claims = list(executor.map(claim, range(8)))
+            claimed = [index for index, value in enumerate(claims) if value["idea"] is not None]
+            assert len(claimed) == 4
+            with identity_scope(worker):
+                assert api.claim(run["run_id"], f"session-claim-{claimed[0]}")["idea"]["idea_id"] == idea["idea_id"]
+            assert client.get(f"/cases/{case['case_id']}").json()["traces"][0]["payload"] == trace["payload"]
             with engine.begin() as upload:
                 upload.execute(
                     text("UPDATE traces SET updated_at=now() WHERE message_id=:id"), {"id": trace["message_id"]}
@@ -175,61 +221,17 @@ def test_database_worker_round_trip_queue_permissions_and_revocation(database_ur
                 with engine.begin() as revision:
                     revision.execute(text("SET LOCAL lock_timeout='100ms'"))
                     migrate(revision)
-            detail = database.case(case["case_id"], "streaming")
-            assert detail["seed"] == case["seed"] and detail["review"] == case["review"]
-            assert detail["traces"][0]["payload"] == trace["payload"]
-            assert client.get(f"/cases/{case['case_id']}").json()["traces"][0]["payload"] == trace["payload"]
-            assert database.cases(run["run_id"], "complete")["total"] == 1
-            trace["state"] = "complete"
-            database.save("/traces", [trace])
-            assert database.case(case["case_id"], "streaming")["traces"] == []
-            idea = client.post(
-                f"/runs/{run['run_id']}/ideas",
-                json={
-                    "text": "Check JSON schemas",
-                    "kind": "topic",
-                    "chats": 4,
-                    "mode": "chat",
-                },
-            ).json()
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                claims = list(executor.map(lambda number: database.claim(run["run_id"], f"claim-{number}"), range(8)))
-            claimed = [index for index, value in enumerate(claims) if value["idea"] is not None]
-            assert len(claimed) == 4
-            assert database.claim(run["run_id"], f"claim-{claimed[0]}")["idea"]["idea_id"] == idea["idea_id"]
-            assert client.get(f"/runs/{run['run_id']}/ideas").json()[0]["assigned"] == 4
-            with pytest.raises(DBAPIError):
-                other_database.run(run["run_id"])
-            for operation in (
-                lambda: database.run("database-unassigned"),
-                lambda: database.save("/cases", [{**case, "run_id": "database-unassigned"}]),
-                lambda: database.save("/runs", [{**run, "config": {"candidates": []}}]),
-            ):
-                with pytest.raises(DBAPIError):
-                    operation()
-            for statement in (
-                f"UPDATE {schema}.runs SET owner='forged'",
-                f"UPDATE {schema}.runs SET desired_state='stopped'",
-                f"DROP TABLE {schema}.traces",
-                "SELECT * FROM another_applet.private_data",
-            ):
-                with pytest.raises(DBAPIError):
-                    with worker_engine.begin() as connection:
-                        connection.execute(text(statement))
-            with identity_scope(VerifiedIdentity(user_id="other-user", role="user")):
-                assert (
-                    client.post(f"/runs/{run['run_id']}/database-worker", json={"role": other_login}).status_code == 403
-                )
-            assert client.post(f"/runs/{run['run_id']}/database-worker", json={"role": None}).status_code == 200
-            with pytest.raises(DBAPIError):
-                database.save("/traces", [trace])
+            second = client.post(f"/runs/{run['run_id']}/create-session-key").json()["session_key"]
+            with pytest.raises(RuntimeError, match="401"):
+                api.run(run["run_id"])
+            renewed = WorkerApi(replace(session, key=second))
+            assert renewed.run(run["run_id"])["generated_tokens"] == 21
+            assert client.post(f"/runs/{run['run_id']}/revoke-session-key").status_code == 200
+            with pytest.raises(RuntimeError, match="401"):
+                renewed.run(run["run_id"])
     finally:
-        worker_engine.dispose()
-        other_engine.dispose()
         with engine.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-            for name in (login, other_login):
-                connection.execute(text(f'DROP ROLE IF EXISTS "{name}"'))
+            connection.execute(text(f'DROP SCHEMA "applet_{applet.hex}" CASCADE'))
         engine.dispose()
 
 

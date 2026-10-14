@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import httpx
 from dotenv import dotenv_values
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
@@ -19,35 +20,26 @@ from marina.client import marina_request
 
 from experiments.evaluation.snowball_probes.cluster_worker import run
 from experiments.evaluation.snowball_probes.config import CONCURRENT_CHATS, TOKEN_CAP
-from experiments.evaluation.snowball_probes.database import DatabaseConfig, cloud_database
-from experiments.evaluation.snowball_probes.store import Store
 from experiments.evaluation.snowball_probes.worker import (
     APPLET_ORIGIN,
     INFERENCE_TIMEOUT,
     SHELLSIM_CPU_LIMIT,
     Endpoints,
-    Worker,
     inspiration_seeds,
+    run_configuration,
 )
 
 logger = logging.getLogger(__name__)
 
 
-async def configuration(args: argparse.Namespace, client: IrisClient, origin: str, seeds: list[dict], key: str) -> dict:
+async def configuration(args: argparse.Namespace, client: IrisClient, origin: str) -> dict:
     """Resolve the pinned servers before registering an immutable run configuration."""
-    store = Store(args.state_dir / "state.sqlite", args.token_cap)
-    with cloud_database(
-        DatabaseConfig(args.database_connection, args.database_name, args.database_user), args.applet
-    ) as database:
-        worker = Worker(args, store, Endpoints(client, origin, args.coordinator, args.glm_gateway), seeds, key, database)
-        try:
-            await worker.endpoints.refresh(worker.http)
-            if not worker.endpoints.metadata:
-                raise RuntimeError("Wait for the pinned candidate metadata before submitting the driver")
-            return worker.configuration()
-        finally:
-            await worker.http.aclose()
-            store.close()
+    endpoints = Endpoints(client, origin, args.coordinator, args.glm_gateway)
+    async with httpx.AsyncClient() as http:
+        await endpoints.refresh(http)
+    if not endpoints.metadata:
+        raise RuntimeError("Wait for the pinned candidate metadata before submitting the driver")
+    return run_configuration(args, endpoints)
 
 
 def main() -> None:
@@ -59,9 +51,6 @@ def main() -> None:
         "run-id",
         "job-name",
         "user",
-        "database-connection",
-        "database-name",
-        "database-user",
     ):
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--glm-env", type=Path, required=True)
@@ -94,7 +83,7 @@ def main() -> None:
         args.state_dir = Path(temporary)
         seeds = inspiration_seeds(args.inspiration_cache or args.state_dir / "wildchat.json")
         client = IrisClient.remote(endpoint.url, workspace=Path.cwd(), credentials=endpoint.credentials)
-        config = asyncio.run(configuration(args, client, endpoint.url, seeds, key))
+        config = asyncio.run(configuration(args, client, endpoint.url))
         marina_request(
             args.marina_url,
             "POST",
@@ -110,21 +99,19 @@ def main() -> None:
                 "state": "waiting_for_worker",
             },
         )
-        marina_request(
+        session = marina_request(
             args.marina_url,
             "POST",
-            f"{prefix}/runs/{args.run_id}/database-worker",
-            json_body={"role": args.database_user},
+            f"{prefix}/runs/{args.run_id}/create-session-key",
         )
+        assert isinstance(session, dict)
         arguments = []
         for name in (
             "applet",
             "coordinator",
             "glm_gateway",
             "run_id",
-            "database_connection",
-            "database_name",
-            "database_user",
+            "marina_url",
             "concurrency",
             "token_cap",
             "shellsim_cpu_limit",
@@ -136,7 +123,10 @@ def main() -> None:
             user=args.user,
             entrypoint=Entrypoint.from_callable(run, arguments, seeds),
             resources=ResourceSpec(cpu=4, memory="4GB", disk="8GB"),
-            environment=EnvironmentSpec(sync_packages=["marin-marina"], env_vars={"GLM_API_TOKEN": key}),
+            environment=EnvironmentSpec(
+                sync_packages=["marin-marina"],
+                env_vars={"GLM_API_TOKEN": key, "SNOWBALL_SESSION_KEY": session["session_key"]},
+            ),
             constraints=[preemptible_constraint(False)],
             priority_band=job_pb2.PRIORITY_BAND_BATCH,
             max_retries_failure=10,

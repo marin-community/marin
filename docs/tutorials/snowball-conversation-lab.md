@@ -118,46 +118,43 @@ uv run marina publish infra/marina/applets/snowball_probes --mode private --buil
 ```
 
 Run the driver on an Iris CPU worker so it can continue when a developer's
-machine sleeps or disconnects. New drivers connect directly to the existing
-`marina` Postgres database through Cloud SQL's authenticated connector. They
-call restricted database functions to save results, read recovery state, and
-claim queued work. They do not call Marina's HTTP API. The launch command uses
-your Marina login to create the run and assign its database worker; your login
-retains ownership, queue, pause, stop, and assignment controls.
+machine sleeps or disconnects. New drivers use an applet-issued session key for
+one run. Your Marina login creates the run, then calls
+`POST /runs/<run-id>/create-session-key` before submitting the job. The response
+contains a random 256-bit key; the applet stores only its SHA-256 hash. Issuing
+another key for that run immediately replaces the previous key.
 
-Before launching, register `iris-worker@hai-gcp-models.iam` as an IAM database
-user on `marin-metadata`. Its Google service account needs `roles/cloudsql.client`
-and `roles/cloudsql.instanceUser`, restricted to that instance. These are
-connection/login permissions; SQL grants determine which data it can access.
-IAM changes follow the repository's `add-grant` and `review-grant` workflows.
-The October 13, 2026 drivers listed below still use the UUID-specific IAP grant in
-[#10050](https://github.com/marin-community/marin/pull/10050); switch them only
-after the direct-database permissions and live smoke test pass.
+The launcher passes the key through the explicit `SNOWBALL_SESSION_KEY` job
+environment parameter. It is absent from command arguments, run configuration,
+and saved conversation traces. Each API request supplies `X-Lab-Session-Key`
+for application authorization and a renewable machine IAP token for admission
+to Marina. The existing IAP access in
+[#10050](https://github.com/marin-community/marin/pull/10050) remains necessary;
+a session key alone cannot bypass IAP. No Cloud SQL worker login or roles are
+required. The proposed direct-database grant in
+[#10105](https://github.com/marin-community/marin/pull/10105) was closed without
+applying its resources.
 
-Publish the updated applet to install its worker functions, then use the existing
-Cloud SQL administrator credential to grant that login only schema usage and
-execution of the seven worker functions:
+The worker's IAP condition admits only
+`/a/25f504c6-c6fb-4e14-8401-07dd8e6fbfba/api/` on `applets.marina.oa.dev`.
+Keep this API-only restriction: Marina's generic applet SQL route sits outside
+the custom backend and does not apply its session-key checks. Static assets,
+versioned APIs, and the generic SQL route are excluded from worker admission.
 
-```bash
-uv run python -m experiments.evaluation.snowball_probes.configure_database \
-  --connection hai-gcp-models:us-central1:marin-metadata --database marina \
-  --applet 25f504c6-c6fb-4e14-8401-07dd8e6fbfba \
-  --worker-user iris-worker@hai-gcp-models.iam
-```
+The configured Marin CPU pools use
+`iris-worker@hai-gcp-models.iam.gserviceaccount.com`. If you select another pool,
+check its service account in `lib/iris/config/marin.yaml` and verify its IAP access
+before launching there.
 
-This operator command reads `cloudsql-pulumi-admin-password` through your
-existing `gcloud` Secret Manager access. The administrator credential stays in
-the provisioning process and is never sent to the driver.
+A key can save results, recover state, and claim queued ideas only in its run.
+It cannot create runs, issue or revoke keys, change ownership or checkpoints,
+queue topics, or change pause, stop, concurrency, or token-cap controls. Reads
+are scoped to the same run. Invalid or revoked keys return HTTP 401 even when
+the request's IAP identity belongs to the owner. Keys remain valid until the
+owner rotates or revokes them, including while a stopped worker flushes its
+final traces. Job retries retain the same key.
 
-The provisioning command rejects logins with administrative privileges or
-membership in an applet owner or shared reader role. Worker functions check the
-authenticated database login against the requested run's assignment on every
-call. The login receives no direct table-write, ownership, schema-creation, or
-other applet privileges. SQL statements have a 60-second deadline. Clearing a
-run's database-worker assignment blocks subsequent requests, including on
-already-open connections.
-
-The run owner can revoke an assignment through the applet API:
+The run owner can revoke a key through the authenticated applet API:
 
 ```python
 from marina.client import marina_request
@@ -165,17 +162,19 @@ from marina.client import marina_request
 marina_request(
     "https://applets.marina.oa.dev",
     "POST",
-    "/a/25f504c6-c6fb-4e14-8401-07dd8e6fbfba/api/runs/<run-id>/database-worker",
-    json_body={"role": None},
+    "/a/25f504c6-c6fb-4e14-8401-07dd8e6fbfba/api/runs/<run-id>/revoke-session-key",
 )
 ```
 
-Before replacing a live driver, test the connection from an Iris worker using
-its machine identity: read an assigned diagnostic run, save a trace, and claim
-a queued idea. Check that the trace is visible in the viewer and that revoking
-the assignment denies the next request. Use new run IDs for this transport
-change; the driver records configuration version 20 and preserves each older
-run's immutable configuration.
+Revocation blocks subsequent requests and causes the driver to retain its
+local outbox and pause new chats. For a planned replacement, stop the old driver
+while its key is still valid and wait for `stopped` with zero reserved tokens;
+then revoke its key. If a key was revoked before uploads finished, preserve the
+old task disk: its unuploaded journal needs explicit owner recovery before the
+run can be settled. A replacement on another host can recover only uploaded
+records. Start the replacement with a new run ID and `--previous-run` to carry
+the settled token total. Driver configuration version 21 records this transport;
+older run configurations remain immutable.
 
 Replace the example user namespace, job IDs, and run ID with your launch values:
 
@@ -186,25 +185,17 @@ uv run python -m experiments.evaluation.snowball_probes.submit_worker \
   --glm-gateway /your-user/snowball-lab-glm/ortet \
   --applet 25f504c6-c6fb-4e14-8401-07dd8e6fbfba \
   --run-id dr-doom-vs-qwen36-new-run \
-  --database-connection hai-gcp-models:us-central1:marin-metadata \
-  --database-name marina --database-user iris-worker@hai-gcp-models.iam \
   --glm-env /tmp/glm.env --concurrency 16 --token-cap 10000000000
 ```
 
 The launcher submits to the `marin` controller. Its scheduler selects a
-non-preemptible worker; `--database-user` must match that worker's Google
-service account with the `.gserviceaccount.com` suffix removed. Inspect the configured worker pool service accounts in
-`lib/iris/config/marin.yaml` before submission; the supplied Marin pools use
-`iris-worker@hai-gcp-models.iam.gserviceaccount.com`. The driver requests 4 CPUs,
-4 GB memory, and 8 GB disk. Iris retries up to ten failed attempts. It uses the job's Iris
-credentials to renew scoped inference links and the machine's renewable
-service-account credentials for Cloud SQL admission and IAM database login. The
-connector refreshes those credentials; no database password is supplied. All
-jobs using this shared service account share its SQL identity and can use its
-assigned lab runs. This application-level scope does not isolate individual Iris
-jobs on the same account. The GLM token travels through
-an explicit Iris environment parameter and is written to a mode-`0600` temporary
-file in the task. No user login refresh credential is copied into the job.
+non-preemptible worker. The driver requests 4 CPUs, 4 GB memory, and 8 GB disk;
+Iris retries up to ten failed attempts. The job renews scoped inference links
+through Iris and obtains IAP tokens from the machine's service account. The
+run-scoped key distinguishes application sessions even when jobs share that
+account. The GLM token travels through an explicit Iris environment parameter
+and is written to a mode-`0600` temporary file in the task. No user login refresh
+credential or database password is copied into the job.
 
 To replace a healthy existing driver, select **Stop run** in the viewer and
 wait for its state to become `stopped` with zero reserved tokens. This flushes
@@ -219,8 +210,8 @@ Two current runs use the patched `grug` reasoning parser:
 
 | Run | Checkpoint revision | CPU driver | Serving coordinator | GLM gateway |
 | --- | --- | --- | --- | --- |
-| `antidoom-patched-grug-vs-qwen36-20261013-v1` | Antidoom `88f4d8b8c2a6083b9d107836b2a3a028e2465a8c` | `/dlwh/snowball-probes-worker-20261013-v1` | `/dlwh/snowball-probes-serve-20261013-v1` | `/dlwh/snowball-probes-glm-20261013-v1/ortet` |
-| `merge-patched-grug-vs-qwen36-20261013-v2` | Shared100 `81d4cd7d39ddb7499b1f85d7a1f39fc6658b2a01` | `/dlwh/snowball-probes-worker-20261013-v3` | `/dlwh/snowball-probes-serve-20261013-v3` | `/dlwh/snowball-probes-glm-20261013-v3/ortet` |
+| `antidoom-patched-grug-vs-qwen36-20261013-session-v1` | Antidoom `88f4d8b8c2a6083b9d107836b2a3a028e2465a8c` | `/dlwh/snowball-probes-worker-20261013-session-v1` | `/dlwh/snowball-probes-serve-20261013-v1` | `/dlwh/snowball-probes-glm-20261013-v1/ortet` |
+| `merge-patched-grug-vs-qwen36-20261013-session-v1` | Shared100 `81d4cd7d39ddb7499b1f85d7a1f39fc6658b2a01` | `/dlwh/snowball-probes-worker-20261013-session-v2` | `/dlwh/snowball-probes-serve-20261013-v3` | `/dlwh/snowball-probes-glm-20261013-v3/ortet` |
 
 Antidoom is `open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02`.
 Shared100 is `open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09`;
@@ -258,8 +249,8 @@ candidates have no execution tools. The previous laptop systemd service is disab
 Inspect a driver with:
 
 ```bash
-uv run iris --cluster=marin job describe /dlwh/snowball-probes-worker-20261013-v1
-uv run iris --cluster=marin task logs /dlwh/snowball-probes-worker-20261013-v1/0 --tail --max-lines 50
+uv run iris --cluster=marin job describe /dlwh/snowball-probes-worker-20261013-session-v1
+uv run iris --cluster=marin task logs /dlwh/snowball-probes-worker-20261013-session-v1/0 --tail --max-lines 50
 ```
 
 ## Pause, stop, and recover
@@ -309,8 +300,8 @@ requests from spending the same remaining budget.
 
 The worker journals compressed raw stream chunks in `chunks/<message-id>.jsonl.gz`, stores compressed current traces
 and the token ledger in `state.sqlite`, and queues uploads in a durable outbox.
-The direct database transport stores compressed trace payloads in the existing
-applet Postgres schema; the viewer reads those same tables. An
+The applet API stores compressed trace payloads in its existing Postgres schema;
+the viewer reads those same tables. An
 upload failure retains the local data and pauses new conversations until
 uploads recover. A fresh heartbeat with zero active chats and **Trace upload failed**
 can therefore mean an upload backlog. Inspect the worker's exception before
@@ -319,9 +310,9 @@ Evidence quotes preserve NUL characters through storage and export. Once
 uploads recover, the same worker resumes automatically.
 A worker restart charges abandoned reservations conservatively
 and marks unfinished conversations as interrupted. If a cluster retry loses
-its disk, it restores the token total and unfinished chats from Postgres, charging
+its disk, it restores the token total and unfinished chats through the applet API, charging
 the last saved reservations conservatively. Recovery fetches only streaming
-messages through the restricted case-read function; completed
+messages through the run-scoped case-read endpoint; completed
 messages remain in Postgres. This bounds recovery responses even when a
 conversation has a large saved history. It starts fresh conversations using
 the remaining budget. See the [large-history recovery incident](https://marina.oa.dev/echo/wiki/707)

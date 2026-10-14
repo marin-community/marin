@@ -16,8 +16,8 @@ from iris.client.client import IrisClient
 from iris.rpc import controller_pb2
 from jsonschema import ValidationError, validate
 
+from experiments.evaluation.snowball_probes.client import WorkerApi
 from experiments.evaluation.snowball_probes.config import load_candidates
-from experiments.evaluation.snowball_probes.database import WorkerDatabase
 from experiments.evaluation.snowball_probes.protocol import (
     infrastructure_review,
     public_history,
@@ -216,9 +216,9 @@ def make_worker(tmp_path: Path, store: Store) -> Worker:
         {"key": "small", "reasoning_parser": "grug_optional", "reasoning_format": "api_fields"},
         {"key": "reference", "reasoning_parser": "qwen3", "reasoning_format": "api_fields"},
     ]
-    database = Mock(spec=WorkerDatabase)
-    database.claim.return_value = {"idea": None}
-    return Worker(args, store, endpoints, [{"text": "inspiration", "row": 1}], "test-key", database)
+    api = Mock(spec=WorkerApi)
+    api.claim.return_value = {"idea": None}
+    return Worker(args, store, endpoints, [{"text": "inspiration", "row": 1}], "test-key", api)
 
 
 def test_native_grug_call_executes_while_open_thinking_is_preserved_only_in_model_history(tmp_path, store):
@@ -525,13 +525,13 @@ def test_cluster_retry_restores_accounting_and_marks_unfinished_chats_interrupte
             raise RuntimeError("Full trace history is too large")
         return {**case, "traces": [trace]}
 
-    worker.database.run.return_value = {"generated_tokens": 70, "reserved_tokens": 30, "desired_state": "paused"}
-    worker.database.cases.side_effect = saved_cases
-    worker.database.case.side_effect = saved_case
+    worker.api.run.return_value = {"generated_tokens": 70, "reserved_tokens": 30, "desired_state": "paused"}
+    worker.api.cases.side_effect = saved_cases
+    worker.api.case.side_effect = saved_case
 
     async def run():
         try:
-            await worker.restore_from_database()
+            await worker.restore_from_applet()
             assert store.totals() == (100, 0)
             assert store.get("/cases", "abandoned")["state"] == "interrupted"
             saved_trace = store.case_traces("abandoned")[0]
@@ -540,7 +540,7 @@ def test_cluster_retry_restores_accounting_and_marks_unfinished_chats_interrupte
             assert worker.desired_state == "paused"
             # The restored record fences repeated recovery of the same reservation.
             store.put("/runs", "test", {"run_id": "test"})
-            await worker.restore_from_database()
+            await worker.restore_from_applet()
             assert store.totals() == (100, 0)
         finally:
             await worker.http.aclose()
@@ -992,7 +992,7 @@ def test_queued_task_branches_independently_and_followups_only_see_their_own_pub
             captured["claim"] = {"case_id": case_id}
             return {"idea": idea}
 
-        worker.database.claim.side_effect = claim
+        worker.api.claim.side_effect = claim
         await worker.http.aclose()
         worker.endpoints.urls["glm"] = "http://glm/v1/chat/completions"
         worker.http = httpx.AsyncClient(transport=httpx.MockTransport(response))

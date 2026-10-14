@@ -4,20 +4,23 @@
 """Private, durable trace storage and comparison queries for the conversation lab."""
 
 import json
+import secrets
 import uuid
 import zlib
 from enum import StrEnum
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from marina.applets import AppletServices
 from pydantic import BaseModel, Field
 from rigging.server_auth import get_verified_identity
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import JSONResponse
 
 from .records import case_record, searchable_metadata
-from .worker_sql import install_worker_functions
+from .sessions import SESSION_HEADER, key_hash, session_run, session_run_id
 
 
 class RunState(StrEnum):
@@ -89,10 +92,6 @@ class WorkerGrant(BaseModel):
     identity: str | None = Field(pattern=r"^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.gserviceaccount\.com$")
 
 
-class DatabaseWorkerGrant(BaseModel):
-    role: str | None = Field(pattern=r"^[A-Za-z0-9_@.\-]+$", max_length=63)
-
-
 def migrate(connection: Connection) -> None:
     catalog = inspect(connection)
     schema = connection.execute(text("SELECT current_schema()")).scalar_one()
@@ -162,10 +161,21 @@ def migrate(connection: Connection) -> None:
         if name not in indexes:
             connection.execute(text(f"CREATE INDEX {name} {definition}"))
     columns = {column["name"] for column in catalog.get_columns("runs", schema=schema)}
-    for name in ("worker_identity", "database_worker"):
+    for name in ("worker_identity", "worker_session_hash"):
         if name not in columns:
             connection.execute(text(f"ALTER TABLE runs ADD COLUMN {name} TEXT"))
-    install_worker_functions(connection)
+    namespace = connection.dialect.identifier_preparer.quote_schema(schema)
+    for signature in (
+        "worker_run(text)",
+        "worker_cases(text,text,integer)",
+        "worker_case(text,text)",
+        "worker_save_run(jsonb)",
+        "worker_save_cases(jsonb)",
+        "worker_save_traces(jsonb)",
+        "worker_claim(text,text)",
+        "worker_require_run(text)",
+    ):
+        connection.execute(text(f"DROP FUNCTION IF EXISTS {namespace}.{signature}"))
 
 
 def identity() -> str:
@@ -176,6 +186,8 @@ def identity() -> str:
 
 
 def owned_run(connection: Connection, run_id: str) -> None:
+    if session_run.get() is not None:
+        raise HTTPException(403, "Session keys cannot change owner controls")
     owner = connection.execute(text("SELECT owner FROM runs WHERE run_id=:run_id"), {"run_id": run_id}).scalar()
     if owner is None:
         raise HTTPException(404, "Run not found")
@@ -184,6 +196,11 @@ def owned_run(connection: Connection, run_id: str) -> None:
 
 
 def writable_run(connection: Connection, run_id: str) -> None:
+    delegated_run = session_run.get()
+    if delegated_run is not None:
+        if delegated_run != run_id:
+            raise HTTPException(403, "Session key is assigned to another run")
+        return
     run = (
         connection.execute(text("SELECT owner,worker_identity FROM runs WHERE run_id=:run_id"), {"run_id": run_id})
         .mappings()
@@ -193,6 +210,15 @@ def writable_run(connection: Connection, run_id: str) -> None:
         raise HTTPException(404, "Run not found")
     if identity() not in {run["owner"], run["worker_identity"]}:
         raise HTTPException(403, "Only this run's owner or assigned worker may save results")
+
+
+def readable_run(connection: Connection, run_id: str) -> None:
+    if session_run.get() is not None or identity().endswith(".gserviceaccount.com"):
+        writable_run(connection, run_id)
+
+
+def run_record(row: dict) -> dict:
+    return {key: value for key, value in row.items() if key != "worker_session_hash"}
 
 
 def comparison_identity(config: dict) -> dict:
@@ -206,6 +232,20 @@ def comparison_identity(config: dict) -> dict:
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
+
+    @api.middleware("http")
+    async def authenticate_session(request: Request, call_next):
+        key = request.headers.get(SESSION_HEADER)
+        if key is None:
+            return await call_next(request)
+        run_id = await run_in_threadpool(session_run_id, engine, key)
+        if run_id is None:
+            return JSONResponse({"detail": "Invalid or revoked session key"}, status_code=401)
+        token = session_run.set(run_id)
+        try:
+            return await call_next(request)
+        finally:
+            session_run.reset(token)
 
     @api.post("/runs")
     def update_run(update: RunUpdate) -> dict:
@@ -222,7 +262,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 writable_run(connection, update.run_id)
                 if comparison_identity(existing["config"]) != comparison_identity(update.config):
                     raise HTTPException(409, "Run checkpoint/config identity is immutable; create a new run")
-            elif values["owner"].endswith(".gserviceaccount.com"):
+            elif session_run.get() is not None or values["owner"].endswith(".gserviceaccount.com"):
                 raise HTTPException(403, "A user must create the run and assign its worker")
             connection.execute(
                 text(
@@ -244,15 +284,26 @@ def create_api(services: AppletServices) -> FastAPI:
 
     @api.get("/runs")
     def runs() -> list[dict]:
+        delegated_run = session_run.get()
+        caller = identity()
+        values = {"run_id": delegated_run, "caller": caller}
+        where = ""
+        if delegated_run is not None:
+            where = "WHERE run_id=:run_id"
+        elif caller.endswith(".gserviceaccount.com"):
+            where = "WHERE worker_identity=:caller"
         with engine.connect() as connection:
             return [
-                dict(row)
-                for row in connection.execute(text("SELECT * FROM runs ORDER BY created_at DESC LIMIT 100")).mappings()
+                run_record(dict(row))
+                for row in connection.execute(
+                    text(f"SELECT * FROM runs {where} ORDER BY created_at DESC LIMIT 100"), values
+                ).mappings()
             ]
 
     @api.get("/runs/{run_id}")
     def run(run_id: str) -> dict:
         with engine.connect() as connection:
+            readable_run(connection, run_id)
             row = (
                 connection.execute(text("SELECT * FROM runs WHERE run_id=:run_id"), {"run_id": run_id})
                 .mappings()
@@ -260,7 +311,25 @@ def create_api(services: AppletServices) -> FastAPI:
             )
             if row is None:
                 raise HTTPException(404, "Run not found")
-            return dict(row)
+            return run_record(dict(row))
+
+    @api.post("/runs/{run_id}/create-session-key")
+    def create_session_key(run_id: str) -> dict:
+        with engine.begin() as connection:
+            owned_run(connection, run_id)
+            key = secrets.token_urlsafe(32)
+            connection.execute(
+                text("UPDATE runs SET worker_session_hash=:hash WHERE run_id=:run_id"),
+                {"run_id": run_id, "hash": key_hash(key)},
+            )
+        return {"session_key": key}
+
+    @api.post("/runs/{run_id}/revoke-session-key")
+    def revoke_session_key(run_id: str) -> dict:
+        with engine.begin() as connection:
+            owned_run(connection, run_id)
+            connection.execute(text("UPDATE runs SET worker_session_hash=NULL WHERE run_id=:run_id"), {"run_id": run_id})
+        return {"revoked": True}
 
     @api.post("/runs/{run_id}/worker")
     def assign_worker(run_id: str, grant: WorkerGrant) -> dict:
@@ -281,26 +350,6 @@ def create_api(services: AppletServices) -> FastAPI:
                 {"run_id": run_id, "state": update.state},
             )
         return {"desired_state": update.state}
-
-    @api.post("/runs/{run_id}/database-worker")
-    def assign_database_worker(run_id: str, grant: DatabaseWorkerGrant) -> dict:
-        with engine.begin() as connection:
-            owned_run(connection, run_id)
-            if grant.role is not None:
-                login = connection.execute(
-                    text(
-                        "SELECT rolcanlogin AND NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolbypassrls) "
-                        "FROM pg_roles WHERE rolname=:role"
-                    ),
-                    {"role": grant.role},
-                ).scalar()
-                if login is not True:
-                    raise HTTPException(422, "Provision a restricted SQL login before assigning it")
-            connection.execute(
-                text("UPDATE runs SET database_worker=:role WHERE run_id=:run_id"),
-                {"run_id": run_id, "role": grant.role},
-            )
-        return {"assigned": grant.role is not None}
 
     @api.post("/cases")
     def update_case(update: CaseUpdate) -> dict:
@@ -362,6 +411,7 @@ def create_api(services: AppletServices) -> FastAPI:
     @api.get("/runs/{run_id}/ideas")
     def ideas(run_id: str) -> list[dict]:
         with engine.connect() as connection:
+            readable_run(connection, run_id)
             rows = connection.execute(
                 text(
                     """SELECT i.*, count(c.case_id) FILTER (WHERE c.state='complete') AS completed,
@@ -399,6 +449,11 @@ def create_api(services: AppletServices) -> FastAPI:
                 if old["run_id"] != run_id:
                     raise HTTPException(409, "Idea claim belongs to a different run")
                 return {"idea": dict(old)}
+            desired = connection.execute(
+                text("SELECT desired_state FROM runs WHERE run_id=:run_id"), values
+            ).scalar_one()
+            if desired != "running":
+                return {"idea": None}
             row = (
                 connection.execute(
                     text(
@@ -492,6 +547,7 @@ def create_api(services: AppletServices) -> FastAPI:
             values["breakages"] = json.dumps({"breakages": [item]})
         where = " AND ".join(filters)
         with engine.connect() as connection:
+            readable_run(connection, run_id)
             total = connection.execute(text(f"SELECT count(*) FROM cases WHERE {where}"), values).scalar_one()
             rows = connection.execute(
                 text(
@@ -519,6 +575,7 @@ def create_api(services: AppletServices) -> FastAPI:
             )
             if row is None:
                 raise HTTPException(404, "Case not found")
+            readable_run(connection, row["run_id"])
             statement = "SELECT * FROM traces WHERE case_id=:case_id"
             if trace_state is not None:
                 statement += " AND state=:trace_state"
@@ -537,6 +594,7 @@ def create_api(services: AppletServices) -> FastAPI:
     def summary(run_id: str, mode: Literal["chat", "agentic"] | None = None) -> dict:
         parameters = {"run_id": run_id, "mode": mode or ""}
         with engine.connect() as connection:
+            readable_run(connection, run_id)
             categories = [
                 dict(row)
                 for row in connection.execute(

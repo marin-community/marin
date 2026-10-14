@@ -11,6 +11,7 @@ import gzip
 import hashlib
 import json
 import logging
+import os
 import random
 import signal
 import time
@@ -37,8 +38,8 @@ from marin.inference.shell_workspace import (
 from pydantic import ValidationError
 from rigging.connect import capability_path
 from rigging.timing import Duration
-from sqlalchemy.exc import SQLAlchemyError
 
+from experiments.evaluation.snowball_probes.client import SessionConfig, WorkerApi
 from experiments.evaluation.snowball_probes.config import (
     CATEGORIES,
     CONCURRENT_CHATS,
@@ -47,7 +48,6 @@ from experiments.evaluation.snowball_probes.config import (
     WILDCHAT_REVISION,
     ReasoningFormat,
 )
-from experiments.evaluation.snowball_probes.database import DatabaseConfig, WorkerDatabase, cloud_database
 from experiments.evaluation.snowball_probes.protocol import (
     FOLLOWUP_INSTRUCTIONS,
     GLM_LANGUAGE_INSTRUCTIONS,
@@ -267,6 +267,57 @@ class Endpoints:
             return True
 
 
+def run_configuration(args: argparse.Namespace, endpoints: Endpoints) -> dict:
+    """Describe the pinned candidate roster and evaluation semantics for a run."""
+    return {
+        "candidates": endpoints.metadata,
+        "coordinator": args.coordinator,
+        "driver": {
+            "model": "glm-5.3",
+            "role": "user and independent reviewer",
+            "cluster": "ortet",
+            "gateway": endpoints.glm_gateway,
+            "language_policy": GLM_LANGUAGE_INSTRUCTIONS,
+            "response_format": "json_schema",
+            "input_encoding": "JSON with angle brackets escaped",
+            "review_repair": "quotes constrained to exact same-candidate trace excerpts",
+            "shellsim_capabilities": SHELLSIM_INSTRUCTIONS,
+        },
+        "wildchat": {"dataset": WILDCHAT_DATASET, "revision": WILDCHAT_REVISION, "mode": "inspiration"},
+        "max_rounds": MAX_ROUNDS,
+        "candidate_max_tokens": CANDIDATE_MAX_TOKENS,
+        "glm_max_tokens": GLM_MAX_TOKENS,
+        "token_accounting": "completion tokens include reasoning; missing usage charged at request maximum",
+        "token_cap": args.token_cap,
+        "concurrency": args.concurrency,
+        "agentic_environment": "ShellSim",
+        "conversation_policy": "shared opening; independent followups per candidate",
+        "tool_policy": "tools remain enabled throughout every agentic turn; no per-turn call cutoff",
+        "workspace_max_commands": MAX_WORKSPACE_COMMANDS,
+        "workspace_max_history_bytes": MAX_WORKSPACE_HISTORY_BYTES,
+        "shellsim_cpu_limit": args.shellsim_cpu_limit,
+        "shellsim_cpu_exhaustion": "fail chat; no followup or review; pair unscored",
+        "inference_timeout": args.inference_timeout,
+        "worker_job": args.worker_job,
+        "reasoning_policy": (
+            "Per-candidate parsing: native inline thinking or server reasoning fields; "
+            "Grug thinking retained in candidate history and excluded from GLM user followups"
+        ),
+        "verification_policy": "checks declared before answers; shared opening only; inconclusive pairs excluded",
+        "score_policy": "verified opening checks separate from exploratory GLM conversation judgments",
+        "storage_transport": "Marina HTTP API with applet-issued run-scoped session key",
+        "harness_revision": (
+            hashlib.sha256(
+                b"".join(
+                    Path(__file__).with_name(name).read_bytes()
+                    for name in ("worker.py", "protocol.py", "verification.py")
+                )
+            ).hexdigest()
+        ),
+        "version": 21,
+    }
+
+
 class Worker:
     def __init__(
         self,
@@ -275,14 +326,14 @@ class Worker:
         endpoints: Endpoints,
         seeds: list[dict],
         glm_key: str,
-        database: WorkerDatabase,
+        api: WorkerApi,
     ):
         self.args = args
         self.store = store
         self.endpoints = endpoints
         self.seeds = seeds
         self.glm_key = glm_key
-        self.database = database
+        self.api = api
         self.desired_state = "running"
         self.active: set[str] = set()
         self.upload_error: str | None = None
@@ -317,15 +368,15 @@ class Worker:
             },
         )
 
-    async def restore_from_database(self) -> None:
+    async def restore_from_applet(self) -> None:
         """Recover accounting and interrupted chats when a cluster attempt loses its disk."""
         if self.store.get("/runs", self.args.run_id) is not None:
             return
-        snapshot = await asyncio.to_thread(self.database.run, self.args.run_id)
+        snapshot = await asyncio.to_thread(self.api.run, self.args.run_id)
         self.store.restore_budget(snapshot["generated_tokens"] + snapshot["reserved_tokens"])
         for state in ("generating", "reviewing"):
             cases = await asyncio.to_thread(
-                self.database.cases,
+                self.api.cases,
                 self.args.run_id,
                 state,
                 200,
@@ -334,7 +385,7 @@ class Worker:
                 raise ValueError("Too many interrupted chats to recover in one cluster attempt")
             for case in cases["cases"]:
                 detail = await asyncio.to_thread(
-                    self.database.case,
+                    self.api.case,
                     case["case_id"],
                     "streaming",
                 )
@@ -347,7 +398,7 @@ class Worker:
                 case["review"] = {"summary": "Worker restarted; pair unscored", "kind": "infrastructure"}
                 self.store.put("/cases", case["case_id"], case)
         cases = await asyncio.to_thread(
-            self.database.cases,
+            self.api.cases,
             self.args.run_id,
             "",
             1,
@@ -372,7 +423,7 @@ class Worker:
                     size += record_bytes
                 offset += len(batch)
                 bodies = [json.loads(record[2]) for record in batch]
-                result = await asyncio.to_thread(self.database.save, path, bodies)
+                result = await asyncio.to_thread(self.api.save, path, bodies)
                 for record in batch:
                     self.store.acknowledge(path, record[1], record[3])
                 if path == "/runs":
@@ -386,7 +437,7 @@ class Worker:
             try:
                 await self.flush()
                 self.upload_error = None
-            except (RuntimeError, SQLAlchemyError, OSError) as error:
+            except (RuntimeError, OSError) as error:
                 self.upload_error = f"Trace upload failed: {type(error).__name__}"
                 logger.exception("Trace upload failed; local outbox retained")
             await asyncio.sleep(3)
@@ -857,7 +908,7 @@ class Worker:
         self.store.put("/cases", case["case_id"], case)
         self.active.add(case["case_id"])
         try:
-            claimed = await asyncio.to_thread(self.database.claim, self.args.run_id, case["case_id"])
+            claimed = await asyncio.to_thread(self.api.claim, self.args.run_id, case["case_id"])
             idea = claimed["idea"]
             if idea:
                 idea = {key: idea[key] for key in ("idea_id", "text", "kind", "mode")}
@@ -1036,61 +1087,12 @@ class Worker:
                 continue
             await self.conversation(slot)
 
-    def configuration(self) -> dict:
-        return {
-            "candidates": self.endpoints.metadata,
-            "coordinator": self.args.coordinator,
-            "driver": {
-                "model": "glm-5.3",
-                "role": "user and independent reviewer",
-                "cluster": "ortet",
-                "gateway": self.endpoints.glm_gateway,
-                "language_policy": GLM_LANGUAGE_INSTRUCTIONS,
-                "response_format": "json_schema",
-                "input_encoding": "JSON with angle brackets escaped",
-                "review_repair": "quotes constrained to exact same-candidate trace excerpts",
-                "shellsim_capabilities": SHELLSIM_INSTRUCTIONS,
-            },
-            "wildchat": {"dataset": WILDCHAT_DATASET, "revision": WILDCHAT_REVISION, "mode": "inspiration"},
-            "max_rounds": MAX_ROUNDS,
-            "candidate_max_tokens": CANDIDATE_MAX_TOKENS,
-            "glm_max_tokens": GLM_MAX_TOKENS,
-            "token_accounting": "completion tokens include reasoning; missing usage charged at request maximum",
-            "token_cap": self.args.token_cap,
-            "concurrency": self.args.concurrency,
-            "agentic_environment": "ShellSim",
-            "conversation_policy": "shared opening; independent followups per candidate",
-            "tool_policy": "tools remain enabled throughout every agentic turn; no per-turn call cutoff",
-            "workspace_max_commands": MAX_WORKSPACE_COMMANDS,
-            "workspace_max_history_bytes": MAX_WORKSPACE_HISTORY_BYTES,
-            "shellsim_cpu_limit": self.args.shellsim_cpu_limit,
-            "shellsim_cpu_exhaustion": "fail chat; no followup or review; pair unscored",
-            "inference_timeout": self.args.inference_timeout,
-            "worker_job": self.args.worker_job,
-            "reasoning_policy": (
-                "Per-candidate parsing: native inline thinking or server reasoning fields; "
-                "Grug thinking retained in candidate history and excluded from GLM user followups"
-            ),
-            "verification_policy": "checks declared before answers; shared opening only; inconclusive pairs excluded",
-            "score_policy": "verified opening checks separate from exploratory GLM conversation judgments",
-            "storage_transport": "restricted Postgres functions; no worker requests to Marina",
-            "harness_revision": (
-                hashlib.sha256(
-                    b"".join(
-                        Path(__file__).with_name(name).read_bytes()
-                        for name in ("worker.py", "protocol.py", "verification.py")
-                    )
-                ).hexdigest()
-            ),
-            "version": 20,
-        }
-
     async def run(self) -> None:
         if self.args.worker_job is not None:
-            await self.restore_from_database()
+            await self.restore_from_applet()
         logger.info("Waiting for pinned candidate servers")
         await self.endpoints.refresh(self.http)
-        self.config = self.configuration()
+        self.config = run_configuration(self.args, self.endpoints)
         self.run_snapshot()
         await self.flush()
         loop = asyncio.get_running_loop()
@@ -1136,9 +1138,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--concurrency", type=int, default=CONCURRENT_CHATS)
     parser.add_argument("--shellsim-cpu-limit", type=int, default=SHELLSIM_CPU_LIMIT)
     parser.add_argument("--inference-timeout", type=float, default=INFERENCE_TIMEOUT)
-    parser.add_argument("--database-connection", required=True)
-    parser.add_argument("--database-name", required=True)
-    parser.add_argument("--database-user", required=True)
+    parser.add_argument("--marina-url", default=APPLET_ORIGIN)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -1164,12 +1164,8 @@ def main(argv: list[str] | None = None) -> None:
         info = get_job_info()
         args.worker_job = str(info.job_id) if info is not None else None
         with ExitStack() as stack:
-            database = stack.enter_context(
-                cloud_database(
-                    DatabaseConfig(args.database_connection, args.database_name, args.database_user),
-                    args.applet,
-                )
-            )
+            key = os.environ["SNOWBALL_SESSION_KEY"] if info is None else info.env["SNOWBALL_SESSION_KEY"]
+            api = WorkerApi(SessionConfig(args.marina_url, args.applet, args.run_id, key))
             if info is None:
                 endpoint = stack.enter_context(connect_controller(cluster_name="marin"))
                 client = IrisClient.remote(endpoint.url, credentials=endpoint.credentials)
@@ -1180,7 +1176,7 @@ def main(argv: list[str] | None = None) -> None:
                 origin = info.controller_address
             endpoints = Endpoints(client, origin, args.coordinator, args.glm_gateway)
             try:
-                asyncio.run(Worker(args, store, endpoints, seeds, glm_key, database).run())
+                asyncio.run(Worker(args, store, endpoints, seeds, glm_key, api).run())
             finally:
                 store.close()
 

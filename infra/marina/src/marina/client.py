@@ -51,22 +51,23 @@ def marina_request(
     json_body: object | None = None,
     payload: bytes | None = None,
     params: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> object | None:
     """Call one Marina endpoint with the shared CLI authentication behavior."""
     service_url = service_url.rstrip("/")
-    headers: dict[str, str] = {}
+    request_headers = dict(headers or {})
     if payload is not None:
-        headers["Content-Type"] = "application/gzip"
+        request_headers["Content-Type"] = "application/gzip"
     host = urlparse(service_url).hostname
     if host not in {"127.0.0.1", "localhost"}:
-        headers["Authorization"] = f"Bearer {bearer_token()}"
+        request_headers["Authorization"] = f"Bearer {bearer_token()}"
     response = requests.request(
         method,
         service_url + path,
         params=params,
         json=json_body,
         data=payload,
-        headers=headers,
+        headers=request_headers,
         timeout=DEFAULT_TIMEOUT,
     )
     if response.status_code >= 400:
