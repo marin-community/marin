@@ -1,0 +1,35 @@
+{
+  "configs": [
+    {
+      "config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_interactive_v1/curriculum-tis-s1.yaml",
+      "run": "sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce",
+      "source_config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/curriculum-tis-s1.yaml",
+      "priority": "interactive",
+      "cluster": "cw-us-east-02a",
+      "nodes": 2,
+      "horizon": 300,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "sha256": "ed51eb5767a9c9120c73387864d62377e4b5b32cebad98bf1e7306e39bd17ca5",
+      "scientific_recipe_unchanged": true,
+      "basis": "RNO originals Kueue-preempted,automaticretryqueued,noexactresume. Completeoriginalraw/costspreserved; replaceonlyqueuedownedruns afterconfirmednewsubmission. Four-node sharedinteractivecapcheckbeforeactualsubmission."
+    },
+    {
+      "config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_interactive_v1/optimizer-tis-s0.yaml",
+      "run": "sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce",
+      "source_config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/qwen_transfer_main_rno_v1/optimizer-tis-s0.yaml",
+      "priority": "interactive",
+      "cluster": "cw-us-east-02a",
+      "nodes": 2,
+      "horizon": 300,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "sha256": "d0f74cea98e2d90b938868bc9eb33741428d80e4543f4efc293078123aa52de4",
+      "scientific_recipe_unchanged": true,
+      "basis": "RNO originals Kueue-preempted,automaticretryqueued,noexactresume. Completeoriginalraw/costspreserved; replaceonlyqueuedownedruns afterconfirmednewsubmission. Four-node sharedinteractivecapcheckbeforeactualsubmission."
+    }
+  ],
+  "all_preflights_passed": true,
+  "submitted": false,
+  "scientific_recipe_comparison_passed": true,
+  "predecessors_queued_gate": true,
+  "interactive_total_cap_including_pending": 4
+}
