@@ -281,7 +281,10 @@ an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`
 caller's `ProgramBuilder` (`run_build`, which must build as the caller's build stage does, on the same
 step store, so a program that built in the session rebuilds there from memo hits alone), grade a
 candidate against the last draft the session built (`run_grade_candidate`), and search and fetch the
-web when the proposal lists research. Every tool result is cut to 6,000 characters, head and tail.
+web when the proposal lists research. Every load of a program (`run_loader`, `run_build`, `submit`)
+goes through the session's `ProgramLoader`, by default `stage30_author.load_process` in a child process
+bounded by `LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the
+caller's event loop. Every tool result is cut to 6,000 characters, head and tail.
 `submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
 program that never built in the session is refused once and handed in untested when submitted again;
 an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
@@ -413,11 +416,11 @@ reward lies outside the grader's declared score range is `Ungraded(GRADER_REWARD
 
 `stage50_validate.preflight.preflight(task, host, factories, settings, deadlines)` lowers the task
 and, when its task machine lands on the local backend, runs the engine's own preparation once (machine
-start, resources, setup commands) with a probe that answers at once. A preparation failure re-lowers
-the task with the local backend withheld, so the task machine takes the container backend, and the
-result carries a `BackendFallback` (backends, cause, detail) for the lower record; any other probe
-outcome keeps the first lowering, and the probe records no evidence. A verifier machine never falls
-back.
+start, resources, setup commands) with a probe that answers at once. A preparation failure moves the
+task machine alone to the container backend, the verifier and its grader requirements staying as first
+lowered, and the result carries a `BackendFallback` (backends, cause, detail) for the lower record;
+any other probe outcome keeps the first lowering, and the probe records no evidence. A verifier
+machine never falls back.
 
 `stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
 `LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on

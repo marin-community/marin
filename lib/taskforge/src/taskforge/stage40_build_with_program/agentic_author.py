@@ -9,8 +9,11 @@ the standard template as ``program.py``, the proposal, the SDK reference and the
 and edit workspace files, run the loader, build the program with the caller's ``ProgramBuilder`` (the
 caller's own build stage: same step store, model, policy, services and research requirement, so a
 program that built in the session rebuilds there from memo hits alone), grade a candidate against the
-last draft the session built, and, when the proposal lists research, search and fetch the web. The
-program is handed in with ``submit(path)``: the loader runs on the file; a program that never built in
+last draft the session built, and, when the proposal lists research, search and fetch the web. Every
+load of a program runs through the session's ``ProgramLoader``, by default in a child process bounded
+by ``LOAD_TIMEOUT`` (``load_program_in_process``), so a module body that never returns cannot hold the
+caller's event loop. The program is handed in with ``submit(path)``: the loader runs on the file; a
+program that never built in
 the session is refused once, with the loader's result and the reason, and accepted when submitted
 again; an accepted submission ends the loop through ``run_agent``'s ``stop`` callback.
 
@@ -64,10 +67,9 @@ from taskforge.stage30_author.author import (
     PROGRAM_MANIFEST_FILE,
     Revision,
     RevisionKind,
-    program_manifest,
 )
-from taskforge.stage30_author.loader import GRADER_STEP, load_program_source
-from taskforge.stage30_author.program import RLEnvBuildProgram
+from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
+from taskforge.stage30_author.loader import GRADER_STEP
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build_with_program.glm_author import RECORD_FILE, REVISION_PROMPT, author_messages, sdk_reference
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
@@ -114,6 +116,8 @@ MAX_NUDGES = 2
 MAX_SESSIONS_PER_ROUND = 4
 """Sessions one round may start; a session stopped by the context guard hands off until this many ran."""
 REPLAY = ReasoningReplay.KEEP
+LOAD_TIMEOUT = 120.0
+"""Seconds the default ``ProgramLoader`` gives a program's module body before it refuses the load."""
 SESSION_ORIGIN = "author_session"
 GRADE_STEP = "author_grade"
 """The ``RLEnvBuildContext.step`` of a ``run_grade_candidate`` call."""
@@ -216,9 +220,20 @@ class ProgramBuilder(Protocol):
         ...
 
 
+class ProgramLoader(Protocol):
+    async def __call__(self, source: str) -> ProgramManifest:
+        """The manifest of ``source``; raises ``ValueError`` with the loader's refusal."""
+        ...
+
+
+async def load_in_child(source: str) -> ProgramManifest:
+    """The default ``ProgramLoader``: ``load_program_in_process`` under ``LOAD_TIMEOUT``."""
+    return await load_program_in_process(source, wall_timeout=LOAD_TIMEOUT)
+
+
 @dataclass(frozen=True)
 class SessionBuild:
-    """How a session builds and grades its program.
+    """How a session loads, builds and grades its program.
 
     Attributes:
         builder: Builds a program as the caller's build stage does.
@@ -228,6 +243,8 @@ class SessionBuild:
         services: ``grade_candidate``'s services (factories, host, ledger, web tools).
         session_ledger: The ledger file in-session builds append to (``<root>/<item>.jsonl``); a build's step
             statuses are the ``STEP`` spans appended to it during the build.
+        loader: Loads a program for ``run_loader``, ``run_build`` and ``submit``; ``load_in_child`` unless the
+            caller bounds the load itself.
     """
 
     builder: ProgramBuilder
@@ -236,6 +253,7 @@ class SessionBuild:
     policy: LLMPolicy
     services: RLEnvBuildServices
     session_ledger: Path
+    loader: ProgramLoader = load_in_child
 
 
 class AuthorStatus(StrEnum):
@@ -367,7 +385,7 @@ class ToolRefusal(Exception):
 class Submission:
     path: str
     source: bytes
-    program: RLEnvBuildProgram
+    manifest: ProgramManifest
     notes: str
     tested: bool
 
@@ -482,7 +500,7 @@ class AuthorSession:
 
     async def run_loader(self, arguments: Mapping[str, object]) -> str:
         try:
-            program = load_program_source(self.read(str(arguments["path"])))
+            program = await self.build.loader(self.read(str(arguments["path"])))
         except ValueError as error:
             return f"refused by the loader: {error}"
         return f"loads: program {program.digest[:16]}; run order {', '.join(program.order)}"
@@ -491,11 +509,11 @@ class AuthorSession:
         raw = str(arguments["path"])
         source = self.read(raw)
         try:
-            program = load_program_source(source)
+            program = await self.build.loader(source)
         except ValueError as error:
             return f"refused by the loader: {error}"
         invalidate = frozenset(str(name) for name in _list_argument(arguments, "invalidate"))
-        unknown = sorted(invalidate - {*program.steps, program.sink.name})
+        unknown = sorted(invalidate - set(program.steps))
         if unknown:
             raise ToolRefusal(f"invalidate names {unknown}, which are not steps of the program")
         j = len(_numbered(self.runs))
@@ -563,7 +581,7 @@ class AuthorSession:
         entry: dict = {"path": raw, "notes_chars": len(notes), "loaded": None, "digest": None, "error": None}
         try:
             source = self.read(raw)
-            program = load_program_source(source)
+            program = await self.build.loader(source)
         except ToolRefusal as refusal:
             self.submissions.append(entry | {"outcome": SubmitOutcome.REFUSED_PATH, "error": str(refusal)})
             raise
@@ -1096,13 +1114,13 @@ async def author_round(
         _write_json(target / AUTHOR_RECORD, record | {"status": status, "error": f"no submission ({result.stop})"})
         return AuthorOutcome(status, None)
     _write_bytes(target / PROGRAM_FILE, submission.source)
-    _write_json(target / PROGRAM_MANIFEST_FILE, program_manifest(submission.program))
+    _write_json(target / PROGRAM_MANIFEST_FILE, submission.manifest.model_dump())
     _write_json(
         target / SUBMIT_FILE,
         {
             "accepted": True,
             "path": submission.path,
-            "digest": submission.program.digest,
+            "digest": submission.manifest.digest,
             "notes": submission.notes,
             "tested": submission.tested,
             "submitted_by": session_id,
@@ -1113,7 +1131,7 @@ async def author_round(
         target / RECORD_FILE,
         {
             "author_kind": AUTHOR_KIND,
-            "program_digest": submission.program.digest,
+            "program_digest": submission.manifest.digest,
             "sdk_version": SDK_VERSION,
             "model": client.model,
             "revision": None if revision is None else str(revision.kind),
@@ -1124,6 +1142,6 @@ async def author_round(
     _write_json(
         target / AUTHOR_RECORD,
         record
-        | {"status": AuthorStatus.ACCEPTED, "program_digest": submission.program.digest, "tested": submission.tested},
+        | {"status": AuthorStatus.ACCEPTED, "program_digest": submission.manifest.digest, "tested": submission.tested},
     )
     return AuthorOutcome(AuthorStatus.ACCEPTED, submission.source.decode())
