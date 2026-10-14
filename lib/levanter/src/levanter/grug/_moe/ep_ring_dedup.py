@@ -32,63 +32,13 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     CapacityDrops,
 )
-from levanter.grug._moe.ep_common import _assignment_sources
+from levanter.grug._moe.ep_common import _assignment_sources, _combine_gather_sum
 from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _select_local_assignments
 
 
 def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int) -> float:
     """Probability that a token's ``topk`` distinct uniform experts include one on a given shard."""
     return 1.0 - math.comb(num_experts - local_experts, topk) / math.comb(num_experts, topk)
-
-
-def _weighted_gather_sum_impl(src, weights, inv):
-    out = jnp.zeros((inv.shape[0], src.shape[1]), jnp.float32)
-    for j in range(inv.shape[1]):
-        rows = jnp.take(src, inv[:, j], axis=0, mode="fill", fill_value=0).astype(jnp.float32)
-        out = out + rows * weights[:, j, None].astype(jnp.float32)
-    return out.astype(src.dtype)
-
-
-@jax.custom_vjp
-def _weighted_gather_sum_rows(
-    src: Float[Array, "M H"],
-    weights: Float[Array, "N J"],
-    inv: Int[Array, "N J"],
-    flat_idx: Int[Array, "M"],
-) -> Float[Array, "N H"]:
-    """``out[n] = sum_j weights[n, j] * src[inv[n, j]]``.
-
-    ``flat_idx[m]`` is the flat ``n * J + j`` entry that reads row ``m`` (or a sentinel), so the
-    backward for ``src`` is a gather.
-    """
-    return _weighted_gather_sum_impl(src, weights, inv)
-
-
-def _weighted_gather_sum_rows_fwd(src, weights, inv, flat_idx):
-    return _weighted_gather_sum_impl(src, weights, inv), (src, weights, inv, flat_idx)
-
-
-def _weighted_gather_sum_rows_bwd(residual, cotangent):
-    src, weights, inv, flat_idx = residual
-    num_rows, num_slots = weights.shape
-    flat_valid = flat_idx < num_rows * num_slots
-    safe_flat = jnp.minimum(flat_idx, num_rows * num_slots - 1)
-    row_weight = weights.reshape(-1)[safe_flat].astype(jnp.float32)
-    d_src = cotangent[safe_flat // num_slots].astype(jnp.float32) * row_weight[:, None]
-    d_src = jnp.where(flat_valid[:, None], d_src, 0).astype(src.dtype)
-
-    ct32 = cotangent.astype(jnp.float32)
-    d_weights = jnp.stack(
-        [
-            jnp.sum(jnp.take(src, inv[:, j], axis=0, mode="fill", fill_value=0).astype(jnp.float32) * ct32, axis=-1)
-            for j in range(num_slots)
-        ],
-        axis=1,
-    ).astype(weights.dtype)
-    return d_src, d_weights, None, None
-
-
-_weighted_gather_sum_rows.defvjp(_weighted_gather_sum_rows_fwd, _weighted_gather_sum_rows_bwd)
 
 
 def _moe_mlp_ep_ring_dedup_local(
@@ -218,7 +168,13 @@ def _moe_mlp_ep_ring_dedup_local(
         )
 
     with jax.named_scope("combine"):
-        expert_combined = _weighted_gather_sum_rows(out_dispatch, received_weights, position, picked)
+        expert_combined = _combine_gather_sum(
+            out_dispatch,
+            position.reshape(-1),
+            picked,
+            received_weights,
+            out_dispatch.dtype,
+        )
         returned = jax.lax.all_to_all(
             expert_combined.reshape(ep_size, pair_capacity, hidden_dim),
             "expert",

@@ -31,6 +31,7 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     CapacityDrops,
@@ -574,14 +575,17 @@ def moe_mlp(
             )
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+        if (
+            resolved_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
+            and pooled_transport_capacity_factor is None
+        ):
+            raise ValueError(f"{resolved_implementation} requires pooled_transport_capacity_factor")
 
         if resolved_implementation == "ring":
             shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_scatter_add_dispatch_combine)
         elif resolved_implementation == "ring_gather_combine":
             shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_gather_dispatch_combine)
         elif resolved_implementation == "ring_dedup":
-            if pooled_transport_capacity_factor is None:
-                raise ValueError("ring_dedup requires pooled_transport_capacity_factor")
             shard_local_fn = partial(
                 _moe_mlp_ep_ring_dedup_local,
                 transport_capacity_factor=pooled_transport_capacity_factor,
@@ -591,8 +595,6 @@ def moe_mlp(
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":
-            if pooled_transport_capacity_factor is None:
-                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
             shard_local_fn = partial(
                 _moe_mlp_ep_fixed_pooled_wave_a2a_local,
                 transport_capacity_factor=pooled_transport_capacity_factor,

@@ -30,8 +30,10 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _scaled_capacity,
     _swiglu_gate_up_backward,
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
     CapacityDrops,
 )
+from levanter.grug._moe.ep_common import _combine_gather_sum
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
@@ -50,7 +52,6 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
-from levanter.grug._moe.ep_ring_dedup import _weighted_gather_sum_rows
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -1107,7 +1108,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                 implementation=implementation,
                 mesh=mesh,
                 pooled_transport_capacity_factor=(
-                    1.05 if implementation in ("fixed_pooled_wave_all_to_all", "ring_dedup") else None
+                    1.05 if implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS else None
                 ),
                 num_expert_waves=1,
             )
@@ -1452,6 +1453,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
         import numpy as np
         from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
+        from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
         from levanter.grug.grug_moe import moe_mlp
 
         assert jax.device_count() == 4
@@ -1503,7 +1505,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
 
         implementation = "__IMPLEMENTATION__"
         extra = {}
-        if implementation in ("fixed_pooled_wave_all_to_all", "ring_dedup"):
+        if implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
             extra["pooled_transport_capacity_factor"] = 4.0
 
         def backend_output(x, w_up_gate, w_down):
@@ -1886,7 +1888,13 @@ def test_ring_dedup_expert_combine_keeps_bf16_sums_in_float32():
     @jax.jit
     def evaluate(src, weights, cotangent):
         out, vjp = jax.vjp(
-            lambda src, weights: _weighted_gather_sum_rows(src, weights, jnp.asarray(inv), jnp.asarray(flat_idx)),
+            lambda src, weights: _combine_gather_sum(
+                src,
+                jnp.asarray(inv).reshape(-1),
+                jnp.asarray(flat_idx),
+                weights,
+                src.dtype,
+            ),
             src,
             weights,
         )
