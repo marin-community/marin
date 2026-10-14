@@ -52,6 +52,11 @@ Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no pa
 envelope and no internal command-line rendering layer.
 
 The runtime executes tasks through `TaskSession` and sends token requests to model engines.
+Generated RL inputs contain bare `TaskSpec` JSON in the `task_spec` column.
+Prepare source rows and task packages before training.
+SkyRL preserves each task definition and adds runtime and session settings from `environment.task_sessions`.
+Per-source overrides in `environment.task_sessions.sources` match `TaskSpec.source.dataset`.
+Static DPO retains chosen/rejected datasets and selects their format through `data.preference_pair_format`.
 Harbor tasks use the Shellbox session. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 

@@ -11,6 +11,8 @@ import yaml
 from click.testing import CliRunner
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun
+from taskcompendium.grader import grader_config
+from taskcompendium.models import TaskSpec
 
 from experiments.post_training.cat_count_canary.data import (
     DEFAULT_TRAIN_NS,
@@ -35,16 +37,20 @@ def test_procedural_rows_balance_and_holdout_exclusion():
     config = CatCountDataConfig("/tmp/unused", DEFAULT_TRAIN_NS, 64 * 60, 17)
     train, validation = cat_count_rows(config)
 
-    counts = Counter(row["extra_info"]["n"] for row in train)
+    train_tasks = [TaskSpec.model_validate_json(row["task_spec"]) for row in train]
+    validation_tasks = [TaskSpec.model_validate_json(row["task_spec"]) for row in validation]
+    train_counts = [grader_config(task)["extras"]["extra_info"]["n"] for task in train_tasks]
+    counts = Counter(train_counts)
     assert set(counts) == set(DEFAULT_TRAIN_NS)
     assert set(counts.values()) == {240}
     for start in range(0, len(train), 64):
-        assert {row["extra_info"]["n"] for row in train[start : start + 64]} == set(DEFAULT_TRAIN_NS)
-    assert {row["extra_info"]["n"] for row in validation} == set(DEFAULT_TRAIN_NS) | set(HELDOUT_NS) | set(
-        EXTRAPOLATION_NS
+        assert set(train_counts[start : start + 64]) == set(DEFAULT_TRAIN_NS)
+    assert {grader_config(task)["extras"]["extra_info"]["n"] for task in validation_tasks} == (
+        set(DEFAULT_TRAIN_NS) | set(HELDOUT_NS) | set(EXTRAPOLATION_NS)
     )
-    assert all(row["data_source"] == f"cat_count_n{row['extra_info']['n']}" for row in train + validation)
-    assert all(row["env_class"] == "cat_count" for row in train + validation)
+    for task in (*train_tasks, *validation_tasks):
+        count = grader_config(task)["extras"]["extra_info"]["n"]
+        assert task.source.dataset == f"cat_count_n{count}"
 
 
 def test_parquet_writes_typed_rows(tmp_path):
@@ -53,18 +59,16 @@ def test_parquet_writes_typed_rows(tmp_path):
     validation = duckdb.read_parquet(str(tmp_path / VALIDATION_FILENAME))
     assert train.count("*").fetchone() == (32,)
     assert validation.count("*").fetchone() == (22,)
-    assert train.columns == ["data_source", "prompt", "env_class", "reward_spec", "extra_info"]
-    for source, prompt, env_class, reward_spec, extra_info in train.fetchall():
-        n = extra_info["n"]
-        assert source == f"cat_count_n{n}"
-        assert prompt == [
-            {
-                "content": f"Reply with the word cat exactly {n} times, separated by single spaces. Nothing else.",
-                "role": "user",
-            }
-        ]
-        assert env_class == "cat_count"
-        assert reward_spec == {"ground_truth": n, "method": "rule"}
+    assert train.columns == ["task_spec"]
+    for (encoded,) in train.fetchall():
+        task = TaskSpec.model_validate_json(encoded)
+        extras = grader_config(task)["extras"]
+        n = extras["extra_info"]["n"]
+        assert task.source.dataset == f"cat_count_n{n}"
+        assert task.context.events[0].content == (
+            f"Reply with the word cat exactly {n} times, separated by single spaces. Nothing else."
+        )
+        assert extras["reward_spec"] == {"ground_truth": n, "method": "rule"}
         assert n not in (*HELDOUT_NS, *EXTRAPOLATION_NS)
 
 

@@ -16,6 +16,8 @@ from marin.execution.remote import remote
 from rigging.filesystem.storage_path import prefix_join
 from zephyr.writers import write_parquet_file
 
+from experiments.post_training.task_sessions.data import answer_task_record
+
 logger = logging.getLogger(__name__)
 
 TRAIN_FILENAME = "train.parquet"
@@ -51,18 +53,22 @@ def cat_count_eval_ns(train_ns: tuple[int, ...]) -> tuple[int, ...]:
 
 
 def cat_count_record(n: int, split: str, index: int) -> dict[str, object]:
-    return {
-        "data_source": cat_count_data_source(n),
-        "prompt": [
+    return answer_task_record(
+        [
             {
                 "role": "user",
                 "content": f"Reply with the word cat exactly {n} times, separated by single spaces. Nothing else.",
             }
         ],
-        "env_class": ENV_CLASS,
-        "reward_spec": {"method": "rule", "ground_truth": n},
-        "extra_info": {"n": n, "split": split, "index": index},
-    }
+        dataset=cat_count_data_source(n),
+        split=split,
+        index=index,
+        extras={
+            "reward_spec": {"method": "rule", "ground_truth": n},
+            "extra_info": {"n": n, "split": split, "index": index},
+        },
+        config={},
+    )
 
 
 def cat_count_rows(config: CatCountDataConfig) -> tuple[list[dict[str, object]], list[dict[str, object]]]:

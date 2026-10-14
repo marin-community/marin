@@ -68,6 +68,7 @@ from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
+from experiments.post_training.task_sessions.data import answer_task_record
 from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, resources_from_accelerator, sft_step
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ ICEBALL_WANDB_PROJECT = f"marin-{ICEBALL_MODEL_NAME}"
 FINEWEB_ARTIFACT_NAME = f"documents/{ICEBALL_MODEL_NAME}-fineweb-edu"
 FINEWEB_TOKENIZED_ARTIFACT_NAME = f"tokenized/{ICEBALL_MODEL_NAME}-fineweb-edu-qwen3"
 FINEWEB_TRAIN_FILENAME = "train.jsonl.gz"
-GSM8K_ARTIFACT_NAME = f"documents/{ICEBALL_MODEL_NAME}-gsm8k-skyrl"
+GSM8K_ARTIFACT_NAME = f"documents/{ICEBALL_MODEL_NAME}-gsm8k-taskspec"
 GSM8K_TRAIN_FILENAME = "train.parquet"
 GSM8K_VALIDATION_FILENAME = "validation.parquet"
 SKYRL_GSM8K_ENVIRONMENT = "gsm8k"
@@ -157,7 +158,9 @@ context_budget:
   max_turns: 1
 
 environment:
-  env_class: {SKYRL_GSM8K_ENVIRONMENT}
+  task_sessions:
+    session:
+      task_session: {SKYRL_GSM8K_ENVIRONMENT}
 
 trainer:
   strategy: megatron
@@ -195,7 +198,6 @@ generator:
     top_p: 1.0
 
 data:
-  kind: parquet
   train_data: []
   val_data: []
 """
@@ -271,23 +273,22 @@ def _gsm8k_record(example: Mapping[str, str], split: str, index: int) -> dict[st
         raise ValueError(f"GSM8K row {split}/{index} has no final answer marker")
     answer = match.group(1).replace(",", "")
     question = example["question"]
-    return {
-        "data_source": GSM8K_DATASET,
-        "prompt": [
+    return answer_task_record(
+        [
             {
                 "role": "user",
                 "content": f'{question} Let\'s think step by step and output the final answer after "####".',
             }
         ],
-        "env_class": SKYRL_GSM8K_ENVIRONMENT,
-        "reward_spec": {"method": "rule", "ground_truth": answer},
-        "extra_info": {
-            "split": split,
-            "index": index,
-            "answer": example["answer"],
-            "question": question,
+        dataset=GSM8K_DATASET,
+        split=split,
+        index=index,
+        config={},
+        extras={
+            "reward_spec": {"method": "rule", "ground_truth": answer},
+            "extra_info": {"split": split, "index": index, "answer": example["answer"], "question": question},
         },
-    }
+    )
 
 
 def write_gsm8k_parquet(config: Gsm8kParquetConfig) -> None:

@@ -59,11 +59,16 @@ from rigging.provenance import username_segment
 from experiments.evaluation.models import SNOWBALL_SFT_EXPORT_URI, SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.pool import (
+    ANSWER_LINE_ENV,
+    GSM8K_BIN,
     MAX_PROMPT_TOKENS,
     QWEN3_MODEL,
     QWEN3_REVISION,
+    REASONING_GYM_BINS,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
+    VALIDATION_GSM8K_SOURCE,
+    VALIDATION_REASONING_GYM_BINS,
     pool_step,
 )
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
@@ -72,7 +77,7 @@ logger = logging.getLogger(__name__)
 
 EXPERIMENT_NAME = "curriculum-rl"
 HF_EXPORT_SUBDIR = "hf"
-POOL_ARTIFACT_NAME = f"documents/{EXPERIMENT_NAME}-pool"
+POOL_ARTIFACT_NAME = f"documents/{EXPERIMENT_NAME}-taskspec-pool"
 MODEL_ARTIFACT_NAME = f"models/{EXPERIMENT_NAME}-qwen3-0.6b"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 8
@@ -559,7 +564,9 @@ context_budget:
   max_turns: 1
 
 environment:
-  env_class: gsm8k
+  task_sessions:
+    session:
+      task_session: {ANSWER_LINE_ENV}
 
 trainer:
   strategy: {policy.trainer_config["strategy"]}
@@ -601,12 +608,21 @@ generator:
     top_p: 1.0
 
 data:
-  kind: parquet
   train_data: []
   val_data: []
 """
     )
     trainer = config["trainer"]
+    config["environment"]["task_sessions"]["sources"] = {
+        **{
+            source: {"session": {"task_session": GSM8K_BIN.env_class}}
+            for source in (GSM8K_BIN.name, VALIDATION_GSM8K_SOURCE)
+        },
+        **{
+            source.pool_bin.name: {"session": {"task_session": source.pool_bin.env_class}}
+            for source in (*REASONING_GYM_BINS, *VALIDATION_REASONING_GYM_BINS)
+        },
+    }
     if trainer["strategy"] == "megatron":
         trainer.pop("micro_forward_batch_size_per_gpu")
         trainer["policy"].pop("fsdp_config")

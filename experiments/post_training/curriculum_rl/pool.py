@@ -5,10 +5,9 @@
 
 The pool is one partition shared by every sampling arm: bins ordered by grade
 (0 easiest), each bin either a pinned slice of a public math dataset or a
-seeded procedurally generated reasoning-gym task family. Rows use the SkyRL
-parquet schema with a per-row ``env_class`` so one training run mixes verifier
-environments freely; ``extra_info`` carries the bin name and grade for
-curriculum samplers and per-source metrics.
+seeded procedural reasoning-gym task family. Rows contain bare TaskSpecs.
+The run config selects a session for each source. ``extra_info`` contains the
+bin name and difficulty grade for curriculum samplers.
 
 Bins sit on one 0-13 ladder from single-digit sums to graduate mathematics,
 anchored to school grade and contest tier. Grades come from the strongest
@@ -39,6 +38,8 @@ from marin.execution.remote import remote
 from rigging.filesystem.storage_path import prefix_join
 from transformers import AutoTokenizer
 from zephyr.writers import write_parquet_file
+
+from experiments.post_training.task_sessions.data import answer_task_record
 
 logger = logging.getLogger(__name__)
 
@@ -291,10 +292,6 @@ def _pool_record(
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"{question}{instruction}"},
         ],
-        "env_class": pool_bin.env_class,
-        # The gsm8k env reads reward_spec.ground_truth; the aime env reads
-        # reward_model.ground_truth. Every row carries both.
-        "reward_spec": {"method": "rule", "ground_truth": answer},
         "reward_model": {"ground_truth": answer},
         "extra_info": {
             "data_source": source,
@@ -601,7 +598,21 @@ def write_pool_parquet(config: PoolParquetConfig) -> None:
     ]
     for records, filename in ((train, TRAIN_FILENAME), (validation, VALIDATION_FILENAME)):
         destination = prefix_join(config.output_path, filename)
-        write_parquet_file(records, destination)
+        prepared = [
+            {
+                **answer_task_record(
+                    row["prompt"],
+                    dataset=row["data_source"],
+                    split=row["extra_info"]["split"],
+                    index=row["extra_info"]["index"],
+                    extras={"reward_model": row["reward_model"], "extra_info": row["extra_info"]},
+                    config={},
+                ),
+                "extra_info": {"data_source": row["extra_info"]["data_source"], "grade": row["extra_info"]["grade"]},
+            }
+            for row in records
+        ]
+        write_parquet_file(prepared, destination)
         logger.info("Wrote %d rows to %s", len(records), destination)
 
 
