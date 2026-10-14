@@ -698,6 +698,8 @@ def _trainer(
         # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
+        # The run's name and version: the output path's version alone is shared by every run built at it.
+        id=f"{spec.name.split('/')[-1]}-{spec.version}",
         seed=spec.seed,
         train_batch_size=spec.batch_size,
         num_train_steps=num_train_steps,
