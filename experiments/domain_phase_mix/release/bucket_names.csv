@@ -1,0 +1,40 @@
+bucket_id,internal_name,paper_name,pool,quality_tier
+arxiv,dolma3_arxiv,arXiv,dolma3,
+cc/art_and_design_high,dolma3_cc/art_and_design_high,Art \& design (H),dolma3,high
+cc/art_and_design_low,dolma3_cc/art_and_design_low,Art \& design (L),dolma3,low
+cc/crime_and_law_high,dolma3_cc/crime_and_law_high,Crime \& law (H),dolma3,high
+cc/crime_and_law_low,dolma3_cc/crime_and_law_low,Crime \& law (L),dolma3,low
+cc/education_and_jobs_high,dolma3_cc/education_and_jobs_high,Education \& jobs (H),dolma3,high
+cc/education_and_jobs_low,dolma3_cc/education_and_jobs_low,Education \& jobs (L),dolma3,low
+cc/electronics_and_hardware_high,dolma3_cc/electronics_and_hardware_high,Electronics \& hardware (H),dolma3,high
+cc/electronics_and_hardware_low,dolma3_cc/electronics_and_hardware_low,Electronics \& hardware (L),dolma3,low
+cc/entertainment_high,dolma3_cc/entertainment_high,Entertainment (H),dolma3,high
+cc/entertainment_low,dolma3_cc/entertainment_low,Entertainment (L),dolma3,low
+cc/finance_and_business_high,dolma3_cc/finance_and_business_high,Finance \& business (H),dolma3,high
+cc/finance_and_business_low,dolma3_cc/finance_and_business_low,Finance \& business (L),dolma3,low
+cc/food_and_dining_high,dolma3_cc/food_and_dining_high,Food \& dining (H),dolma3,high
+cc/food_and_dining_low,dolma3_cc/food_and_dining_low,Food \& dining (L),dolma3,low
+cc/games_high,dolma3_cc/games_high,Games (H),dolma3,high
+cc/games_low,dolma3_cc/games_low,Games (L),dolma3,low
+cc/health_high,dolma3_cc/health_high,Health (H),dolma3,high
+cc/health_low,dolma3_cc/health_low,Health (L),dolma3,low
+cc/history_and_geography_high,dolma3_cc/history_and_geography_high,History \& geography (H),dolma3,high
+cc/history_and_geography_low,dolma3_cc/history_and_geography_low,History \& geography (L),dolma3,low
+cc/industrial_high,dolma3_cc/industrial_high,Industrial (H),dolma3,high
+cc/industrial_low,dolma3_cc/industrial_low,Industrial (L),dolma3,low
+cc/literature_high,dolma3_cc/literature_high,Literature (H),dolma3,high
+cc/literature_low,dolma3_cc/literature_low,Literature (L),dolma3,low
+cc/science_math_and_technology_high,dolma3_cc/science_math_and_technology_high,"Science, math \& tech. (H)",dolma3,high
+cc/science_math_and_technology_low,dolma3_cc/science_math_and_technology_low,"Science, math \& tech. (L)",dolma3,low
+finemath_3plus,dolma3_finemath_3plus,FineMath 3+,dolma3,
+stack_edu,dolma3_stack_edu,Stack-Edu,dolma3,
+wikipedia,dolma3_wikipedia,Wikipedia,dolma3,
+dolmino/common_crawl_hq,dolmino_common_crawl_hq,Common Crawl HQ,dolmino,
+dolmino/olmocr_pdfs_hq,dolmino_olmocr_pdfs_hq,olmOCR PDFs HQ,dolmino,
+dolmino/stack_edu_fim,dolmino_stack_edu_fim,Stack-Edu FIM,dolmino,
+dolmino/stem_heavy_crawl,dolmino_stem_heavy_crawl,STEM-heavy crawl,dolmino,
+dolmino/synth_code,dolmino_synth_code,Synthetic code,dolmino,
+dolmino/synth_instruction,dolmino_synth_instruction,Synthetic instruction,dolmino,
+dolmino/synth_math,dolmino_synth_math,Synthetic math,dolmino,
+dolmino/synth_qa,dolmino_synth_qa,Synthetic QA,dolmino,
+dolmino/synth_thinking,dolmino_synth_thinking,Synthetic thinking,dolmino,

@@ -1,0 +1,44 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+
+from experiments.domain_phase_mix.release import naming, paths
+from experiments.domain_phase_mix.release.configs import partition_tasks
+
+pytestmark = pytest.mark.skipif(not paths.MIXSEL.exists(), reason="mixture-selection checkout absent")
+
+
+def test_partition_has_39_buckets_with_consistent_epochs():
+    out = partition_tasks.export(None)["partition"]
+    assert len(out) == 39 and out.bucket_id.is_unique
+    assert list(out.bucket_id) == naming.BUCKETS
+    expected = paths.D_TGT / out.pool_tokens
+    assert (abs(out.epochs_per_unit_weight - expected) / expected < 1e-9).all()
+    assert out.pool.isin(["dolma3", "dolmino"]).all()
+    assert set(out.quality_tier.dropna()) == {"high", "low"}
+
+
+def test_tasks_have_58_rows_and_objective_weights_sum_to_one():
+    out = partition_tasks.export(None)["tasks"]
+    assert len(out) == 58 and out.task_id.is_unique
+    assert list(out.task_id) == naming.TASKS
+    weights = naming.task_weights()
+    assert sum(weights["uncheatable_fixed"].values()) == pytest.approx(1.0, abs=1e-12)
+    assert sum(weights["obe_easy"].values()) == pytest.approx(1.0, abs=1e-12)
+    assert len(weights["uncheatable_fixed"]) == 7 and len(weights["obe_easy"]) == 51
+
+
+def test_task_public_accepts_every_internal_spelling():
+    assert naming.task_public("olmo_base_eval/easy_bpb/arc_challenge/bpb") == "arc_challenge"
+    assert naming.task_public("olmo_base_easy/table9/arc_challenge/bpb") == "arc_challenge"
+    assert naming.task_public("table9/arc_challenge/bpb") == "arc_challenge"
+    assert naming.task_public("eval/uncheatable_eval/ao3_english/bpb") == "uncheatable/ao3_english"
+    assert naming.task_public("uncheatable_ao3_english_bpb") == "uncheatable/ao3_english"
+
+
+def test_paper_names_appear_verbatim_in_the_appendix():
+    appendix = (paths.DRIVE / "sections/appendix.tex").read_text()
+    out = partition_tasks.export(None)
+    missing = [n for n in out["partition"].paper_name if n not in appendix]
+    assert missing == []
