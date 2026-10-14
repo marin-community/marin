@@ -11,7 +11,7 @@ from pathlib import Path
 from huggingface_hub import snapshot_download
 
 RECIPES_REPO = "open-athena/Snowball-67B-A2B-Model-Merging-Artifacts-2026.10.09"
-RECIPES_REVISION = "2f161ef8c2ba8adad763d762b228acff2fbaa151"
+RECIPES_REVISION = "1ef199578aeec9f08e142a8dd760d44658264be4"
 RECIPES_SUBFOLDER = "campaign2-recipes"
 HISTORICAL_OUTPUT = "s3://marin-us-east-02a/marin/weight-merging/campaign2-20261009"
 CALIBRATION_DATA = Path(__file__).parent / "campaign2" / "calibration.jsonl"
