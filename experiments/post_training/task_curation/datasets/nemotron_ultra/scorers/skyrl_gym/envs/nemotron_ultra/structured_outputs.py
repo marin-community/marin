@@ -13,6 +13,7 @@ from typing import Any
 import xmltodict
 import yaml
 from openapi_schema_validator import validate as validate_openapi
+from verifyit.modes.extract import unwrap_fence
 
 
 def _coerce_xml(data: Any, schema: dict[str, Any]) -> Any:
@@ -134,7 +135,13 @@ def grade_structured_output(
             return 0.0, {"error_type": "empty_response", "error_message": "No assistant response text"}
         schema_type = str(record.get("schema_type", "json")).lower()
         try:
-            value = _parse(schema_type, text)
+            try:
+                value = _parse(schema_type, text)
+            except Exception:
+                fenced = unwrap_fence(text)
+                if fenced == text:
+                    raise
+                value = _parse(schema_type, fenced)
         except Exception as error:
             return 0.0, {"error_type": "parse_error", "error_message": f"{type(error).__name__}: {str(error)[:200]}"}
         if schema_type == "xml":
