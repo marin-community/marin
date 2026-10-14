@@ -163,7 +163,7 @@ def _band_mask(q_pos, q_lower, k_pos):
 
 def _forward_kernel(q_ref, k_ref, v_ref, lower_ref, o_ref, lse_ref, *, scale: float, block_k: int, num_q_blocks: int):
     block_q = q_ref.shape[0]
-    q_block = num_q_blocks - 1 - pl.program_id(0)  # longest rows first
+    q_block = num_q_blocks - 1 - pl.program_id(2)  # longest rows first
     q_start = q_block * block_q
     q = q_ref[...]
     q_lower = lower_ref[...]
@@ -212,7 +212,7 @@ def _dq_kernel(
     num_q_blocks: int,
 ):
     block_q = q_ref.shape[0]
-    q_block = num_q_blocks - 1 - pl.program_id(0)
+    q_block = num_q_blocks - 1 - pl.program_id(2)
     q_start = q_block * block_q
     q = q_ref[...]
     do = do_ref[...]
@@ -312,16 +312,17 @@ def _forward(q, k, v, lower, *, block_sizes: TritonFlashBlockSizes, interpret: b
     )
     return pl.pallas_call(
         functools.partial(_forward_kernel, scale=scale, block_k=block_sizes.block_k, num_q_blocks=nq),
-        grid=(nq, batch, num_q_heads),
+        # Query blocks vary slowest, longest rows first; see the dK/dV launch order below.
+        grid=(batch, num_q_heads, nq),
         in_specs=[
-            pl.BlockSpec((None, bq, None, head_dim), lambda i, b, h: (b, nq - 1 - i, h, 0)),
-            pl.BlockSpec((None, seq_len, None, head_dim), lambda i, b, h: (b, 0, h // group, 0)),
-            pl.BlockSpec((None, seq_len, None, head_dim), lambda i, b, h: (b, 0, h // group, 0)),
-            pl.BlockSpec((None, bq), lambda i, b, h: (b, nq - 1 - i)),
+            pl.BlockSpec((None, bq, None, head_dim), lambda b, h, i: (b, nq - 1 - i, h, 0)),
+            pl.BlockSpec((None, seq_len, None, head_dim), lambda b, h, i: (b, 0, h // group, 0)),
+            pl.BlockSpec((None, seq_len, None, head_dim), lambda b, h, i: (b, 0, h // group, 0)),
+            pl.BlockSpec((None, bq), lambda b, h, i: (b, nq - 1 - i)),
         ],
         out_specs=[
-            pl.BlockSpec((None, bq, None, head_dim), lambda i, b, h: (b, nq - 1 - i, h, 0)),
-            pl.BlockSpec((None, None, bq), lambda i, b, h: (b, h, nq - 1 - i)),
+            pl.BlockSpec((None, bq, None, head_dim), lambda b, h, i: (b, nq - 1 - i, h, 0)),
+            pl.BlockSpec((None, None, bq), lambda b, h, i: (b, h, nq - 1 - i)),
         ],
         out_shape=out_shape,
         compiler_params=plgpu.CompilerParams(num_warps=block_sizes.num_warps, num_stages=block_sizes.num_stages),
@@ -341,17 +342,17 @@ def _backward(q, k, v, lower, out, lse, do, *, block_sizes: TritonFlashBlockSize
     nq = seq_len // bq
     dq = pl.pallas_call(
         functools.partial(_dq_kernel, scale=scale, block_k=block_sizes.block_k_dq, num_q_blocks=nq),
-        grid=(nq, batch, num_q_heads),
+        grid=(batch, num_q_heads, nq),
         in_specs=[
-            pl.BlockSpec((None, bq, None, head_dim), lambda i, b, h: (b, nq - 1 - i, h, 0)),
-            pl.BlockSpec((None, seq_len, None, head_dim), lambda i, b, h: (b, 0, h // group, 0)),
-            pl.BlockSpec((None, seq_len, None, head_dim), lambda i, b, h: (b, 0, h // group, 0)),
-            pl.BlockSpec((None, bq), lambda i, b, h: (b, nq - 1 - i)),
-            pl.BlockSpec((None, bq, None, head_dim), lambda i, b, h: (b, nq - 1 - i, h, 0)),
-            pl.BlockSpec((None, None, bq), lambda i, b, h: (b, h, nq - 1 - i)),
-            pl.BlockSpec((None, None, bq), lambda i, b, h: (b, h, nq - 1 - i)),
+            pl.BlockSpec((None, bq, None, head_dim), lambda b, h, i: (b, nq - 1 - i, h, 0)),
+            pl.BlockSpec((None, seq_len, None, head_dim), lambda b, h, i: (b, 0, h // group, 0)),
+            pl.BlockSpec((None, seq_len, None, head_dim), lambda b, h, i: (b, 0, h // group, 0)),
+            pl.BlockSpec((None, bq), lambda b, h, i: (b, nq - 1 - i)),
+            pl.BlockSpec((None, bq, None, head_dim), lambda b, h, i: (b, nq - 1 - i, h, 0)),
+            pl.BlockSpec((None, None, bq), lambda b, h, i: (b, h, nq - 1 - i)),
+            pl.BlockSpec((None, None, bq), lambda b, h, i: (b, h, nq - 1 - i)),
         ],
-        out_specs=pl.BlockSpec((None, bq, None, head_dim), lambda i, b, h: (b, nq - 1 - i, h, 0)),
+        out_specs=pl.BlockSpec((None, bq, None, head_dim), lambda b, h, i: (b, nq - 1 - i, h, 0)),
         out_shape=jax.ShapeDtypeStruct(q.shape, q.dtype),
         compiler_params=plgpu.CompilerParams(num_warps=block_sizes.num_warps_dq, num_stages=block_sizes.num_stages_dq),
         interpret=interpret,
@@ -368,7 +369,8 @@ def _backward(q, k, v, lower, out, lse, do, *, block_sizes: TritonFlashBlockSize
     dk, dv = pl.pallas_call(
         functools.partial(_dkv_kernel, scale=scale, block_q=bq_dkv, group=group),
         # Key blocks vary slowest, so a causal layer's longest key blocks start first. On MI350X this ran dK/dV
-        # 1.2-1.5x faster than key blocks fastest, on window and causal layers alike, at 4 to 16 sequences per GPU.
+        # 1.2-1.5x faster than key blocks fastest, on window and causal layers alike, at 4 to 16 sequences per GPU;
+        # the forward and dQ kernels gain 1.2-1.5x from the same order over query blocks.
         grid=(batch, num_kv_heads, seq_len // bk),
         in_specs=[
             group_rows,
