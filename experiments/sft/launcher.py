@@ -71,6 +71,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol, runtime_checkable
+from urllib.parse import urlparse
 
 import click
 import jax.numpy as jnp
@@ -93,6 +94,7 @@ from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.instruction import (
@@ -142,6 +144,15 @@ class ArtifactDatasetSpec:
     artifact: ArtifactStep[Artifact]
     train_glob: str
     weight: float
+
+
+@dataclass(frozen=True)
+class ArtifactValidationSpec:
+    """Held-out rows with canonical OpenAI ``messages``, scored for loss during training, never trained on."""
+
+    slug: str
+    artifact: ArtifactStep[Artifact]
+    glob: str
 
 
 @runtime_checkable
@@ -263,9 +274,17 @@ def _levanter_pod_config(
             gpu_allocator=gpu_allocator,
         ),
         resources=resources,
-        output_path=ctx.output_path,
+        output_path=(
+            ctx.output_path if spec.output_ttl_days is None else ttl_output_path(ctx.output_path, spec.output_ttl_days)
+        ),
         auto_build_caches=data_config.auto_build_caches,
     )
+
+
+def ttl_output_path(output_path: str, ttl_days: int) -> str:
+    """Where a run with ``output_ttl_days`` writes: its output key on region-local storage that expires."""
+    key = urlparse(output_path).path.lstrip("/")
+    return marin_temp_bucket(ttl_days=ttl_days, prefix=key, source_prefix=output_path)
 
 
 def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
@@ -537,10 +556,21 @@ class SFTSpec:
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
     wandb_project: str = "marin-sft-launcher"
+    seed: int = 0  # Levanter's trainer seed: data shuffle order and any random init
+    validation: Sequence[ArtifactValidationSpec] = ()  # held-out loss sets; num_train_steps runs only
+    steps_per_eval: int = 500
+    # Sequences per device per microbatch; -1 takes the whole per-device batch at once. Long sequences
+    # need a small value, with gradients accumulated across microbatches to the same update.
+    per_device_parallelism: int = -1
+    # When set, the run writes its checkpoints, HF export, and metrics under the same key on storage
+    # that expires after this many days (see ttl_output_path); the artifact directory keeps its record.
+    output_ttl_days: int | None = None
 
     def __post_init__(self) -> None:
         if (self.num_train_steps is None) == (self.num_train_epochs is None):
             raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
+        if self.validation and self.num_train_epochs is not None:
+            raise ValueError("validation sets need num_train_steps; the prebuilt-cache path has none.")
         if self.num_train_epochs is not None and len(self.datasets) != 1:
             raise ValueError(
                 f"num_train_epochs is only defined for a single dataset (got {len(self.datasets)}); "
@@ -606,11 +636,14 @@ def _chat_mixture_data_config(
     )
 
 
-def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str], tokenizer: str) -> LmDataConfig:
+def build_chat_data_config(
+    spec: SFTSpec, dep_paths: Sequence[str], tokenizer: str, validation_paths: Sequence[str] = ()
+) -> LmDataConfig:
     """Chat caches built on the training pod from canonical messages artifacts.
 
-    ``dep_paths`` are the resolved source outputs, aligned with ``spec.datasets``.
-    Levanter builds the chat cache at train time.
+    ``dep_paths`` are the resolved source outputs, aligned with ``spec.datasets``; ``validation_paths``
+    are aligned with ``spec.validation``. Levanter builds the chat caches at train time. A validation
+    set is a component with no train weight, so it is only evaluated.
     """
 
     fmt = _chat_format(spec)
@@ -622,6 +655,13 @@ def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str], tokenizer: s
             cache_dir=cache_dir,
             format=fmt,
             split="train",
+        )
+    for validation, cache_dir in zip(spec.validation, validation_paths, strict=True):
+        components[validation.slug] = DatasetComponent(
+            source=UrlDatasetSourceConfig(validation_urls=[prefix_join(cache_dir, validation.glob)]),
+            cache_dir=cache_dir,
+            format=fmt,
+            split="validation",
         )
 
     return _chat_mixture_data_config(spec, components, tokenizer, auto_build_caches=True)
@@ -658,12 +698,15 @@ def _trainer(
         # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
+        # The run's name and version: the output path's version alone is shared by every run built at it.
+        id=f"{spec.name.split('/')[-1]}-{spec.version}",
+        seed=spec.seed,
         train_batch_size=spec.batch_size,
         num_train_steps=num_train_steps,
-        steps_per_eval=500,
+        steps_per_eval=spec.steps_per_eval,
         jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
-        per_device_parallelism=-1,  # auto microbatch; raise on OOM (math-equivalent)
+        per_device_parallelism=spec.per_device_parallelism,
         use_explicit_mesh_axes=use_explicit_mesh_axes,
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(
@@ -781,12 +824,18 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
 
     else:
         assert spec.num_train_steps is not None
-        deps = (*transform_deps, *model.init_deps())
+        validation_deps = tuple(validation.artifact for validation in spec.validation)
+        deps = (*transform_deps, *validation_deps, *model.init_deps())
 
         def build_config(ctx: StepContext) -> object:
             run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
             tokenizer = model.resolve_tokenizer(ctx)
-            data_config = build_chat_data_config(spec, [ctx.artifact_path(dep) for dep in transform_deps], tokenizer)
+            data_config = build_chat_data_config(
+                spec,
+                [ctx.artifact_path(dep) for dep in transform_deps],
+                tokenizer,
+                [ctx.artifact_path(dep) for dep in validation_deps],
+            )
             return model.build_train_config(ctx, spec, data_config, run_resources, spec.num_train_steps)
 
     return ArtifactStep(

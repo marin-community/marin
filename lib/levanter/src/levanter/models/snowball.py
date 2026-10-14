@@ -143,7 +143,9 @@ _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT laye
 # from_hf_config fallback so the two never drift. Real grug_moe exports always carry qk_mult.
 _DEFAULT_QK_MULT = 1.5703274004183786
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-_FSDP_AXES: tuple[str, ...] = ("data", "context")
+# Parameters and optimizer state shard over every data-parallel axis, nodes included, so whole
+# sequences per GPU across many nodes never replicate the model per node.
+_FSDP_AXES: tuple[str, ...] = ("replica_dcn", "data", "context")
 
 
 def _context_axis() -> str | None:

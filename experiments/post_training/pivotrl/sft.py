@@ -1,0 +1,691 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""SFT baselines for PivotRL: fine-tune the frozen policy on the expert action of each pivot.
+
+Each example is a candidate's prompt, exactly as pass-rate measurement requests it, followed by the
+expert's action from the candidate's source trajectory. Loss covers only that final turn (see
+``sft_templates.py``). A run trains on the candidates in one band of the frozen policy's pass counts,
+such as PivotRL's pivots or every graded candidate, through the general chat-SFT launcher
+(``experiments/sft/launcher.py``).
+
+Print the plan with ``uv run python -m experiments.post_training.pivotrl.sft --version dev``,
+choose runs with ``--experiment``, and add ``--run`` to build them.
+"""
+
+import importlib
+import json
+import math
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass, replace
+from itertools import islice
+from typing import Any, Protocol
+
+import click
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
+from fray.types import ResourceConfig
+from levanter.optim.config import AdamConfig
+from levanter.tokenizers import load_tokenizer
+from levanter.utils.mesh import MeshConfig
+from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.hardware import AcceleratorChoice
+from marin.evaluation.model_config import ModelConfig
+from marin.execution.artifact import Artifact
+from marin.execution.build_context import resolve_version
+from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.remote import remote
+from marin.experiment.checkpoints import hf_to_levanter
+from marin.experiment.cli import build_options
+from marin.experiment.namespacing import user_owned_name
+from marin.rl.nemotron_pivot import VALIDATION_FILENAME
+from marin.rl.pass_rates import PASS_RATES_FILENAME, PassRateSampling, PassRateTask, measure_pass_rates
+from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
+from zephyr.writers import write_jsonl_file
+
+from experiments.post_training.pivotrl.pipeline import full_candidate_step, pivot_steps, policy_key
+from experiments.post_training.pivotrl.runs import (
+    GRUG_SMOKE_RUNS,
+    OPENHANDS_GRUG,
+    SMOKE_RUNS,
+    SWE_GRUG,
+    PivotRLRun,
+)
+from experiments.post_training.pivotrl.sft_templates import GRUG_FINAL_TURN_TEMPLATE, QWEN3_FINAL_TURN_TEMPLATE
+from experiments.sft.launcher import (
+    LLAMA3_CHAT_EOS_TOKEN_IDS,
+    ArtifactDatasetSpec,
+    ArtifactValidationSpec,
+    ConvertedCheckpointModel,
+    HFModel,
+    ModelSource,
+    SFTSpec,
+    resources_from_accelerator,
+    sft_step,
+    ttl_output_path,
+)
+
+EXAMPLES_GLOB = "train-*.jsonl.gz"
+EXAMPLE_SHARDS = 64
+"""Files per example set: Levanter builds a chat cache with one worker per file."""
+QWEN3_EOS_TOKEN_IDS = (151645, 151643)  # <|im_end|> and <|endoftext|>
+# As the MarinSkyRL SFT on Grug did, each GPU keeps whole 65,536-token sequences, one at a time, and
+# updates accumulate gradients over the batch. Splitting sequences across nodes instead deadlocked a
+# collective inside the accumulation loop.
+GRUG_TRAIN_NODES = 8
+GRUG_CONVERSION_VERSION = "2026.10.09"
+ROWS_PER_BATCH = 64
+# Tokens an example adds beyond its prompt's served length and its action's bytes: the turn's
+# header and end markers.
+TURN_TOKENS = 32
+CHECKPOINT_TTL_DAYS = 7
+
+# Grug's K=16 pass rates: each full run's 8 samples per candidate pooled with 8 more from a seed-1
+# rerun. They were pooled outside this pipeline, so they are adopted from where they were written.
+K16_PASS_RATES_ROOT = "s3://marin-us-east-02a/marin/users/dml/pivotrl"
+K16_PASS_RATES_VERSION = "2026.10.09"
+
+
+class ReferenceTask(PassRateTask, Protocol):
+    def reference(self, row: dict[str, Any]) -> dict[str, Any]:
+        """The expert's action for this row, as an assistant message."""
+        ...
+
+
+@dataclass(frozen=True)
+class PassBand:
+    """Graded candidates that passed between ``lowest`` and ``highest`` of their K samples, inclusive."""
+
+    name: str
+    lowest: int
+    highest: int
+
+
+def pivot_band(name: str, samples_per_row: int, difficulty_threshold: float) -> PassBand:
+    """PivotRL's pivots at K samples: mixed outcomes and a pass rate below lambda (``selection.pivot_filter``)."""
+    return PassBand(name, 1, math.ceil(samples_per_row * difficulty_threshold) - 1)
+
+
+def band_mask(counts: pa.Table, band: PassBand) -> pa.ChunkedArray:
+    """Which rows of a pass-rate table, given by its ``passed`` and ``total`` columns, are in ``band``.
+
+    Excluded rows (``total == 0``) are never in a band. Every graded row must share one K that
+    ``band`` fits, so a band written for one K never silently selects from another.
+    """
+    total, passed = counts["total"], counts["passed"]
+    totals = pc.unique(total.filter(pc.greater(total, 0))).to_pylist()
+    if len(totals) != 1 or band.highest > totals[0]:
+        raise ValueError(f"band {band} does not fit rows sampled {sorted(totals)} times")
+    in_band = pc.and_(pc.greater_equal(passed, band.lowest), pc.less_equal(passed, band.highest))
+    return pc.and_(pc.greater(total, 0), in_band)
+
+
+def read_band_mask(pass_rates_path: str, band: PassBand) -> pa.ChunkedArray:
+    """:func:`band_mask` over a pass-rate artifact, reading only its count columns."""
+    with (StoragePath(pass_rates_path) / PASS_RATES_FILENAME).open("rb") as source:
+        return band_mask(pq.read_table(source, columns=["passed", "total"]), band)
+
+
+def band_rows(pass_rates_path: str, mask: pa.ChunkedArray) -> Iterator[dict[str, Any]]:
+    """Stream the rows of a pass-rate artifact selected by ``mask``, a few at a time: prompts can be long."""
+    with (StoragePath(pass_rates_path) / PASS_RATES_FILENAME).open("rb") as source:
+        offset = 0
+        for batch in pq.ParquetFile(source).iter_batches(batch_size=ROWS_PER_BATCH):
+            yield from batch.filter(mask.slice(offset, batch.num_rows).combine_chunks()).to_pylist()
+            offset += batch.num_rows
+
+
+def prompt_tokens(samples_path: str) -> dict[str, int]:
+    """Each row's prompt length in tokens, as the server counted it when pass rates were sampled."""
+    fs, path = url_to_fs(str(StoragePath(samples_path) / "samples"))
+    samples = ds.dataset(path, filesystem=fs, format="parquet").to_table(columns=["row_id", "prompt_tokens"])
+    lengths = samples.group_by("row_id").aggregate([("prompt_tokens", "max")])
+    return dict(zip(lengths["row_id"].to_pylist(), lengths["prompt_tokens_max"].to_pylist(), strict=True))
+
+
+def example_tokens_bound(prompt_tokens: int, action: dict[str, Any]) -> int:
+    """An upper bound on an example's length: a byte-level BPE token covers at least one byte."""
+    return prompt_tokens + len(json.dumps(action, ensure_ascii=False).encode()) + TURN_TOKENS
+
+
+def write_example_shards(
+    rows: Iterator[dict[str, Any]],
+    row_count: int,
+    examples: Callable[[Iterator[dict[str, Any]]], Iterable[dict[str, Any]]],
+    output: StoragePath,
+) -> None:
+    """Write the examples of ``row_count`` streamed rows as up to :data:`EXAMPLE_SHARDS` files of consecutive rows.
+
+    ``examples`` maps an iterator of rows to the examples written for them. Levanter shuffles the whole
+    chat cache, so consecutive rows sharing a file does not order training.
+    """
+    shards = max(1, min(EXAMPLE_SHARDS, row_count))
+    rows_per_shard = math.ceil(row_count / shards)
+    for index in range(shards):
+        path = output / f"train-{index:05d}-of-{shards:05d}.jsonl.gz"
+        write_jsonl_file(examples(islice(rows, rows_per_shard)), str(path))
+
+
+def chat_example(reader: ReferenceTask, row: dict[str, Any], enable_thinking: bool) -> dict[str, Any]:
+    """The row's requested prompt and tools, followed by the expert's action."""
+    body = reader.request(row)
+    return {
+        "messages": [*body["messages"], reader.reference(row)],
+        # Levanter's renderer, unlike transformers', leaves an unset ``tools`` undefined.
+        "chat_template_kwargs": {"tools": body.get("tools"), "enable_thinking": enable_thinking},
+    }
+
+
+def write_sft_examples(
+    *,
+    pass_rates_path: str,
+    samples_path: str,
+    band: PassBand,
+    output_path: str,
+    task: str,
+    enable_thinking: bool,
+    max_tokens: int,
+) -> None:
+    """Write one chat example per row: the requested prompt and tools, then the expert action.
+
+    Rows that may not fit in ``max_tokens`` are dropped, since truncation would cut the supervised
+    action; ``manifest.json`` counts them. Lengths come from the served prompt lengths recorded with
+    the samples, bounded above by the action's bytes, so no tokenizer is needed. Examples are split
+    into files so the chat cache builds in parallel.
+
+    Args:
+        pass_rates_path: A pass-rate artifact: candidate rows with their pass counts.
+        samples_path: A pass-rate artifact whose samples cover the same rows, for their prompt lengths.
+        band: Which candidates to train on, by pass count.
+        output_path: Where the ``train-*.jsonl.gz`` files and ``manifest.json`` go.
+        task: Import path of the :class:`ReferenceTask` that reads these rows.
+        enable_thinking: The thinking mode pass rates sample with, so prompts render as they were served.
+        max_tokens: The training sequence length.
+    """
+    module, attribute = task.split(":")
+    reader: ReferenceTask = getattr(importlib.import_module(module), attribute)
+    served = prompt_tokens(samples_path)
+    bounds: list[int] = []
+    too_long = 0
+
+    def examples(rows: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        nonlocal too_long
+        for row in rows:
+            example = chat_example(reader, row, enable_thinking)
+            bound = example_tokens_bound(served[reader.row_id(row)], example["messages"][-1])
+            if bound > max_tokens:
+                too_long += 1
+                continue
+            bounds.append(bound)
+            yield example
+
+    mask = read_band_mask(pass_rates_path, band)
+    output = StoragePath(output_path)
+    write_example_shards(band_rows(pass_rates_path, mask), pc.sum(mask).as_py() or 0, examples, output)
+    if not bounds:
+        raise ValueError(f"no example fits in {max_tokens} tokens")
+    manifest = {
+        "band": band.name,
+        "rows": len(bounds) + too_long,
+        "examples": len(bounds),
+        "too_long": too_long,
+        "max_tokens": max_tokens,
+        "longest_example_tokens_bound": max(bounds),
+    }
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def write_validation_examples(
+    *,
+    rows_path: str,
+    output_path: str,
+    task: str,
+    tokenizer: str,
+    chat_template: str,
+    enable_thinking: bool,
+    max_tokens: int,
+) -> None:
+    """Write one chat example per held-out row, as :func:`write_sft_examples` writes training rows.
+
+    Held-out rows were never sampled, so they have no served lengths; each example is rendered and
+    measured with the policy's tokenizer instead, which is cheap at validation's size. Examples longer
+    than ``max_tokens`` are dropped, since Levanter refuses over-long unpacked sequences.
+
+    Args:
+        rows_path: A candidate artifact holding ``validation.parquet``.
+        output_path: Where the ``train-*.jsonl.gz`` files and ``manifest.json`` go.
+        task: Import path of the :class:`ReferenceTask` that reads these rows.
+        tokenizer: The policy's tokenizer, by an ``hf://`` reference.
+        chat_template: The SFT chat template, which renders the measured example.
+        enable_thinking: The thinking mode pass rates sample with.
+        max_tokens: The training sequence length.
+    """
+    module, attribute = task.split(":")
+    reader: ReferenceTask = getattr(importlib.import_module(module), attribute)
+    with (StoragePath(rows_path) / VALIDATION_FILENAME).open("rb") as source:
+        rows = pq.read_table(source).to_pylist()
+    measure = load_tokenizer(tokenizer)
+    examples = []
+    for row in rows:
+        example = chat_example(reader, row, enable_thinking)
+        encoded = measure.apply_chat_template_with_masks(
+            [example["messages"]], chat_template=chat_template, **example["chat_template_kwargs"]
+        )
+        if len(encoded["input_ids"][0]) <= max_tokens:
+            examples.append(example)
+    if not examples:
+        raise ValueError(f"no validation example fits in {max_tokens} tokens")
+
+    output = StoragePath(output_path)
+    write_example_shards(iter(examples), len(examples), list, output)
+    manifest = {"rows": len(rows), "examples": len(examples), "too_long": len(rows) - len(examples)}
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+@dataclass(frozen=True)
+class SFTPolicy:
+    """How to fine-tune one policy: the template it is served with, and a trainer."""
+
+    chat_template: str
+    model: ModelSource
+    resources: ResourceConfig
+    mesh: MeshConfig | None = None
+
+
+def qwen3_policy(model: ModelConfig) -> SFTPolicy:
+    """A Qwen3 HF checkpoint, trained by Levanter on one GPU."""
+    reference = f"{model.location}@{model.revision}"
+    return SFTPolicy(
+        chat_template=QWEN3_FINAL_TURN_TEMPLATE,
+        model=HFModel(
+            model_ref=reference, tokenizer_path=reference, model_type="qwen3", eos_token_ids=QWEN3_EOS_TOKEN_IDS
+        ),
+        resources=resources_from_accelerator("1xH100"),
+    )
+
+
+def grug_policy(model: ModelConfig) -> SFTPolicy:
+    """A Grug Datakit SFT export, converted to a Levanter Snowball checkpoint and trained on 8x8 H100.
+
+    Nodes and each node's GPUs are both data parallel, so a GPU holds whole sequences; Snowball shards
+    parameters and optimizer state over expert x data, all 64 GPUs.
+    """
+    conversion = hf_to_levanter(
+        model.location,
+        model_type="snowball",
+        hf_revision=model.revision,
+        tokenizer=f"hf://{model.location}@{model.revision}",
+        version=GRUG_CONVERSION_VERSION,
+        resources=ResourceConfig.with_cpu(cpu=64, ram="512g", disk="256g"),
+    )
+    return SFTPolicy(
+        chat_template=GRUG_FINAL_TURN_TEMPLATE,
+        model=ConvertedCheckpointModel(conversion=conversion, eos_token_ids=LLAMA3_CHAT_EOS_TOKEN_IDS),
+        resources=ResourceConfig.with_gpu(
+            "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=GRUG_TRAIN_NODES, preemptible=False
+        ),
+        mesh=MeshConfig(
+            axes={"data": 1, "replica": 1, "model": 1, "expert": -1},
+            dcn_axes={"replica_dcn": GRUG_TRAIN_NODES},
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"], "vocab": "model"},
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class SFTBudget:
+    seq_len: int
+    """Training sequence length; longer examples are dropped."""
+    batch_size: int
+    steps: int
+    learning_rate: float
+    """Adam learning rate, constant after warmup."""
+    warmup: int
+    """Linear warmup, in updates, so a fresh Adam's first updates stay small."""
+    max_grad_norm: float
+    steps_per_eval: int
+    """How often held-out loss is computed."""
+    per_device_parallelism: int
+    """Sequences per device per microbatch; updates accumulate gradients over the rest of the batch."""
+
+
+@dataclass(frozen=True)
+class MeasuredPassRates:
+    """The pass rates the PivotRL pipeline measures for the run."""
+
+
+@dataclass(frozen=True)
+class AdoptedPassRates:
+    """Pass rates written outside the PivotRL pipeline, adopted from where they were written."""
+
+    label: str
+    """Names them in the paths of the SFT artifacts built from them."""
+    source: str
+    version: str
+    samples: str
+    """A pass-rate artifact whose samples cover the same rows, for their served prompt lengths."""
+
+
+@dataclass(frozen=True)
+class PivotSFTRun:
+    name: str
+    pivots: PivotRLRun
+    """The PivotRL run whose policy is fine-tuned and whose task reads the candidates."""
+    pass_rates: MeasuredPassRates | AdoptedPassRates
+    """The policy's pass rates on the run's candidates."""
+    band: PassBand
+    policy: SFTPolicy
+    """How to fine-tune ``pivots.model``."""
+    budget: SFTBudget
+    seed: int
+    """The trainer seed, which orders the examples."""
+
+
+def grug_k16_pass_rates(run: PivotRLRun) -> AdoptedPassRates:
+    """Grug's pass rates on ``run``'s candidates at K=16 (see ``K16_PASS_RATES_ROOT``)."""
+    pass_rates = f"{K16_PASS_RATES_ROOT}/{run.candidates.label}/pass-rates"
+    return AdoptedPassRates(
+        label=f"{run.model.name}-k16",
+        source=f"{pass_rates}/{run.model.name}+seed-1/{K16_PASS_RATES_VERSION}",
+        version=K16_PASS_RATES_VERSION,
+        # The pooled pass rates kept no samples; the unseeded run sampled the same rows.
+        samples=f"{pass_rates}/{run.model.name}/{K16_PASS_RATES_VERSION}",
+    )
+
+
+def pass_rates_step(run: PivotSFTRun) -> tuple[str, ArtifactStep[Artifact], ArtifactStep[Artifact] | str]:
+    """The label naming the run's pass rates in SFT artifact paths, the pass rates, and their samples."""
+    pivots = run.pivots
+    match run.pass_rates:
+        case MeasuredPassRates():
+            measured = pivot_steps(pivots)["pass-rates"]
+            return policy_key(pivots), measured, measured
+        case AdoptedPassRates(label=label, source=source, version=version, samples=samples):
+            name = user_owned_name(f"pivotrl/{pivots.candidates.label}/pass-rates/{label}")
+            return label, ArtifactStep.adopt(name, version, source), samples
+
+
+def sft_examples_step(run: PivotSFTRun) -> ArtifactStep[Artifact]:
+    """The run's chat examples: its band of candidates, each followed by the expert action."""
+    pivots = run.pivots
+    label, pass_rates, samples = pass_rates_step(run)
+    return apply(
+        user_owned_name(
+            f"pivotrl/{pivots.candidates.label}/sft-examples/{label}/{run.band.name}/max-{run.budget.seq_len}"
+        ),
+        remote(write_sft_examples, resources=ResourceConfig.with_cpu(cpu=2, ram="16g")),
+        pass_rates_path=pass_rates,
+        samples_path=samples,
+        band=run.band,
+        output_path=OUT,
+        task=pivots.candidates.task,
+        enable_thinking=pivots.sampling.enable_thinking,
+        max_tokens=run.budget.seq_len,
+    )
+
+
+def validation_examples_step(run: PivotSFTRun) -> ArtifactStep[Artifact]:
+    """Held-out chat examples from the candidates' validation split, shared by every band and seed."""
+    pivots = run.pivots
+    model = pivots.model
+    return apply(
+        user_owned_name(f"pivotrl/{pivots.candidates.dataset}/sft-validation/{model.name}/max-{run.budget.seq_len}"),
+        remote(write_validation_examples, resources=ResourceConfig.with_cpu(cpu=2, ram="16g")),
+        rows_path=full_candidate_step(pivots.candidates),
+        output_path=OUT,
+        task=pivots.candidates.task,
+        tokenizer=f"hf://{model.location}@{model.revision}",
+        chat_template=run.policy.chat_template,
+        enable_thinking=pivots.sampling.enable_thinking,
+        max_tokens=run.budget.seq_len,
+    )
+
+
+def pivot_sft_step(run: PivotSFTRun) -> ArtifactStep[LevanterCheckpoint]:
+    examples = sft_examples_step(run)
+    budget = run.budget
+    name = user_owned_name(f"checkpoints/pivotrl-sft/{run.name}")
+    spec = SFTSpec(
+        name=name,
+        # Deferred like the data artifacts, so --version and --override reach the checkpoint too.
+        version=resolve_version(name, None),
+        model=run.policy.model,
+        chat_template=run.policy.chat_template,
+        datasets=[
+            ArtifactDatasetSpec(
+                slug=run.pivots.candidates.label, artifact=examples, train_glob=EXAMPLES_GLOB, weight=1.0
+            )
+        ],
+        optimizer=AdamConfig(
+            learning_rate=budget.learning_rate,
+            beta1=0.9,
+            beta2=0.999,
+            epsilon=1e-8,
+            weight_decay=0.0,
+            max_grad_norm=budget.max_grad_norm,
+            lr_schedule="constant",
+            warmup=budget.warmup,
+        ),
+        mesh=run.policy.mesh,
+        seq_len=budget.seq_len,
+        # One example per sequence, as RL trains; Snowball does not read packed attention masks.
+        pack=False,
+        batch_size=budget.batch_size,
+        num_train_steps=budget.steps,
+        hf_save_dtype="bfloat16",
+        wandb_project="pivotrl-sft",
+        seed=run.seed,
+        validation=[
+            ArtifactValidationSpec(
+                slug=f"{run.pivots.candidates.dataset}-validation",
+                artifact=validation_examples_step(run),
+                glob=EXAMPLES_GLOB,
+            )
+        ],
+        steps_per_eval=budget.steps_per_eval,
+        per_device_parallelism=budget.per_device_parallelism,
+        # A 67B run's final checkpoint holds fp32 weights and optimizer state; keep it a week.
+        output_ttl_days=CHECKPOINT_TTL_DAYS,
+    )
+    return sft_step(spec, run.policy.resources)
+
+
+def smoke_sft_runs(pivots: PivotRLRun, policy: SFTPolicy, budget: SFTBudget) -> tuple[PivotSFTRun, ...]:
+    """Training on the run's pivots, and on every graded candidate, from its own pass rates."""
+    k = pivots.sampling.samples_per_row
+    bands = (pivot_band("pivots", k, pivots.difficulty_threshold), PassBand("all", 0, k))
+    return tuple(
+        PivotSFTRun(f"{pivots.name}-{band.name}", pivots, MeasuredPassRates(), band, policy, budget, seed=0)
+        for band in bands
+    )
+
+
+def grid_bands(samples_per_row: int) -> tuple[PassBand, ...]:
+    """From every graded candidate, through ever harder pivots, to the candidates no sample solved.
+
+    RL learns nothing from an unsolved candidate, since all its rewards are equal; SFT can.
+    """
+    k = samples_per_row
+    return (
+        PassBand("all", 0, k),
+        pivot_band("mixed", k, 1.0),
+        pivot_band("pivots", k, 0.5),
+        pivot_band("hard", k, 0.25),
+        PassBand("unsolved", 0, 0),
+    )
+
+
+def k16_grid_runs(pivots: PivotRLRun, budget: SFTBudget) -> tuple[PivotSFTRun, ...]:
+    """Each band of Grug's K=16 pass rates, trained with each seed under one budget."""
+    policy = grug_policy(pivots.model)
+    pass_rates = grug_k16_pass_rates(pivots)
+    return tuple(
+        PivotSFTRun(f"{pivots.name}-k16-{band.name}-seed{seed}", pivots, pass_rates, band, policy, budget, seed)
+        for band in grid_bands(16)
+        for seed in GRID_SEEDS
+    )
+
+
+# The MarinSkyRL reference-action baseline's budget: 32 updates of 4 examples at a constant 2e-6.
+QWEN_SMOKE_BUDGET = SFTBudget(
+    seq_len=32768,
+    batch_size=4,
+    steps=32,
+    learning_rate=2e-6,
+    warmup=0,
+    max_grad_norm=1.0,
+    steps_per_eval=8,
+    per_device_parallelism=-1,
+)
+# Grug trains in the 64k window it is served and RL-trained in, so no candidate it was graded on is cut.
+GRUG_BUDGET = SFTBudget(
+    seq_len=65536,
+    batch_size=64,
+    steps=32,
+    learning_rate=2e-6,
+    warmup=0,
+    max_grad_norm=1.0,
+    steps_per_eval=8,
+    per_device_parallelism=1,
+)
+# The MarinSkyRL SFT on Grug (pivot-grug-20261005-swe-sft-all-1p5epochs): batch 512 of one sequence
+# per GPU at a constant 4e-6 with no warmup, gradients clipped at 0.5. 19 updates are 9,728 examples,
+# about one epoch of SWE's hard band, the smallest, so every band trains on as many examples and none
+# repeats one.
+SWE_GRID_BUDGET = SFTBudget(
+    seq_len=65536,
+    batch_size=512,
+    steps=19,
+    learning_rate=4e-6,
+    warmup=0,
+    max_grad_norm=0.5,
+    steps_per_eval=2,
+    per_device_parallelism=1,
+)
+GRID_SEEDS = (0, 1, 2)
+
+QWEN_SMOKE_SFT_RUNS = tuple(
+    sft_run
+    for pivots in SMOKE_RUNS
+    if pivots.sampling.seed == 1
+    for sft_run in smoke_sft_runs(pivots, qwen3_policy(pivots.model), QWEN_SMOKE_BUDGET)
+)
+
+GRUG_SMOKE_SFT_RUNS = tuple(
+    sft_run for pivots in GRUG_SMOKE_RUNS for sft_run in smoke_sft_runs(pivots, grug_policy(pivots.model), GRUG_BUDGET)
+)
+
+# OpenHands has 5,441 candidates, so its bands train on 2,048 examples: about two epochs of the smallest.
+GRUG_K16_GRID_RUNS = (*k16_grid_runs(SWE_GRUG, SWE_GRID_BUDGET), *k16_grid_runs(OPENHANDS_GRUG, GRUG_BUDGET))
+
+SFT_RUNS = {run.name: run for run in (*QWEN_SMOKE_SFT_RUNS, *GRUG_SMOKE_SFT_RUNS, *GRUG_K16_GRID_RUNS)}
+
+
+def measure_checkpoint_pass_rates(
+    *,
+    checkpoint_path: str,
+    hf_step: int,
+    base_model: ModelConfig,
+    model_name: str,
+    rows_path: str,
+    rows_filename: str,
+    output_path: str,
+    task: str,
+    accelerator: AcceleratorChoice,
+    sampling: PassRateSampling,
+) -> None:
+    """:func:`measure_pass_rates` for an SFT run's final HF export, served like ``base_model``."""
+    location = f"{ttl_output_path(checkpoint_path, CHECKPOINT_TTL_DAYS)}/hf/step-{hf_step}"
+    model = replace(
+        base_model,
+        name=model_name,
+        location=location,
+        revision=None,
+        tokenizer=base_model.location,
+        tokenizer_revision=base_model.revision,
+    )
+    measure_pass_rates(
+        rows_path=rows_path,
+        rows_filename=rows_filename,
+        output_path=output_path,
+        task=task,
+        model=model,
+        accelerator=accelerator,
+        sampling=sampling,
+    )
+
+
+def heldout_eval_step(run: PivotSFTRun) -> ArtifactStep[Artifact]:
+    """Pass rates of the run's final checkpoint on its dataset's held-out turns, graded like pass rates."""
+    pivots = run.pivots
+    name = f"{pivots.candidates.dataset}-sft-heldout/{run.name}"
+    return apply(
+        user_owned_name(f"pivotrl/{name}"),
+        remote(
+            measure_checkpoint_pass_rates,
+            resources=ResourceConfig.with_cpu(cpu=8, ram="64g"),
+            env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
+        ),
+        checkpoint_path=pivot_sft_step(run),
+        hf_step=run.budget.steps - 1,
+        base_model=pivots.model,
+        model_name=f"pivotrl-sft-{run.name}",
+        rows_path=full_candidate_step(pivots.candidates),
+        rows_filename=VALIDATION_FILENAME,
+        output_path=OUT,
+        task=pivots.candidates.task,
+        accelerator=pivots.accelerator,
+        sampling=HELDOUT_SAMPLING,
+    )
+
+
+def heldout_baseline_step(pivots: PivotRLRun) -> ArtifactStep[Artifact]:
+    """The untrained policy's pass rates on the same held-out turns."""
+    return apply(
+        user_owned_name(f"pivotrl/{pivots.candidates.dataset}-sft-heldout/{pivots.model.name}"),
+        remote(
+            measure_pass_rates,
+            resources=ResourceConfig.with_cpu(cpu=8, ram="64g"),
+            env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
+        ),
+        rows_path=full_candidate_step(pivots.candidates),
+        rows_filename=VALIDATION_FILENAME,
+        output_path=OUT,
+        task=pivots.candidates.task,
+        model=pivots.model,
+        accelerator=pivots.accelerator,
+        sampling=HELDOUT_SAMPLING,
+    )
+
+
+# Held-out turns are sampled as pass rates sample candidates, four replies each, so the trained and
+# untrained policies are graded on the same footing.
+HELDOUT_SAMPLING = replace(SWE_GRUG.sampling, samples_per_row=4, seed=0)
+
+
+@click.command(help=__doc__)
+@click.option(
+    "--experiment",
+    "names",
+    type=click.Choice(sorted(SFT_RUNS)),
+    multiple=True,
+    help="Run to build; repeatable. Default: every run.",
+)
+@click.option("--heldout-eval", is_flag=True, help="Build each run's held-out eval, and the untrained policy's.")
+@build_options
+def main(names: tuple[str, ...], heldout_eval: bool) -> dict[str, ArtifactStep]:
+    runs = [SFT_RUNS[name] for name in names or SFT_RUNS]
+    if not heldout_eval:
+        return {run.name: pivot_sft_step(run) for run in runs}
+    steps = {f"{run.name}/heldout": heldout_eval_step(run) for run in runs}
+    for pivots in {run.pivots.name: run.pivots for run in runs}.values():
+        steps[f"{pivots.name}/heldout"] = heldout_baseline_step(pivots)
+    return steps
+
+
+if __name__ == "__main__":
+    main()
