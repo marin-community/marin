@@ -1,9 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Levanter Authors
-# SPDX-License-Identifier: Apache-2.0
-
 
 import numpy as np
 from haliax.state_dict import to_state_dict as eqx_to_state_dict, with_prefix
@@ -98,13 +95,11 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
     initializer_range: float = 0.02
     gradient_checkpointing: bool = True
 
-    # Attention-related config
     use_flash_attention: bool = False
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
     inference: bool = True  # Whether to run in inference mode (disables dropout)
 
-    # Reference checkpoint for loading pretrained models
     reference_checkpoint: Optional[str] = None
 
     @property
@@ -155,11 +150,9 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
             vocab_size: Ignored for vision models (present for interface compatibility)
             config_overrides: Optional config overrides
         """
-        # vocab_size is ignored for vision models
         if config_overrides is None:
             config_overrides = {}
 
-        # Map activation function back to HF format
         # gelu_new in Levanter maps back to gelu_pytorch_tanh in HF (for Siglip2 compatibility)
         if isinstance(self.hidden_act, ActivationFunctionEnum):
             if self.hidden_act == ActivationFunctionEnum.gelu_new:
@@ -188,13 +181,10 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
             **config_overrides,
         )
 
-        # Add image_size as a manual attribute for LlavaOnevision compatibility
-        # HfSiglip2VisionConfig doesn't have image_size in __init__, but we can set it manually
         hf_config.image_size = image_size
 
         return hf_config
 
-    # Axis definitions following marin/Levanter patterns
     @property
     def Embed(self) -> Axis:
         """Embedding dimension axis."""
@@ -262,9 +252,6 @@ class Siglip2VisionEmbeddings(eqx.Module):
         """
         k_patch, k_pos = maybe_rng_split(key, 2)
 
-        # Patch embedding: linear projection from flattened patches to embed_dim
-        # Input: num_channels * patch_size * patch_size
-        # Output: hidden_size
         patch_input_dim = config.num_channels * config.patch_size * config.patch_size
         PatchInput = Axis(name="patch_input", size=patch_input_dim)
 
@@ -276,7 +263,6 @@ class Siglip2VisionEmbeddings(eqx.Module):
             out_first=True,
         )
 
-        # Position embedding: learnable embeddings for each patch position
         position_embedding = hnn.Embedding.init(
             config.NumPatches,
             config.Embed,
@@ -302,11 +288,8 @@ class Siglip2VisionEmbeddings(eqx.Module):
         Returns:
             Embeddings with position information added
         """
-        # Apply patch embeddings to patchified pixels
-        # Shape: (..., num_patches, patch_input_dim) -> (..., num_patches, hidden_size)
         patch_embeds = self.patch_embedding(pixel_values)
 
-        # Get position embeddings
         num_patches_axis = pixel_values.resolve_axis("num_patches")
 
         if spatial_shapes is not None:
@@ -339,12 +322,9 @@ class Siglip2VisionEmbeddings(eqx.Module):
             resized = resized.reshape(*(ax.size for ax in batch_axes), num_patches_axis.size, self.config.Embed.size)
             pos_embeds = hax.named(resized, (*batch_axes, num_patches_axis, self.config.Embed))
         else:
-            # Standard position embeddings (square grid)
             position_ids = hax.arange(num_patches_axis)
             pos_embeds = self.position_embedding(position_ids)
 
-        # Add position embeddings to patch embeddings
-        # Broadcasting will handle batch dimensions
         embeddings = patch_embeds + pos_embeds
 
         return embeddings
@@ -385,14 +365,12 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
 
         embeddings = Siglip2VisionEmbeddings.init(config, key=k_embed)
 
-        # Initialize stacked encoder layers
         layers = Stacked.init(
             config.Layers,
             VisionEncoderLayer,
             gradient_checkpointing=config.gradient_checkpointing,
         )(config, key=shaped_rng_split(k_layers, config.num_hidden_layers))
 
-        # Post-encoder layer norm
         post_layernorm = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True)
 
         return Siglip2VisionTransformer(config, embeddings, layers, post_layernorm)
@@ -428,7 +406,6 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
         """
         k_embed, k_layers = maybe_rng_split(key, 2)
 
-        # Get embeddings with spatial_shapes support
         hidden_states = self.embeddings(pixel_values, spatial_shapes=spatial_shapes, key=k_embed)
 
         hidden_states, result_hidden_states = vision_hidden_states(
@@ -478,11 +455,8 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
 
         ProbeSeq = Axis("probe_seq", 1)
 
-        # Learnable probe: (1, hidden_size)
         probe = hax.random.normal(k_probe, (ProbeSeq, config.Embed)) * config.initializer_range
 
-        # Attention projections (Q, K, V, out)
-        # Q projection for probe
         q_proj = hnn.Linear.init(
             In=config.Embed,
             Out=(config.Heads, config.HeadSize),
@@ -490,7 +464,6 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             use_bias=True,
             out_first=True,
         )
-        # K projection for hidden states
         k_proj = hnn.Linear.init(
             In=config.Embed,
             Out=(config.Heads, config.HeadSize),
@@ -498,7 +471,6 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             use_bias=True,
             out_first=True,
         )
-        # V projection for hidden states
         v_proj = hnn.Linear.init(
             In=config.Embed,
             Out=(config.Heads, config.HeadSize),
@@ -506,7 +478,6 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             use_bias=True,
             out_first=True,
         )
-        # Output projection
         out_proj = hnn.Linear.init(
             In=(config.Heads, config.HeadSize),
             Out=config.Embed,
@@ -552,23 +523,18 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
         """
         k_drop = maybe_rng_split(key, 1)[0] if key is not None else None
 
-        # Project probe to Q
         q = self.q_proj(self.probe)  # (probe_seq, heads, head_size)
 
-        # Project hidden states to K, V
         k = self.k_proj(hidden_states)  # (..., num_patches, heads, head_size)
         v = self.v_proj(hidden_states)  # (..., num_patches, heads, head_size)
 
-        # Broadcast q to match batch dimensions of k and v
         batch_axes = [ax for ax in k.axes if ax.name not in ["num_patches", "heads", "head_size"]]
         for ax in batch_axes:
             q = hax.broadcast_to(q, (ax,) + q.axes)
 
-        # Rename for attention
         k = k.rename({"num_patches": "key_position"})
         v = v.rename({"num_patches": "key_position"})
 
-        # Cross-attention: probe attends to hidden states
         attn_output = dot_product_attention(
             "probe_seq",
             "key_position",
@@ -585,17 +551,13 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             prng=k_drop,
         )
 
-        # Project back to embed dimension
         attn_output = self.out_proj(attn_output.astype(hidden_states.dtype))  # (..., probe_seq, embed)
 
-        # Residual connection with probe (broadcast probe to batch dims)
         hidden_states = self.probe + attn_output
 
-        # Squeeze probe_seq dimension to get (..., embed)
         ProbeSeq = hidden_states.resolve_axis("probe_seq")
         hidden_states = hidden_states[ProbeSeq, 0]  # Remove probe_seq dim
 
-        # Layer norm + MLP with residual
         residual = hidden_states
         hidden_states = self.layernorm(hidden_states)
         hidden_states = residual + self.mlp(hidden_states)
@@ -615,7 +577,6 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
 
         state_dict: Dict[str, jnp.ndarray] = {}
 
-        # Probe
         state_dict[with_prefix(prefix, "probe")] = self.probe.array
 
         # Combine Q, K, V projections into in_proj
@@ -624,7 +585,6 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
         k_weight = self.k_proj.weight.array
         v_weight = self.v_proj.weight.array
 
-        # Reshape to (hidden_size, embed) and stack
         hidden_size = q_weight.shape[0] * q_weight.shape[1]
         embed_size = q_weight.shape[2]
 
@@ -635,7 +595,6 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
         in_proj_weight = jnp.concatenate([q_flat, k_flat, v_flat], axis=0)
         state_dict[with_prefix(prefix, "attention.in_proj_weight")] = in_proj_weight
 
-        # Combine biases
         if self.q_proj.bias is not None:
             q_bias = self.q_proj.bias.array.reshape(-1)
             k_bias = self.k_proj.bias.array.reshape(-1)
@@ -643,7 +602,6 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             in_proj_bias = jnp.concatenate([q_bias, k_bias, v_bias], axis=0)
             state_dict[with_prefix(prefix, "attention.in_proj_bias")] = in_proj_bias
 
-        # Output projection
         out_dict = eqx_to_state_dict(self.out_proj, with_prefix(prefix, "attention.out_proj"))
         state_dict.update(out_dict)
 
@@ -658,7 +616,6 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
     def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None) -> Self:
         """Load from HuggingFace state dict format with combined in_proj."""
 
-        # Load probe
         probe_key = with_prefix(prefix, "probe")
         if probe_key in state_dict:
             probe_array = state_dict[probe_key]
@@ -669,19 +626,13 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
         else:
             probe = self.probe
 
-        # Split in_proj into Q, K, V
         in_proj_weight_key = with_prefix(prefix, "attention.in_proj_weight")
         in_proj_bias_key = with_prefix(prefix, "attention.in_proj_bias")
 
         if in_proj_weight_key in state_dict:
             in_proj_weight = state_dict[in_proj_weight_key]  # (3 * hidden_size, hidden_size)
 
-            # Split into Q, K, V
             q_weight, k_weight, v_weight = jnp.split(in_proj_weight, 3, axis=0)
-
-            # The weights are already in the flattened format (hidden_size, embed_size)
-            # which matches our expected axes (__OUT__, __IN__) after flattening
-            # No need to reshape since the template is already flattened at this point
 
             q_proj_weight = hax.named(q_weight, self.q_proj.weight.axes)
             k_proj_weight = hax.named(k_weight, self.k_proj.weight.axes)
@@ -691,14 +642,9 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             k_proj_weight = self.k_proj.weight
             v_proj_weight = self.v_proj.weight
 
-        # Handle biases
         if in_proj_bias_key in state_dict:
             in_proj_bias = state_dict[in_proj_bias_key]  # (3 * hidden_size,)
             q_bias, k_bias, v_bias = jnp.split(in_proj_bias, 3, axis=0)
-
-            # The biases are already in the flattened format (hidden_size,)
-            # which matches our expected axes (__OUT__,) after flattening
-            # No need to reshape since the template is already flattened at this point
 
             q_proj_bias = hax.named(q_bias, self.q_proj.bias.axes)
             k_proj_bias = hax.named(k_bias, self.k_proj.bias.axes)
@@ -708,18 +654,14 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             k_proj_bias = self.k_proj.bias
             v_proj_bias = self.v_proj.bias
 
-        # Create updated projections
         q_proj = dataclasses.replace(self.q_proj, weight=q_proj_weight, bias=q_proj_bias)
         k_proj = dataclasses.replace(self.k_proj, weight=k_proj_weight, bias=k_proj_bias)
         v_proj = dataclasses.replace(self.v_proj, weight=v_proj_weight, bias=v_proj_bias)
 
-        # Load out_proj using default mechanism
         out_proj = from_state_dict(self.out_proj, state_dict, with_prefix(prefix, "attention.out_proj"))
 
-        # Load layernorm
         layernorm = from_state_dict(self.layernorm, state_dict, with_prefix(prefix, "layernorm"))
 
-        # Load MLP
         mlp = from_state_dict(self.mlp, state_dict, with_prefix(prefix, "mlp"))
 
         return Siglip2MultiheadAttentionPoolingHead(

@@ -233,7 +233,6 @@ def test_siglip_vision_pretrained_random_pixels() -> None:
     # 12-layer full model: numerical differences compound, use looser tolerance
     assert np.allclose(torch_output, lev_output_np, rtol=1e-3, atol=1e-2)
 
-    # Test Levanter -> HF conversion
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = f"{tmpdir}/converted_model"
 
@@ -250,7 +249,3 @@ def test_siglip_vision_pretrained_random_pixels() -> None:
 
         assert not np.any(np.isnan(converted_output_np))
         assert np.allclose(lev_output_np, converted_output_np, rtol=1e-3, atol=1e-2)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

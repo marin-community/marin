@@ -50,7 +50,6 @@ from transformers import (  # noqa: E402
     ProcessorMixin,
 )
 
-# Image loading dependencies - imported at module level for performance
 from io import BytesIO  # noqa: E402
 
 import requests  # noqa: E402
@@ -146,7 +145,6 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
         i = 0
         format = _sniff_format_for_dataset(url)
         if format == ".parquet":
-            # Handle parquet files
 
             with StoragePath(url).open("rb") as f:
                 table = pq.read_table(f)
@@ -231,7 +229,6 @@ def image_source_urls(urls: Sequence[str]) -> list[str]:
     return sorted(result)
 
 
-# Type definitions for conversation data
 ConversationMessage = TypedDict(
     "ConversationMessage",
     {
@@ -252,7 +249,6 @@ ConversationDict = TypedDict(
 )
 
 
-# Type definitions for processed image-text data
 # Pixel values are optional to support text-only examples.
 class ImageTextDict(TypedDict, total=False):
     """Processed arrays consumed by the cache and image dataset.
@@ -463,7 +459,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         add_generation_prompt: bool = False,
         mask_prompt: bool = True,
         max_num_patches: Optional[int] = 9,
-        # Parameters for computing grid_mask for JIT-compatible VLM training
         grid_pinpoints: Optional[List[List[int]]] = None,
         patch_size: int = DEFAULT_IMAGE_TILE_SIZE,
         vision_feature_height: Optional[int] = None,
@@ -495,13 +490,11 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         self.add_generation_prompt = add_generation_prompt
         self.mask_prompt = mask_prompt
 
-        # Parameters for computing grid_mask for JIT-compatible VLM training
         self.grid_pinpoints = grid_pinpoints
         self.patch_size = patch_size
         self.vision_feature_height = vision_feature_height
         self.max_num_patches = max_num_patches
 
-        # Pre-compute grid_pinpoints arrays for vectorized _compute_grid_shape
         if grid_pinpoints is not None:
             self._grid_h: np.ndarray | None = np.array([p[0] for p in grid_pinpoints], dtype=np.float64)
             self._grid_w: np.ndarray | None = np.array([p[1] for p in grid_pinpoints], dtype=np.float64)
@@ -511,7 +504,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             self._grid_w = None
             self._grid_area = None
 
-        # Create a custom processor with the new tokenizer if specified
         if tokenizer is not None:
             self.processor = processor_with_tokenizer(
                 processor,
@@ -520,10 +512,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 video_token=video_token or processor.video_token,
             )
 
-        # Cache padding mode for __call__
         self._padding_mode = "max_length" if self.padding else False
 
-        # Eagerly cache token IDs for _create_loss_mask (after any tokenizer replacement)
         final_tokenizer = self.processor.tokenizer
         self._cached_im_start_id: int = final_tokenizer.convert_tokens_to_ids("<|im_start|>")
         self._cached_im_end_id: int = final_tokenizer.convert_tokens_to_ids("<|im_end|>")
@@ -540,16 +530,13 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         orig_h, orig_w = image_size
         orig_area = orig_h * orig_w
 
-        # Vectorized computation of scales for all grid resolutions
         # scale = min(w/orig_w, h/orig_h) for each resolution
         scales = np.minimum(self._grid_w / orig_w, self._grid_h / orig_h)
 
-        # Compute scaled dimensions and effective area
         scaled_h = (orig_h * scales).astype(np.int64)
         scaled_w = (orig_w * scales).astype(np.int64)
         eff = np.minimum(scaled_h * scaled_w, orig_area)
 
-        # Compute waste (area not used)
         waste = self._grid_area - eff
 
         # Combined score: maximize eff first, then minimize waste
@@ -592,10 +579,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             unpad_indices: Array of shape (num_unpadded_features,) where
                           unpad_indices[i] = Levanter index for HF position i
         """
-        # Base features are identity mapping (base patch is always first)
         base_indices = np.arange(features_per_patch, dtype=np.int32)
 
-        # Grid spatial dimensions after combining all tiles
         curr_height = patches_height * scale_height
         curr_width = patches_width * scale_width
 
@@ -605,7 +590,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         current_aspect_ratio = curr_width / curr_height
 
         if original_aspect_ratio > current_aspect_ratio:
-            # Wider image - remove top/bottom padding
             scale_factor = curr_width / orig_width
             new_height = int(round(orig_height * scale_factor, 7))
             padding = (curr_height - new_height) // 2
@@ -614,7 +598,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             col_start = 0
             col_end = curr_width
         else:
-            # Taller image - remove left/right padding
             scale_factor = curr_height / orig_height
             new_width = int(round(orig_width * scale_factor, 7))
             padding = (curr_width - new_width) // 2
@@ -627,20 +610,17 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # HF order: row-major through unpadded region
         # Levanter order: patch-by-patch (tile-by-tile), then row-major within each patch
 
-        # Create grid of all (row, col) positions in the unpadded region
         rows = np.arange(row_start, row_end, dtype=np.int32)
         cols = np.arange(col_start, col_end, dtype=np.int32)
         row_grid, col_grid = np.meshgrid(rows, cols, indexing="ij")
         row_flat = row_grid.ravel()
         col_flat = col_grid.ravel()
 
-        # Compute tile indices and local positions (vectorized)
         tile_rows = row_flat // patches_height
         tile_cols = col_flat // patches_width
         local_rows = row_flat % patches_height
         local_cols = col_flat % patches_width
 
-        # Compute Levanter indices (vectorized)
         tile_indices = tile_rows * scale_width + tile_cols
         local_indices = local_rows * patches_width + local_cols
         grid_indices = features_per_patch + tile_indices * features_per_patch + local_indices
@@ -661,11 +641,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         total_patches = self.max_num_patches + 1  # +1 for base patch
         actual_patches = pixel_values.shape[0]
 
-        # Create grid_mask: True for valid patches, False for padding
         grid_mask = np.zeros(total_patches, dtype=np.bool_)
         grid_mask[:valid_patches] = True
 
-        # Pad or truncate pixel_values to fixed size
         if actual_patches < total_patches:
             pad_size = total_patches - actual_patches
             padding = np.zeros((pad_size,) + pixel_values.shape[1:], dtype=pixel_values.dtype)
@@ -688,13 +666,11 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         if n < 3:
             return empty_mask
 
-        # Find all <|im_start|> positions and filter to valid ones
         im_start_positions = np.where(input_ids == self._cached_im_start_id)[0]
         valid_positions = im_start_positions[im_start_positions + 1 + num_assistant_tokens <= n]
         if len(valid_positions) == 0:
             return empty_mask
 
-        # Vectorized check for assistant tokens following <|im_start|>
         offsets = np.arange(1, num_assistant_tokens + 1)
         check_indices = valid_positions[:, None] + offsets
         check_tokens = input_ids[check_indices]
@@ -713,12 +689,10 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         if len(content_starts) == 0:
             return empty_mask
 
-        # Use searchsorted to find matching <|im_end|> for each content_start
         end_indices = np.searchsorted(im_end_positions, content_starts, side="left")
         # A truncated final response still supervises its visible prefix.
         end_positions = np.append(im_end_positions + 1, n)[end_indices]
 
-        # Use diff + cumsum to create interval mask efficiently
         diff = np.zeros(n + 1, dtype=np.int8)
         np.add.at(diff, content_starts, 1)
         np.add.at(diff, end_positions, -1)
@@ -741,7 +715,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         all_texts: list[str] = []
         images_per_example: list[int] = []
 
-        # Collect all images and texts - avoid repeated dict.get calls
         for item in batch:
             if item.get("audio") or item.get("videos"):
                 raise ValueError(
@@ -750,11 +723,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             messages = item.get(self.messages_key, [])
             images_data = item.get(self.images_key, [])
 
-            # Load all images for this example
             all_images.extend(load_image(img) for img in images_data)
             images_per_example.append(len(images_data))
 
-            # Apply chat template to get the text with image placeholders
             all_texts.append(
                 self.processor.apply_chat_template(
                     messages,
@@ -762,7 +733,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 )
             )
 
-        # Process all images and texts together in one call
         if all_images:
             processed: BatchFeature = cast(ImageProcessorCallable, self.processor)(
                 images=all_images,
@@ -773,7 +743,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 truncation=True,
             )
         else:
-            # Text-only processing
             processed: BatchFeature = cast(ImageProcessorCallable, self.processor)(
                 text=all_texts,
                 return_tensors="np",
@@ -782,11 +751,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 truncation=True,
             )
 
-        # Extract and convert batch arrays once (avoid per-example astype calls)
         input_ids_batch = processed["input_ids"].astype(np.int32)
         attention_mask_batch = processed["attention_mask"].astype(np.int32)
 
-        # Pre-extract pixel_values and image_sizes if available
         has_pixel_values = "pixel_values" in processed
         has_image_sizes = "image_sizes" in processed
         pv = processed["pixel_values"] if has_pixel_values else None
@@ -799,8 +766,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             else np.asarray([(image.height, image.width) for image in all_images], dtype=np.int32).reshape(-1, 2)
         )
 
-        # Pre-compute cumulative image indices for fast slicing
-        # cumsum gives end indices: [n0, n0+n1, n0+n1+n2, ...]
         cum_images = np.cumsum(images_per_example)
 
         out: list[ImageTextDict] = []
@@ -808,11 +773,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             input_ids = input_ids_batch[i]
             num_images = images_per_example[i]
 
-            # Calculate image index range for this example
             pv_end = cum_images[i]
             pv_start = pv_end - num_images
 
-            # Get pixel_values for this example and create grid_mask
             grid_mask = None
             unpad_indices = None
             if num_images > 0 and has_pixel_values:
@@ -834,7 +797,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             else:
                 pixel_values = None
 
-            # Get image sizes for this example
             image_sizes = img_sizes[pv_start:pv_end].reshape(-1, 2)
 
             # Compute unpad_indices only for single-image anyres case
@@ -853,7 +815,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                     scale_width=gw,
                     features_per_patch=features_per_patch,
                 )
-                # Pad unpad_indices to fixed size for consistent array shapes
                 if self.max_num_patches is not None:
                     max_features = (self.max_num_patches + 1) * features_per_patch
                     unpad_indices = np.zeros(max_features, dtype=np.int32)
@@ -890,13 +851,10 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
     @property
     def output_exemplar(self) -> ImageTextDict:
         exemplar: ImageTextDict = {**IMAGE_TEXT_CACHE_EXEMPLAR}
-        # Override with sized arrays when max_num_patches is configured
         if self.max_num_patches is not None:
             total_patches = self.max_num_patches + 1
-            # Fixed-size pixel_values for cache schema
             exemplar["pixel_values"] = np.zeros((total_patches, 3, self.patch_size, self.patch_size), dtype=np.float32)
             exemplar["grid_mask"] = np.zeros((total_patches,), dtype=np.bool_)
-            # Include sized unpad_indices when vision_feature_height is also configured
             if self.grid_pinpoints and self.vision_feature_height:
                 features_per_patch = self.vision_feature_height * self.vision_feature_height
                 max_features = (self.max_num_patches + 1) * features_per_patch
@@ -1149,7 +1107,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
     Use the raw source's doc_iterator for bounded, sequential HF streaming.
     """
 
-    # How many processed examples to cache in memory
     DEFAULT_CACHE_SIZE = 256  # ~256 examples * ~2MB each = ~512MB
 
     # Per-processor locks - each processor instance gets its own lock
@@ -1200,7 +1157,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         if max_num_patches is None:
             max_num_patches = params.max_num_patches
 
-        # Build the batch processor (runs on CPU in background thread)
         self._batch_processor = BatchImageProcessor(
             processor,
             max_length=max_length,
@@ -1213,9 +1169,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
             max_num_patches=max_num_patches,
         )
 
-        # Use per-processor lock - HuggingFace tokenizer is NOT thread-safe
-        # Each processor instance gets its own lock, allowing different processors
-        # to run in parallel while ensuring thread-safety for each one
         self._processor_lock = self._get_processor_lock(processor)
 
         # Raw records may include decoded images as well as paths or encoded bytes.
@@ -1230,7 +1183,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         self._processed_cache: OrderedDict[int, ImageTextDict] = OrderedDict()
         self._cache_lock = threading.Lock()
 
-        # Background sequential prefetch
         self._prefetch_thread: Optional[threading.Thread] = None
         self._stop_prefetch = threading.Event()
         self._prefetch_error: Optional[Exception] = None
@@ -1277,17 +1229,14 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
                     self._stop_prefetch.wait(0.05)
                     continue
 
-                # Check cache size
                 cache_len = len(self._processed_cache)
                 if cache_len >= self.cache_size:
-                    # Cache is full, wait
                     self._stop_prefetch.wait(0.05)
                     continue
 
                 if next_idx >= self._length:
                     return
 
-                # Find indices not in cache
                 end_idx = min(next_idx + batch_size, self._length)
                 with self._cache_lock:
                     indices_to_prefetch = [i for i in range(next_idx, end_idx) if i not in self._processed_cache]
@@ -1296,7 +1245,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
                     next_idx = end_idx
                     continue
 
-                # Process batch
                 try:
                     raw_items = [self._raw_data[i] for i in indices_to_prefetch]
                     with self._processor_lock:
@@ -1305,7 +1253,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
                     with self._cache_lock:
                         for idx, item in zip(indices_to_prefetch, processed):
                             self._processed_cache[idx] = item
-                        # Evict oldest entries if over limit
                         while len(self._processed_cache) > self.cache_size:
                             self._processed_cache.popitem(last=False)
                 except Exception as error:
@@ -1335,28 +1282,22 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         results: List[Optional[ImageTextDict]] = [None] * len(indices)
         indices_to_process: List[Tuple[int, int]] = []  # (result_idx, global_idx)
 
-        # Check cache and pop accessed items (they won't be needed again soon)
         with self._cache_lock:
             for result_idx, global_idx in enumerate(indices):
                 if global_idx in self._processed_cache:
-                    # Pop from cache - accessed data won't be reused in sequential access
                     results[result_idx] = self._processed_cache.pop(global_idx)
                 else:
                     indices_to_process.append((result_idx, global_idx))
 
-        # Process missing items outside of cache lock
         if indices_to_process:
             global_indices = [gidx for _, gidx in indices_to_process]
 
-            # Get raw items without lock (read-only access to _raw_data)
             assert self._raw_data is not None, "Data not loaded"
             raw_items = [self._raw_data[i] for i in global_indices]
 
-            # Only hold processor lock during actual processing
             with self._processor_lock:
                 processed = self._batch_processor(raw_items)
 
-            # Store results (no need to cache since we just processed on-demand)
             for (result_idx, _), item in zip(indices_to_process, processed):
                 results[result_idx] = item
 
@@ -1372,7 +1313,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[ImageTextDict]:
         """Get a batch of processed items."""
-        # Run in thread pool to not block event loop
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
 
@@ -1601,8 +1541,6 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
         # Use NamedArray constructor directly instead of hax.named() to keep data as numpy
         # DataLoader will handle the conversion to JAX arrays during batching
         def _convert_example(inputs: ImageTextDict) -> ImageTextExample:
-            # All processing on CPU with numpy, avoid jnp.asarray() which would allocate on TPU
-            # DataLoader will handle the conversion to JAX arrays during batching
             pv = inputs.get("pixel_values")
             pv_dtype = np.dtype(self.pixel_dtype) if self.pixel_dtype is not None else np.float32
 
@@ -1613,7 +1551,6 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
                     dtype=pv_dtype,
                 )
             elif pv.ndim == 4:
-                # (num_patches, channels, height, width)
                 actual_num_patches = pv.shape[0]
                 target_num_patches = self.NumPatches.size
 
@@ -1643,7 +1580,6 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
             if "loss_mask" in inputs:
                 loss_mask = NamedArray(inputs["loss_mask"], (self.Position,))
 
-            # grid_mask: always present as NamedArray for consistent pytree structure
             gm_arr = inputs.get("grid_mask")
             if gm_arr is not None:
                 grid_mask = NamedArray(gm_arr, (self.NumPatches,))
@@ -1657,12 +1593,10 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
                 )
                 grid_mask = NamedArray(gm_arr, (self.NumPatches,))
 
-            # unpad_indices: include only when NumImageTokens is configured
             unpad_indices = None
             if self.NumImageTokens is not None:
                 ui_arr = inputs.get("unpad_indices")
                 if ui_arr is not None:
-                    # Pad/truncate to fixed size
                     target_size = self.NumImageTokens.size
                     if len(ui_arr) < target_size:
                         padded = np.zeros(target_size, dtype=np.int32)
@@ -1706,7 +1640,6 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
     cache_dir: Optional[str] = "cache/"
 
-    # Data source configs and weights
     configs: Dict[str, Union[ImageDatasetSourceConfig, ConversationDatasetSourceConfig]] = field(default_factory=dict)
     """Configuration of each dataset source (URLs, HF dataset ID, etc.)"""
     train_weights: Dict[str, float] = field(default_factory=dict)
@@ -1760,8 +1693,6 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
                 out_datasets[name] = shuffle_ds(ds, next(key_iter))
             image_datasets = out_datasets
 
-        # Wrap each dataset in RepeatedImageDataset if epochs is specified and > 0
-        # This is applied before mixing so each dataset cycles for the specified epochs
         if epochs and epochs > 0:
             logger.info(f"Wrapping each dataset in RepeatedImageDataset with max_epochs={epochs}")
             epoch_wrapped_datasets = {}
@@ -1805,7 +1736,6 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
             if weight == 0 and split == "train":
                 continue
 
-            # Get the shard source
             if split == "train":
                 source = source_config.get_shard_source(source_config.train_split)
             elif split == "validation":

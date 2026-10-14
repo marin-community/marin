@@ -1,9 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Levanter Authors
-# SPDX-License-Identifier: Apache-2.0
-
 
 from haliax._src.state_dict import default_eqx_module_from_state_dict
 
@@ -94,13 +91,11 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
     attention_dropout: float = 0.0
     gradient_checkpointing: bool = True
 
-    # Attention-related config
     use_flash_attention: bool = True
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
     inference: bool = True  # Whether to run in inference mode (disables dropout)
 
-    # Reference checkpoint for loading pretrained models
     reference_checkpoint: Optional[str] = None
 
     def hf_checkpoint_converter(
@@ -122,7 +117,6 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
         - SiglipVisionConfig directly (has hidden_act attribute)
         - SiglipConfig (has vision_config nested inside)
         """
-        # If this is a full SiglipConfig, extract the vision_config
         if isinstance(hf_config, HfSiglipConfig):
             vision_config = hf_config.vision_config
             assert isinstance(vision_config, HfSiglipVisionConfig)
@@ -151,11 +145,9 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
             vocab_size: Vocabulary size (unused for vision-only models, but required by interface)
             config_overrides: Optional config overrides
         """
-        # vocab_size is not used for vision-only models, but required by the interface
         if config_overrides is None:
             config_overrides = {}
 
-        # Map activation function back to HF format
         # gelu_new in Levanter maps back to gelu_pytorch_tanh in HF (for SigLIP compatibility)
         if isinstance(self.hidden_act, ActivationFunctionEnum):
             if self.hidden_act == ActivationFunctionEnum.gelu_new:
@@ -165,7 +157,6 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
         else:
             hf_hidden_act = self.hidden_act
 
-        # Build config dict with defaults from self
         config_dict = {
             "hidden_size": self.hidden_size,
             "intermediate_size": self.intermediate_size,
@@ -190,7 +181,6 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
         """Return the corresponding model class."""
         return SiglipVisionModel
 
-    # Axis definitions following Levanter patterns
     @property
     def Embed(self) -> Axis:
         """Embedding dimension axis."""
@@ -271,7 +261,6 @@ class SiglipVisionEmbeddings(eqx.Module):
         Out_Features = config.Embed
         patch_size = config.patch_size
 
-        # Define spatial dimensions for the input image
         Height = Axis("height", config.image_size)
         Width = Axis("width", config.image_size)
 
@@ -286,7 +275,6 @@ class SiglipVisionEmbeddings(eqx.Module):
             use_bias=True,
         )
 
-        # Position embedding: learnable embeddings for each patch position
         # For standard SigLIP, this is (num_patches,) where num_patches = (image_size // patch_size)^2
         position_embedding = hnn.Embedding.init(
             config.NumPatches,
@@ -308,9 +296,6 @@ class SiglipVisionEmbeddings(eqx.Module):
         Returns:
             Embeddings with position information added, shape (batch, num_patches, embed)
         """
-        # Apply patch embeddings using Conv2d
-        # Input: (batch, channels, height, width)
-        # Output: (batch, embed, h_patches, w_patches)
         patch_embeds = self.patch_embedding(pixel_values, key=key)
 
         # Flatten spatial dimensions (h_patches, w_patches) into num_patches
@@ -319,7 +304,6 @@ class SiglipVisionEmbeddings(eqx.Module):
         embed_axis = self.config.Embed
         spatial_axes = [ax for ax in patch_embeds.axes if ax.name in ("height", "width")]
 
-        # Flatten spatial dims into num_patches
         num_patches_total = 1
         for ax in spatial_axes:
             num_patches_total *= ax.size
@@ -327,12 +311,9 @@ class SiglipVisionEmbeddings(eqx.Module):
 
         patch_embeds = hax.flatten_axes(patch_embeds, spatial_axes, NumPatchesActual)
 
-        # Rearrange to put num_patches before embed: (batch, embed, num_patches) -> (batch, num_patches, embed)
-        # Get all axes except embed and num_patches (i.e., batch if present), then num_patches, then embed
         other_axes = [ax for ax in patch_embeds.axes if ax not in (embed_axis, NumPatchesActual)]
         patch_embeds = patch_embeds.rearrange((*other_axes, NumPatchesActual, embed_axis))
 
-        # Add position embeddings
         position_ids = hax.arange(NumPatchesActual)
         pos_embeds = self.position_embedding(position_ids)
 
@@ -374,14 +355,12 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
 
         embeddings = SiglipVisionEmbeddings.init(config, key=k_embed)
 
-        # Initialize stacked encoder layers
         layers = Stacked.init(
             config.Layers,
             VisionEncoderLayer,
             gradient_checkpointing=config.gradient_checkpointing,
         )(config, key=shaped_rng_split(k_layers, config.num_hidden_layers))
 
-        # Post-encoder layer norm
         post_layernorm = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True)
 
         return SiglipVisionTransformer(config, embeddings, layers, post_layernorm)
@@ -415,7 +394,6 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
         """
         k_embed, k_layers = maybe_rng_split(key, 2)
 
-        # Get embeddings
         hidden_states = self.embeddings(pixel_values, key=k_embed)
 
         hidden_states, result_hidden_states = vision_hidden_states(
