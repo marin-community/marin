@@ -168,7 +168,7 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 60
-      maxConcurrent: 16
+      maxConcurrent: 8
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-review/AGENTS.md
@@ -190,7 +190,7 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 60
-      maxConcurrent: 4
+      maxConcurrent: 8
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-holistic-review/AGENTS.md
