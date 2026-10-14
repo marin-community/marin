@@ -244,14 +244,12 @@ def _job_benchmark(job_dir: StoragePath) -> BenchmarkMetadataRef:
 
 
 def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> None:
-    """Remove results Harbor should retry after a confirmed inference interruption."""
+    """Remove known unscored trial results so Harbor retries them."""
     for result_file in (job_dir / _TRIAL_RESULT_GLOB).glob():
         try:
             trial = _read_trial(result_file, taxonomy)
         except json.JSONDecodeError as exc:
-            logger.warning(
-                "removing unreadable Harbor trial result after inference interruption: %s (%s)", result_file, exc
-            )
+            logger.warning("removing unreadable Harbor trial result: %s (%s)", result_file, exc)
             result_file.parent.rmtree()
             continue
         error_type = (trial.error or {}).get("type", "")
