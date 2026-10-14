@@ -103,6 +103,14 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     assert "Unknown source: unknown" in unknown.output
 
 
+def test_iris_plan_propagates_worker_profile_to_coordinator(tmp_path, catalog):
+    result = CliRunner().invoke(main, arguments(tmp_path))
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["worker_resources"]["container_profile"] == "CONTAINER_PROFILE_PRIVILEGED"
+    assert plan["coordinator_resources"]["container_profile"] == "CONTAINER_PROFILE_PRIVILEGED"
+
+
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
