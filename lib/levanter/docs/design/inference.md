@@ -81,6 +81,30 @@ with an `abort` finish reason. Other groups in the batch continue; the cancelled
 response does not wait for them to finish. Disconnecting a client cancels its group
 and releases the request ID. No separate remote cancellation endpoint is exposed.
 
+### Remote weight-sync pause
+
+`POST /pause_generation` takes `{"mode": "abort", "clear_cache": true}`. It closes
+admission, returns each active request's exact partial token IDs and logprobs with
+finish reason `abort`, then clears KV and model-specific cache state before
+acknowledging. Requests submitted while paused return an empty `abort` result.
+`POST /resume_generation` reopens admission. SkyRL's single-request retry loop
+waits for resume, appends the partial IDs to the prompt, and requests the remaining
+tokens. Deterministic greedy continuation matches uninterrupted generation when
+weights stay unchanged; cache state is rebuilt.
+
+Configure the paired remote SkyRL client with `generator.weight_sync_pause.mode=abort`
+and `clear_cache=true`. Native serving rejects `keep`, `wait`, and cache retention
+before changing state. SkyRL's default `keep` policy is not silently converted.
+The current Marin SkyRL launcher still requires local engines; remote transport
+support alone does not enable a remote-engine training topology.
+
+The paired retry regression is
+`test_remote_skyrl_pause_retries_exact_tokens_after_resume` in
+`tests/inference/test_inference_server.py`. Add the paired SkyRL repository root and
+its `skyrl-train` directory to `PYTHONPATH`, install its CPU client dependencies
+(Ray, OmegaConf, and loguru), and run that test explicitly with `-m integration`.
+It uses a local HTTP server and synthetic weights; it does not launch training.
+
 ### Remote weight publication
 
 Set `InferenceServerConfig.weight_transfer` to `WeightTransferConfig(backend="gloo",

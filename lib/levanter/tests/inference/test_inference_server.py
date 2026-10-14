@@ -905,10 +905,10 @@ def test_http_pause_preserves_partial_tokens_and_logprobs(stream):
         with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
             pending = pool.submit(client.post, "/v1/chat/completions", json=request)
             assert entered.wait(30), "generation did not reach the model"
-            pausing = pool.submit(server.pause_generation)
+            pausing = pool.submit(client.post, "/pause_generation", json={"mode": "abort", "clear_cache": True})
             assert server.inference_context.pause_event.wait(5)
             release.set()
-            pausing.result(timeout=30)
+            assert pausing.result(timeout=30).status_code == 200
             response = pending.result(timeout=30)
             assert response.status_code == 200, response.text
             if stream:
@@ -924,7 +924,10 @@ def test_http_pause_preserves_partial_tokens_and_logprobs(stream):
             assert choice["token_ids"] == [3]
             partial_logprobs = choice["logprobs"]["content"]
             assert len(partial_logprobs) == 1
-            server.resume_generation()
+            paused = client.post("/v1/chat/completions", json={**request, "stream": False}).json()
+            assert paused["choices"][0]["finish_reason"] == "abort"
+            assert paused["choices"][0]["token_ids"] == []
+            assert client.post("/resume_generation").status_code == 200
             full = client.post("/v1/chat/completions", json={**request, "stream": False}).json()
             continuation = client.post(
                 "/v1/chat/completions",
@@ -943,6 +946,23 @@ def test_http_pause_preserves_partial_tokens_and_logprobs(stream):
     finally:
         release.set()
         server.inference_context.shutdown()
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"mode": "keep", "clear_cache": True},
+        {"mode": "wait", "clear_cache": True},
+        {"mode": "abort", "clear_cache": False},
+    ],
+)
+def test_http_unsupported_pause_keeps_generation_available(exact_token_client, policy):
+    request = {"model": "gpt2", "prompt": [0, 1], "max_tokens": 2, "temperature": 0, "return_token_ids": True}
+    before = exact_token_client.post("/v1/completions", json=request).json()["choices"]
+    assert exact_token_client.post("/pause_generation", json=policy).status_code == 400
+    after = exact_token_client.post("/v1/completions", json=request).json()["choices"]
+    assert after == before
+    assert after[0]["finish_reason"] == "length"
 
 
 class _WeightedTokenModel(_TokenSensitiveCompletionModel):
@@ -1380,3 +1400,79 @@ def test_streamed_unicode_keeps_byte_token_ids_without_replacement_text():
         assert choices[-1]["finish_reason"] == "length"
     finally:
         server.inference_context.shutdown()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
+    """Run with the paired SkyRL checkout on PYTHONPATH and its client dependencies installed."""
+    remote = pytest.importorskip("skyrl_train.inference_engines.remote_inference_engine")
+    skyrl_client = pytest.importorskip("skyrl_train.inference_engines.inference_engine_client")
+    policy = pytest.importorskip("skyrl_train.config.weight_sync_pause")
+    omegaconf = pytest.importorskip("omegaconf")
+    entered, release = threading.Event(), threading.Event()
+    config = _exact_token_config()
+    tokenizer = _AliasingChatTokenizer()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _BlockingTokenModel(entered, release), tokenizer)
+    ready = asyncio.Event()
+    http_server = _ReadyHttpServer(server.app, ready)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
+        try:
+            await asyncio.wait_for(ready.wait(), 10)
+            engine = remote.RemoteInferenceEngine(
+                f"127.0.0.1:{listener.getsockname()[1]}",
+                "gpt2",
+                "vllm",
+                tokenizer,
+                weight_sync_pause_policy=policy.WeightSyncPausePolicy(policy.WeightSyncPauseMode.ABORT, True),
+            )
+            client = skyrl_client.InferenceEngineClient(
+                engines=[engine],
+                tokenizer=tokenizer,
+                full_config=omegaconf.OmegaConf.create(
+                    {
+                        "trainer": {"policy": {"model": {"path": "gpt2"}}},
+                        "generator": {
+                            "backend": "vllm",
+                            "enable_http_endpoint": False,
+                            "http_endpoint_host": "127.0.0.1",
+                            "http_endpoint_port": 0,
+                            "weight_sync_pause_timeout_seconds": 30,
+                        },
+                    }
+                ),
+            )
+            request = {"prompt_token_ids": [[0, 1]], "sampling_params": {"temperature": 0, "max_tokens": 3}}
+            pending = asyncio.create_task(client.generate(request))
+            pausing = None
+            try:
+                assert await asyncio.to_thread(entered.wait, 30)
+                pausing = asyncio.create_task(client.pause_generation())
+                assert await asyncio.to_thread(server.inference_context.pause_event.wait, 10)
+                release.set()
+                await pausing
+                # The real client must park retries until resume; direct callers receive abort.
+                paused = await engine.generate(request)
+                assert paused["stop_reasons"] == ["abort"]
+                assert paused["response_ids"] == paused["response_logprobs"] == [[]]
+                assert not pending.done()
+                await client.resume_generation()
+                resumed = await asyncio.wait_for(pending, 30)
+                full = await engine.generate(request)
+                assert resumed["response_ids"] == full["response_ids"] == [[3, 1, 3]]
+                assert resumed["response_logprobs"] == full["response_logprobs"]
+                assert resumed["stop_reasons"] == full["stop_reasons"] == ["length"]
+            finally:
+                release.set()
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+                if pausing is not None:
+                    await asyncio.gather(pausing, return_exceptions=True)
+        finally:
+            release.set()
+            http_server.should_exit = True
+            await serving
+            server.inference_context.shutdown()
