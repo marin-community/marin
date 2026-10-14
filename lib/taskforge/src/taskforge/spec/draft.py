@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pydantic import JsonValue
 from rolloutengine.lowering import SHELLBOX_SESSION, lower_task
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
-from shellbox.machine import Backend, MachineFactory, NetworkPolicy
+from shellbox.machine import Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
@@ -59,6 +59,13 @@ from taskforge.sandbox.images import GRADER_BASE_IMAGE
 
 SHELL_CAPABILITY = "shell"
 FILESYSTEM_CAPABILITY = "filesystem"
+SHELLSIM_CPYTHON = PackageSpec(pypi_packages=())
+"""The software of a task machine without an image: the ports catalog's CPython and no PyPI packages.
+
+ShellSim installs a catalog's CPython runtime whenever ``pypi_packages`` is set, even to no packages;
+a bare ``PackageSpec()`` has the built-in shell tools and no ``python3``. The catalog
+``sandbox.factories.SHELLSIM_CATALOG`` provides CPython 3.13 with its standard library.
+"""
 
 type Reward = StdoutReward | ExitCodeReward | FileReward
 
@@ -119,7 +126,8 @@ def requirements(
     """The task machine's contents, all visible to the agent.
 
     ``image`` is a digest-pinned registry reference (an ``ImageBuilder`` output), whose commands
-    run as Linux processes, or ``None`` for ShellSim's simulated shell and built-in filesystem.
+    run as Linux processes, or ``None`` for ShellSim's simulated shell and built-in filesystem with
+    the catalog's CPython (``SHELLSIM_CPYTHON``).
     ``setup`` commands run with
     ``sh -c`` as user ``0`` under the machine's startup timeout; a builder that
     needs a readiness check puts a wait loop there. Agent-visible files go to
@@ -129,6 +137,7 @@ def requirements(
         capabilities=(SHELL_CAPABILITY, FILESYSTEM_CAPABILITY),
         command_semantics=CommandSemantics.SHELL_SIMULATOR if image is None else CommandSemantics.LINUX_PROCESS,
         docker_image=image,
+        package_spec=SHELLSIM_CPYTHON if image is None else None,
         working_directory=workdir,
         setup_commands=tuple(setup),
         environment_variables=dict(env or {}),

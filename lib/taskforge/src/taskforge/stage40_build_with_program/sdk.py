@@ -117,9 +117,11 @@ say; say plainly what you could not confirm.\
 """
 
 SHELLSIM_FACTS = """\
-The task machine is ShellSim: a simulated shell with POSIX tools, `awk` and `jq`, and no Python at \
-all. No pip, no network. The solver works in {workdir} through a `shell(command)` tool and ends \
-with a final text reply. Private grader files are never installed in the solver's machine.\
+The task machine is ShellSim: a simulated shell with POSIX tools, `awk`, `jq` and `python3`, which \
+is CPython 3.13 with its standard library only. No pip, no network. The machine has a fixed compute \
+budget, a few seconds of Python work over the whole attempt, and a virtual clock that advances only \
+through `sleep`. The solver works in {workdir} through a `shell(command)` tool and ends with a final \
+text reply. Private grader files are never installed in the solver's machine.\
 """
 
 CPYTHON_FACTS = """\
@@ -207,8 +209,8 @@ class FixturesDraft(BaseModel):
     )
     facts: str = Field(description="The ground truth these fixtures encode, with every value the grader checks.")
     solver_machine: Literal["shellsim", "cpython"] = Field(
-        description="cpython when solving needs arithmetic or data processing a careful person would do with a "
-        "calculator or a script; shellsim when reading, shell tools and short awk/sed are enough. Ignored for "
+        description="shellsim when reading, shell tools or a short Python script are enough; cpython when "
+        "solving needs more computation than ShellSim's few seconds of Python, or a real clock. Ignored for "
         "a container task, which runs in its own image."
     )
 

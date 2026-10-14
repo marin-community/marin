@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from rolloutengine.lowering import SHELLBOX_SESSION
+from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
@@ -14,6 +15,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
+    Command,
     ExecutionRequirements,
     MachineSpec,
     NetworkPolicy,
@@ -45,6 +47,7 @@ from taskforge.sandbox.factories import (
     machine_factories,
     task_refusals,
 )
+from taskforge.spec import draft
 
 IMAGE = "registry.example/task@sha256:" + "0" * 64
 SHELL = ("shell", "filesystem")
@@ -251,3 +254,19 @@ def test_factory_arguments_must_match_the_host():
         machine_factories(MachineHost.LAPTOP, controller_url="http://c:1")
     with pytest.raises(ValueError, match="controller URL"):
         machine_factories(MachineHost.IRIS, controller_url=None)
+
+
+@pytest.mark.manual
+async def test_a_taskforge_shellsim_machine_runs_the_catalogs_cpython():
+    """Fetches ``SHELLSIM_CATALOG``'s CPython, which the unit suite leaves to ShellSim's own tests."""
+    factory = machine_factories(MachineHost.LAPTOP, controller_url=None)[Backend.SHELLSIM.value]
+    spec = _machine_spec(draft.requirements(image=None), selection(Backend.SHELLSIM))
+    machine = await factory.create(spec)
+    try:
+        result = await machine.run(
+            Command(argv=("python3", "-c", "import sys; print(6 * 7, sys.implementation.name)"), timeout=120)
+        )
+    finally:
+        await machine.close()
+
+    assert (result.exit_code, result.stdout) == (0, b"42 cpython\n")

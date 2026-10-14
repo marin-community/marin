@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Container machine factories for unit tests that need no Docker, and the grader packages that run on them."""
+"""Machine factories for unit tests that need no Docker or ShellSim port, and the grader packages that run on them."""
 
 import json
 from collections.abc import Mapping
@@ -31,6 +31,19 @@ from taskcompendium.runtime.resources import inline_resource
 from taskforge.spec.draft import GRADER_RESOURCE_ROOT, PYTHON_GRADER_ARGV, VERDICT_REWARD, script_grader
 
 SHELL_GRADER_ARGV = ("sh", f"{GRADER_RESOURCE_ROOT}/grade.sh")
+
+
+class PortlessShellSimFactory(ShellSimMachineFactory):
+    """ShellSim machines without the catalog's CPython that ``draft.requirements(image=None)`` asks for.
+
+    TESTING.md leaves ShellSim's guest interpreter and ports to ShellSim's own suite, so the unit suite
+    never fetches the port: a machine here has ShellSim's built-in shell tools only, and stays offline.
+    """
+
+    async def create(self, spec: MachineSpec) -> ShellSimMachine:
+        if isinstance(spec.source, PackageSpec):
+            spec = replace(spec, source=replace(spec.source, pypi_packages=None))
+        return await super().create(spec)
 
 
 @dataclass(frozen=True)

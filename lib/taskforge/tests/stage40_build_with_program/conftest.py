@@ -14,7 +14,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 
 import pytest
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 
 from taskforge.llm.agent import AgentTool, ReasoningReplay
@@ -23,7 +22,7 @@ from taskforge.sandbox.factories import MachineHost
 from taskforge.stage10_proposal.model import TaskProposal, parse
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
-from tests.sandbox.fixture_images import ShellGraderImageFactory
+from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory
 
 PROPOSAL = """---
 id: "d00.arithmetic.products/1"
@@ -60,7 +59,7 @@ None.
 """
 WORKPIECE = "d00.arithmetic.products--1"
 SAMPLING = LLMPolicy()
-FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: ShellGraderImageFactory()}
+FACTORIES = {Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: ShellGraderImageFactory()}
 LIMITS = AgentLimits(max_turns=8, max_tokens=4096, max_calls=16)
 
 

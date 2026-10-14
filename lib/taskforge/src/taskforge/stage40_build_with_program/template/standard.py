@@ -12,8 +12,8 @@ The steps, in run order:
 1. ``sources`` calls ``research`` for each research item of the proposal, concurrently. The notes
    feed the later steps.
 2. ``fixtures`` writes the solver-visible files and the private reference data, and picks the
-   solver machine a non-container task runs on: ShellSim, or CPython when solving takes real
-   arithmetic or data processing.
+   solver machine a non-container task runs on: ShellSim, or the grader-base image's CPython when
+   solving takes more computation than ShellSim's budget or a real clock.
 3. ``requirements`` returns the task machine. A reasoning or shellsim proposal runs in ShellSim, or
    on Taskforge's grader-base image when the fixtures chose CPython. A container proposal gets a
    ``DockerBuild``, which ``publish_image`` pushes; the step's output memoizes the pinned reference.

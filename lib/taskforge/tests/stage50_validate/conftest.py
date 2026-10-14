@@ -54,12 +54,12 @@ from taskforge.spec.draft import (
     requirements,
     session,
 )
-from tests.sandbox.fixture_images import FixtureImageFactory, shell_grader
+from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 
 MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
 NUMBERS_SUM = 60
-FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: FixtureImageFactory()}
+FACTORIES = {Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()}
 SESSION = session(
     max_turns=4,
     model_turn_timeout=None,
@@ -346,7 +346,7 @@ class FlakyFactory:
         await asyncio.sleep(self.delay)
         if failing:
             raise self.error()
-        return await ShellSimMachineFactory().create(spec)
+        return await PortlessShellSimFactory().create(spec)
 
 
 @dataclass
@@ -388,7 +388,7 @@ class FaultyFactory:
         ShellSimMachineFactory().check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:
-        return FaultyMachine(await ShellSimMachineFactory().create(spec), self.close_error, self.terminated)
+        return FaultyMachine(await PortlessShellSimFactory().create(spec), self.close_error, self.terminated)
 
 
 @dataclass(frozen=True)
