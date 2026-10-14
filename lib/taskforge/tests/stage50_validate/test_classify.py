@@ -28,10 +28,10 @@ from taskforge.llm.rollout_model import TokenContractBreak
 from taskforge.spec.draft import answer_grader, grader_environment
 from taskforge.stage50_validate.classify import candidate_code_error, trial_outcome
 from taskforge.stage50_validate.outcome import Cause, ContractBreak, Graded, Ungraded
-from tests.sandbox.fixture_images import FixtureImageFactory
+from tests.sandbox.fixture_images import SHELL_GRADER_ARGV, FixtureImageFactory
 
-INVALID_REWARD_GRADER = 'import pathlib\npathlib.Path("/logs/verifier/reward.json").write_text(\'{"reward": "nan?"}\')\n'
-FAILING_GRADER = "raise SystemExit(3)\n"
+INVALID_REWARD_GRADER = """printf '%s' '{"reward": "nan?"}' > /logs/verifier/reward.json\n"""
+FAILING_GRADER = "exit 3\n"
 """Exits before writing its verdict; a verdict-file grade reads the missing file, not the exit code."""
 HANGING_GRADER = "# never finishes on HangingGraderFactory\n"
 
@@ -50,7 +50,7 @@ class HangingGraderFactory:
 
         class Hanging:
             async def run(self, command):
-                if command.argv[:1] == ("python3",):
+                if command.argv == SHELL_GRADER_ARGV:
                     await asyncio.Future()
                 return await machine.run(command)
 

@@ -4,7 +4,7 @@
 """Small lowered tasks shared by the unit and live validate tests, with a control set for two of them.
 
 ``math_task`` is a null-environment numeric task graded in process by verifyit; ``json_task`` is a
-null-environment task with a JSON answer. ``file_task`` is a ShellSim task whose private Python
+null-environment task with a JSON answer. ``file_task`` is a ShellSim task whose private ``sh``
 grader runs in a verifier machine from the grader-base image and checks the captured file the agent
 must create. Each is lowered for a laptop (``lowered``) onto ``FACTORIES``: ShellSim, and for the
 verifier machine the ShellSim-backed ``FixtureImageFactory`` registered as Docker; ``relower`` lowers
@@ -51,11 +51,10 @@ from taskforge.spec.draft import (
     grader_environment,
     lower,
     machine,
-    python_grader,
     requirements,
     session,
 )
-from tests.sandbox.fixture_images import FixtureImageFactory
+from tests.sandbox.fixture_images import FixtureImageFactory, shell_grader
 
 MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
@@ -72,14 +71,16 @@ SESSION = session(
     cleanup_timeout=10,
 )
 SHELLSIM = machine(startup_timeout=30)
-SUM_GRADER = """import json, pathlib
-expected = json.loads(pathlib.Path("/tests/config.json").read_text())["expected"]
-answer = pathlib.Path("/workspace/sum.txt")
-got = answer.read_text().strip() if answer.is_file() else None
-print(f"got {got!r}")
-check = {"name": "sum", "passed": got == expected, "weight": 1.0}
-verdict = {"reward": float(check["passed"]), "detail": {"checks": [check]}}
-pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps(verdict))
+SUM_GRADER = """expected=$(jq -r .expected /tests/config.json)
+passed=false
+if test -f /workspace/sum.txt; then
+    got=$(cat /workspace/sum.txt)
+    echo "got $got"
+    if test "$got" = "$expected"; then passed=true; fi
+fi
+jq -n -c --argjson passed "$passed" '{
+    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "sum", passed: $passed, weight: 1.0}]}
+}' > /logs/verifier/reward.json
 """
 """Writes reward 1 and a passing ``sum`` check when ``/workspace/sum.txt`` holds ``config["expected"]``."""
 
@@ -141,7 +142,7 @@ def file_task_spec(grader_script: str = SUM_GRADER, setup: tuple[str, ...] = (),
         "as a single integer, to /workspace/sum.txt. Say when you are done.",
         AnswerType.FILE,
         PlainText(),
-        python_grader(
+        shell_grader(
             grader_script,
             {"expected": str(NUMBERS_SUM)},
             environment=grader_environment(None),

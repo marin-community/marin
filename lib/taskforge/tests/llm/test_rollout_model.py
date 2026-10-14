@@ -40,25 +40,28 @@ from taskforge.spec.draft import (
     grader_environment,
     lower,
     machine,
-    python_grader,
     requirements,
     session,
 )
 from tests.conftest import fake_source
-from tests.sandbox.fixture_images import FixtureImageFactory
+from tests.sandbox.fixture_images import FixtureImageFactory, shell_grader
 
 POLICY = LLMPolicy(max_continuations=0)
 # Grading runs on the grader-base verifier machine, here served by ShellSim through the fixture factory.
 FACTORIES = {"shellsim": ShellSimMachineFactory(), "docker": FixtureImageFactory()}
 CONTEXT_ERROR = "This model's maximum context length is 262144 tokens. However, you requested 300000 tokens."
-OUTPUT_CHECK = """import json, pathlib
-config = json.loads(pathlib.Path("/tests/config.json").read_text())
-output = pathlib.Path("/", config["path"])
-words = config["words"]
-passed = bool(output.is_file() and (words is None or output.read_text().split() == words))
-check = {"name": "output", "passed": passed, "weight": 1.0}
-verdict = {"reward": float(passed), "detail": {"checks": [check]}}
-pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps(verdict))
+OUTPUT_CHECK = """output=/$(jq -r .path /tests/config.json)
+passed=false
+if test -f "$output"; then
+    if jq -e '.words == null' /tests/config.json > /dev/null; then
+        passed=true
+    elif test "$(awk '{for (i = 1; i <= NF; i++) print $i}' "$output")" = "$(jq -r '.words[]' /tests/config.json)"; then
+        passed=true
+    fi
+fi
+jq -n -c --argjson passed "$passed" '{
+    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "output", passed: $passed, weight: 1.0}]}
+}' > /logs/verifier/reward.json
 """
 """Rewards 1 when the captured output file exists and, unless ``words`` is null, holds exactly those words."""
 PUZZLE_1 = "List, ascending and one per line, every prime p below 1000 such that p + 2 and p + 6 are both prime.\n"
@@ -148,7 +151,7 @@ def shell_task():
 def output_check(path: str, words: Sequence[str] | None):
     listed: list[JsonValue] | None = None if words is None else list(words)
     config: dict[str, JsonValue] = {"path": path, "words": listed}
-    return python_grader(
+    return shell_grader(
         OUTPUT_CHECK,
         config,
         environment=grader_environment(None),
