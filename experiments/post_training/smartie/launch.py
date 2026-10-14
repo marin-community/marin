@@ -32,7 +32,7 @@ MODEL_REVISION = "50fe2f488aee7730bbccc721024b35229075602e"
 CLUSTER = "cw-rno2a"
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
-    policy_num_nodes=4,
+    policy_num_nodes=8,
     policy_num_gpus_per_node=8,
     num_inference_engines=12,
     inference_engine_tensor_parallel_size=1,
@@ -90,7 +90,7 @@ def training_config(max_steps: int) -> dict:
 
 
 def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: int) -> ArtifactStep:
-    """Bind regional model bytes and native train/validation tasks to an 80-H100 run."""
+    """Bind regional model bytes and native train/validation tasks to a 112-H100 run."""
     name = user_owned_name("models/snowball-smartie")
     model = ArtifactStep.adopt(
         user_owned_name("models/smartie-initializer"),
@@ -111,7 +111,7 @@ def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: in
             ),
             train_data=(ArtifactDataSource(data, relative_path="train.parquet"),),
             validation_data=(ArtifactDataSource(data, relative_path="validation.parquet"),),
-            topology=SkyRLTopology(num_nodes=10, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
+            topology=SkyRLTopology(num_nodes=14, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
             seed=42,
         ),
