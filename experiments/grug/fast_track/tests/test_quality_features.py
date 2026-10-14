@@ -12,8 +12,12 @@ from zephyr.stage_io import ZephyrWorkerError
 from experiments.datakit import hero_data
 from experiments.grug.fast_track.corpus_sample import CorpusSource
 from experiments.grug.fast_track.quality_features import (
+    FEATURE_BATCH_ROWS,
+    HARRIER_DIM,
     HARRIER_FEATURE_IDENTITY,
     QualityFeatureSource,
+    _join_source_shard,
+    _NormalizedRowLocator,
     normalize_harrier_embeddings,
     pinned_quality_feature_sources,
     prepare_quality_features,
@@ -128,3 +132,27 @@ def test_pinned_feature_sources_resolve_complete_harrier_paths():
     for pin in pins:
         assert pin.harrier_path == f"{hero_data.MANIFEST_PREFIX}/{hero_data.pinned_map('harrier')[pin.source]}"
         assert "/embed/harrier-all/" in pin.harrier_path
+
+
+def test_harrier_join_reads_sparse_rows_across_batches_and_row_groups(tmp_path):
+    rows = 3 * FEATURE_BATCH_ROWS
+    ids = [f"{index:032x}" for index in range(rows)]
+    (tmp_path / "normalized").mkdir()
+    (tmp_path / "harrier").mkdir()
+    normalized_shard = str(tmp_path / "normalized" / "shard.parquet")
+    pq.write_table(pa.table({"id": ids, "text": ["text"] * rows}), normalized_shard)
+    embeddings = pa.array([[index % 127] * HARRIER_DIM for index in range(rows)], type=pa.list_(pa.int8(), HARRIER_DIM))
+    pq.write_table(
+        pa.table({"id": ids, "embedding": embeddings}),
+        tmp_path / "harrier" / "shard.parquet",
+        row_group_size=2 * FEATURE_BATCH_ROWS,
+    )
+    pins = {"source": QualityFeatureSource("source", str(tmp_path / "normalized"), str(tmp_path / "harrier"))}
+    selected = [5, FEATURE_BATCH_ROWS - 1, FEATURE_BATCH_ROWS, 2 * FEATURE_BATCH_ROWS, rows - 1]
+    locators = [
+        _NormalizedRowLocator("source", normalized_shard, row, 0, index, ids[row]) for index, row in enumerate(selected)
+    ]
+
+    joined = list(_join_source_shard(normalized_shard, iter(locators), source_pins=pins))
+
+    assert [(row["id"], row["embedding"][0]) for row in joined] == [(ids[row], row % 127) for row in selected]

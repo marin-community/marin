@@ -80,6 +80,8 @@ INCUMBENT_SCORE_COLUMN = "incumbent_score"
 SCORE_SAMPLE_ROWS = 512
 QUALITY_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
 QUALITY_POOL_WORKERS = 8
+# The feature join reads the Harrier row groups of every normalized shard that the pool samples.
+QUALITY_FEATURE_WORKERS = 128
 QUALITY_FEATURES_CONTEXT = "fast-track-quality-features"
 QUALITY_SCORE_CONTEXT = "fast-track-quality-score"
 
@@ -858,7 +860,7 @@ def build_quality_features(
         with ZephyrContext(
             name=QUALITY_FEATURES_CONTEXT,
             resources=config.resources,
-            max_workers=QUALITY_POOL_WORKERS,
+            max_workers=QUALITY_FEATURE_WORKERS,
         ) as ctx:
             return prepare_quality_features(
                 pool,
