@@ -7,8 +7,6 @@
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO, TASKTROVE_REVISION
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
-MIMO_VERIFIER = SourceReference("Harbor", "a2ad9f6160b03ff2d47e59832bfb6b289f37c917", "")
-
 TASKTROVE_INPUT = SourceReference(
     TASKTROVE_REPO,
     TASKTROVE_REVISION,
@@ -35,7 +33,6 @@ def sources() -> list[RlDataSource]:
                     "explicitly accepted."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference("Harbor", "fb1e75441a94b8bb0ced08acd6b59e711704d70a", ""),
             )
         ),
         RlDataSource(
@@ -134,9 +131,6 @@ def sources() -> list[RlDataSource]:
                     "current review status before training use."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference(
-                    "Harbor", "f332529660d81fd64eb0ecf73b2bbf75241c36792fef7215de07c98e8ebeded3", ""
-                ),
             )
         ),
         RlDataSource(
@@ -158,9 +152,6 @@ def sources() -> list[RlDataSource]:
                     "before training use."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference(
-                    "Harbor", "d8923833284d2018e63fe33775411487dde8635092d8f20a28c0f8b624917f25", ""
-                ),
             )
         ),
         RlDataSource(
@@ -795,9 +786,6 @@ def sources() -> list[RlDataSource]:
                     "expected-status grading; oracle patches remain separate."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference(
-                    "Harbor", "ba712d3ff6ade9d6b1cd594af2e81185a5c23a99ccc2115b9b38552c2d4d6ed3", ""
-                ),
             )
         ),
         RlDataSource(
@@ -826,9 +814,6 @@ def sources() -> list[RlDataSource]:
                     "Canonical SWE-Gym tasks with native test selection and grading; oracle patches " "remain separate."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=SourceReference(
-                    "Harbor", "33e77858f09c2f6ed51db9fc3d2518afffdc54582d1672b91aa3ae579b84dfdd", ""
-                ),
             )
         ),
         RlDataSource(
@@ -847,7 +832,6 @@ def sources() -> list[RlDataSource]:
                     "and dependency resolution remain mutable."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=MIMO_VERIFIER,
             )
         ),
         RlDataSource(
@@ -869,7 +853,6 @@ def sources() -> list[RlDataSource]:
                     "hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=MIMO_VERIFIER,
             )
         ),
         RlDataSource(
@@ -891,7 +874,6 @@ def sources() -> list[RlDataSource]:
                     "V2.6-RL-oss__general/source.json) for runtime revisions and file hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=MIMO_VERIFIER,
             )
         ),
         RlDataSource(
@@ -905,7 +887,6 @@ def sources() -> list[RlDataSource]:
                     "Canonical prompts with the complete native ABC-to-MIDI continuous scorer; no shipped " "solutions."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=MIMO_VERIFIER,
             )
         ),
         RlDataSource(
@@ -928,7 +909,6 @@ def sources() -> list[RlDataSource]:
                     "hashes."
                 ),
                 dataset=TASKTROVE_RELEASE,
-                verifier=MIMO_VERIFIER,
             )
         ),
     ]

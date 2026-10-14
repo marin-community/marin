@@ -15,6 +15,15 @@ PYPI_PIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9._,-]+\])?==[^\s=
 NLTK_DATA = re.compile(r"nltk:[a-z0-9_]+")
 APT_PACKAGE = re.compile(r"[a-z0-9][a-z0-9+.-]+")
 
+FRAGMENT_INSTRUCTIONS = frozenset({"ARG", "ENV", "RUN"})
+"""The Dockerfile instructions a fragment may use.
+
+A fragment is spliced between the generated apt step and the lock sync, so an instruction that
+changes the base image, the user, the working directory, the shell, the entrypoint, or the build
+context would break or redirect the generated steps that follow it. ``ENV`` persists on purpose: it
+is how a fragment puts its toolchain on ``PATH`` for the grader.
+"""
+
 WORKER_IMAGE_APT = frozenset(
     {
         "build-essential",
@@ -43,7 +52,7 @@ class Environment:
     ``data`` downloads such as ``nltk:punkt_tab``. ``image`` is a digest-pinned image used as-is and
     excludes every other field. ``dockerfile`` is a checked-in, self-contained Dockerfile fragment that
     installs a toolchain the packages cannot provide, such as Lean and Mathlib; the environment's image
-    build runs it after the apt step, so it excludes ``image``.
+    build runs it after the apt step, so it excludes ``image``. It may use only ``FRAGMENT_INSTRUCTIONS``.
     """
 
     pypi: tuple[str, ...] = ()
@@ -71,11 +80,32 @@ class Environment:
             raise ValueError(f"apt entries must be Debian package names: {invalid}")
         if self.lock is not None and not self.lock.is_file():
             raise ValueError(f"Lock file does not exist: {self.lock}")
-        if self.dockerfile is not None and not self.dockerfile.is_file():
-            raise ValueError(f"Dockerfile fragment does not exist: {self.dockerfile}")
+        if self.dockerfile is not None:
+            if not self.dockerfile.is_file():
+                raise ValueError(f"Dockerfile fragment does not exist: {self.dockerfile}")
+            forbidden = sorted(set(dockerfile_instructions(self.dockerfile.read_text())) - FRAGMENT_INSTRUCTIONS)
+            if forbidden:
+                raise ValueError(
+                    f"A Dockerfile fragment may use only {sorted(FRAGMENT_INSTRUCTIONS)}, not {forbidden}:"
+                    f" {self.dockerfile}"
+                )
         unsupported = [entry for entry in self.data if NLTK_DATA.fullmatch(entry) is None]
         if unsupported:
             raise ValueError(f"Data entries must be nltk:<package>: {unsupported}")
+
+
+def dockerfile_instructions(text: str) -> list[str]:
+    """The instruction keyword of each logical line of a Dockerfile, skipping comments and blank lines."""
+    instructions = []
+    continued = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue  # Docker drops comment lines even inside a continued instruction.
+        if not continued:
+            instructions.append(line.split(maxsplit=1)[0].upper())
+        continued = line.endswith("\\")
+    return instructions
 
 
 class Placement(StrEnum):

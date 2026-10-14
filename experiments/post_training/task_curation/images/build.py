@@ -59,17 +59,17 @@ class MissingEnvironmentArtifact(RuntimeError):
 
 
 class EnvironmentArtifact(Artifact):
-    """A built environment: its hash lock, stored beside the record, and the image built for it, if any."""
+    """A built environment: its hash lock, stored beside the record, and the image built for it, if any.
+
+    A worker receives only the lock's URL and reads ``lock_sha256`` and ``data`` back out of this record
+    through ``taskcompendium.runtime.local``, which cannot import this module. The other build inputs
+    are already in the identity, so the record does not repeat them.
+    """
 
     identity: str
     lock_sha256: str
-    apt: list[str]
     data: list[str]
-    python: str
-    base_image: str
-    dockerfile_sha256: str | None = None
     image: str | None = None
-    tag: str | None = None
 
     @property
     def lock_url(self) -> str:
@@ -289,7 +289,7 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
     if builds_image:
         _require_docker(build.repository)
     _require_tracked(environment)
-    image = tag = None
+    image = None
     with TemporaryDirectory() as directory:
         context = Path(directory)
         write_context(environment, context)
@@ -302,13 +302,8 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
         path=build.output_path,
         identity=build.identity,
         lock_sha256=hashlib.sha256(lock).hexdigest(),
-        apt=sorted(environment.apt),
         data=list(environment.data),
-        python=PYTHON_VERSION,
-        base_image=BASE_IMAGE,
-        dockerfile_sha256=_fragment_sha256(environment),
         image=image,
-        tag=tag,
     )
 
 

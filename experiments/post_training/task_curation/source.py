@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source identity and assessments, independent of the Atlas presentation."""
+"""Source declarations and their curation pipeline interfaces."""
 
-from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from dataclasses import dataclass
+from typing import Protocol
 
 from marin.execution.lazy import ArtifactStep
 
@@ -43,7 +43,7 @@ class CatalogConfig(Protocol):
 
 @dataclass(frozen=True)
 class SourceReference:
-    """A dataset or verifier at the revision an assessment covers."""
+    """A pinned dataset reference."""
 
     name: str
     revision: str | None
@@ -71,22 +71,6 @@ class SourceInfo:
     count: int | None = None
     notes: str = ""
     dataset: SourceReference | None = None
-    verifier: SourceReference | None = None
-
-
-@dataclass(frozen=True)
-class DataSourceReview:
-    """An authored assessment and the dataset/verifier revisions it covers.
-
-    Executed reviews and difficulty measurements remain in the Atlas database.
-    Declaring a conversion recipe does not imply a favorable quality review.
-    """
-
-    grade: Literal["good", "some_issues", "bad"] | None = None
-    evidence_url: str | None = None
-    reviewed_at: str | None = None
-    dataset_revision: str | None = None
-    verifier_revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,7 +86,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
     info: SourceInfo
     config: ConfigT | None = None
     pipeline: "CurationPipeline[ConfigT] | None" = None
-    review: DataSourceReview = field(default_factory=DataSourceReview)
 
     @property
     def name(self) -> str:

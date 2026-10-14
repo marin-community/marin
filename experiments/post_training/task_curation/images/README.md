@@ -46,7 +46,12 @@ compiles proofs there through
 A `dockerfile` fragment is self-contained: it downloads what it installs inside
 its own `RUN` steps, so the build context carries only the lock and the generated
 Dockerfile. Its lines follow the apt step and precede the lock sync, so toolchain
-layers stay cached while the lock changes.
+layers stay cached while the lock changes. A fragment may use only `ARG`, `ENV`
+and `RUN` (`FRAGMENT_INSTRUCTIONS` in [`../environment.py`](../environment.py));
+the declaration refuses `FROM`, `USER`, `WORKDIR`, `SHELL`, `COPY`, `ADD`,
+`ENTRYPOINT`, `CMD` and the rest, because they would replace the base, break the
+generated package steps, or change the grader container. `ENV` persists into the
+image on purpose: it is how a fragment puts its toolchain on `PATH`.
 
 [`../datasets/grader.in`](../datasets/grader.in) lists the direct requirements
 grouped by the scorers that need them. Regenerate the lock after changing it:
@@ -99,9 +104,9 @@ repository is not part of the identity. The build:
    with `docker buildx imagetools inspect`, which needs `docker buildx` and a
    `docker login` for the repository's registry;
 4. writes the artifact `images/env-<identity[:16]>`, which stores the lock as
-   `requirements.lock` and records the identity, the lock's SHA-256, `apt`,
-   `data`, the `dockerfile` fragment's SHA-256, the Python version, the base
-   image, and any built image and tag.
+   `requirements.lock` and records the identity, any built image digest, and
+   the lock's SHA-256 and `data` that a worker reads back to build its
+   environment from the lock URL alone. The other inputs are in the identity.
 
 A second run with an unchanged declaration finds the artifact and starts no
 build. Planning a source whose environment has no artifact for its current

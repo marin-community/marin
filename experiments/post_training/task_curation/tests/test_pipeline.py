@@ -371,9 +371,10 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
             assert review["status"] == "unreviewed"
             assert verification["status"] == "passed"
             assert verification["counts"]["checked"] == len(records)
+            trials = json.loads(StoragePath(verification["trial_report"]).read_text())
             assert all(
                 check["check"] == "golden" and check["status"] == "pass"
-                for row in verification["results"]
+                for row in trials["results"]
                 for trial in row["trials"]
                 for check in trial["checks"]
             )
