@@ -1,0 +1,52 @@
+[
+  {
+    "run_id": "sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "objects": 3574,
+    "bytes": 1534734801,
+    "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-sc-s2-attempt0-runtime-promotion.json",
+    "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/preserved-controller-attempt0-runtime/retained-runtime/promotion-manifest-01a126ce.json",
+    "retention_snapshot_before_ms": 1791957417195,
+    "disposition": "Same-bucket conditional ETag copy after failed attempt, while retry wholly queued. Unique attempt0 destination and pre-query timestamp exclude future-retry writes. Source ETag and destination length/provenance verified; no full-weight SHA claim."
+  },
+  {
+    "run_id": "sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "objects": 2998,
+    "bytes": 28238448,
+    "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis-s0-attempt0-runtime-promotion.json",
+    "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/preserved-controller-attempt0-runtime/retained-runtime/promotion-manifest-01a126ce.json",
+    "retention_snapshot_before_ms": 1791957672526,
+    "disposition": "Same-bucket conditional ETag copy after failed attempt, while retry wholly queued. Unique attempt0 destination and pre-query timestamp exclude future-retry writes. Source ETag and destination length/provenance verified; no full-weight SHA claim."
+  },
+  {
+    "run_id": "sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "objects": 2456,
+    "bytes": 9314697,
+    "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis-s1-attempt0-runtime-promotion.json",
+    "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce/preserved-controller-attempt0-runtime/retained-runtime/promotion-manifest-01a126ce.json",
+    "retention_snapshot_before_ms": 1791957883768,
+    "disposition": "Same-bucket conditional ETag copy after failed attempt, while retry wholly queued. Unique attempt0 destination and pre-query timestamp exclude future-retry writes. Source ETag and destination length/provenance verified; no full-weight SHA claim."
+  },
+  {
+    "run_id": "sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "objects": 2456,
+    "bytes": 9332671,
+    "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis-s2-attempt0-runtime-promotion.json",
+    "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce/preserved-controller-attempt0-runtime/retained-runtime/promotion-manifest-01a126ce.json",
+    "retention_snapshot_before_ms": 1791958051477,
+    "disposition": "Same-bucket conditional ETag copy after failed attempt, while retry wholly queued. Unique attempt0 destination and pre-query timestamp exclude future-retry writes. Source ETag and destination length/provenance verified; no full-weight SHA claim."
+  },
+  {
+    "run_id": "sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "objects": 3158,
+    "bytes": 510428313,
+    "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/native-window-sc-s0-attempt0-runtime-promotion.json",
+    "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/preserved-controller-attempt0-runtime/retained-runtime/promotion-manifest-01a126ce.json",
+    "retention_snapshot_before_ms": 1791958219412,
+    "disposition": "Same-bucket conditional ETag copy after failed attempt, while retry wholly queued. Unique attempt0 destination and pre-query timestamp exclude future-retry writes. Source ETag and destination length/provenance verified; no full-weight SHA claim."
+  }
+]

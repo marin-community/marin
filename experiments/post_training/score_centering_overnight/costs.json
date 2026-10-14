@@ -1,6 +1,6 @@
 {
   "basis": "Current controller task_attempts started_at_ms to finished_at_ms, multiplied by GPU count decoded from submitted job_config; every recorded task has an actual node_name. Task allocation intervals, not provider billing. Old provider task events are unavailable; do not infer sub-second scheduler/binding precision.",
-  "observed_at": "2026-10-14T05:38:31.271847+00:00",
+  "observed_at": "2026-10-14T05:53:00.139617+00:00",
   "attempts": [
     {
       "task_id": "/romain/sc-ref-diagnostic-noise001-sc-s0-a0-01a123c0/0",
@@ -5422,9 +5422,209 @@
       "allocated_seconds": 79.361,
       "allocated_h100_hours": 0.17635777777777778,
       "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "530e663528b22d25",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1791954692917",
+      "finished_at_ms": "1791956355235",
+      "node_name": "g530bbc",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "9bec369f0da416230960850d19ffa92f7686f0fd1ccb7cead5e3b709f99bf6d7",
+      "allocated_seconds": 1662.318,
+      "allocated_h100_hours": 3.6940399999999998,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "f4c300f627fa77ff",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791954692917",
+      "finished_at_ms": "1791956355235",
+      "node_name": "g538100",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "9bec369f0da416230960850d19ffa92f7686f0fd1ccb7cead5e3b709f99bf6d7",
+      "allocated_seconds": 1662.318,
+      "allocated_h100_hours": 3.6940399999999998,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "51079b4800be405a",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1791954692917",
+      "finished_at_ms": "1791956355235",
+      "node_name": "gb95a50",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "c0382143d2cc83231f979cec2757bec72ffe36a9159acf4ba7d34a3c4dd30cfc",
+      "allocated_seconds": 1662.318,
+      "allocated_h100_hours": 3.6940399999999998,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "8f78dad6883429bf",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791954692917",
+      "finished_at_ms": "1791956355235",
+      "node_name": "gb95ea0",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "c0382143d2cc83231f979cec2757bec72ffe36a9159acf4ba7d34a3c4dd30cfc",
+      "allocated_seconds": 1662.318,
+      "allocated_h100_hours": 3.6940399999999998,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "e22a0583259e1c0f",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1791955863949",
+      "finished_at_ms": "1791956355235",
+      "node_name": "g7596c2",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "1a181c5161cfe4e8c455bc3d095559c8aa5b73927bd6c2f7fcebdf3b44ae855f",
+      "allocated_seconds": 491.286,
+      "allocated_h100_hours": 1.0917466666666666,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "fd66b617827871b6",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791955863949",
+      "finished_at_ms": "1791956355235",
+      "node_name": "g82267a",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "1a181c5161cfe4e8c455bc3d095559c8aa5b73927bd6c2f7fcebdf3b44ae855f",
+      "allocated_seconds": 491.286,
+      "allocated_h100_hours": 1.0917466666666666,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "b03f718be38a26d7",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1791956140406",
+      "finished_at_ms": "1791956355235",
+      "node_name": "gb95e20",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "67cdb96c62735e54b07abf1ca26dce84d9d93e4f2e4f3763d8fcc5d79a995aa7",
+      "allocated_seconds": 214.829,
+      "allocated_h100_hours": 0.4773977777777778,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "6a230b4bc6313844",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791956140406",
+      "finished_at_ms": "1791956355235",
+      "node_name": "gb960f0",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "67cdb96c62735e54b07abf1ca26dce84d9d93e4f2e4f3763d8fcc5d79a995aa7",
+      "allocated_seconds": 214.829,
+      "allocated_h100_hours": 0.4773977777777778,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce/0",
+      "attempt_id": "0",
+      "attempt_uid": "8269d81f883ed5b3",
+      "state": "10",
+      "exit_code": "137",
+      "started_at_ms": "1791956140406",
+      "finished_at_ms": "1791956355235",
+      "node_name": "g5303b8",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "cd4a673fb3d409d36014297d0b21b6657f9c261593b88e38ca2be6566f8aeede",
+      "allocated_seconds": 214.829,
+      "allocated_h100_hours": 0.4773977777777778,
+      "outcome": "failed engineering attempt"
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce/1",
+      "attempt_id": "0",
+      "attempt_uid": "9dadb71640b1d6a9",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1791956140406",
+      "finished_at_ms": "1791956355235",
+      "node_name": "g530748",
+      "terminal_reason": "",
+      "stage": "Qwen transfer main",
+      "cluster": "cw-rno2a",
+      "priority": "batch",
+      "gpus": 8,
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "configuration_sha256": "cd4a673fb3d409d36014297d0b21b6657f9c261593b88e38ca2be6566f8aeede",
+      "allocated_seconds": 214.829,
+      "allocated_h100_hours": 0.4773977777777778,
+      "outcome": "failed engineering attempt"
     }
   ],
-  "terminal_h100_hours": 4737.366871111109,
+  "terminal_h100_hours": 4756.236115555554,
   "terminal_h100_hours_by_stage": {
     "reference diagnostics": 14.997133333333334,
     "reference qualification": 1.1350711111111111,
@@ -5438,7 +5638,7 @@
     "Snowball noise calibration": 235.28845555555557,
     "Snowball incumbent qualification": 92.46114222222224,
     "Qwen transfer pilot": 209.99305111111101,
-    "Qwen transfer main": 170.5285133333333
+    "Qwen transfer main": 189.39775777777777
   },
   "active_costs": "Active intervals are partial observations and excluded from terminal stage totals.",
   "active_attempts": [
@@ -5458,8 +5658,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "1e13a303f306bafe285b3d14f395aea43882035246a25504620acf843055f034",
-      "observed_at": "2026-10-14T04:31:23.375991+00:00",
-      "allocated_h100_hours_so_far": 42.72791553603278
+      "observed_at": "2026-10-14T05:52:56.299174+00:00",
+      "allocated_h100_hours_so_far": 53.60107816484239
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/1",
@@ -5477,8 +5677,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "1e13a303f306bafe285b3d14f395aea43882035246a25504620acf843055f034",
-      "observed_at": "2026-10-14T04:31:23.375991+00:00",
-      "allocated_h100_hours_so_far": 42.72791553603278
+      "observed_at": "2026-10-14T05:52:56.299174+00:00",
+      "allocated_h100_hours_so_far": 53.60107816484239
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce/0",
@@ -5496,8 +5696,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "ed51eb5767a9c9120c73387864d62377e4b5b32cebad98bf1e7306e39bd17ca5",
-      "observed_at": "2026-10-14T04:31:23.375991+00:00",
-      "allocated_h100_hours_so_far": 18.094135535558063
+      "observed_at": "2026-10-14T05:52:56.299174+00:00",
+      "allocated_h100_hours_so_far": 28.967298164367676
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s1-main-interactive-a1-01a126ce/1",
@@ -5515,8 +5715,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "ed51eb5767a9c9120c73387864d62377e4b5b32cebad98bf1e7306e39bd17ca5",
-      "observed_at": "2026-10-14T04:31:23.375991+00:00",
-      "allocated_h100_hours_so_far": 18.094135535558063
+      "observed_at": "2026-10-14T05:52:56.299174+00:00",
+      "allocated_h100_hours_so_far": 28.967298164367676
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce/0",
@@ -5534,8 +5734,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "d0f74cea98e2d90b938868bc9eb33741428d80e4543f4efc293078123aa52de4",
-      "observed_at": "2026-10-14T04:31:23.375991+00:00",
-      "allocated_h100_hours_so_far": 18.094135535558063
+      "observed_at": "2026-10-14T05:52:56.299174+00:00",
+      "allocated_h100_hours_so_far": 28.967298164367676
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce/1",
@@ -5553,8 +5753,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "d0f74cea98e2d90b938868bc9eb33741428d80e4543f4efc293078123aa52de4",
-      "observed_at": "2026-10-14T04:31:23.375991+00:00",
-      "allocated_h100_hours_so_far": 18.094135535558063
+      "observed_at": "2026-10-14T05:52:56.299174+00:00",
+      "allocated_h100_hours_so_far": 28.967298164367676
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce/0",
@@ -5572,8 +5772,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "167bdb214b533a6bc355b84a3f47c55239ec8471ec12a3641e2c8098ffa3f2d5",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 49.77763743771447
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 51.70845470428467
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s0-main-rno-a1-01a126ce/1",
@@ -5591,8 +5791,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "167bdb214b533a6bc355b84a3f47c55239ec8471ec12a3641e2c8098ffa3f2d5",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 49.77763743771447
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 51.70845470428467
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce/0",
@@ -5610,8 +5810,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "05bbd1505ad47c9893887d94bb00365b29a96481ed22abd34e1ba7c5d3b815f9",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 47.29730188210805
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 49.22811914867825
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce/1",
@@ -5629,8 +5829,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "05bbd1505ad47c9893887d94bb00365b29a96481ed22abd34e1ba7c5d3b815f9",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 47.308561882442895
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 49.2393791490131
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce/0",
@@ -5648,8 +5848,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "8bf54cdec21f35af8e7c84ede2065dfa66c6f313ce807854076e97e9282d82f9",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 47.26141521559821
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 49.19223248216841
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-sc-s2-main-rno-a1-01a126ce/1",
@@ -5667,8 +5867,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "8bf54cdec21f35af8e7c84ede2065dfa66c6f313ce807854076e97e9282d82f9",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 47.26141521559821
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 49.19223248216841
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-main-rno-a1-01a126ce/0",
@@ -5686,8 +5886,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "6e3a67ccd7d053cbaca63a2929b64a6e626e9e65b172444edc75b3e44133db7d",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 47.23476632648044
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 49.16558359305064
     },
     {
       "task_id": "/romain/sc-qwen-transfer-curriculum-tis-s0-main-rno-a1-01a126ce/1",
@@ -5705,8 +5905,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "6e3a67ccd7d053cbaca63a2929b64a6e626e9e65b172444edc75b3e44133db7d",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 47.23476632648044
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 49.16558359305064
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce/0",
@@ -5724,8 +5924,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "70b235c298e5a7d4a52291d7271ec4075829476e74ee22fdea275c9808755594",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 28.161035215589735
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 30.091852482159933
     },
     {
       "task_id": "/romain/sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce/1",
@@ -5743,8 +5943,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "70b235c298e5a7d4a52291d7271ec4075829476e74ee22fdea275c9808755594",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 28.161035215589735
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 30.091852482159933
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce/0",
@@ -5762,8 +5962,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "f599febd4cb7cfaeaf84d9490289151f2f180206d79835b50d426b091fa5587c",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 28.161035215589735
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 30.091852482159933
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce/1",
@@ -5781,8 +5981,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "f599febd4cb7cfaeaf84d9490289151f2f180206d79835b50d426b091fa5587c",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 28.161035215589735
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 30.091852482159933
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce/0",
@@ -5800,8 +6000,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "ffde000e28e6ec7de3f3c05edaf9740244017225a9d5aa6f06b304da94283634",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 28.161035215589735
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 30.091852482159933
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce/1",
@@ -5819,8 +6019,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "ffde000e28e6ec7de3f3c05edaf9740244017225a9d5aa6f06b304da94283634",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 28.161035215589735
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 30.091852482159933
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/0",
@@ -5838,8 +6038,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "0dc416140892fe59a15051f294d8b79bd9c56fb8b210d0870ee7336b0afaedde",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 25.177588548660278
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 27.108405815230476
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce/1",
@@ -5857,8 +6057,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "0dc416140892fe59a15051f294d8b79bd9c56fb8b210d0870ee7336b0afaedde",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 25.177588548660278
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 27.108405815230476
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce/0",
@@ -5876,8 +6076,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "b108a16ed3ba72329052e54081e4f98acd86d6a50e972713dddcc1dd60c795f5",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 28.161035215589735
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 30.091852482159933
     },
     {
       "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce/1",
@@ -5895,122 +6095,8 @@
       "gpus": 8,
       "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
       "configuration_sha256": "b108a16ed3ba72329052e54081e4f98acd86d6a50e972713dddcc1dd60c795f5",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 28.161035215589735
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/0",
-      "attempt_id": "0",
-      "attempt_uid": "530e663528b22d25",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791954692917",
-      "finished_at_ms": "",
-      "node_name": "g530bbc",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "9bec369f0da416230960850d19ffa92f7686f0fd1ccb7cead5e3b709f99bf6d7",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 3.5963441043429905
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/1",
-      "attempt_id": "0",
-      "attempt_uid": "f4c300f627fa77ff",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791954692917",
-      "finished_at_ms": "",
-      "node_name": "g538100",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "9bec369f0da416230960850d19ffa92f7686f0fd1ccb7cead5e3b709f99bf6d7",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 3.5963441043429905
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/0",
-      "attempt_id": "0",
-      "attempt_uid": "51079b4800be405a",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791954692917",
-      "finished_at_ms": "",
-      "node_name": "gb95a50",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "c0382143d2cc83231f979cec2757bec72ffe36a9159acf4ba7d34a3c4dd30cfc",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 3.5963441043429905
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/1",
-      "attempt_id": "0",
-      "attempt_uid": "8f78dad6883429bf",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791954692917",
-      "finished_at_ms": "",
-      "node_name": "gb95ea0",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "c0382143d2cc83231f979cec2757bec72ffe36a9159acf4ba7d34a3c4dd30cfc",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 3.5963441043429905
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/0",
-      "attempt_id": "0",
-      "attempt_uid": "e22a0583259e1c0f",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791955863949",
-      "finished_at_ms": "",
-      "node_name": "g7596c2",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "1a181c5161cfe4e8c455bc3d095559c8aa5b73927bd6c2f7fcebdf3b44ae855f",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 0.9940507713953654
-    },
-    {
-      "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/1",
-      "attempt_id": "0",
-      "attempt_uid": "fd66b617827871b6",
-      "state": "3",
-      "exit_code": "",
-      "started_at_ms": "1791955863949",
-      "finished_at_ms": "",
-      "node_name": "g82267a",
-      "terminal_reason": "",
-      "stage": "Qwen transfer main",
-      "cluster": "cw-rno2a",
-      "priority": "batch",
-      "gpus": 8,
-      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
-      "configuration_sha256": "1a181c5161cfe4e8c455bc3d095559c8aa5b73927bd6c2f7fcebdf3b44ae855f",
-      "observed_at": "2026-10-14T05:38:31.271847+00:00",
-      "allocated_h100_hours_so_far": 0.9940507713953654
+      "observed_at": "2026-10-14T05:53:00.139617+00:00",
+      "allocated_h100_hours_so_far": 30.091852482159933
     }
   ]
 }

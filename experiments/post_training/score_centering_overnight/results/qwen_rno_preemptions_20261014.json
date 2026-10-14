@@ -1,0 +1,693 @@
+{
+  "scope": "Five newly observed attempt0 batch preemptions. Surviving original exports are conditionally snapshotted separately; all prior and current allocation intervals remain charged.",
+  "interruptions": [
+    {
+      "job_id": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_number": 0,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "51079b4800be405a",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791956355235",
+          "node_name": "gb95a50",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "8f78dad6883429bf",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791956355235",
+          "node_name": "gb95ea0",
+          "terminal_reason": ""
+        }
+      ],
+      "allocated_h100_hours": 7.3880799999999995,
+      "published_training_updates_in_attempt": 8,
+      "export_objects_written_in_attempt": [
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_data/global_step_1_training_input.pkl",
+          "bytes": 1937756,
+          "etag": "\"a30146d23f87fb8905458ebe0e147160\"",
+          "last_modified_ms": 1791955649771
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_data/global_step_2_training_input.pkl",
+          "bytes": 1941980,
+          "etag": "\"3bc691e888607ab42d550f2284b273de\"",
+          "last_modified_ms": 1791955738846
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_data/global_step_3_training_input.pkl",
+          "bytes": 1969884,
+          "etag": "\"a64d62863ebad6a9e400178d4c36f234\"",
+          "last_modified_ms": 1791955827590
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_data/global_step_4_training_input.pkl",
+          "bytes": 1989148,
+          "etag": "\"717623a94a82ada6e77b878457713c7f\"",
+          "last_modified_ms": 1791955912535
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_data/global_step_5_training_input.pkl",
+          "bytes": 1958044,
+          "etag": "\"15809b57b30fc3b4cb6f34a7a7671c9e\"",
+          "last_modified_ms": 1791955998253
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_data/global_step_6_training_input.pkl",
+          "bytes": 1963676,
+          "etag": "\"f1ca70d3fe9a74f3150e671b1caf2f21\"",
+          "last_modified_ms": 1791956085092
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_data/global_step_7_training_input.pkl",
+          "bytes": 1983644,
+          "etag": "\"a0d1a6a880b4e0874eea07300211c02c\"",
+          "last_modified_ms": 1791956164386
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_data/global_step_8_training_input.pkl",
+          "bytes": 1957404,
+          "etag": "\"a14be6d51168b88edddf990c04007300\"",
+          "last_modified_ms": 1791956256047
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_data/global_step_9_training_input.pkl",
+          "bytes": 1963100,
+          "etag": "\"103e5f7aa4e208bb6871b33b43d988e0\"",
+          "last_modified_ms": 1791956340590
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_evals/global_step_0_evals/aggregated_results.jsonl",
+          "bytes": 3988,
+          "etag": "\"bce9c32db600e095d3bdbce53a6d1984\"",
+          "last_modified_ms": 1791955576602
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_evals/global_step_0_evals/val-gsm8k.jsonl",
+          "bytes": 4124763,
+          "etag": "\"9e0019946687e4614d17af9ec1520836\"",
+          "last_modified_ms": 1791955575843
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/dumped_evals/global_step_0_evals/val-math500.jsonl",
+          "bytes": 12202524,
+          "etag": "\"c601e20954e4b4786c10df263b487206\"",
+          "last_modified_ms": 1791955576344
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/eval-00000000.json",
+          "bytes": 3988,
+          "etag": "\"153d0db1503a3ad2469747b7f18842d3\"",
+          "last_modified_ms": 1791955577686
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/startup-00000000.json",
+          "bytes": 49,
+          "etag": "\"8aa22d7a206d8082e7136d4f6d3b08ef\"",
+          "last_modified_ms": 1791955577945
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/train-00000001.json",
+          "bytes": 16234,
+          "etag": "\"42a063358d81b1d4f92716e3e715054c\"",
+          "last_modified_ms": 1791955668041
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/train-00000002.json",
+          "bytes": 16231,
+          "etag": "\"a86fa8df48d005e1577677f06c547c5a\"",
+          "last_modified_ms": 1791955754396
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/train-00000003.json",
+          "bytes": 16255,
+          "etag": "\"af624113eb2e7b018d50408c28267e8c\"",
+          "last_modified_ms": 1791955843456
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/train-00000004.json",
+          "bytes": 16227,
+          "etag": "\"b3d8d42c1663d5fa389a53846e8d45c6\"",
+          "last_modified_ms": 1791955928508
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/train-00000005.json",
+          "bytes": 16231,
+          "etag": "\"f7b598d9059c3ad01e10ab592497e53b\"",
+          "last_modified_ms": 1791956014065
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/train-00000006.json",
+          "bytes": 16204,
+          "etag": "\"d5afdd81e65df0254b63b5316072b695\"",
+          "last_modified_ms": 1791956100918
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/train-00000007.json",
+          "bytes": 16246,
+          "etag": "\"dec18ea41e1b1f4becd495f95dd1464b\"",
+          "last_modified_ms": 1791956180222
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/exports/training_metrics/train-00000008.json",
+          "bytes": 16216,
+          "etag": "\"46e9e8427883b4ded2fe2eb091b93cd5\"",
+          "last_modified_ms": 1791956271862
+        }
+      ],
+      "raw_controller_evidence": [
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/0:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-sc-s2-a0-rank0-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-sc-s2-a0-rank0-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/1:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-sc-s2-a0-rank1-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-sc-s2-a0-rank1-events.log"
+          }
+        }
+      ],
+      "disposition": "Batch capacity preemption; published partial updates are retained separately and never treated as a final scientific endpoint. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals.",
+      "normalized_original_snapshot": {
+        "file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-sc-s2-interrupted-attempt0-snapshot.json",
+        "sha256": "d1819d7f1481fc942621c5394585d65f07635819bdc87aad56c38184a53619f1",
+        "objects": 20,
+        "bytes": 17821600,
+        "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-sc-s2-main-rno-a1-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json"
+      }
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_number": 0,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "e22a0583259e1c0f",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1791955863949",
+          "finished_at_ms": "1791956355235",
+          "node_name": "g7596c2",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "fd66b617827871b6",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791955863949",
+          "finished_at_ms": "1791956355235",
+          "node_name": "g82267a",
+          "terminal_reason": ""
+        }
+      ],
+      "allocated_h100_hours": 2.1834933333333333,
+      "published_training_updates_in_attempt": 0,
+      "export_objects_written_in_attempt": [
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/exports/training_metrics/startup-00000000.json",
+          "bytes": 161,
+          "etag": "\"f81cb7d21d5e1d97ed6fcde77cf4730e\"",
+          "last_modified_ms": 1791956149999
+        }
+      ],
+      "raw_controller_evidence": [
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/0:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s0-a0-rank0-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s0-a0-rank0-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/1:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s0-a0-rank1-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s0-a0-rank1-events.log"
+          }
+        }
+      ],
+      "disposition": "Batch capacity preemption; published partial updates are retained separately and never treated as a final scientific endpoint. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals.",
+      "normalized_original_snapshot": {
+        "file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis-s0-interrupted-attempt0-snapshot.json",
+        "sha256": "5b1ce1ec2d1baf244dfd310205c9d1d5a4bb35671d5adff1918766ff4ad3c2f6",
+        "objects": 2,
+        "bytes": 23260,
+        "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s0-main-rno-a1-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json"
+      }
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_number": 0,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "b03f718be38a26d7",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1791956140406",
+          "finished_at_ms": "1791956355235",
+          "node_name": "gb95e20",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "6a230b4bc6313844",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791956140406",
+          "finished_at_ms": "1791956355235",
+          "node_name": "gb960f0",
+          "terminal_reason": ""
+        }
+      ],
+      "allocated_h100_hours": 0.9547955555555556,
+      "published_training_updates_in_attempt": 0,
+      "export_objects_written_in_attempt": [],
+      "raw_controller_evidence": [
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce/0:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s1-a0-rank0-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s1-a0-rank0-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce/1:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s1-a0-rank1-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s1-a0-rank1-events.log"
+          }
+        }
+      ],
+      "disposition": "Batch capacity preemption; published partial updates are retained separately and never treated as a final scientific endpoint. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals.",
+      "normalized_original_snapshot": {
+        "file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis-s1-interrupted-attempt0-snapshot.json",
+        "sha256": "0ec055fa44953250454e2779f344b319725fa7f1d7d7f548245c87bd83516468",
+        "objects": 1,
+        "bytes": 23099,
+        "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s1-main-rno-a1-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json"
+      }
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_number": 0,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "8269d81f883ed5b3",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1791956140406",
+          "finished_at_ms": "1791956355235",
+          "node_name": "g5303b8",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "9dadb71640b1d6a9",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791956140406",
+          "finished_at_ms": "1791956355235",
+          "node_name": "g530748",
+          "terminal_reason": ""
+        }
+      ],
+      "allocated_h100_hours": 0.9547955555555556,
+      "published_training_updates_in_attempt": 0,
+      "export_objects_written_in_attempt": [],
+      "raw_controller_evidence": [
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce/0:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s2-a0-rank0-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s2-a0-rank0-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce/1:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s2-a0-rank1-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/advantages-tis-s2-a0-rank1-events.log"
+          }
+        }
+      ],
+      "disposition": "Batch capacity preemption; published partial updates are retained separately and never treated as a final scientific endpoint. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals.",
+      "normalized_original_snapshot": {
+        "file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/advantages-tis-s2-interrupted-attempt0-snapshot.json",
+        "sha256": "f83d2e015c6f1b30b88c0942bea94d9c6da083cda8490839d084e6f429866f71",
+        "objects": 1,
+        "bytes": 23099,
+        "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s2-main-rno-a1-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json"
+      }
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_number": 0,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "530e663528b22d25",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791956355235",
+          "node_name": "g530bbc",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 905338c2-809b-43e1-a515-d053323089dd, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "f4c300f627fa77ff",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791956355235",
+          "node_name": "g538100",
+          "terminal_reason": ""
+        }
+      ],
+      "allocated_h100_hours": 7.3880799999999995,
+      "published_training_updates_in_attempt": 19,
+      "export_objects_written_in_attempt": [
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_10_training_input.pkl",
+          "bytes": 6913923,
+          "etag": "\"cac69e1d989fd66e0a0eb888433e14de\"",
+          "last_modified_ms": 1791955786966
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_11_training_input.pkl",
+          "bytes": 10561621,
+          "etag": "\"f24e6a2192d12d5724e3fd8fbc343bf1\"",
+          "last_modified_ms": 1791955825612
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_12_training_input.pkl",
+          "bytes": 7769877,
+          "etag": "\"915c34ab7d3586643f7e600aba684d86\"",
+          "last_modified_ms": 1791955855590
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_13_training_input.pkl",
+          "bytes": 6905923,
+          "etag": "\"03cdc8eb4553b5b68b4dd6874e2322c2\"",
+          "last_modified_ms": 1791955884497
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_14_training_input.pkl",
+          "bytes": 6478787,
+          "etag": "\"727dbf66a4fe0a0e071baf0d5607083a\"",
+          "last_modified_ms": 1791955911212
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_15_training_input.pkl",
+          "bytes": 6609091,
+          "etag": "\"4777f2222f47f0c8bdf0a8bab2ae803c\"",
+          "last_modified_ms": 1791955937320
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_16_training_input.pkl",
+          "bytes": 8524629,
+          "etag": "\"b80fbc96af072f461044ae69059c4f8f\"",
+          "last_modified_ms": 1791955970287
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_17_training_input.pkl",
+          "bytes": 7084803,
+          "etag": "\"368c7d990792025ff7cf1231e37b3b5e\"",
+          "last_modified_ms": 1791955998497
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_18_training_input.pkl",
+          "bytes": 10601813,
+          "etag": "\"e82e538d3044f8f468d3716e10538386\"",
+          "last_modified_ms": 1791956038189
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_19_training_input.pkl",
+          "bytes": 7590604,
+          "etag": "\"36793ffe2001f4730ba5e8a7932de709\"",
+          "last_modified_ms": 1791956069238
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_1_training_input.pkl",
+          "bytes": 17136624,
+          "etag": "\"d4e3a8b2b1436c7224dd1ab8fe047711\"",
+          "last_modified_ms": 1791955503954
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_20_training_input.pkl",
+          "bytes": 6688195,
+          "etag": "\"f8cf8c00c502c46d4b0368d8fe21bc6c\"",
+          "last_modified_ms": 1791956096378
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_2_training_input.pkl",
+          "bytes": 8688405,
+          "etag": "\"744cb48cc9c60c0a3e554885d4006ae3\"",
+          "last_modified_ms": 1791955540730
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_3_training_input.pkl",
+          "bytes": 7398156,
+          "etag": "\"1ed34250b382c4169e5e77f49fe84655\"",
+          "last_modified_ms": 1791955570233
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_4_training_input.pkl",
+          "bytes": 6193923,
+          "etag": "\"c4e4896693622b9428d0685d10be1ee2\"",
+          "last_modified_ms": 1791955595305
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_5_training_input.pkl",
+          "bytes": 12685269,
+          "etag": "\"65017b22141fb94894f024b77bb59470\"",
+          "last_modified_ms": 1791955638797
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_6_training_input.pkl",
+          "bytes": 5620867,
+          "etag": "\"09b93ff15019499a99df0eb83cc6c53b\"",
+          "last_modified_ms": 1791955664016
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_7_training_input.pkl",
+          "bytes": 9217813,
+          "etag": "\"5a1c1d25dcb9e30ddfa96d26f77f6709\"",
+          "last_modified_ms": 1791955698988
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_8_training_input.pkl",
+          "bytes": 6178243,
+          "etag": "\"ff025b0632d39b1136d4e6ce059269b2\"",
+          "last_modified_ms": 1791955727710
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_data/global_step_9_training_input.pkl",
+          "bytes": 7494668,
+          "etag": "\"cc7ecc818f5eb66071374dbf2d5874e8\"",
+          "last_modified_ms": 1791955760046
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_evals/global_step_0_evals/aggregated_results.jsonl",
+          "bytes": 3643,
+          "etag": "\"dfeec93ce84476aff8b3cf9b23c80198\"",
+          "last_modified_ms": 1791955452305
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_evals/global_step_0_evals/val-gsm8k.jsonl",
+          "bytes": 2105314,
+          "etag": "\"3363d0b4520ff6f6cf81f5307e559cb7\"",
+          "last_modified_ms": 1791955450819
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/dumped_evals/global_step_0_evals/val-math500.jsonl",
+          "bytes": 10105127,
+          "etag": "\"f05965958a87057d44bb662db3db3171\"",
+          "last_modified_ms": 1791955451991
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/eval-00000000.json",
+          "bytes": 3643,
+          "etag": "\"ef0953dbc1ebc82ab9d44361098fc823\"",
+          "last_modified_ms": 1791955453407
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/startup-00000000.json",
+          "bytes": 50,
+          "etag": "\"1c0d9cecd29beaf38f74231f33306a82\"",
+          "last_modified_ms": 1791955453680
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000001.json",
+          "bytes": 16316,
+          "etag": "\"0bd50bd63fb269bcbf0a60b17cfd48d9\"",
+          "last_modified_ms": 1791955513584
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000002.json",
+          "bytes": 16356,
+          "etag": "\"23d3baa88867041360ec55cacd5d1954\"",
+          "last_modified_ms": 1791955546783
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000003.json",
+          "bytes": 16416,
+          "etag": "\"adb097e2fe64357a03aab3a0d34fca51\"",
+          "last_modified_ms": 1791955576245
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000004.json",
+          "bytes": 16218,
+          "etag": "\"cb4101bae1df6168ac452e888d8c33f6\"",
+          "last_modified_ms": 1791955601269
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000005.json",
+          "bytes": 16264,
+          "etag": "\"6773e846ba67a54cf558cd00e7d4e1dd\"",
+          "last_modified_ms": 1791955645701
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000006.json",
+          "bytes": 16294,
+          "etag": "\"2324522de87256980625ff0adbeabb9f\"",
+          "last_modified_ms": 1791955669979
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000007.json",
+          "bytes": 16107,
+          "etag": "\"fdb06fa1b4355f34681bd10a8f6b2e70\"",
+          "last_modified_ms": 1791955704950
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000008.json",
+          "bytes": 16304,
+          "etag": "\"bfff07b7ad0c2f7dde08467ed03833f8\"",
+          "last_modified_ms": 1791955733605
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000009.json",
+          "bytes": 16227,
+          "etag": "\"21c63b96cdca4abd65c7dab3c1730671\"",
+          "last_modified_ms": 1791955765887
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000010.json",
+          "bytes": 16173,
+          "etag": "\"b221e4846fb7221280be6a7230c3caed\"",
+          "last_modified_ms": 1791955792774
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000011.json",
+          "bytes": 16361,
+          "etag": "\"bf7121ffcf93b61bac64c18261afb0d1\"",
+          "last_modified_ms": 1791955831492
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000012.json",
+          "bytes": 16206,
+          "etag": "\"6e17cba7ab080749dff79c47af813cf7\"",
+          "last_modified_ms": 1791955861478
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000013.json",
+          "bytes": 16323,
+          "etag": "\"71e409631cfa70ba30f8493f145da58e\"",
+          "last_modified_ms": 1791955890294
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000014.json",
+          "bytes": 16350,
+          "etag": "\"6a15d6e523897815dfd761254321ef76\"",
+          "last_modified_ms": 1791955917113
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000015.json",
+          "bytes": 16265,
+          "etag": "\"fe4a2654ab5f27465c1a5aec7cb92338\"",
+          "last_modified_ms": 1791955943410
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000016.json",
+          "bytes": 16243,
+          "etag": "\"e7c8a5873c22afd01796f32b422c3fed\"",
+          "last_modified_ms": 1791955976110
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000017.json",
+          "bytes": 16321,
+          "etag": "\"947153beeec2e9d13efcd086e5a50083\"",
+          "last_modified_ms": 1791956004433
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000018.json",
+          "bytes": 16300,
+          "etag": "\"e5ec016f4292659c34aa8b44622275b9\"",
+          "last_modified_ms": 1791956044086
+        },
+        {
+          "key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/exports/training_metrics/train-00000019.json",
+          "bytes": 16271,
+          "etag": "\"7f8257d2995d324c1b6945f6bf17a56c\"",
+          "last_modified_ms": 1791956075128
+        }
+      ],
+      "raw_controller_evidence": [
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/0:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/native-window-sc-s0-a0-rank0-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/native-window-sc-s0-a0-rank0-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/1:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/native-window-sc-s0-a0-rank1-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-preemptions-20261014T0547/native-window-sc-s0-a0-rank1-events.log"
+          }
+        }
+      ],
+      "disposition": "Batch capacity preemption; published partial updates are retained separately and never treated as a final scientific endpoint. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals.",
+      "normalized_original_snapshot": {
+        "file": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/native-window-sc-s0-interrupted-attempt0-snapshot.json",
+        "sha256": "25de54d17424bf066b515d1317cb13500008381f0cc946a45c2db99a345ab433",
+        "objects": 42,
+        "bytes": 166679392,
+        "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json"
+      }
+    }
+  ],
+  "total_allocated_h100_hours": 18.869244444444444,
+  "native_original_archives": "Append-only native ZIP records remain in their original durable attempts/trajectories paths; future complete audits select the final attempt timestamp boundary and exclude prior partial archives.",
+  "runtime_retention_summary": "results/qwen_rno_preempted_runtime_20261014.json; all5 failed-attempt runtime sets copied to unique original-attempt destinations with pre-query time cutoff, captured source ETag and destination length/provenance checks."
+}

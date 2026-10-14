@@ -1,0 +1,17 @@
+{
+  "config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/snowball_stale_calibration_v4/stale64-tis-s0.yaml",
+  "config_sha256": "1e0f72290813d53d80f2420f61f639ae1d2cc8ef19d1cdc626905355e844215c",
+  "run_id": "sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+  "iris_job_id": "/romain/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "lifecycle": "confirmed submitted; controller/runtime state checked separately",
+  "cluster": "cw-us-east-02a",
+  "priority": "batch",
+  "nodes": 5,
+  "gpus_per_node": 8,
+  "scientific_horizon": 130,
+  "sampler_refresh_period": 65,
+  "role": "separate TIS-only staleness calibration, not a main effect comparison",
+  "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-stale65-tis130-v4-submit.log",
+  "matched_fresh_control": "unsubmitted until first two actual stale updates pass the published capture/optimizer/version/archive gate"
+}
