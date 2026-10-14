@@ -342,6 +342,8 @@ class SFTBudget:
     max_grad_norm: float
     steps_per_eval: int
     """How often held-out loss is computed."""
+    per_device_parallelism: int
+    """Sequences per device per microbatch; updates accumulate gradients over the rest of the batch."""
 
 
 @dataclass(frozen=True)
@@ -478,6 +480,7 @@ def pivot_sft_step(run: PivotSFTRun) -> ArtifactStep[LevanterCheckpoint]:
             )
         ],
         steps_per_eval=budget.steps_per_eval,
+        per_device_parallelism=budget.per_device_parallelism,
     )
     return sft_step(spec, run.policy.resources)
 
@@ -520,17 +523,39 @@ def k16_grid_runs(pivots: PivotRLRun, budget: SFTBudget) -> tuple[PivotSFTRun, .
 
 # The MarinSkyRL reference-action baseline's budget: 32 updates of 4 examples at a constant 2e-6.
 QWEN_SMOKE_BUDGET = SFTBudget(
-    seq_len=32768, batch_size=4, steps=32, learning_rate=2e-6, warmup=0, max_grad_norm=1.0, steps_per_eval=8
+    seq_len=32768,
+    batch_size=4,
+    steps=32,
+    learning_rate=2e-6,
+    warmup=0,
+    max_grad_norm=1.0,
+    steps_per_eval=8,
+    per_device_parallelism=-1,
 )
 # Grug trains in the 64k window it is served and RL-trained in, so no candidate it was graded on is cut.
 GRUG_BUDGET = SFTBudget(
-    seq_len=65536, batch_size=64, steps=32, learning_rate=2e-6, warmup=0, max_grad_norm=1.0, steps_per_eval=8
+    seq_len=65536,
+    batch_size=64,
+    steps=32,
+    learning_rate=2e-6,
+    warmup=0,
+    max_grad_norm=1.0,
+    steps_per_eval=8,
+    # A whole per-device batch of 64k sequences needs hundreds of GiB per GPU; take one at a time.
+    per_device_parallelism=1,
 )
 # The update of the MarinSkyRL SFT and RL runs on Grug: batch 512 at 4e-6, gradients clipped at 0.5,
 # with a short warmup for the fresh optimizer. 19 updates are 9,728 examples, about one epoch of SWE's
 # hard band, the smallest, so every band trains on as many examples and none repeats one.
 SWE_GRID_BUDGET = SFTBudget(
-    seq_len=65536, batch_size=512, steps=19, learning_rate=4e-6, warmup=3, max_grad_norm=0.5, steps_per_eval=2
+    seq_len=65536,
+    batch_size=512,
+    steps=19,
+    learning_rate=4e-6,
+    warmup=3,
+    max_grad_norm=0.5,
+    steps_per_eval=2,
+    per_device_parallelism=1,
 )
 GRID_SEEDS = (0, 1, 2)
 

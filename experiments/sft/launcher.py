@@ -549,6 +549,9 @@ class SFTSpec:
     seed: int = 0  # Levanter's trainer seed: data shuffle order and any random init
     validation: Sequence[ArtifactValidationSpec] = ()  # held-out loss sets; num_train_steps runs only
     steps_per_eval: int = 500
+    # Sequences per device per microbatch; -1 takes the whole per-device batch at once. Long sequences
+    # need a small value, with gradients accumulated across microbatches to the same update.
+    per_device_parallelism: int = -1
 
     def __post_init__(self) -> None:
         if (self.num_train_steps is None) == (self.num_train_epochs is None):
@@ -688,7 +691,7 @@ def _trainer(
         steps_per_eval=spec.steps_per_eval,
         jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
-        per_device_parallelism=-1,  # auto microbatch; raise on OOM (math-equivalent)
+        per_device_parallelism=spec.per_device_parallelism,
         use_explicit_mesh_axes=use_explicit_mesh_axes,
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(
