@@ -58,7 +58,7 @@ class JuneSnowballConfig(SnowballConfig):
         fields = {
             field.name: getattr(self, field.name)
             for field in dataclasses.fields(SnowballConfig)
-            if field.name not in ("reference_checkpoint", "tokenizer")
+            if field.name not in ("reference_checkpoint", "tokenizer", "inference_attention_implementation")
         }
         return GrugModelConfig(**fields, disable_pko=True, disable_long_rope=True, capacity_factor=self.capacity_factor)
 

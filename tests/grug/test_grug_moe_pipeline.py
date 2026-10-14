@@ -118,9 +118,10 @@ def test_staged_loss_and_gradients_match_the_unsplit_model():
     def pipeline_loss(params):
         return _staged_loss(split_transformer(params, 2), batch, logsumexp_weight=0.01)
 
+    # Compile whole gradient calculations instead of dispatching each backward primitive separately.
     with jax.set_mesh(mesh):
-        ordinary_value, ordinary_grads = jax.value_and_grad(ordinary_loss)(model)
-        pipeline_value, pipeline_grads = jax.value_and_grad(pipeline_loss)(model)
+        ordinary_value, ordinary_grads = jax.jit(jax.value_and_grad(ordinary_loss))(model)
+        pipeline_value, pipeline_grads = jax.jit(jax.value_and_grad(pipeline_loss))(model)
 
     np.testing.assert_allclose(pipeline_value, ordinary_value, rtol=1e-5, atol=1e-5)
     _assert_trees_close(pipeline_grads, ordinary_grads)

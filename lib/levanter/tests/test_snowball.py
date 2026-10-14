@@ -37,6 +37,7 @@ from levanter.models.snowball import (
     validate_single_name_config,
 )
 from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.inference import assert_mixed_paged_decode_matches_forward
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -200,13 +201,24 @@ def test_snowball_state_dict_key_and_shape_manifest():
         assert tuple(sd[key].shape) == shape, f"{key}: {tuple(sd[key].shape)} != {shape}"
 
 
-def test_snowball_state_dict_roundtrip_is_exact():
+@pytest.mark.parametrize("individual_experts", [False, True])
+@pytest.mark.parametrize("prefix", [None, "policy"])
+def test_snowball_state_dict_roundtrip_is_exact(individual_experts, prefix):
     cfg = _tiny_config()
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         src = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(1))
         dst = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(2))
-        sd = src.to_state_dict()
-        dst = dst.from_state_dict(sd)
+        canonical = src.to_state_dict(prefix=prefix)
+        sd = {}
+        for name, weight in canonical.items():
+            if individual_experts and ".mlp.experts." in name:
+                stem, projection = name.split(".mlp.experts.")
+                sd.update({f"{stem}.mlp.experts.{i}.{projection}": weight[i] for i in range(cfg.num_experts)})
+            else:
+                sd[name] = weight
+        dst = hax.named_jit(lambda m, state: m.from_state_dict(state, prefix=prefix))(dst, sd)
+        for name, weight in dst.to_state_dict(prefix=prefix).items():
+            np.testing.assert_array_equal(np.asarray(weight), np.asarray(canonical[name]), err_msg=name)
 
         ids = _device_batched_ids(cfg.vocab_size, 10)
         run = hax.named_jit(lambda m, x: m(x))
@@ -607,4 +619,76 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
             assert math.isfinite(native_metrics["train/loss"])
         """,
         device_count=8,
+    )
+
+
+@pytest.mark.parametrize("sliding_window", [2, 4])
+@jax.default_matmul_precision("highest")
+def test_snowball_paged_decode_matches_full_forward(sliding_window):
+    """Mixed chunked prefill/decode preserves per-request positions and June attention."""
+    cfg = _tiny_config(sliding_window=sliding_window)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(17))
+        # Exercise the learned head gates, whose initializer is identically zero.
+        blocks = tuple(
+            eqx.tree_at(
+                lambda b: b.attn.attn_gate, block, jax.random.normal(jax.random.key(i), block.attn.attn_gate.shape)
+            )
+            for i, block in enumerate(model.transformer.blocks)
+        )
+        model = eqx.tree_at(lambda m: m.transformer.blocks, model, blocks)
+        assert_mixed_paged_decode_matches_forward(model)
+
+
+@pytest.mark.timeout(180)
+def test_snowball_paged_decode_sharding_and_expert_skew_match_unsharded():
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        import haliax as hax
+        from haliax import Axis
+        from levanter.grug.sharding import compact_grug_mesh
+        from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+
+        cfg = SnowballConfig(
+            vocab_size=32, hidden_dim=16, intermediate_dim=16,
+            shared_expert_intermediate_dim=16, num_experts=4,
+            num_experts_per_token=1, num_layers=2, num_heads=2,
+            num_kv_heads=2, head_dim=8, max_seq_len=8, sliding_window=2,
+            initializer_std=0.2,
+            attention_implementation="reference", moe_implementation="ring",
+        )
+        ids = hax.named(jnp.array([1, 2, 3, 4, 5, 6, 0, 0], dtype=jnp.int32), "position")
+        positions = hax.named(jnp.array([0, 1, 2, 0, 1, 2, -1, -1], dtype=jnp.int32), "position")
+        info = PageBatchInfo(
+            slot_ids=hax.named(jnp.array([0, 1], dtype=jnp.int32), "seq"),
+            page_indices=hax.named(jnp.array([[0, 1], [2, 3]], dtype=jnp.int32), ("seq", "page")),
+            seq_lens=hax.named(jnp.array([3, 3], dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.array([0, 3, 6], dtype=jnp.int32), "seq"),
+            num_seqs=jnp.array(2, dtype=jnp.int32),
+            new_token_dests=hax.named(jnp.array([0, 1, 2, 4, 5, 6, -1, -1], dtype=jnp.int32), "position"),
+            page_size=2,
+        )
+        results = []
+        for expert_size, model_size in ((1, 1), (2, 1), (1, 2)):
+            with jax.set_mesh(compact_grug_mesh(expert_axis_size=expert_size, model_axis_size=model_size)):
+                model = SnowballLMHeadModel.init(Axis("vocab", 32), cfg, key=jax.random.key(0))
+                # Every token selects expert 0. Balanced training capacity drops half the
+                # assignments on two expert ranks; serving must retain all six real tokens.
+                blocks = tuple(eqx.tree_at(
+                    lambda b: b.mlp.router_bias, block,
+                    jnp.array([100., 0., 0., 0.]),
+                ) for block in model.transformer.blocks)
+                model = eqx.tree_at(lambda m: m.transformer.blocks, model, blocks)
+                cache = model.initial_cache(PageTableSpec(4, 2, max_seqs=2), dtype=jnp.float32)
+                logits, _ = eqx.filter_jit(lambda m, c: m.decode(ids, c, info, positions))(model, cache)
+                results.append(np.asarray(logits.array)[:6])
+        for actual in results[1:]:
+            np.testing.assert_allclose(results[0], actual, rtol=1e-4, atol=1e-4)
+        """,
+        device_count=2,
     )

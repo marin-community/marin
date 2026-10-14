@@ -20,6 +20,7 @@ class PageTableSpec:
 
     num_pages: int
     page_size: int
+    max_seqs: int
 
 
 class PageTable(eqx.Module):
@@ -56,7 +57,7 @@ class PageTable(eqx.Module):
         return self.page_size * self.pages_per_seq
 
     def spec(self) -> PageTableSpec:
-        return PageTableSpec(num_pages=self.num_pages, page_size=self.page_size)
+        return PageTableSpec(num_pages=self.num_pages, page_size=self.page_size, max_seqs=self.max_seqs)
 
 
 class PageBatchInfo(eqx.Module):
