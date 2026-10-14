@@ -1,0 +1,16 @@
+{
+  "run_id": "sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scope": "Actual first update admission only; not final scientific endpoint.",
+  "configured_updates": 300,
+  "applied_updates": 1,
+  "gradient_norm": 0.1875254064798355,
+  "logical_batch_rows": 512,
+  "retained_rows": 2,
+  "loss_tokens_checked": 225,
+  "natural_head_width": 128,
+  "group_admission_seconds": 67.48763369605877,
+  "policy_training_seconds": 14.200608776183799,
+  "metric_sha256": "ec5868e7eb502059fe2d6b8037983133621d7d5cd6474ca6b36cc5284c80964f",
+  "early_path_passed": true
+}
