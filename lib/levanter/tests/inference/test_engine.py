@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import threading
 
 import equinox as eqx
 import haliax as hax
@@ -14,7 +15,7 @@ from jax.sharding import AxisType, Mesh, PartitionSpec as P
 
 import levanter.inference.engine as engine_module
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
-from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
 from levanter.inference.page_table import PageTableSpec
 from levanter.layers.kv_cache import KvPageCache
 from levanter.utils.mesh import create_mesh_from_axis_specs
@@ -166,3 +167,84 @@ def test_generate_samples_explicit_token_and_vocabulary_shards():
         result = service.generate([request])
     assert result.tokens == [[3, 3, 3], [3, 3, 3]]
     assert all(np.isfinite(values).all() for values in result.logprobs)
+
+
+def test_generation_preserves_stop_and_length_reasons_across_clones_and_reuse():
+    service = _build_service()
+    stops = hax.named(jnp.array([[-1, 4], [3, 3]]), ("stop_seq", "position"))
+    requests = [
+        Request(
+            prompt_tokens=[1, 2],
+            request_id=0,
+            n_generations=2,
+            decode_params=dataclasses.replace(
+                SeqDecodingParams.default(), max_num_tokens=jnp.array(4), stop_tokens=stops
+            ),
+        ),
+        Request(
+            prompt_tokens=[1, 2],
+            request_id=1,
+            n_generations=1,
+            decode_params=dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(5)),
+        ),
+    ]
+    result = service.generate(requests)
+    assert result.tokens == [[3, 3], [3, 3], [3, 3, 3]]
+    # A matched stop wins when it coincides with the length limit.
+    assert result.finish_reasons == [FinishReason.STOP, FinishReason.STOP, FinishReason.LENGTH]
+    assert result.logprobs is not None
+    assert [len(row) for row in result.logprobs] == [2, 2, 3]
+    assert service.generate(requests[1:]).finish_reasons == [FinishReason.LENGTH]
+
+
+@pytest.mark.parametrize("abort_before_prefill", [False, True])
+def test_abort_returns_exact_partial_results_and_releases_slots(abort_before_prefill):
+    service = _build_service()
+    request = Request(
+        prompt_tokens=[1, 2],
+        request_id=10,
+        n_generations=2,
+        decode_params=dataclasses.replace(
+            SeqDecodingParams.default(), max_num_tokens=jnp.array(7), temperature=jnp.array(0.0)
+        ),
+    )
+    uninterrupted = service.generate([request])
+    abort = threading.Event()
+    if abort_before_prefill:
+        abort.set()
+    partial = service.generate([request], step_callback=lambda _: abort.set(), should_abort=abort.is_set)
+    assert partial.finish_reasons == [FinishReason.ABORT, FinishReason.ABORT]
+    assert partial.logprobs is not None and uninterrupted.logprobs is not None
+    expected_count = 0 if abort_before_prefill else 1
+    assert [len(tokens) for tokens in partial.tokens] == [expected_count, expected_count]
+    assert len(service.free_slots) == service.config.max_seqs
+    assert not service.sequences
+    for tokens, logprobs, complete_tokens, complete_logprobs in zip(
+        partial.tokens, partial.logprobs, uninterrupted.tokens, uninterrupted.logprobs, strict=True
+    ):
+        continuation = dataclasses.replace(request, prompt_tokens=request.prompt_tokens + tokens, n_generations=1)
+        resumed = service.generate([continuation])
+        assert resumed.logprobs is not None
+        assert tokens + resumed.tokens[0] == complete_tokens
+        assert logprobs + resumed.logprobs[0] == pytest.approx(complete_logprobs)
+        assert resumed.finish_reasons == [FinishReason.LENGTH]
+
+
+def test_abort_keeps_already_finished_stop_reasons():
+    service = _build_service()
+    params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(7))
+    requests = [
+        Request(
+            prompt_tokens=[1, 2],
+            request_id=0,
+            n_generations=1,
+            decode_params=dataclasses.replace(
+                params, stop_tokens=hax.named(jnp.array([[3]]), ("stop_seq", "position"))
+            ),
+        ),
+        Request(prompt_tokens=[1, 2], request_id=1, decode_params=params, n_generations=1),
+    ]
+    abort = threading.Event()
+    result = service.generate(requests, step_callback=lambda _: abort.set(), should_abort=abort.is_set)
+    assert result.tokens == [[3], [3]]
+    assert result.finish_reasons == [FinishReason.STOP, FinishReason.ABORT]

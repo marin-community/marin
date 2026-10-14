@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import equinox as eqx
 import haliax as hax
@@ -27,6 +27,7 @@ from levanter.kernels.pallas.autotune_utils import named_sharding_of
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
     DecodeState,
+    FinishReason,
     SeqDecodingParams,
     TokenQueue,
     _DecodeOutputs,
@@ -251,8 +252,12 @@ class DecodeResult:
     token_list: list[int]
     # Count of newly appended tokens (includes prompt tokens as extracted)
     tokens_decoded: int = 0
-    done: bool = False
+    finish_reason: FinishReason = FinishReason.RUNNING
     logprobs: list[float] = field(default_factory=list)
+
+    @property
+    def done(self) -> bool:
+        return self.finish_reason != FinishReason.RUNNING
 
 
 class GenState(eqx.Module):
@@ -463,7 +468,7 @@ def _prefill_kernel(
         max_seqs=decode_state.max_seqs,
         with_logprobs=True,
     )
-    outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+    outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
@@ -660,7 +665,7 @@ def _handle_clones(
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state, cache=cache)
 
     # Append clone outputs
-    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finished)
+    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finish_reasons)
 
     # Device-side release of finished sequences (jit-safe)
     return gen_state, outputs
@@ -729,7 +734,7 @@ def _run_generation_loop(
         # Update the gen_state with all the new components
         new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
         # Append non-stateful outputs for host-side extraction
-        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
 
         # jax.debug.print(
         #     "[gen] step={step} outputs_size={size} queued_after={queued}",
@@ -756,6 +761,7 @@ class GenerationResult:
     tokens: list[list[int]]
     logprobs: list[list[float]] | None
     total_generated: int
+    finish_reasons: list[FinishReason]
 
 
 FIRST_TOKEN_LOGPROB = 0.0
@@ -1088,7 +1094,9 @@ class InferenceEngine:
             ),
         )
 
-    def generate(self, requests: Sequence[Request], step_callback=None) -> GenerationResult:
+    def generate(
+        self, requests: Sequence[Request], step_callback=None, *, should_abort: Callable[[], bool] | None = None
+    ) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
         Each Request provides prompt_tokens, decode_params, and n_generations (clones).
@@ -1097,9 +1105,11 @@ class InferenceEngine:
         Args:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
+            should_abort: Host predicate checked before prefill and between decode rounds.
+                Unfinished choices return their exact partial output with an ABORT reason.
         """
         if not requests:
-            return GenerationResult(tokens=[], logprobs=[], total_generated=0)
+            return GenerationResult(tokens=[], logprobs=[], total_generated=0, finish_reasons=[])
         if len({r.request_id for r in requests}) != len(requests):
             raise ValueError("Request IDs must be unique within a generation batch.")
         assert self.config.max_prefill_size is not None
@@ -1169,8 +1179,10 @@ class InferenceEngine:
 
         time_in = time.time()
         # Initial admission from queue and extract prompt tokens
-        decode_outputs = self._prefill_batch(requests)
-        self._extract_outputs(decode_outputs)
+        aborted = should_abort is not None and should_abort()
+        if not aborted:
+            decode_outputs = self._prefill_batch(requests)
+            self._extract_outputs(decode_outputs)
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1185,7 +1197,10 @@ class InferenceEngine:
 
         pending = [request for request in requests if request.request_id not in self.sequences]
         decode_iteration = 0
-        while not _all_done():
+        while not aborted and not _all_done():
+            if should_abort is not None and should_abort():
+                aborted = True
+                break
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending)
                 self._extract_outputs(prefill_outputs)
@@ -1195,6 +1210,9 @@ class InferenceEngine:
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
+            if should_abort is not None and should_abort():
+                aborted = True
+                break
 
             iter_start = time.time()
 
@@ -1207,9 +1225,7 @@ class InferenceEngine:
                 self.config.max_rounds,
             )
             submit_done = time.time()
-            # Time spent with device executing (and the host thread waiting)
             self.gen_state = future_state
-            device_time = time.time() - submit_done
 
             extract_start = time.time()
             new_tokens = self._extract_outputs(decode_outputs)
@@ -1217,16 +1233,12 @@ class InferenceEngine:
 
             iter_end = time.time()
             iter_time = iter_end - iter_start
-            # Host time is everything except the device execution wait
-            host_time = max(iter_time - device_time, 0.0)
             submit_time = submit_done - iter_start
             if iter_time > 0:
                 tps_total = new_tokens / iter_time
                 logger.info(
-                    f"Decode iter: total {iter_time:.3f}s (device {device_time:.3f}s, host {host_time:.3f}s, "
-                    f"submit {submit_time:.3f}s), "
-                    f"{tps_total:.2f} tok/s, {new_tokens} new"
-                    f" (extract {extract_time:.3f}s)"
+                    f"Decode iter: total {iter_time:.3f}s (submit {submit_time:.3f}s, "
+                    f"extract/wait {extract_time:.3f}s), {tps_total:.2f} tok/s, {new_tokens} new"
                 )
 
             decode_iteration += 1
@@ -1237,18 +1249,17 @@ class InferenceEngine:
         # Assemble outputs in the order of the requests for this call
         outputs_list: list[list[int]] = []
         logprobs_list: list[list[float]] = []
+        finish_reasons: list[FinishReason] = []
         total_prompt_tokens = 0
         for r in requests:
             rid = int(r.request_id)
             total_prompt_tokens += len(r.prompt_tokens) * int(r.n_generations)
-            # Initialize result buckets for this rid if not present
-            kid_map = self.results.get(rid, {})
+            kid_map = self.results[rid]
             for k in range(int(r.n_generations)):
-                dr = kid_map.get(k)
-                if dr is None:
-                    # Ensure a placeholder exists to avoid KeyErrors
-                    kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
-                    dr = kid_map[k]
+                dr = kid_map[k]
+                if aborted and not dr.done:
+                    dr.finish_reason = FinishReason.ABORT
+                finish_reasons.append(dr.finish_reason)
                 outputs_list.append(dr.token_list)
                 logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
             self.results[rid] = kid_map
@@ -1260,7 +1271,11 @@ class InferenceEngine:
         for rid in call_rids:
             if rid in self.results:
                 self.results.pop(rid, None)
-        return GenerationResult(tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated)
+        if aborted:
+            self.reset()
+        return GenerationResult(
+            tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated, finish_reasons=finish_reasons
+        )
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
         """
@@ -1364,7 +1379,7 @@ class InferenceEngine:
                 continue
             rid, cid = info
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
-            dr.done = True
+            dr.finish_reason = FinishReason(int(pending_outputs.finish_reasons.array[local_slot]))
 
             del self.local_map[local_slot]
             self.free_slots.append(local_slot)
