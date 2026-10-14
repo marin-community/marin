@@ -128,11 +128,11 @@ async def grade_candidate(
     A grader step calls this on its reference answer, on the empty answer and on wrong answers it
     invents, and keeps every candidate in ``Grader.prototyped``.
 
-    An empty ``reply`` usually returns ungraded. TaskCompendium refuses the submission before any
-    grader runs, and the result carries ``Outcome.SUBMISSION_FAILURE``, reward 0.0 and the error
-    "Text submission requires nonempty assistant content without tool calls". A caller counts that
-    status as a rejection: the grader step of ``template.standard`` fails an empty answer only when
-    it comes back ``GRADED`` above ``REJECTION_CEILING``.
+    An empty ``reply`` comes back either as ``Outcome.SUBMISSION_FAILURE`` with reward 0.0, when
+    TaskCompendium refuses the submission before any grader runs, or as ``Outcome.GRADED`` with the
+    reward an empty candidate earns under the grader's empty-output policy, usually 0.0. A caller
+    counts both as a rejection: the grader step of ``template.standard`` fails an empty answer only
+    when it comes back ``GRADED`` above ``REJECTION_CEILING``.
 
     Raises:
         BuildFailure: ``spec.draft.assemble`` or ``spec.draft.lower`` rejects the provisional task,
