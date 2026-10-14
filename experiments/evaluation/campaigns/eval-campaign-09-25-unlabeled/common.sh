@@ -25,21 +25,13 @@ JUDGE_BASE_URL="${JUDGE_BASE_URL:-https://api.together.xyz/v1}"
 TAU2_JUDGE_MODEL="${TAU2_JUDGE_MODEL:-openai/openai/gpt-oss-120b}"
 
 CAMPAIGN_SHA_MARIN=$(git -C "$MARIN_DIR" rev-parse HEAD)
-eval "$(python3 - "$MARIN_DIR/lib/marin/src/marin/external_dependencies.py" <<'PY'
-import re
+eval "$(PYTHONPATH="$MARIN_DIR/lib/marin/src" python3 - <<'PY'
 import shlex
-import sys
-from pathlib import Path
 
-text = Path(sys.argv[1]).read_text()
-for name in ("EVALCHEMY", "HARBOR"):
-    block = re.search(rf"{name} = ExternalDependency\((.*?)\n\)", text, re.DOTALL)
-    if block is None:
-        raise SystemExit(f"missing {name} dependency block")
-    commit = re.search(r'commit="([0-9a-f]{40})"', block.group(1))
-    if commit is None:
-        raise SystemExit(f"missing {name} commit")
-    print(f"CAMPAIGN_SHA_{name}={shlex.quote(commit.group(1))}")
+from marin.external_dependencies import EVALCHEMY, HARBOR
+
+print(f"CAMPAIGN_SHA_EVALCHEMY={shlex.quote(EVALCHEMY.commit)}")
+print(f"CAMPAIGN_SHA_HARBOR={shlex.quote(HARBOR.commit)}")
 PY
 )"
 export CAMPAIGN_SHA_MARIN CAMPAIGN_SHA_HARBOR CAMPAIGN_SHA_EVALCHEMY
