@@ -1,0 +1,33 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configs": [
+    {
+      "arm": "sc",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/native-window-sc-s0.yaml",
+      "sha256": "fcc0ee3b16d186b0bf3c19ef9fdf94320d14d9dbfee45f304dbdeb02e1082c2c",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "controller_attempt": 0,
+      "actual_start_ms": 1791940343182,
+      "planned_updates": 40,
+      "model_identity": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "train_input": "curriculum-rl-pool@2026.08.29.1:seed0:native-window:01a126ce",
+      "validation_input": "curriculum-rl-pool@2026.08.29.1:seed0:native-window:01a126ce"
+    },
+    {
+      "arm": "tis",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/native-window-tis-s0.yaml",
+      "sha256": "c79b7a3a058be86a4d7bdccf2876ee0908ae3b927dd3926ec4b518f1ba72010b",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "controller_attempt": 0,
+      "actual_start_ms": 1791940343182,
+      "planned_updates": 40,
+      "model_identity": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "train_input": "curriculum-rl-pool@2026.08.29.1:seed0:native-window:01a126ce",
+      "validation_input": "curriculum-rl-pool@2026.08.29.1:seed0:native-window:01a126ce"
+    }
+  ],
+  "scope": "Exploratoryseed0 paired40 native8192context4096newtokens/full10427train756validation corpus. Full756 and common753 metrics separately reported; no populationCI/equivalence. Final three-seed1200 endpoints remain required.",
+  "prior_recipe": "SameoriginalQweninitialization, fixedrelativeinitialnoise.05, AdamW/nativeoptimizationrewards/GRPOstd/8groups4samples32rows as batchingstage. Onlywindow/fullcorpus changes."
+}
