@@ -751,8 +751,6 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         # Find all <|im_end|> positions
         im_end_positions = np.where(input_ids == self._cached_im_end_id)[0]
-        if len(im_end_positions) == 0:
-            return empty_mask
 
         # Content starts after: <|im_start|> + assistant_tokens
         # Note: The \n after "assistant" is INCLUDED in loss (matches HF behavior)
@@ -764,14 +762,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         # Use searchsorted to find matching <|im_end|> for each content_start
         end_indices = np.searchsorted(im_end_positions, content_starts, side="left")
-        valid_ends = end_indices < len(im_end_positions)
-        content_starts = content_starts[valid_ends]
-        end_indices = end_indices[valid_ends]
-        if len(content_starts) == 0:
-            return empty_mask
-
-        # End positions include <|im_end|> token
-        end_positions = im_end_positions[end_indices] + 1
+        # A truncated final response still supervises its visible prefix.
+        end_positions = np.append(im_end_positions + 1, n)[end_indices]
 
         # Use diff + cumsum to create interval mask efficiently
         diff = np.zeros(n + 1, dtype=np.int8)
@@ -845,6 +837,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         has_pixel_values = "pixel_values" in processed
         has_image_sizes = "image_sizes" in processed
         pv = processed["pixel_values"] if has_pixel_values else None
+        if pv is not None and pv.ndim == 4:
+            # Single-crop processors return (images, channels, height, width).
+            pv = pv[:, None, ...]
         img_sizes = processed["image_sizes"].astype(np.int32) if has_image_sizes else None
 
         # Pre-compute cumulative image indices for fast slicing
@@ -965,6 +960,17 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         return 0
 
 
+def image_caption_to_conversation(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Represent an image-caption pair as a user image and assistant caption."""
+    return {
+        "messages": [
+            {"role": "user", "content": [{"type": "image"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": record["text"]}]},
+        ],
+        "images": [record["image"]],
+    }
+
+
 @dataclass
 class ImageDatasetSourceConfig:
     """Configuration for a simple image-text dataset source (single image + text pairs)."""
@@ -1002,12 +1008,14 @@ class ImageDatasetSourceConfig:
                     "text": x[self.text_key],
                 }
 
-            return ds.map(extract_fields)
+            return ds.map(extract_fields).map(image_caption_to_conversation)
         else:
             split_urls = self.urls_for_split(split)
             if len(split_urls) == 0:
                 return None
-            return ImageTextUrlDataSource(split_urls, image_key=self.image_key, text_key=self.text_key)
+            return ImageTextUrlDataSource(split_urls, image_key=self.image_key, text_key=self.text_key).map(
+                image_caption_to_conversation
+            )
 
     def doc_iterator(self, split: str) -> Iterator[Dict[str, Any]]:
         """Iterate over documents in the specified split."""
@@ -1604,15 +1612,13 @@ class ImageIODatasetConfig(ImageDatasetSourceConfig, ImageTaskConfig):
 
         logger.info(f"Building cache for {split}...")
 
-        # For simple image-text pairs, we need to convert to conversation format
-        # The BatchImageProcessor expects messages_key and images_key
         return ProcessedImageCache.build_or_load(
             split_cache_dir,
             source,
             self.the_processor,
             max_length=self.max_length,
             padding=self.padding,
-            messages_key="messages",  # Will be created by source mapping
+            messages_key="messages",
             images_key="images",
             cache_options=cache_options,
         )

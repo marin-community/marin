@@ -191,6 +191,8 @@ def test_siglip2_vision_roundtrip() -> None:
         assert np.allclose(torch_output2, jax_output_array, rtol=1e-3, atol=1e-2)
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(600)
 @skip_if_no_torch
 def test_siglip2_vision_real_image() -> None:
     """Test Siglip2 vision model with generated pixels using the HF processor."""
@@ -205,13 +207,10 @@ def test_siglip2_vision_real_image() -> None:
     image = Image.fromarray(np.random.default_rng(0).integers(0, 256, (224, 224, 3), dtype=np.uint8))
     model_name = "google/siglip2-so400m-patch16-naflex"
 
-    try:
-        processor = AutoProcessor.from_pretrained(model_name)
-        torch_model = AutoModel.from_pretrained(model_name, trust_remote_code=True, torch_dtype=torch.float32)
-        torch_model.eval()
-        torch_model = torch_model.float()
-    except Exception as e:
-        pytest.skip(f"Failed to load HF model/processor: {e}")
+    processor = AutoProcessor.from_pretrained(model_name)
+    torch_model = AutoModel.from_pretrained(model_name, trust_remote_code=True, torch_dtype=torch.float32)
+    torch_model.eval()
+    torch_model = torch_model.float()
 
     inputs = processor(images=image, return_tensors="pt")
     pixel_values_torch = inputs["pixel_values"].float()
@@ -265,10 +264,7 @@ def test_siglip2_vision_real_image() -> None:
     assert not np.any(np.isnan(jax_output_array))
     assert not np.any(np.isinf(jax_output_array))
 
-    # Multi-layer full model: use percentile-based check
-    diff = np.abs(torch_output - jax_output_array)
-    p99_diff = np.percentile(diff, 99)
-    assert p99_diff < 0.1, f"P99 diff too large: {p99_diff}"
+    np.testing.assert_allclose(torch_output, jax_output_array, rtol=1e-4, atol=1e-4)
 
     # Test Levanter -> HF conversion
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -292,9 +288,7 @@ def test_siglip2_vision_real_image() -> None:
             converted_output_np = converted_outputs.last_hidden_state.detach().cpu().numpy()
 
         assert not np.any(np.isnan(converted_output_np))
-        diff_lev_hf = np.abs(jax_output_array - converted_output_np)
-        p99_diff_lev_hf = np.percentile(diff_lev_hf, 99)
-        assert p99_diff_lev_hf < 0.1, f"Levanter -> HF p99 diff too large: {p99_diff_lev_hf}"
+        np.testing.assert_allclose(jax_output_array, converted_output_np, rtol=1e-4, atol=1e-4)
 
 
 if __name__ == "__main__":

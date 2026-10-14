@@ -19,7 +19,6 @@ from typing import Self, Callable, Dict, Optional, Tuple, Type
 
 import jax
 from levanter.models.vision_model import VisionEncoderConfig
-import jax.image
 import equinox as eqx
 import jax.numpy as jnp
 
@@ -39,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 silence_transformer_nag()
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
+from transformers import Siglip2Config as HfSiglip2Config  # noqa: E402
 from transformers import Siglip2VisionConfig as HfSiglip2VisionConfig  # noqa: E402
 
 
@@ -118,19 +118,20 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["Siglip2VisionConfig"]:  # type: ignore
         """Create HuggingFace checkpoint converter for this config."""
-        # Vision-only models don't have a tokenizer, but HFCheckpointConverter requires one
-        # Use gpt2 tokenizer as a placeholder since it's always available
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=False,
-            tokenizer="gpt2",  # Dummy tokenizer for vision-only model
             HfConfigClass=HfSiglip2VisionConfig,
         )
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "Siglip2VisionConfig":
         """Convert from HuggingFace config to Levanter config."""
+        if isinstance(hf_config, HfSiglip2Config):
+            vision_config = hf_config.vision_config
+            assert isinstance(vision_config, HfSiglip2VisionConfig)
+            hf_config = vision_config
         # Extract activation function, handle both string and enum
         hidden_act = hf_config.hidden_act
         if isinstance(hidden_act, str):
@@ -436,7 +437,16 @@ class Siglip2Attention(eqx.Module):
 
             # Combine with existing mask if present
             if mask is not None:
-                combined_mask = AttentionMask.explicit(pad_mask) & mask
+                original_mask = mask.materialize(seq_axis, Axis("key_position", orig_seq_len))
+                if original_mask is not None:
+                    original_mask = original_mask.broadcast_axis((seq_axis, Axis("key_position", orig_seq_len)))
+                    original_mask = hax.pad(
+                        original_mask,
+                        {seq_axis_name: (0, pad_len), "key_position": (0, pad_len)},
+                        constant_values=False,
+                    )
+                    pad_mask = pad_mask & original_mask
+                combined_mask = AttentionMask.explicit(pad_mask)
             else:
                 combined_mask = AttentionMask.explicit(pad_mask)
 
@@ -624,67 +634,34 @@ class Siglip2VisionEmbeddings(eqx.Module):
         num_patches_axis = pixel_values.resolve_axis("num_patches")
 
         if spatial_shapes is not None:
-            # Interpolate position embeddings to match spatial_shapes
-            # This is needed for flexible aspect ratio support
+            grid_size = int(self.config.NumPatches.size**0.5)
+            positions = self.position_embedding(hax.arange(self.config.NumPatches)).array
+            grid = positions.reshape(grid_size, grid_size, -1)
+            batch_axes = tuple(ax for ax in patch_embeds.axes if ax not in (num_patches_axis, self.config.Embed))
+            shapes = jnp.asarray(spatial_shapes).reshape(-1, 2)
 
-            # Get the pretrained position embeddings (assuming square grid)
-            num_positions = self.config.NumPatches.size
-            grid_size = int(num_positions**0.5)
+            def resize_one(shape):
+                height, width = shape
+                indices = jnp.arange(num_patches_axis.size)
+                # HF fills padding with the first resized positional embedding.
+                indices = jnp.where(indices < height * width, indices, 0)
+                source = jnp.arange(grid_size, dtype=jnp.float32)
 
-            # Get all position embeddings and reshape to 2D grid
-            # Shape: (num_positions, embed_dim) -> (grid_size, grid_size, embed_dim)
-            all_pos_ids = hax.arange(self.config.NumPatches)
-            all_pos_embeds = self.position_embedding(all_pos_ids)  # (num_patches, embed)
-            pos_embeds_2d = all_pos_embeds.array.reshape(grid_size, grid_size, -1)
+                def weights(coordinates, target_size):
+                    # Half-pixel centers with a widened triangle kernel match HF antialiased bilinear resize.
+                    scale = grid_size / target_size
+                    centers = (coordinates + 0.5) * scale - 0.5
+                    support = jnp.maximum(scale, 1.0)
+                    kernel = jnp.maximum(1.0 - jnp.abs(source[None, :] - centers[:, None]) / support, 0.0)
+                    return kernel / jnp.sum(kernel, axis=-1, keepdims=True)
 
-            # Get target height and width from pixel_values shape (JIT-safe)
-            # num_patches_axis.size is static at trace time
-            # For square grids: target_h = target_w = sqrt(num_patches)
-            # For non-square: use spatial_shapes if it contains Python ints, otherwise infer from num_patches
-            expected_num_patches = num_patches_axis.size
+                y_weights = weights(indices // width, height)
+                x_weights = weights(indices % width, width)
+                return jnp.einsum("ph,hwe,pw->pe", y_weights, grid.astype(jnp.float32), x_weights).astype(grid.dtype)
 
-            # Check if spatial_shapes contains concrete Python values or is traced
-            # If spatial_shapes is a numpy array or contains Python ints, use it directly
-            # Otherwise, infer from pixel_values shape (assumes square grid)
-            try:
-                # Try to get concrete values - works for numpy arrays and Python values
-                target_h = int(spatial_shapes[0, 0])
-                target_w = int(spatial_shapes[0, 1])
-            except (TypeError, jax.errors.ConcretizationTypeError):
-                # spatial_shapes is traced, infer from pixel_values (assumes square)
-                target_h = target_w = int(expected_num_patches**0.5)
-
-            # Use JAX's resize function to interpolate
-            # Need to permute to (embed, height, width) for resize, then back
-            pos_embeds_2d = jnp.transpose(pos_embeds_2d, (2, 0, 1))  # (embed, h, w)
-            pos_embeds_resized = jax.image.resize(
-                pos_embeds_2d,
-                shape=(pos_embeds_2d.shape[0], target_h, target_w),
-                method="linear",  # 'linear' (bilinear for 2D) is the closest to PyTorch's bilinear
-            )
-            # Reshape back to (num_patches, embed)
-            pos_embeds_resized = jnp.transpose(pos_embeds_resized, (1, 2, 0))  # (h, w, embed)
-            pos_embeds_flat = pos_embeds_resized.reshape(-1, pos_embeds_resized.shape[-1])
-
-            # The interpolated position embeddings may have different number of patches than pixel_values
-            # (e.g., 14*18=252 vs 256 if pixel_values is padded)
-            # We need to broadcast/pad the position embeddings to match
-            actual_num_patches_interp = target_h * target_w
-
-            if actual_num_patches_interp < expected_num_patches:
-                # Pad by repeating the first embedding value (matching HF behavior)
-                # HF does: resulted_positional_embeddings[i, height * width :] = resized_embeddings[0]
-                padding = expected_num_patches - actual_num_patches_interp
-                first_embedding = pos_embeds_flat[0:1]  # Shape: (1, embed_dim)
-                repeated_padding = jnp.repeat(first_embedding, padding, axis=0)  # Shape: (padding, embed_dim)
-                pos_embeds_flat = jnp.concatenate([pos_embeds_flat, repeated_padding], axis=0)
-            elif actual_num_patches_interp > expected_num_patches:
-                raise ValueError(
-                    f"Actual number of patches {actual_num_patches_interp} exceeds expected {expected_num_patches}"
-                )
-
-            # Create NamedArray with correct axis
-            pos_embeds = hax.named(pos_embeds_flat, (num_patches_axis, self.config.Embed))
+            resized = jax.vmap(resize_one)(shapes)
+            resized = resized.reshape(*(ax.size for ax in batch_axes), num_patches_axis.size, self.config.Embed.size)
+            pos_embeds = hax.named(resized, (*batch_axes, num_patches_axis, self.config.Embed))
         else:
             # Standard position embeddings (square grid)
             position_ids = hax.arange(num_patches_axis)
@@ -1184,5 +1161,8 @@ class Siglip2VisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializat
     def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None) -> Self:
         """Load from state dict."""
 
-        # Use default loading
+        # Standalone HF vision checkpoints omit the composite model's vision_model prefix.
+        if with_prefix(prefix, "embeddings.patch_embedding.weight") in state_dict:
+            vision_model = default_eqx_module_from_state_dict(self.vision_model, state_dict, prefix)
+            return dataclasses.replace(self, vision_model=vision_model)
         return default_eqx_module_from_state_dict(self, state_dict, prefix)
