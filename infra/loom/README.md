@@ -157,20 +157,11 @@ ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
 
-The correctness and holistic review workflows launch on open, ready-for-review,
-and reopen events. Both profiles use Claude Opus 5.5 (`claude-opus-5-5`). Each
-lane uses a durable per-PR idempotency key, so repeated events return the
-existing run without starting another session, including after archival.
-Automatic deslop also uses a per-PR key. This permits at most three automatically
-launched sessions per PR: one correctness review, one holistic review for a
-change of at least 250 lines or a new class under `lib/*/src/` or `experiments/`,
-and one deslop. Pushes do not trigger holistic reviews. Further reviews or
-retries after a stale or failed review require an explicit session launch.
-
-Loom's `runs.create` also accepts a stable `channel`: distinct delivery keys
-on that channel reuse a running ACP session. An archived session causes a new
-session on a later delivery. Channels therefore do not impose a lifetime
-session cap; these review workflows use per-PR run keys instead.
+The PR review workflow launches on open, ready-for-review, and reopen events.
+Reopen a PR to retry its latest head if a push invalidates an in-progress review.
+The `pr-holistic-review` mapping authorizes the whole-change review profile,
+which runs the `claude` agent with the `fable` model and also launches on
+pushes; its session skips small deltas since the last reviewed head.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only

@@ -83,24 +83,21 @@ request's size and file patches through the API: the review runs when the
 change has at least 250 changed lines or adds a class, dataclass, or
 `Protocol` under `lib/*/src/` or `experiments/`. The session runs the
 `review-pr-holistic` skill with the `pr-holistic-review` profile (Claude
-Opus 5.5) and posts one packet ending in `<!-- marin-holistic-review:<sha> -->`.
-Both review profiles use `claude-opus-5-5`. The correctness and holistic
-workflows launch on open, ready-for-review, and reopen events, using durable
-per-PR keys. Repeated events return the existing run, including after the
-session is archived. Each PR gets at most one automatic session per review
-lane; pushes do not launch another holistic review. Further reviews or retries
-after a stale or failed review require an explicit session launch. The review
-is advisory and is not a required check.
+Fable) and posts one packet ending in `<!-- marin-holistic-review:<sha> -->`.
+Unlike the correctness review, the workflow also launches on `synchronize`;
+runs for an earlier head are cancelled, and the session posts nothing when the
+delta since the last reviewed head is under 100 changed lines, touches only
+fixtures or documentation, or consists only of `Deslop` commits. The review is
+advisory and is not a required check.
 
 The `deslop` job in `ops-loom-github.yaml` launches a `github-automation`
-session, at most once per PR, when a holistic packet is posted on a pull
-request carrying `agent-generated`, or when a maintainer review contains
-`deslop`. The session
+session when a holistic packet is posted on a pull request carrying
+`agent-generated`, or when a maintainer review contains `deslop`. The session
 applies only the packet's mechanical items and the `noslop` skill, pushes one
 `Deslop` commit after the narrow checks pass, and replies with
 `<!-- marin-deslop:<sha> -->`. Pull requests without `agent-generated` receive
-committable suggestions and no push. Deslop pushes do not trigger another
-holistic review.
+committable suggestions and no push. The holistic session ignores a head whose
+delta is only `Deslop` commits, which closes the review-then-deslop loop.
 
 ## External dependency updates
 
