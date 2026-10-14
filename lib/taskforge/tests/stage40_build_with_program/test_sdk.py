@@ -6,14 +6,20 @@ import json
 import pytest
 from pydantic import BaseModel
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import ArtifactKind, VerifierArtifact
+from verifyit.spec import ExactSpec
 
+from taskforge.spec import draft
+from taskforge.spec.draft import VERDICT_REWARD
 from taskforge.stage40_build_with_program.context import BuildFailure
 from taskforge.stage40_build_with_program.outputs import WebCall
 from taskforge.stage40_build_with_program.sdk import (
     ATTEMPTS,
     DIAGNOSTICS_CHARS,
+    WORKDIR,
     accept,
     grade_diagnostics,
+    output_paths,
     research,
     structured_until,
 )
@@ -116,3 +122,22 @@ def test_grade_diagnostics_cuts_a_long_text_in_the_middle():
     assert "ValueError: bad row 7" in text
     assert "characters cut]" in text
     assert len(text) < DIAGNOSTICS_CHARS + 50
+
+
+def test_output_paths_name_the_reference_files_for_an_artifact_grader_too():
+    """A grader that reads the workspace through an artifact still has output paths, for the controls."""
+    reference = (draft.file("workspace/report.txt", "42"), draft.file("workspace/notes.md", "x"))
+    environment = draft.grader_environment(f"registry.example/task@sha256:{'0' * 64}")
+    through_artifact = draft.script_grader(
+        ("python3", "/tests/grade.py"),
+        VERDICT_REWARD,
+        environment=environment,
+        answer_path=None,
+        timeout=60,
+        artifacts=(VerifierArtifact(source=WORKDIR, target=WORKDIR, kind=ArtifactKind.DIRECTORY),),
+    )
+    direct = draft.python_grader("pass", {}, environment=environment, answer_path=None, timeout=60)
+
+    assert output_paths(through_artifact, reference) == ("/workspace/notes.md", "/workspace/report.txt")
+    assert output_paths(direct, reference) == ("/workspace/notes.md", "/workspace/report.txt")
+    assert output_paths(draft.answer_grader(ExactSpec(expected=("42",))), reference) == ()
