@@ -41,7 +41,6 @@ def test_joint_recipe_crosses_pinned_launcher_boundary(tmp_path):
             data_uri=str(tmp_path / "data"),
             data_version="dev",
             max_steps=2,
-            judge_base_url="https://judge.invalid/v1",
         )
     launch = run.build_config(StepContext.for_fingerprint(run.runtime_args, run.deps))
     path = tmp_path / "launch.yaml"
@@ -60,5 +59,11 @@ def test_joint_recipe_crosses_pinned_launcher_boundary(tmp_path):
         "auxiliary_active": True,
         "verified_boundaries": True,
         "sampling_kind": "domain-weighted",
-        "domain_weights": {"real": 2.0, "structural": 1.0},
+        "domain_weights": {
+            "calendar": 0.5,
+            "competitive_code": 0.5,
+            "reasoning_gym": 0.5,
+            "stem_mcqa": 0.5,
+            "structural": 1.0,
+        },
     }

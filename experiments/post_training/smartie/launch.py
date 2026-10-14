@@ -46,14 +46,10 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def training_config(max_steps: int, judge_base_url: str) -> dict:
+def training_config(max_steps: int) -> dict:
     """Render the objective and runtime settings; SkyRLSpec supplies role geometry."""
     with Path(__file__).with_name("recipe.yaml").open() as stream:
         config = yaml.safe_load(stream)
-    config["environment"]["task_sessions"]["remote_judge"] = {
-        "base_url": judge_base_url,
-        "api_key_env": "GLM_BULK_TOKEN",
-    }
     trainer = config["trainer"]
     trainer.update(
         max_steps=max_steps,
@@ -93,7 +89,7 @@ def training_config(max_steps: int, judge_base_url: str) -> dict:
     return config
 
 
-def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: int, judge_base_url: str) -> ArtifactStep:
+def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: int) -> ArtifactStep:
     """Bind regional model bytes and native train/validation tasks to an 80-H100 run."""
     name = user_owned_name("models/snowball-smartie")
     model = ArtifactStep.adopt(
@@ -108,7 +104,7 @@ def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: in
         SkyRLSpec(
             name=name,
             version=resolve_version(name, None),
-            config_yaml=yaml.safe_dump(training_config(max_steps, judge_base_url), sort_keys=False),
+            config_yaml=yaml.safe_dump(training_config(max_steps), sort_keys=False),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=model, tokenizer_uri=MODEL_REPOSITORY, tokenizer_revision=MODEL_REVISION, relative_path=""
@@ -131,7 +127,7 @@ def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: in
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=72,
             wandb_entity=None,
-            required_env_vars=("DAYTONA_RL_API_KEY", "GLM_BULK_TOKEN"),
+            required_env_vars=("DAYTONA_RL_API_KEY",),
         ),
         export_hf=True,
     )
@@ -141,16 +137,14 @@ def build_run(*, model_uri: str, data_uri: str, data_version: str, max_steps: in
 @click.option("--model-uri", required=True, help="Regional HF-format bytes verified against the pinned initializer.")
 @click.option("--data-uri", required=True, help="Admitted mixed native-task directory, including validation.parquet.")
 @click.option("--data-version", required=True, help="Immutable admitted dataset version.")
-@click.option("--judge-base-url", required=True, help="Resolved RNO2A judge endpoint, including /v1.")
 @click.option("--max-steps", type=click.IntRange(min=2), default=2, show_default=True)
 @rl_build_options
-def main(model_uri: str, data_uri: str, data_version: str, max_steps: int, judge_base_url: str) -> ArtifactStep:
+def main(model_uri: str, data_uri: str, data_version: str, max_steps: int) -> ArtifactStep:
     return build_run(
         model_uri=model_uri,
         data_uri=data_uri,
         data_version=data_version,
         max_steps=max_steps,
-        judge_base_url=judge_base_url,
     )
 
 

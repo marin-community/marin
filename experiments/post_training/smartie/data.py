@@ -163,6 +163,8 @@ def build_real_dataset(
                     **asdict(source),
                     "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
                     "shard_sha256": hashes,
+                    "train_ids": [task.task.id for task in train],
+                    "validation_ids": [task.task.id for task in val],
                 }
             )
         except (ValueError, KeyError, TypeError, OSError, NotImplementedError) as error:

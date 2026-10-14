@@ -26,6 +26,7 @@ from experiments.post_training.task_curation.images.build import (
     identity_digest,
 )
 from experiments.post_training.task_curation.tests.image_builds import (
+    LOCK,
     REPOSITORY,
     TOOLCHAIN_FRAGMENT,
     install_fake_build_tools,
@@ -148,6 +149,17 @@ def test_build_refuses_a_lock_git_does_not_track(lock, docker_log, tmp_path):
     environment = Environment(lock=untracked)
     with pytest.raises(ValueError, match="tracked by git"):
         build_environment(environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out")))
+
+
+def test_build_from_a_gitless_source_bundle_records_the_content_hashed_lock(docker_log, tmp_path):
+    lock = tmp_path / "bundle.lock"
+    lock.write_text(LOCK)
+    environment = Environment(lock=lock)
+    built = build_environment(
+        environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out"))
+    )
+    assert StoragePath(built.lock_url).read_bytes() == lock.read_bytes()
+    assert built.identity == identity_digest(environment)
 
 
 def test_an_image_build_requires_repository_credentials(lock, docker_log, tmp_path):

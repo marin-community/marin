@@ -229,20 +229,35 @@ def _git_tracked(directory: Path, pathspec: str) -> set[str]:
     return {path for path in listed.split("\0") if path}
 
 
-def _require_tracked(environment: Environment) -> None:
-    """The files the identity hashes must be exactly git-tracked files, and package files have no exec bits.
+def _has_git_index(directory: Path) -> bool:
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        == "true"
+    )
 
-    Consumers recompute the identity from a workspace bundle that has no git metadata and no exec bits,
-    so an untracked or executable file here would give them a different identity.
+
+def _require_tracked(environment: Environment) -> None:
+    """Check tracked inputs when Git metadata is present and reject executable runtime files.
+
+    Iris source bundles omit Git metadata but retain the content-hashed files that define the identity.
     """
     for hashed in (environment.lock, environment.dockerfile):
-        if hashed is not None and hashed.name not in _git_tracked(hashed.parent, hashed.name):
+        if (
+            hashed is not None
+            and _has_git_index(hashed.parent)
+            and hashed.name not in _git_tracked(hashed.parent, hashed.name)
+        ):
             raise ValueError(f"{hashed} must be tracked by git")
     for package in RUNTIME_PACKAGES:
         files = context_files(package)
         found = {file.path for file in files}
-        expected = _git_tracked(package, ".")
-        if found != expected:
+        if _has_git_index(package) and found != (expected := _git_tracked(package, ".")):
             raise ValueError(
                 f"{package} must contain exactly its git-tracked files; "
                 f"untracked: {sorted(found - expected)}, missing: {sorted(expected - found)}"

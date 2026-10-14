@@ -30,38 +30,50 @@ def test_mixture_preserves_payloads_and_rejects_cross_split_leakage(tmp_path, ov
     structural = tmp_path / "structural"
     real.mkdir()
     structural.mkdir()
-    real_manifest = {"failures": []}
+    real_manifest = {
+        "failures": [],
+        "sources": [{"root": "fixture/calendar"}, {"root": "fixture/competitive_code"}],
+    }
     structural_manifest = {"outputs": {}}
     expected = {}
     for split in ("train", "validation"):
         expected[split] = []
         for route, root in (("real", real), ("structural", structural)):
-            identity = f"{route}-{split}"
+            identities = [f"calendar-{split}", f"code-{split}"] if route == "real" else [f"structural-{split}"]
             if overlap and route == "structural" and split == "validation":
-                identity = "real-train"
-            payload = lowered(arithmetic_task(id=identity)).model_dump_json()
-            expected[split].append(payload)
+                identities = ["calendar-train"]
+            payloads = [lowered(arithmetic_task(id=identity)).model_dump_json() for identity in identities]
+            expected[split].extend(payloads)
             path = root / f"{split}.parquet"
-            pq.write_table(pa.table({"lowered_task_spec": [payload]}), path)
+            pq.write_table(pa.table({"lowered_task_spec": payloads}), path)
             if route == "real":
-                real_manifest[f"{split}_ids"] = [identity]
+                real_manifest[f"{split}_ids"] = identities
+                for source, identity in zip(real_manifest["sources"], identities, strict=True):
+                    source[f"{split}_ids"] = [identity]
             else:
                 structural_manifest["outputs"][split] = {
-                    "rows": 1,
+                    "rows": len(identities),
                     "native_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 }
     (real / "manifest.json").write_text(json.dumps(real_manifest))
     (structural / "manifest.json").write_text(json.dumps(structural_manifest))
     output = tmp_path / "mixed"
+    mixing = {
+        "source_routes": {"fixture/calendar": "calendar", "fixture/competitive_code": "competitive_code"},
+        "domain_weights": {"calendar": 1.0, "competitive_code": 1.0, "structural": 1.0},
+    }
     if overlap:
         with pytest.raises(ValueError, match="overlapping task identities"):
-            build_mixture(StoragePath(str(real)), structural, StoragePath(str(output)))
+            build_mixture(StoragePath(str(real)), structural, StoragePath(str(output)), **mixing)
         assert not output.exists()
         return
-    build_mixture(StoragePath(str(real)), structural, StoragePath(str(output)))
+    build_mixture(StoragePath(str(real)), structural, StoragePath(str(output)), **mixing)
     for split in expected:
         actual = pq.read_table(output / f"{split}.parquet").to_pydict()
-        assert actual == {"lowered_task_spec": expected[split], "teacher_route": ["real", "structural"]}
+        assert actual == {
+            "lowered_task_spec": expected[split],
+            "teacher_route": ["calendar", "competitive_code", "structural"],
+        }
     assert (output / "manifest.json").exists()
 
 
@@ -266,6 +278,7 @@ def test_source_files_publish_native_splits_only_after_all_sources_pass(tmp_path
     report = build_real_dataset(**kwargs)
     assert len(report["train_ids"]) == 6 and len(report["validation_ids"]) == 2
     assert set(report["train_ids"]).isdisjoint(report["validation_ids"])
+    assert {task_id for source in report["sources"] for task_id in source["train_ids"]} == set(report["train_ids"])
     recovered = {}
     for name in ("train", "validation"):
         for row in pq.read_table(output / f"{name}.parquet").to_pylist():
