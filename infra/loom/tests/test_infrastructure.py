@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from dataclasses import replace
+from pathlib import Path
 
 import pulumi
 import pytest
@@ -188,15 +191,12 @@ def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
     assert launch["uses"] == "./.github/actions/launch-loom-run"
     assert "head.repo.full_name == github.repository" in job["if"]
     assert "strategy" not in job
-    assert launch["with"]["idempotency-key"] == (
-        "pr-review:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
-    )
 
     review_profile = stack["config"]["marin-loom:profiles"]["pr-review"]
     assert 0 < review_profile["idleArchiveSeconds"] <= 900
 
 
-def test_loom_holistic_review_launcher_reviews_each_head_once_and_cancels_stale_runs() -> None:
+def test_loom_holistic_review_launcher_bounds_automatic_sessions_per_pr() -> None:
     workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-holistic-review.yaml"
     workflow = yaml.safe_load(workflow_path.read_text())
     stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
@@ -213,9 +213,6 @@ def test_loom_holistic_review_launcher_reviews_each_head_once_and_cancels_stale_
     assert gate["if"] == "steps.author.outputs.allowed == 'true'"
     assert launch["if"] == "steps.gate.outputs.run == 'true'"
     assert launch["uses"] == "./.github/actions/launch-loom-run"
-    assert launch["with"]["idempotency-key"] == (
-        "pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
-    )
 
     profile = stack["config"]["marin-loom:profiles"]["pr-holistic-review"]
     assert 0 < profile["idleArchiveSeconds"] <= 900
@@ -224,6 +221,43 @@ def test_loom_holistic_review_launcher_reviews_each_head_once_and_cancels_stale_
         "/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main"
     )
     assert federations["pr-holistic-review"]["profile"] == "pr-holistic-review"
+
+
+@pytest.mark.parametrize(
+    ("changed_lines", "api_exit_code", "expected_run"),
+    [(99, 0, "false"), (100, 0, "false"), (101, 0, "true"), (0, 1, None)],
+)
+def test_holistic_synchronize_gate_checks_parent_diff(
+    tmp_path: Path, changed_lines: int, api_exit_code: int, expected_run: str | None
+) -> None:
+    workflow = yaml.safe_load((ROOT.parent.parent / ".github/workflows/ops-loom-holistic-review.yaml").read_text())
+    gate = next(step for step in workflow["jobs"]["review"]["steps"] if step.get("id") == "gate")
+    github_cli = tmp_path / "gh"
+    github_cli.write_text(f"#!/bin/sh\nprintf '%s\\n' {changed_lines}\nexit {api_exit_code}\n")
+    github_cli.chmod(0o755)
+    output = tmp_path / "output"
+    result = subprocess.run(
+        ["bash", "-c", gate["run"]],
+        env={
+            **os.environ,
+            **workflow["env"],
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_REPOSITORY": "marin-community/marin",
+            "EVENT_ACTION": "synchronize",
+            "HEAD_SHA": "a" * 40,
+            "ADDITIONS": "300",
+            "DELETIONS": "0",
+        },
+        capture_output=True,
+        text=True,
+    )
+    if expected_run is None:
+        assert result.returncode != 0
+        assert not output.exists()
+        return
+    assert result.returncode == 0, result.stderr
+    assert output.read_text().strip() == f"run={expected_run}"
 
 
 def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
