@@ -116,6 +116,7 @@ _EP_MOE_IMPLEMENTATIONS = (
     "fixed_pooled_wave_all_to_all",
     "deepep",
 )
+_TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS = ("ring_dedup", "fixed_pooled_wave_all_to_all")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
