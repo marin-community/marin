@@ -56,6 +56,9 @@ DRAFT_DIR = "draft"
 TASK_FILE = "task.json"
 PROVENANCE_FILE = "provenance.json"
 BUILD_STAGE = "build"
+STEP_TIMEOUT = 1800.0
+"""Seconds one step may run before the build fails as the program's; a step that never returns would otherwise
+hold its item for good."""
 """The ``step`` of the ``STAGE`` ledger span ``run_build`` records around a build."""
 
 
@@ -183,8 +186,14 @@ async def run_program(
             code_hash=step.source_digest,
             input_hash=key.digest,
         ) as fields:
+            deadline = asyncio.timeout(STEP_TIMEOUT)
             try:
-                status, memo, output = await cached(store, name, key, output_type, compute)
+                async with deadline:
+                    status, memo, output = await cached(store, name, key, output_type, compute)
+            except TimeoutError as error:
+                if not deadline.expired():
+                    raise
+                raise BuildFailure(f"ran for more than {STEP_TIMEOUT:.0f} seconds without returning", name) from error
             except Exception as error:
                 infrastructure = infrastructure_failure(error)
                 if infrastructure is not None:

@@ -35,6 +35,7 @@ from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
+from taskforge.stage40_build_with_program import run as run_module
 from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext
 from taskforge.stage40_build_with_program.outputs import ResearchFinding, Sources
 from taskforge.stage40_build_with_program.run import (
@@ -287,6 +288,21 @@ async def test_a_failing_sink_raises_a_build_failure_carrying_its_step_name(tmp_
     assert failure.value.step == "task"
     assert str(failure.value) == "task: the numbers do not multiply to the answer"
     assert not (tmp_path / "round" / DRAFT_DIR).exists()
+
+
+async def test_a_step_that_never_returns_fails_the_build_as_the_programs(tmp_path, proposal, services, monkeypatch):
+    monkeypatch.setattr(run_module, "STEP_TIMEOUT", 0.05)
+
+    @rl_env_build_sink
+    async def task(context: RLEnvBuildContext, numbers: TaskResource) -> TaskSpec:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    with pytest.raises(BuildFailure) as failure:
+        await build(tmp_path, proposal, services, rl_env_build_program(numbers, sink=task))
+
+    assert failure.value.step == "task"
+    assert str(failure.value) == "task: ran for more than 0 seconds without returning"
 
 
 @rl_env_build_step
