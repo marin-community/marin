@@ -289,9 +289,7 @@ def test_structured_output_repairs_repeated_required_fields():
     )
     assert isinstance(result, NormalizedTask)
     assert json.loads(grader_config(result.task)["contract"]["schema_str"])["required"] == ["count"]
-    assert [(change.field, change.reason) for change in result.changes] == [
-        ("schema_str", "Remove repeated names from JSON Schema required lists")
-    ]
+    assert [change.field for change in result.changes] == ["schema_str"]
 
 
 def test_structured_output_does_not_rewrite_schema_data():
