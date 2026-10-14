@@ -1,0 +1,34 @@
+{
+  "run_id": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "archive_after_ms": 1791943638806,
+  "scope": "Existing original record IDs only, re-derived with the frozen native serializer from actual selected-attempt rollout groups; every serialized field equals the older archived record. No synthetic record IDs or inferred response content.",
+  "verified_reused_records": [
+    {
+      "record_id": "d749a482a30250b8b5f75380741962e9edc9828955151e9b2b8847494b98f469",
+      "phase": "train",
+      "step": 11,
+      "instance_id": "678",
+      "repetition_id": 5,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000011/d3a2435a73342cf0e96959d5403071e0fc42421e801382c20a26df561e791e72.zip",
+      "archive_etag": "\"a950d917b892bd69acf40e2a2a5aedda\"",
+      "archive_modified_ms": 1791939111549,
+      "record_payload_sha256": "a3cda35c17918556e1b60abec7e061eefbbf5d740be281cff8e689d9ce8b58c0",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce/groups/3d210f4c423947aa93db5ffa077a10ab.pkl",
+      "current_group_etag": "\"f47e062afb7b1e92c01ced9e4b2c704f\"",
+      "current_group_sha256": "5a9c4e88e0af5bd32c43b68453c3eddd2dc1ad36284993cea47d8cb5e6a4477d",
+      "current_group_modified_ms": 1791945675917,
+      "all_serialized_fields_equal": true
+    }
+  ],
+  "physical_budget_checks": [
+    {
+      "step": 11,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    }
+  ],
+  "all_verified": true
+}

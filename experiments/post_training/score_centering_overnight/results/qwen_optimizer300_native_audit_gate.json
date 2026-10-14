@@ -1,0 +1,186 @@
+{
+  "observed_at": "2026-10-14T21:36:11.344998+00:00",
+  "stage": "optimizer only: AdamW with original binary rewards and unnormalized group centering",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "runs": [
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "config_sha256": "0dc416140892fe59a15051f294d8b79bd9c56fb8b210d0870ee7336b0afaedde",
+      "full_native_audit": "results/sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce.json.gz",
+      "full_native_audit_sha256": "a9cb2c735560b6a7d1ac9b14f527dfb8624dff238e4d95e5c6e983d5c84217d8",
+      "updates": 300,
+      "physical_training_responses": 153600,
+      "evaluation_responses": 96384,
+      "native_error_phase_step_instance": [
+        [
+          "train",
+          117,
+          "7442"
+        ],
+        [
+          "train",
+          168,
+          "393"
+        ],
+        [
+          "train",
+          278,
+          "7442"
+        ],
+        [
+          "train",
+          278,
+          "7442"
+        ]
+      ],
+      "verified_reused_record_count": 7,
+      "full_native_audit_passed": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "config_sha256": "b108a16ed3ba72329052e54081e4f98acd86d6a50e972713dddcc1dd60c795f5",
+      "full_native_audit": "results/sc-qwen-transfer-optimizer-sc-s1-main-rno-a1-01a126ce.json.gz",
+      "full_native_audit_sha256": "9c183ae8fa20453ae888a7c7ebde5df4289aad1fffc6eb5855582651e0cdf54f",
+      "updates": 300,
+      "physical_training_responses": 153600,
+      "evaluation_responses": 96384,
+      "native_error_phase_step_instance": [
+        [
+          "train",
+          45,
+          "2848"
+        ],
+        [
+          "train",
+          148,
+          "9436"
+        ],
+        [
+          "train",
+          148,
+          "9436"
+        ],
+        [
+          "train",
+          244,
+          "5264"
+        ],
+        [
+          "train",
+          244,
+          "5264"
+        ],
+        [
+          "train",
+          275,
+          "7224"
+        ],
+        [
+          "train",
+          278,
+          "7437"
+        ],
+        [
+          "train",
+          278,
+          "7437"
+        ]
+      ],
+      "verified_reused_record_count": 1,
+      "full_native_audit_passed": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "config_sha256": "ace57758debeede0a16390025a75cac7daf98155758798f4147d9eb272ee57e1",
+      "full_native_audit": "results/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce.json.gz",
+      "full_native_audit_sha256": "290f48ab534f7e2e077c6867a83d698714495d300599aaf4489a3dedee9098ef",
+      "updates": 300,
+      "physical_training_responses": 153600,
+      "evaluation_responses": 96384,
+      "native_error_phase_step_instance": [
+        [
+          "train",
+          277,
+          "7323"
+        ],
+        [
+          "train",
+          191,
+          "1830"
+        ]
+      ],
+      "verified_reused_record_count": 2,
+      "full_native_audit_passed": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "config_sha256": "d0f74cea98e2d90b938868bc9eb33741428d80e4543f4efc293078123aa52de4",
+      "full_native_audit": "results/sc-qwen-transfer-optimizer-tis-s0-main-interactive-a1-01a126ce.json.gz",
+      "full_native_audit_sha256": "66465f4260c0be82260ec1debbf5fa9d84a56df387868ccd437691ac7721f6f4",
+      "updates": 300,
+      "physical_training_responses": 153600,
+      "evaluation_responses": 96384,
+      "native_error_phase_step_instance": [],
+      "verified_reused_record_count": 0,
+      "full_native_audit_passed": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "config_sha256": "ffde000e28e6ec7de3f3c05edaf9740244017225a9d5aa6f06b304da94283634",
+      "full_native_audit": "results/sc-qwen-transfer-optimizer-tis-s1-main-rno-a1-01a126ce.json.gz",
+      "full_native_audit_sha256": "6f87e5b1a31a483349b4d6ca8c284e7f4e072f7f4339f8fc48e93141d2b3be5a",
+      "updates": 300,
+      "physical_training_responses": 153600,
+      "evaluation_responses": 96384,
+      "native_error_phase_step_instance": [
+        [
+          "train",
+          136,
+          "8677"
+        ],
+        [
+          "train",
+          83,
+          "5254"
+        ]
+      ],
+      "verified_reused_record_count": 4,
+      "full_native_audit_passed": true
+    },
+    {
+      "run_id": "sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "config_sha256": "f599febd4cb7cfaeaf84d9490289151f2f180206d79835b50d426b091fa5587c",
+      "full_native_audit": "results/sc-qwen-transfer-optimizer-tis-s2-main-rno-a1-01a126ce.json.gz",
+      "full_native_audit_sha256": "09e98c631a9ecef2fe8397f7f42e377c8601671d6ed40e54f53d4c9517b22fe9",
+      "updates": 300,
+      "physical_training_responses": 153600,
+      "evaluation_responses": 96384,
+      "native_error_phase_step_instance": [
+        [
+          "train",
+          158,
+          "10098"
+        ],
+        [
+          "train",
+          115,
+          "7323"
+        ]
+      ],
+      "verified_reused_record_count": 1,
+      "full_native_audit_passed": true
+    }
+  ],
+  "identity_checkpoint_crosscheck": "results/qwen_optimizer300_identity_checkpoint_crosscheck.json",
+  "identity_checkpoint_crosscheck_sha256": "2aa8d47a176a7883e95b5135427b1ed12fa331d09a6a19b75a5f841c6435b91c",
+  "full_native_audits_passed": true,
+  "full_new_response_grade_replay_complete": false,
+  "completion_claim": false,
+  "remaining_gate": "Every successful new native response is being replayed against original source rows with the frozen grading contract. All masked execution failures remain separately counted; attempted failed responses are unavailable."
+}

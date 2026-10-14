@@ -1,0 +1,40 @@
+{
+  "run_id": "sc-snowball-incumbent-main-s0-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "qualification": "results/snowball0212_incumbent_qualification.json.gz",
+  "qualification_sha256": "a06e35ed779305b9f9a826affb366c678b52a59b4587af4008b0b211694df4de",
+  "qualification_updates": 5,
+  "preflight": {
+    "config": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v2/s0.yaml",
+    "source_config": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v1/s0.yaml",
+    "run": "sc-snowball-incumbent-main-s0-a2-01a126ce",
+    "sha256": "7776d7eed7336ba5abc855670dcc6b489141f0c9a6b167bd8c13a89a8bb63699",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "seed": 0,
+    "nodes": 5,
+    "gpus_per_node": 8,
+    "priority": "batch",
+    "horizon": 1200,
+    "execution_ceiling_seconds": 604800,
+    "admission_watchdog_seconds": 2400,
+    "callback_schedule_from_native_factory": {
+      "checkpoint_steps": 1200,
+      "save_on_train_end": true,
+      "evaluation_steps": 20,
+      "eval_before_train": true,
+      "eval_on_train_end": false
+    },
+    "changes": [
+      "run-owned paths",
+      "admission watchdog",
+      "correct explicit incumbent callback intervals from qualification 5/5 to declared main 1200/20"
+    ],
+    "remaining_config_fields_unchanged": true,
+    "preflight_exit_code": 0,
+    "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_incumbent_main_v2-s0-preflight.log"
+  },
+  "planned_scientific_updates": 1200,
+  "geometry": "Four8-H100 learners plus one8-H100 inference node, always BATCH. Native PP2/EP8/TP1/CP1/SP1.",
+  "basis": "Exact source0212 ordinary no-head/no-TIS/no-centering path passed five real GPU updates and full native audit. Native asynchronous staleness bound2/full batch and max in flight256. No quality threshold; first actual main native finite-update/no-head gate before other two seeds.",
+  "completion_claim": false
+}

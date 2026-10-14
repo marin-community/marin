@@ -1,0 +1,103 @@
+{
+  "run_id": "sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "archive_after_ms": 1791965251951,
+  "scope": "Existing original record IDs only, re-derived with the frozen native serializer from actual selected-attempt rollout groups; every serialized field equals the older archived record. No synthetic record IDs or inferred response content.",
+  "verified_reused_records": [
+    {
+      "record_id": "cb893af3e45385bc10eeb8249dfe4479c47ce053de2d554a7ffcdd4e0d674c5f",
+      "phase": "train",
+      "step": 95,
+      "instance_id": "6067",
+      "repetition_id": 0,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000095/dca0d0265b7e252c605eb6fe7174bf83767c8266d13defcf24555878494d35ea.zip",
+      "archive_etag": "\"38853c5945c109959637fe58be7b4e98\"",
+      "archive_modified_ms": 1791944341843,
+      "record_payload_sha256": "b884c8e743d0609bda7f15a4b15bbfa41324feebd09ff017387cc6589d729f0f",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/groups/8cb53edd22ed4bf0a7ac9d099fefd401.pkl",
+      "current_group_etag": "\"7190aaaab8bd97e48273e9608759b1d0\"",
+      "current_group_sha256": "52736fd3d7068e8f1dc0e366b5259f04e113dd3fe178d0883a0dbc5129595c56",
+      "current_group_modified_ms": 1791976793906,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "db52114ac644820c9cac4916a83c1cbd916ae665b6e0f976ba2d2b874aa355ae",
+      "phase": "train",
+      "step": 111,
+      "instance_id": "7095",
+      "repetition_id": 1,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000111/846988117a8608bb0224275e7b096aa26838a613649fc15e7cf61a9cabe866b1.zip",
+      "archive_etag": "\"d0e760f7ade4c809f81b57987ae21fe3\"",
+      "archive_modified_ms": 1791946277241,
+      "record_payload_sha256": "9064776eaa0825ec910835c1ab8c0d420dac7fdd003830e6474abe140f037615",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/groups/a65c852cde534efca4823a10a3899ea1.pkl",
+      "current_group_etag": "\"9539dffa6b5d37b4b7f74782b95734cf\"",
+      "current_group_sha256": "809b3b2b2a99c51571d881f43f58d927632c55416013b74e8070516a1e5a5b5c",
+      "current_group_modified_ms": 1791978705053,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "a34827118d426bb890d0c4e4c64c58fdd470d92b262a92a0038ee71574c2c264",
+      "phase": "train",
+      "step": 152,
+      "instance_id": "9695",
+      "repetition_id": 0,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000152/d5b25ba25b704769eb760bd8873123f480fe435e3a037f309b087405769106fc.zip",
+      "archive_etag": "\"75afbb9394690169b783c1bf9e262203\"",
+      "archive_modified_ms": 1791950970799,
+      "record_payload_sha256": "090036475ae2549384eaf99d71d1832ec4c29a869a40150abf27c7d09274b781",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/groups/6dff84b59dd74b5abbd89107661a4f99.pkl",
+      "current_group_etag": "\"9f77e9b1868b1eefb7fd84d76ee1924b\"",
+      "current_group_sha256": "a1ec6cc0c9d5394682c7a5c748c93078c7be3f328e0de593c53119262d35aa16",
+      "current_group_modified_ms": 1791983211347,
+      "all_serialized_fields_equal": true
+    },
+    {
+      "record_id": "cae79d0e9acb4308f8a1cca7d68f982a915174a6b0a26c968f47c14a14f01213",
+      "phase": "train",
+      "step": 157,
+      "instance_id": "10018",
+      "repetition_id": 6,
+      "archive_key": "marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/attempts/trajectories/schema_v5/archives/phase=train/step=00000157/a3a8ab9d8f7e31471ef51f7a7828a9fb68449658287ddb84f5742c2b0970e40a.zip",
+      "archive_etag": "\"de8ea735e1a251e8afec2856be074272\"",
+      "archive_modified_ms": 1791951393343,
+      "record_payload_sha256": "1e278321d04dd0aeeb32fb821a55041791d82ecb515973e933ab7dfece180d6d",
+      "current_group_key": "tmp/ttl=14d/score-centering-overnight-01a123c0/sc-qwen-transfer-curriculum-tis-s2-main-a2-01a126ce/groups/76a22f90fd35454eb832e2c536d5940f.pkl",
+      "current_group_etag": "\"f66211d659363ad7f557b6f7938181bb\"",
+      "current_group_sha256": "6bd3ca3d70a61fc562a16985088858f9ab43c2a112eb6c352a0ae525d08032ac",
+      "current_group_modified_ms": 1791983625041,
+      "all_serialized_fields_equal": true
+    }
+  ],
+  "physical_budget_checks": [
+    {
+      "step": 95,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    },
+    {
+      "step": 111,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    },
+    {
+      "step": 152,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    },
+    {
+      "step": 157,
+      "new_records": 511,
+      "declared_duplicate_records": 1,
+      "verified_existing_records": 1,
+      "physical_responses": 512
+    }
+  ],
+  "all_verified": true
+}

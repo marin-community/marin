@@ -47,6 +47,9 @@ def summarize(config: dict, audit: dict, cache: Path, costs: dict, *, recovery_r
     allocation_jobs = {"/romain/" + identity for identity in (run_id, *recovery_run_ids)}
     attempts = [row for row in costs["attempts"] if row["task_id"].rsplit("/", 1)[0] in allocation_jobs]
     assert attempts and all(int(row["finished_at_ms"]) for row in attempts)
+    allocated_starts = [int(row["started_at_ms"]) for row in attempts if row["started_at_ms"]]
+    assert allocated_starts
+    assert all(row["allocated_h100_hours"] == 0 for row in attempts if not row["started_at_ms"])
     metrics = [
         json.loads((cache / "exports/training_metrics" / f"train-{step:08d}.json").read_text())
         for step in range(1, updates + 1)
@@ -69,7 +72,7 @@ def summarize(config: dict, audit: dict, cache: Path, costs: dict, *, recovery_r
         points.append(
             {
                 **point,
-                "elapsed_seconds": (stamp - min(int(row["started_at_ms"]) for row in attempts)) / 1000,
+                "elapsed_seconds": (stamp - min(allocated_starts)) / 1000,
                 "consumed_loss_tokens": sum(row["async/performance/consumed_loss_tokens"] for row in metrics[:step]),
                 "allocated_h100_hours": allocated_hours(attempts, stamp),
                 "errors": sum(row["errors"] for row in rows),

@@ -1,0 +1,15 @@
+{
+  "run_id": "sc-qwen-transfer-curriculum-sc-s1-main-rno-a1-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scientific_completed_controller_attempt": 0,
+  "original_poddeleted_finished_at_ms": 1791969337189,
+  "full300_audit_passed": true,
+  "training_metrics_and_captures_evaluation_objects_checked": 616,
+  "native_archive_objects_checked": 19216,
+  "checkpoint_inventory_objects": 20,
+  "all_original_scientific_artifacts_predate_original_poddeleted": true,
+  "native_training_errors": 1,
+  "native_error_type": "AgentTimeoutError",
+  "later_retries": "All later allocated attempts are retained and charged; later startup failures do not remove the fully audited original endpoint.",
+  "scientific_rerun_required": false
+}

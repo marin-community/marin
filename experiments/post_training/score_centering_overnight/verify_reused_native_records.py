@@ -31,7 +31,9 @@ parser.add_argument("--after-ms", type=int, required=True)
 parser.add_argument("--output", type=Path, required=True)
 args = parser.parse_args()
 cfg = yaml.safe_load(args.config.read_text())
-assert cfg["skyrl"]["generator"]["sampler_refresh_period"] == 1, "This verifier covers fresh-sampler training records."
+assert (
+    cfg["skyrl"]["generator"].get("sampler_refresh_period", 1) == 1
+), "This verifier covers fresh-sampler training records."
 run = cfg["run"]["id"]
 size = cfg["skyrl"]["trainer"]["train_batch_size"] * cfg["skyrl"]["generator"]["n_samples_per_prompt"]
 group_size = cfg["skyrl"]["generator"]["n_samples_per_prompt"]

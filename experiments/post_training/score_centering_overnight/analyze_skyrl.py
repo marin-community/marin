@@ -21,6 +21,7 @@ def allocated_hours(attempts: list[dict], cutoff_ms: int) -> float:
     return sum(
         max(0, min(int(row["finished_at_ms"]), cutoff_ms) - int(row["started_at_ms"])) * int(row["gpus"]) / 3_600_000
         for row in attempts
+        if row["started_at_ms"]
     )
 
 
