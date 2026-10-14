@@ -931,6 +931,8 @@ class GrugModelConfig:
     fp8_recipe: Fp8Recipe = Fp8Recipe.NONE
     """Low-precision recipe for attention/KDA projections, the fused router-latent-shared projection (router
     columns excluded), the latent up-projection, the shared expert and the routed experts; see ``Fp8Recipe``."""
+    mxfp8_fused_grad_quant: bool = False
+    """Real-MXFP8 dense projections quantize the output gradient along rows and columns in one Pallas pass."""
     moe_ragged_chunks: int = 2
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
@@ -1194,7 +1196,7 @@ def _proj(cfg: "GrugModelConfig", x: jax.Array, w: jax.Array, out_sharding: P | 
         # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
         from levanter.grug._moe.quack_mxfp8 import mx_linear  # noqa: PLC0415
 
-        return mx_linear(x, w, out_sharding)
+        return mx_linear(x, w, out_sharding, cfg.mxfp8_fused_grad_quant)
     return jnp.einsum("...k,kn->...n", x, w, out_sharding=out_sharding)
 
 

@@ -33,7 +33,7 @@ from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
-from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows
+from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows, quantize_rows_cols
 from levanter.grug.mxfp8 import MX_BLOCK, mx_dequantize_rows, mx_quantize_cols, mx_quantize_rows, mx_unpack_rows
 from levanter.grug._moe.quack_moe_cute import _ACC, _QUACK_USE_PDL, _max_active_clusters, _mint_epilogue_gemm
 
@@ -435,18 +435,20 @@ def _token_spec(x_spec: P, ndim: int) -> P:
     return P(*entries[:-1], None)
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(2,))
-def mx_linear(x: jax.Array, w: jax.Array, out_sharding: P | None = None) -> jax.Array:
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3))
+def mx_linear(x: jax.Array, w: jax.Array, out_sharding: P | None = None, fused_grad_quant: bool = False) -> jax.Array:
     """``x[..., K] @ w[K, N]`` with MXFP8 operands in all three GEMMs, on QuACK's block-scaled SM100 kernel.
 
     Tokens may be sharded on any leading axes; a sharded feature dim of ``x`` is gathered first. ``w`` is gathered like the
     einsum it replaces would gather it, and its gradient comes back sharded as ``w``. Every GEMM quantizes both of
     its operands along its own contraction axis (the weight gradient along tokens), as ``levanter.grug.mxfp8``
-    simulates."""
-    return _mx_linear_fwd(x, w, out_sharding)[0]
+    simulates. ``fused_grad_quant`` quantizes the output gradient along rows and columns in one pass (1.22x faster,
+    but both quantized copies are live at once)."""
+    return _mx_linear_fwd(x, w, out_sharding, fused_grad_quant)[0]
 
 
-def _mx_linear_fwd(x, w, out_sharding):
+def _mx_linear_fwd(x, w, out_sharding, fused_grad_quant):
+    del fused_grad_quant
     x_spec = _token_spec(jax.typeof(x).sharding.spec, x.ndim)
     k, n = w.shape
 
@@ -463,7 +465,7 @@ def _mx_linear_fwd(x, w, out_sharding):
     return y, (x, w)
 
 
-def _mx_linear_bwd(out_sharding, res, g):
+def _mx_linear_bwd(out_sharding, fused_grad_quant, res, g):
     del out_sharding
     x, w = res
     x_orig_spec = jax.typeof(x).sharding.spec
@@ -476,10 +478,12 @@ def _mx_linear_bwd(out_sharding, res, g):
 
     def local(xl, gl, wv, we):
         x2, g2 = xl.reshape(-1, k), gl.reshape(-1, n)
-        # Separate passes: quantize_rows_cols reads g once (1.22x) but keeping both copies live pushes the GB200
-        # recipe over the NCCL memory edge (lc1-gb200-profrc).
-        dx = mxfp8_matmul_dgrad(quantize_rows(g2), wv, we).reshape(xl.shape)
-        dw = _reduce_partial_to_spec(mxfp8_matmul_wgrad(x2, quantize_cols(g2)), dw_spec, batch_axes)
+        # The separate passes keep one quantized copy live at a time; the fused pass pushed the GB200 recipe with the
+        # bigram table over the NCCL memory edge (lc1-gb200-profrc).
+        g_rows, g_cols = quantize_rows_cols(g2) if fused_grad_quant else (quantize_rows(g2), None)
+        dx = mxfp8_matmul_dgrad(g_rows, wv, we).reshape(xl.shape)
+        dw = mxfp8_matmul_wgrad(x2, quantize_cols(g2) if g_cols is None else g_cols)
+        dw = _reduce_partial_to_spec(dw, dw_spec, batch_axes)
         return dx, dw
 
     replicated = P(None, None)
