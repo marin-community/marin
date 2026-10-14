@@ -197,7 +197,7 @@ class FixtureImageFactory(DockerMachineFactory):
 
     async def create(self, spec):
         return await ShellSimMachineFactory().create(
-            replace(spec, source=PackageSpec(pypi_packages=()), workdir=spec.workdir or "/workspace")
+            replace(spec, source=PackageSpec(), workdir=spec.workdir or "/workspace")
         )
 
 
@@ -994,21 +994,17 @@ async def test_ungraded_task_reports_reason_without_a_verifier_machine():
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
 async def test_script_grader_reads_answer_and_conversation_files_without_a_task_machine(answer, reward):
-    script = (
-        b"import json\n"
-        b"messages = json.load(open('/tests/conversation.json'))\n"
-        b"answer = open('/app/answer.txt').read()\n"
-        b"question = messages[0]['content'] == 'What is six plus six?'\n"
-        b"print(float(question and messages[-1]['content'] == answer == '12'))\n"
-    )
+    script = b"""answer=$(cat /app/answer.txt)
+jq --arg answer "$answer" 'if .[0].content == "What is six plus six?" and
+    .[-1].content == $answer and $answer == "12" then 1 else 0 end' /tests/conversation.json
+"""
     task = arithmetic_task(
-        grader=ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADER_ENVIRONMENT),
-        resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+        grader=ScriptGrader(argv=("sh", "/tests/grade.sh"), environment=GRADER_ENVIRONMENT),
+        resources=ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
     )
     factory = RecordingShellSimFactory()
-    # This input-contract test includes cold Wasmtime compilation of CPython.
     record = await engine(ReplayModel([{"role": "assistant", "content": answer}]), {"local": factory}).run(
-        lowered(task, verifier_machine=machine_runtime(), verifier_timeout=30)
+        lowered(task, verifier_machine=machine_runtime())
     )
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
     assert len(factory.machines) == 1
@@ -1023,7 +1019,7 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(a
         environment_requirements=EnvironmentRequirements(
             command_semantics=command_semantics,
             docker_image=FIXTURE_IMAGE if command_semantics == CommandSemantics.LINUX_PROCESS else None,
-            capabilities=("shell", "filesystem", "python"),
+            capabilities=("shell", "filesystem"),
         ),
         grader=workspace_grader(
             argv=("sh", "/tests/grade.sh"),
@@ -1052,9 +1048,7 @@ async def test_private_verifier_receives_binary_artifacts_in_a_fresh_workspace(a
     simulator = RecordingShellSimFactory(backend=Backend.SHELLSIM)
     model = ReplayModel(
         [
-            shell_call(
-                "python3 -c 'print(6 + 6)' && test ! -f /tests/expected && cp input answer && echo tainted > baseline"
-            ),
+            shell_call("printf '12\\n' && test ! -f /tests/expected && cp input answer && echo tainted > baseline"),
             {"role": "assistant", "content": "Done."},
         ]
     )
