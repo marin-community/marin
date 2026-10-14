@@ -6,6 +6,7 @@
 import enum
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -24,7 +25,7 @@ from connectrpc.errors import ConnectError
 from fray.actor import ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ActorConfig, EnvironmentConfig, ResourceConfig
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging import telemetry
@@ -32,6 +33,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, log_time
 from starlette.types import ASGIApp
 
+from zephyr import memory_budget
 from zephyr.dashboard.app import (
     PipelinePlan,
     PlanNodeState,
@@ -136,6 +138,14 @@ def _resolve_execution_history_url() -> str | None:
         return context.client.resolve_endpoint(ZEPHYR_HISTORY_ENDPOINT_NAME).rstrip("/")
     except (ConnectionError, ConnectError):
         return None
+
+
+def thread_cap_environment(cpu: float) -> EnvironmentConfig:
+    """Return the actor-group environment that caps native pools at ``cpu``."""
+    # EnvironmentConfig rejects a config with neither workspace nor image, but
+    # convert_environment never reads workspace (the Iris client owns it), so
+    # this value is a placeholder; only env_vars reach the job.
+    return EnvironmentConfig(workspace=os.getcwd(), env_vars=memory_budget.native_thread_env(cpu))
 
 
 class WorkerState(enum.StrEnum):
@@ -482,6 +492,10 @@ class ZephyrCoordinator:
             count=worker_count,
             resources=worker_resources,
             actor_config=actor_config,
+            # Native pools size themselves at import from the node's core
+            # count, not the container's share; inline stages run in this
+            # process, so the cap has to be in its launch environment.
+            environment=thread_cap_environment(worker_resources.cpu),
         )
 
     def worker_handles(self, count: int, timeout: float) -> tuple[ActorHandle, ...]:

@@ -191,3 +191,23 @@ def read_merge_fan_in(
 def polars_thread_count(task_cpu: float) -> int:
     """Return the Polars thread-pool size for a task's CPU allocation."""
     return max(1, math.ceil(task_cpu))
+
+
+def native_thread_env(cpu: float) -> dict[str, str]:
+    """Return env vars that size every native thread pool to a CPU allocation.
+
+    Each library reads its variable once, at import or first pool init, so the
+    values only take effect in the environment of a process that has not yet
+    imported it: OMP_NUM_THREADS covers OpenMP (faiss, torch, numba's omp layer,
+    Arrow's CPU pool); the others cover Polars, OpenBLAS/MKL, numba and rayon
+    (HF tokenizers). Without them each pool defaults to the node's core count.
+    """
+    threads = str(polars_thread_count(cpu))
+    return {
+        "POLARS_MAX_THREADS": threads,
+        "OMP_NUM_THREADS": threads,
+        "OPENBLAS_NUM_THREADS": threads,
+        "MKL_NUM_THREADS": threads,
+        "NUMBA_NUM_THREADS": threads,
+        "RAYON_NUM_THREADS": threads,
+    }

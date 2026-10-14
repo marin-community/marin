@@ -25,6 +25,7 @@ from fray.types import (
     ActorConfig,
     BinaryEntrypoint,
     CallableEntrypoint,
+    EnvironmentConfig,
     JobRequest,
     JobStatus,
     ResourceConfig,
@@ -189,9 +190,13 @@ class LocalClient:
         count: int,
         resources: ResourceConfig = ResourceConfig(),
         actor_config: ActorConfig = ActorConfig(),
+        environment: EnvironmentConfig | None = None,
         **kwargs: Any,
     ) -> ActorGroup:
-        """Create N in-process actor instances, returning a group handle."""
+        """Create N in-process actor instances, returning a group handle.
+
+        ``environment`` is ignored: actors are threads of this process.
+        """
         handles: list[LocalActorHandle] = []
         jobs: list[LocalJobHandle] = []
         try:

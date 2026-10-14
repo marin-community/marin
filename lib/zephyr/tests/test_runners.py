@@ -74,7 +74,8 @@ def test_simple_map(local_client, tmp_path, runner_factory):
     assert sorted(results) == [3, 6, 9, 12, 15]
 
 
-def test_subprocess_runner_limits_polars_threads_to_task_cpu(local_client, tmp_path):
+@pytest.mark.parametrize(("task_cpu", "expected"), [(1, 1), (2.5, 3)])
+def test_subprocess_runner_sizes_polars_pool_to_task_cpu(local_client, tmp_path, task_cpu, expected):
     def polars_thread_pool_size(_: int) -> int:
         return pl.thread_pool_size()
 
@@ -89,12 +90,12 @@ def test_subprocess_runner_limits_polars_threads_to_task_cpu(local_client, tmp_p
     try:
         results = ctx.execute(
             Dataset.from_list([0]).map(polars_thread_pool_size),
-            map_task_resources=ResourceConfig(cpu=1, ram="256m"),
+            map_task_resources=ResourceConfig(cpu=task_cpu, ram="256m"),
         ).results
     finally:
         ctx.shutdown()
 
-    assert results == [1]
+    assert results == [expected]
 
 
 def test_user_counters_propagate(local_client, tmp_path, runner_factory):
