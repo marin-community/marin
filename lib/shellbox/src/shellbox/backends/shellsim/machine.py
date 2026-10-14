@@ -57,7 +57,11 @@ class ShellSimShellSession:
         self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
     ) -> ShellUpdate:
         try:
-            result = await self.machine._run_source(command, shell=self.shell)
+            result = await asyncio.wait_for(
+                self.machine._run_source(command, shell=self.shell, timeout=wait), timeout=wait
+            )
+        except TimeoutError:
+            return ShellUpdate(b"", ShellStatus.RUNNING)
         except shellsim.SimulationError as error:
             output = str(error).encode()
             return ShellUpdate(
@@ -119,16 +123,21 @@ class ShellSimMachine:
         initial.check_returncode()
 
     @asynccontextmanager
-    async def _simulation_turn(self) -> AsyncIterator[None]:
-        """Hold the simulation for one operation, after any command still running past its timeout.
+    async def _simulation_turn(self, timeout: float | None) -> AsyncIterator[None]:
+        """Hold the simulation for one operation whose caller waits at most ``timeout`` seconds.
 
-        The interpreter runs on one thread and cannot be interrupted, so a command whose caller
-        stopped waiting keeps simulating. The next operation waits for it under the lock rather
-        than running beside it, and the machine stays usable once it ends.
+        A command that outran its timeout keeps simulating on its thread, since the interpreter
+        cannot be interrupted. An operation with a deadline of its own waits for it under the lock
+        and runs once it ends; an operation without one (``timeout`` is ``None``) is refused at once
+        rather than waiting for a command that may never end.
         """
         if self._closed:
             raise RuntimeError("Machine is closed")
         async with self._lock:
+            if self._running is not None and not self._running.done() and timeout is None:
+                raise RuntimeError(
+                    "A command is still running past its timeout; this operation has no deadline to wait under"
+                )
             if self._running is not None:
                 await asyncio.wait({self._running})
                 error = None if self._running.cancelled() else self._running.exception()
@@ -138,9 +147,9 @@ class ShellSimMachine:
             yield
 
     async def _run_source(
-        self, source: str, stdin: bytes = b"", *, shell: shellsim.ShellSession | None = None
+        self, source: str, stdin: bytes = b"", *, shell: shellsim.ShellSession | None = None, timeout: float | None
     ) -> shellsim.RunResult:
-        async with self._simulation_turn():
+        async with self._simulation_turn(timeout):
             runner = self.simulation.run if shell is None else shell.run
             running = asyncio.create_task(asyncio.to_thread(runner, source, stdin))
             self._running = running
@@ -169,7 +178,9 @@ class ShellSimMachine:
         )
         source = f"sh -c {shlex.quote(f'cd {shlex.quote(cwd)}; {environment} {shlex.join(command.argv)}')}"
         try:
-            result = await asyncio.wait_for(self._run_source(source, command.stdin), timeout=command.timeout)
+            result = await asyncio.wait_for(
+                self._run_source(source, command.stdin, timeout=command.timeout), timeout=command.timeout
+            )
         except TimeoutError:
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except shellsim.SimulationError as error:
@@ -194,7 +205,7 @@ class ShellSimMachine:
         )
 
     async def upload(self, source: Path, target: str) -> None:
-        async with self._simulation_turn():
+        async with self._simulation_turn(None):
             if source.is_dir():
                 await asyncio.to_thread(self.simulation.mount, source, target)
                 return
@@ -202,7 +213,7 @@ class ShellSimMachine:
             self.simulation.write_file(target, source.read_bytes(), mode=source.stat().st_mode & 0o7777)
 
     async def download(self, source: str, target: Path) -> None:
-        async with self._simulation_turn():
+        async with self._simulation_turn(None):
             if target.exists() and target.is_dir():
                 archive = f"/__harbor_download_{uuid.uuid4().hex}.tar"
                 command = f"tar -cf {shlex.quote(archive)} -C {shlex.quote(source)} ."

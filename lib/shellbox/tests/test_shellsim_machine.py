@@ -40,20 +40,43 @@ def test_download_rejects_file_and_byte_overflow(limits):
     asyncio.run(check())
 
 
-def test_a_command_past_its_timeout_leaves_the_machine_usable() -> None:
-    """The timed-out command keeps simulating on its thread; the next command waits for it, then runs."""
+SLOW_LOOP = "i=0; while [ $i -lt 200000 ]; do i=$((i+1)); done"
+
+
+def test_a_command_past_its_timeout_leaves_the_machine_usable(tmp_path: Path) -> None:
+    """A later command with a deadline waits for the timed-out one; a transfer without one is refused at once."""
 
     async def scenario():
         machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
-        loop = "i=0; while [ $i -lt 200000 ]; do i=$((i+1)); done"
-        slow = await machine.run(Command(("sh", "-c", loop), timeout=0.05))
+        slow = await machine.run(Command(("sh", "-c", SLOW_LOOP), timeout=0.05))
+        source = tmp_path / "note"
+        source.write_text("hello")
+        with pytest.raises(RuntimeError, match="still running past its timeout"):
+            await machine.upload(source, "/workspace/note")
         after = await machine.run(Command(("echo", "after"), timeout=10))
+        await machine.upload(source, "/workspace/note")
+        noted = await machine.run(Command(("cat", "/workspace/note"), timeout=10))
+        await machine.close()
+        return slow, after, noted
+
+    slow, after, noted = asyncio.run(scenario())
+    assert slow.reason is ExitReason.TIMED_OUT
+    assert (after.exit_code, after.stdout) == (0, b"after\n")
+    assert noted.stdout == b"hello"
+
+
+def test_a_shell_action_past_its_wait_reports_running_and_the_next_one_waits() -> None:
+    async def scenario():
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        shell = await machine.open_shell()
+        slow = await shell.execute(SLOW_LOOP, wait=0.05)
+        after = await shell.execute("echo after", wait=10)
         await machine.close()
         return slow, after
 
     slow, after = asyncio.run(scenario())
-    assert slow.reason is ExitReason.TIMED_OUT
-    assert (after.exit_code, after.stdout) == (0, b"after\n")
+    assert slow.status is ShellStatus.RUNNING
+    assert (after.status, after.output) == (ShellStatus.COMPLETED, b"after\n")
 
 
 def test_shell_state_and_one_shot_command() -> None:
