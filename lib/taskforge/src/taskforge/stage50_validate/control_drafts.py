@@ -208,14 +208,30 @@ def check_controls_not_graded(controls: Sequence[Control], grader: Grader) -> No
         )
 
 
-def output_paths_text(output_paths: Sequence[str]) -> str:
-    """The request's statement of the files a control may write."""
+def output_paths_text(output_paths: Sequence[str], shipped: Sequence[str]) -> str:
+    """The request's statement of the files a control may write.
+
+    ``shipped`` names the output paths the task's own files already occupy in the machine; a control
+    edits those in place rather than writing them again from memory.
+    """
     if not output_paths:
         return "The task has no output paths, so every control is a final reply alone with no files."
-    return (
+    text = (
         "A control writes files only at these output paths, the files the grader reads from the candidate's "
         f"machine, with each path absolute as listed: {', '.join(output_paths)}."
     )
+    if shipped:
+        text += (
+            f" Of these, the task ships {', '.join(shipped)} in the machine already: a control changes such a "
+            "file where the task's solution would, and leaves the rest of it as shipped."
+        )
+    return text
+
+
+def shipped_output_paths(task: TaskSpec) -> tuple[str, ...]:
+    """The task's output paths that its agent-visible files already occupy."""
+    shipped = {f"/{resource.path}" for resource in (*task.resources.all, *task.resources.worker)}
+    return tuple(path for path in task.output_paths if path in shipped)
 
 
 async def write_controls(
@@ -246,7 +262,7 @@ async def write_controls(
         f"# Answer contract\n\n{grader.answer_contract}\n\n{SUBMISSION}\n\n"
         f"# Reference reply\n\n{grader.reference_reply}\n\n"
         f"# Reference files\n\n{files_text(grader.reference_files, '/')}\n\n"
-        f"# Output paths\n\n{output_paths_text(task.output_paths)}\n\n"
+        f"# Output paths\n\n{output_paths_text(task.output_paths, shipped_output_paths(task))}\n\n"
         "Write the fixed controls from the proposal's 'Grader design and controls' section: at least one "
         "known_correct positive control with concern reference (reward_min 0.99), one plausible_wrong control "
         "with concern acceptance, one task_specific_shortcut or reward_hack control with concern shortcut, and "

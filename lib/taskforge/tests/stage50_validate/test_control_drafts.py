@@ -28,6 +28,8 @@ from taskforge.stage50_validate.control_drafts import (
     ControlDraft,
     control_payload,
     load_controls,
+    output_paths_text,
+    shipped_output_paths,
     write_controls,
 )
 from taskforge.stage50_validate.controls import ControlPlan, ControlVerdict, replay
@@ -225,3 +227,27 @@ async def test_control_files_with_shell_metacharacters_in_their_paths_are_writte
     finally:
         await machine.close()
     assert written.stdout == b"x'y\n"
+
+
+def test_the_controls_request_names_the_output_paths_the_task_ships():
+    """A control edits a shipped file in place; one it must create from nothing is listed plainly."""
+    task = draft.assemble(
+        "controls-paths",
+        "Fix the README and write the answer.",
+        AnswerType.TEXT,
+        PlainText(),
+        draft.answer_grader(ExactSpec(expected=("42",))),
+        Source(dataset="taskforge-validate-tests", revision="1", row="paths", importer_revision="1"),
+        environment=draft.requirements(image=None),
+        files=(draft.file("workspace/README.md", "intro"), draft.file("workspace/data.csv", "a,b")),
+        output_paths=("/workspace/README.md", "/workspace/answer.txt"),
+    )
+
+    assert shipped_output_paths(task) == ("/workspace/README.md",)
+    text = output_paths_text(task.output_paths, shipped_output_paths(task))
+    assert "/workspace/README.md, /workspace/answer.txt" in text
+    assert "the task ships /workspace/README.md" in text
+    assert (
+        output_paths_text((), ())
+        == "The task has no output paths, so every control is a final reply alone with no files."
+    )
