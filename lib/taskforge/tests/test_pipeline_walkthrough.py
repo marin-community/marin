@@ -111,7 +111,7 @@ SERVICES = RLEnvBuildServices(
     web_tools=(),
     ledger=None,
     reasoning_replay=ReasoningReplay.KEEP,
-    agent_limits=AgentLimits(max_turns=1, max_tokens=1024),
+    agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
 )
 SUMMARY = {"graded": 4, "solved": 2}
 

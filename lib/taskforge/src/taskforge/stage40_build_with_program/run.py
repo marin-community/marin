@@ -22,20 +22,21 @@ host and reads any step's stored output, such as the grader's reference answer, 
 """
 
 import asyncio
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from typing import Any
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
 from taskcompendium.models import TaskSpec
 
 from taskforge.content_hash import digest
 from taskforge.ledger.records import EntryKind, span
-from taskforge.llm.client import ModelClient
-from taskforge.llm.policy import LLMPolicy
+from taskforge.llm.client import Completion, ModelClient, StructuredResult
+from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
@@ -56,10 +57,10 @@ DRAFT_DIR = "draft"
 TASK_FILE = "task.json"
 PROVENANCE_FILE = "provenance.json"
 BUILD_STAGE = "build"
+"""The ``step`` of the ``STAGE`` ledger span ``run_build`` records around a build."""
 STEP_TIMEOUT = 1800.0
 """Seconds one step may run before the build fails as the program's; a step that never returns would otherwise
 hold its item for good."""
-"""The ``step`` of the ``STAGE`` ledger span ``run_build`` records around a build."""
 
 
 class ResearchRequirement(StrEnum):
@@ -138,6 +139,41 @@ def build_model_digest(model: ModelClient, sampling: LLMPolicy, services: RLEnvB
     )
 
 
+@dataclass
+class _BudgetedModel:
+    """``client`` for one step, refusing the call past ``limit``.
+
+    Every path a step has to the model goes through ``context.model``: the SDK's structured calls,
+    its agent loops and a direct call alike. Each call spends one of the step's ``max_calls``, and
+    the first call past the limit fails the build as the program's; ``run_program`` names the step.
+    """
+
+    client: ModelClient
+    limit: int
+    spent: int = 0
+
+    @property
+    def model(self) -> str:
+        return self.client.model
+
+    def _spend(self) -> None:
+        if self.spent >= self.limit:
+            raise BuildFailure(f"more than {self.limit} model calls in one step; keep retries within the step's budget")
+        self.spent += 1
+
+    async def complete(
+        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
+    ) -> Completion:
+        self._spend()
+        return await self.client.complete(messages, policy, request_fields)
+
+    async def complete_structured[T: BaseModel](
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
+    ) -> StructuredResult[T]:
+        self._spend()
+        return await self.client.complete_structured(messages, output_type, policy)
+
+
 async def run_program(
     program: RLEnvBuildProgram,
     context: RLEnvBuildContext,
@@ -175,7 +211,10 @@ async def run_program(
         key = RLEnvBuildStepKey(
             SDK_VERSION, step.source_digest, {dep: digests[dep] for dep in step.inputs}, model_digest
         )
-        compute = partial(step.fn, replace(context, step=name), **{dep: outputs[dep] for dep in step.inputs})
+        budgeted = _BudgetedModel(context.model, context.services.agent_limits.max_calls)
+        compute = partial(
+            step.fn, replace(context, step=name, model=budgeted), **{dep: outputs[dep] for dep in step.inputs}
+        )
         cached = recomputed if name in invalidate else memoized
         with span(
             context.services.recording,

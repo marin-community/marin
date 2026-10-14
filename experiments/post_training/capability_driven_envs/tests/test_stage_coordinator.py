@@ -120,7 +120,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         web_tools=(),
         ledger=None,
         reasoning_replay=ReasoningReplay.KEEP,
-        agent_limits=AgentLimits(max_turns=1, max_tokens=1024),
+        agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
     )
     coordinator = StageCoordinator(
         stages=stages,

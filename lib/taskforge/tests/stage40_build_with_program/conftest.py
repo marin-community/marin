@@ -61,7 +61,7 @@ None.
 WORKPIECE = "d00.arithmetic.products--1"
 SAMPLING = LLMPolicy()
 FACTORIES = {Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: ShellGraderImageFactory()}
-LIMITS = AgentLimits(max_turns=8, max_tokens=4096)
+LIMITS = AgentLimits(max_turns=8, max_tokens=4096, max_calls=16)
 
 
 @pytest.fixture
