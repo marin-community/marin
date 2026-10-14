@@ -1,0 +1,16 @@
+{
+  "run_id": "sc-qwen-transfer-advantages-sc-s0-main-rno-a1-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scope": "Actual first update admission only; not final scientific endpoint.",
+  "configured_updates": 300,
+  "applied_updates": 1,
+  "gradient_norm": 0.2518270015716553,
+  "logical_batch_rows": 512,
+  "retained_rows": 2,
+  "loss_tokens_checked": 300,
+  "natural_head_width": 128,
+  "group_admission_seconds": 68.76590741006657,
+  "policy_training_seconds": 14.220930279232562,
+  "metric_sha256": "c8124b572cef875f2af6e3041ddc7df5ef6b38f67e8884943140dbd6f7715331",
+  "early_path_passed": true
+}
