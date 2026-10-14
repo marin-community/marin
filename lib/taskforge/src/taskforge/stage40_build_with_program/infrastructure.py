@@ -24,6 +24,8 @@ Only errors the program cannot have caused are infrastructure:
   a shorter one would cancel the wait first and the factory's timeout would never be raised.
 * ``HOST_UNREACHABLE``: a connection to the machine host failed, or the controller answered an RPC
   with a transport, capacity or credential error.
+* ``BUILD_PROCESS``: the child process running the build (``build_process.py``) exited without
+  writing its result, as when its services could not start or the kernel killed it for memory.
 
 Everything else is the program's: an image it built or named that fails to build, pull or start,
 a machine spec the backend refuses (``UnsupportedMachineSpec``), and setup or grader commands that
@@ -65,6 +67,7 @@ class InfrastructureCause(StrEnum):
     NO_IMAGE_BUILDER = "no_image_builder"
     SCHEDULING_TIMEOUT = "scheduling_timeout"
     HOST_UNREACHABLE = "host_unreachable"
+    BUILD_PROCESS = "build_process"
 
 
 HOST_REJECTIONS = frozenset({InfrastructureCause.NO_FACTORY, InfrastructureCause.NO_IMAGE_BUILDER})
