@@ -105,7 +105,7 @@ def test_siglip_vision_activation_function_conversion() -> None:
 
 
 @skip_if_no_torch
-def test_siglip_vision_embeddings_vs_hf() -> None:
+def test_siglip_vision_model_vs_hf() -> None:
     """Compare SiglipVisionModel output with HuggingFace using a small model."""
     import torch  # noqa: PLC0415  # optional reference
     from transformers import (  # noqa: PLC0415  # optional reference
@@ -115,7 +115,6 @@ def test_siglip_vision_embeddings_vs_hf() -> None:
         SiglipVisionModel as HfSiglipVisionModel,
     )  # noqa: PLC0415  # optional reference
 
-    # Set JAX to use float32 matmul precision
     jax.config.update("jax_default_matmul_precision", "float32")
 
     hf_config = HfSiglipVisionConfig(
@@ -172,6 +171,8 @@ def test_siglip_vision_embeddings_vs_hf() -> None:
     assert np.allclose(hf_last_hidden_np, lev_last_hidden_np, rtol=1e-3, atol=1e-3)
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(600)
 @skip_if_no_torch
 def test_siglip_vision_real_image() -> None:
     """Test SigLIP vision model with generated pixels using the HF processor."""
@@ -183,19 +184,13 @@ def test_siglip_vision_real_image() -> None:
         SiglipVisionModel as HfSiglipVisionModel,
     )  # noqa: PLC0415  # optional reference
 
-    # Set JAX to use float32 matmul precision
     jax.config.update("jax_default_matmul_precision", "float32")
 
     image = Image.fromarray(np.random.default_rng(0).integers(0, 256, (224, 224, 3), dtype=np.uint8))
     model_name = "google/siglip-base-patch16-224"
 
-    try:
-        processor = SiglipImageProcessor.from_pretrained(model_name)
-        torch_model = HfSiglipVisionModel.from_pretrained(model_name)
-        torch_model.eval()
-        torch_model = torch_model.float()
-    except Exception as e:
-        pytest.skip(f"Failed to load HF model/processor: {e}")
+    processor = SiglipImageProcessor.from_pretrained(model_name)
+    torch_model = HfSiglipVisionModel.from_pretrained(model_name).eval().float()
 
     inputs = processor(images=image, return_tensors="pt")
     pixel_values_torch = inputs["pixel_values"].float()
