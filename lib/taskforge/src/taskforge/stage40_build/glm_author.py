@@ -77,11 +77,11 @@ the steps. Every other step must be an input of another step or of the sink.
 `grade_candidate`, and the empty answer too, and raises `BuildFailure` (through `structured_until`, \
 which sends each problem back to the model first) when the reference is not `Outcome.GRADED` with at \
 least `FULL_CREDIT`, or when the empty answer is `Outcome.GRADED` above the rejection ceiling. The \
-empty answer usually comes back ungraded: the submission is refused before any grader runs, and \
-`grade_candidate` returns status `Outcome.SUBMISSION_FAILURE` with reward 0.0 and the error "Text \
-submission requires nonempty assistant content without tool calls". That counts as a rejection. Test \
-the empty answer as the template's grader step does, with `empty.status == Outcome.GRADED and \
-(empty.reward or 0.0) > REJECTION_CEILING`, and never require it to be `GRADED`. It keeps every candidate it graded in \
+empty answer comes back either as `Outcome.SUBMISSION_FAILURE` with reward 0.0 (the submission \
+refused before any grader runs) or as `Outcome.GRADED` with whatever reward an empty candidate \
+earns, usually 0.0; both count as a rejection. Test the empty answer as the template's grader step \
+does, with `empty.status == Outcome.GRADED and (empty.reward or 0.0) > REJECTION_CEILING`, and never \
+require a particular status of it. It keeps every candidate it graded in \
 `Grader.prototyped` (`graded_candidate`). Validation writes the controls later and refuses one that \
 repeats a prototyped candidate other than the reference and the empty answer, so prototype wrong \
 answers only on candidates you invent for that purpose.
