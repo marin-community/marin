@@ -26,6 +26,8 @@ and is ``MACHINE_TERMINATED`` whichever operation it interrupted.
 
 import traceback
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from rolloutengine.contracts import (
     LENGTH_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
@@ -53,6 +55,11 @@ GRADING_FAILURES = {
     GradingFailure.EXECUTION: Cause.GRADER_EXECUTION,
 }
 ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = ("Environment setup command ",)
+MACHINE_LOSS_RPC_CODES = frozenset({Code.DEADLINE_EXCEEDED, Code.UNAVAILABLE, Code.RESOURCE_EXHAUSTED})
+"""Controller RPC codes that mean the machine host was lost under a running trial; a credential or
+permission code is not among them, so it stays unclassified."""
+MACHINE_LOSS_MESSAGE_PREFIXES = ("Machine is closed", "ShellSim terminated")
+"""Messages of the bare ``RuntimeError`` shellbox raises when a trial's machine is gone under it."""
 """Message prefixes of the errors RolloutEngine raises when a task's setup command fails or times out."""
 CANDIDATE_CODE_REASONS = frozenset({"startup_error", "collection_error"})
 """The ``reason`` values in a verifyit pytest verdict's detail when the candidate's code did not load."""
@@ -128,6 +135,10 @@ def _exception_cause(error: BaseException) -> Cause:
     if isinstance(error, UnsupportedMachineSpec):
         return Cause.MACHINE_UNSUPPORTED
     if isinstance(error, MachineTerminated):
+        return Cause.MACHINE_TERMINATED
+    if isinstance(error, ConnectError) and error.code in MACHINE_LOSS_RPC_CODES:
+        return Cause.MACHINE_TERMINATED
+    if isinstance(error, RuntimeError) and str(error).startswith(MACHINE_LOSS_MESSAGE_PREFIXES):
         return Cause.MACHINE_TERMINATED
     if isinstance(error, RolloutInterrupted):
         return _interruption_cause(error)
