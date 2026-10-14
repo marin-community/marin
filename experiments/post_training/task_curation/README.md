@@ -247,6 +247,8 @@ description-model credential. Repeat `--curated SOURCE_ID ROOT` for more sources
 For reviewed outputs, select `--population admitted`. Omit `--sample-size` to
 process complete selected populations. `--catalog-root` selects another immutable
 directory containing `curriculum.json`; otherwise the graph uses `TASK_CURRICULUM`.
+Use `--stage descriptions` or `--stage curriculum_embeddings` to run one branch
+and its dependencies while measuring the local loop.
 
 The annotator sees instructions and the public tool/answer contract. It does not
 read task files, source labels, private verifier resources or solutions. Tasks
@@ -265,6 +267,11 @@ For an existing Iris-managed TEI Harrier pool, use `--embedding-backend tei
 the same checkpoint, tokenizer and token limit. Requests reject truncation.
 `--max-workers` and `--worker-memory` select the Zephyr worker pool; run the same
 entrypoint inside Iris with a storage-region cache root.
+
+For a direct single-GPU baseline, select `--embedding-backend gpu --max-workers 1`
+inside a GPU-equipped Iris job. This runs local Zephyr workers in that job and
+keeps Harrier resident on its GPU. Compare against CPU using identical inputs and
+precision in separate cache roots before sharing vectors across backends.
 
 Alignment uses the code constant `MAX_DISTANCE` in
 `taskcompendium.pipeline.curriculum_alignment` for subject and capability cosine

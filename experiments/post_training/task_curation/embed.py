@@ -12,7 +12,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep, run
-from marin.processing.embeddings.harrier import HARRIER_DIMENSIONS, HARRIER_MODEL, HARRIER_REVISION, HarrierCpuEmbedder
+from marin.processing.embeddings.harrier import HARRIER_DIMENSIONS, HARRIER_MODEL, HARRIER_REVISION, HarrierEmbedder
 from marin.processing.embeddings.tei import TeiEmbeddingClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
@@ -44,12 +44,19 @@ from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURR
 @click.option("--base-url")
 @click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB)
 @click.option("--review-concurrency", type=click.IntRange(1, 64), default=16)
-@click.option("--embedding-backend", type=click.Choice(["cpu", "tei"]), required=True)
+@click.option("--embedding-backend", type=click.Choice(["cpu", "gpu", "tei"]), required=True)
 @click.option("--tei-endpoint", help="Iris-registered TEI pool using the selected Harrier revision and token limit.")
 @click.option("--compute-dtype", type=click.Choice(["float32", "bfloat16", "float16"]), required=True)
 @click.option("--max-tokens", type=click.IntRange(min=1), default=512, show_default=True)
 @click.option("--max-workers", type=click.IntRange(min=1), default=2)
 @click.option("--worker-memory", default="8g")
+@click.option(
+    "--stage",
+    type=click.Choice(["inputs", "descriptions", "task_embeddings", "curriculum_embeddings", "assignments"]),
+    default="assignments",
+    show_default=True,
+    help="Run this artifact stage and its dependencies.",
+)
 @click.option("--run", "do_run", is_flag=True, help="Execute the graph; otherwise print its plan.")
 def main(
     curated,
@@ -69,6 +76,7 @@ def main(
     max_tokens,
     max_workers,
     worker_memory,
+    stage,
     do_run,
 ):
     if len({name for name, _ in curated}) != len(curated):
@@ -84,15 +92,16 @@ def main(
         compute_dtype=compute_dtype,
     )
     embedder = (
-        HarrierCpuEmbedder(
+        HarrierEmbedder(
             model=spec.model,
             revision=spec.revision,
             tokenizer_revision=spec.tokenizer_revision,
             dimensions=spec.dimensions,
             max_tokens=spec.max_tokens,
             compute_dtype=spec.compute_dtype,
+            device="cpu" if embedding_backend == "cpu" else "cuda",
         )
-        if embedding_backend == "cpu"
+        if embedding_backend != "tei"
         else TeiEmbeddingClient(tei_endpoint, spec.dimensions, truncate=False)
     )
     runtime = CampaignRuntime()
@@ -137,18 +146,21 @@ def main(
                     "max_distance": MAX_DISTANCE,
                     "sample_size": sample_size,
                     "population": population,
+                    "stage": stage,
                 },
                 indent=2,
             )
         )
         if not do_run:
             return
-        if not StoragePath(cache_root).is_remote:
+        client = None
+        if not StoragePath(cache_root).is_remote or embedding_backend == "gpu":
             client = LocalClient()
             scope.callback(client.shutdown)
             scope.enter_context(set_current_client(client))
         context = scope.enter_context(
             ZephyrContext(
+                client=client,
                 max_workers=max_workers,
                 resources=ResourceConfig(cpu=1, ram=worker_memory),
                 chunk_storage_prefix=str(StoragePath(cache_root) / ".zephyr/embeddings"),
@@ -156,8 +168,8 @@ def main(
             )
         )
         scope.enter_context(runtime.activate(context))
-        result = run(stages.assignments, max_concurrent=1)[0]
-        click.echo(json.dumps({"assignments_root": result.path, "paths": result.paths}, indent=2))
+        result = run(getattr(stages, stage), max_concurrent=1)[0]
+        click.echo(json.dumps({"stage": stage, "root": result.path, "paths": result.paths}, indent=2))
 
 
 if __name__ == "__main__":

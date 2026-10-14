@@ -4,6 +4,7 @@
 """Shared, content-addressed embedding passes for task and curriculum descriptions."""
 
 import json
+import time
 from collections.abc import Iterator
 from functools import partial
 from typing import Literal, Protocol
@@ -96,10 +97,15 @@ def _embed_batches(
             keys = [row["embedding_key"] for row in batch]
             cached = view.read_blobs(keys)
             missing = [row for row in batch if row["embedding_key"] not in cached]
+            started = time.monotonic()
             vectors = (
                 normalized_vectors(embedder.embed([row["text"] for row in missing]), len(missing), spec.dimensions)
                 if missing
                 else np.empty((0, spec.dimensions), dtype=np.float32)
+            )
+            counters.current_stage().update_counter("embedding/provider_seconds", time.monotonic() - started)
+            counters.current_stage().update_counter(
+                "embedding/input_bytes", sum(len(row["text"].encode()) for row in missing)
             )
             if missing:
                 with store.transaction() as transaction:
@@ -124,7 +130,7 @@ def embed_texts(
     embedder: TextEmbedder,
     cache_root: str,
     output_root: str,
-    batch_size: int = 128,
+    batch_size: int = 4096,
 ) -> list[str]:
     """Embed unique text keys with batched FineStore reads and transactional cache writes."""
     schema = pa.schema([("embedding_key", pa.string()), ("embedding", pa.list_(pa.float32(), spec.dimensions))])

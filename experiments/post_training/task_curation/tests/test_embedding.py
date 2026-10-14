@@ -17,7 +17,7 @@ from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.semantics import DescriptionModel
-from taskcompendium.pipeline.task_embeddings import EmbeddingSpec
+from taskcompendium.pipeline.task_embeddings import EmbeddingSpec, text_record
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -40,18 +40,14 @@ class DescriptionHandler(BaseHTTPRequestHandler):
         identifier = request["tools"][0]["function"]["parameters"]["properties"]["task_id"]["const"]
         description = {
             "task_id": identifier,
-            "description": {
-                "status": "ready",
-                "reason": "",
-                "key": {
-                    "subject_domain": "arithmetic",
-                    "task_mechanic": "calculation",
-                    "summary": "Add numbers",
-                    "hardest_operation": "addition",
-                    "required_operations": ["addition"],
-                    "answer_form": "number",
-                },
-            },
+            "status": "ready",
+            "reason": "",
+            "subject_domain": "arithmetic",
+            "task_mechanic": "calculation",
+            "summary": "Add numbers",
+            "hardest_operation": "addition",
+            "required_operations": ["addition"],
+            "answer_form": "number",
         }
         body = json.dumps(
             {
@@ -103,8 +99,7 @@ class EmbeddingEndpoint:
 
     def embed(self, texts):
         with Path(self.calls).open("a") as stream:
-            for text in texts:
-                stream.write(json.dumps(text) + "\n")
+            stream.write(json.dumps(texts) + "\n")
         return np.asarray([[1.0, 0.0, 0.0] for _ in texts], dtype=np.float32)
 
 
@@ -216,11 +211,17 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
         rows = [row for path in built.paths for row in load_parquet(path)]
         assert {row["task_id"] for row in rows} == {"a", "b"}
         assert all(row["assignments"][0]["capability_id"] == "math.addition" for row in rows)
-        calls_before = len(Path(provider.calls).read_text().splitlines())
+        batches = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
+        expected = {
+            text_record(anchor.text, anchor.projection, spec)["text"] for anchor in curriculum_anchors(first_catalog)
+        }
+        assert any(set(batch) == expected for batch in batches)
+        texts_before = sum(map(len, batches))
         rebuilt = run(second.assignments, max_concurrent=1)[0]
         assert {row["task_id"] for path in rebuilt.paths for row in load_parquet(path)} == {"a", "b"}
         assert len(description_server.requests) == 1
-        assert len(Path(provider.calls).read_text().splitlines()) == calls_before + 1
+        batches = [json.loads(line) for line in Path(provider.calls).read_text().splitlines()]
+        assert sum(map(len, batches)) == texts_before + 1
     anchors = curriculum_anchors(first_catalog)
     assert {anchor.capability_id for anchor in anchors if anchor.capability_id is not None} == {
         "math.addition",

@@ -41,8 +41,8 @@ from experiments.post_training.task_curation.curriculum import curriculum_anchor
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 INPUTS_VERSION = "2026.10.14.1"
-DESCRIPTIONS_VERSION = "2026.10.14.1"
-EMBEDDINGS_VERSION = "2026.10.14.1"
+DESCRIPTIONS_VERSION = "2026.10.14.4"
+EMBEDDINGS_VERSION = "2026.10.14.3"
 ALIGNMENT_VERSION = "2026.10.14.1"
 
 
@@ -152,11 +152,17 @@ def _embed_curriculum(
     catalog = CurriculumCatalog.model_validate_json((StoragePath(catalog_root) / "curriculum.json").read_text())
     anchors = curriculum_anchors(catalog)
     anchor_result = runtime.context.execute(
-        Dataset.from_list([anchor.model_dump(mode="json") for anchor in anchors]).write_parquet(
+        Dataset.from_list([anchors])
+        .flat_map(lambda batch: [anchor.model_dump(mode="json") for anchor in batch])
+        .write_parquet(
             str(StoragePath(output_root) / "anchors/part-{shard:05d}.parquet"), schema=arrow_schema(CurriculumAnchor)
         )
     )
-    texts = Dataset.from_list([text_record(anchor.text, anchor.projection, spec) for anchor in anchors])
+    # The catalog fits in memory. One input shard keeps inference batches full;
+    # a shard per anchor would force singleton model and cache requests.
+    texts = Dataset.from_list([anchors]).flat_map(
+        lambda batch: [text_record(anchor.text, anchor.projection, spec) for anchor in batch]
+    )
     paths = embed_texts(
         runtime.context, texts=texts, spec=spec, embedder=embedder, cache_root=cache_root, output_root=output_root
     )

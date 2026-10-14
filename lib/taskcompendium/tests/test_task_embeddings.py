@@ -82,24 +82,20 @@ class DescriptionTransport:
         for request in reversed(requests):
             with Path(self.calls).open("a") as stream:
                 stream.write(json.dumps(request) + "\n")
-            public = request["body"]["messages"][-1]["content"]
+            public = request["body"]["messages"][1]["content"]
             missing = "UNSPECIFIED_OPERATION" in public
             description = {
                 "status": "insufficient_context" if missing else "ready",
                 "reason": "The requested operation is absent" if missing else "",
-                "key": (
-                    None
-                    if missing
-                    else {
-                        "subject_domain": "arithmetic",
-                        "task_mechanic": "counting",
-                        "summary": "Count apples",
-                        "hardest_operation": "count",
-                        "required_operations": ["count"],
-                        "answer_form": "number",
-                    }
-                ),
+                "subject_domain": "" if missing else "arithmetic",
+                "task_mechanic": "" if missing else "counting",
+                "summary": "" if missing else "Count apples",
+                "hardest_operation": "" if missing else "count",
+                "required_operations": [] if missing else ["count"],
+                "answer_form": "" if missing else "number",
             }
+            if not missing and len(request["body"]["messages"]) == 2:
+                description.pop("status")
             response = {
                 "custom_id": request["custom_id"],
                 "response": {
@@ -117,7 +113,7 @@ class DescriptionTransport:
                                             "function": {
                                                 "name": "describe_task",
                                                 "arguments": json.dumps(
-                                                    {"task_id": request["custom_id"], "description": description}
+                                                    {"task_id": request["custom_id"], **description}
                                                 ),
                                             },
                                         }
@@ -187,7 +183,9 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     )
     assert len(rows(inputs)) == 3
     assert len(rows(descriptions)) == 2
-    assert len(Path(transport.calls).read_text().splitlines()) == 2
+    requests = [json.loads(line) for line in Path(transport.calls).read_text().splitlines()]
+    assert len(requests) == 3
+    assert any("failed schema validation" in request["body"]["messages"][-1]["content"] for request in requests)
     replay = describe_tasks(
         context,
         input_paths=inputs,
@@ -199,7 +197,7 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
     assert sorted(rows(replay), key=lambda row: row["content_hash"]) == sorted(
         rows(descriptions), key=lambda row: row["content_hash"]
     )
-    assert len(Path(transport.calls).read_text().splitlines()) == 2
+    assert len(Path(transport.calls).read_text().splitlines()) == 3
 
     provider = EmbeddingProvider(str(tmp_path / "embeddings-called.jsonl"))
     texts = [text for row in rows(descriptions) for text in task_text_records(row, spec)]
