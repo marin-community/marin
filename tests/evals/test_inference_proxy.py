@@ -658,6 +658,8 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     ) as session:
         assert session.model.endpoint.model == "public-model"
         assert session.model.endpoint.base_url.startswith("https://iris.example/proxy/t/broker-token/")
+        assert session.effective_serving is not None
+        assert session.effective_serving.task_count == 2
 
     assert proxy_models == ["public-model"]
     _, register_args, register_kwargs = events[0]
@@ -665,6 +667,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert endpoint_name == minted[0]
     assert address == "http://127.0.0.1:1"
     assert metadata["model"] == "public-model"
+    assert metadata["task_count"] == "2"
     assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
     assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2

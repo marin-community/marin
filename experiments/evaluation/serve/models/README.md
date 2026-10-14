@@ -100,6 +100,12 @@ and needs no acknowledgement. Pass the full flag spelling in `vllm_extra_args`; 
 
 ## Multi-node GPU serving
 
+Set `serve.instances` to start independent model servers behind Marin's inference broker. Each
+instance receives the configured `resource_hint`, tensor/data parallelism, and pipeline task count.
+For example, `resource_hint.gpu: {H100: 8}`, `data_parallel_size: 8`, and `instances: 2` starts two
+DP8 servers on two H100x8 Iris tasks and exposes one load-balanced endpoint. This provides 16
+independent data-parallel replicas; it does not create one 16-GPU model replica.
+
 Set `serve.pipeline_parallel_size` to the number of Iris tasks in one vLLM serving gang.
 Each task runs one pipeline stage. For example, `resource_hint.gpu: {H100: 8}` with
 `tensor_parallel_size: 8`, `pipeline_parallel_size: 2`, and `data_parallel_size: 1`
@@ -108,7 +114,7 @@ requests 16 GPUs across two tasks and exposes one endpoint.
 Multi-node serving requires the vLLM backend, an explicit GPU resource hint, and an explicit
 tensor parallel size. Tensor parallel size times data parallel size must equal GPUs per task.
 Set `serve.backend: vllm` (the default); an unset `data_parallel_size` means 1.
-The inference API requires `instances=1` and `broker=None` with pipeline parallelism.
+Pipeline parallelism requires `serve.instances: 1`; the inference API also requires `broker=None`.
 Host memory and CPU hints apply to each task; automatic host memory sizing budgets the full
 checkpoint on each task.
 

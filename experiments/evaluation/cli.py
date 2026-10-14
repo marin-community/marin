@@ -103,7 +103,8 @@ def resolve_judge_model_config(model_key: str | None, config_path: Path | None) 
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
     geometry = batch.accelerator.geometry
     serving = geometry.label if geometry is not None else "worker-resolved"
-    task_count = geometry.task_count if geometry is not None else 1
+    serving = f"{serving} instances={batch.model.serve.instances}"
+    task_count = (geometry.task_count if geometry is not None else 1) * batch.model.serve.instances
     click.echo(
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "

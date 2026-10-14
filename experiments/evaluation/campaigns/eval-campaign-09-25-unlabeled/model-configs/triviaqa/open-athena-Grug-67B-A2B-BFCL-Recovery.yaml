@@ -13,6 +13,7 @@ serve:
   hf_hub_disable_xet: true
   tensor_parallel_size: 1
   data_parallel_size: 8
+  instances: 2
   max_model_len: 73728
   max_num_batched_tokens: 7168
   max_num_seqs: 32

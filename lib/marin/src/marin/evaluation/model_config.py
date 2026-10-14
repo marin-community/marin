@@ -73,11 +73,13 @@ class ServeConfig:
     """Model-server behavior independent of scheduler placement.
 
     ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
-    inference settings. The remaining typed vLLM fields map onto command-line flags or process
-    settings. ``hf_hub_disable_xet`` selects regular HTTP for the worker's Hugging Face weight
-    mirror when Xet is rate-limited. ``vllm_extra_args`` is the escape hatch for flags without a
-    typed field. Multi-node topology flags are owned by the launcher; a typed GPU memory limit
-    cannot also appear in the escape hatch.
+    inference settings. ``instances`` starts independent servers behind Marin's inference broker;
+    it is distinct from pipeline parallelism, which splits one server across multiple Iris tasks.
+    The remaining typed vLLM fields map onto command-line flags or process settings.
+    ``hf_hub_disable_xet`` selects regular HTTP for the worker's Hugging Face weight mirror when Xet
+    is rate-limited. ``vllm_extra_args`` is the escape hatch for flags without a typed field.
+    Multi-node topology flags are owned by the launcher; a typed GPU memory limit cannot also appear
+    in the escape hatch.
 
     When ``auto_overrides`` is true, the lowering path inspects the Hugging Face ``config.json`` to
     fill portable architecture-specific vLLM flags and clamp an explicit context length to the
@@ -88,6 +90,7 @@ class ServeConfig:
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
     pipeline_parallel_size: int = 1
+    instances: int = 1
     gpu_memory_utilization: float | None = None
     max_model_len: int | None = None
     max_num_batched_tokens: int | None = None
@@ -119,6 +122,8 @@ class ServeConfig:
             raise ValueError("vLLM source and plugins require the vLLM backend")
         if self.pipeline_parallel_size < 1:
             raise ValueError("pipeline_parallel_size must be >= 1")
+        if self.instances < 1:
+            raise ValueError("instances must be >= 1")
         for name in ("tensor_parallel_size", "data_parallel_size"):
             value = getattr(self, name)
             if value is not None and value < 1:
@@ -128,6 +133,8 @@ class ServeConfig:
                 raise ValueError("pipeline parallelism requires the vLLM backend")
             if self.tensor_parallel_size is None:
                 raise ValueError("pipeline parallelism requires an explicit tensor_parallel_size")
+            if self.instances > 1:
+                raise ValueError("pipeline parallelism requires instances=1")
             validate_pipeline_args(self.vllm_extra_args)
         if self.gpu_memory_utilization is not None:
             if not 0 < self.gpu_memory_utilization <= 1:

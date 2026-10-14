@@ -144,6 +144,7 @@ class ModelServeConfig(BaseModel):
     tensor_parallel_size: int | None
     data_parallel_size: int | None
     pipeline_parallel_size: int = 1
+    instances: int = 1
     gpu_memory_utilization: float | None = None
     max_model_len: int | None
     max_num_batched_tokens: int | None
@@ -156,6 +157,7 @@ class ModelServeConfig(BaseModel):
     vllm_use_flashinfer_sampler: bool | None = None
     runai_streamer_concurrency: int | None = None
     runai_streamer_s3_request_timeout_ms: int | None = None
+    hf_hub_disable_xet: bool = False
     vllm_source: str | None = None
     vllm_version: str | None = None
     vllm_plugin_requirements: tuple[str, ...] = ()

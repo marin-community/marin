@@ -236,6 +236,32 @@ def test_gpu_lowering_can_disable_xet_for_weight_mirror():
     assert lowered.iris.worker_environment.env_vars["HF_HUB_DISABLE_XET"] == "1"
 
 
+def test_gpu_lowering_preserves_independent_serving_instances():
+    model = ModelConfig(
+        name="brokered-model",
+        location="org/model",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(
+            tensor_parallel_size=1,
+            data_parallel_size=8,
+            instances=2,
+            auto_overrides=False,
+        ),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+
+    assert lowered.instances == 2
+    assert lowered.iris.worker_resources.replicas == 1
+    assert lowered.iris.worker_resources.chip_count() == 8
+
+
+def test_pipeline_parallelism_rejects_multiple_serving_instances():
+    with pytest.raises(ValueError, match="pipeline parallelism requires instances=1"):
+        ServeConfig(tensor_parallel_size=8, pipeline_parallel_size=2, instances=2)
+
+
 @pytest.mark.parametrize(
     ("serve", "accelerator"),
     [
