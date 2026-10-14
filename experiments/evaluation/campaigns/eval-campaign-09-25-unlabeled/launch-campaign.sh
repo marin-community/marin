@@ -129,6 +129,8 @@ for model in "${models[@]}"; do
     override_eval=tb2-recovery
   elif [ "$suite" = agentic ] && [ "${#selected_harbor_names[@]}" -eq 1 ]; then
     override_eval="${selected_harbor_names[0]}"
+  elif [ "$suite" = nonagentic ] && [ "${#selected_evalchemy_names[@]}" -eq 1 ]; then
+    override_eval="${selected_evalchemy_names[0]}"
   fi
   if [ -n "$override_eval" ]; then
     override=$(cd "$MARIN_DIR" && CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" MODEL_NAME="$model" EVAL_NAME="$override_eval" uv run python - <<'PY'

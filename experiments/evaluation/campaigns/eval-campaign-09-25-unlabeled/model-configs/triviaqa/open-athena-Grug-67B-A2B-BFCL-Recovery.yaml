@@ -1,0 +1,27 @@
+# TriviaQA throughput profile: preserve serving semantics while doubling the
+# data-parallel replica pool for this unusually generation-heavy task.
+name: open-athena-Grug-67B-A2B-BFCL-Recovery
+location: open-athena/Grug-67B-A2B-BFCL-Recovery
+revision: 850a32627724d274004241dd10f6cb46fd3f6f83
+apply_chat_template: true
+evalchemy_num_concurrent: 128
+resource_hint:
+  gpu:
+    H100: 16
+  memory: 1024g
+serve:
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 16
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

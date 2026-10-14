@@ -1,5 +1,7 @@
 tasks: [triviaqa]
 runtime_memory: 128g
+extra_model_args:
+  num_concurrent: 128
 task_options:
   triviaqa:
     num_fewshot: 5
