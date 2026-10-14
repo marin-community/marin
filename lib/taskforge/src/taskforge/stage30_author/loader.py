@@ -40,7 +40,8 @@ the GLM author also sends it back within its structured call.
 
 The module is registered in ``sys.modules`` as ``taskforge_program_<sha256 prefix>``, one name per
 distinct source, so pydantic resolves the program's own output models while the store decodes
-them, and loading a source twice returns the same program. A refused source is unregistered.
+them, and loading a source twice returns the same program. A source whose load does not return a
+program, whether refused or interrupted, is unregistered, so the next load of it runs again.
 """
 
 import ast
@@ -284,7 +285,9 @@ def load_program_source(source: str) -> RLEnvBuildProgram:
         except Exception as error:
             raise ValueError(f"the program failed to load: {type(error).__name__}: {error}") from error
         return _checked_program(module)
-    except ValueError:
+    except BaseException:
+        # A refusal, and equally an interrupt or a memory error mid-load: the half-run module must
+        # not stand in for the program on the next load of the same source.
         del sys.modules[name]
         raise
 

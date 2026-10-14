@@ -26,6 +26,20 @@ def test_a_program_loads_once_per_source_with_its_own_output_models():
     assert program.steps["question"].output_type.__module__ == module_name(PROGRAM)
 
 
+def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
+    """An interrupt mid-load, as a stall watcher or a KeyboardInterrupt raises, leaves no half-run module behind."""
+    source = PROGRAM.replace(
+        "@dataclass(frozen=True)\nclass Question",
+        "class Interrupting:\n    raise KeyboardInterrupt()\n\n\n@dataclass(frozen=True)\nclass Question",
+    )
+    assert source != PROGRAM
+
+    for _ in range(2):
+        with pytest.raises(KeyboardInterrupt):
+            load_program_source(source)
+        assert module_name(source) not in sys.modules
+
+
 @pytest.mark.parametrize(
     ("edit", "problem"),
     [
