@@ -65,7 +65,7 @@ class SkyRLRuntime:
 
 @dataclass(frozen=True)
 class SkyRLRolePlan:
-    """Explicit policy and rollout settings that bear experiment identity."""
+    """Explicit policy, rollout, and reference settings that bear experiment identity."""
 
     colocate_all: bool
     colocate_policy_ref: bool

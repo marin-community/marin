@@ -488,7 +488,8 @@ def _submit_iris_job(
 
     ``raw_fn`` is wrapped to also persist its return value via
     :func:`~marin.execution.artifact.write_step_record` inside the submitted job, since Fray
-    jobs cannot return values back to the caller.
+    jobs cannot return values back to the caller. Steps that already write their own full
+    record (``writes_record``) skip that write.
     """
     identity = _step_record_identity(step)
 

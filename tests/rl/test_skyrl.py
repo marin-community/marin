@@ -164,6 +164,14 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
             topology=dataclasses.replace(base.topology, role_plan=plan),
             config_yaml=yaml.safe_dump(recipe),
         )
+    # Matching sizes still validate: the gate rejects the mismatch, not Megatron itself.
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 2
+    dataclasses.replace(
+        base,
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        topology=dataclasses.replace(base.topology, role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
 
 
 @pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])

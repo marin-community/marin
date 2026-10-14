@@ -83,7 +83,7 @@ def test_coordinator_request_requires_a_skyrl_step() -> None:
 
 def test_rl_launch_forwards_dedicated_daytona_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     client = MagicMock(spec=IrisClient)
-    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "test-rl-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "test-eval-key")

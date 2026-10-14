@@ -311,8 +311,8 @@ def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepS
     Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its pin); the
     fingerprint, version, artifact type, and dep identities travel in ``hash_attrs`` so the runner
     applies the drift check before serving a cached output, and the step fn writes a full
-    :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it never
-    inspects ``handle.run``.
+    :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it only
+    inspects ``handle.run`` to preserve a :class:`RemoteCallable` wrapper in the lowered spec.
 
     ``memo`` caches the spec of each handle by identity, so a handle several consumers share is
     lowered once. Without it a diamond re-walks the shared subgraph — and re-runs its
