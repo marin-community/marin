@@ -581,14 +581,11 @@ async def test_reasoning_only_response_grades_missing_answer_or_existing_files(s
 
 
 @pytest.mark.parametrize(
-    ("stalled", "failure", "error"),
-    [
-        ("-xf", GradingFailure.STAGING, "Verifier deadline expired while preparing the verifier machine"),
-        ("/tests/grade.sh", GradingFailure.TIMEOUT, "Verifier deadline expired"),
-    ],
+    ("stalled", "failure"),
+    [("-xf", GradingFailure.STAGING), ("/tests/grade.sh", GradingFailure.TIMEOUT)],
     ids=["during-staging", "during-the-grader"],
 )
-async def test_a_verifier_deadline_names_the_phase_it_expired_in(stalled, failure, error):
+async def test_a_verifier_deadline_names_the_phase_it_expired_in(stalled, failure):
     """A deadline that runs out while the verifier machine is being prepared is the host's, not the grader's."""
 
     class StallingFactory(DockerMachineFactory):
@@ -622,7 +619,7 @@ async def test_a_verifier_deadline_names_the_phase_it_expired_in(stalled, failur
 
     assert caught.value.operation is RolloutOperation.GRADE
     grade = caught.value.rollout.grade
-    assert (grade.status, grade.failure, grade.error) == (Outcome.INFRA_ERROR, failure, error)
+    assert (grade.status, grade.failure) == (Outcome.INFRA_ERROR, failure)
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])

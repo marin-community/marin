@@ -101,7 +101,7 @@ class PhaseRecordingFactory(FixtureImageFactory):
 
     def __init__(self, progress: GradingProgress):
         self.progress = progress
-        self.phases: list[tuple[str, GradingPhase]] = []
+        self.phases: list[tuple[tuple[str, ...], GradingPhase]] = []
 
     async def create(self, spec):
         machine = await super().create(spec)
@@ -109,7 +109,7 @@ class PhaseRecordingFactory(FixtureImageFactory):
 
         class Noting:
             async def run(self, command):
-                factory.phases.append((command.argv[0], factory.progress.phase))
+                factory.phases.append((command.argv, factory.progress.phase))
                 return await machine.run(command)
 
             async def upload(self, source, target):
@@ -124,11 +124,16 @@ class PhaseRecordingFactory(FixtureImageFactory):
         return Noting()
 
 
-def test_grading_progress_reaches_the_grader_phase_only_at_the_grader_command():
-    """The runtime's own commands run under STAGING; the grader's argv is the first under GRADER."""
+@pytest.mark.parametrize(
+    "environment",
+    [GRADING_ENVIRONMENT, GRADING_ENVIRONMENT.model_copy(update={"setup_commands": ("true",)})],
+    ids=["no-setup", "with-a-setup-command"],
+)
+def test_grading_progress_is_staging_until_the_authors_commands(environment):
+    """The runtime's preparation runs under STAGING; the author's setup commands and grader under GRADER."""
     grader = ScriptGrader(
         argv=("sh", "/tests/grade.sh"),
-        environment=GRADING_ENVIRONMENT,
+        environment=environment,
         answer_path=None,
         reward=FileReward(
             files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),), pass_above=0.5
@@ -138,16 +143,16 @@ def test_grading_progress_reaches_the_grader_phase_only_at_the_grader_command():
     task = _task(GraderPackage(grader, (inline_resource("grade.sh", STATE_GRADER), config)), AnswerType.STATE)
     progress = GradingProgress()
     factory = PhaseRecordingFactory(progress)
-
     attempt = _attempt(task, TextMessage(role="assistant", content="Done"), StateSubmission({"value": 3}))
+
     result = asyncio.run(grade_in_sandbox(task, attempt, factory, GRADING_MACHINE, progress=progress))
 
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
-    staged = [argv for argv, phase in factory.phases if phase is GradingPhase.STAGING]
-    graded = [argv for argv, phase in factory.phases if phase is GradingPhase.GRADER]
-    assert staged == ["tar", "rm", "mkdir", "mkdir", "rm"]
-    # The grader's own command, then the reward file read that follows it.
-    assert graded == ["sh", "sh"]
+    phases = factory.phases
+    authored = min(index for index, (argv, _) in enumerate(phases) if argv[-1] in ("/tests/grade.sh", "true"))
+    assert phases[0][1] is GradingPhase.STAGING
+    assert all(phase is GradingPhase.STAGING for _, phase in phases[:authored])
+    assert all(phase is GradingPhase.GRADER for _, phase in phases[authored:])
     assert progress.phase is GradingPhase.GRADER
 
 

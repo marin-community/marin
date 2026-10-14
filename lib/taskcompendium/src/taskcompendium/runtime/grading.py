@@ -620,15 +620,16 @@ async def _grade_on(
         Command(("mkdir", "-p", workspace), cwd="/", timeout=timeout),
         "Could not initialize the grading workspace",
     )
+    if isinstance(grader, ScriptGrader) and isinstance(grader.reward, FileReward):
+        await _prepare_reward_files(machine, grader.reward, timeout)
+    # The environment's setup commands are the task author's, like the grader's own command.
+    progress.phase = GradingPhase.GRADER
     for setup in environment.setup_commands:
         await _run_checked(
             machine,
             Command(("sh", "-c", setup), timeout=timeout, user=user),
             "Grading environment setup failed",
         )
-    if isinstance(grader, ScriptGrader) and isinstance(grader.reward, FileReward):
-        await _prepare_reward_files(machine, grader.reward, timeout)
-    progress.phase = GradingPhase.GRADER
     if spec is not None:
         return await _verifyit_reward(machine, spec, workspace, timeout)
     assert isinstance(grader, ScriptGrader)
