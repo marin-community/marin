@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Transfer approved Marin Belay suggestions from the intake issue into the main Belay issue.
+"""Transfer approved Marin Belay suggestions from the intake issue into the current weekly Belay issue.
 
 A comment on the intake issue is approved when an allowlisted user reacts to it with a thumbs-up made after the
 comment's last edit, so editing an approved comment needs a fresh approval. The allowlist holds numeric GitHub user
@@ -11,11 +11,15 @@ ids, not logins: ids never change or get reused, while a login freed by a rename
 An approved comment first gets an experiment id in the Marin Belay registry (``experiments/belay/registry`` on the
 registry branch): the next free ``X####``, with a ``status: approved`` entry built from the comment, recorded in the
 registry's ``intake_ids.json`` so a retried run reuses it. It is then copied (quoted, attributed, headed with its id,
-with @-mentions and marker syntax neutralized) into the main issue, ending in a hidden marker, and the intake comment
-gets a rocket reaction. Only markers in comments posted by the
-workflow's own account count, so quoted text cannot mark other comments as transferred. A comment is copied once; a later
-run adds a missing rocket if an earlier run posted the copy but stopped before reacting. The agent that runs the Belay
-loop reads only the main issue, so only approved text reaches it.
+with @-mentions and marker syntax neutralized) into the week's Belay issue (the one open issue labeled
+``belay-weekly``), the bot replies on the intake issue with the id, and the intake comment gets a rocket reaction.
+
+The copy and the reply each end in a hidden marker naming the intake comment, and only markers in comments posted by
+the workflow's own account count, so quoted text cannot mark other comments as transferred. A comment counts as
+transferred once a reply or a copy carries its marker; the replies live on the intake issue, which never rolls over,
+and copies from before the weekly issues are in ``LEGACY_TARGET_ISSUE``. A later run posts a missing reply or rocket
+if an earlier run stopped part-way. The agent that runs the Belay loop reads only the Belay issues, so only approved
+text reaches it.
 """
 
 import argparse
@@ -35,6 +39,11 @@ TRANSFERRED_REACTION = "rocket"
 TRANSFER_BOT = "marin-belay-bot"
 _MARKER_TEMPLATE = "<!-- belay-intake:{} -->"
 _MARKER_RE = re.compile(re.escape(_MARKER_TEMPLATE).replace(r"\{\}", r"(\d+)") + r"\s*\Z")
+_REPLY_MARKER_TEMPLATE = "<!-- belay-intake-reply:{} -->"
+_REPLY_MARKER_RE = re.compile(re.escape(_REPLY_MARKER_TEMPLATE).replace(r"\{\}", r"(\d+)") + r"\s*\Z")
+WEEKLY_LABEL = "belay-weekly"
+# The single Belay issue used before the weekly issues; its transfer markers still count.
+LEGACY_TARGET_ISSUE = 9451
 # A zero-width space after "@" keeps copied text from pinging users or teams; one inside "<!--" keeps quoted text
 # from forming an HTML comment (and so a marker).
 _MENTION_RE = re.compile(r"@(?=[A-Za-z0-9-])")
@@ -95,14 +104,13 @@ def pending_transfers(
     return pending
 
 
-def transferred_ids_in(target_comments: list[dict]) -> set[int]:
-    """Intake comment ids already copied into the main issue, read only from the trailing marker of comments that
-    the transfer bot posted."""
+def transferred_ids_in(comments: list[dict], marker: re.Pattern = _MARKER_RE) -> set[int]:
+    """Intake comment ids named by the trailing ``marker`` of comments that the transfer bot posted."""
     ids = set()
-    for comment in target_comments:
+    for comment in comments:
         if comment["user"]["login"] != TRANSFER_BOT:
             continue
-        match = _MARKER_RE.search(comment["body"])
+        match = marker.search(comment["body"])
         if match:
             ids.add(int(match.group(1)))
     return ids
@@ -182,6 +190,15 @@ def register(github: "GitHub", comment: IntakeComment, approver: str) -> str:
     return experiment_id
 
 
+def reply_body(comment_id: int, experiment_id: str, target_issue: int, repo: str) -> str:
+    """The bot's reply on the intake issue once a suggestion is registered and copied."""
+    registry = f"https://github.com/{repo}/tree/{REGISTRY_BRANCH}/{REGISTRY_DIR}"
+    return (
+        f"🤖 Registered as **{experiment_id}** in the [experiment registry]({registry}) and copied to "
+        f"#{target_issue}.\n\n{_REPLY_MARKER_TEMPLATE.format(comment_id)}"
+    )
+
+
 def transfer_body(comment: IntakeComment, approver: str, experiment_id: str) -> str:
     """The main-issue comment for an approved intake comment: id, attribution, the quoted text, and the marker."""
     text = _MENTION_RE.sub("@" + _ZERO_WIDTH_SPACE, comment.body).replace("<!--", "<" + _ZERO_WIDTH_SPACE + "!--")
@@ -220,8 +237,37 @@ class GitHub:
             url = _next_link(headers.get("Link", ""))
         return items
 
+    @property
+    def repo(self) -> str:
+        return self._repo
+
     def issue_comments(self, issue: int) -> list[dict]:
         return self._paginate(f"/issues/{issue}/comments")
+
+    def open_issues_labeled(self, label: str) -> list[int]:
+        """Numbers of the open issues (not pull requests) carrying ``label``."""
+        items = self._paginate(f"/issues?labels={label}&state=open")
+        return [item["number"] for item in items if "pull_request" not in item]
+
+    def issue(self, number: int) -> dict:
+        data, _ = self._request("GET", f"{API}/repos/{self._repo}/issues/{number}")
+        assert isinstance(data, dict), data
+        return data
+
+    def create_issue(self, title: str, body: str, labels: list[str]) -> int:
+        data, _ = self._request(
+            "POST", f"{API}/repos/{self._repo}/issues", {"title": title, "body": body, "labels": labels}
+        )
+        assert isinstance(data, dict), data
+        return data["number"]
+
+    def lock(self, number: int) -> None:
+        self._request("PUT", f"{API}/repos/{self._repo}/issues/{number}/lock", {})
+
+    def close(self, number: int) -> None:
+        self._request(
+            "PATCH", f"{API}/repos/{self._repo}/issues/{number}", {"state": "closed", "state_reason": "completed"}
+        )
 
     def comment_reactions(self, comment_id: int) -> list[dict]:
         return self._paginate(f"/issues/comments/{comment_id}/reactions")
@@ -277,13 +323,29 @@ def _to_intake(raw: dict, reactions: list[dict]) -> IntakeComment:
     )
 
 
-def run(github: GitHub, *, intake_issue: int, target_issue: int, approvers: frozenset[int], dry_run: bool) -> int:
-    """Copy every approved, not-yet-copied intake comment into the target issue and mark it with a rocket; also add
-    a missing rocket to comments already copied. With ``dry_run`` only report. Returns the number of comments that
-    were (or, with ``dry_run``, would be) copied."""
-    transferred = transferred_ids_in(github.issue_comments(target_issue))
+def current_weekly_issue(github: GitHub) -> int:
+    """The one open issue labeled ``WEEKLY_LABEL``."""
+    issues = github.open_issues_labeled(WEEKLY_LABEL)
+    if len(issues) != 1:
+        raise RuntimeError(f"expected exactly one open {WEEKLY_LABEL} issue, found {sorted(issues)}")
+    return issues[0]
+
+
+def run(github: GitHub, *, intake_issue: int, approvers: frozenset[int], dry_run: bool) -> int:
+    """Register, copy and reply to every approved, not-yet-transferred intake comment, and mark it with a rocket;
+    also post a missing reply or rocket for comments already copied. With ``dry_run`` only report. Returns the
+    number of comments that were (or, with ``dry_run``, would be) copied."""
+    target_issue = current_weekly_issue(github)
+    intake_raw = github.issue_comments(intake_issue)
+    replied = transferred_ids_in(intake_raw, _REPLY_MARKER_RE)
+    copied = transferred_ids_in(github.issue_comments(target_issue))
+    if target_issue != LEGACY_TARGET_ISSUE:
+        copied |= transferred_ids_in(github.issue_comments(LEGACY_TARGET_ISSUE))
+    transferred = replied | copied
     candidates, unmarked = [], []
-    for raw in github.issue_comments(intake_issue):
+    for raw in intake_raw:
+        if raw["user"]["login"] == TRANSFER_BOT:
+            continue
         summary = raw.get("reactions", {})
         if raw["id"] in transferred:
             if summary.get(TRANSFERRED_REACTION, 0) == 0:
@@ -293,11 +355,24 @@ def run(github: GitHub, *, intake_issue: int, target_issue: int, approvers: froz
             candidates.append(_to_intake(raw, github.comment_reactions(raw["id"])))
     pending = pending_transfers(candidates, approvers, transferred)
     for comment, approver in pending:
-        print(f"copy intake comment {comment.comment_id} by {comment.author} (approved by {approver})")
+        print(
+            f"copy intake comment {comment.comment_id} by {comment.author} (approved by {approver}) to #{target_issue}"
+        )
         if not dry_run:
             experiment_id = register(github, comment, approver)
             github.post_comment(target_issue, transfer_body(comment, approver, experiment_id))
+            github.post_comment(intake_issue, reply_body(comment.comment_id, experiment_id, target_issue, github.repo))
             github.react(comment.comment_id, TRANSFERRED_REACTION)
+    # Copies without a reply: a run stopped between the two. Copies from before the registry have no id; skip them.
+    unreplied = copied - replied
+    index_file = github.get_file(INTAKE_INDEX, REGISTRY_BRANCH) if unreplied else None
+    index = json.loads(index_file[0]) if index_file else {}
+    for comment_id in sorted(unreplied):
+        if str(comment_id) not in index:
+            continue
+        print(f"post the missing reply for intake comment {comment_id}")
+        if not dry_run:
+            github.post_comment(intake_issue, reply_body(comment_id, index[str(comment_id)], target_issue, github.repo))
     for comment_id in unmarked:
         print(f"add the missing rocket to already-copied intake comment {comment_id}")
         if not dry_run:
@@ -308,7 +383,6 @@ def run(github: GitHub, *, intake_issue: int, target_issue: int, approvers: froz
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--intake-issue", type=int, required=True)
-    parser.add_argument("--target-issue", type=int, required=True)
     parser.add_argument(
         "--approver-ids", required=True, help="Comma-separated numeric GitHub user ids whose 👍 approves."
     )
@@ -322,7 +396,6 @@ def main() -> None:
         count = run(
             github,
             intake_issue=args.intake_issue,
-            target_issue=args.target_issue,
             approvers=approvers,
             dry_run=args.dry_run,
         )

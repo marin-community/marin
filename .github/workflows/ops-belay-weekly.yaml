@@ -1,0 +1,36 @@
+name: "Ops - Belay Weekly"
+
+# Rolls the Marin Belay agent log over to a new locked weekly issue (label belay-weekly) every Monday, closing the
+# previous week's issue with a summary of its experiments from the experiment registry.
+# Logic lives in scripts/ci/belay_weekly.py.
+
+on:
+  schedule:
+    - cron: '5 0 * * 1'
+  workflow_dispatch:
+
+# Issue writes use the marin-belay-bot account's token (see ops-belay-intake.yaml): only users with write access can
+# comment on the locked weekly issues.
+permissions:
+  contents: read
+
+concurrency:
+  group: belay-weekly
+  cancel-in-progress: false
+
+jobs:
+  rollover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: marin_belay_v1_registry
+          path: registry
+      - name: Install the registry's YAML dependency
+        run: python3 -m pip install --quiet pyyaml
+      - name: Roll over the weekly Belay issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.BELAY_INTAKE_TOKEN }}
+        run: python3 -m scripts.ci.belay_weekly --registry-checkout registry
