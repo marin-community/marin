@@ -21,11 +21,12 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
     ArtifactKind,
+    CommandSemantics,
     EnvironmentRequirements,
     PlainText,
     ScriptGrader,
@@ -131,8 +132,16 @@ packages), `sh` and the usual Debian command-line tools, as root, without networ
 text reply. Private grader files are never installed in the solver's machine.\
 """
 
+PACKAGES_FACTS = """\
+The task machine runs CPython 3.12 with its standard library and {packages}, `sh` and the usual \
+command-line tools, without network; nothing else can be installed. The solver works in {workdir} \
+through a `shell(command)` tool, may write and run Python scripts there, and ends with a final text \
+reply. Private grader files are never installed in the solver's machine.\
+"""
+
 SOLVER_MACHINE_CHOICE = """\
-Choose solver_machine for this non-container task. shellsim: {shellsim} cpython: {cpython}\
+Choose solver_machine for this non-container task. shellsim: {shellsim} cpython: {cpython} \
+packages: {packages}\
 """
 
 CONTAINER_FACTS = """\
@@ -208,16 +217,28 @@ class FixturesDraft(BaseModel):
         description="Grader-only data files, paths relative to the grader's private directory. May be empty."
     )
     facts: str = Field(description="The ground truth these fixtures encode, with every value the grader checks.")
-    solver_machine: Literal["shellsim", "cpython"] = Field(
+    solver_machine: Literal["shellsim", "cpython", "packages"] = Field(
         description="shellsim when reading, shell tools or a short Python script are enough; cpython when "
-        "solving needs more computation than ShellSim's few seconds of Python, or a real clock. Ignored for "
-        "a container task, which runs in its own image."
+        "solving needs more computation than ShellSim's few seconds of Python, or a real clock; packages when "
+        "solving also needs PyPI packages (numpy, pandas, ...) and no system packages. Ignored for a container "
+        "task, which runs in its own image."
+    )
+    packages: list[str] = Field(
+        description="For solver_machine=packages, the PyPI requirements the solver's machine installs, one per "
+        "entry, such as numpy or pandas==2.2.3, each available as a wheel; otherwise empty."
     )
 
     @field_validator("agent_files")
     @classmethod
     def visible(cls, files: list[FileDraft]) -> list[FileDraft]:
         return under_workspace(files)
+
+    @model_validator(mode="after")
+    def machine_packages(self) -> "FixturesDraft":
+        if (self.solver_machine == "packages") != bool(self.packages):
+            raise ValueError("list packages exactly when solver_machine is packages")
+        draft.check_packages(self.packages)
+        return self
 
 
 class DockerfileDraft(BaseModel):
@@ -279,8 +300,12 @@ def files_text(files: Sequence[TaskResource], root: str) -> str:
 
 
 def machine_facts(requirements: EnvironmentRequirements) -> str:
-    """The solver's machine for a prompt: ShellSim without an image, CPython on the grader base image,
-    otherwise the task's own container."""
+    """The solver's machine for a prompt: CPython with the packages of a package machine, ShellSim
+    without an image, CPython on the grader base image, otherwise the task's own container."""
+    packages = requirements.package_spec
+    if packages is not None and requirements.command_semantics == CommandSemantics.LINUX_PROCESS:
+        listed = ", ".join(f"`{package}`" for package in packages.pypi_packages or ())
+        return PACKAGES_FACTS.format(workdir=WORKDIR, packages=f"these PyPI packages: {listed}")
     if requirements.docker_image is None:
         return SHELLSIM_FACTS.format(workdir=WORKDIR)
     if requirements.docker_image == GRADER_BASE_IMAGE:
@@ -293,7 +318,11 @@ def environment_facts(environment: Environment) -> str:
     if environment is Environment.CONTAINER:
         return CONTAINER_FACTS.format(workdir=WORKDIR)
     return SOLVER_MACHINE_CHOICE.format(
-        shellsim=SHELLSIM_FACTS.format(workdir=WORKDIR), cpython=CPYTHON_FACTS.format(workdir=WORKDIR)
+        shellsim=SHELLSIM_FACTS.format(workdir=WORKDIR),
+        cpython=CPYTHON_FACTS.format(workdir=WORKDIR),
+        packages=PACKAGES_FACTS.format(
+            workdir=WORKDIR, packages="the PyPI packages you list, installed from wheels with no image to build"
+        ),
     )
 
 
