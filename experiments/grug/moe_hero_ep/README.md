@@ -7,13 +7,13 @@ data-parallel rack uses one 64-device expert mesh.
 
 - Model: d6144, 48 layers, 384 routed experts of width 3072, top-8 routing, latent width 3072, and
   two shared experts of width 3072. Depth rounds up to the nearest even count.
-- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 4096,
-  sliding window 2048, and every fourth layer full-causal with the final layer also global. SConv
-  and fused RoPE are on.
+- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 16384
+  (4096 through step 257553), query/key multiplier 1.48 (1.3 at 4K), sliding window 2048, and every
+  fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Additional racks use
   the `replica_dcn` axis. Six experts are on each GPU in each rack.
-- Batch: The d6144 production run uses 11264 global sequences across 11 racks. A one-rack
-  diagnostic uses 1024 sequences.
+- Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 2816 global
+  sequences across 11 racks at 16K (11264 at 4K). A one-rack diagnostic defaults to 256 sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
 - MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
@@ -263,10 +263,10 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | --- | --- |
 | `--gc-interval` | opts into cyclic GC at shared completed-step boundaries after warmup |
 | `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
-| `--batch-size` | sets global sequences per step and the optimizer token budget |
+| `--batch-size` | sets global sequences per step and the optimizer token budget; the default holds one hero rack's 4,194,304 tokens at the sequence length |
 | `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
-| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default 1.3, extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
+| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.48; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
@@ -333,12 +333,12 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32576 \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
-    --run-id "$run_id" --num-steps 8 --schedule-steps 390251 --batch-size 1024 \
+    --run-id "$run_id" --num-steps 8 --schedule-steps 390251 \
     --profile-start-step 5 --profile-steps 2 --training-data synthetic \
     --version dev --run
 ```
 
-Batch 1024 keeps the production local batch of 16 sequences per GPU. The trace does not include
+The default batch, 256 at 16K, keeps the production local batch of 4 sequences per GPU. The trace does not include
 the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
 ### Profile-guided scheduling
@@ -437,7 +437,8 @@ checkpoint policy all follow `--size`:
 | d2048 | 11 | 11264 | 20,072 | every 5% | final only |
 | d6144 | 11 | 11264 | 390,251 | every 3000 | every 6k |
 
-Train batch is 1024 × racks; eval batch is 64 × racks (one sequence per device). The step budget is
+At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step (2816 for
+the d6144 hero at 16K); eval batch is 64 × racks (one sequence per device). The step budget is
 791 tokens per active parameter (18T at d6144); pass `--num-steps` to override.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the

@@ -65,10 +65,10 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
-    HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
+    HERO_INITIAL_SEQ_LEN,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -76,9 +76,11 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_PROCESSES_PER_TASK,
     HERO_QB_HIST_BINS,
     HERO_TENSORSTORE_CACHE_BYTES,
+    HERO_TOKENS_PER_RACK,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
     hero_grug_trainer_config,
+    hero_rack_batch_size,
     hero_trainer_config,
     validation_datasets,
     with_transport_remat_mode,
@@ -110,9 +112,6 @@ HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 # names the ranks that never arrived, while this one only reports that nothing progressed.
 HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 
-# The hero started at 4K context, and every context keeps its 4K tokens per rack per update.
-HERO_INITIAL_SEQ_LEN = 4096
-HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_INITIAL_SEQ_LEN
 # The context lengths the d6144 hero trained at before its current one, oldest first, each with the
 # step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
 HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (HarrierContextPhase(end_step=257_553, seq_len=4096),)
@@ -194,7 +193,7 @@ def build_ladder_run(
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
-    context_phases: Sequence[HarrierContextPhase] = (),
+    context_phases: Sequence[HarrierContextPhase] | None = None,
     flops_baseline_total: float | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
@@ -216,15 +215,23 @@ def build_ladder_run(
     ``qk_mult`` and ``qk_mult_long_scale`` override the rung's model config when set; the hero's own
     values, including its context length and capacity factor, live in ``HERO_MODEL``.
 
-    ``context_phases`` is the d6144 hero's context history (``HERO_CONTEXT_PHASES`` from the CLI), and
-    ``flops_baseline_total`` its cumulative training FLOPs at the last switch. Each data bucket resumes at
-    its next shuffle window (see ``LmDataConfig.prior_context_phases``). The narrow rungs take no history
-    and train at their context length from their start.
+    ``context_phases`` is the run's context history and ``flops_baseline_total`` its cumulative training
+    FLOPs at the last switch. Each data bucket resumes at its next shuffle window (see
+    ``LmDataConfig.prior_context_phases``). ``None`` selects the checked-in history: ``HERO_CONTEXT_PHASES``
+    and ``HERO_FLOPS_BASELINE_TOTAL`` for d6144, and none for the narrow rungs, which train at their context
+    length from their start. Pass both to build another history.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in LADDER_RACKS:
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
+
+    if context_phases is None:
+        if flops_baseline_total is not None:
+            raise ValueError("flops_baseline_total requires an explicit context_phases")
+        hero = size == "d6144"
+        context_phases = HERO_CONTEXT_PHASES if hero else ()
+        flops_baseline_total = HERO_FLOPS_BASELINE_TOTAL if hero else None
 
     model = _ladder_model(size)
     if qk_mult is not None:
@@ -237,9 +244,7 @@ def build_ladder_run(
     dp_racks = LADDER_RACKS[size]
     # Weak scaling holds per-rack token load constant; eval is one sequence per device.
     global_tokens_per_step = HERO_TOKENS_PER_RACK * dp_racks
-    if global_tokens_per_step % seq_len:
-        raise ValueError(f"seq_len={seq_len} must divide {global_tokens_per_step} tokens per step")
-    batch_size = global_tokens_per_step // seq_len
+    batch_size = hero_rack_batch_size(seq_len) * dp_racks
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
 
     if num_steps is None:
@@ -462,7 +467,6 @@ def main(
     gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    hero = size == "d6144"
     return build_ladder_run(
         run_id=run_id,
         size=size,
@@ -473,8 +477,6 @@ def main(
         eval_every=eval_every,
         gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
-        context_phases=HERO_CONTEXT_PHASES if hero else (),
-        flops_baseline_total=HERO_FLOPS_BASELINE_TOTAL if hero else None,
     )
 
 
