@@ -97,7 +97,7 @@ def _make_ep_mesh_or_none() -> Mesh | None:
     )
 
 
-def _jit_with_sync_collectives_on_rocm(fun: Callable) -> Callable:
+def _jit_with_rocm_deadlock_workaround(fun: Callable) -> Callable:
     """``jax.jit`` that runs every collective synchronously on AMD GPUs.
 
     XLA launches some collectives asynchronously on a second stream, so a device can have collectives on two
@@ -1987,8 +1987,8 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
         )
 
     with jax.set_mesh(mesh):
-        actual, overflow = _jit_with_sync_collectives_on_rocm(backend_output)(x, w_up_gate, w_down, combine_weights)
-        actual_gradients = _jit_with_sync_collectives_on_rocm(
+        actual, overflow = _jit_with_rocm_deadlock_workaround(backend_output)(x, w_up_gate, w_down, combine_weights)
+        actual_gradients = _jit_with_rocm_deadlock_workaround(
             jax.grad(
                 lambda x, w_up_gate, w_down, combine_weights: jnp.sum(
                     backend_output(x, w_up_gate, w_down, combine_weights)[0] * cotangent
