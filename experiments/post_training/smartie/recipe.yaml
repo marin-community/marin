@@ -83,6 +83,7 @@ trainer:
     max_in_flight: 64
 generator:
   backend: vllm
+  model_loading: stage_local
   model_dtype: bfloat16
   run_engines_locally: true
   eval_n_samples_per_prompt: 1
