@@ -5,6 +5,10 @@ from collections.abc import Iterator
 from typing import Any
 
 import json
+import asyncio
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
+from levanter.store.cache import CacheOptions
 from io import BytesIO
 from pathlib import Path
 
@@ -18,6 +22,9 @@ from transformers import CLIPImageProcessor, CLIPProcessor, PreTrainedTokenizerF
 
 from levanter.data.image import (
     processor_with_tokenizer,
+    ConversationDatasetSourceConfig,
+    ImageMixtureDatasetConfig,
+    image_caption_to_conversation,
     BatchImageProcessor,
     ImageConversationUrlDataSource,
     ImageDatasetSourceConfig,
@@ -147,3 +154,54 @@ def test_caption_source_preserves_images_and_truncated_targets(tmp_path, caption
     if max_length >= 9:
         expected_mask[8] = True
     np.testing.assert_array_equal(processed["loss_mask"], expected_mask)
+
+
+@pytest.mark.parametrize("source_kind", ["caption", "conversation"])
+@pytest.mark.parametrize("use_cache", [False, True])
+def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
+    tmp_path, caption_processor, source_kind, use_cache, monkeypatch
+):
+    image = tmp_path / "red.png"
+    Image.new("RGB", (4, 4), "red").save(image)
+    records = tmp_path / "records.jsonl"
+    rows = [{"image": str(image), "text": text} for text in ("red", "red square")]
+    if source_kind == "conversation":
+        conversations = [image_caption_to_conversation(row) for row in rows]
+        rows = [{"dialog": row["messages"], "pictures": row["images"]} for row in conversations]
+        source = ConversationDatasetSourceConfig(
+            train_urls=[str(records)], messages_key="dialog", images_key="pictures"
+        )
+    else:
+        source = ImageDatasetSourceConfig(train_urls=[str(records)])
+    records.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    monkeypatch.setattr("transformers.AutoProcessor.from_pretrained", lambda *args, **kwargs: caption_processor)
+    config = ImageMixtureDatasetConfig(
+        processor="local-test-processor",
+        configs={"tiny": source},
+        train_weights={"tiny": 1},
+        cache_dir=str(tmp_path / "cache"),
+        mixture_block_size=2,
+        use_cache=use_cache,
+        padding=not use_cache,
+        max_length=12,
+    )
+    # Different target lengths require single-example batches when padding is disabled.
+    with set_current_client(LocalClient()):
+        dataset = config.train_set(options=CacheOptions(batch_size=1), max_num_patches=3)
+        first = asyncio.run(dataset.get_batch([0]))[0]
+        second = asyncio.run(dataset.get_batch([1]))[0]
+    expected_pixels = caption_processor.image_processor(images=Image.open(image), return_tensors="np")["pixel_values"][
+        0
+    ]
+    for item, length in zip(sorted([first, second], key=lambda item: int(item["attention_mask"].sum())), [8, 9]):
+        expected_length = length if use_cache else 12
+        assert item["input_ids"].shape == (expected_length,)
+        assert item["pixel_values"].shape == (4, 3, 4, 4)
+        np.testing.assert_allclose(item["pixel_values"][0], expected_pixels)
+        np.testing.assert_array_equal(item["grid_mask"], [True, False, False, False])
+        np.testing.assert_array_equal(
+            item["loss_mask"], [0] * 6 + [1] * (length - 6) + [0] * (expected_length - length)
+        )
+    if use_cache:
+        restored = config.train_set(options=CacheOptions(batch_size=1), max_num_patches=3)
+        np.testing.assert_array_equal(asyncio.run(restored.get_batch([1]))[0]["input_ids"], second["input_ids"])

@@ -11,7 +11,8 @@ from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compati
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.image import RepeatedImageDataset
 from levanter.models.siglip import SiglipVisionConfig, SiglipVisionModel
-from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel, Siglip2VisionEmbeddings, Siglip2Attention
+from levanter.models.vision_transformer import VisionAttention
+from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel, Siglip2VisionEmbeddings
 from levanter.layers.attention import AttentionMask
 from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
 
@@ -65,7 +66,10 @@ def test_public_vision_checkpoint_loader(tmp_path, encoder):
         SiglipVisionModel as HfSiglipVisionModel,
         Siglip2VisionModel as HfSiglip2VisionModel,
     )
-    from transformers import Siglip2Config as HfSiglip2Config  # noqa: PLC0415 - optional Torch reference
+    from transformers import (  # noqa: PLC0415 - optional Torch reference
+        SiglipConfig as HfSiglipConfig,
+        Siglip2Config as HfSiglip2Config,
+    )
 
     parameters = dict(hidden_size=16, intermediate_size=32, num_hidden_layers=1, num_attention_heads=2, patch_size=2)
     if encoder == "siglip":
@@ -77,8 +81,8 @@ def test_public_vision_checkpoint_loader(tmp_path, encoder):
         hf_model = HfSiglip2VisionModel(config.to_hf_config())
         axes = (hax.Axis("batch", 1), hax.Axis("num_patches", 4), hax.Axis("patch_input", 12))
     hf_model.save_pretrained(tmp_path)
-    if encoder == "siglip2":
-        HfSiglip2Config(vision_config=hf_model.config.to_dict()).save_pretrained(tmp_path)
+    hf_config_class = HfSiglipConfig if encoder == "siglip" else HfSiglip2Config
+    hf_config_class(vision_config=hf_model.config.to_dict()).save_pretrained(tmp_path)
     converter = config.hf_checkpoint_converter(str(tmp_path))
     with use_test_mesh():
         loaded = converter.load_pretrained(config.model_type)
@@ -111,11 +115,12 @@ def test_siglip2_jitted_mixed_shapes_match_hf_embeddings():
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
 
 
-def test_siglip2_attention_pads_explicit_mask():
-    config = Siglip2VisionConfig(
-        hidden_size=8, intermediate_size=16, num_hidden_layers=1, num_attention_heads=2, patch_size=2, num_patches=16
+@pytest.mark.parametrize("config_class", [SiglipVisionConfig, Siglip2VisionConfig])
+def test_vision_attention_pads_explicit_mask(config_class):
+    config = config_class(
+        hidden_size=8, intermediate_size=16, num_hidden_layers=1, num_attention_heads=2, patch_size=2
     )
-    attention = Siglip2Attention.init(config, key=jax.random.PRNGKey(0))
+    attention = VisionAttention.init(config, key=jax.random.PRNGKey(0))
     sequence = hax.Axis("num_patches", 5)
     pixels = hax.random.normal(jax.random.PRNGKey(1), (hax.Axis("batch", 1), sequence, config.Embed))
     mask = AttentionMask.explicit(hax.named(jnp.eye(5, dtype=bool), (sequence, hax.Axis("key_position", 5))))
