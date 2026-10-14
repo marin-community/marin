@@ -1,0 +1,97 @@
+name: "Ops - Loom Holistic Review"
+
+# This workflow runs from the trusted default branch and never checks out or
+# executes pull-request code. It launches one whole-change review session for
+# a large pull request or one that adds a new abstraction, and launches again
+# after a push; the session itself skips small deltas since the last reviewed
+# head. The gate step reads the pull request's size and file patches through
+# the GitHub API without checking anything out.
+on:
+  pull_request_target:
+    types: [opened, ready_for_review, reopened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  HOLISTIC_REVIEW_MIN_CHANGED_LINES: "300"
+
+jobs:
+  review:
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - name: Checkout trusted workflow actions
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/launch-loom-run
+            .github/actions/check-write-access
+          sparse-checkout-cone-mode: false
+
+      - name: Check author write access
+        id: author
+        uses: ./.github/actions/check-write-access
+        with:
+          login: ${{ github.event.pull_request.user.login }}
+          allowed-bots: |
+            marin-ops-agent[bot]
+            loom-oa-dev[bot]
+
+      - name: Gate on size or a new abstraction
+        id: gate
+        if: steps.author.outputs.allowed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ADDITIONS: ${{ github.event.pull_request.additions }}
+          DELETIONS: ${{ github.event.pull_request.deletions }}
+        run: |
+          set -euo pipefail
+          changed=$((ADDITIONS + DELETIONS))
+          if (( changed >= HOLISTIC_REVIEW_MIN_CHANGED_LINES )); then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "gate: $changed changed lines"
+            exit 0
+          fi
+          # A smaller PR still qualifies when it adds a class, dataclass, or
+          # Protocol under a library source tree or the experiments tree. The
+          # API call runs on its own line so a failure stops the job instead
+          # of reading as a skipped PR.
+          patches="$RUNNER_TEMP/holistic-review-patches.txt"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | select(.filename | test("^(lib/[^/]+/src/|experiments/)")) | .patch // ""' \
+            > "$patches"
+          if grep -Eq '^\+\s*(class |@dataclass)' "$patches"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "gate: new abstraction in $changed changed lines"
+            exit 0
+          fi
+          echo "run=false" >> "$GITHUB_OUTPUT"
+          echo "gate: $changed changed lines, no new abstraction; skipping"
+
+      - name: Launch Loom holistic review
+        if: steps.gate.outputs.run == 'true'
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_PR_HOLISTIC_REVIEW_PROFILE }}
+          idempotency-key: pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
+          title: "Holistic review for #${{ github.event.pull_request.number }}"
+          goal: >-
+            Review pull request #${{ github.event.pull_request.number }} at head
+            ${{ github.event.pull_request.head.sha }} as a whole change. Remain
+            read-only except for one GitHub comment. Run review-pr-holistic with
+            --comment and publish a typed result.
+          base: ${{ github.event.pull_request.head.sha }}
+          github-issue: ${{ github.event.pull_request.number }}
