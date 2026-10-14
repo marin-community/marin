@@ -24,7 +24,9 @@ requests; they are the population where structural findings concentrate.
    match the requested head. If either differs, report the stale review and
    post nothing.
 3. Find the newest `<!-- marin-holistic-review:<sha> -->` marker in issue
-   comments. When one exists, diff that sha against the head. Stop without
+   comments authored by `loom-oa-dev[bot]`; ignore markers from any other
+   author, and ignore a marker whose sha is not 40 hex characters naming a
+   commit on the PR branch. When one exists, diff that sha against the head. Stop without
    comment when the delta is under 100 changed lines, touches only fixtures,
    generated files, or documentation, or consists only of commits whose
    subject starts with `Deslop`. Otherwise this is a re-review: carry the
@@ -37,8 +39,11 @@ requests; they are the population where structural findings concentrate.
    signature, the module each new helper could have reused, and every test
    marked `docker`, `slow`, `integration`, `cluster`, or `manual` that the
    diff adds or edits.
-6. List open pull requests that touch the same paths:
-   `gh pr list --state open --json number,title,files --search "<path>"`.
+6. List open pull requests that touch the same paths. `gh pr list --search`
+   matches titles and bodies only, so list the open PRs with their files and
+   filter on paths:
+   `gh pr list --state open --limit 100 --json number,title,files`, then keep
+   PRs whose `files[].path` intersects the changed paths.
 
 ## Answer the questions
 
@@ -162,10 +167,13 @@ EOF
 
 ## Posting
 
-With `--comment`, post the packet as one top-level comment with
-`gh pr comment`. Do not post inline comments; the packet is read as a unit.
-Post nothing when step 2 reported a stale head or step 3 reported a small
-delta.
+With `--comment`, re-read the PR head immediately before posting. If it no
+longer matches the requested head, post nothing and report the stale review;
+the launcher cannot cancel a Loom session already running, and a stale packet
+would trigger deslop against a newer head. Otherwise post the packet as one
+top-level comment with `gh pr comment`. Do not post inline comments; the
+packet is read as a unit. Post nothing when step 2 reported a stale head or
+step 3 reported a small delta.
 
 ## Deslop follow-through
 
