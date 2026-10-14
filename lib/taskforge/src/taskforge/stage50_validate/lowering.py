@@ -16,15 +16,19 @@ from rolloutengine.spec import LoweredTaskSpec
 from shellbox.machine import MachineFactory
 from taskcompendium.models import TaskSpec
 
-from taskforge.sandbox.factories import MachineHost, grading_environment
+from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, MachineHost, grading_environment
 from taskforge.spec import draft
 from taskforge.spec.draft import SHELL_CAPABILITY
 from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
 
 STARTUP_TIMEOUT = 600.0
 """Seconds the task machine and the verifier machine may take to start."""
-VERIFIER_TIMEOUT = GRADER_TIMEOUT + 120.0
-"""The session's grading deadline: a template grader's own timeout plus a verifier machine's start."""
+VERIFIER_TIMEOUT = SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
+"""The session's grading deadline: a verifier machine's scheduling budget, then a template grader's own timeout.
+
+It stays behind the factory's scheduling timeout so a sandbox that never starts is the factory's
+``TimeoutError``, which validation classifies, and not the deadline.
+"""
 CLEANUP_TIMEOUT = 120.0
 TASK_MACHINE = draft.machine(startup_timeout=STARTUP_TIMEOUT)
 SESSION = draft.session(

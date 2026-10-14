@@ -31,6 +31,13 @@ from taskcompendium.runtime.environment import validate_machine_spec
 logger = logging.getLogger(__name__)
 
 DOCKER_PROBE_TIMEOUT = 20
+SANDBOX_SCHEDULING_TIMEOUT = 600
+"""Seconds the Iris factory waits for a sandbox to start before it raises ``TimeoutError``.
+
+A deadline the engine holds around a machine's start, such as a session's verifier deadline, must
+outlast this budget: the factory's own timeout is what ``stage40_build_with_program.infrastructure`` classifies
+as a host failure, and a shorter engine deadline cancels the wait first and reports a bare timeout.
+"""
 
 
 class MachineHost(StrEnum):
@@ -120,7 +127,9 @@ def machine_factories(where: MachineHost, controller_url: str | None) -> Mapping
         raise ValueError(f"{where} factories take a controller URL only on Iris, got {controller_url!r}")
     factories: list[MachineFactory] = [ShellSimMachineFactory()]
     if controller_url is not None:
-        factories.append(IrisMachineFactory(controller_url=controller_url))
+        factories.append(
+            IrisMachineFactory(controller_url=controller_url, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)
+        )
         sandbox = local_sandbox()
         if sandbox.factory is not None:
             factories.append(sandbox.factory)

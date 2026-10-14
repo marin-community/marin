@@ -23,13 +23,21 @@ from shellbox.machine import (
 from taskcompendium.models import AnswerType, PlainText, TaskSpec
 
 from taskforge.ledger.records import EntryKind
+from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, run_build
-from taskforge.stage40_build_with_program.sandbox_effects import build_machine, grade_candidate, publish_image
+from taskforge.stage40_build_with_program.sandbox_effects import (
+    GRADE_CANDIDATE_VERIFIER_TIMEOUT,
+    build_machine,
+    grade_candidate,
+    publish_image,
+)
+from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
+from taskforge.stage50_validate.lowering import VERIFIER_TIMEOUT
 from tests.sandbox.fixture_images import shell_grader
 from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING
 
@@ -178,6 +186,17 @@ async def test_an_image_or_spec_the_program_chose_stays_the_programs_failure(con
         await grade_candidate(on_host, SHELLSIM, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
 
     assert interrupted.value.__cause__ is error
+
+
+def test_verifier_deadlines_outlast_the_sandbox_scheduling_timeout():
+    """A verifier deadline at or under the factory's scheduling timeout cancels the machine wait first.
+
+    The factory's ``TimeoutError`` is then never raised, the engine reports a bare deadline, and a
+    sandbox that never starts spends a program revision instead of failing as infrastructure. Both
+    deadlines leave the factory its whole budget and the grader its own on top.
+    """
+    assert GRADE_CANDIDATE_VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
+    assert VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
 
 
 async def test_the_programs_own_startup_deadline_stays_the_programs_failure(context):
