@@ -39,10 +39,10 @@ ROLE_PLAN = SkyRLRolePlan(
     inference_engine_pipeline_parallel_size=1,
     inference_engine_data_parallel_size=4,
     inference_engine_expert_parallel_size=4,
-    train_batch_size=512,
-    policy_mini_batch_size=512,
+    train_batch_size=64,
+    policy_mini_batch_size=64,
     micro_train_batch_size_per_gpu=1,
-    n_samples_per_prompt=16,
+    n_samples_per_prompt=8,
 )
 
 
