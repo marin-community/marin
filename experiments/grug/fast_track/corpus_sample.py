@@ -103,6 +103,13 @@ class RawCorpusPool(Artifact):
 
 
 @dataclass(frozen=True)
+class _NormalizedRow:
+    document_id: str
+    text: str
+    row_offset: int
+
+
+@dataclass(frozen=True)
 class _CorpusShard:
     source: str
     path: str
@@ -197,7 +204,7 @@ def _row_groups_to_read(parquet: pq.ParquetFile, intervals: tuple[tuple[int, int
 
 def _iter_normalized_rows(
     parquet: pq.ParquetFile, shard_path: str, intervals: tuple[tuple[int, int], ...]
-) -> Iterator[tuple[str, str, int]]:
+) -> Iterator[_NormalizedRow]:
     schema = parquet.schema_arrow
     if schema.get_field_index("id") < 0 or schema.get_field_index("text") < 0:
         raise ValueError(f"{shard_path}: normalized parquet must contain id and text fields")
@@ -230,7 +237,7 @@ def _iter_normalized_rows(
                     raise ValueError(
                         f"{shard_path}: normalized id at row {row_offset} must be 32 lowercase hexadecimal characters"
                     )
-                yield document_id, text, row_offset
+                yield _NormalizedRow(document_id, text, row_offset)
 
 
 def _sample_records(
@@ -249,7 +256,8 @@ def _sample_records(
     def records() -> Iterator[tuple[dict, int]]:
         with StoragePath(shard.path).open("rb") as stream:
             parquet = pq.ParquetFile(stream)
-            for document_id, text, row_offset in _iter_normalized_rows(parquet, shard.path, intervals):
+            for row in _iter_normalized_rows(parquet, shard.path, intervals):
+                document_id, text = row.document_id, row.text
                 rank_value = (int(document_id, 16) + rank_salt) % _ID_SPACE
                 if rank_value >= cutoff:
                     continue
@@ -274,7 +282,7 @@ def _sample_records(
                         "sample_rank": rank,
                         "duplicate_group": duplicate_group,
                         "normalized_shard": shard.path,
-                        "normalized_row": row_offset,
+                        "normalized_row": row.row_offset,
                         "text": text,
                     },
                     text_bytes,

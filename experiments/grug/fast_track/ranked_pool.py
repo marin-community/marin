@@ -20,6 +20,7 @@ from zephyr.dataset import Dataset
 from zephyr.writers import ensure_parent_dir
 
 RANKED_BATCH_ROWS = 1024
+RANGE_FILE_PREFIX = "range-"
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ def write_parquet_tables(path: str, tables: Iterable[pa.Table], *, schema: pa.Sc
 
 def _write_range(output_path: str) -> Callable[[int, Iterator[dict[str, Any]]], RangeTokenTotal]:
     def write(range_key: int, rows: Iterator[dict[str, Any]]) -> RangeTokenTotal:
-        path = prefix_join(output_path, f"range-{range_key:05d}.parquet")
+        path = prefix_join(output_path, f"{RANGE_FILE_PREFIX}{range_key:05d}.parquet")
         tokens = 0
 
         def tables() -> Iterator[pa.Table]:
