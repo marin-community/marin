@@ -3,6 +3,7 @@
 
 """K8sService protocol and CloudK8sService (kubernetes DynamicClient) implementation."""
 
+import json
 import logging
 import os
 import socket
@@ -82,6 +83,14 @@ def _k8s_call(operation: str) -> Iterator[None]:
 # parks its caller indefinitely. Chunked lists bound both the response body and
 # the API server's etcd range read.
 _LIST_PAGE_LIMIT: int = 500
+# Passed to DynamicClient reads. By default the client wraps each response in nested
+# pure-Python ``ResourceField`` objects, which callers here only convert back to dicts;
+# for a controller listing ~1,000 pods each tick that round trip costs ~7x the JSON parse
+# itself and holds the GIL throughout. With ``serialize=False`` the call returns the
+# unread HTTP response, whose body ``_response_json`` must read to release the connection.
+_RAW_RESPONSE = {"serialize": False}
+# Sandbox clients exec file uploads as ~87 KB base64 scripts; log only each command's head.
+_EXEC_LOG_COMMAND_CHARS = 200
 
 # API error bodies quote the offending manifest; keep enough to identify the
 # verdict without flooding logs.
@@ -200,6 +209,16 @@ class K8sService(Protocol):
     ) -> AbstractContextManager[str]:
         """Port-forward to a K8s Service, yielding the local URL."""
         ...
+
+
+def _response_json(response) -> dict:
+    """Read and parse the HTTP response a DynamicClient call returns under ``_RAW_RESPONSE``."""
+    return json.loads(response.data)
+
+
+def _command_preview(cmd: list[str]) -> str:
+    """The head of ``cmd`` for a log line, without copying a large argument in full."""
+    return " ".join(arg[:_EXEC_LOG_COMMAND_CHARS] for arg in cmd)[:_EXEC_LOG_COMMAND_CHARS]
 
 
 def _label_selector(labels: dict[str, str]) -> str:
@@ -365,12 +384,13 @@ class CloudK8sService:
         logger.info("k8s: GET %s/%s", resource.plural, name)
         with _k8s_call(f"get {resource.plural}/{name}"):
             try:
-                result = self._resource_api(resource).get(
+                response = self._resource_api(resource).get(
                     name=name,
                     **self._request_timeout_kwargs(),
                     **self._ns_kwargs(resource),
+                    **_RAW_RESPONSE,
                 )
-                return result.to_dict()
+                return _response_json(response)
             except NotFoundError:
                 return None
             except ApiException as e:
@@ -412,13 +432,11 @@ class CloudK8sService:
                 if continue_token:
                     page_kwargs["_continue"] = continue_token
                 try:
-                    result = api.get(**page_kwargs)
+                    page = _response_json(api.get(**page_kwargs, **_RAW_RESPONSE))
                 except ApiException as e:
                     raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
-                for item in result.items:
-                    yield item.to_dict()
-                meta = result.metadata
-                continue_token = (meta["continue"] if meta is not None else None) or ""
+                yield from page.get("items") or []
+                continue_token = (page.get("metadata") or {}).get("continue") or ""
                 if not continue_token:
                     return
 
@@ -721,7 +739,7 @@ class CloudK8sService:
     ) -> ExecResult:
         """Run a command inside a Pod container."""
         effective_timeout = timeout if timeout is not None else self.timeout
-        logger.info("k8s: exec %s cmd=%s container=%s", pod_name, cmd, container)
+        logger.info("k8s: exec %s cmd=%s container=%s", pod_name, _command_preview(cmd), container)
         with slow_log(logger, f"exec {pod_name}", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
                 kwargs: dict = {

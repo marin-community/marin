@@ -4,9 +4,12 @@
 """Tests for KubernetesProvider integration with controller and transitions."""
 
 import json
+import threading
 
 import pytest
 from finelog.rpc import logging_pb2
+from iris.cluster.controller import controller as controller_module
+from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -35,6 +38,7 @@ from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.controller import (
     make_direct_job_request,
     query_attempt,
+    query_job,
     query_task,
     query_tasks_for_job,
     reconcile_once,
@@ -926,3 +930,83 @@ def test_apply_ignores_finished_task(state):
 
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_SUCCEEDED
+
+
+# =============================================================================
+# Cancel racing a reconcile tick (#10111)
+# =============================================================================
+
+
+def test_cancel_committed_during_reconcile_tick_kills_running_child(make_controller, monkeypatch):
+    """A parent cancel that commits while a reconcile tick is in flight must stick.
+
+    The tick authors its effects from a snapshot after backend I/O and commits
+    them later. A cancel landing between the two used to be overwritten by the
+    tick's stale ASSIGNED->RUNNING delta, leaving the child job and task RUNNING
+    under a KILLED parent, so its pod stayed in the desired set forever.
+    """
+    provider = FakeDirectProvider()
+    ctrl = make_controller(provider=provider, remote_state_dir="file:///tmp/iris-10111-cancel-race")
+    state = ControllerTestState(ctrl._db)
+
+    parent_id = JobName.root("test-user", "coordinator")
+    child_id = parent_id.child("shellbox")
+    child_request = make_direct_job_request("coordinator")
+    child_request.name = child_id.to_wire()
+    with state._db.transaction() as cur:
+        submit_job_in_tx(cur, job_id=parent_id, request=make_direct_job_request("coordinator"), ts=Timestamp.now())
+    with state._db.transaction() as cur:
+        [parent_run] = dispatch.drain_for_dispatch(cur).tasks_to_run
+    parent_task_id = JobName.from_wire(parent_run.task_id)
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=parent_task_id, attempt_id=parent_run.attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
+            now=Timestamp.now(),
+        )
+    with state._db.transaction() as cur:
+        submit_job_in_tx(cur, job_id=child_id, request=child_request, ts=Timestamp.now())
+    with state._db.transaction() as cur:
+        [child_run] = dispatch.drain_for_dispatch(cur).tasks_to_run
+    child_task_id = JobName.from_wire(child_run.task_id)
+
+    # The child's pod reaches Running in the same tick the user cancels the parent.
+    provider.sync_result = ReconcileObservation(
+        task_updates=[
+            TaskUpdate(
+                attempt_uid=AttemptUid(child_run.attempt_uid),
+                task_id=child_task_id,
+                attempt_id=child_run.attempt_id,
+                new_state=job_pb2.TASK_STATE_RUNNING,
+            )
+        ]
+    )
+
+    def cancel_parent() -> None:
+        with ctrl._db.transaction() as cur:
+            ops.job.cancel(cur, job_id=parent_id, reason="Terminated by user")
+
+    canceller = threading.Thread(target=cancel_parent)
+    real_apply_observation = controller_module.apply_observation
+
+    def apply_observation_then_cancel(*args, **kwargs):
+        application = real_apply_observation(*args, **kwargs)
+        # A TerminateJob RPC arrives once the tick has read its snapshot. Bounded
+        # join: a tick that holds the write lock here makes the cancel wait for it.
+        canceller.start()
+        canceller.join(timeout=0.5)
+        return application
+
+    monkeypatch.setattr(controller_module, "apply_observation", apply_observation_then_cancel)
+    reconcile_once(ctrl)
+    canceller.join()
+    monkeypatch.setattr(controller_module, "apply_observation", real_apply_observation)
+
+    assert query_job(state, parent_id).state == job_pb2.JOB_STATE_KILLED
+    assert query_job(state, child_id).state == job_pb2.JOB_STATE_KILLED
+    assert query_task(state, child_task_id).state == job_pb2.TASK_STATE_KILLED
+
+    # The next sync no longer wants the child's pod, so the K8s stray diff deletes it.
+    provider.sync_result = ReconcileObservation()
+    reconcile_once(ctrl)
+    assert child_task_id not in {entry.task_id for entry in provider.sync_calls[-1].running_tasks}
