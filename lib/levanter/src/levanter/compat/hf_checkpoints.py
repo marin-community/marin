@@ -584,7 +584,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         ref = _coerce_to_rr(reference_checkpoint) if reference_checkpoint is not None else None
         HfConfigClass = HFCheckpointConverter._infer_config_class(HfConfigClass, ref, trust_remote_code)
-        tokenizer = HFCheckpointConverter._infer_tokenizer(tokenizer, ref, trust_remote_code)
+        if tokenizer is not None or issubclass(LevConfigClass, LmConfig):
+            tokenizer = HFCheckpointConverter._infer_tokenizer(tokenizer, ref, trust_remote_code)
 
         self.__default_init__(  # type: ignore
             LevConfigClass=LevConfigClass,
@@ -974,8 +975,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
         lm_model_cls = config.model_type
 
         # Vocab: first we have to resize the vocab as loaded from the checkpoint
-        tokenizer_Vocab = self.Vocab
-        Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        if isinstance(config, LmConfig):
+            tokenizer_Vocab = self.Vocab
+            Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        else:
+            # Vision models accept an unused vocabulary axis through the serialization interface.
+            tokenizer_Vocab = Vocab = Axis("vocab", 0)
 
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.

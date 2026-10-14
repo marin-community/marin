@@ -10,7 +10,7 @@ from haliax._src.state_dict import default_eqx_module_from_state_dict
 
 
 from jaxtyping import PRNGKeyArray
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Self, Callable, Dict, Optional, Tuple, Type
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
@@ -29,7 +29,7 @@ import haliax.nn as hnn  # noqa: E402
 from haliax import Axis, NamedArray  # noqa: E402
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split  # noqa: E402
 from haliax.nn.scan import Stacked  # noqa: E402
-from haliax.state_dict import ModuleWithStateDictSerialization  # noqa: E402
+from haliax.state_dict import ModuleWithStateDictSerialization, with_prefix  # noqa: E402
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, ModelWithHfSerializationMixin  # noqa: E402
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention  # noqa: E402
@@ -108,13 +108,10 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["SiglipVisionConfig"]:  # type: ignore
         """Create HuggingFace checkpoint converter for this config."""
-        # Vision-only models don't have a tokenizer, but HFCheckpointConverter requires one
-        # Use gpt2 tokenizer as a placeholder since it's always available
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=False,
-            tokenizer="gpt2",  # Dummy tokenizer for vision-only model
             HfConfigClass=HfSiglipVisionConfig,
         )
 
@@ -833,7 +830,10 @@ class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializati
     def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None) -> Self:
         """Load from state dict."""
 
-        # Use default loading
+        # Standalone HF vision checkpoints omit the composite model's vision_model prefix.
+        if with_prefix(prefix, "embeddings.patch_embedding.weight") in state_dict:
+            vision_model = default_eqx_module_from_state_dict(self.vision_model, state_dict, prefix)
+            return replace(self, vision_model=vision_model)
         return default_eqx_module_from_state_dict(self, state_dict, prefix)
 
 
