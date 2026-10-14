@@ -6,6 +6,7 @@
 import argparse
 import gzip
 import hashlib
+import itertools
 import json
 import math
 import subprocess
@@ -25,6 +26,25 @@ from skyrl_gym.envs.reasoning_gym.scoring import normalize_ground_truth, score_r
 SOURCES = {}
 PRESERVE_FULL_RESPONSE = False
 EOS_TOKEN_TEXT = "<|im_end|>"
+
+
+def retained_records(cache: Path, audited: dict):
+    reused = {row["record_id"]: row for row in audited.get("verified_reused_records", [])}
+    for item in sorted(audited["selected_archives"], key=lambda item: item["Key"]):
+        relative = "attempts/" + item["Key"].split("/attempts/", 1)[1]
+        with zipfile.ZipFile(cache / relative) as archive:
+            for name in archive.namelist():
+                if not name.startswith("records/"):
+                    continue
+                raw = gzip.decompress(archive.read(name))
+                record = json.loads(raw)
+                if item["last_modified_ms"] < audited["archive_after_ms"]:
+                    reference = reused.get(record["record_id"])
+                    if reference is None:
+                        continue
+                    assert reference["archive_key"] == item["Key"]
+                    assert reference["record_payload_sha256"] == hashlib.sha256(raw).hexdigest()
+                yield raw, record
 
 
 def load_sources(train: str, validation: str, preserve_full_response: bool, eos_token_text: str = "<|im_end|>") -> None:
@@ -141,28 +161,16 @@ def main() -> None:
         )
         assert (args.runtime_checkout / relative).read_bytes() == frozen
         grader_files[relative] = hashlib.sha256(frozen).hexdigest()
-    records = []
     digest = hashlib.sha256()
     record_ids = set()
-    reused = {row["record_id"]: row for row in audited.get("verified_reused_records", [])}
-    for item in sorted(audited["selected_archives"], key=lambda item: item["Key"]):
-        relative = "attempts/" + item["Key"].split("/attempts/", 1)[1]
-        with zipfile.ZipFile(args.cache / relative) as archive:
-            for name in archive.namelist():
-                if not name.startswith("records/"):
-                    continue
-                raw = gzip.decompress(archive.read(name))
-                record = json.loads(raw)
-                if item["last_modified_ms"] < audited["archive_after_ms"]:
-                    reference = reused.get(record["record_id"])
-                    if reference is None:
-                        continue
-                    assert reference["archive_key"] == item["Key"]
-                    assert reference["record_payload_sha256"] == hashlib.sha256(raw).hexdigest()
-                assert record["record_id"] not in record_ids
-                record_ids.add(record["record_id"])
-                digest.update(raw)
-                records.append(record)
+
+    def records():
+        for raw, record in retained_records(args.cache, audited):
+            assert record["record_id"] not in record_ids
+            record_ids.add(record["record_id"])
+            digest.update(raw)
+            yield record
+
     counts = Counter()
     quality = Counter()
     discrepancies = []
@@ -172,15 +180,17 @@ def main() -> None:
         initializer=load_sources,
         initargs=(str(args.train_source), str(args.validation_source), preserve_full_response, eos_token_text),
     ) as executor:
-        for result in executor.map(regrade, records, chunksize=16):
-            key = (result["phase"], result["step"])
-            counts[key] += 1
-            if result.get("offline_error") or result.get("mismatch"):
-                discrepancies.append(result)
-            else:
-                quality[key] += result["quality"]
-            if result.get("native_error"):
-                native_errors.append(result)
+        iterator = records()
+        while batch := list(itertools.islice(iterator, 512)):
+            for result in executor.map(regrade, batch, chunksize=16):
+                key = (result["phase"], result["step"])
+                counts[key] += 1
+                if result.get("offline_error") or result.get("mismatch"):
+                    discrepancies.append(result)
+                else:
+                    quality[key] += result["quality"]
+                if result.get("native_error"):
+                    native_errors.append(result)
     report = {
         "run_id": config["run"]["id"],
         "source": config["runtime"]["launcher_commit"],
@@ -193,7 +203,7 @@ def main() -> None:
         "grader_files_sha256": grader_files,
         "source_sha256": source_hashes,
         "record_payloads_sha256": digest.hexdigest(),
-        "records": len(records),
+        "records": len(record_ids),
         "quality": [
             {
                 "phase": phase,
@@ -212,7 +222,7 @@ def main() -> None:
         json.dumps(
             {
                 "run_id": report["run_id"],
-                "records": len(records),
+                "records": len(record_ids),
                 "discrepancies": len(discrepancies),
                 "native_errors": len(native_errors),
             }

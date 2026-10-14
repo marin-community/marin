@@ -1,0 +1,10 @@
+{
+  "run_id": "sc-qwen-transfer-optimizer-sc-s0-main-rno-a1-01a126ce",
+  "records": 249984,
+  "record_payloads_sha256": "027b5cffbd18e89a0e4badba5300983f02970f08fa2ddda4cab4268541f41cd2",
+  "verified_older_record_references": 7,
+  "maximum_batch_records": 512,
+  "all300_train_and16_eval_counts_match": true,
+  "native_grading_functions_ast_unchanged": true,
+  "basis": "Full actual complete300 optimizer SC0 record selection, including every explicitly verified older reference and unique record ID. Grading functions unchanged; every-new-response native grade replay remains separate ongoing work."
+}

@@ -1,0 +1,37 @@
+{
+  "new_run": "sc-qwen-transfer-native-window-sc-s1-main-rno-a3-01a126ce",
+  "retired_run": "sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scientific_updates": 1200,
+  "same_learning_recipe": true,
+  "config_sha256": "2c15438e1ca88ffe6d935ea7910439f3a8ffae4f691554f157c452020c30518b",
+  "preflight_passed": true,
+  "preflight_log_sha256": "a11b468a2397cf1bef3b07968a5c577218aaf88474931748c6bd1e80b086aa30",
+  "failed_attempt_number": 10,
+  "failed_attempt_rows": [
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce/0",
+      "attempt_id": "10",
+      "attempt_uid": "4f1c8cfba2a116a6",
+      "state": "5",
+      "exit_code": "1",
+      "started_at_ms": "1792017319486",
+      "finished_at_ms": "1792018175624",
+      "node_name": "g4ead54",
+      "terminal_reason": "esult, _LEDGER_NAME)\n  File \"/app/marinskyrl/skyrl-train/skyrl_train/trajectory_runners/trajectory_retention.py\", line 1071, in _raise_publication_error\n    raise TrajectoryRetentionPublicationTimeout(message)\nskyrl_train.trajectory_runners.trajectory_retention.TrajectoryRetentionPublicationTimeout: trajectory retention publication failed for _retention_ledger.json: storage operation exceeded 600 seconds\n2026-10-14 22:48:41.917 | ERROR    | skyrl_train.entrypoints.main_base:run_ray_driver:747 - "
+    },
+    {
+      "task_id": "/romain/sc-qwen-transfer-native-window-sc-s1-main-rno-a2-01a126ce/1",
+      "attempt_id": "10",
+      "attempt_uid": "9bd6c553bfdec30d",
+      "state": "11",
+      "exit_code": "",
+      "started_at_ms": "1792017314526",
+      "finished_at_ms": "1792018175624",
+      "node_name": "g82d9f0",
+      "terminal_reason": ""
+    }
+  ],
+  "failed_attempt_allocated_h100_hours": 3.8160800000000004,
+  "basis": "No learning updates in selected startup attempt. Retention-ledger storage deadline600 exceeded. New run owns an empty archive namespace with unchanged scientific recipe, source, batch priority and full1200 horizon; all original partials and costs remain. Underlying storage-stall cause is not established."
+}
