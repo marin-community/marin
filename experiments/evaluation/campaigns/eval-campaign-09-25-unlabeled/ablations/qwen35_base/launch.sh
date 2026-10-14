@@ -52,6 +52,9 @@ tau3_model_config="$ABLATION_DIR/model-tau3.yaml"
 validate_marin_checkout
 validate_campaign_configs
 prepare_judge_environment
+if [ "${WAIT_FOR_RESULTS:-0}" = "1" ]; then
+  resolve_coreweave_credentials
+fi
 
 (cd "$MARIN_DIR" && \
   STANDARD_MODEL_CONFIG="$model_config" \
