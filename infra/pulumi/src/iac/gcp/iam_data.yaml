@@ -1026,10 +1026,24 @@ project_grants:
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
+- role: roles/cloudsql.client
+  members:
+  - serviceAccount:iris-worker@hai-gcp-models.iam.gserviceaccount.com
+  condition:
+    title: conversation-lab-marin-metadata
+    expression: resource.name == "projects/hai-gcp-models/instances/marin-metadata" && resource.service == "sqladmin.googleapis.com"
+    description: Connect lab workers to the existing metadata database; SQL grants restrict lab operations.
 - role: roles/cloudsql.instanceUser
   members:
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
   - principal: human-012
+- role: roles/cloudsql.instanceUser
+  members:
+  - serviceAccount:iris-worker@hai-gcp-models.iam.gserviceaccount.com
+  condition:
+    title: conversation-lab-marin-metadata
+    expression: resource.name == "projects/hai-gcp-models/instances/marin-metadata" && resource.service == "sqladmin.googleapis.com"
+    description: Authenticate lab workers with renewable machine credentials; SQL grants restrict lab operations.
 - role: roles/cloudtasks.enqueuer
   members:
   - serviceAccount:hai-gcp-models@appspot.gserviceaccount.com

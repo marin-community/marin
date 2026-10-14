@@ -156,6 +156,14 @@ def main() -> None:
         type="CLOUD_IAM_SERVICE_ACCOUNT",
         opts=child,
     )
+    gcp.sql.User(
+        "conversation-lab-worker-db-user",
+        name="iris-worker@hai-gcp-models.iam",
+        instance=INSTANCE,
+        project=PROJECT,
+        type="CLOUD_IAM_SERVICE_ACCOUNT",
+        opts=child,
+    )
     reader_group = gcp.sql.User(
         "reader-group",
         name=READER_GROUP,
