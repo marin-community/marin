@@ -235,7 +235,7 @@ async def test_shellsim_file_task_trials(client, evidence_dir, file_task):
         evidence_dir,
         file_task,
         "b_shellsim_trials",
-        "ShellSim task, k=3: shell tool calls execute, a Python grader in a verifier machine checks the "
+        "ShellSim task, k=3: shell tool calls execute, a sh grader in a verifier machine checks the "
         "captured /workspace/sum.txt",
         {SHELLSIM_BACKEND: ShellSimMachineFactory()},
     )

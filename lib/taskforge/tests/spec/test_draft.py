@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from dataclasses import dataclass, field
+import shlex
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import pytest
@@ -52,6 +53,7 @@ from taskforge.spec.draft import (
     ANSWER_PATH,
     FILESYSTEM_CAPABILITY,
     GRADER_VERDICT_PATH,
+    PYTHON_GRADER_ARGV,
     SHELL_CAPABILITY,
     MachineSettings,
     Resources,
@@ -88,28 +90,29 @@ SHELLSIM = machine(startup_timeout=30)
 VERIFIER = machine(startup_timeout=30)
 IMAGE = "ghcr.io/example/task@sha256:" + "0" * 64
 BASE = grader_environment(None)
-SUM_GRADER = """import json, pathlib
-expected = json.loads(pathlib.Path("/tests/config.json").read_text())["expected"]
-answer = pathlib.Path("/workspace/answer")
-got = answer.read_text().strip() if answer.is_file() else None
-print(f"got {got!r}")
-passed = bool(got == expected)
-check = {"name": "answer", "passed": passed, "weight": 1.0}
-verdict = {"reward": float(passed), "detail": {"checks": [check]}}
-pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps(verdict))
+# sh programs, run as /tests/grade.py by ``shell_backed`` packages: a bare ShellSim machine has no python3.
+SUM_GRADER = """expected=$(jq -r .expected /tests/config.json)
+passed=false
+if test -f /workspace/answer; then
+    got=$(cat /workspace/answer)
+    echo "got $got"
+    if test "$got" = "$expected"; then passed=true; fi
+fi
+jq -n -c --argjson passed "$passed" '{
+    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "answer", passed: $passed, weight: 1.0}]}
+}' > /logs/verifier/reward.json
 """
-TEXT_GRADER = """import json, pathlib
-passed = bool(pathlib.Path("/app/answer.txt").read_text().strip() == "twelve")
-check = {"name": "answer", "passed": passed, "weight": 1.0}
-verdict = {"reward": float(passed), "detail": {"checks": [check]}}
-pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps(verdict))
+TEXT_GRADER = """passed=false
+if test "$(cat /app/answer.txt)" = twelve; then passed=true; fi
+jq -n -c --argjson passed "$passed" '{
+    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "answer", passed: $passed, weight: 1.0}]}
+}' > /logs/verifier/reward.json
 """
-KEY_GRADER = """import json, pathlib
-got = pathlib.Path("/app/answer.txt").read_text().strip()
-passed = bool(got == pathlib.Path("/tests/key/answer.txt").read_text().strip())
-check = {"name": "answer", "passed": passed, "weight": 1.0}
-verdict = {"reward": float(passed), "detail": {"checks": [check]}}
-pathlib.Path("/logs/verifier/reward.json").write_text(json.dumps(verdict))
+KEY_GRADER = """passed=false
+if test "$(cat /app/answer.txt)" = "$(cat /tests/key/answer.txt)"; then passed=true; fi
+jq -n -c --argjson passed "$passed" '{
+    reward: (if $passed then 1.0 else 0.0 end), detail: {checks: [{name: "answer", passed: $passed, weight: 1.0}]}
+}' > /logs/verifier/reward.json
 """
 
 
@@ -172,6 +175,18 @@ def sum_grader() -> GraderPackage:
     return python_grader(SUM_GRADER, {"expected": "12"}, environment=BASE, answer_path=None, timeout=20)
 
 
+def shell_backed(package: GraderPackage) -> GraderPackage:
+    """``package`` with ``sh`` in place of ``python3``, so its ``/tests/grade.py`` runs as a sh program.
+
+    A bare ShellSim machine has no python3 (shellsim 0.1.36), and Marin CI leaves interpreter coverage to
+    ShellSim. A test of a shell-backed package checks what ``python_grader`` packages and how its verdict is
+    read: the program and private config under ``/tests``, its further private files, the captured output and
+    the extracted answer it reads, and the ``GRADER_VERDICT_PATH`` reward. The program's language is not tested.
+    """
+    assert isinstance(package.grader, ScriptGrader) and package.grader.argv == PYTHON_GRADER_ARGV
+    return replace(package, grader=package.grader.model_copy(update={"argv": ("sh", *PYTHON_GRADER_ARGV[1:])}))
+
+
 def file_task(grader: GraderPackage | None = None) -> TaskSpec:
     return assemble(
         "sum-file",
@@ -231,7 +246,7 @@ def test_file_lands_relative_to_the_machine_root_with_its_mode():
 
 @pytest.mark.parametrize("answer,expected", [("12", 1.0), ("13", 0.0)])
 async def test_python_grader_grades_the_captured_output_of_a_shellsim_run_on_a_verifier_machine(answer, expected):
-    lowered = lower_here(file_task(), SHELLSIM, VERIFIER)
+    lowered = lower_here(file_task(shell_backed(sum_grader())), SHELLSIM, VERIFIER)
 
     result = await run(
         lowered, [shell_message("c1", f"echo {answer} > /workspace/answer"), {"role": "assistant", "content": "Done."}]
@@ -243,7 +258,7 @@ async def test_python_grader_grades_the_captured_output_of_a_shellsim_run_on_a_v
 
 @pytest.mark.parametrize("answer,expected", [("twelve", 1.0), ("eleven", 0.0)])
 async def test_python_grader_reads_the_extracted_answer_of_a_task_without_a_machine(answer, expected):
-    grader = python_grader(TEXT_GRADER, {}, environment=BASE, answer_path=ANSWER_PATH, timeout=20)
+    grader = shell_backed(python_grader(TEXT_GRADER, {}, environment=BASE, answer_path=ANSWER_PATH, timeout=20))
     lowered = lower_here(answer_task(grader), verifier_machine=VERIFIER)
 
     result = await run(lowered, [{"role": "assistant", "content": answer}])
@@ -254,13 +269,15 @@ async def test_python_grader_reads_the_extracted_answer_of_a_task_without_a_mach
 
 @pytest.mark.parametrize("answer,expected", [("twelve", 1.0), ("eleven", 0.0)])
 async def test_python_grader_reads_its_private_files_from_the_tests_directory(answer, expected):
-    grader = python_grader(
-        KEY_GRADER,
-        {},
-        environment=BASE,
-        answer_path=ANSWER_PATH,
-        timeout=20,
-        files=(file("key/answer.txt", "twelve\n"),),
+    grader = shell_backed(
+        python_grader(
+            KEY_GRADER,
+            {},
+            environment=BASE,
+            answer_path=ANSWER_PATH,
+            timeout=20,
+            files=(file("key/answer.txt", "twelve\n"),),
+        )
     )
     lowered = lower_here(answer_task(grader), verifier_machine=VERIFIER)
 
@@ -271,8 +288,8 @@ async def test_python_grader_reads_its_private_files_from_the_tests_directory(an
 
 async def test_python_grader_verdict_carries_its_checks_into_the_grade():
     checks = (GraderCheck("total", True, 1.0), GraderCheck("units", False, 1.0))
-    script = f"import pathlib\npathlib.Path({GRADER_VERDICT_PATH!r}).write_text({verdict_json(0.5, checks)!r})\n"
-    grader = python_grader(script, {}, environment=BASE, answer_path=ANSWER_PATH, timeout=20)
+    script = f"printf '%s' {shlex.quote(verdict_json(0.5, checks))} > {GRADER_VERDICT_PATH}\n"
+    grader = shell_backed(python_grader(script, {}, environment=BASE, answer_path=ANSWER_PATH, timeout=20))
     lowered = lower_here(answer_task(grader), verifier_machine=VERIFIER)
 
     result = await run(lowered, [{"role": "assistant", "content": "twelve"}])
