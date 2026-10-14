@@ -226,7 +226,7 @@ def main(
         review=review,
         review_cache=review_cache,
         base_url=base_url,
-        api_key=os.environ[GLM_BULK_TOKEN_ENV],
+        api_key=os.environ.get(GLM_BULK_TOKEN_ENV),
         relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=normalized_shards,
