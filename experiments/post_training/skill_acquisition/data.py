@@ -11,8 +11,8 @@ import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from rolloutengine.tool_protocol import THINK_CLOSE, THINK_OPEN, TOOL_OPEN, ToolCallStatus, tool_call_regions
 from tokenizers import Tokenizer
+from verifyit.tool_call_markup import THINK_CLOSE, THINK_OPEN, TOOL_OPEN, ToolCallStatus, tool_call_regions
 
 
 @dataclass(frozen=True)
