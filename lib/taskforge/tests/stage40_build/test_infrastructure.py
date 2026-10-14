@@ -38,7 +38,7 @@ from taskforge.stage40_build.sandbox_effects import (
 )
 from taskforge.stage40_build.sdk import GRADER_TIMEOUT
 from taskforge.stage50_validate.lowering import VERIFIER_TIMEOUT
-from tests.sandbox.fixture_images import shell_grader
+from tests.sandbox.fixture_images import PortlessShellSimFactory, shell_grader
 from tests.stage40_build.conftest import FACTORIES, ITEM, SAMPLING
 
 SHELLSIM = draft.requirements(image=None)
@@ -115,7 +115,7 @@ class DroppingFactory:
         ShellSimMachineFactory().check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:
-        return DroppingMachine(await ShellSimMachineFactory().create(spec), self.error)
+        return DroppingMachine(await PortlessShellSimFactory().create(spec), self.error)
 
 
 @pytest.mark.parametrize(

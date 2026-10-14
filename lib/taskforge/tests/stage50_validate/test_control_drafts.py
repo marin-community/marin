@@ -35,7 +35,7 @@ from taskforge.stage50_validate.control_drafts import (
 from taskforge.stage50_validate.controls import ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings
-from tests.sandbox.fixture_images import FixtureImageFactory
+from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
 from tests.stage40_build.conftest import FACTORIES, PROPOSAL
 from tests.stage50_validate.conftest import TemplateTokenizer
 
@@ -91,7 +91,7 @@ def controls(wrong: str) -> str:
 
 def engine_settings() -> EngineSettings:
     return EngineSettings(
-        factories={Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.DOCKER.value: FixtureImageFactory()},
+        factories={Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()},
         max_turns=4,
         command_timeout=10,
         tool_turn_timeout=20,

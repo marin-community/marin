@@ -24,7 +24,6 @@ from pydantic import JsonValue
 from rolloutengine.contracts import GenerationLimitReached, ModelRequest, RolloutContractError, RolloutData
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.spec import LoweredTaskSpec
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
 
@@ -44,11 +43,11 @@ from taskforge.spec.draft import (
     session,
 )
 from tests.conftest import fake_source
-from tests.sandbox.fixture_images import FixtureImageFactory, shell_grader
+from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 
 POLICY = LLMPolicy(max_continuations=0)
 # Grading runs on the grader-base verifier machine, here served by ShellSim through the fixture factory.
-FACTORIES = {"shellsim": ShellSimMachineFactory(), "docker": FixtureImageFactory()}
+FACTORIES = {"shellsim": PortlessShellSimFactory(), "docker": FixtureImageFactory()}
 CONTEXT_ERROR = "This model's maximum context length is 262144 tokens. However, you requested 300000 tokens."
 OUTPUT_CHECK = """output=/$(jq -r .path /tests/config.json)
 passed=false

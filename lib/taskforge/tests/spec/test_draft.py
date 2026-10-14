@@ -9,9 +9,10 @@ from typing import Any
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import RolloutEngine
+from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, ExecutionRequirements, MachineSpec, NetworkPolicy
+from shellbox.machine import Backend, ExecutionRequirements, MachineSpec, NetworkPolicy, PackageSpec
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -71,11 +72,11 @@ from taskforge.spec.draft import (
     session,
 )
 from taskforge.spec.verdict import GraderCheck, grader_checks, verdict_json
-from tests.sandbox.fixture_images import FixtureImageFactory
+from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
 PLAIN = PlainText()
-FACTORIES = {"shellsim": ShellSimMachineFactory(), "docker": FixtureImageFactory(Backend.DOCKER)}
+FACTORIES = {"shellsim": PortlessShellSimFactory(), "docker": FixtureImageFactory(Backend.DOCKER)}
 SESSION = session(
     max_turns=4,
     model_turn_timeout=None,
@@ -608,6 +609,23 @@ def test_lower_puts_a_shellsim_task_on_shellsim_and_its_grader_on_the_hosts_cont
 
     assert lowered.runtime.task_machine is not None and lowered.runtime.verifier_machine is not None
     assert (lowered.runtime.task_machine.backend, lowered.runtime.verifier_machine.backend) == ("shellsim", "gvisor")
+
+
+def test_a_shellsim_task_machine_asks_for_the_catalogs_cpython():
+    lowered = lower(
+        file_task(),
+        host=MachineHost.LAPTOP,
+        task_machine=SHELLSIM,
+        verifier_machine=VERIFIER,
+        session=SESSION,
+        factories=FACTORIES,
+    )
+    environment = lowered.task.environment_requirements
+    assert lowered.runtime.task_machine is not None
+
+    # ShellSim installs the catalog's CPython for any set ``pypi_packages``, here none beyond it.
+    assert _machine_spec(environment, lowered.runtime.task_machine).source == PackageSpec(pypi_packages=())
+    assert requirements(image=IMAGE).package_spec is None
 
 
 def test_a_lock_only_grader_lowers_onto_the_local_backend():

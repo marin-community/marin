@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
 
+import shellsim
 from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
@@ -31,6 +32,13 @@ from taskcompendium.runtime.environment import validate_machine_spec
 logger = logging.getLogger(__name__)
 
 DOCKER_PROBE_TIMEOUT = 20
+SHELLSIM_CATALOG = shellsim.DEFAULT_PYPI_CATALOG
+"""The ports catalog ShellSim machines install ``draft.SHELLSIM_CPYTHON`` from, over HTTPS.
+
+shellsim's published catalog, which Marin's inference tools also read by default. Each process
+fetches the catalog itself; the first on a host downloads the CPython assets into shellsim's cache
+(``$XDG_CACHE_HOME/shellsim``, else ``~/.cache/shellsim``), which later processes reuse.
+"""
 SANDBOX_SCHEDULING_TIMEOUT = 600
 """Seconds the Iris factory waits for a sandbox to start before it raises ``TimeoutError``.
 
@@ -122,10 +130,13 @@ def machine_factories(where: MachineHost, controller_url: str | None) -> Mapping
     bubblewrap can sandbox commands in the Iris task. On a laptop ``controller_url`` must be
     ``None``; the Docker factory, which pulls registry images through the Docker daemon, is absent
     when the laptop has no reachable daemon. Each absent factory is logged with the probe's reason.
+
+    The ShellSim factory's context reads ``SHELLSIM_CATALOG`` when its first machine asks for CPython
+    and prepares that installation once, for every later machine the factories create.
     """
     if (where is MachineHost.IRIS) != (controller_url is not None):
         raise ValueError(f"{where} factories take a controller URL only on Iris, got {controller_url!r}")
-    factories: list[MachineFactory] = [ShellSimMachineFactory()]
+    factories: list[MachineFactory] = [ShellSimMachineFactory(context=shellsim.Context(pypi_catalog=SHELLSIM_CATALOG))]
     if controller_url is not None:
         factories.append(
             IrisMachineFactory(controller_url=controller_url, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)
