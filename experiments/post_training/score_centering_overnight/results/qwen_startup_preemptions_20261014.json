@@ -1,0 +1,153 @@
+{
+  "scope": "Three newly observed allocated startup preemptions; older optimizer seed2 attempt0 training evidence is retained separately.",
+  "interruptions": [
+    {
+      "job_id": "/romain/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_number": 1,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce/0",
+          "attempt_id": "1",
+          "attempt_uid": "948375d97c7a5625",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791954761074",
+          "node_name": "gb95e20",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 38cc1a19-aadc-4dbe-94fa-4c93008c4894, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce/1",
+          "attempt_id": "1",
+          "attempt_uid": "cc1304d782879b53",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791954761074",
+          "node_name": "gb960f0",
+          "terminal_reason": ""
+        }
+      ],
+      "allocated_h100_hours": 0.30291999999999997,
+      "published_training_updates_in_attempt": 0,
+      "export_objects_written_in_attempt": [],
+      "raw_controller_evidence": [
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce/0:1",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/optimizer-sc-s2-a1-rank0-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/optimizer-sc-s2-a1-rank0-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-optimizer-sc-s2-main-rno-a1-01a126ce/1:1",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/optimizer-sc-s2-a1-rank1-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/optimizer-sc-s2-a1-rank1-events.log"
+          }
+        }
+      ],
+      "disposition": "Batch capacity preemption during startup, before first published training update. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals."
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_number": 0,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "b388266bfacdd22a",
+          "state": "10",
+          "exit_code": "15",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791954772278",
+          "node_name": "g7596c2",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: b9106efb-a8c3-4d09-b428-925bb7eaf2e1, JobUID: fb17da86-57b2-48f3-b095-9242d5f0f8b6) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "07d8f8cd3437507d",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791954772278",
+          "node_name": "g82267a",
+          "terminal_reason": ""
+        }
+      ],
+      "allocated_h100_hours": 0.35271555555555556,
+      "published_training_updates_in_attempt": 0,
+      "export_objects_written_in_attempt": [],
+      "raw_controller_evidence": [
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce/0:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/advantages-sc-s1-a0-rank0-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/advantages-sc-s1-a0-rank0-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-advantages-sc-s1-main-rno-a1-01a126ce/1:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/advantages-sc-s1-a0-rank1-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/advantages-sc-s1-a0-rank1-events.log"
+          }
+        }
+      ],
+      "disposition": "Batch capacity preemption during startup, before first published training update. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals."
+    },
+    {
+      "job_id": "/romain/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "attempt_number": 0,
+      "attempt_rows": [
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce/0",
+          "attempt_id": "0",
+          "attempt_uid": "3f7e1fddae696e81",
+          "state": "10",
+          "exit_code": "137",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791954761074",
+          "node_name": "g5303b8",
+          "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 38cc1a19-aadc-4dbe-94fa-4c93008c4894, JobUID: UNKNOWN) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+        },
+        {
+          "task_id": "/romain/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce/1",
+          "attempt_id": "0",
+          "attempt_uid": "90c38ee0fff04219",
+          "state": "11",
+          "exit_code": "",
+          "started_at_ms": "1791954692917",
+          "finished_at_ms": "1791954761074",
+          "node_name": "g530748",
+          "terminal_reason": ""
+        }
+      ],
+      "allocated_h100_hours": 0.30291999999999997,
+      "published_training_updates_in_attempt": 0,
+      "export_objects_written_in_attempt": [],
+      "raw_controller_evidence": [
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce/0:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/batching-sc-s0-a0-rank0-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/batching-sc-s0-a0-rank0-events.log"
+          }
+        },
+        {
+          "attempt_ref": "/romain/sc-qwen-transfer-batching-sc-s0-main-rno-a2-01a126ce/1:0",
+          "captures": {
+            "logs": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/batching-sc-s0-a0-rank1-logs.log",
+            "events": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/qwen-startup-preemptions-20261014T0522/batching-sc-s0-a0-rank1-events.log"
+          }
+        }
+      ],
+      "disposition": "Batch capacity preemption during startup, before first published training update. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals."
+    }
+  ],
+  "total_allocated_h100_hours": 0.9585555555555555
+}

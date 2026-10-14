@@ -1,0 +1,16 @@
+{
+  "run_id": "sc-qwen-transfer-native-window-sc-s0-main-rno-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scope": "Actual first update admission only; not final scientific endpoint.",
+  "configured_updates": 1200,
+  "applied_updates": 1,
+  "gradient_norm": 0.4364330470561981,
+  "logical_batch_rows": 32,
+  "retained_rows": 2,
+  "loss_tokens_checked": 254,
+  "natural_head_width": 128,
+  "group_admission_seconds": 47.893354166066274,
+  "policy_training_seconds": 4.863002366968431,
+  "metric_sha256": "79a6170f286c908fda7fa909f0c9d9ebc5be60f3679ef739b8d1194d1241bcec",
+  "early_path_passed": true
+}
