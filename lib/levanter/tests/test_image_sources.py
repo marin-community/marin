@@ -13,10 +13,12 @@ import pytest
 from PIL import Image
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import WhitespaceSplit
 from transformers import CLIPImageProcessor, CLIPProcessor, PreTrainedTokenizerFast
 
 from levanter.data.image import (
     processor_with_tokenizer,
+    BatchImageProcessor,
     ImageConversationUrlDataSource,
     ImageDatasetSourceConfig,
     image_source_urls,
@@ -93,3 +95,55 @@ def test_processor_replacement_uses_configured_modality_tokens() -> None:
     assert replaced.image_token_id == 1
     assert replaced.video_token_id == 2
     assert replaced.image_processor is image_processor
+
+
+@pytest.fixture
+def caption_processor():
+    vocabulary = {
+        token: index
+        for index, token in enumerate(
+            ["[UNK]", "[PAD]", "<|im_start|>", "<|im_end|>", "user", "assistant", "<image>", "red", "square"]
+        )
+    }
+    backend = Tokenizer(WordLevel(vocabulary, unk_token="[UNK]"))
+    backend.pre_tokenizer = WhitespaceSplit()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="[UNK]",
+        pad_token="[PAD]",
+        additional_special_tokens=["<|im_start|>", "<|im_end|>", "<image>"],
+    )
+    processor = CLIPProcessor(
+        image_processor=CLIPImageProcessor(size={"shortest_edge": 4}, crop_size={"height": 4, "width": 4}),
+        tokenizer=tokenizer,
+    )
+    processor.chat_template = (
+        "{% for message in messages %}<|im_start|> {{ message['role'] }} "
+        "{% for item in message['content'] %}{% if item['type'] == 'image' %}<image> "
+        "{% else %}{{ item['text'] }} {% endif %}{% endfor %}<|im_end|> {% endfor %}"
+    )
+    return processor
+
+
+@pytest.mark.parametrize("max_length", [6, 7, 8, 10])
+def test_caption_source_preserves_images_and_truncated_targets(tmp_path, caption_processor, max_length):
+    image = tmp_path / "red.png"
+    Image.new("RGB", (4, 4), "red").save(image)
+    records = tmp_path / "captions.jsonl"
+    records.write_text(json.dumps({"image": str(image), "text": "red square"}) + "\n")
+    source = ImageDatasetSourceConfig(train_urls=[str(records)]).get_shard_source("train")
+    batch = list(source.open_shard(source.shard_names[0]))
+    processed = BatchImageProcessor(caption_processor, max_length=max_length, max_num_patches=3)(batch)[0]
+    assert processed["pixel_values"] is not None
+    expected_pixels = caption_processor.image_processor(images=Image.open(image), return_tensors="np")["pixel_values"][
+        0
+    ]
+    np.testing.assert_allclose(processed["pixel_values"][0], expected_pixels)
+    np.testing.assert_array_equal(processed["pixel_values"][1:], 0)
+    ids = processed["input_ids"]
+    tokenizer = caption_processor.tokenizer
+    expected_mask = np.isin(ids, tokenizer.convert_tokens_to_ids(["red", "square"]))
+    # The assistant terminator is supervised only when it survives truncation.
+    if max_length >= 9:
+        expected_mask[8] = True
+    np.testing.assert_array_equal(processed["loss_mask"], expected_mask)

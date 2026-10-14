@@ -11,7 +11,9 @@ from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compati
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.image import RepeatedImageDataset
 from levanter.models.siglip import SiglipVisionConfig, SiglipVisionModel
-from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel
+from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel, Siglip2VisionEmbeddings, Siglip2Attention
+from levanter.layers.attention import AttentionMask
+from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
 
 
 @pytest.mark.parametrize("encoder", ["siglip", "siglip2"])
@@ -54,3 +56,70 @@ async def test_image_repetition_crosses_epoch_boundary_and_stops() -> None:
     assert await repeated.get_batch([1, 2, 3]) == [{"text": "second"}, {"text": "first"}, {"text": "second"}]
     with pytest.raises(IndexError):
         await repeated.get_batch([4])
+
+
+@pytest.mark.parametrize("encoder", ["siglip", "siglip2"])
+@skip_if_no_torch
+def test_public_vision_checkpoint_loader(tmp_path, encoder):
+    from transformers import (  # noqa: PLC0415 - optional Torch reference
+        SiglipVisionModel as HfSiglipVisionModel,
+        Siglip2VisionModel as HfSiglip2VisionModel,
+    )
+    from transformers import Siglip2Config as HfSiglip2Config  # noqa: PLC0415 - optional Torch reference
+
+    parameters = dict(hidden_size=16, intermediate_size=32, num_hidden_layers=1, num_attention_heads=2, patch_size=2)
+    if encoder == "siglip":
+        config = SiglipVisionConfig(**parameters, image_size=4)
+        hf_model = HfSiglipVisionModel(config.to_hf_config())
+        axes = (hax.Axis("batch", 1), hax.Axis("channels", 3), hax.Axis("height", 4), hax.Axis("width", 4))
+    else:
+        config = Siglip2VisionConfig(**parameters, num_patches=4)
+        hf_model = HfSiglip2VisionModel(config.to_hf_config())
+        axes = (hax.Axis("batch", 1), hax.Axis("num_patches", 4), hax.Axis("patch_input", 12))
+    hf_model.save_pretrained(tmp_path)
+    if encoder == "siglip2":
+        HfSiglip2Config(vision_config=hf_model.config.to_dict()).save_pretrained(tmp_path)
+    converter = config.hf_checkpoint_converter(str(tmp_path))
+    with use_test_mesh():
+        loaded = converter.load_pretrained(config.model_type)
+        template = config.model_type.init(hax.Axis("vocab", 0), config, key=jax.random.PRNGKey(1))
+        expected = from_torch_compatible_state_dict(template, converter.load_state_dict(str(tmp_path)))
+    pixels = hax.random.normal(jax.random.PRNGKey(2), axes)
+    forward = eqx.filter_jit(lambda model: model(pixels).last_hidden_state.array)
+    np.testing.assert_allclose(forward(loaded), forward(expected), rtol=1e-5, atol=1e-5)
+
+
+@skip_if_no_torch
+def test_siglip2_jitted_mixed_shapes_match_hf_embeddings():
+    import torch  # noqa: PLC0415 - optional reference
+    from transformers.models.siglip2.modeling_siglip2 import Siglip2VisionEmbeddings as HfEmbeddings  # noqa: PLC0415
+
+    config = Siglip2VisionConfig(
+        hidden_size=8, intermediate_size=16, num_hidden_layers=1, num_attention_heads=2, patch_size=2, num_patches=16
+    )
+    reference = HfEmbeddings(config.to_hf_config()).eval()
+    template = Siglip2VisionEmbeddings.init(config, key=jax.random.PRNGKey(0))
+    weights = {k: jnp.asarray(v.detach().numpy()) for k, v in reference.state_dict().items()}
+    model = from_torch_compatible_state_dict(template, weights)
+    pixels = hax.random.normal(
+        jax.random.PRNGKey(1), (hax.Axis("batch", 3), hax.Axis("num_patches", 20), hax.Axis("patch_input", 12))
+    )
+    shapes = np.array([[2, 3], [5, 4], [3, 5]], dtype=np.int32)
+    with torch.no_grad():
+        expected = reference(torch.from_numpy(np.asarray(pixels.array).copy()), torch.from_numpy(shapes)).numpy()
+    actual = eqx.filter_jit(lambda model, shape: model(pixels, spatial_shapes=shape).array)(model, jnp.asarray(shapes))
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+
+
+def test_siglip2_attention_pads_explicit_mask():
+    config = Siglip2VisionConfig(
+        hidden_size=8, intermediate_size=16, num_hidden_layers=1, num_attention_heads=2, patch_size=2, num_patches=16
+    )
+    attention = Siglip2Attention.init(config, key=jax.random.PRNGKey(0))
+    sequence = hax.Axis("num_patches", 5)
+    pixels = hax.random.normal(jax.random.PRNGKey(1), (hax.Axis("batch", 1), sequence, config.Embed))
+    mask = AttentionMask.explicit(hax.named(jnp.eye(5, dtype=bool), (sequence, hax.Axis("key_position", 5))))
+    actual = eqx.filter_jit(lambda x: attention(x, mask=mask))(pixels)
+    # With diagonal attention, each query receives exactly its own projected value.
+    expected = attention.out_proj(attention.v_proj(pixels))
+    np.testing.assert_allclose(actual.array, expected.array, rtol=1e-5, atol=1e-5)
