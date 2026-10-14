@@ -566,7 +566,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                     template, str(root / "native-checkpoint"), subpath="model", mesh=trainer_cfg.device_mesh,
                 )
                 expert_spec = restored.transformer.blocks[0].mlp.expert_mlp.w_gate.sharding.spec
-                assert expert_spec == P("expert", ("data", "context"), "model"), expert_spec
+                assert expert_spec == P("expert", ("replica_dcn", "data", "context"), "model"), expert_spec
                 optimizer = AdamConfig(learning_rate=5e-5).build(1)
                 state = named_jit(
                     lambda model: TrainerState.init(optimizer, model, key=random.key(1)),
@@ -579,7 +579,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                     if isinstance(leaf, jax.Array) and leaf.shape == expert_shape
                 ]
                 assert moment_specs and all(
-                    "expert" in spec and ("data", "context") in spec for spec in moment_specs
+                    "expert" in spec and ("replica_dcn", "data", "context") in spec for spec in moment_specs
                 ), moment_specs
             examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
             data = LmDataConfig(

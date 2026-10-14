@@ -327,7 +327,7 @@ def grug_policy(model: ModelConfig) -> SFTPolicy:
         ),
         mesh=MeshConfig(
             axes={"data": 1, "replica": 1, "model": 1, "expert": -1},
-            dcn_axes={"data": GRUG_TRAIN_NODES},
+            dcn_axes={"replica_dcn": GRUG_TRAIN_NODES},
             compute_mapping={"batch": ["replica_dcn", "data", "expert"], "vocab": "model"},
         ),
     )
