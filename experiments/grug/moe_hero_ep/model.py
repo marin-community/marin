@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
@@ -155,6 +156,40 @@ def _token_spec() -> P:
 def _activation_spec(x: Float[Array, "B S D"]) -> P:
     """Preserve the input residual layout after an MLP flattens and restores tokens."""
     return _partition_spec_of(x) or _batch_spec()
+
+
+def _flatten_tokens(x: jax.Array) -> jax.Array:
+    """Merge ``[B, S, ...]`` into the token axis without moving data between devices.
+
+    Each device flattens its own block of rows and sequence shard. With a context-sharded sequence the
+    token order is therefore shard-major rather than the global ``(b s)`` order; with an unsharded
+    sequence the two orders agree. Per-token computations do not depend on the order, and
+    `_unflatten_tokens` inverts it.
+    """
+    mesh = get_abstract_mesh()
+    trailing = (None,) * (x.ndim - 2)
+    residual_spec = P(_BATCH_AXES, _seq_axis(mesh), *trailing)
+    return shard_map(
+        lambda local: local.reshape(-1, *local.shape[2:]),
+        mesh=mesh,
+        in_specs=residual_spec,
+        out_specs=P(_token_axes(mesh), *trailing),
+    )(reshard(x, residual_spec))
+
+
+def _unflatten_tokens(x_flat: jax.Array, like: Float[Array, "B S D"]) -> jax.Array:
+    """Invert `_flatten_tokens` and restore ``like``'s residual layout."""
+    mesh = get_abstract_mesh()
+    trailing = (None,) * (x_flat.ndim - 1)
+    token_spec = P(_token_axes(mesh), *trailing)
+    local_rows = like.shape[0] // math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
+    restored = shard_map(
+        lambda local: local.reshape(local_rows, -1, *local.shape[1:]),
+        mesh=mesh,
+        in_specs=token_spec,
+        out_specs=P(_BATCH_AXES, _seq_axis(mesh), *trailing),
+    )(reshard(x_flat, token_spec))
+    return reshard(restored, _activation_spec(like))
 
 
 def _router_top_k(logits: Float[Array, "T E"], k: int) -> Int[Array, "T K"]:
@@ -776,17 +811,11 @@ class DenseMLP(eqx.Module):
         else:
             activation_fn = activation
 
-        b, s, _ = x.shape
-        # Flattening sequence shards requires an all-to-all when a device owns multiple
-        # batch rows; restoring the residual layout exchanges them back.
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
+        x_flat = _flatten_tokens(x)
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
-        # Reshard after the reshape so the shared-expert output carries the same sharding as the
-        # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
-        # for why the unflattened tensor cannot keep the fused token tuple.
-        return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
+        return _unflatten_tokens(out_flat, x)
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -1022,9 +1051,8 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
         token_valid: Bool[Array, "B S"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        b, s, _ = x.shape
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
-        token_valid_flat = reshard(rearrange(token_valid, "b s -> (b s)"), _token_spec())
+        x_flat = _flatten_tokens(x)
+        token_valid_flat = _flatten_tokens(token_valid)
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
@@ -1148,9 +1176,7 @@ class MoEMLP(eqx.Module):
                 out_sharding=_token_spec(),
             )
 
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _activation_spec(x))
-        return routed, router_stats
+        return _unflatten_tokens(routed_flat, x), router_stats
 
 
 class Block(eqx.Module):
