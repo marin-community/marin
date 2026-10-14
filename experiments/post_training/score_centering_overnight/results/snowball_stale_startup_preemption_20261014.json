@@ -105,5 +105,12 @@
       "disposition": "Batch capacity preemption during startup, before first published training update. Automatic retry keeps the original job handle and full planned scientific horizon. Charge both task allocation intervals."
     }
   ],
-  "total_allocated_h100_hours": 5.788326666666666
+  "total_allocated_h100_hours": 5.788326666666666,
+  "normalized_original_snapshot": {
+    "sha256": "e066502dd0a8665e689d733236dc47f836e8d00e628b1557ab7815e11b259bc5",
+    "objects": 1,
+    "bytes": 23758,
+    "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json"
+  },
+  "runtime_retention_summary": "results/snowball_stale_preempted_runtime_20261014.json"
 }

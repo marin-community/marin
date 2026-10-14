@@ -1,0 +1,17 @@
+{
+  "run_id": "sc-snowball-main-noise005-sc-s0-a2-01a126ce",
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/snowball_noise_main_v3/sc-s0.yaml",
+  "config_sha256": "11221253d6a7fbbf918132283d765c290715c4e54493ed9b98c69ca23f4a14ba",
+  "iris_job_id": "/romain/sc-snowball-main-noise005-sc-s0-a2-01a126ce",
+  "cluster": "cw-us-east-02a",
+  "priority": "batch",
+  "nodes": 5,
+  "gpus_per_node": 8,
+  "noise": 0.05,
+  "scientific_horizon": 1200,
+  "confirmed_submitted": true,
+  "scientific_role": "First full controlled-noise main; source0212 noisy real-path gate still required before other5 seed/arm submissions. No effect endpoint yet.",
+  "admission_gate": "results/snowball_controlled_main_submission_gate.json",
+  "submission_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball-noise005-sc-s0-main1200-v3-submit.log"
+}

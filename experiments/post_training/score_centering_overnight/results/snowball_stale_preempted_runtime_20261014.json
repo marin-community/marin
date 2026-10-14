@@ -1,0 +1,12 @@
+[
+  {
+    "run_id": "sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+    "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+    "objects": 7221,
+    "bytes": 80493820,
+    "manifest": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/stale64-tis-s0-attempt0-runtime-promotion.json",
+    "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce/preserved-controller-attempt0-runtime/retained-runtime/promotion-manifest-01a126ce.json",
+    "retention_snapshot_before_ms": 1791960800431,
+    "disposition": "Same-bucket conditional ETag copy after failed attempt, while retry wholly queued. Unique attempt0 destination and pre-query timestamp exclude future-retry writes. Source ETag and destination length/provenance verified; no full-weight SHA claim."
+  }
+]
