@@ -117,7 +117,7 @@ def _write_id_shard(tmp_path, name, document_ids, *, row_group_size=None, write_
 
 
 def test_corpus_sample_keeps_raw_proportions_and_is_independent_of_input_partitions(
-    tmp_path, zephyr_context, corpus_tokenizer
+    tmp_path, zephyr_context, corpus_tokenizer, monkeypatch
 ):
     sources = (
         _source(tmp_path / "first", "large", 400, text="hello world " * 4),
@@ -129,6 +129,8 @@ def test_corpus_sample_keeps_raw_proportions_and_is_independent_of_input_partiti
         _source(tmp_path / "second", "small", 400, partitions=3, estimate=1),
         _source(tmp_path / "second", "large", 400, partitions=7, estimate=1, text="hello world " * 4),
     )
+    # Map tasks that read groups of shards across the two sources give the same pool.
+    monkeypatch.setattr("experiments.grug.fast_track.corpus_sample.SAMPLE_SHARDS_PER_TASK", 3)
     second = prepare_corpus_pool(
         CorpusSampleConfig(replace(spec, sources=repartitioned), str(tmp_path / "pool2")),
         ctx=zephyr_context,
