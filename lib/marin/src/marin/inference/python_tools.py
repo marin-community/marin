@@ -23,7 +23,7 @@ MAX_PYTHON_TOOL_SOURCE_BYTES = 64 * 1024
 _PYTHON_TOOL_FILENAME = "<chat-python-tools>"
 _SHELLSIM_PROGRAM_PATH = "/work/marin-tool.py"
 _SHELLSIM_RESULT_PATH = "/work/.marin-tool-result.json"
-_SHELLSIM_CPU_LIMIT = 2_000_000_000
+_SHELLSIM_CPU_LIMIT = 100_000_000_000
 _SHELLSIM_OUTPUT_LIMIT = 1024 * 1024
 _SCALAR_ANNOTATIONS: dict[str, Any] = {
     "bool": bool,
