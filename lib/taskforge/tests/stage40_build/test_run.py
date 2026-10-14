@@ -290,6 +290,27 @@ async def test_a_failing_sink_raises_a_build_failure_carrying_its_step_name(tmp_
     assert not (tmp_path / "round" / DRAFT_DIR).exists()
 
 
+async def test_a_step_past_its_call_budget_fails_the_build_as_the_programs(
+    tmp_path, proposal, services, fake_glm, glm_client
+):
+    for _ in range(3):
+        fake_glm.stream(content='{"text": "again"}')
+    two_calls = replace(services, agent_limits=replace(services.agent_limits, max_calls=2))
+
+    @rl_env_build_sink
+    async def task(context: RLEnvBuildContext, numbers: TaskResource) -> TaskSpec:
+        for _ in range(3):
+            await structured(context, [{"role": "user", "content": "A hint."}], Hint)
+        raise AssertionError("unreachable")
+
+    with pytest.raises(BuildFailure) as failure:
+        await build(tmp_path, proposal, two_calls, rl_env_build_program(numbers, sink=task), model=glm_client)
+
+    assert failure.value.step == "task"
+    assert "more than 2 model calls" in str(failure.value)
+    assert len(fake_glm.requests) == 2
+
+
 async def test_a_step_that_never_returns_fails_the_build_as_the_programs(tmp_path, proposal, services, monkeypatch):
     monkeypatch.setattr(run_module, "STEP_TIMEOUT", 0.05)
 
@@ -348,7 +369,7 @@ async def test_reasoning_replay_and_agent_limits_enter_every_step_key_unless_the
     dropped = replace(services, reasoning_replay=ReasoningReplay.DROP)
 
     assert set(statuses(await build(tmp_path, proposal, dropped)).values()) == {CacheStatus.MISS}
-    shorter = replace(services, agent_limits=AgentLimits(max_turns=2, max_tokens=1024))
+    shorter = replace(services, agent_limits=AgentLimits(max_turns=2, max_tokens=1024, max_calls=16))
     assert set(statuses(await build(tmp_path, proposal, shorter)).values()) == {CacheStatus.MISS}
     overridden = await build(tmp_path, proposal, dropped, model_digest=keep.provenance.model_digest)
     assert set(statuses(overridden).values()) == {CacheStatus.HIT}
