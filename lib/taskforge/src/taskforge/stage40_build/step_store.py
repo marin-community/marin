@@ -28,8 +28,6 @@ Dataclasses, pydantic output types, tuples, strings and numbers come back intact
 garbled, because canonical JSON encodes them as base64 and pydantic decodes a JSON string as UTF-8.
 """
 
-import re
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
