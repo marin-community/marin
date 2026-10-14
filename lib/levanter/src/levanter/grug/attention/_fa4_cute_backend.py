@@ -27,6 +27,7 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_backward_launcher,
     segmented_flash_attention_backward_sm100_launcher,
     segmented_flash_attention_backward_sm90_launcher,
+    native_flash_attention_backward_preprocess_clearing_dq_launcher,
     native_flash_attention_backward_preprocess_launcher,
     segmented_flash_attention_forward_launcher,
     segmented_flash_attention_forward_sm100_launcher,
@@ -316,7 +317,7 @@ def _segmented_flash_attention_backward_sm100(
         tile_n=tile[1],
     )
     dq_accum_shape, dk_accum_shape, dv_accum_shape = _native_backward_accum_output_shapes(q, k, v, tile)
-    dpsum, lse_log2, dq_accum = _native_backward_preprocess(
+    dpsum, lse_log2, dq_accum = _native_backward_preprocess_clearing_dq(
         modules, q, out, dout, lse, tile=tile, softmax_scale=softmax_scale, dq_accum_shape=dq_accum_shape
     )
     accum_inputs, accum_outputs = _native_backward_accum_specs(modules, vector_elems=8)
@@ -439,7 +440,7 @@ def segmented_flash_attention_backward_sm90_native(
     if qhead_per_kvhead == 1:
         raise NotImplementedError("native SM90 backward currently expects GQA so dK/dV accumulators are present.")
     dpsum, lse_log2 = _native_backward_preprocess(
-        modules, q, out, dout, lse, tile=sm90_config.tile, softmax_scale=softmax_scale, dq_accum_shape=None
+        modules, q, out, dout, lse, tile=sm90_config.tile, softmax_scale=softmax_scale
     )
 
     backward_input_spec, backward_output_spec = _native_backward_accum_specs(modules, vector_elems=8)
@@ -487,30 +488,47 @@ def _native_backward_preprocess(
     *,
     tile: tuple[int, int],
     softmax_scale: float,
-    dq_accum_shape: jax.ShapeDtypeStruct | None,
-) -> tuple[jax.Array, ...]:
-    """Return ``(dpsum, lse_log2)``, plus a zeroed dQ accumulator when ``dq_accum_shape`` is given."""
+) -> tuple[jax.Array, jax.Array]:
     inputs, outputs = _native_backward_preprocess_specs(modules, vector_elems=8)
-    output_shapes = _native_backward_preprocess_output_shapes(q, tile)
-    if dq_accum_shape is not None:
-        output_shapes = (*output_shapes, dq_accum_shape)
-        outputs = (*outputs, outputs[0])
     preprocess = cutlass_call(
         native_flash_attention_backward_preprocess_launcher(
-            modules,
-            dtype=q.dtype,
-            head_dim=q.shape[-1],
-            head_dim_v=out.shape[-1],
-            tile_m=tile[0],
-            clears_dq_accum=dq_accum_shape is not None,
+            modules, dtype=q.dtype, head_dim=q.shape[-1], head_dim_v=out.shape[-1], tile_m=tile[0]
         ),
-        output_shape_dtype=output_shapes,
+        output_shape_dtype=_native_backward_preprocess_output_shapes(q, tile),
         input_spec=inputs,
         output_spec=outputs,
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    return tuple(preprocess(out, dout, lse))
+    dpsum, lse_log2 = preprocess(out, dout, lse)
+    return dpsum, lse_log2
+
+
+def _native_backward_preprocess_clearing_dq(
+    modules: _CutlassCuteModules,
+    q: jax.Array,
+    out: jax.Array,
+    dout: jax.Array,
+    lse: jax.Array,
+    *,
+    tile: tuple[int, int],
+    softmax_scale: float,
+    dq_accum_shape: jax.ShapeDtypeStruct,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Return ``(dpsum, lse_log2, dq_accum)`` with ``dq_accum`` zeroed by the preprocess kernel."""
+    inputs, outputs = _native_backward_preprocess_specs(modules, vector_elems=8)
+    preprocess = cutlass_call(
+        native_flash_attention_backward_preprocess_clearing_dq_launcher(
+            modules, dtype=q.dtype, head_dim=q.shape[-1], head_dim_v=out.shape[-1], tile_m=tile[0]
+        ),
+        output_shape_dtype=(*_native_backward_preprocess_output_shapes(q, tile), dq_accum_shape),
+        input_spec=inputs,
+        output_spec=(*outputs, outputs[0]),
+        use_static_tensors=True,
+        softmax_scale=softmax_scale,
+    )
+    dpsum, lse_log2, dq_accum = preprocess(out, dout, lse)
+    return dpsum, lse_log2, dq_accum
 
 
 def _native_backward_gradients(

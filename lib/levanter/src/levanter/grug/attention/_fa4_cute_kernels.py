@@ -1650,22 +1650,10 @@ def segmented_flash_attention_backward_sm100_launcher(
     return _launch_native_sm100
 
 
-@cute_launcher_factory
-def native_flash_attention_backward_preprocess_launcher(
-    modules: Any,
-    *,
-    dtype: Any,
-    head_dim: int,
-    head_dim_v: int,
-    tile_m: int,
-    clears_dq_accum: bool,
+def _native_backward_preprocess_kernel(
+    modules: Any, *, dtype: Any, head_dim: int, head_dim_v: int, tile_m: int
 ) -> Any:
-    """Build native backward statistics; optionally also zero the dQ accumulator, as upstream FA4 does."""
-    deps = _import_cute_dependencies(modules)
-    cutlass = deps.cutlass
-    cute = deps.cute
-    cuda = deps.cuda
-
+    cutlass = _import_cute_dependencies(modules).cutlass
     if str(dtype) == "bfloat16":
         cute_dtype = cutlass.BFloat16
     elif str(dtype) == "float16":
@@ -1675,7 +1663,7 @@ def native_flash_attention_backward_preprocess_launcher(
 
     preprocess_module = importlib.import_module("flash_attn.cute.flash_bwd_preprocess")
     FlashAttentionBackwardPreprocess = preprocess_module.FlashAttentionBackwardPreprocess
-    preprocess = FlashAttentionBackwardPreprocess(
+    return FlashAttentionBackwardPreprocess(
         cute_dtype,
         head_dim,
         head_dim_v,
@@ -1683,7 +1671,25 @@ def native_flash_attention_backward_preprocess_launcher(
         num_threads=128,
         use_padded_offsets=True,
     )
-    _as_gmem_tensor = _native_gmem_tensor_view(modules)
+
+
+@cute_launcher_factory
+def native_flash_attention_backward_preprocess_launcher(
+    modules: Any,
+    *,
+    dtype: Any,
+    head_dim: int,
+    head_dim_v: int,
+    tile_m: int,
+) -> Any:
+    """Build native backward statistics."""
+    deps = _import_cute_dependencies(modules)
+    cutlass = deps.cutlass
+    cute = deps.cute
+    cuda = deps.cuda
+    preprocess = _native_backward_preprocess_kernel(
+        modules, dtype=dtype, head_dim=head_dim, head_dim_v=head_dim_v, tile_m=tile_m
+    )
 
     @cute.jit
     def _launch_native_flash_attention_backward_preprocess(
@@ -1697,6 +1703,28 @@ def native_flash_attention_backward_preprocess_launcher(
         softmax_scale: cutlass.Float32,
     ):
         preprocess(out, dout, dpsum, lse, lse_log2, None, None, None, None, None, None, softmax_scale, None, stream)
+
+    return _launch_native_flash_attention_backward_preprocess
+
+
+@cute_launcher_factory
+def native_flash_attention_backward_preprocess_clearing_dq_launcher(
+    modules: Any,
+    *,
+    dtype: Any,
+    head_dim: int,
+    head_dim_v: int,
+    tile_m: int,
+) -> Any:
+    """Build native backward statistics and zero the dQ accumulator in the same kernel, as upstream FA4 does."""
+    deps = _import_cute_dependencies(modules)
+    cutlass = deps.cutlass
+    cute = deps.cute
+    cuda = deps.cuda
+    preprocess = _native_backward_preprocess_kernel(
+        modules, dtype=dtype, head_dim=head_dim, head_dim_v=head_dim_v, tile_m=tile_m
+    )
+    _as_gmem_tensor = _native_gmem_tensor_view(modules)
 
     @cute.jit
     def _launch_native_flash_attention_backward_preprocess_clearing_dq(
@@ -1715,9 +1743,7 @@ def native_flash_attention_backward_preprocess_launcher(
             out, dout, dpsum, lse, lse_log2, dq_accum, None, None, None, None, None, softmax_scale, None, stream
         )
 
-    if clears_dq_accum:
-        return _launch_native_flash_attention_backward_preprocess_clearing_dq
-    return _launch_native_flash_attention_backward_preprocess
+    return _launch_native_flash_attention_backward_preprocess_clearing_dq
 
 
 @cute_launcher_factory
@@ -1858,6 +1884,7 @@ __all__ = [
     "flash_attention_backward_postprocess_launcher",
     "segmented_flash_attention_backward_launcher",
     "segmented_flash_attention_backward_sm90_launcher",
+    "native_flash_attention_backward_preprocess_clearing_dq_launcher",
     "native_flash_attention_backward_preprocess_launcher",
     "segmented_flash_attention_forward_launcher",
     "segmented_flash_attention_forward_sm100_launcher",
