@@ -474,6 +474,8 @@ class InferenceContext:
             raise RuntimeError("Inference engine is not initialized.")
 
         for i, req in enumerate(requests):
+            if req.max_tokens == 0:
+                continue
             # Create stop tokens if specified
             stop_ids = None
             if req.stop_tokens:
@@ -575,6 +577,17 @@ class InferenceContext:
                 logger.exception("Error publishing output for request %s", req.request_id)
                 req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, error)
 
+        for index, req in enumerate(requests):
+            if req.max_tokens == 0:
+                publish(
+                    index,
+                    [
+                        DecodeResult(id=index, choice=choice, token_list=[], finish_reason=FinishReason.LENGTH)
+                        for choice in range(req.n_generations)
+                    ],
+                )
+        if not service_requests:
+            return
         result = self.engine.generate(service_requests, should_abort=should_abort, output_callback=publish)
         duration = time.time() - start_time
         logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
@@ -673,9 +686,10 @@ def _completion_prompt_ids(
     return cast(list[list[int]], prompt)
 
 
-def _validate_prompt_ids(ctx: InferenceContext, tokens: list[int]) -> None:
-    if not tokens or len(tokens) >= ctx.config.service.max_seq_len:
-        raise HTTPException(status_code=400, detail="Prompt must be nonempty and leave room within the context limit")
+def _validate_prompt_ids(ctx: InferenceContext, tokens: list[int], *, max_tokens: int) -> None:
+    prompt_limit = ctx.config.service.max_seq_len - int(max_tokens > 0)
+    if not tokens or len(tokens) > prompt_limit:
+        raise HTTPException(status_code=400, detail="Prompt must be nonempty and fit within the context limit")
     if min(tokens) < 0 or max(tokens) >= ctx.model.Vocab.size:
         raise HTTPException(status_code=400, detail="Prompt contains a token ID outside the model vocabulary")
 
@@ -713,7 +727,7 @@ async def _create_completion(
                         f"max_seq_len={ctx.config.service.max_seq_len}"
                     ),
                 )
-            _validate_prompt_ids(ctx, prompt_tokens)
+            _validate_prompt_ids(ctx, prompt_tokens, max_tokens=request.max_tokens)
             total_prompt_tokens += len(prompt_tokens)
 
         for prompt_index, prompt_tokens in enumerate(prompt_token_lists):
@@ -947,7 +961,7 @@ async def _create_chat_completion(
                 add_generation_prompt=request.add_generation_prompt,
                 continue_final_message=request.continue_final_message,
             )
-        _validate_prompt_ids(ctx, prompt_tokens)
+        _validate_prompt_ids(ctx, prompt_tokens, max_tokens=request.max_tokens)
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
         if request.stop_token_ids:
