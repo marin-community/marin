@@ -1,0 +1,14 @@
+[
+ "Attention variants",
+ "Linear attention / KDA",
+ "Depth connections",
+ "Embeddings and inputs",
+ "MoE and routing",
+ "Optimizers",
+ "Normalization",
+ "Output head and loss",
+ "Training dynamics and schedules",
+ "Systems and speed",
+ "Recipe stacks",
+ "Unsorted"
+]

@@ -95,7 +95,10 @@ class _FakeGitHub:
         self.posted: list[str] = []
         self.reacted: list[tuple[int, str]] = []
         self.reaction_fetches: list[int] = []
-        self.files: dict[str, str] = {f"{REGISTRY_DIR}/X0007-older-idea.yaml": "id: X0007\n"}
+        self.files: dict[str, str] = {
+            f"{REGISTRY_DIR}/X0007-older-idea.yaml": "id: X0007\n",
+            f"{REGISTRY_DIR}/categories.json": json.dumps(["MoE and routing", "Unsorted"]),
+        }
 
     def issue_comments(self, issue: int) -> list[dict]:
         if issue == 1:

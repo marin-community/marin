@@ -28,20 +28,8 @@ import yaml
 REGISTRY_DIR = Path(__file__).parent / "registry"
 ID_RE = re.compile(r"^X\d{4}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-CATEGORIES = (
-    "Attention variants",
-    "Linear attention / KDA",
-    "Depth connections",
-    "Embeddings and inputs",
-    "MoE and routing",
-    "Optimizers",
-    "Normalization",
-    "Output head and loss",
-    "Training dynamics and schedules",
-    "Systems and speed",
-    "Recipe stacks",
-    "Unsorted",
-)
+# One list shared with the intake bot (scripts/ci/belay_intake.py), which reads it from this branch.
+CATEGORIES: tuple[str, ...] = tuple(json.loads((REGISTRY_DIR / "categories.json").read_text()))
 
 
 class Status(StrEnum):

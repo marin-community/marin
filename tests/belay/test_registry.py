@@ -85,7 +85,7 @@ def test_intake_bot_entries_are_valid_registry_files(tmp_path):
         reactions=(),
         body="**Title:** Per-head router temperature\n**Category:** Vibes\n**Idea:** learn it\nmore text",
     )
-    filename, text = registry_entry("X0042", comment, "ClassicLarry")
+    filename, text = registry_entry("X0042", comment, "ClassicLarry", frozenset(R.CATEGORIES))
     (tmp_path / filename).write_text(text)
     (experiment,) = R.load_registry(tmp_path)
     assert experiment.id == "X0042" and experiment.slug == "per-head-router-temperature"
