@@ -48,6 +48,9 @@ TOKENIZE_BATCH_MAX_BYTES = 256 * 1024
 PARQUET_BATCH_ROWS = 32
 SAMPLE_RANGES = 1024
 SAMPLE_HEADROOM = Fraction(5, 4)
+# Each reducer merges one scatter output per map task, so a map task reads a group of shards.
+SAMPLE_SHARDS_PER_TASK = 64
+CORPUS_SAMPLE_WORKERS = 128
 SAMPLING_POLICY = "corpus-id-interval-v1"
 _ID_SPACE = 1 << 128
 _NORMALIZED_ID = re.compile(r"[0-9a-f]{32}\Z")
@@ -306,16 +309,18 @@ def _encode_records(records: list[dict], preprocessor: BatchProcessor[dict, dict
         yield {**row, "input_ids": input_ids, "token_count": len(input_ids)}
 
 
-def _read_sample(shard: _CorpusShard, *, cutoff: int, spec: CorpusSampleSpec) -> Iterator[dict]:
+def _read_samples(shards: tuple[_CorpusShard, ...], *, cutoff: int, spec: CorpusSampleSpec) -> Iterator[dict]:
     require_tokenizer_content(spec.tokenizer.name, spec.tokenizer.identity, owner="corpus sample")
-    yield from _sample_records(
-        shard,
-        cutoff=cutoff,
-        seed=spec.seed,
-        tokenizer=load_tokenizer(spec.tokenizer.name),
-        excluded_groups=spec.label_exclusion.duplicate_groups if spec.label_exclusion else frozenset(),
-        excluded_document_ids=spec.label_exclusion.normalized_document_ids if spec.label_exclusion else frozenset(),
-    )
+    tokenizer = load_tokenizer(spec.tokenizer.name)
+    for shard in shards:
+        yield from _sample_records(
+            shard,
+            cutoff=cutoff,
+            seed=spec.seed,
+            tokenizer=tokenizer,
+            excluded_groups=spec.label_exclusion.duplicate_groups if spec.label_exclusion else frozenset(),
+            excluded_document_ids=spec.label_exclusion.normalized_document_ids if spec.label_exclusion else frozenset(),
+        )
 
 
 def _source_summary(index: int, path: str) -> _CorpusShardSummary:
@@ -346,12 +351,15 @@ def prepare_corpus_pool(
         if not paths:
             raise ValueError(f"no normalized corpus shards at {normalized.main_output_dir}")
         shards.extend(_CorpusShard(source.name, path) for path in paths)
+    shard_groups = [
+        tuple(shards[start : start + SAMPLE_SHARDS_PER_TASK]) for start in range(0, len(shards), SAMPLE_SHARDS_PER_TASK)
+    ]
     estimate = sum(source.estimated_tokens for source in spec.sources)
     cutoff = _sampling_cutoff(spec.token_budget, estimate)
     attempt = 0
     while True:
         attempt_path = prefix_join(config.output_path, f"sample-{attempt:03d}")
-        dataset = Dataset.from_list(shards).flat_map(partial(_read_sample, cutoff=cutoff, spec=spec))
+        dataset = Dataset.from_list(shard_groups).flat_map(partial(_read_samples, cutoff=cutoff, spec=spec))
         ranked = ranked_pool(
             dataset,
             ctx=ctx,
@@ -421,7 +429,7 @@ def build_corpus_pool(spec: CorpusSampleSpec, *, version: str | None = None) -> 
         return CorpusSampleConfig(spec, ctx.output_path)
 
     def run(config: CorpusSampleConfig) -> RawCorpusPool:
-        with ZephyrContext(resources=ResourceConfig(cpu=2, ram="8g"), max_workers=8) as ctx:
+        with ZephyrContext(resources=ResourceConfig(cpu=2, ram="8g"), max_workers=CORPUS_SAMPLE_WORKERS) as ctx:
             return prepare_corpus_pool(config, ctx=ctx)
 
     return ArtifactStep(
