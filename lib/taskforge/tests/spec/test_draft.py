@@ -12,6 +12,7 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.machines import _machine_spec
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.image import RegistryImage
 from shellbox.machine import Backend, ExecutionRequirements, MachineSpec, NetworkPolicy, PackageSpec
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
@@ -54,6 +55,7 @@ from taskforge.spec.draft import (
     ANSWER_PATH,
     FILESYSTEM_CAPABILITY,
     GRADER_VERDICT_PATH,
+    LOCAL_CPYTHON,
     PYTHON_GRADER_ARGV,
     SHELL_CAPABILITY,
     MachineSettings,
@@ -646,3 +648,60 @@ def test_a_lock_only_grader_lowers_onto_the_local_backend():
     )
 
     assert lowered.runtime.verifier_machine is not None and lowered.runtime.verifier_machine.backend == "local"
+
+
+def cpython_task(grader: GraderPackage | None = None) -> TaskSpec:
+    return assemble(
+        "sum-cpython",
+        "Write the sum of the numbers in /workspace/numbers.txt to /workspace/answer.",
+        AnswerType.FILE,
+        PLAIN,
+        grader or sum_grader(),
+        SOURCE,
+        environment=requirements(image=GRADER_BASE_IMAGE),
+        files=(file("workspace/numbers.txt", "5\n7\n"),),
+        output_paths=("/workspace/answer",),
+    )
+
+
+def lower_on_iris(task: TaskSpec, backends: tuple[Backend, ...]) -> LoweredTaskSpec:
+    return lower(
+        task,
+        host=MachineHost.IRIS,
+        task_machine=SHELLSIM,
+        verifier_machine=VERIFIER,
+        session=SESSION,
+        factories={backend.value: RecordingFactory(backend) for backend in backends},
+    )
+
+
+def machine_sources(lowered: LoweredTaskSpec) -> tuple[tuple[str, object], tuple[str, object]]:
+    """Each machine's backend and the ``MachineSpec`` source RolloutEngine creates it from."""
+    runtime, task = lowered.runtime, lowered.task
+    assert runtime.task_machine is not None and runtime.verifier_machine is not None
+    assert isinstance(task.grader, ScriptGrader)
+    return (
+        (runtime.task_machine.backend, _machine_spec(task.environment_requirements, runtime.task_machine).source),
+        (runtime.verifier_machine.backend, _machine_spec(task.grader.environment, runtime.verifier_machine).source),
+    )
+
+
+def test_grader_base_machines_run_a_local_cpython_when_the_host_has_the_local_backend():
+    lowered = lower_on_iris(cpython_task(), (Backend.GVISOR, Backend.LOCAL))
+
+    assert machine_sources(lowered) == (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))
+    assert LoweredTaskSpec.model_validate_json(lowered.model_dump_json()) == lowered
+
+
+def test_grader_base_machines_stay_on_the_container_backend_without_the_local_backend():
+    lowered = lower_on_iris(cpython_task(), (Backend.GVISOR,))
+
+    image = RegistryImage(GRADER_BASE_IMAGE)
+    assert machine_sources(lowered) == (("gvisor", image), ("gvisor", image))
+    assert lowered.task == cpython_task()
+
+
+def test_a_task_image_stays_on_the_container_backend_beside_the_local_backend():
+    lowered = lower_on_iris(docker_task(docker_grader()), (Backend.GVISOR, Backend.LOCAL))
+
+    assert machine_sources(lowered) == (("gvisor", RegistryImage(IMAGE)), ("gvisor", RegistryImage(IMAGE)))

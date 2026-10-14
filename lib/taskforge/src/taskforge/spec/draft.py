@@ -11,7 +11,9 @@ a spec that survives a JSON round trip.
 A ``TaskSpec`` holds the semantic task only. How it runs (machine backend,
 limits, user, deadlines) is the ``LoweredTaskSpec`` RolloutEngine executes, and
 ``lower`` alone builds one, choosing each machine's backend for the host. A
-lowered spec is therefore bound to the host whose factories it names.
+lowered spec is therefore bound to the host whose factories it names, and its
+task may name the software differently from the ``TaskSpec``: on a host with
+the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``.
 
 Only ``_presentation`` builds the presented context, concrete tools and answer
 format, and only ``lower`` builds a ``LoweredTaskSpec``, so moving either is a
@@ -65,6 +67,16 @@ SHELLSIM_CPYTHON = PackageSpec(pypi_packages=())
 ShellSim installs a catalog's CPython runtime whenever ``pypi_packages`` is set, even to no packages;
 a bare ``PackageSpec()`` has the built-in shell tools and no ``python3``. The catalog
 ``sandbox.factories.SHELLSIM_CATALOG`` provides CPython 3.13 with its standard library.
+"""
+
+LOCAL_CPYTHON = PackageSpec(pypi_packages=())
+"""``GRADER_BASE_IMAGE``'s software on the local backend: a uv-managed CPython 3.12 and no PyPI packages.
+
+shellbox's local factory resolves the empty requirement list into an empty hash lock, then installs the
+interpreter (``shellbox.backends.local.python_environment.DEFAULT_PYTHON_VERSION``) and a venv from it
+under the factory's package cache when the first such machine starts, and mounts both read-only as
+the machine's ``HostImage``, the venv's ``bin`` first on ``PATH``. Later machines on the host reuse
+the build. ``sh``, ``setsid``, ``tar`` and the other commands come from the host's system directories.
 """
 
 type Reward = StdoutReward | ExitCodeReward | FileReward
@@ -389,10 +401,12 @@ def lower(
 ) -> LoweredTaskSpec:
     """The ``LoweredTaskSpec`` that runs ``task`` on ``host``'s ``factories``.
 
-    Every Taskforge ``LoweredTaskSpec`` is built here. Each machine's backend is ShellSim when its
-    requirements name neither an image nor a packages lock, the local backend for a lock alone, and
-    the host's container backend for an image. A grader with an environment (a script grader, or a
-    verifyit grader that does not grade in process) takes a verifier machine; no other grader does.
+    Every Taskforge ``LoweredTaskSpec`` is built here. Each machine runs the requirements
+    ``host_requirements`` gives for ``factories``, the same rule for the task machine and the verifier
+    machine, on the backend ``machine_backend`` picks for them; the lowered task carries those
+    requirements and each machine's ``MachineRuntimeSpec.backend`` names its backend. A grader with an
+    environment (a script grader, or a verifyit grader that does not grade in process) takes a
+    verifier machine; no other grader does.
 
     Raises:
         ValueError: A machine is given where the task has none or missing where it has one, or
@@ -401,9 +415,10 @@ def lower(
     """
     if (task_machine is None) != (SHELL_CAPABILITY not in task.environment_requirements.capabilities):
         raise ValueError("A task machine is given exactly when the task has the shell capability")
-    grading = grading_environment(task)
-    if (verifier_machine is None) != (grading is None):
+    if (verifier_machine is None) != (grading_environment(task) is None):
         raise ValueError("A verifier machine is given exactly when the task's grader has an environment")
+    task = _hosted_task(task, factories)
+    grading = grading_environment(task)
     runtime = TaskRuntimeSpec(
         task_machine=(
             None if task_machine is None else machine_runtime(task_machine, task.environment_requirements, host)
@@ -420,8 +435,9 @@ def machine_runtime(
 ) -> MachineRuntimeSpec:
     """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``.
 
-    ``lower`` builds every task and verifier machine with it; a builder prototyping a machine
-    outside a lowered task uses it too, so the backend choice stays in one place.
+    ``requirements`` are the machine's ``host_requirements``. ``lower`` builds every task and verifier
+    machine with it; a builder prototyping a machine outside a lowered task uses it too, so the
+    backend choice stays in one place.
     """
     return MachineRuntimeSpec(
         backend=machine_backend(requirements, host).value,
@@ -437,12 +453,36 @@ def machine_runtime(
 
 
 def machine_backend(requirements: EnvironmentRequirements, host: MachineHost) -> Backend:
-    """ShellSim without an image or lock, the local backend for a lock alone, else the host's container backend."""
+    """The host's container backend for an image, the local backend for Linux processes without one
+    (a packages lock or a package spec), else ShellSim."""
     if requirements.docker_image is not None:
         return container_backend(host)
-    if requirements.packages_lock is not None:
+    if requirements.command_semantics == CommandSemantics.LINUX_PROCESS:
         return Backend.LOCAL
     return Backend.SHELLSIM
+
+
+def host_requirements(
+    requirements: EnvironmentRequirements, factories: Mapping[str, MachineFactory]
+) -> EnvironmentRequirements:
+    """``requirements`` as a host with ``factories`` runs them.
+
+    A machine on ``GRADER_BASE_IMAGE`` runs ``LOCAL_CPYTHON`` on the local backend when ``factories``
+    hold one, and the image on the host's container backend otherwise. Every other requirement is
+    unchanged.
+    """
+    if requirements.docker_image == GRADER_BASE_IMAGE and Backend.LOCAL.value in factories:
+        return requirements.model_copy(update={"docker_image": None, "package_spec": LOCAL_CPYTHON})
+    return requirements
+
+
+def _hosted_task(task: TaskSpec, factories: Mapping[str, MachineFactory]) -> TaskSpec:
+    """``task`` with its task machine's and its grader's requirements as ``host_requirements`` gives them."""
+    update: dict[str, object] = {"environment_requirements": host_requirements(task.environment_requirements, factories)}
+    grading = grading_environment(task)
+    if grading is not None:
+        update["grader"] = task.grader.model_copy(update={"environment": host_requirements(grading, factories)})
+    return task.model_copy(update=update)
 
 
 def _reads_task_machine(grader: GraderPackage) -> bool:

@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 
 import pytest
-from shellbox.machine import Command
+from shellbox.machine import Backend, Command
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -17,11 +17,11 @@ from taskcompendium.models import (
 )
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec, StructuredExactSpec
 
-from taskforge.sandbox.images import DockerBuild
+from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
 from taskforge.stage40_build.context import BuildFailure
 from taskforge.stage40_build.sandbox_effects import build_machine, grade_candidate, publish_image
-from tests.sandbox.fixture_images import shell_grader
+from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 
 SHELLSIM = draft.requirements(image=None)
 MACHINE = draft.machine(startup_timeout=60)
@@ -121,6 +121,20 @@ async def test_machine_installs_the_files_and_runs_the_setup(context):
         result = await prepared.run(Command(argv=("cat", "/workspace/question.txt", "/workspace/out/s")))
 
     assert result.stdout == b"6 * 7\nready\n"
+
+
+async def test_machine_runs_the_grader_base_on_the_local_backend_when_the_host_has_one(context):
+    # Without a Docker factory, only the local backend can start the machine.
+    factories = {
+        Backend.SHELLSIM.value: PortlessShellSimFactory(),
+        Backend.LOCAL.value: FixtureImageFactory(Backend.LOCAL),
+    }
+    requirements = draft.requirements(image=GRADER_BASE_IMAGE, setup=("echo ready > /workspace/s",))
+
+    async with build_machine(context(factories=factories).services, requirements, MACHINE) as prepared:
+        result = await prepared.run(Command(argv=("cat", "/workspace/s")))
+
+    assert result.stdout == b"ready\n"
 
 
 async def test_publish_image_pushes_under_the_items_repository(context):

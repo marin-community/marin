@@ -72,18 +72,20 @@ async def build_machine(
 ) -> AsyncIterator[Machine]:
     """``async with build_machine(services, requirements, settings, files) as m``: a prepared machine.
 
-    The machine starts as a task attempt's would, with ``files`` installed relative to the root and
-    the setup commands run. A step uses it to try fixtures or a grader program;
-    ``llm.agent.shell_tool(m, ...)`` gives an agent loop a shell in it. Leaving the block closes it.
+    The machine starts as a task attempt's would, on the requirements ``spec.draft.host_requirements``
+    gives for the host, with ``files`` installed relative to the root and the setup commands run. A
+    step uses it to try fixtures or a grader program; ``llm.agent.shell_tool(m, ...)`` gives an agent
+    loop a shell in it. Leaving the block closes it.
 
     Raises:
         BuildInfrastructureFailure: the host failed to create or drive the machine.
     """
-    runtime = machine_runtime(settings, requirements, services.host)
     factories = host_checked_factories(services.factories, services.host)
+    hosted = draft.host_requirements(requirements, factories)
+    runtime = machine_runtime(settings, hosted, services.host)
     async with AsyncExitStack() as owned:
         prepared = await _prepare_machine(
-            requirements, runtime, tuple(files), factories, _Cleanup(MACHINE_CLEANUP_TIMEOUT), owned
+            hosted, runtime, tuple(files), factories, _Cleanup(MACHINE_CLEANUP_TIMEOUT), owned
         )
         assert prepared is not None, "a machine runtime always prepares a machine"
         yield prepared
