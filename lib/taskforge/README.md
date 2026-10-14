@@ -56,7 +56,7 @@ submit commands in their docstrings: `scripts/build_image_job.py` builds a `Dock
 pushes it to a registry digest through `scripts/push_image_task.py`, and
 `scripts/iris_machine_probe.py` probes the shellbox Iris backend, and
 `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved from
-a relay job. `docker/grader-base` is the build context of the grader base image.
+a relay job.
 
 ## Proposals
 
