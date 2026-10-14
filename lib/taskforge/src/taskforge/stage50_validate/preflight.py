@@ -11,11 +11,13 @@ the local backend while the same task runs in a container.
 
 ``preflight`` lowers the task, and when its task machine lands on the local backend it runs the
 engine's own preparation once (machine start, resources, setup commands) by rolling out a probe that
-answers at once, then grades. A preparation failure (``PREPARATION_CAUSES``) re-lowers the task with
-the local backend withheld, so the task machine takes the container backend, and the result carries
-a ``BackendFallback`` for the lower record. Any other outcome of the probe, a grade included, keeps
-the first lowering: what the probe says about the grader the trials will say again. A verifier
-machine never falls back: its preparation failure is a task defect the trials report.
+answers at once, then grades. A preparation failure (``PREPARATION_CAUSES``) moves the task machine
+alone to the container backend: the task is lowered again with the local backend withheld, and its
+verifier machine and grader requirements are taken from the first lowering, so a grader-base verifier
+stays local. The result carries a ``BackendFallback`` for the lower record. Any other outcome of the
+probe, a grade included, keeps the first lowering: what the probe says about the grader the trials
+will say again. A verifier machine never falls back: its preparation failure is a task defect the
+trials report.
 
 The probe is not evidence: it records no attempt file and no ledger span.
 """
@@ -25,7 +27,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.lowering import lower_task
+from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import TaskSpec
 
@@ -96,13 +99,25 @@ async def preflight(
     outcome = await _probe(lowered, settings, deadlines)
     if not isinstance(outcome, Ungraded) or outcome.cause not in PREPARATION_CAUSES:
         return Preflight(lowered, None)
-    without_local = {backend: factory for backend, factory in factories.items() if backend != Backend.LOCAL.value}
-    fallback = lower(task, host, without_local)
+    fallback = _task_machine_fallback(task, host, factories, lowered)
     assert fallback.runtime.task_machine is not None
     return Preflight(
         fallback,
         BackendFallback(machine.backend, fallback.runtime.task_machine.backend, outcome.cause, outcome.detail),
     )
+
+
+def _task_machine_fallback(
+    task: TaskSpec, host: MachineHost, factories: Mapping[str, MachineFactory], lowered: LoweredTaskSpec
+) -> LoweredTaskSpec:
+    """``lowered`` with its task machine on the container backend and its verifier as it was."""
+    without_local = {backend: factory for backend, factory in factories.items() if backend != Backend.LOCAL.value}
+    container = lower(task, host, without_local)
+    runtime = TaskRuntimeSpec(
+        task_machine=container.runtime.task_machine, verifier_machine=lowered.runtime.verifier_machine
+    )
+    hosted = container.task.model_copy(update={"grader": lowered.task.grader})
+    return lower_task(hosted, runtime, lowered.session, factories=factories, sessions={})
 
 
 async def _probe(lowered: LoweredTaskSpec, settings: EngineSettings, deadlines: Deadlines):
