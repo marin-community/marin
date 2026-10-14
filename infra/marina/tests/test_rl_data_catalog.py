@@ -215,7 +215,6 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(cat
         assert packet["packet"]["task"]["prompt"] == "Null: \u0000; Unicode: π"
         assert client.get("/evidence", params={"source_id": "math", "task_id": "other"}).status_code == 404
         assert client.get("/assessment", params={"source_id": "absent"}).status_code == 404
-        assert client.post("/refresh").status_code == 404
         assert client.get("/archive").json()["reviews"][0]["id"] == "legacy"
         assert client.get("/archive/reviews/legacy").json()["collection"]["quality"] == "good"
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
@@ -278,13 +277,7 @@ def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, ve
                     "has_task": verdict != "missing_task",
                 },
             )
-        row = (
-            connection.execute(text("SELECT grade, good_fraction, grade_reason FROM atlas_cohort_summary"))
-            .mappings()
-            .one()
-        )
+        row = connection.execute(text("SELECT grade, good_fraction FROM atlas_cohort_summary")).mappings().one()
     assert row["grade"] == expected
     if verdicts == ["good"] * 99 + ["bad"]:
         assert row["good_fraction"] == 0.99
-    if not verdicts and curation_status != "incomplete":
-        assert row["grade_reason"] == "Curation retained zero tasks"

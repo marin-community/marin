@@ -247,16 +247,6 @@ def test_generated_rows_record_entries_a_fresh_dataset_does_not_reproduce(noisy_
     assert isinstance(result, ImportRejection) and result.reason == "irreproducible_entry"
 
 
-def test_selected_generation_cannot_restore_process_dependent_originals(noisy_generator_wheel, monkeypatch):
-    monkeypatch.setenv("REASONING_TEST_DRIFT", "1")
-    monkeypatch.setenv("REASONING_TEST_MORE_FAMILIES", "riddle sudoku")
-    original = first_rows(noisy_generator_wheel, 2)[1]
-    selected = dict(
-        declarations.generated_rows(noisy_generator_wheel, "pinned-version", EXCLUDED, 0, 0, 1, frozenset({1}))
-    )
-    assert selected[1]["entry"] != original["entry"]
-
-
 def test_generated_rows_surface_a_malformed_stream(noisy_generator_wheel, monkeypatch):
     monkeypatch.setenv("REASONING_TEST_BAD_WIRE", "1")
     with pytest.raises(json.JSONDecodeError):

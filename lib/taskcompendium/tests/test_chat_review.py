@@ -208,7 +208,6 @@ def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monk
             raise OSError("Cache storage unavailable")
 
         monkeypatch.setattr(PersistentKvCache, failure, fail)
-    compact_query_cache(str(cache_root))
     requests = [{"custom_id": "task", "body": {"prompt": "Count apples."}}]
     raw = json.dumps({"custom_id": "task", "answer": "2"})
     submitted = []

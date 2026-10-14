@@ -75,7 +75,7 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     assert source.curation.admission_counts.admitted == 3
     inventories = [row for row in catalog.sources(snapshot.snapshot_id) if row.declaration.pipeline is None]
     assert inventories and all(
-        row.assessment_key is None and row.reason == "No conversion pipeline" for row in inventories
+        row.assessment_key is None and row.latest_attempt_status == "skipped" for row in inventories
     )
     packet = catalog.packet(key, items[0].task_id)
     assert packet["task"]["id"] == items[0].task_id

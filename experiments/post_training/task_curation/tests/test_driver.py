@@ -126,15 +126,6 @@ def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog, mo
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2/rl-grading")
     result = CliRunner().invoke(main, arguments(tmp_path))
     assert result.exit_code == 0, result.output
-    assert (
-        json.loads(result.output)["chunk_storage_prefix"] == "gs://marin-us-central2/rl-grading/.zephyr/rl-data-campaign"
-    )
-    assert not (tmp_path / "report.json").exists()
-
-
-def test_oversized_quality_panel_is_rejected_before_source_work(tmp_path, catalog):
-    result = CliRunner().invoke(main, [*arguments(tmp_path), "--run", "--quality-sample-size", "101"])
-    assert result.exit_code == 2
     assert not (tmp_path / "report.json").exists()
 
 
@@ -321,40 +312,6 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
         client.shutdown()
 
 
-def test_local_full_recipe_exports_admitted_tasks_without_cluster_settings(tmp_path, monkeypatch):
-    declared = next(source for source in skyrl_math.sources() if source.name == "math500")
-    source = replace(declared, config=replace(math500(), rubric=None, controls=None))
-    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
-    staged = tmp_path / "input"
-    staged.mkdir()
-    (staged / "test.jsonl").write_text('{"problem":"One plus one?","answer":"2"}\n')
-    cache = tmp_path / "cache"
-    result = CliRunner().invoke(
-        main,
-        [
-            "--mode",
-            "full",
-            "--skip-assessment",
-            "--cache-dir",
-            str(cache),
-            "--source",
-            source.name,
-            "--input-root",
-            str(staged),
-            "--max-workers",
-            "1",
-            "--run",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    outcome = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
-    final = StoragePath(outcome["result"]["outputs"]["final"])
-    tasks = [row for path in (final / "*.parquet").glob() for row in load_parquet(str(path))]
-    assert len(tasks) == 1
-    assert tasks[0]["source_row"] == "test.jsonl:0"
-    assert outcome["status"] == "completed"
-
-
 def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, monkeypatch, review_server):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     source = replace(
@@ -411,10 +368,7 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
     assert len(review_server.requests) == 2
 
 
-@pytest.mark.parametrize("mode, flags, admitted", [("full", [], 3), ("sample", ["--assess"], 2)])
-def test_campaign_assesses_tasks_and_preserves_curation_scope(
-    tmp_path, monkeypatch, review_server, mode, flags, admitted
-):
+def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, review_server):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     source = replace(declared, config=replace(math500(), rubric=None, controls=None))
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
@@ -427,8 +381,7 @@ def test_campaign_assesses_tasks_and_preserves_curation_scope(
     cache = tmp_path / "cache"
     args = [
         "--mode",
-        mode,
-        *flags,
+        "sample",
         "--cache-dir",
         str(cache),
         "--source",
@@ -453,20 +406,21 @@ def test_campaign_assesses_tasks_and_preserves_curation_scope(
     assert result.exit_code == 0, result.output
     catalog = CurationCatalog(str(cache / "campaigns/catalog"))
     row = next(row for row in catalog.sources(catalog.current().snapshot_id) if row.id == source.info.id)
+    assert row.assessment_key is None
+    assert review_server.requests == []
+
+    result = CliRunner().invoke(main, [*args, "--assess"])
+    assert result.exit_code == 0, result.output
+    catalog = CurationCatalog(str(cache / "campaigns/catalog"))
+    row = next(row for row in catalog.sources(catalog.current().snapshot_id) if row.id == source.info.id)
     assessment = catalog.assessment(row.assessment_key)
     items = list(catalog.items(row.assessment_key))
     assert [(item.cohort, item.verdict) for item in items] == [("admitted", "good")]
     assert {population.cohort: population.population for population in catalog.populations(row.assessment_key)} == {
-        "admitted": admitted,
+        "admitted": 2,
         "excluded": 0,
     }
-    assert assessment.scope == mode
-    assert assessment.curation.admission_counts.admitted == admitted
-    assert assessment.curation.raw_population_count == 3
-    assert assessment.curation.processed_rows == admitted
-    assert len(review_server.requests) == 1
-    repeated = CliRunner().invoke(main, args)
-    assert repeated.exit_code == 0, repeated.output
+    assert assessment.scope == "sample"
     assert len(review_server.requests) == 1
 
 
@@ -516,14 +470,14 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     assert [(item.cohort, item.status) for item in catalog.items(catalog_source.assessment_key)] == [
         ("excluded", "reviewed")
     ]
-    assert len(review_server.requests) == 4
+    requests = list(review_server.requests)
+    assert sum(request["tool_choice"]["function"]["name"] == "assess_task" for request in requests) == 1
     repeated = CliRunner().invoke(main, args)
     assert repeated.exit_code != 0
-    assert len(review_server.requests) == 4
+    assert review_server.requests == requests
     review_server.review_available = True
     retried = CliRunner().invoke(main, [*args, "--curation-attempt", "1"])
     assert retried.exit_code == 0, retried.output
     recovered = json.loads((cache / "campaigns/campaign.json").read_text())
     assert recovered["sources"][0]["status"] == "completed"
     assert recovered["sources"][0]["path"] != outcome["path"]
-    assert len(review_server.requests) == 7

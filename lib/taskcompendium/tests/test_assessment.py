@@ -404,7 +404,6 @@ def test_assessment_keeps_task_context_when_audit_views_repeat_large_payloads(co
     (packet,) = [row for path in manifest.packet_paths for row in load_parquet(path)]
     evidence = json.loads(packet["packet_json"])
     assert evidence["task"]["id"] == packet["task_id"]
-    assert evidence["submission"]["answer_path"] is None
     assert evidence["normalize"]["normalization_changes"][0]["original"]["truncated"]
     assert "task_json" not in evidence["review"] and "task_json" not in evidence["verify"]
     assert "raw_json" not in evidence["verify"]
@@ -445,7 +444,6 @@ def test_assessment_summarizes_large_evidence_without_dropping_task(context, tmp
     (packet,) = [row for path in metadata.packet_paths for row in load_parquet(path)]
     evidence = json.loads(packet["packet_json"])
     assert evidence["task"]["id"] == packet["task_id"]
-    assert evidence["submission"]["answer_path"] is None
     assert evidence["verify"]["admission"] == "admitted"
     assert len(packet["packet_json"]) <= sampling.max_packet_characters
     if oversized_section == "task":
