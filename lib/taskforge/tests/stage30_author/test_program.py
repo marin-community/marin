@@ -163,9 +163,49 @@ def test_an_edit_to_an_output_type_defined_beside_the_step_changes_its_source_di
     edited_output = load_step(FIXTURE + "    lines: tuple[str, ...] = ()\n" + NOTE + STEP)
     edited_other_class = load_step(FIXTURE + NOTE + "    author: str = ''\n" + STEP)
 
-    assert step.source_digest == sha256_hex((STEP.lstrip("\n") + FIXTURE.lstrip("\n")).encode())
     assert edited_output.source_digest != step.source_digest
     assert edited_other_class.source_digest == step.source_digest
+
+
+HELPER = """
+LIMIT = 3
+
+
+def path_for(name):
+    return f"workspace/{name}"
+"""
+
+STEP_THROUGH_HELPERS = """
+@rl_env_build_step
+async def fixtures(context) -> list[Fixture]:
+    return [Fixture(path=path_for("numbers.txt"))] * LIMIT
+"""
+
+NOTED_FIXTURE = """
+@dataclass(frozen=True)
+class Fixture:
+    path: str
+    note: Note
+"""
+
+
+def test_the_source_digest_follows_what_the_step_reaches_in_its_module(load_step):
+    """A helper, a constant, an annotation's type argument and a class a class names all enter the key."""
+    step = load_step(FIXTURE + HELPER + STEP_THROUGH_HELPERS)
+
+    edited_helper = load_step(FIXTURE + HELPER.replace("workspace/", "work/") + STEP_THROUGH_HELPERS)
+    edited_constant = load_step(FIXTURE + HELPER.replace("LIMIT = 3", "LIMIT = 4") + STEP_THROUGH_HELPERS)
+    edited_argument = load_step(FIXTURE + "    lines: tuple[str, ...] = ()\n" + HELPER + STEP_THROUGH_HELPERS)
+    assert len({edited_helper.source_digest, edited_constant.source_digest, edited_argument.source_digest}) == 3
+    assert step.source_digest not in {
+        edited_helper.source_digest,
+        edited_constant.source_digest,
+        edited_argument.source_digest,
+    }
+
+    nested = load_step(NOTE + NOTED_FIXTURE + STEP)
+    edited_nested = load_step(NOTE + "    author: str = ''\n" + NOTED_FIXTURE + STEP)
+    assert edited_nested.source_digest != nested.source_digest
 
 
 def test_a_step_returning_a_library_type_digests_its_own_source_only():

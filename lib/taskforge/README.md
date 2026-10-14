@@ -60,14 +60,12 @@ a memo only on a miss.
 
 Each step's output is memoized under a key built from `SDK_VERSION`, a source digest, the content
 digest of each input, and a digest of the model and its sampling policy. The decorator computes the
-source digest over the step's own source text, followed by the source of its output type when the
-program defines that class beside the step. An output type imported from a library, such as
-`TaskSpec`, falls under `SDK_VERSION`. A step should therefore read everything it depends on from
-its inputs, its own body or an output type defined beside it. Editing a helper defined outside the
-body leaves the key unchanged, so a library change of that kind comes with an `SDK_VERSION` bump.
+source digest over the step's own source text and everything the step reaches in its own module:
+the helpers it calls, the constants it reads, the classes in its return annotation at any depth,
+and what those classes reach in turn. Names bound by imports stay out; a library type such as
+`TaskSpec` falls under `SDK_VERSION`, so a library change comes with an `SDK_VERSION` bump.
 Because inputs enter the key by content, a step that reruns and returns the same output leaves its
-consumers cached. The runner memoizes each step through `step_store.memoized`, and a driver
-memoizing a helper calls it the same way with a key of its own.
+consumers cached.
 
 ## Testing
 

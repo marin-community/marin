@@ -19,6 +19,7 @@ and runs the sink last. The sink's ``TaskSpec`` becomes the program's output.
 
 import bisect
 import inspect
+import types
 import typing
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ from typing import Any
 
 from taskcompendium.models import TaskSpec
 
-from taskforge.content_hash import digest, sha256_hex
+from taskforge.content_hash import canonical_json, digest, sha256_hex
 
 PROPOSAL_INPUT = "proposal"
 """The parameter name a step takes to receive the proposal. A step may not use it as its own name."""
@@ -117,10 +118,90 @@ def _decorated[S: (RLEnvBuildStep, RLEnvBuildSink)](fn: Callable[..., Awaitable[
 
 
 def _source_digest(fn: Callable[..., Awaitable[Any]], output_type: Any) -> str:
-    source = inspect.getsource(fn)
-    if inspect.isclass(output_type) and output_type.__module__ == fn.__module__:
-        source += inspect.getsource(output_type)
-    return sha256_hex(source.encode())
+    """The sha256 of the step's source together with everything it reaches in its own module.
+
+    From the step's code and from its return annotation, the walk follows every name the module
+    defines: a function or class adds its source and is walked in turn (a class through its methods,
+    its field annotations and its bases), any other value adds its canonical JSON, or its ``repr``
+    when it has none. Names bound by imports, modules and builtins stay out; ``SDK_VERSION`` covers
+    the library. The step's source comes first, then each reached object under its name in sorted
+    order, so a step that reaches nothing digests its source alone.
+    """
+    module, namespace = fn.__module__, fn.__globals__
+    reached: dict[str, str] = {}
+    pending = [*_annotated_classes(output_type, module), *_named(fn.__code__, namespace, module)]
+    while pending:
+        name, value = pending.pop()
+        if name in reached:
+            continue
+        if inspect.isfunction(value):
+            reached[name] = inspect.getsource(value)
+            pending += _named(value.__code__, namespace, module)
+        elif inspect.isclass(value):
+            reached[name] = inspect.getsource(value)
+            pending += _reached_by_class(value, namespace, module)
+        else:
+            reached[name] = _value_text(value)
+    parts = [inspect.getsource(fn), *(f"\n# {name}\n{text}" for name, text in sorted(reached.items()))]
+    return sha256_hex("".join(parts).encode())
+
+
+def _code_names(code: types.CodeType) -> set[str]:
+    """The global names ``code`` and the code objects nested in it read."""
+    names = set(code.co_names)
+    for constant in code.co_consts:
+        if isinstance(constant, types.CodeType):
+            names |= _code_names(constant)
+    return names
+
+
+def _named(code: types.CodeType, namespace: Mapping[str, Any], module: str) -> list[tuple[str, Any]]:
+    """The module-level objects ``code`` reads that ``module`` defines, by name."""
+    found = []
+    for name in sorted(_code_names(code)):
+        if name.startswith("__") or name not in namespace:
+            continue
+        value = namespace[name]
+        if isinstance(value, types.ModuleType):
+            continue
+        if (inspect.isfunction(value) or inspect.isclass(value)) and value.__module__ != module:
+            continue
+        found.append((name, value))
+    return found
+
+
+def _reached_by_class(cls: type, namespace: Mapping[str, Any], module: str) -> list[tuple[str, Any]]:
+    """What a class defined in ``module`` reaches: its methods' names, its field annotations and its bases."""
+    found = []
+    for attribute in vars(cls).values():
+        if inspect.isfunction(attribute):
+            found += _named(attribute.__code__, namespace, module)
+    try:
+        hints = typing.get_type_hints(cls)
+    except (NameError, TypeError):
+        hints = {}
+    for hint in hints.values():
+        found += _annotated_classes(hint, module)
+    for base in cls.__bases__:
+        found += _annotated_classes(base, module)
+    return found
+
+
+def _annotated_classes(annotation: Any, module: str) -> list[tuple[str, Any]]:
+    """The classes ``module`` defines that ``annotation`` names, at any depth of its type arguments."""
+    if inspect.isclass(annotation):
+        return [(annotation.__name__, annotation)] if annotation.__module__ == module else []
+    found = []
+    for argument in typing.get_args(annotation):
+        found += _annotated_classes(argument, module)
+    return found
+
+
+def _value_text(value: Any) -> str:
+    try:
+        return canonical_json(value)
+    except (TypeError, ValueError):
+        return repr(value)
 
 
 @dataclass(frozen=True)
