@@ -3,7 +3,9 @@
 
 """A toy program carried through ``run_build``: ``numbers`` and ``grader`` feed the sink ``task``."""
 
+import asyncio
 import base64
+import time
 from collections.abc import Sequence
 from dataclasses import replace
 
@@ -112,6 +114,66 @@ async def build(tmp_path, program=PROGRAM, proposal=PROPOSAL):
         model_digest(model, SAMPLING),
         0,
     )
+
+
+async def test_steps_without_a_dependency_between_them_run_together_and_outcomes_keep_the_program_order(tmp_path):
+    spans: dict[str, tuple[float, float]] = {}
+
+    async def linger(name: str) -> None:
+        started = time.monotonic()
+        await asyncio.sleep(0.2)
+        spans[name] = (started, time.monotonic())
+
+    @rl_env_build_step
+    async def slow_numbers(context: RLEnvBuildContext) -> TaskResource:
+        await linger("slow_numbers")
+        return inline_file("workspace/numbers.txt", b"6 7\n")
+
+    @rl_env_build_step
+    async def slow_grader(context: RLEnvBuildContext) -> GraderPackage:
+        await linger("slow_grader")
+        return verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0))
+
+    @rl_env_build_sink
+    async def joined(
+        context: RLEnvBuildContext, slow_numbers: TaskResource, slow_grader: GraderPackage, proposal: dict
+    ) -> TaskSpec:
+        await linger("joined")
+        return toy_task(context.item_id, proposal["task"], slow_numbers, slow_grader)
+
+    program = rl_env_build_program(slow_numbers, slow_grader, sink=joined)
+    draft = await build(tmp_path, program)
+
+    assert spans["slow_grader"][0] < spans["slow_numbers"][1], "the two steps did not overlap"
+    assert spans["joined"][0] >= max(spans["slow_numbers"][1], spans["slow_grader"][1])
+    assert [outcome.memo.name for outcome in draft.provenance.steps] == list(program.order)
+
+
+async def test_a_failing_step_ends_the_build_and_cancels_the_steps_still_running(tmp_path):
+    cancelled = asyncio.Event()
+
+    @rl_env_build_step
+    async def doomed(context: RLEnvBuildContext) -> TaskResource:
+        await asyncio.sleep(0.05)
+        raise BuildFailure("the numbers never arrived")
+
+    @rl_env_build_step
+    async def patient(context: RLEnvBuildContext) -> GraderPackage:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        raise AssertionError("unreachable")
+
+    @rl_env_build_sink
+    async def never(context: RLEnvBuildContext, doomed: TaskResource, patient: GraderPackage) -> TaskSpec:
+        raise AssertionError("unreachable")
+
+    with pytest.raises(BuildFailure) as failure:
+        await build(tmp_path, rl_env_build_program(doomed, patient, sink=never))
+
+    assert (failure.value.step, cancelled.is_set()) == ("doomed", True)
 
 
 def statuses(draft) -> dict[str, CacheStatus]:
