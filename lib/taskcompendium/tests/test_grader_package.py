@@ -133,11 +133,7 @@ class RecordingImageFactory(FixtureImageFactory):
     ids=["grader-workspace", "named-by-the-environment"],
 )
 def test_grading_machine_starts_in_the_grader_workspace(environment, workdir):
-    """An image machine's spec carries an empty workdir, which the Iris backend cannot create.
-
-    The grading machine starts in the grader's workspace instead, unless its environment names a
-    directory of its own.
-    """
+    """The grading machine starts in the grader's workspace unless its environment names a directory."""
     task = _state_task(environment)
     factory = RecordingImageFactory()
     result = grade_task(
