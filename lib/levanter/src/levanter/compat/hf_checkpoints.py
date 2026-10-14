@@ -1258,7 +1258,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     logger.info(f"Copying reference code from {self.reference_checkpoint}")
                     self._save_code_local(local_path)
 
-                if save_tokenizer:
+                if save_tokenizer and self.tokenizer is not None:
                     logger.info("Saving tokenizer")
                     _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
 

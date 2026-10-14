@@ -12,10 +12,9 @@ import numpy as np
 import pytest
 from transformers import PretrainedConfig
 from haliax.partitioning import ResourceAxis
-from haliax.state_dict import from_torch_compatible_state_dict
-from jax import random
 from jax.sharding import Mesh
 
+from levanter.layers.attention import AttentionMask
 from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel
 from levanter.utils.activation import ActivationFunctionEnum
 from PIL import Image
@@ -132,31 +131,22 @@ def test_siglip2_vision_roundtrip() -> None:
     patch_input_dim = hf_config.num_channels * hf_config.patch_size * hf_config.patch_size
     pixel_values_torch = torch.randn(batch_size, num_patches, patch_input_dim, dtype=torch.float32)
 
-    # Run HF model through encoder
+    spatial_shapes = torch.tensor([[8, 8]] * batch_size)
+    attention_mask = torch.ones(batch_size, num_patches, dtype=torch.long)
     with torch.no_grad():
-        hf_vision = torch_model.vision_model
-        patch_embeds = hf_vision.embeddings.patch_embedding(pixel_values_torch)
-        position_ids = torch.arange(num_patches)
-        pos_embeds = hf_vision.embeddings.position_embedding(position_ids)
-        hidden_states = patch_embeds + pos_embeds
-
-        attention_mask = torch.ones(batch_size, 1, num_patches, num_patches)
-        encoder_output = hf_vision.encoder(hidden_states, attention_mask=attention_mask)
-        hidden_states = encoder_output.last_hidden_state
-        torch_output = hf_vision.post_layernorm(hidden_states).detach().cpu().numpy()
+        torch_output = torch_model(
+            pixel_values_torch, pixel_attention_mask=attention_mask, spatial_shapes=spatial_shapes
+        ).last_hidden_state.numpy()
 
     single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
 
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(mesh=single_device_mesh):
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
-        config = Siglip2VisionConfig.from_hf_config(hf_config)
+        config = Siglip2VisionConfig.from_hf_config(torch_model.config)
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
 
-        Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=random.PRNGKey(0))
-        state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
-        model = from_torch_compatible_state_dict(model_template, state_dict)
+        model = converter.load_pretrained(Siglip2VisionModel)
 
         Batch = hax.Axis("batch", batch_size)
         NumPatches = hax.Axis("num_patches", num_patches)
@@ -167,12 +157,11 @@ def test_siglip2_vision_roundtrip() -> None:
             (Batch, NumPatches, PatchInput),
         )
 
-        jax_output = model(pixel_values, key=None)
-        jax_output_array = jax_output.last_hidden_state.array
+        jax_output_array = eqx.filter_jit(
+            lambda pixels, shapes: model(pixels, spatial_shapes=shapes).last_hidden_state.array
+        )(pixel_values, jnp.asarray(spatial_shapes.numpy()))
 
-        # Multi-layer model: use 1e-2 tolerance
-        assert torch_output.shape == jax_output_array.shape
-        assert np.allclose(torch_output, jax_output_array, rtol=1e-3, atol=1e-2)
+        np.testing.assert_allclose(torch_output, jax_output_array, rtol=1e-4, atol=1e-4)
 
         # Test roundtrip: save Levanter model and load back as HF
         converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
@@ -180,15 +169,10 @@ def test_siglip2_vision_roundtrip() -> None:
         torch_model2.eval()
 
         with torch.no_grad():
-            hf_vision2 = torch_model2.vision_model
-            patch_embeds = hf_vision2.embeddings.patch_embedding(pixel_values_torch)
-            pos_embeds = hf_vision2.embeddings.position_embedding(position_ids)
-            hidden_states = patch_embeds + pos_embeds
-            encoder_output = hf_vision2.encoder(hidden_states, attention_mask=attention_mask)
-            hidden_states = encoder_output.last_hidden_state
-            torch_output2 = hf_vision2.post_layernorm(hidden_states).detach().cpu().numpy()
-
-        assert np.allclose(torch_output2, jax_output_array, rtol=1e-3, atol=1e-2)
+            torch_output2 = torch_model2(
+                pixel_values_torch, pixel_attention_mask=attention_mask, spatial_shapes=spatial_shapes
+            ).last_hidden_state.numpy()
+        np.testing.assert_allclose(torch_output2, jax_output_array, rtol=1e-4, atol=1e-4)
 
 
 @pytest.mark.slow
@@ -198,7 +182,7 @@ def test_siglip2_vision_real_image() -> None:
     """Test Siglip2 vision model with generated pixels using the HF processor."""
     import torch  # noqa: PLC0415  # optional reference
     from transformers import (  # noqa: PLC0415  # optional reference
-        AutoModel,
+        Siglip2VisionModel as HfSiglip2VisionModel,
         AutoProcessor,
     )  # noqa: PLC0415  # optional reference
 
@@ -208,7 +192,7 @@ def test_siglip2_vision_real_image() -> None:
     model_name = "google/siglip2-so400m-patch16-naflex"
 
     processor = AutoProcessor.from_pretrained(model_name)
-    torch_model = AutoModel.from_pretrained(model_name, trust_remote_code=True, torch_dtype=torch.float32)
+    torch_model = HfSiglip2VisionModel.from_pretrained(model_name, dtype=torch.float32)
     torch_model.eval()
     torch_model = torch_model.float()
 
@@ -217,23 +201,12 @@ def test_siglip2_vision_real_image() -> None:
     batch_size = pixel_values_torch.shape[0]
     num_patches = pixel_values_torch.shape[1]
 
-    if "spatial_shapes" in inputs:
-        spatial_shapes = inputs["spatial_shapes"]
-    else:
-        grid_size = int(num_patches**0.5)
-        spatial_shapes = torch.tensor([[grid_size, grid_size]] * batch_size, dtype=torch.long)
-
-    # Run HF model
+    spatial_shapes = inputs["spatial_shapes"]
+    attention_mask = inputs["pixel_attention_mask"]
     with torch.no_grad():
-        if hasattr(torch_model, "vision_model"):
-            hf_vision = torch_model.vision_model
-            hf_config = torch_model.config.vision_config
-        else:
-            hf_vision = torch_model
-            hf_config = torch_model.config
-
-        attention_mask = torch.ones(batch_size, num_patches, dtype=torch.long)
-        vision_outputs = hf_vision(pixel_values_torch, attention_mask=attention_mask, spatial_shapes=spatial_shapes)
+        vision_outputs = torch_model(
+            pixel_values_torch, pixel_attention_mask=attention_mask, spatial_shapes=spatial_shapes
+        )
         torch_output = vision_outputs.last_hidden_state.detach().cpu().numpy()
 
     single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
@@ -241,13 +214,10 @@ def test_siglip2_vision_real_image() -> None:
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(mesh=single_device_mesh):
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
-        config = Siglip2VisionConfig.from_hf_config(hf_config)
+        config = Siglip2VisionConfig.from_hf_config(torch_model.config)
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
 
-        Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=random.PRNGKey(0))
-        state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
-        model = from_torch_compatible_state_dict(model_template, state_dict)
+        model = converter.load_pretrained(Siglip2VisionModel)
 
         pixel_values_np = pixel_values_torch.cpu().numpy().astype(np.float32)
         Batch = hax.Axis("batch", batch_size)
@@ -257,7 +227,10 @@ def test_siglip2_vision_real_image() -> None:
         pixel_values = hax.named(jnp.array(pixel_values_np, dtype=jnp.float32), (Batch, NumPatches, PatchInput))
         spatial_shapes_np = spatial_shapes.cpu().numpy()
 
-        jax_output = model(pixel_values, spatial_shapes=spatial_shapes_np)
+        mask = AttentionMask.explicit(
+            hax.named(jnp.asarray(attention_mask.numpy(), dtype=bool), (Batch, hax.Axis("key_position", num_patches)))
+        )
+        jax_output = model(pixel_values, mask=mask, spatial_shapes=spatial_shapes_np)
         jax_output_array = jax_output.last_hidden_state.array
 
     assert torch_output.shape == jax_output_array.shape
@@ -272,18 +245,13 @@ def test_siglip2_vision_real_image() -> None:
         converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
         converter.save_pretrained(model, save_path, save_tokenizer=False)
 
-        converted_hf_model = AutoModel.from_pretrained(save_path, trust_remote_code=True)
+        converted_hf_model = HfSiglip2VisionModel.from_pretrained(save_path)
         converted_hf_model.eval()
         converted_hf_model = converted_hf_model.float()
 
         with torch.no_grad():
-            if hasattr(converted_hf_model, "vision_model"):
-                converted_vision = converted_hf_model.vision_model
-            else:
-                converted_vision = converted_hf_model
-
-            converted_outputs = converted_vision(
-                pixel_values_torch, attention_mask=attention_mask, spatial_shapes=spatial_shapes
+            converted_outputs = converted_hf_model(
+                pixel_values_torch, pixel_attention_mask=attention_mask, spatial_shapes=spatial_shapes
             )
             converted_output_np = converted_outputs.last_hidden_state.detach().cpu().numpy()
 
