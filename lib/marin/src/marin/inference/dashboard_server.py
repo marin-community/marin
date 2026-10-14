@@ -35,6 +35,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 
 import httpx
+import shellsim
 import uvicorn
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
@@ -50,7 +51,7 @@ from marin.inference.python_tool_routes import (
     shell_workspace_response,
 )
 from marin.inference.repository_snapshot import repository_snapshot_response
-from marin.inference.shellsim_runtime import DEFAULT_PYPI_CATALOG, prepare_tool_runtime
+from marin.inference.shellsim_runtime import prepare_tool_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ def build_dashboard_app(
     model_id: str,
     info: ServingInfo,
     request_timeout_seconds: float = 600.0,
-    shellsim_catalog: str = DEFAULT_PYPI_CATALOG,
+    shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
 ) -> Starlette:
     """Prepare tool ports and build the app fronting a local serving backend.
 

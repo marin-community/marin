@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+import shellsim
 from pydantic import BaseModel, ConfigDict, TypeAdapter, create_model
 
 from marin.inference.shellsim_runtime import (
-    DEFAULT_PYPI_CATALOG,
     tool_environment,
 )
 
@@ -225,7 +225,7 @@ with _marin_open({_SHELLSIM_RESULT_PATH!r}, "w") as _marin_output:
 """
 
 
-def _invoke_tool(request: PythonToolRequest, *, catalog: str = DEFAULT_PYPI_CATALOG) -> bytes:
+def _invoke_tool(request: PythonToolRequest, *, catalog: str = shellsim.DEFAULT_PYPI_CATALOG) -> bytes:
     tools = {tool.name: tool for tool in python_tools_from_source(request.source)}
     tool = tools.get(request.name)
     if tool is None:
@@ -252,7 +252,7 @@ def _invoke_tool(request: PythonToolRequest, *, catalog: str = DEFAULT_PYPI_CATA
 def _main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", type=PythonToolOperation, choices=list(PythonToolOperation))
-    parser.add_argument("--catalog", default=DEFAULT_PYPI_CATALOG)
+    parser.add_argument("--catalog", default=shellsim.DEFAULT_PYPI_CATALOG)
     args = parser.parse_args()
     operation = args.operation
     match operation:

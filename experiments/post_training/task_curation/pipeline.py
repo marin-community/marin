@@ -36,7 +36,6 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.backends.shellsim.catalog import DEFAULT_PYPI_CATALOG
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
@@ -238,18 +237,10 @@ class CampaignMachines:
     image_factory: MachineFactory | None = None
     image_cpus: int = IMAGE_MACHINE_CPUS
     local: LocalGraderMachines = field(default_factory=LocalGraderMachines)
-    simulator_catalog: str = DEFAULT_PYPI_CATALOG
+    simulator_catalog: str | None = None
 
     @cached_property
     def _simulator_factory(self) -> MachineFactory:
-        try:
-            from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
-        except ImportError as error:
-            raise UnsupportedMachineSpec("Simulator controls require the Shellbox shellsim extra") from error
-        return ShellSimMachineFactory()
-
-    @cached_property
-    def _ports_factory(self) -> MachineFactory:
         try:
             import shellsim  # noqa: PLC0415
             from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
@@ -282,10 +273,7 @@ class CampaignMachines:
         require_resolved_environment(environment)
         if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
             packages = environment.package_spec or PackageSpec()
-            factory = (
-                self._ports_factory if packages.pypi_packages is not None or packages.tools else self._simulator_factory
-            )
-            return factory, MachineSpec(packages, network=NetworkPolicy.DENY, memory_mb=memory_mb)
+            return self._simulator_factory, MachineSpec(packages, network=NetworkPolicy.DENY, memory_mb=memory_mb)
         if environment.packages_lock is not None or environment.package_spec is not None:
             return self.local.machine(environment, memory_mb)
         if environment.docker_image is None:

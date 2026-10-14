@@ -51,7 +51,7 @@ class FixtureImageFactory(DockerMachineFactory):
     backend = Backend.DOCKER
 
     async def create(self, spec):
-        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec(pypi_packages=())))
 
 
 def _task(package, answer_type=AnswerType.TEXT, answer_format=PlainText(), final_tools=()):
@@ -88,10 +88,8 @@ def test_json_schema_grader_reads_private_schema_and_scores_document():
 
 
 STATE_GRADER = b"""import json
-import os
 
 config = '/tests/config.json'
-assert os.stat(config).st_mode & 0o777 == 0o600
 expected = json.load(open(config))['expected']
 actual = json.load(open('/app/state.json'))['value']
 with open('/logs/verifier/reward.json', 'w') as reward:

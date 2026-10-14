@@ -5,7 +5,6 @@
 
 import shellsim
 
-DEFAULT_PYPI_CATALOG = "https://shellsim.rjp.io/ports/catalog.json"
 TOOL_PACKAGES = ("numpy",)
 
 

@@ -15,7 +15,6 @@ from pathlib import PurePosixPath
 import shellsim
 
 from marin.inference.shellsim_runtime import (
-    DEFAULT_PYPI_CATALOG,
     tool_environment,
 )
 
@@ -257,7 +256,9 @@ def _write_workspace_file(environment: shellsim.Environment, name: str, content:
     environment.write_file(f"{_WORKSPACE_ROOT}/{name}", content)
 
 
-def shell_command_result(request: ShellWorkspaceRequest, *, catalog: str = DEFAULT_PYPI_CATALOG) -> ShellCommandResult:
+def shell_command_result(
+    request: ShellWorkspaceRequest, *, catalog: str = shellsim.DEFAULT_PYPI_CATALOG
+) -> ShellCommandResult:
     environment = tool_environment(
         catalog,
         cpu=_SHELLSIM_CPU_LIMIT,
@@ -284,7 +285,7 @@ def shell_command_result(request: ShellWorkspaceRequest, *, catalog: str = DEFAU
 
 def _main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--catalog", default=DEFAULT_PYPI_CATALOG)
+    parser.add_argument("--catalog", default=shellsim.DEFAULT_PYPI_CATALOG)
     args = parser.parse_args()
     request = ShellWorkspaceRequest.from_payload(json.load(sys.stdin))
     sys.stdout.buffer.write(shell_command_result(request, catalog=args.catalog).to_json_bytes())

@@ -456,7 +456,7 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
             )
         }
     )
-    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec()), {}, 1, 1024)
+    factory = ShellFactory(ShellSimMachineFactory(), MachineSpec(PackageSpec(pypi_packages=())), {}, 1, 1024)
     env = await factory.create(task)
     try:
         python = await env.machine.run(Command(("python3", "-c", "print(6 * 7)")))

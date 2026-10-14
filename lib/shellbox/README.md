@@ -219,7 +219,7 @@ agents:
       base_url: http://127.0.0.1:8000/v1
 ```
 
-Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Select packages and tools through the shared `shellbox.PackageSpec`, passed as `package_spec` to the Harbor adapter or as the machine source. For example, `PackageSpec(pypi_packages=("pytest",))` selects CPython and pytest; `PackageSpec()` keeps a shell-only environment. Harbor uses the public ports catalog when packages or tools are selected. A custom Harbor environment class can own the configured Context. Guest commands have no host filesystem or network access.
+Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Select packages and tools through the shared `shellbox.PackageSpec`, passed as `package_spec` to the Harbor adapter or as the machine source. Use `PackageSpec(pypi_packages=())` for CPython alone; `PackageSpec()` keeps a shell-only environment. A custom Harbor environment class can own the configured Context. Guest commands have no host filesystem or network access.
 
 Agent shell state persists between Bash actions; setup and verifier commands use fresh shell state over the same filesystem. Actions complete before returning; interactive input and interruption are unavailable. Task images and Dockerfile instructions are not applied; regular files under `environment/` are copied to the workdir. Select tasks compatible with the WASI catalog and supported commands.
 

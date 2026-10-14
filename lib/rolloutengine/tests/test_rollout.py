@@ -197,7 +197,7 @@ class FixtureImageFactory(DockerMachineFactory):
 
     async def create(self, spec):
         return await ShellSimMachineFactory().create(
-            replace(spec, source=PackageSpec(), workdir=spec.workdir or "/workspace")
+            replace(spec, source=PackageSpec(pypi_packages=()), workdir=spec.workdir or "/workspace")
         )
 
 

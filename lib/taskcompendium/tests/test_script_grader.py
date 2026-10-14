@@ -75,8 +75,8 @@ REWARD_JSON = "/logs/verifier/reward.json"
 class VerifyitImageMachine:
     """A ShellSim machine whose image provides the verifyit CLI.
 
-    ShellSim's Python lacks the standard library verifyit needs, so the CLI runs on the host against
-    copies of the machine's ``/tests`` and workspace, and its verdict is written back.
+    This test-only CLI fake runs on the host against copies of the machine's ``/tests`` and
+    workspace; ordinary Python grader scripts run inside ShellSim.
     """
 
     machine: Machine
@@ -114,7 +114,9 @@ class FixtureImageFactory(DockerMachineFactory):
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> VerifyitImageMachine:
-        return VerifyitImageMachine(await ShellSimMachineFactory().create(replace(spec, source=PackageSpec())))
+        return VerifyitImageMachine(
+            await ShellSimMachineFactory().create(replace(spec, source=PackageSpec(pypi_packages=())))
+        )
 
 
 def arithmetic_task(grader: Grader) -> TaskSpec:
