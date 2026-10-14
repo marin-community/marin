@@ -1,0 +1,217 @@
+schema_version: 1
+run:
+  id: sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce
+  attempt_id: initial
+  seed: 2
+  submission: detach
+  export_hf: false
+runtime:
+  launcher_commit: 0212d03c68bf1cf366776dfe08f99c6a33d43779
+  profile: megatron
+iris:
+  cluster: cw-us-east-02a
+  cluster_config: /home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/cw-us-east-02a-client.yaml
+  job_name: sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce
+  priority: batch
+  max_retries: 0
+  timeout: 604800
+  allocation:
+    num_nodes: 5
+    gpus_per_node: 8
+    gpu_variant: H100
+    cpu: 32
+    memory: 1800GB
+    disk: 500GB
+ray:
+  spill_dir: /tmp/skyrl-ray-spill
+  rendezvous_dir: s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/rendezvous
+  log_dir: s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/ray-logs
+artifacts:
+  checkpoint_root: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/checkpoints
+  export_root: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/exports
+  attempts_root: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/attempts
+  resolved_config_uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/resolved-launch.yaml
+  terminal_manifest_uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/terminal.json
+inputs:
+  model:
+    uri: s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm/
+    identity: models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770
+    local_path: /tmp/marinskyrl/models/snowball-67b-a2b-sft-s2-thinking
+    tokenizer_uri: marin-community/marin-tokenizer
+    tokenizer_revision: a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2
+  data_kind: parquet
+  train_data:
+  - kind: directory
+    uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/snowball-inputs-01a126ce/seed2
+    identity: curriculum-rl-pool@2026.09.18:seed2:01a126ce
+    local_path: /tmp/marinskyrl/data/snowball-curriculum-s2
+    relative_path: train.parquet
+  validation_data:
+  - kind: directory
+    uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/snowball-inputs-01a126ce/seed2
+    identity: curriculum-rl-pool@2026.09.18:seed2:01a126ce
+    local_path: /tmp/marinskyrl/data/snowball-curriculum-s2
+    relative_path: validation.parquet
+skyrl:
+  entrypoint: standard
+  context_budget:
+    request_window_tokens: 8192
+    max_new_tokens_per_turn: 4096
+    max_turns: 1
+    max_prompt_tokens: 4096
+  environment:
+    env_class: gsm8k
+    task_sessions:
+      gsm8k:
+        reward_method: strict
+      aime:
+        allow_general_math_reference: true
+  trajectory_runner:
+    rollout_workers:
+      num_workers: 4
+      cpus_per_worker: 4
+      executor_threads: 64
+  trainer:
+    strategy: megatron
+    flash_attn: true
+    use_sample_packing: false
+    gradient_checkpointing: true
+    epochs: 50
+    max_steps: 1200
+    update_epochs_per_batch: 1
+    train_batch_size: 128
+    policy_mini_batch_size: 128
+    micro_train_batch_size_per_gpu: 1
+    micro_forward_batch_size_per_gpu: 1
+    eval_before_train: true
+    eval_interval: 20
+    ckpt_interval: 1200
+    resume_mode: none
+    logger: console
+    training_metrics: true
+    rollout_spans: true
+    policy_train_spans: true
+    rollout_buffer:
+      max_staleness_steps: 0
+      batch_policy: full_batch
+      max_in_flight: 128
+      object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/score-centering-overnight-01a123c0/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/groups
+    algorithm:
+      advantage_estimator: grpo
+      policy_loss_type: regular
+      loss_reduction: token_mean
+      use_kl_loss: false
+      use_kl_in_reward: false
+      kl_estimator_type: k3_unbiased_gradient
+      off_policy_correction: custom
+      off_policy_correction_rules:
+      - kind: token
+        action: truncate
+        high: 2.0
+      score_centering_topk: 128
+      score_centering_enabled: false
+      eps_clip_low: 0.2
+      eps_clip_high: 0.2
+      grpo_norm_by_std: true
+      advantage_batch_normalize: false
+      reference_binary_rewards: false
+      group_admission:
+        stall_timeout: 2400.0
+    policy:
+      sequence_parallel_size: 1
+      optimizer_config:
+        optimizer: AdamW
+        lr: 1.0e-06
+        weight_decay: 0.01
+        max_grad_norm: 1.0
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 2
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+        optimizer_checkpoint_sharding_type: dp_reshardable
+        logprob_chunk_size: 512
+        torch_profiler_config:
+          enable: false
+          ranks:
+          - 0
+          - 16
+          save_path: /tmp/skyrl-debug/sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce/attention-profile
+    placement:
+      colocate_all: false
+      colocate_policy_ref: true
+      policy_num_nodes: 4
+      policy_num_gpus_per_node: 8
+      ref_num_nodes: 4
+      ref_num_gpus_per_node: 8
+    offload_optimizer_during_rollouts: true
+    dump_data_batch: true
+    dump_data_batch_rows: 2
+  generator:
+    backend: vllm
+    model_dtype: bfloat16
+    vllm_attention_backend: FLASH_ATTN
+    run_engines_locally: true
+    weight_sync_backend: nccl
+    num_inference_engines: 1
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_data_parallel_size: 8
+    inference_engine_expert_parallel_size: 8
+    n_samples_per_prompt: 4
+    enable_http_endpoint: true
+    chat_template_kwargs: {}
+    gpu_memory_utilization: 0.75
+    enable_prefix_caching: true
+    weight_sync_pause:
+      mode: keep
+      clear_cache: true
+    engine_init_kwargs:
+      logprobs_mode: processed_logprobs
+      generation_config: vllm
+      moe_backend: triton
+    sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      logprobs: 128
+      top_k: -1
+      min_p: 0.0
+    weight_sync_transport: expert_block
+    expert_block_sync:
+      timeout_seconds: 600
+      verify: true
+    max_num_seqs: 1024
+    max_num_batched_tokens: 8192
+    enable_chunked_prefill: true
+    enforce_eager: false
+    eval_n_samples_per_prompt: 4
+    eval_sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
+      logprobs: null
+    sampler_refresh_period: 1
+    sampler_weight_noise_scale: 0.0
+    sampler_weight_noise_seed: 2
+    trajectory_retention:
+      enabled: true
+      phases:
+      - train
+      - eval
+      sample_fraction: 1.0
+      sample_count_per_step: 0
+      max_bytes_per_step: null
+      max_bytes_per_run: null
+      required: true
+      reuse_publication_process: true
+      append_only: true
+      publish_timeout_seconds: 600.0
+      shutdown_timeout_seconds: 120.0
+      publication_retries: 2
+  extra_env:
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NVTE_FLASH_ATTN: '1'
+    NVTE_FUSED_ATTN: '0'
+    NVTE_UNFUSED_ATTN: '0'
+  data:
+    shuffle: false

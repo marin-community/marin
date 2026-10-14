@@ -1,0 +1,467 @@
+{
+  "submitted": false,
+  "qualified_training_source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configs": [
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/sc-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v2/sc-s0.yaml",
+      "run": "sc-snowball-main-noise005-sc-s0-a2-01a126ce",
+      "sha256": "11221253d6a7fbbf918132283d765c290715c4e54493ed9b98c69ca23f4a14ba",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 0,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_noise_main_v3-sc-s0-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/sc-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v2/sc-s1.yaml",
+      "run": "sc-snowball-main-noise005-sc-s1-a2-01a126ce",
+      "sha256": "d0b76d1e97f8ceb362d81efdb5777c5266bf62b842db4153e57942eac73fc2a8",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 1,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_noise_main_v3-sc-s1-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/sc-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v2/sc-s2.yaml",
+      "run": "sc-snowball-main-noise005-sc-s2-a2-01a126ce",
+      "sha256": "743511f86e678ef532ef9f7fea01cfe1dd2d472f4443f225e74c84841650dd9e",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 2,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_noise_main_v3-sc-s2-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/tis-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v2/tis-s0.yaml",
+      "run": "sc-snowball-main-noise005-tis-s0-a2-01a126ce",
+      "sha256": "9b92a3961f1746ca392b732933523be16aea0887f54a626efcbb30add3a44e29",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 0,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_noise_main_v3-tis-s0-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/tis-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v2/tis-s1.yaml",
+      "run": "sc-snowball-main-noise005-tis-s1-a2-01a126ce",
+      "sha256": "8d788f92385f7462bb85d1674f67f7313253be689e9652f5707531455d1338c9",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 1,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_noise_main_v3-tis-s1-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v3/tis-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_noise_main_v2/tis-s2.yaml",
+      "run": "sc-snowball-main-noise005-tis-s2-a2-01a126ce",
+      "sha256": "62ad1b2108e80eabf40e99c7e5a3ca8c013e42c367f2452dd5042a2251624feb",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 2,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_noise_main_v3-tis-s2-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/sc-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v2/sc-s0.yaml",
+      "run": "sc-snowball-main-fresh-noise000-sc-s0-a2-01a126ce",
+      "sha256": "3cd43001aca2cd6035c19a0975fcf09d0f2226d2db89dcf41133b6fd8f5e9c29",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 0,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_fresh_main_v3-sc-s0-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/sc-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v2/sc-s1.yaml",
+      "run": "sc-snowball-main-fresh-noise000-sc-s1-a2-01a126ce",
+      "sha256": "5aa84245a4b2e6d43213f9c31dd4da3f36aee4c1d7166e9b95225584b8feeb38",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 1,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_fresh_main_v3-sc-s1-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/sc-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v2/sc-s2.yaml",
+      "run": "sc-snowball-main-fresh-noise000-sc-s2-a2-01a126ce",
+      "sha256": "2e69f4b880a85cf732bdfa7e978db02ee7ffcd830d4ece06e68994ff78645c1c",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 2,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_fresh_main_v3-sc-s2-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/tis-s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v2/tis-s0.yaml",
+      "run": "sc-snowball-main-fresh-noise000-tis-s0-a2-01a126ce",
+      "sha256": "690600ac4a22948069f63ffaa5fa4059f12bac4d569a89ea1e2f1dd85b665590",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 0,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_fresh_main_v3-tis-s0-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/tis-s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v2/tis-s1.yaml",
+      "run": "sc-snowball-main-fresh-noise000-tis-s1-a2-01a126ce",
+      "sha256": "69d8c6f926a85212ea32b50f6dcc13f3388f41ccd8b87a588be5dfad6b1ecab6",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 1,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_fresh_main_v3-tis-s1-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v3/tis-s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_fresh_main_v2/tis-s2.yaml",
+      "run": "sc-snowball-main-fresh-noise000-tis-s2-a2-01a126ce",
+      "sha256": "6d9fc36965814563a115f1ef95d0f830b3352c8cfd81e77347f79d77bfedbe1f",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 2,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": true
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_fresh_main_v3-tis-s2-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v2/s0.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v1/s0.yaml",
+      "run": "sc-snowball-incumbent-main-s0-a2-01a126ce",
+      "sha256": "7776d7eed7336ba5abc855670dcc6b489141f0c9a6b167bd8c13a89a8bb63699",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 0,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": false
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog",
+        "correct explicit incumbent callback intervals from qualification 5/5 to declared main 1200/20"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_incumbent_main_v2-s0-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v2/s1.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v1/s1.yaml",
+      "run": "sc-snowball-incumbent-main-s1-a2-01a126ce",
+      "sha256": "42292aca383f5b50b3ee8b225872887d0c0f192dcefefbcb6a40d71934976b7a",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 1,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": false
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog",
+        "correct explicit incumbent callback intervals from qualification 5/5 to declared main 1200/20"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_incumbent_main_v2-s1-preflight.log"
+    },
+    {
+      "config": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v2/s2.yaml",
+      "source_config": "experiments/post_training/score_centering_overnight/snowball_incumbent_main_v1/s2.yaml",
+      "run": "sc-snowball-incumbent-main-s2-a2-01a126ce",
+      "sha256": "3a5b5baf038564ce9a05593bb53fcaaa01a7655200c48b9df958e9cacd1d512a",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "seed": 2,
+      "nodes": 5,
+      "gpus_per_node": 8,
+      "priority": "batch",
+      "horizon": 1200,
+      "execution_ceiling_seconds": 604800,
+      "admission_watchdog_seconds": 2400,
+      "callback_schedule_from_native_factory": {
+        "checkpoint_steps": 1200,
+        "save_on_train_end": true,
+        "evaluation_steps": 20,
+        "eval_before_train": true,
+        "eval_on_train_end": false
+      },
+      "changes": [
+        "run-owned paths",
+        "admission watchdog",
+        "correct explicit incumbent callback intervals from qualification 5/5 to declared main 1200/20"
+      ],
+      "remaining_config_fields_unchanged": true,
+      "preflight_exit_code": 0,
+      "preflight_log": "/home/romain/data/sessions/devbox/codex/01a126ce-e85e-7d42-879a-3c883a6fe9f9/artifacts/snowball_incumbent_main_v2-s2-preflight.log"
+    }
+  ],
+  "all_preflights_passed": true,
+  "native_callback_factory_checked": true,
+  "submission_gates": "Complete declared Qwen transfer audits and separate Snowball calibration; first main capture and optimizer check before broader seeds.",
+  "incumbent_correction_evidence": "skyrl-train/skyrl_train/callbacks/builtin.py:create_default_callbacks chooses explicit callbacks before legacy ckpt_interval/eval_interval. Three old unsubmitted incumbent plans retained 5-step qualification callbacks. New plans implement the predeclared main 1200-step checkpoint and 20-step evaluation cadence.",
+  "stale_main_status": "Separate 130-update refresh65 calibration must still justify and freeze the stale main setting and horizon.",
+  "paired_recipe_checks": [
+    {
+      "config_dir": "snowball_noise_main_v3",
+      "seed": 0,
+      "paired_learning_recipe_equal": true
+    },
+    {
+      "config_dir": "snowball_noise_main_v3",
+      "seed": 1,
+      "paired_learning_recipe_equal": true
+    },
+    {
+      "config_dir": "snowball_noise_main_v3",
+      "seed": 2,
+      "paired_learning_recipe_equal": true
+    },
+    {
+      "config_dir": "snowball_fresh_main_v3",
+      "seed": 0,
+      "paired_learning_recipe_equal": true
+    },
+    {
+      "config_dir": "snowball_fresh_main_v3",
+      "seed": 1,
+      "paired_learning_recipe_equal": true
+    },
+    {
+      "config_dir": "snowball_fresh_main_v3",
+      "seed": 2,
+      "paired_learning_recipe_equal": true
+    }
+  ],
+  "final_evaluation_deduplication": "The frozen trainer _finalize_training requires _last_evaluated_step != global_step; all planned horizons are divisible by 20."
+}
