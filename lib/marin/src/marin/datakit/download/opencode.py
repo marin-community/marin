@@ -8,8 +8,7 @@ import re
 
 from zephyr import counters
 
-from marin.datakit.download.rollout_transforms import INLINE_TOOL_CALL
-
+INLINE_TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 TOOL_USE_PLACEHOLDER = "(tool use)"
 
 
