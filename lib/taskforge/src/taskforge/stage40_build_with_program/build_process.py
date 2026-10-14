@@ -44,6 +44,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import shutil
 import signal
 import sys
 import traceback
@@ -276,10 +277,13 @@ def image_builder(config: BuildServiceConfig) -> IrisImageBuilder | None:
     """The child's image builder, or ``None`` when ``config`` names no image cluster.
 
     Raises:
-        ValueError: ``config`` names an image cluster but no controller URL.
+        ValueError: ``config`` names an image cluster but no controller URL, or ``gcloud``, which the
+            publish path reads the registry credential with, is not on this host's PATH.
     """
     if config.image_cluster is None:
         return None
+    if shutil.which("gcloud") is None:
+        raise ValueError("the image builder reads the registry credential with gcloud, which is not on PATH")
     return IrisImageBuilder(controller_url=config.controller_url, target_cluster=config.image_cluster)
 
 

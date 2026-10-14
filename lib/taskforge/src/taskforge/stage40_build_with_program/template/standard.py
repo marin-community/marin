@@ -69,6 +69,7 @@ from taskforge.stage40_build_with_program.sdk import (
     grader_contract,
     grader_package,
     instruction_problem,
+    machine_available,
     machine_facts,
     output_paths,
     research,
@@ -97,7 +98,9 @@ async def fixtures(context: RLEnvBuildContext, proposal: TaskProposal, sources: 
         "goes in private_files. Compute every value exactly; the facts field must state every value the grader "
         "will check."
     )
-    submitted = await structured_until(context, task_messages(proposal, request), FixturesDraft, accept)
+    submitted = await structured_until(
+        context, task_messages(proposal, request), FixturesDraft, machine_available(context)
+    )
     return Fixtures(
         agent_files=tuple(task_file(f) for f in submitted.agent_files),
         private_files=tuple(task_file(f) for f in submitted.private_files),

@@ -11,6 +11,7 @@ from dataclasses import replace
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import RolloutEngine
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, PackageSpec
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
@@ -33,6 +34,7 @@ from taskforge.stage40_build_with_program.sdk import (
     FixturesDraft,
     GraderDraft,
     grader_package,
+    machine_available,
     machine_facts,
     task_file,
 )
@@ -323,3 +325,16 @@ def test_fixtures_list_packages_exactly_for_a_package_machine(machine, packages)
 
     with pytest.raises(ValueError):
         FixturesDraft.model_validate({**submission, "packages": packages})
+
+
+async def test_a_packages_machine_goes_back_to_the_model_on_a_host_without_the_local_backend(context):
+    draft = FixturesDraft.model_validate(
+        {"agent_files": [], "private_files": [], "facts": "", "solver_machine": "packages", "packages": ["numpy"]}
+    )
+    without_local = context(factories={Backend.SHELLSIM.value: ShellSimMachineFactory()})
+    with_local = context(
+        factories={Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.LOCAL.value: ShellSimMachineFactory()}
+    )
+
+    assert "needs the local backend" in (await machine_available(without_local)(draft) or "")
+    assert await machine_available(with_local)(draft) is None
