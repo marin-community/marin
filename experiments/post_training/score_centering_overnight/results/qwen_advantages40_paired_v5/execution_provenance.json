@@ -1,0 +1,26 @@
+{
+  "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "configs": [
+    {
+      "arm": "sc",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/advantages-sc-s0.yaml",
+      "sha256": "e35f224100458c9600415875bbdb159424af9eb7c4df8dc3a67a21d6faa46f01",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "scientific_controller_attempt": 0
+    },
+    {
+      "arm": "tis",
+      "configuration": "experiments/post_training/score_centering_overnight/qwen_transfer_pilot_v5/advantages-tis-s0.yaml",
+      "sha256": "336b78895f5802213a8bbf603bfddb485c27281abeb4ada2820f36960806404d",
+      "cluster": "cw-us-east-02a",
+      "priority": "interactive",
+      "scientific_controller_attempt": 0
+    }
+  ],
+  "scientific_scope": "Exploratory pairedseed0 40updates native reward/GRPOstandard-deviation stage. No population uncertainty or equivalence. Both originalattempt0 endpoints retained.",
+  "tis_native_training_error": "One GradingInfraError atstep33 instance2109, fully masked placeholder; original attemptedtext unavailable. Zero evaluation errors. All512physical rows and finite applied updates preserved.",
+  "tis_shutdown_interruption": "Original40+eval40+checkpoint40 completed before task0PodDeleted; redundant automaticattempt1 canceled after complete timestamp-bounded audit. All original and retry allocation costs included.",
+  "original_tis_evidence_snapshot": "qwen_advantages40_tis_interruption.json",
+  "audit_fields_complete": true
+}

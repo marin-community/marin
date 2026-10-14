@@ -30,10 +30,10 @@
       "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce/0",
       "attempt_id": "1",
       "attempt_uid": "dc5df9b972a7a8c2",
-      "state": "3",
+      "state": "6",
       "exit_code": "",
       "started_at_ms": "1791936790212",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791937715138",
       "node_name": "g83d11c",
       "terminal_reason": ""
     },
@@ -41,10 +41,10 @@
       "task_id": "/romain/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce/1",
       "attempt_id": "1",
       "attempt_uid": "4209f55199ec0d0c",
-      "state": "3",
+      "state": "6",
       "exit_code": "",
       "started_at_ms": "1791936790212",
-      "finished_at_ms": "",
+      "finished_at_ms": "1791937715138",
       "node_name": "g845f9c",
       "terminal_reason": ""
     }
@@ -54,5 +54,11 @@
   "snapshot_bytes": 79579079,
   "manifest_sha256": "9b1f77c1aa6aa32513b02ef0ef689cf005a76cbd3bc32327fd724ec6ef3b5568",
   "manifest_uri": "s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/skyrl/sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce/preserved-controller-attempt0-before-restart/snapshot-manifest.json",
-  "cause_basis": "Controller PodDeleted event on task0, coscheduled task11; underlying deletion cause unproved. Automatic attempt1 is live, so no duplicate submission. All failed allocations charged and native append-only archives retained. Final audit filters all metrics/captures/archives/checkpoint to final actual attempt start."
+  "cause_basis": "Original task0 PodDeleted event after all40 updates, evaluation40 andcheckpoint40. Underlying deletion cause unproved. Scientific audit used original snapshot metrics/captures and timestamp-bounded append-only archives; one observed GradingInfraError is fully masked. Complete original trial retained; redundant automatic retry canceled.",
+  "valid_scientific_attempt": 0,
+  "completed_scientific_updates": 40,
+  "attempt0_full_audit": "sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce.json.gz",
+  "native_masked_training_errors": 1,
+  "native_evaluation_errors": 0,
+  "automatic_attempt1_resolution": "Stopped only after all40 original update/capture/evaluation/checkpoint checks passed. Retry allocation fully charged; no scientific endpoint from retry."
 }

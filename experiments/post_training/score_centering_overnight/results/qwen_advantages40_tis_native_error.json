@@ -1,0 +1,20 @@
+{
+  "run_id": "sc-qwen-transfer-advantages-tis-s0-pilot-a4-01a126ce",
+  "controller_attempt": 0,
+  "phase": "train",
+  "learner_step": 33,
+  "instance_id": "2109",
+  "exception_type": "GradingInfraError",
+  "error_treatment": "mask",
+  "training_responses_denominator": 20480,
+  "native_training_errors": 1,
+  "fraction": 4.8828125e-05,
+  "training_mask": [
+    0
+  ],
+  "attempted_text_available": false,
+  "record_id": "bd8eaeb0fa7f38077945a16ae88b689b9276f6e5fdea4d18a4dc5ea4e0512174",
+  "record_payload_sha256": "4046c76510cb025085dd706c90c60c272563424112ce396924d7beb8d87252fc",
+  "evidence_manifest": "qwen_advantages40_tis_interruption.json",
+  "scope": "Original native grading failure is a fully masked placeholder. Attempted response is unavailable and is not regraded or invented. Full physical512-row batch and applied optimizer update remain required. All clean evaluation records must independently pass with zero execution/grading failures."
+}
