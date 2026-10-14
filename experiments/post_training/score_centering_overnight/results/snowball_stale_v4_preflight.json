@@ -1,0 +1,46 @@
+{
+  "configs": [
+    {
+      "config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/snowball_stale_calibration_v4/stale64-tis-s0.yaml",
+      "source_config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/snowball_stale_calibration_v3/stale64-tis-s0.yaml",
+      "run": "sc-snowball-stale-calibration-stale64-tis-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "nodes": 5,
+      "horizon": 130,
+      "refresh_period": 65,
+      "sha256": "1e0f72290813d53d80f2420f61f639ae1d2cc8ef19d1cdc626905355e844215c",
+      "scientific_recipe_unchanged": true,
+      "changes": [
+        "run-ownedidentitypaths",
+        "2400-secondadmissionwatchdogallows600x3requiredarchive+120x3shutdownretries"
+      ],
+      "submission_gate": "Existingdeclaredprecedingtransfergates and exact0212five-nodeGPUqualification/fullnativeaudits; preparationonlynotmaincomparison"
+    },
+    {
+      "config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/snowball_stale_calibration_v4/fresh-tis-s0.yaml",
+      "source_config": "/home/romain/work/marin-community/marin/score-centering-resume-01a126ce/experiments/post_training/score_centering_overnight/snowball_stale_calibration_v3/fresh-tis-s0.yaml",
+      "run": "sc-snowball-stale-calibration-fresh-tis-s0-a3-01a126ce",
+      "source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+      "cluster": "cw-us-east-02a",
+      "priority": "batch",
+      "nodes": 5,
+      "horizon": 130,
+      "refresh_period": 1,
+      "sha256": "6af35118dcf53e2132bde7687c2a00b90da0f8cbc69769b7c8f85fc873604f3b",
+      "scientific_recipe_unchanged": true,
+      "changes": [
+        "run-ownedidentitypaths",
+        "2400-secondadmissionwatchdogallows600x3requiredarchive+120x3shutdownretries"
+      ],
+      "submission_gate": "Existingdeclaredprecedingtransfergates and exact0212five-nodeGPUqualification/fullnativeaudits; preparationonlynotmaincomparison"
+    }
+  ],
+  "all_preflights_passed": true,
+  "submitted": false,
+  "qualified_training_source": "0212d03c68bf1cf366776dfe08f99c6a33d43779",
+  "scientific_recipe_comparison_passed": true,
+  "geometry": "4learner+1inference5BATCH8H100nodes",
+  "main_horizon_starting_reference": 1200
+}
